@@ -332,6 +332,7 @@ fn run_ast_passes(
     // only symbol-backed terminal jumps as tail calls so the ordinary call pass
     // can see their argument-register setup and returned value.
     crate::ir::name_resolve::resolve_names(f, addr_map);
+    crate::ir::call_args::recover_resolved_direct_tail_calls(f, cc, addr_map);
     crate::ir::call_args::recover_resolved_tail_calls(f, cc);
     dp!("recover_resolved_tail_calls");
     crate::ir::call_args::reconstruct_args_with_params(f, cc, param_slots);

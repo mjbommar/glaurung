@@ -67,6 +67,134 @@ pub fn recover_resolved_tail_calls(f: &mut Function, arch: CallConv) {
     recover_tail_calls_in_body(&mut f.body, arch);
 }
 
+/// Recover a direct jump whose target is a named entry outside the current AST
+/// as a source-level tail call.
+///
+/// Authoritative function ranges deliberately keep PLT stubs and neighboring
+/// functions out of the lifted LLIR. The terminal machine jump therefore has
+/// no local `Label`, but the binary address map still proves which callable
+/// entry it targets. Converting only that exact combination avoids both a
+/// dangling `goto` and the old workaround of importing the callee's basic
+/// blocks into the caller.
+pub fn recover_resolved_direct_tail_calls(
+    f: &mut Function,
+    arch: CallConv,
+    names: &std::collections::HashMap<u64, String>,
+) {
+    let mut local_labels = std::collections::HashSet::new();
+    collect_labels(&f.body, &mut local_labels);
+    recover_direct_tail_calls_in_body(&mut f.body, arch, names, &local_labels);
+}
+
+fn collect_labels(body: &[Stmt], labels: &mut std::collections::HashSet<u64>) {
+    for statement in body {
+        match statement {
+            Stmt::Label(va) => {
+                labels.insert(*va);
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_labels(then_body, labels);
+                if let Some(else_body) = else_body {
+                    collect_labels(else_body, labels);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collect_labels(body, labels)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    collect_labels(case, labels);
+                }
+                if let Some(default) = default {
+                    collect_labels(default, labels);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn recover_direct_tail_calls_in_body(
+    body: &mut Vec<Stmt>,
+    arch: CallConv,
+    names: &std::collections::HashMap<u64, String>,
+    local_labels: &std::collections::HashSet<u64>,
+) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_direct_tail_calls_in_body(then_body, arch, names, local_labels);
+                if let Some(else_body) = else_body {
+                    recover_direct_tail_calls_in_body(else_body, arch, names, local_labels);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                recover_direct_tail_calls_in_body(body, arch, names, local_labels)
+            }
+            Stmt::For { body, .. } => {
+                recover_direct_tail_calls_in_body(body, arch, names, local_labels)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    recover_direct_tail_calls_in_body(case, arch, names, local_labels);
+                }
+                if let Some(default) = default {
+                    recover_direct_tail_calls_in_body(default, arch, names, local_labels);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut index = 0;
+    while index < body.len() {
+        let callee = match &body[index] {
+            Stmt::Goto { target } if !local_labels.contains(target) => {
+                names.get(target).map(|name| Expr::Named {
+                    va: *target,
+                    name: name.clone(),
+                })
+            }
+            _ => None,
+        };
+        let Some(callee) = callee else {
+            index += 1;
+            continue;
+        };
+
+        let has_local_setup = body[..index]
+            .iter()
+            .any(|statement| statement_writes_argument_slot(statement, arch));
+        let args = if has_local_setup {
+            Vec::new()
+        } else {
+            (0..arg_slots(arch).len())
+                .map(|slot| Expr::Reg(VReg::phys(format!("arg{slot}"))))
+                .collect()
+        };
+        body[index] = Stmt::Call {
+            target: callee,
+            args,
+            dst: None,
+        };
+        body.insert(
+            index + 1,
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys(return_reg(arch)))),
+            },
+        );
+        index += 2;
+    }
+}
+
 fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
     for stmt in body.iter_mut() {
         match stmt {
@@ -1291,6 +1419,48 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert!(matches!(f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn unresolved_direct_jump_to_a_named_external_entry_becomes_a_tail_call() {
+        let mut f = Function {
+            name: "forward_sum6".into(),
+            entry_va: 0x17b0,
+            body: vec![Stmt::Goto { target: 0x1070 }],
+        };
+        let names = [(0x1070, "sum_arg6@plt".to_string())].into_iter().collect();
+
+        recover_resolved_direct_tail_calls(&mut f, CallConv::SysVAmd64, &names);
+
+        let Stmt::Call { target, args, .. } = &f.body[0] else {
+            panic!("expected recovered direct tail call, got {:#?}", f.body);
+        };
+        assert!(matches!(target, Expr::Named { va: 0x1070, name } if name == "sum_arg6@plt"));
+        assert_eq!(
+            args,
+            &(0..6)
+                .map(|slot| Expr::Reg(reg(&format!("arg{slot}"))))
+                .collect::<Vec<_>>()
+        );
+        assert!(matches!(f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn direct_jump_with_an_in_function_label_stays_a_goto() {
+        let mut f = Function {
+            name: "loop".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Goto { target: 0x1070 },
+                Stmt::Label(0x1070),
+                Stmt::Return { value: None },
+            ],
+        };
+        let names = [(0x1070, "other_symbol".to_string())].into_iter().collect();
+
+        recover_resolved_direct_tail_calls(&mut f, CallConv::SysVAmd64, &names);
+
+        assert!(matches!(f.body[0], Stmt::Goto { target: 0x1070 }));
     }
 
     #[test]

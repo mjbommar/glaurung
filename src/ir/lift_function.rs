@@ -30,6 +30,32 @@ pub fn supports_arch(arch: Arch) -> bool {
     matches!(arch, Arch::X86 | Arch::X86_64 | Arch::AArch64 | Arch::ARM)
 }
 
+/// Intersect a heuristic basic block with the authoritative chunks owned by
+/// `func`.
+///
+/// CFG recovery can temporarily attach blocks beyond a function boundary (for
+/// example, when a requested entry is analysed before the following ELF
+/// symbol). DWARF then replaces `func.chunks` with the exact ranges, but the
+/// heuristic block list intentionally remains available to analysis clients.
+/// The lifter is the semantic boundary: it must never import instructions from
+/// a different function. A block that starts in an owned chunk is clipped at
+/// that chunk's end; a block that starts outside every chunk is rejected.
+/// Legacy `Function`s with no range metadata retain their historical behavior.
+fn clip_block_to_owned_ranges(func: &Function, start: u64, end: u64) -> Option<(u64, u64)> {
+    if end <= start {
+        return None;
+    }
+    let ranges = func.all_ranges();
+    if ranges.is_empty() {
+        return Some((start, end));
+    }
+    ranges.into_iter().find_map(|range| {
+        let range_start = range.start.value;
+        let range_end = range_start.saturating_add(range.size);
+        (start >= range_start && start < range_end).then_some((start, end.min(range_end)))
+    })
+}
+
 /// Lift every basic block of `func` from `data` into LLIR blocks.
 ///
 /// Returns `None` when the architecture has no LLIR lifter yet.
@@ -44,11 +70,11 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
     let mut blocks: Vec<LlirBlock> = Vec::with_capacity(func.basic_blocks.len());
 
     for bb in &func.basic_blocks {
-        let start = bb.start_address.value;
-        let end = bb.end_address.value;
-        if end <= start {
+        let Some((start, end)) =
+            clip_block_to_owned_ranges(func, bb.start_address.value, bb.end_address.value)
+        else {
             continue;
-        }
+        };
         let Some(foff) = va_to_code_file_offset(data, start) else {
             continue;
         };
@@ -81,6 +107,15 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
             instrs,
             succs,
         });
+    }
+
+    // A clipped-out target must not survive as a dangling LLIR edge. This is
+    // especially important for oversized heuristic graphs corrected by DWARF:
+    // their last in-range block can still name the next function's entry.
+    let owned_starts: std::collections::HashSet<u64> =
+        blocks.iter().map(|block| block.start_va).collect();
+    for block in &mut blocks {
+        block.succs.retain(|target| owned_starts.contains(target));
     }
 
     if blocks.is_empty() {
@@ -161,6 +196,13 @@ mod tests {
                 src_starts.contains(&b.start_va),
                 "block start 0x{:x} not in source function",
                 b.start_va
+            );
+            assert!(
+                f.contains_va(b.start_va) && b.end_va > b.start_va && f.contains_va(b.end_va - 1),
+                "lifted block [{:#x}, {:#x}) escaped authoritative chunks {:?}",
+                b.start_va,
+                b.end_va,
+                f.all_ranges()
             );
             assert!(
                 !b.instrs.is_empty(),
@@ -258,6 +300,42 @@ mod tests {
         let f = Function::new("f".into(), entry, FunctionKind::Normal).unwrap();
         assert!(lift_function_from_bytes(&[0u8; 0], &f, Arch::MIPS64).is_none());
         assert!(lift_function_from_bytes(&[0u8; 0], &f, Arch::RISCV64).is_none());
+    }
+
+    #[test]
+    fn authoritative_chunks_clip_and_reject_heuristic_blocks() {
+        use crate::core::address::{Address, AddressKind};
+        use crate::core::address_range::AddressRange;
+        use crate::core::function::{Function, FunctionKind};
+
+        let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
+        let mut f = Function::new("bounded".into(), entry, FunctionKind::Normal).unwrap();
+        f.add_chunk(
+            AddressRange::new(
+                Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap(),
+                0x10,
+                None,
+            )
+            .unwrap(),
+        );
+        f.add_chunk(
+            AddressRange::new(
+                Address::new(AddressKind::VA, 0x2000, 64, None, None).unwrap(),
+                0x08,
+                None,
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(
+            clip_block_to_owned_ranges(&f, 0x1004, 0x1018),
+            Some((0x1004, 0x1010))
+        );
+        assert_eq!(clip_block_to_owned_ranges(&f, 0x1010, 0x1020), None);
+        assert_eq!(
+            clip_block_to_owned_ranges(&f, 0x2000, 0x2010),
+            Some((0x2000, 0x2008))
+        );
     }
 
     #[test]
