@@ -266,6 +266,7 @@ fn return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static st
     use crate::ir::call_args::CallConv;
     match cc {
         CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
+        CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         CallConv::Aarch64 => &["x0", "w0"],
         CallConv::Arm => &["r0"],
     }

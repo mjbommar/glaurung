@@ -102,15 +102,17 @@ pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> Has
 /// one in a standard frame.
 ///
 /// SysV AMD64: six integer registers, then `[rbp+16]` upward — `[rbp]` holds the
-/// saved frame pointer and `[rbp+8]` the return address. AArch64 AAPCS: eight
-/// registers, then `[x29+16]`, the frame record being `{fp, lr}`. Win64 and ARM32
-/// are deliberately absent: their layouts (a 32-byte shadow space; a different frame
-/// record) are not exercised by any fixture here, and guessing at an ABI is how a
-/// decompiler invents a parameter that does not exist.
-fn stack_arg_layout(cc: CallConv) -> Option<(usize, i64)> {
+/// saved frame pointer and `[rbp+8]` the return address. Cdecl32 has no integer
+/// register arguments and starts at `[ebp+8]` in four-byte slots. AArch64 AAPCS:
+/// eight registers, then `[x29+16]`, the frame record being `{fp, lr}`. Win64 and
+/// ARM32 are deliberately absent: their layouts (a 32-byte shadow space; a
+/// different frame record) are not exercised by any fixture here, and guessing
+/// at an ABI is how a decompiler invents a parameter that does not exist.
+fn stack_arg_layout(cc: CallConv) -> Option<(usize, i64, i64)> {
     match cc {
-        CallConv::SysVAmd64 => Some((6, 16)),
-        CallConv::Aarch64 => Some((8, 16)),
+        CallConv::SysVAmd64 => Some((6, 16, 8)),
+        CallConv::Cdecl32 => Some((0, 8, 4)),
+        CallConv::Aarch64 => Some((8, 16, 8)),
         CallConv::Win64 | CallConv::Arm => None,
     }
 }
@@ -539,9 +541,9 @@ fn alloc_name(
     // defined`) — and leaves it out of the signature, so the recompiled function
     // reads uninitialised memory instead of its own argument.
     if is_frame_pointer(base) && disp > 0 {
-        if let Some((reg_args, first)) = ctx.cc.and_then(stack_arg_layout) {
-            if disp >= first && (disp - first) % 8 == 0 {
-                return format!("arg{}", reg_args + ((disp - first) / 8) as usize);
+        if let Some((reg_args, first, stride)) = ctx.cc.and_then(stack_arg_layout) {
+            if disp >= first && (disp - first) % stride == 0 {
+                return format!("arg{}", reg_args + ((disp - first) / stride) as usize);
             }
         }
     }
@@ -618,6 +620,15 @@ mod tests {
         assert_eq!(promoted("rbp", 24, cc), "arg7");
         assert_eq!(promoted("rbp", 32, cc), "arg8");
         assert_eq!(promoted("rbp", 40, cc), "arg9");
+    }
+
+    #[test]
+    fn cdecl32_arguments_start_at_ebp_plus_eight_in_four_byte_slots() {
+        let cc = Some(CallConv::Cdecl32);
+        assert_eq!(promoted("ebp", 8, cc), "arg0");
+        assert_eq!(promoted("ebp", 12, cc), "arg1");
+        assert_eq!(promoted("ebp", 16, cc), "arg2");
+        assert_eq!(promoted("ebp", -4, cc), "local_4");
     }
 
     #[test]

@@ -452,6 +452,7 @@ fn detect_arch_and_call_conv(
     let cc = match (arch, is_pe) {
         (BArch::AArch64, _) => crate::ir::call_args::CallConv::Aarch64,
         (BArch::ARM, _) => crate::ir::call_args::CallConv::Arm,
+        (BArch::X86, _) => crate::ir::call_args::CallConv::Cdecl32,
         (BArch::X86_64, true) => crate::ir::call_args::CallConv::Win64,
         _ => crate::ir::call_args::CallConv::SysVAmd64,
     };
@@ -797,6 +798,7 @@ fn remap_type_map(
             &["r8", "r8d", "r8w", "r8b"],
             &["r9", "r9d", "r9w", "r9b"],
         ],
+        crate::ir::call_args::CallConv::Cdecl32 => &[],
         crate::ir::call_args::CallConv::Aarch64 => &[
             &["x0", "w0"],
             &["x1", "w1"],
@@ -827,6 +829,7 @@ fn remap_type_map(
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64 => {
             &["rax", "eax", "ax", "al"]
         }
+        crate::ir::call_args::CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         crate::ir::call_args::CallConv::Aarch64 => &["x0", "w0"],
         crate::ir::call_args::CallConv::Arm => &["r0"],
     };

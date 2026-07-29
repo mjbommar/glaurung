@@ -30,6 +30,7 @@ use crate::ir::types::{CallEffects, LlirFunction, Op, VReg};
 pub fn return_register(cc: CallConv) -> &'static str {
     match cc {
         CallConv::SysVAmd64 | CallConv::Win64 => "rax",
+        CallConv::Cdecl32 => "rax",
         CallConv::Aarch64 => "x0",
         CallConv::Arm => "r0",
     }
@@ -43,6 +44,7 @@ pub fn argument_registers(cc: CallConv) -> &'static [&'static str] {
     match cc {
         CallConv::SysVAmd64 => &["rdi", "rsi", "rdx", "rcx", "r8", "r9"],
         CallConv::Win64 => &["rcx", "rdx", "r8", "r9"],
+        CallConv::Cdecl32 => &[],
         CallConv::Aarch64 => &["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"],
         CallConv::Arm => &["r0", "r1", "r2", "r3"],
     }
@@ -73,6 +75,7 @@ pub fn argument_slots(cc: CallConv) -> &'static [&'static [&'static str]] {
             &["r8", "r8d", "r8w", "r8b"],
             &["r9", "r9d", "r9w", "r9b"],
         ],
+        CallConv::Cdecl32 => &[],
         CallConv::Aarch64 => &[
             &["x0", "w0"],
             &["x1", "w1"],
@@ -91,6 +94,10 @@ pub fn argument_slots(cc: CallConv) -> &'static [&'static [&'static str]] {
 pub fn return_registers(cc: CallConv) -> &'static [&'static str] {
     match cc {
         CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
+        // SSA canonicalises EAX and its subregisters to the RAX parent name
+        // even when decoding a 32-bit binary, so keep that logical spelling at
+        // the head of the alias set as the decompiler's logical return value.
+        CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         CallConv::Aarch64 => &["x0", "w0"],
         CallConv::Arm => &["r0"],
     }
@@ -216,6 +223,14 @@ mod tests {
     }
 
     #[test]
+    fn cdecl32_uses_the_canonical_accumulator_and_no_register_arguments() {
+        let effects = call_effects(CallConv::Cdecl32);
+        assert_eq!(effects.result, Some(VReg::phys("rax")));
+        assert!(effects.args.is_empty());
+        assert!(is_return_register(CallConv::Cdecl32, "eax#9"));
+    }
+
+    #[test]
     fn annotation_is_idempotent_and_does_not_overwrite() {
         let mut lf = func(vec![call_at(0x1000)]);
         annotate_calls(&mut lf, CallConv::SysVAmd64);
@@ -240,7 +255,13 @@ mod tests {
     /// alias means a `%edi = …` write is not recognised as setting parameter 0.
     #[test]
     fn every_alias_maps_to_its_own_slot() {
-        for cc in [CallConv::SysVAmd64, CallConv::Win64, CallConv::Aarch64, CallConv::Arm] {
+        for cc in [
+            CallConv::SysVAmd64,
+            CallConv::Win64,
+            CallConv::Cdecl32,
+            CallConv::Aarch64,
+            CallConv::Arm,
+        ] {
             for (i, names) in argument_slots(cc).iter().enumerate() {
                 for n in *names {
                     assert_eq!(argument_slot_of(cc, n), Some(i), "{cc:?} {n}");
@@ -254,7 +275,13 @@ mod tests {
     /// a register is.
     #[test]
     fn the_canonical_list_is_the_first_alias_of_each_slot() {
-        for cc in [CallConv::SysVAmd64, CallConv::Win64, CallConv::Aarch64, CallConv::Arm] {
+        for cc in [
+            CallConv::SysVAmd64,
+            CallConv::Win64,
+            CallConv::Cdecl32,
+            CallConv::Aarch64,
+            CallConv::Arm,
+        ] {
             let canon = argument_registers(cc);
             let slots = argument_slots(cc);
             assert_eq!(canon.len(), slots.len(), "{cc:?}");
@@ -290,8 +317,18 @@ mod tests {
     /// The return register is the widest spelling, and the alias list leads with it.
     #[test]
     fn the_return_register_leads_its_alias_list() {
-        for cc in [CallConv::SysVAmd64, CallConv::Win64, CallConv::Aarch64, CallConv::Arm] {
-            assert_eq!(return_registers(cc).first(), Some(&return_register(cc)), "{cc:?}");
+        for cc in [
+            CallConv::SysVAmd64,
+            CallConv::Win64,
+            CallConv::Cdecl32,
+            CallConv::Aarch64,
+            CallConv::Arm,
+        ] {
+            assert_eq!(
+                return_registers(cc).first(),
+                Some(&return_register(cc)),
+                "{cc:?}"
+            );
         }
     }
 }

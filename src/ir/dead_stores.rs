@@ -35,6 +35,7 @@ pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
 fn return_reg_aliases(cc: CallConv) -> Vec<&'static str> {
     match cc {
         CallConv::SysVAmd64 | CallConv::Win64 => vec!["rax", "eax", "ax", "al", "ret"],
+        CallConv::Cdecl32 => vec!["rax", "eax", "ax", "al", "ret"],
         CallConv::Aarch64 => vec!["x0", "w0", "arg0", "ret"],
         CallConv::Arm => vec!["r0", "arg0", "ret"],
     }

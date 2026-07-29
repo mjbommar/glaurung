@@ -4059,7 +4059,12 @@ pub(crate) fn parse_arg_index(name: &str) -> Option<usize> {
     if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    rest.parse().ok()
+    let index: usize = rest.parse().ok()?;
+    // A malformed stack displacement must never turn rendering into an
+    // unbounded `for 0..argN` allocation. Keep the defensive ceiling high
+    // enough for unusually large generated-C interfaces while rejecting the
+    // multi-million/billion indices produced by corrupt displacements.
+    (index < 1024).then_some(index)
 }
 
 /// The C-identifier spelling for a processor flag (`Flag::Z` -> `zf`).
@@ -6650,6 +6655,13 @@ function f @ 0x1000 {
             "untyped fallback changed:\n{}",
             untyped
         );
+    }
+
+    #[test]
+    fn absurd_argument_indices_are_not_treated_as_signature_arity() {
+        assert_eq!(parse_arg_index("arg1023"), Some(1023));
+        assert_eq!(parse_arg_index("arg1024"), None);
+        assert_eq!(parse_arg_index("arg536870912"), None);
     }
 
     #[test]

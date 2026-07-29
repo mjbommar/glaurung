@@ -25,7 +25,7 @@
 //! populated in calling-convention order.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::VReg;
+use crate::ir::types::{BinOp, VReg};
 
 /// Which calling convention a function obeys. The register facts that follow from
 /// it live in [`crate::ir::abi`].
@@ -33,6 +33,8 @@ use crate::ir::types::VReg;
 pub enum CallConv {
     SysVAmd64,
     Win64,
+    /// 32-bit x86 cdecl: stack arguments, EAX return value.
+    Cdecl32,
     Aarch64,
     /// ARM32 AAPCS (r0-r3 args, r0 return).
     Arm,
@@ -594,6 +596,10 @@ fn fold_one_call(
     arch: CallConv,
     param_slots: &std::collections::HashSet<usize>,
 ) {
+    if arch == CallConv::Cdecl32 {
+        fold_one_cdecl32_call(body, call_idx);
+        return;
+    }
     // Map slot → (stmt_index, expression) for assignments we will eat.
     let mut found: Vec<Option<(usize, Expr)>> = vec![None; arg_slots(arch).len()];
     let mut read_between: Vec<bool> = vec![false; arg_slots(arch).len()];
@@ -684,6 +690,140 @@ fn fold_one_call(
     used_stmt_indices.sort_by(|a, b| b.cmp(a));
     for idx in used_stmt_indices {
         body.remove(idx);
+    }
+}
+
+/// Recover 32-bit cdecl arguments from stores into the outgoing ESP area.
+///
+/// A typical caller emits `mov [esp], a0; mov [esp+4], a1; call f`. These are
+/// not register assignments, so the register-ABI reconstruction above sees no
+/// arguments at all. Walk backward only to the nearest call/stack adjustment or
+/// control-flow boundary, retain the latest store at each non-negative offset,
+/// and accept an exactly contiguous layout beginning at `[esp]`.
+fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
+    let mut by_offset: std::collections::BTreeMap<i64, (usize, Expr, u8)> =
+        std::collections::BTreeMap::new();
+    let mut pushed_args = Vec::new();
+    let mut used = Vec::new();
+    let mut cursor = call_idx;
+    while cursor > 0 {
+        let i = cursor - 1;
+        match &body[i] {
+            Stmt::Call { .. }
+            | Stmt::Label(_)
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Return { .. }
+            | Stmt::If { .. }
+            | Stmt::While { .. }
+            | Stmt::DoWhile { .. }
+            | Stmt::For { .. }
+            | Stmt::Switch { .. }
+            | Stmt::Push { .. }
+            | Stmt::Pop { .. } => break,
+            Stmt::Assign {
+                dst: VReg::Phys(frame),
+                src: Expr::Reg(VReg::Phys(stack)),
+            } if matches!(frame.as_str(), "ebp" | "rbp")
+                && matches!(stack.as_str(), "esp" | "rsp") =>
+            {
+                break;
+            }
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                ..
+            } if name == "esp" || name == "rsp" => break,
+            Stmt::Store {
+                addr:
+                    Expr::Lea {
+                        base: Some(VReg::Phys(base)),
+                        index: None,
+                        disp,
+                        ..
+                    },
+                src,
+                size,
+            } if matches!(base.as_str(), "esp" | "rsp") && *disp >= 0 && *size > 0 => {
+                // Iced lowers `push X` to `sp -= width; [sp] = X`. Walking
+                // backward encounters cdecl's right-to-left pushes in source
+                // argument order: arg0, arg1, ... . Absorb both halves of each
+                // pair, but stop at an unrelated stack adjustment (alignment,
+                // local allocation, or cleanup) rather than guessing across it.
+                if *disp == 0
+                    && i > 0
+                    && stack_pointer_sub_width(&body[i - 1]) == Some(i64::from(*size))
+                {
+                    pushed_args.push(src.clone());
+                    used.extend([i, i - 1]);
+                    cursor = i - 1;
+                    continue;
+                }
+                if pushed_args.is_empty() {
+                    by_offset
+                        .entry(*disp)
+                        .or_insert_with(|| (i, src.clone(), *size));
+                } else {
+                    break;
+                }
+            }
+            _ => {}
+        }
+        cursor = i;
+    }
+
+    let args = if pushed_args.is_empty() {
+        let mut args = Vec::new();
+        let mut expected_offset = 0i64;
+        for (offset, (stmt_idx, value, size)) in by_offset {
+            if offset != expected_offset {
+                break;
+            }
+            args.push(value);
+            used.push(stmt_idx);
+            let slot_size = i64::from(size).max(4);
+            expected_offset = expected_offset.saturating_add((slot_size + 3) & !3);
+        }
+        args
+    } else {
+        pushed_args
+    };
+    if args.is_empty() {
+        return;
+    }
+
+    if let Stmt::Call {
+        args: call_args, ..
+    } = &mut body[call_idx]
+    {
+        *call_args = args;
+    }
+    used.sort_unstable_by(|left, right| right.cmp(left));
+    for stmt_idx in used {
+        body.remove(stmt_idx);
+    }
+}
+
+/// Width of `esp/rsp = esp/rsp - N`, if this is exactly a stack allocation.
+fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
+    let Stmt::Assign {
+        dst: VReg::Phys(dst),
+        src: Expr::Bin {
+            op: BinOp::Sub,
+            lhs,
+            rhs,
+        },
+    } = stmt
+    else {
+        return None;
+    };
+    if !matches!(dst.as_str(), "esp" | "rsp")
+        || !matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(src)) if src == dst)
+    {
+        return None;
+    }
+    match rhs.as_ref() {
+        Expr::Const(width) if *width > 0 => Some(*width),
+        _ => None,
     }
 }
 
@@ -1111,6 +1251,169 @@ mod tests {
             assert_eq!(args[1], Expr::Const(2));
             assert_eq!(args[2], Expr::Const(3));
         }
+    }
+
+    #[test]
+    fn cdecl32_folds_contiguous_outgoing_stack_stores() {
+        let stack_store = |disp, value| Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg("esp")),
+                index: None,
+                scale: 1,
+                disp,
+                segment: None,
+            },
+            src: Expr::Const(value),
+            size: 4,
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                stack_store(8, 30),
+                stack_store(4, 20),
+                stack_store(0, 10),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "callee".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert_eq!(
+            f.body.len(),
+            1,
+            "stack setup was not absorbed: {:#?}",
+            f.body
+        );
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Call { args, .. }
+                if args == &vec![Expr::Const(10), Expr::Const(20), Expr::Const(30)]
+        ));
+    }
+
+    #[test]
+    fn cdecl32_folds_right_to_left_push_lowering() {
+        let push_pair = |value| {
+            [
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(value),
+                    size: 4,
+                },
+            ]
+        };
+        let mut body = Vec::new();
+        body.extend(push_pair(30));
+        body.extend(push_pair(20));
+        body.extend(push_pair(10));
+        body.push(Stmt::Call {
+            target: Expr::Named {
+                va: 0,
+                name: "callee".into(),
+            },
+            args: Vec::new(),
+            dst: None,
+        });
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body,
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert_eq!(
+            f.body.len(),
+            1,
+            "push setup was not absorbed: {:#?}",
+            f.body
+        );
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Call { args, .. }
+                if args == &vec![Expr::Const(10), Expr::Const(20), Expr::Const(30)]
+        ));
+    }
+
+    #[test]
+    fn cdecl32_does_not_absorb_frame_prologue_as_an_argument() {
+        let stack_sub = || Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(4)),
+            },
+        };
+        let stack_store = |value| Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg("rsp")),
+                index: None,
+                scale: 1,
+                disp: 0,
+                segment: None,
+            },
+            src: Expr::Const(value),
+            size: 4,
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                stack_sub(),
+                stack_store(99),
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("rsp")),
+                },
+                stack_sub(),
+                stack_store(20),
+                stack_sub(),
+                stack_store(10),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "callee".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert!(matches!(
+            f.body.last(),
+            Some(Stmt::Call { args, .. })
+                if args == &vec![Expr::Const(10), Expr::Const(20)]
+        ));
+        assert!(f.body.iter().any(|stmt| matches!(
+            stmt,
+            Stmt::Assign { dst: VReg::Phys(name), .. } if name == "rbp"
+        )));
     }
 
     #[test]

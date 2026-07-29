@@ -274,6 +274,28 @@ fn segment_override(seg: Register) -> Option<String> {
     }
 }
 
+/// Decode a base/index-relative displacement with the address width that iced
+/// used. In 32-bit mode iced returns `-0x24` as `0x00000000ffffffdc`; a direct
+/// `as i64` therefore turns a frame local into a four-gigabyte positive offset.
+/// Absolute no-base addresses remain unsigned VAs.
+fn memory_displacement_i64(instr: &iced_x86::Instruction) -> i64 {
+    let raw = instr.memory_displacement64();
+    let base = instr.memory_base();
+    let index = instr.memory_index();
+    let has_relative_register = base != Register::None || index != Register::None;
+    let uses_32bit_addressing = [base, index].into_iter().any(|register| {
+        maybe_reg(register).and_then(|reg| match reg {
+            VReg::Phys(name) => phys_reg_width(&name),
+            _ => None,
+        }) == Some(Width::W32)
+    });
+    if has_relative_register && uses_32bit_addressing {
+        raw as u32 as i32 as i64
+    } else {
+        raw as i64
+    }
+}
+
 fn mem_op_of(instr: &iced_x86::Instruction) -> MemOp {
     let base = if instr.memory_base() == Register::RIP {
         None
@@ -284,7 +306,7 @@ fn mem_op_of(instr: &iced_x86::Instruction) -> MemOp {
         base,
         index: maybe_reg(instr.memory_index()),
         scale: instr.memory_index_scale() as u8,
-        disp: instr.memory_displacement64() as i64,
+        disp: memory_displacement_i64(instr),
         size: instr.memory_size().size() as u8,
         segment: segment_override(instr.memory_segment()),
         endian: Endian::Little,
@@ -2058,7 +2080,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 let base = maybe_reg(instr.memory_base());
                 let index = maybe_reg(instr.memory_index());
                 let scale = instr.memory_index_scale().max(1);
-                let disp = instr.memory_displacement64() as i64;
+                let disp = memory_displacement_i64(instr);
 
                 let mut ops: Vec<Op> = Vec::new();
                 let tmp = VReg::Temp(0);
@@ -4458,6 +4480,26 @@ mod tests {
                 src: Value::Reg(VReg::Temp(0)),
             } if *dst == VReg::phys("rax")
         ));
+    }
+
+    #[test]
+    fn lea_32bit_negative_disp_is_sign_extended() {
+        // lea eax, [ebp - 0x24]  (8d 45 dc). iced exposes the displacement as
+        // 0x00000000ffffffdc in 32-bit mode; treating that as an i64 invents a
+        // huge positive stack offset instead of the local at -0x24.
+        let ops = lift_bytes(&[0x8d, 0x45, 0xdc], 0x1000, 32);
+        assert!(
+            matches!(
+                &ops[1].op,
+                Op::Bin {
+                    dst: VReg::Temp(0),
+                    op: BinOp::Add,
+                    rhs: Value::Const(-36),
+                    ..
+                }
+            ),
+            "got: {ops:#?}"
+        );
     }
 
     #[test]

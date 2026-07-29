@@ -46,6 +46,7 @@ fn arg_slot_tables(cc: CallConv) -> &'static [&'static [&'static str]] {
             &["r8", "r8d", "r8w", "r8b"],
             &["r9", "r9d", "r9w", "r9b"],
         ],
+        CallConv::Cdecl32 => &[],
         CallConv::Aarch64 => &[
             &["x0", "w0"],
             &["x1", "w1"],
