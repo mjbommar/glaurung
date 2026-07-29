@@ -28,17 +28,37 @@ fn build(width: Width, count: usize) -> (ExprPool, Vec<Assert>) {
     for _ in 0..count {
         let x = p.fresh_symbol(width);
         let eight = p.intern(Expr::Const { value: 8, width });
-        let mul = p.intern(Expr::Bin { op: BinOp::Mul, a: x, b: eight, width });
+        let mul = p.intern(Expr::Bin {
+            op: BinOp::Mul,
+            a: x,
+            b: eight,
+            width,
+        });
         let sixteen = p.intern(Expr::Const { value: 16, width });
-        let add = p.intern(Expr::Bin { op: BinOp::Add, a: mul, b: sixteen, width });
+        let add = p.intern(Expr::Bin {
+            op: BinOp::Add,
+            a: mul,
+            b: sixteen,
+            width,
+        });
         let target = p.intern(Expr::Const { value: 0x90, width });
-        let eq: ExprId = p.intern(Expr::Cmp { op: CmpOp::Eq, a: add, b: target, width });
+        let eq: ExprId = p.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: add,
+            b: target,
+            width,
+        });
         asserts.push((eq, true));
     }
     (p, asserts)
 }
 
-fn time_backend<S: Solver>(mut mk: impl FnMut() -> S, p: &ExprPool, a: &[Assert], reps: u32) -> f64 {
+fn time_backend<S: Solver>(
+    mut mk: impl FnMut() -> S,
+    p: &ExprPool,
+    a: &[Assert],
+    reps: u32,
+) -> f64 {
     // warm
     let _ = mk().check(p, a);
     let t = Instant::now();

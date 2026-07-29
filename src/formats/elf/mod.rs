@@ -107,8 +107,7 @@ impl<'data> ElfParser<'data> {
             let size = dynamic.entries_by_tag(size_tag).first().map(|e| e.d_val);
             if let (Some(addr), Some(size)) = (addr, size) {
                 let bytes = self.vaddr_slice(addr, size as usize)?;
-                let relocs =
-                    packed_relocations::decode_android_packed(bytes, is_rela)?;
+                let relocs = packed_relocations::decode_android_packed(bytes, is_rela)?;
                 return Ok(Some(relocs));
             }
         }
@@ -151,7 +150,10 @@ impl<'data> ElfParser<'data> {
         })?;
         self.data
             .get(offset..offset + len)
-            .ok_or(ElfError::Truncated { offset, needed: len })
+            .ok_or(ElfError::Truncated {
+                offset,
+                needed: len,
+            })
     }
 
     /// Parse a symbol table by name

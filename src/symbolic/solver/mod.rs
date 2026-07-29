@@ -1725,8 +1725,8 @@ mod engine_cache_integration_tests {
 #[cfg(test)]
 mod timeout_configuration_tests {
     use super::{
-        DEFAULT_CHECK_TIMEOUT_MS, SolveUnknownReason, SolverWorkBudgets, parse_check_timeout_ms,
-        parse_solver_work_budget,
+        parse_check_timeout_ms, parse_solver_work_budget, SolveUnknownReason, SolverWorkBudgets,
+        DEFAULT_CHECK_TIMEOUT_MS,
     };
 
     #[test]
@@ -1857,8 +1857,8 @@ mod neutral_fair_shadow_tests {
 #[cfg(all(test, feature = "solver-z3"))]
 mod capture_tests {
     use super::{
-        SolveResult, SolveUnknownReason, append_capture_index, publish_query_file,
-        publish_shadow_split_bytes, shadow_result_class, should_capture_shadow_split,
+        append_capture_index, publish_query_file, publish_shadow_split_bytes, shadow_result_class,
+        should_capture_shadow_split, SolveResult, SolveUnknownReason,
     };
 
     #[test]

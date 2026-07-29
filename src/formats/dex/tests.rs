@@ -6,8 +6,8 @@
 use super::*;
 
 fn load_sample() -> Option<Vec<u8>> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/android/sample.dex");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/android/sample.dex");
     std::fs::read(path).ok()
 }
 
@@ -31,7 +31,13 @@ fn string_pool_contains_source_literals() {
     let Some(data) = load_sample() else { return };
     let dex = DexParser::parse(&data).unwrap();
     let strings: Vec<String> = dex.strings().map(|(_, s)| s).collect();
-    for expected in ["GlaurungSample", "greet", "secureCall", "render", "isExported"] {
+    for expected in [
+        "GlaurungSample",
+        "greet",
+        "secureCall",
+        "render",
+        "isExported",
+    ] {
         assert!(
             strings.iter().any(|s| s == expected),
             "string pool missing {expected:?}"
@@ -52,7 +58,10 @@ fn class_names_and_interface_flag() {
         .class_defs()
         .find(|d| dex.class_name(d).as_deref() == Ok("Lcom/glaurung/sample/Widget;"))
         .expect("Widget class_def");
-    assert!(widget.access_flags & ACC_INTERFACE != 0, "Widget is an interface");
+    assert!(
+        widget.access_flags & ACC_INTERFACE != 0,
+        "Widget is an interface"
+    );
 
     let sample = dex
         .class_defs()
@@ -72,15 +81,20 @@ fn method_signatures_render_with_types() {
 
     // greet(String) -> String, add(int,int) -> int, native secureCall(byte[],int) -> long.
     assert!(
-        sigs.iter().any(|s| s
-            == "Lcom/glaurung/sample/Sample;->greet(Ljava/lang/String;)Ljava/lang/String;"),
+        sigs.iter()
+            .any(|s| s
+                == "Lcom/glaurung/sample/Sample;->greet(Ljava/lang/String;)Ljava/lang/String;"),
         "missing greet signature; got {sigs:?}"
     );
-    assert!(sigs.iter().any(|s| s == "Lcom/glaurung/sample/Sample;->add(II)I"));
+    assert!(sigs
+        .iter()
+        .any(|s| s == "Lcom/glaurung/sample/Sample;->add(II)I"));
     assert!(sigs
         .iter()
         .any(|s| s == "Lcom/glaurung/sample/Sample;->secureCall([BI)J"));
-    assert!(sigs.iter().any(|s| s == "Lcom/glaurung/sample/Widget;->render(I)V"));
+    assert!(sigs
+        .iter()
+        .any(|s| s == "Lcom/glaurung/sample/Widget;->render(I)V"));
     assert!(sigs
         .iter()
         .any(|s| s == "Lcom/glaurung/sample/Widget;->isExported()Z"));

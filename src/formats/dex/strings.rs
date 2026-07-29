@@ -71,9 +71,8 @@ pub fn decode_mutf8(data: &[u8], off: usize, utf16_len: usize) -> Result<String>
             if b1 & 0xc0 != 0x80 || b2 & 0xc0 != 0x80 {
                 return Err(DexError::InvalidString);
             }
-            let cp = (((b0 & 0x0f) as u16) << 12)
-                | (((b1 & 0x3f) as u16) << 6)
-                | ((b2 & 0x3f) as u16);
+            let cp =
+                (((b0 & 0x0f) as u16) << 12) | (((b1 & 0x3f) as u16) << 6) | ((b2 & 0x3f) as u16);
             units.push(cp);
             i += 3;
         } else {

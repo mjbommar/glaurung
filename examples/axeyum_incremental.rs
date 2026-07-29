@@ -41,8 +41,16 @@ fn glaurung_pc() -> (ExprPool, Vec<Assert>) {
             hi: (i + 1) as u16,
             lo: i as u16,
         });
-        let b = p.intern(Expr::Const { value: bit, width: Width::W1 });
-        let eq: ExprId = p.intern(Expr::Cmp { op: CmpOp::Eq, a: ex, b, width: Width::W1 });
+        let b = p.intern(Expr::Const {
+            value: bit,
+            width: Width::W1,
+        });
+        let eq: ExprId = p.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: ex,
+            b,
+            width: Width::W1,
+        });
         asserts.push((eq, true));
     }
     (p, asserts)
@@ -106,9 +114,21 @@ fn main() {
     ax_warm /= reps as f64;
 
     println!("Path-condition depth K={K}, {reps} reps. Cost to explore to depth K (ms/run):");
-    println!("  z3 one-shot     : {:>8.3} ms   (glaurung's current backend)", z3);
-    println!("  axeyum one-shot : {:>8.3} ms   ({:.2}x vs z3)", ax_os, ax_os / z3);
-    println!("  axeyum WARM     : {:>8.3} ms   ({:.2}x vs z3, {:.2}x vs axeyum one-shot)", ax_warm, ax_warm / z3, ax_warm / ax_os);
+    println!(
+        "  z3 one-shot     : {:>8.3} ms   (glaurung's current backend)",
+        z3
+    );
+    println!(
+        "  axeyum one-shot : {:>8.3} ms   ({:.2}x vs z3)",
+        ax_os,
+        ax_os / z3
+    );
+    println!(
+        "  axeyum WARM     : {:>8.3} ms   ({:.2}x vs z3, {:.2}x vs axeyum one-shot)",
+        ax_warm,
+        ax_warm / z3,
+        ax_warm / ax_os
+    );
     println!("  (warm path stayed SAT throughout: {})", sat_ok);
     println!();
     println!("If axeyum WARM << axeyum one-shot, the incremental Solver-trait");

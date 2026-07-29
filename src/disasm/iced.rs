@@ -100,9 +100,7 @@ impl IcedDisassembler {
                 OpKind::Immediate8to32 => {
                     out.push(Operand::immediate(instr.immediate8to32() as i64, 32))
                 }
-                OpKind::Immediate8to64 => {
-                    out.push(Operand::immediate(instr.immediate8to64(), 64))
-                }
+                OpKind::Immediate8to64 => out.push(Operand::immediate(instr.immediate8to64(), 64)),
                 OpKind::Immediate32to64 => {
                     out.push(Operand::immediate(instr.immediate32to64(), 64))
                 }
@@ -141,8 +139,7 @@ impl IcedDisassembler {
                         OpKind::MemoryESRDI => ("rdi", "es".to_string()),
                         _ => unreachable!(),
                     };
-                    let mem_bits =
-                        instr.memory_size().size().saturating_mul(8).min(255) as u8;
+                    let mem_bits = instr.memory_size().size().saturating_mul(8).min(255) as u8;
                     let mut op =
                         Operand::memory(mem_bits, acc, None, Some(base.to_string()), None, None);
                     op.segment = Some(seg);
@@ -249,14 +246,20 @@ mod tests {
     fn register_and_memory_sizes_are_extracted() {
         let d = dis();
         // mov ecx, 0x10  -> op0 = ecx (32-bit register)
-        let ins = d.disassemble_instruction(&va(0x1000), &[0xb9, 0x10, 0, 0, 0]).unwrap();
+        let ins = d
+            .disassemble_instruction(&va(0x1000), &[0xb9, 0x10, 0, 0, 0])
+            .unwrap();
         assert_eq!(ins.operands[0].size, 32, "ecx is 32-bit");
         // mov rax, [rbp - 8] -> op0 rax (64), op1 qword memory (64)
-        let ins = d.disassemble_instruction(&va(0x1000), &[0x48, 0x8b, 0x45, 0xf8]).unwrap();
+        let ins = d
+            .disassemble_instruction(&va(0x1000), &[0x48, 0x8b, 0x45, 0xf8])
+            .unwrap();
         assert_eq!(ins.operands[0].size, 64, "rax is 64-bit");
         assert_eq!(ins.operands[1].size, 64, "qword memory access");
         // add byte ptr [rax], 1 -> op0 byte memory (8)
-        let ins = d.disassemble_instruction(&va(0x1000), &[0x80, 0x00, 0x01]).unwrap();
+        let ins = d
+            .disassemble_instruction(&va(0x1000), &[0x80, 0x00, 0x01])
+            .unwrap();
         assert_eq!(ins.operands[0].kind, OperandKind::Memory);
         assert_eq!(ins.operands[0].size, 8, "byte memory access");
     }
@@ -280,11 +283,15 @@ mod tests {
         use crate::core::instruction::Access;
         let d = dis();
         // mov [rax], rbx (48 89 18): op0 memory = Write, op1 rbx = Read
-        let ins = d.disassemble_instruction(&va(0x1000), &[0x48, 0x89, 0x18]).unwrap();
+        let ins = d
+            .disassemble_instruction(&va(0x1000), &[0x48, 0x89, 0x18])
+            .unwrap();
         assert_eq!(ins.operands[0].access, Access::Write, "[rax] is written");
         assert_eq!(ins.operands[1].access, Access::Read, "rbx is read");
         // add rax, rbx (48 01 d8): op0 rax = ReadWrite, op1 rbx = Read
-        let ins = d.disassemble_instruction(&va(0x1000), &[0x48, 0x01, 0xd8]).unwrap();
+        let ins = d
+            .disassemble_instruction(&va(0x1000), &[0x48, 0x01, 0xd8])
+            .unwrap();
         assert_eq!(ins.operands[0].access, Access::ReadWrite, "add dest is r/w");
         assert_eq!(ins.operands[1].access, Access::Read);
     }
@@ -292,7 +299,9 @@ mod tests {
     #[test]
     fn sign_extended_immediate_is_not_dropped() {
         // cmp ecx, 0x15  (83 f9 15) uses Immediate8to32 -> previously dropped.
-        let ins = dis().disassemble_instruction(&va(0x1000), &[0x83, 0xf9, 0x15]).unwrap();
+        let ins = dis()
+            .disassemble_instruction(&va(0x1000), &[0x83, 0xf9, 0x15])
+            .unwrap();
         let imm = ins.operands.iter().find_map(|o| o.immediate);
         assert_eq!(imm, Some(0x15), "imm8-to-32 must be extracted");
     }

@@ -260,7 +260,20 @@ mod tests {
 
     #[test]
     fn sleb128_roundtrip_positive_and_negative() {
-        for v in [0i64, 1, 63, 64, 127, 128, -1, -63, -64, -8192, 0x1234_5678, -0x1234_5678] {
+        for v in [
+            0i64,
+            1,
+            63,
+            64,
+            127,
+            128,
+            -1,
+            -63,
+            -64,
+            -8192,
+            0x1234_5678,
+            -0x1234_5678,
+        ] {
             let mut buf = Vec::new();
             push_sleb128(&mut buf, v);
             let mut dec = Sleb128::new(&buf);
@@ -286,10 +299,10 @@ mod tests {
         push_sleb128(&mut s, 0x1000); // base offset
         push_sleb128(&mut s, 2); // group_size
         push_sleb128(&mut s, 0); // flags = 0 (fully ungrouped)
-        // reloc 1
+                                 // reloc 1
         push_sleb128(&mut s, 0x8); // offset delta -> 0x1008
         push_sleb128(&mut s, 1027); // r_info = R_AARCH64_RELATIVE (0x403)
-        // reloc 2
+                                    // reloc 2
         push_sleb128(&mut s, 0x8); // offset delta -> 0x1010
         push_sleb128(&mut s, 1027);
 
@@ -317,7 +330,7 @@ mod tests {
         push_sleb128(&mut s, flags);
         push_sleb128(&mut s, 8); // group offset delta
         push_sleb128(&mut s, 1027); // shared r_info
-        // per-reloc addend deltas (addend accumulates)
+                                    // per-reloc addend deltas (addend accumulates)
         push_sleb128(&mut s, 0x10);
         push_sleb128(&mut s, 0x20);
         push_sleb128(&mut s, -0x8);

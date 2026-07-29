@@ -126,7 +126,6 @@ pub fn is_return_register(cc: CallConv, name: &str) -> bool {
     return_registers(cc).contains(&ssa_base(name))
 }
 
-
 /// The effects of any call under `cc`.
 ///
 /// The full argument-register set is listed as uses rather than a recovered arity: the

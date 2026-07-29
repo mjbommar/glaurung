@@ -100,7 +100,11 @@ fn parse_start_element(chunk: &[u8], pool: &StringPool) -> Result<XmlEvent> {
 
     // Attributes begin relative to the start of ResXMLTree_attrExt (offset 16).
     let base = 16 + attribute_start;
-    let step = if attribute_size == 0 { 20 } else { attribute_size };
+    let step = if attribute_size == 0 {
+        20
+    } else {
+        attribute_size
+    };
 
     let mut attributes = Vec::with_capacity(attribute_count);
     for i in 0..attribute_count {

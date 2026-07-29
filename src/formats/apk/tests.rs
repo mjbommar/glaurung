@@ -59,7 +59,10 @@ fn extracts_and_analyzes_manifest() {
 
 #[test]
 fn rejects_non_zip() {
-    assert!(matches!(ApkReader::open(b"not a zip"), Err(ApkError::NotZip)));
+    assert!(matches!(
+        ApkReader::open(b"not a zip"),
+        Err(ApkError::NotZip)
+    ));
     assert!(matches!(
         ApkReader::open(b"\x7fELF\x02\x01\x01\x00garbage"),
         Err(ApkError::NotZip)

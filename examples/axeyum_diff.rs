@@ -72,7 +72,12 @@ fn corpus() -> Vec<Case> {
         let lo = konst(&mut p, 0x100, w);
         let above = cmp(&mut p, CmpOp::Ult, lo, x, w); // lo <u x
         cases.push(Case {
-            name: ["mask_range8", "mask_range16", "mask_range32", "mask_range64"][i],
+            name: [
+                "mask_range8",
+                "mask_range16",
+                "mask_range32",
+                "mask_range64",
+            ][i],
             pool: p,
             asserts: vec![(low_nibble_zero, true), (below, true), (above, true)],
         });
@@ -85,11 +90,20 @@ fn corpus() -> Vec<Case> {
         let zero = konst(&mut p, 0, w);
         let neg = cmp(&mut p, CmpOp::Slt, x, zero, w);
         // -10 as width-w two's complement
-        let mask = if w.bits() >= 128 { u128::MAX } else { (1u128 << w.bits()) - 1 };
+        let mask = if w.bits() >= 128 {
+            u128::MAX
+        } else {
+            (1u128 << w.bits()) - 1
+        };
         let neg10 = konst(&mut p, ((-10i128) as u128) & mask, w);
         let gt = cmp(&mut p, CmpOp::Slt, neg10, x, w); // -10 <s x
         cases.push(Case {
-            name: ["signed_win8", "signed_win16", "signed_win32", "signed_win64"][i],
+            name: [
+                "signed_win8",
+                "signed_win16",
+                "signed_win32",
+                "signed_win64",
+            ][i],
             pool: p,
             asserts: vec![(neg, true), (gt, true)],
         });
@@ -115,15 +129,46 @@ fn corpus() -> Vec<Case> {
     {
         let mut p = ExprPool::new();
         let x = p.fresh_symbol(Width::W32);
-        let b3 = p.intern(Expr::Extract { a: x, hi: 32, lo: 24 });
-        let b2 = p.intern(Expr::Extract { a: x, hi: 24, lo: 16 });
-        let b1 = p.intern(Expr::Extract { a: x, hi: 16, lo: 8 });
+        let b3 = p.intern(Expr::Extract {
+            a: x,
+            hi: 32,
+            lo: 24,
+        });
+        let b2 = p.intern(Expr::Extract {
+            a: x,
+            hi: 24,
+            lo: 16,
+        });
+        let b1 = p.intern(Expr::Extract {
+            a: x,
+            hi: 16,
+            lo: 8,
+        });
         let b0 = p.intern(Expr::Extract { a: x, hi: 8, lo: 0 });
-        let hi16 = p.intern(Expr::Concat { hi: b3, lo: b2, hi_w: Width::W8, lo_w: Width::W8 });
-        let lo16 = p.intern(Expr::Concat { hi: b1, lo: b0, hi_w: Width::W8, lo_w: Width::W8 });
-        let re = p.intern(Expr::Concat { hi: hi16, lo: lo16, hi_w: Width::W16, lo_w: Width::W16 });
+        let hi16 = p.intern(Expr::Concat {
+            hi: b3,
+            lo: b2,
+            hi_w: Width::W8,
+            lo_w: Width::W8,
+        });
+        let lo16 = p.intern(Expr::Concat {
+            hi: b1,
+            lo: b0,
+            hi_w: Width::W8,
+            lo_w: Width::W8,
+        });
+        let re = p.intern(Expr::Concat {
+            hi: hi16,
+            lo: lo16,
+            hi_w: Width::W16,
+            lo_w: Width::W16,
+        });
         let eq = cmp(&mut p, CmpOp::Eq, re, x, Width::W32);
-        cases.push(Case { name: "reassemble32", pool: p, asserts: vec![(eq, true)] });
+        cases.push(Case {
+            name: "reassemble32",
+            pool: p,
+            asserts: vec![(eq, true)],
+        });
     }
 
     // Family 6: UNSAT contradictions
@@ -136,13 +181,21 @@ fn corpus() -> Vec<Case> {
             let b = konst(&mut p, k2, w);
             let e1 = cmp(&mut p, CmpOp::Eq, x, a, w);
             let e2 = cmp(&mut p, CmpOp::Eq, x, b, w);
-            cases.push(Case { name, pool: p, asserts: vec![(e1, true), (e2, true)] });
+            cases.push(Case {
+                name,
+                pool: p,
+                asserts: vec![(e1, true), (e2, true)],
+            });
         } else {
             let lo = konst(&mut p, 10, w);
             let hi = konst(&mut p, 20, w);
             let below = cmp(&mut p, CmpOp::Ult, x, lo, w); // x < 10
             let above = cmp(&mut p, CmpOp::Ult, hi, x, w); // 20 < x
-            cases.push(Case { name, pool: p, asserts: vec![(below, true), (above, true)] });
+            cases.push(Case {
+                name,
+                pool: p,
+                asserts: vec![(below, true), (above, true)],
+            });
         }
     }
 
@@ -156,12 +209,21 @@ fn corpus() -> Vec<Case> {
         let is_one = cmp(&mut p, CmpOp::Eq, sel, one8, Width::W8); // BV1
         let four = konst(&mut p, 4, w);
         let shifted = bin(&mut p, BinOp::Shl, x, four, w);
-        let ite = p.intern(Expr::Ite { c: is_one, t: shifted, e: x, width: w });
+        let ite = p.intern(Expr::Ite {
+            c: is_one,
+            t: shifted,
+            e: x,
+            width: w,
+        });
         let target = konst(&mut p, 0x1230, w);
         let eq = cmp(&mut p, CmpOp::Eq, ite, target, w);
         // sel==1 forces shifted; x<<4 == 0x1230 => x == 0x123
         let selone = cmp(&mut p, CmpOp::Eq, sel, one8, Width::W8);
-        cases.push(Case { name: "ite_shift_mux", pool: p, asserts: vec![(eq, true), (selone, true)] });
+        cases.push(Case {
+            name: "ite_shift_mux",
+            pool: p,
+            asserts: vec![(eq, true), (selone, true)],
+        });
     }
 
     cases
@@ -224,10 +286,22 @@ fn main() {
 
         let z3_us = z3_ns as f64 / REPS as f64 / 1000.0;
         let ax_us = ax_ns as f64 / REPS as f64 / 1000.0;
-        let flag = if confident_disagree { " <== DISAGREE" } else if !agree { " (unknown)" } else { "" };
+        let flag = if confident_disagree {
+            " <== DISAGREE"
+        } else if !agree {
+            " (unknown)"
+        } else {
+            ""
+        };
         println!(
             "{:<16} {:>7} {:>7} {:>10.1} {:>10.1} {:>6.2}x{}",
-            case.name, vz, va, z3_us, ax_us, ax_us / z3_us, flag
+            case.name,
+            vz,
+            va,
+            z3_us,
+            ax_us,
+            ax_us / z3_us,
+            flag
         );
     }
 

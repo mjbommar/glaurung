@@ -70,14 +70,20 @@ fn emulate_function_py(
     let func = funcs
         .iter()
         .find(|f| f.entry_point.value == entry_va)
-        .ok_or_else(|| PyValueError::new_err(format!("no function discovered at {:#x}", entry_va)))?;
+        .ok_or_else(|| {
+            PyValueError::new_err(format!("no function discovered at {:#x}", entry_va))
+        })?;
 
     let lf = lift_function_from_bytes(&data, func, cfg_arch)
         .ok_or_else(|| PyValueError::new_err("failed to lift function (unsupported arch?)"))?;
 
     let mut m = Machine::new_with_arch(Concrete, reg_arch);
     // A sane, aligned stack pointer so push/pop/[sp+d] land in plausible memory.
-    let sp_name = if reg_arch == RegArch::AArch64 { "sp" } else { "rsp" };
+    let sp_name = if reg_arch == RegArch::AArch64 {
+        "sp"
+    } else {
+        "rsp"
+    };
     let sp = m.dom.constant(Width::W64, 0x7fff_ffff_0000);
     m.regs.write(&mut m.dom, &VReg::phys(sp_name), sp);
 

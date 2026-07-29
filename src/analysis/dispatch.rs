@@ -350,8 +350,8 @@ impl DispatchTracker {
         // state. `movslq (%rcx,%rax,4),%rax` both reads `rax` as the index and
         // writes it, so a capture that ran after the write-clears-bound rule
         // always found nothing.
-        let index_bound_on_entry = Self::mem_index(ins)
-            .and_then(|i| self.bounded.get(&canon(i)).copied());
+        let index_bound_on_entry =
+            Self::mem_index(ins).and_then(|i| self.bounded.get(&canon(i)).copied());
 
         // --- boundedness, tracked as a propagating fact -----------------------
         //
@@ -429,16 +429,14 @@ impl DispatchTracker {
                     }
                 }
                 // copy: reg <- reg
-                (None, Some(sr), None, Some(dr)) => {
-                    match self.bounded.get(&canon(sr)).copied() {
-                        Some(n) => {
-                            self.bounded.insert(canon(dr), n);
-                        }
-                        None => {
-                            self.bounded.remove(&canon(dr));
-                        }
+                (None, Some(sr), None, Some(dr)) => match self.bounded.get(&canon(sr)).copied() {
+                    Some(n) => {
+                        self.bounded.insert(canon(dr), n);
                     }
-                }
+                    None => {
+                        self.bounded.remove(&canon(dr));
+                    }
+                },
                 _ => {}
             }
         } else if let Some(d) = Self::dest_reg(ins) {
@@ -468,15 +466,13 @@ impl DispatchTracker {
             "movslq" | "movsxd" | "movsx" => {
                 let base = Self::mem_base(ins).and_then(|b| self.get(b));
                 match base {
-                    Some(Val::Addr(t)) => {
-                        self.set(
-                            dest,
-                            Val::TableOffset {
-                                table: t,
-                                bound: index_bound_on_entry,
-                            },
-                        )
-                    }
+                    Some(Val::Addr(t)) => self.set(
+                        dest,
+                        Val::TableOffset {
+                            table: t,
+                            bound: index_bound_on_entry,
+                        },
+                    ),
                     _ => self.clear(dest),
                 }
             }
@@ -501,7 +497,10 @@ impl DispatchTracker {
                 // immediate is kept as a candidate address so non-PIC tables,
                 // which name the table with a plain `mov`, still resolve.
                 let src = ins.operands.get(1);
-                if let Some(v) = src.and_then(|o| o.register.as_deref()).and_then(|r| self.get(r)) {
+                if let Some(v) = src
+                    .and_then(|o| o.register.as_deref())
+                    .and_then(|r| self.get(r))
+                {
                     self.set(dest, v);
                 } else if let Some(imm) = src.and_then(|o| o.immediate) {
                     if imm > 0 {
@@ -664,7 +663,10 @@ mod tests {
     #[test]
     fn the_real_clang_o0_shape_resolves_across_the_guard_edge() {
         let mut guard_block = DispatchTracker::new();
-        guard_block.observe(&ins("mov", vec![reg_op("rax"), mem_op(Some("rbp"), -8, None)]));
+        guard_block.observe(&ins(
+            "mov",
+            vec![reg_op("rax"), mem_op(Some("rbp"), -8, None)],
+        ));
         guard_block.observe(&ins(
             "mov",
             vec![mem_op(Some("rbp"), -24, None), reg_read("rax")],
@@ -676,8 +678,14 @@ mod tests {
         // the guard's in-range edge.
         let mut t = DispatchTracker::new();
         t.inherit_bound(Some(carried));
-        t.observe(&ins("mov", vec![reg_op("rcx"), mem_op(Some("rbp"), -24, None)])); // reload
-        t.observe(&ins("lea", vec![reg_op("rax"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "mov",
+            vec![reg_op("rcx"), mem_op(Some("rbp"), -24, None)],
+        )); // reload
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rax"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rcx"), mem_op(Some("rax"), 0, Some("rcx"))],
@@ -699,10 +707,19 @@ mod tests {
     #[test]
     fn a_bound_survives_a_spill_and_reload_into_another_register() {
         let mut t = DispatchTracker::new();
-        t.observe(&ins("sub", vec![reg_op("rax"), imm_op(3)]));      // guard on rax
-        t.observe(&ins("mov", vec![mem_op(Some("rbp"), -16, None), reg_read("rax")])); // spill
-        t.observe(&ins("mov", vec![reg_op("rcx"), mem_op(Some("rbp"), -16, None)]));   // reload -> rcx
-        t.observe(&ins("lea", vec![reg_op("rax"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins("sub", vec![reg_op("rax"), imm_op(3)])); // guard on rax
+        t.observe(&ins(
+            "mov",
+            vec![mem_op(Some("rbp"), -16, None), reg_read("rax")],
+        )); // spill
+        t.observe(&ins(
+            "mov",
+            vec![reg_op("rcx"), mem_op(Some("rbp"), -16, None)],
+        )); // reload -> rcx
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rax"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rcx"), mem_op(Some("rax"), 0, Some("rcx"))],
@@ -720,7 +737,10 @@ mod tests {
         let mut t = DispatchTracker::new();
         t.observe(&ins("cmp", vec![reg_op("rdi"), imm_op(3)]));
         t.observe(&ins("mov", vec![reg_op("rcx"), reg_op("rdi")]));
-        t.observe(&ins("lea", vec![reg_op("rsi"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rsi"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rcx"), mem_op(Some("rsi"), 0, Some("rcx"))],
@@ -772,7 +792,10 @@ mod tests {
     fn a_power_of_two_mask_is_itself_a_bound() {
         let mut t = DispatchTracker::new();
         t.observe(&ins("and", vec![reg_op("rdi"), imm_op(3)])); // index in [0,3]
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rdx"), mem_op(Some("rcx"), 0, Some("rdi"))],
@@ -790,7 +813,10 @@ mod tests {
     fn an_arbitrary_mask_is_not_a_bound() {
         let mut t = DispatchTracker::new();
         t.observe(&ins("and", vec![reg_op("rdi"), imm_op(0x0f0f)]));
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rdx"), mem_op(Some("rcx"), 0, Some("rdi"))],
@@ -808,7 +834,10 @@ mod tests {
     fn a_stack_adjust_does_not_bound_an_unrelated_dispatch() {
         let mut t = DispatchTracker::new();
         t.observe(&ins("sub", vec![reg_op("rsp"), imm_op(8)]));
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -831,7 +860,10 @@ mod tests {
     fn an_unbounded_dispatch_does_not_resolve() {
         let mut t = DispatchTracker::new();
         // No `cmp`/`sub` guard anywhere — just the dispatch itself.
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -850,7 +882,10 @@ mod tests {
     fn the_guard_clamps_an_overlong_scan() {
         let mut t = DispatchTracker::new();
         t.observe(&ins("sub", vec![reg_op("rax"), imm_op(1)])); // index in [0, 1]
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -858,7 +893,11 @@ mod tests {
         t.observe(&ins("add", vec![reg_op("rax"), reg_op("rcx")]));
         match t.resolve(&ins("jmp", vec![reg_read("rax")]), &tables()) {
             Some(Resolution::Table { targets, .. }) => {
-                assert_eq!(targets.len(), 2, "the guard admits two indices, so two arms")
+                assert_eq!(
+                    targets.len(),
+                    2,
+                    "the guard admits two indices, so two arms"
+                )
             }
             other => panic!("expected a clamped table, got {other:?}"),
         }
@@ -870,7 +909,10 @@ mod tests {
     fn the_clang_lea_movslq_add_jmp_sequence_resolves() {
         let mut t = DispatchTracker::new();
         t.observe(&ins("sub", vec![reg_op("rax"), imm_op(3)])); // switch guard: index in [0,3]
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -899,7 +941,10 @@ mod tests {
     fn observing_the_terminator_does_not_clear_the_register_it_reads() {
         let mut t = DispatchTracker::new();
         t.observe(&ins("sub", vec![reg_op("rax"), imm_op(3)])); // switch guard: index in [0,3]
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -910,7 +955,10 @@ mod tests {
         assert!(
             matches!(
                 t.resolve(&jmp, &tables()),
-                Some(Resolution::Table { table_va: 0x2000, .. })
+                Some(Resolution::Table {
+                    table_va: 0x2000,
+                    ..
+                })
             ),
             "observing the jump must not destroy its own operand"
         );
@@ -921,7 +969,10 @@ mod tests {
     fn the_add_resolves_with_either_operand_order() {
         let mut t = DispatchTracker::new();
         t.observe(&ins("sub", vec![reg_op("rdx"), imm_op(3)])); // guard on the index
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rdx"))],
@@ -930,7 +981,10 @@ mod tests {
         t.observe(&ins("add", vec![reg_op("rcx"), reg_op("rax")]));
         assert!(matches!(
             t.resolve(&ins("jmp", vec![reg_read("rcx")]), &tables()),
-            Some(Resolution::Table { table_va: 0x2000, .. })
+            Some(Resolution::Table {
+                table_va: 0x2000,
+                ..
+            })
         ));
     }
 
@@ -941,7 +995,10 @@ mod tests {
     fn register_width_views_are_the_same_location() {
         let mut t = DispatchTracker::new();
         t.observe(&ins("sub", vec![reg_op("rax"), imm_op(3)])); // switch guard: index in [0,3]
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("eax"), mem_op(Some("rcx"), 0, Some("eax"))],
@@ -959,7 +1016,10 @@ mod tests {
     fn a_register_copy_carries_the_resolution() {
         let mut t = DispatchTracker::new();
         t.observe(&ins("sub", vec![reg_op("rax"), imm_op(3)])); // switch guard: index in [0,3]
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -979,7 +1039,10 @@ mod tests {
     #[test]
     fn an_unmodelled_write_drops_the_register() {
         let mut t = DispatchTracker::new();
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -998,8 +1061,14 @@ mod tests {
     #[test]
     fn an_offset_added_to_an_unrelated_base_does_not_resolve() {
         let mut t = DispatchTracker::new();
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
-        t.observe(&ins("lea", vec![reg_op("rbx"), mem_op(Some("rip"), 0x3000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rbx"), mem_op(Some("rip"), 0x3000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -1018,7 +1087,10 @@ mod tests {
     #[test]
     fn a_dispatch_with_no_discovered_table_reports_the_address() {
         let mut t = DispatchTracker::new();
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x9999, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x9999, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -1036,7 +1108,10 @@ mod tests {
     #[test]
     fn reset_clears_state_between_blocks() {
         let mut t = DispatchTracker::new();
-        t.observe(&ins("lea", vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)]));
+        t.observe(&ins(
+            "lea",
+            vec![reg_op("rcx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
         t.observe(&ins(
             "movslq",
             vec![reg_op("rax"), mem_op(Some("rcx"), 0, Some("rax"))],
@@ -1055,7 +1130,10 @@ mod tests {
     #[test]
     fn a_non_register_operand_is_not_a_dispatch() {
         let t = DispatchTracker::new();
-        assert_eq!(t.resolve(&ins("jmp", vec![imm_op(0x1234)]), &tables()), None);
+        assert_eq!(
+            t.resolve(&ins("jmp", vec![imm_op(0x1234)]), &tables()),
+            None
+        );
     }
 
     /// Non-PIC codegen names the table with a plain immediate move.

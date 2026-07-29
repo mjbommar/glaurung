@@ -87,14 +87,22 @@ pub fn classify(
     // recognise its own default edge.
     let dispatch: Vec<bool> = (0..succs.len())
         .map(|i| {
-            let term = lf.blocks.get(i).and_then(|b| b.instrs.last()).map(|i| &i.op);
+            let term = lf
+                .blocks
+                .get(i)
+                .and_then(|b| b.instrs.last())
+                .map(|i| &i.op);
             is_dispatch(succs[i].len(), term)
         })
         .collect();
 
     let mut out: Vec<Vec<Edge>> = Vec::with_capacity(succs.len());
     for (i, targets) in succs.iter().enumerate() {
-        let term = lf.blocks.get(i).and_then(|b| b.instrs.last()).map(|x| &x.op);
+        let term = lf
+            .blocks
+            .get(i)
+            .and_then(|b| b.instrs.last())
+            .map(|x| &x.op);
         let taken = match term {
             Some(Op::CondJump { target, .. }) => va_to_idx.get(target).copied(),
             _ => None,
@@ -219,7 +227,11 @@ mod tests {
         // 1 = indirect dispatch -> {2, 3, 5}
         let lf = blocks(&[
             (0x00, vec![cj(0x40)], vec![0x10, 0x40]),
-            (0x10, vec![Op::Jump { target: 0x20 }], vec![0x20, 0x30, 0x50]),
+            (
+                0x10,
+                vec![Op::Jump { target: 0x20 }],
+                vec![0x20, 0x30, 0x50],
+            ),
             (0x20, vec![Op::Return], vec![]),
             (0x30, vec![Op::Return], vec![]),
             (0x40, vec![Op::Return], vec![]),
@@ -252,7 +264,10 @@ mod tests {
         let e = classify(&lf, &succs, |a, b| a == 0 && b == 1);
         assert!(e[1][0].back, "1 -> 0 is a latch");
         assert_eq!(e[1][0].kind, EdgeKind::Jump, "and still an explicit jump");
-        assert!(!e[0][0].back && !e[0][1].back, "forward edges are not latches");
+        assert!(
+            !e[0][0].back && !e[0][1].back,
+            "forward edges are not latches"
+        );
     }
 
     /// A block with no transfer instruction runs into the next one: LINEAR, not a
@@ -285,7 +300,11 @@ mod tests {
         // dispatch + derived default
         let lf2 = blocks(&[
             (0x00, vec![cj(0x30)], vec![0x10, 0x30]),
-            (0x10, vec![Op::Jump { target: 0x20 }], vec![0x20, 0x40, 0x50]),
+            (
+                0x10,
+                vec![Op::Jump { target: 0x20 }],
+                vec![0x20, 0x40, 0x50],
+            ),
             (0x20, vec![Op::Return], vec![]),
             (0x30, vec![Op::Return], vec![]),
             (0x40, vec![Op::Return], vec![]),

@@ -12,8 +12,8 @@ use glaurung::analysis::cfg::{analyze_functions_bytes, Budgets};
 
 #[test]
 fn discovers_functions_on_pac_bti_binary() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/android/pac_bti");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/android/pac_bti");
     let Ok(data) = std::fs::read(&path) else {
         eprintln!("skip: pac_bti fixture absent");
         return;

@@ -43,7 +43,10 @@ fn parses_header_across_versions() {
 
 #[test]
 fn rejects_non_policy() {
-    assert_eq!(parse_header(b"not a policy at all"), Err(PolicyError::BadMagic));
+    assert_eq!(
+        parse_header(b"not a policy at all"),
+        Err(PolicyError::BadMagic)
+    );
     // Correct magic, wrong identifier length.
     let mut bad = Vec::new();
     bad.extend_from_slice(&POLICYDB_MAGIC.to_le_bytes());

@@ -325,7 +325,11 @@ mod tests {
         let eax = view(Arch::X86_64, "eax").unwrap();
         assert!(eax.zero_extends());
         assert!(!eax.preserves_parent());
-        assert_eq!(eax.keep_mask(), 0, "a 32-bit write preserves no parent bits");
+        assert_eq!(
+            eax.keep_mask(),
+            0,
+            "a 32-bit write preserves no parent bits"
+        );
         assert_eq!(eax.value_mask(), 0xFFFF_FFFF);
     }
 

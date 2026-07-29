@@ -21,15 +21,15 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::symbolic::expr::{ExprId, ExprPool};
 use crate::symbolic::native_trace::NativeAssertionPack;
 use crate::symbolic::solver::{
-    Assert, SolveResult, SolveTiming, SolverWorkBudgets, check_timeout_ms, pipe,
-    solver_work_budgets,
+    check_timeout_ms, pipe, solver_work_budgets, Assert, SolveResult, SolveTiming,
+    SolverWorkBudgets,
 };
 
 const VERSION: u64 = 1;
@@ -1714,11 +1714,9 @@ mod tests {
         assert!(checks.iter().all(|row| row["axeyum_nanos"].is_u64()));
         assert!(checks.iter().all(|row| row["z3_outcome"].is_string()));
         assert!(checks.iter().all(|row| row["axeyum_outcome"].is_string()));
-        assert!(
-            checks
-                .iter()
-                .all(|row| row["axeyum_execution"] == "warm-retained")
-        );
+        assert!(checks
+            .iter()
+            .all(|row| row["axeyum_execution"] == "warm-retained"));
         let assertions = rows
             .iter()
             .filter(|row| row["event"] == "assert")
@@ -1733,13 +1731,11 @@ mod tests {
         )
         .expect("query-index JSON");
         assert_eq!(index["queries"].as_array().expect("queries").len(), 2);
-        assert!(
-            index["queries"]
-                .as_array()
-                .expect("queries")
-                .iter()
-                .any(|query| query["occurrences"].as_array().expect("occurrences").len() == 2)
-        );
+        assert!(index["queries"]
+            .as_array()
+            .expect("queries")
+            .iter()
+            .any(|query| query["occurrences"].as_array().expect("occurrences").len() == 2));
 
         let validator = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("docs/axeyum-integration/capture/validate_ordered_trace.py");

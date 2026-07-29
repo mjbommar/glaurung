@@ -1064,7 +1064,7 @@ fn select_unsigned_extremum(
             CANONICAL_MODEL_CHOICE_FINAL_UNSAT.fetch_add(1, Ordering::Relaxed);
             None
         }
-            SolveResult::Unknown(_) => {
+        SolveResult::Unknown(_) => {
             CANONICAL_MODEL_CHOICE_INCONCLUSIVE.fetch_add(1, Ordering::Relaxed);
             CANONICAL_MODEL_CHOICE_UNKNOWN.fetch_add(1, Ordering::Relaxed);
             None

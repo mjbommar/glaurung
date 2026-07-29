@@ -72,11 +72,9 @@ fn extracts_components_and_exported_flags() {
     assert!(!dialog.is_exported());
 
     // A representative service is present.
-    assert!(summary
-        .components
-        .iter()
-        .any(|c| c.name == "com.termux.api.SpeechToTextAPI$SpeechToTextService"
-            && c.kind == ComponentKind::Service));
+    assert!(summary.components.iter().any(|c| c.name
+        == "com.termux.api.SpeechToTextAPI$SpeechToTextService"
+        && c.kind == ComponentKind::Service));
 }
 
 #[test]
@@ -90,7 +88,10 @@ fn nfc_activity_has_intent_filter_actions() {
         .iter()
         .find(|c| c.name == "com.termux.api.NfcActivity")
         .expect("NfcActivity present");
-    assert!(!nfc.intent_filters.is_empty(), "NfcActivity has an intent-filter");
+    assert!(
+        !nfc.intent_filters.is_empty(),
+        "NfcActivity has an intent-filter"
+    );
     let actions: Vec<&str> = nfc
         .intent_filters
         .iter()

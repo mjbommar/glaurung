@@ -230,7 +230,10 @@ mod tests {
             at_2250.is_some(),
             "no name for the .plt.sec entry at 0x2250 that calls actually target; \
              mapped addresses were {:?}",
-            map.iter().map(|(v, _)| format!("{v:#x}")).take(12).collect::<Vec<_>>()
+            map.iter()
+                .map(|(v, _)| format!("{v:#x}"))
+                .take(12)
+                .collect::<Vec<_>>()
         );
         assert_eq!(at_2250.unwrap().1, "_ZNSaIcED2Ev@plt");
     }

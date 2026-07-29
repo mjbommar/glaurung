@@ -36,9 +36,9 @@ fn aps2_android_rela_matches_readelf() {
     let mut expected: Vec<u64> = vec![
         0x20860, 0x20868, 0x309c0, // R_AARCH64_RELATIVE
         0x209a0, 0x209a8, 0x209b0, 0x209b8, // R_AARCH64_GLOB_DAT
-        0x309f8, 0x30a00, 0x30a08, 0x30a10, 0x30a18, 0x30a20, 0x30a28, 0x30a30,
-        0x30a38, 0x30a40, 0x30a48, 0x30a50, 0x30a58, 0x30a60, 0x30a68, 0x30a70,
-        0x30a78, 0x30a80, // R_AARCH64_ABS64
+        0x309f8, 0x30a00, 0x30a08, 0x30a10, 0x30a18, 0x30a20, 0x30a28, 0x30a30, 0x30a38, 0x30a40,
+        0x30a48, 0x30a50, 0x30a58, 0x30a60, 0x30a68, 0x30a70, 0x30a78,
+        0x30a80, // R_AARCH64_ABS64
     ];
     expected.sort_unstable();
     assert_eq!(got, expected, "APS2 relocation offsets");
@@ -68,7 +68,11 @@ fn relr_matches_readelf() {
 
     let got: Vec<u64> = relocs.iter().map(|r| r.r_offset).collect();
     // readelf reports the RELR table relocates exactly these three locations.
-    assert_eq!(got, vec![0x209c0, 0x209c8, 0x30b50], "RELR relocation offsets");
+    assert_eq!(
+        got,
+        vec![0x209c0, 0x209c8, 0x30b50],
+        "RELR relocation offsets"
+    );
     assert!(
         relocs.iter().all(|r| r.r_info == 0),
         "RELR relocs are synthetic relative entries"

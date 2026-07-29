@@ -265,7 +265,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
             }
             return out;
         }
-        return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
     }
 
     // --- load/store double: ldrd/strd Rt, Rt2, [Rn, #off] ---------------
@@ -303,7 +305,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 }
             }
         }
-        return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
     }
 
     // --- bit clear: bic Rd, Rn, <reg|imm>  ==>  Rd = Rn & ~Op2 -----------
@@ -338,7 +342,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 }
             }
         }
-        return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
     }
 
     // --- zero/sign-extend byte/half: uxtb/uxth/sxtb/sxth Rd, Rn ----------
@@ -366,7 +372,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 }
             }];
         }
-        return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
     }
 
     // --- movt Rd, #imm  ==>  set the top 16 bits: Rd = Rd | (imm << 16) --
@@ -380,7 +388,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 rhs: Value::Const(imm << 16),
             }];
         }
-        return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
     }
 
     // --- long multiply / multiply-accumulate (4-operand forms) ----------
@@ -396,7 +406,11 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
             operand_to_value(&ops[3]),
         ) {
             let t = VReg::Temp(0);
-            let hi_shift = if mnem == "smull" { BinOp::Sar } else { BinOp::Shr };
+            let hi_shift = if mnem == "smull" {
+                BinOp::Sar
+            } else {
+                BinOp::Shr
+            };
             return vec![
                 Op::Bin {
                     dst: t.clone(),
@@ -416,7 +430,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 },
             ];
         }
-        return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
     }
     // mla Rd, Rn, Rm, Ra : Rd = Rn*Rm + Ra ; mls Rd, Rn, Rm, Ra : Rd = Ra - Rn*Rm.
     // A temp holds Rn*Rm so the accumulate operand `Ra` is read before `Rd` is
@@ -452,7 +468,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
             }
             return out;
         }
-        return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
     }
 
     // --- data processing: <op>{s} Rd, Rn, <reg|imm>  (or 2-operand form) --
@@ -478,7 +496,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 }];
             }
         }
-        return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
     }
 
     // --- reverse subtract: rsb Rd, Rn, #imm  ==>  Rd = imm - Rn ----------
@@ -509,7 +529,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 }];
             }
         }
-        return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
     }
 
     // --- conditional branches: b<cond> label (bne/beq/blt/...) -----------
@@ -523,7 +545,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                         inverted,
                     }];
                 }
-                return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+                return vec![Op::Unknown {
+                    mnemonic: mnem.to_string(),
+                }];
             }
         }
     }
@@ -538,7 +562,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     return vec![Op::Assign { dst, src }];
                 }
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
         // adr Rd, label — PC-relative address. Capstone resolves the target
         // into the immediate; surface it as an absolute address so xref/string
@@ -552,7 +578,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     }];
                 }
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
         "mvn" | "mvns" => {
             if ops.len() == 2 {
@@ -564,7 +592,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     }];
                 }
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
 
         // Compares set flags (cmn compares against the negation, approximated).
@@ -576,7 +606,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     return cmp_flag_ops(lhs, rhs);
                 }
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
         "tst" => {
             // tst a, b sets Z from (a & b). Approximate with an equality flag.
@@ -592,14 +624,18 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     }];
                 }
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
 
         // Loads.
         m if m.starts_with("ldr") => {
             if ops.len() >= 2 {
                 let Some(dst) = operand_reg(&ops[0]) else {
-                    return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+                    return vec![Op::Unknown {
+                        mnemonic: mnem.to_string(),
+                    }];
                 };
                 let size = mem_size_for(m);
                 if let Some(addr) = operand_to_memop(&ops[1], size) {
@@ -634,14 +670,18 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     }];
                 }
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
 
         // Stores.
         m if m.starts_with("str") => {
             if ops.len() >= 2 {
                 let Some(src) = operand_to_value(&ops[0]) else {
-                    return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+                    return vec![Op::Unknown {
+                        mnemonic: mnem.to_string(),
+                    }];
                 };
                 let size = mem_size_for(m);
                 if let Some(addr) = operand_to_memop(&ops[1], size) {
@@ -660,7 +700,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     return out;
                 }
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
 
         // Compare-and-branch (Thumb): cbz/cbnz Rn, label.
@@ -668,7 +710,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
             let inverted = mnem == "cbnz";
             if ops.len() == 2 {
                 let Some(reg_val) = operand_to_value(&ops[0]) else {
-                    return vec![Op::Unknown { mnemonic: mnem.to_string() }];
+                    return vec![Op::Unknown {
+                        mnemonic: mnem.to_string(),
+                    }];
                 };
                 if let Some(target) = ops[1].immediate {
                     return vec![
@@ -686,7 +730,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     ];
                 }
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
 
         // Unconditional branch (also the tail-call form b.w).
@@ -696,7 +742,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     target: target as u64,
                 }];
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
 
         // Calls: bl label (direct); blx label|reg (direct|indirect).
@@ -707,7 +755,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     effects: None,
                 }];
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
         "blx" => {
             if let Some(target) = ops.first().and_then(|o| o.immediate) {
@@ -722,7 +772,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     effects: None,
                 }];
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
 
         // Branch-and-exchange: `bx lr` returns; `bx reg` is an indirect
@@ -738,16 +790,22 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     effects: None,
                 }];
             }
-            vec![Op::Unknown { mnemonic: mnem.to_string() }]
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
         }
 
-        _ => vec![Op::Unknown { mnemonic: mnem.to_string() }],
+        _ => vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }],
     }
 }
 
 /// Strip the `.w`/`.n` Thumb-2 width qualifier from a lowercased mnemonic.
 fn strip_qualifier(m: &str) -> &str {
-    m.strip_suffix(".w").or_else(|| m.strip_suffix(".n")).unwrap_or(m)
+    m.strip_suffix(".w")
+        .or_else(|| m.strip_suffix(".n"))
+        .unwrap_or(m)
 }
 
 /// True for an IT-block introducer: `it` optionally followed by up to three
@@ -982,7 +1040,8 @@ mod tests {
 
         // adds r0, r0, r4  ->  Bin Add
         assert!(
-            ops.iter().any(|o| matches!(o, Op::Bin { op: BinOp::Add, .. })),
+            ops.iter()
+                .any(|o| matches!(o, Op::Bin { op: BinOp::Add, .. })),
             "adds missing: {:?}",
             ops
         );
@@ -997,8 +1056,14 @@ mod tests {
 
         // cmp r0, r4 -> four flag writes incl. the Z equality.
         assert!(
-            ops.iter().any(|o| matches!(o,
-                Op::Cmp { dst: VReg::Flag(Flag::Z), op: CmpOp::Eq, .. })),
+            ops.iter().any(|o| matches!(
+                o,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Z),
+                    op: CmpOp::Eq,
+                    ..
+                }
+            )),
             "cmp flag writes missing: {:?}",
             ops
         );
@@ -1012,7 +1077,11 @@ mod tests {
 
         // pop {r4, pc} and bx lr both return.
         let returns = ops.iter().filter(|o| matches!(o, Op::Return)).count();
-        assert!(returns >= 2, "expected >=2 returns (pop pc + bx lr): {:?}", ops);
+        assert!(
+            returns >= 2,
+            "expected >=2 returns (pop pc + bx lr): {:?}",
+            ops
+        );
     }
 
     #[test]
@@ -1071,7 +1140,8 @@ mod tests {
         // mla r0, r1, r2, r3 = fb01 3002  ->  t = r1*r2 ; r0 = r3 + t
         let mla = ops(&[0x01, 0xfb, 0x02, 0x30]);
         assert!(
-            mla.iter().any(|o| matches!(o, Op::Bin { op: BinOp::Mul, .. })),
+            mla.iter()
+                .any(|o| matches!(o, Op::Bin { op: BinOp::Mul, .. })),
             "mla no mul: {:?}",
             mla
         );
@@ -1139,17 +1209,28 @@ mod tests {
         // bic.w r0, r1, r2 = ea21 0002  ->  Not + And (r0 = r1 & ~r2).
         let bic = ops(&[0x21, 0xea, 0x02, 0x00]);
         assert!(
-            bic.iter().any(|o| matches!(o, Op::Un { op: UnOp::Not, .. }))
-                && bic.iter().any(|o| matches!(o, Op::Bin { op: BinOp::And, .. })),
+            bic.iter()
+                .any(|o| matches!(o, Op::Un { op: UnOp::Not, .. }))
+                && bic
+                    .iter()
+                    .any(|o| matches!(o, Op::Bin { op: BinOp::And, .. })),
             "bic not Not+And: {:?}",
             bic
         );
 
         // uxtb r0,r1=b2c8, uxth=b288 -> ZExt ; sxtb=b248, sxth=b208 -> SExt.
-        assert!(matches!(ops(&[0xc8, 0xb2]).as_slice(), [Op::ZExt { from, .. }] if *from == Width::W8));
-        assert!(matches!(ops(&[0x88, 0xb2]).as_slice(), [Op::ZExt { from, .. }] if *from == Width::W16));
-        assert!(matches!(ops(&[0x48, 0xb2]).as_slice(), [Op::SExt { from, .. }] if *from == Width::W8));
-        assert!(matches!(ops(&[0x08, 0xb2]).as_slice(), [Op::SExt { from, .. }] if *from == Width::W16));
+        assert!(
+            matches!(ops(&[0xc8, 0xb2]).as_slice(), [Op::ZExt { from, .. }] if *from == Width::W8)
+        );
+        assert!(
+            matches!(ops(&[0x88, 0xb2]).as_slice(), [Op::ZExt { from, .. }] if *from == Width::W16)
+        );
+        assert!(
+            matches!(ops(&[0x48, 0xb2]).as_slice(), [Op::SExt { from, .. }] if *from == Width::W8)
+        );
+        assert!(
+            matches!(ops(&[0x08, 0xb2]).as_slice(), [Op::SExt { from, .. }] if *from == Width::W16)
+        );
 
         // movt r0, #0x1234 = f2c1 2034  ->  r0 = r0 | (0x1234 << 16).
         assert_eq!(
@@ -1174,8 +1255,6 @@ mod tests {
             assert!(no_unknown(&ops(b)), "unexpected Unknown in {:x?}", b);
         }
     }
-
-
 
     /// Thumb-2 IT (if-then) blocks: the `it`/`ite` prefix must become a Nop and
     /// each predicated instruction a conditional select, never `Op::Unknown`.

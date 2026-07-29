@@ -16,10 +16,10 @@ use crate::core::control_flow_graph::ControlFlowEdgeKind;
 use crate::core::disassembler::Disassembler;
 use crate::core::function::{Function, FunctionFlags, FunctionKind};
 use crate::core::instruction::Instruction;
-use crate::debug::dwarf::{DwarfFunction, extract_dwarf_functions};
+use crate::debug::dwarf::{extract_dwarf_functions, DwarfFunction};
 use crate::disasm::registry;
 use crate::flirt::{
-    FlirtLibrary, apply_flirt_overrides, discover_flirt_seeds, load_default_library,
+    apply_flirt_overrides, discover_flirt_seeds, load_default_library, FlirtLibrary,
 };
 use crate::triage::heuristics;
 
@@ -671,7 +671,10 @@ fn replay_dispatch_block(
     bounds: Option<crate::analysis::dispatch::Bounds>,
     addresses: Option<&std::collections::HashMap<String, u64>>,
     stop_at: Option<u64>,
-) -> Option<(crate::analysis::dispatch::DispatchTracker, Option<Instruction>)> {
+) -> Option<(
+    crate::analysis::dispatch::DispatchTracker,
+    Option<Instruction>,
+)> {
     let darch: crate::core::disassembler::Architecture = arch.into();
     let mut backend = registry::for_arch(darch, endianness)?;
     if let Some(thumb) = thumb {
@@ -735,9 +738,9 @@ fn discover_function(
     let mut queue: VecDeque<u64> = VecDeque::new();
     let mut seen: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
     let mut blocks: HashMap<u64, (u64, u32)> = HashMap::new(); // start_va -> (end_va, instr_count)
-    // block start -> inclusive max switch index its guard admits. Written when a
-    // block ends in a range check, read when its in-range successor is walked.
-    // BFS reaches the guard before the dispatch, so the fact is always available.
+                                                               // block start -> inclusive max switch index its guard admits. Written when a
+                                                               // block ends in a range check, read when its in-range successor is walked.
+                                                               // BFS reaches the guard before the dispatch, so the fact is always available.
     let mut index_bounds: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
     // Concrete register addresses that reach a block on every predecessor seen
     // so far. Unlike range bounds, these flow across ordinary branches too: a
@@ -1025,12 +1028,8 @@ fn discover_function(
     // that looked unique on the first visit. Must-dataflow makes that loss
     // propagate through every downstream block before tentative table edges are
     // accepted.
-    let thumb = arm32_mode.map(|mode| {
-        matches!(
-            mode,
-            crate::analysis::arm32_mode::Arm32Mode::Thumb
-        )
-    });
+    let thumb =
+        arm32_mode.map(|mode| matches!(mode, crate::analysis::arm32_mode::Arm32Mode::Thumb));
     let mut final_address_inputs: HashMap<u64, HashMap<String, u64>> = HashMap::new();
     final_address_inputs.insert(entry.value, HashMap::new());
     let mut address_queue: VecDeque<u64> = VecDeque::from([entry.value]);
@@ -1072,22 +1071,14 @@ fn discover_function(
             .filter_map(|(source, target, _)| (*source == block_start).then_some(*target))
             .collect();
         for successor in successors {
-            if merge_dispatch_addresses(
-                &mut final_address_inputs,
-                successor,
-                output.clone(),
-            ) {
+            if merge_dispatch_addresses(&mut final_address_inputs, successor, output.clone()) {
                 address_queue.push_back(successor);
             }
         }
     }
 
-    let mut invalid_dispatches: Vec<(
-        u64,
-        u64,
-        Vec<u64>,
-        crate::analysis::dispatch::Unresolved,
-    )> = Vec::new();
+    let mut invalid_dispatches: Vec<(u64, u64, Vec<u64>, crate::analysis::dispatch::Unresolved)> =
+        Vec::new();
     for (site, block_start, attached) in &resolved_dispatch_edges {
         let resolution = blocks.get(block_start).and_then(|(block_end, _)| {
             replay_dispatch_block(
@@ -1125,10 +1116,10 @@ fn discover_function(
         }
     }
     for (site, block_start, attached, why) in invalid_dispatches {
-        edges.retain(|(source, target, _)| {
-            !(*source == block_start && attached.contains(target))
-        });
-        stats.resolved_dispatches.retain(|(resolved, _)| *resolved != site);
+        edges.retain(|(source, target, _)| !(*source == block_start && attached.contains(target)));
+        stats
+            .resolved_dispatches
+            .retain(|(resolved, _)| *resolved != site);
         if !stats
             .unresolved_indirect
             .iter()
@@ -1154,13 +1145,11 @@ fn discover_function(
         }
     }
     blocks.retain(|start, _| reachable.contains(start));
-    edges.retain(|(source, target, _)| {
-        reachable.contains(source) && reachable.contains(target)
-    });
+    edges.retain(|(source, target, _)| reachable.contains(source) && reachable.contains(target));
     call_edges.retain(|xref| {
-        blocks.iter().any(|(start, (end, _))| {
-            xref.callsite_va >= *start && xref.callsite_va < *end
-        })
+        blocks
+            .iter()
+            .any(|(start, (end, _))| xref.callsite_va >= *start && xref.callsite_va < *end)
     });
     stats.resolved_dispatches.retain(|(site, _)| {
         blocks
@@ -3686,7 +3675,7 @@ fn analyze_functions_bytes_with_stats_and_seeds(
 
 #[cfg(test)]
 mod aarch64_ctrl_flow_tests {
-    use super::{BArch, classify_ctrl_flow, is_unconditional_branch_mnemonic};
+    use super::{classify_ctrl_flow, is_unconditional_branch_mnemonic, BArch};
 
     fn class(m: &str) -> (bool, bool, bool) {
         classify_ctrl_flow(m, BArch::AArch64)
@@ -3746,11 +3735,11 @@ mod aarch64_ctrl_flow_tests {
 #[cfg(test)]
 mod prologue_gate_tests {
     use super::{
-        BArch, ExecRegion, PeThunkKind, classify_pe_thunk_head, is_code_padding_terminator,
-        looks_like_fn_start, memory_operand_va, pe_adjustor_jump_stub_len,
-        pe_head_looks_like_simd_continuation, pe_low_confidence_call_target_head,
-        pe_prologue_scan_candidate, pe_tiny_return_helper_len, pe_tiny_stub_scan_candidate,
-        pe_tiny_stub_scan_promotes_candidate,
+        classify_pe_thunk_head, is_code_padding_terminator, looks_like_fn_start, memory_operand_va,
+        pe_adjustor_jump_stub_len, pe_head_looks_like_simd_continuation,
+        pe_low_confidence_call_target_head, pe_prologue_scan_candidate, pe_tiny_return_helper_len,
+        pe_tiny_stub_scan_candidate, pe_tiny_stub_scan_promotes_candidate, BArch, ExecRegion,
+        PeThunkKind,
     };
     use crate::core::instruction::{Access, Instruction, Operand};
     use std::collections::HashSet;
@@ -4345,7 +4334,10 @@ mod gcc_dispatch_corpus_tests {
             .expect("eight-way LLIR dispatch block");
         assert!(
             matches!(
-                dispatch_block.instrs.last().map(|instruction| &instruction.op),
+                dispatch_block
+                    .instrs
+                    .last()
+                    .map(|instruction| &instruction.op),
                 Some(crate::ir::types::Op::IndirectJump { .. })
             ),
             "the computed transfer must survive lifting as IndirectJump"
@@ -4464,7 +4456,10 @@ mod gcc_dispatch_corpus_tests {
             Some(crate::ir::types::Op::IndirectJump { .. })
         ));
         assert!(
-            stats.resolved_dispatches.iter().any(|(_site, arms)| *arms == 4),
+            stats
+                .resolved_dispatches
+                .iter()
+                .any(|(_site, arms)| *arms == 4),
             "the real Clang O2 table jump must contribute all four case arms: {:?}",
             stats.resolved_dispatches
         );

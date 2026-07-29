@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
 use crate::symbolic::solver::{
-    Assert, BitwuzlaExecutionClass, IncrementalSolver, Model, SolveResult, SolveUnknownReason,
-    Solver, SolverWorkBudgets, WarmAssertionPrefix, WarmDeltaContext, check_timeout,
-    check_timeout_ms, solver_work_budgets,
+    check_timeout, check_timeout_ms, solver_work_budgets, Assert, BitwuzlaExecutionClass,
+    IncrementalSolver, Model, SolveResult, SolveUnknownReason, Solver, SolverWorkBudgets,
+    WarmAssertionPrefix, WarmDeltaContext,
 };
 
 const PINNED_API_VERSION: &str = "0.9.1";

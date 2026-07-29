@@ -42,7 +42,10 @@ pub fn register_analysis_bindings(_py: Python<'_>, m: &Bound<'_, PyModule>) -> P
     // PE-specific helpers
     analysis_mod.add_function(wrap_pyfunction!(pe_iat_map_path_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(pe_tls_path_py, &analysis_mod)?)?;
-    analysis_mod.add_function(wrap_pyfunction!(pe_import_call_sites_path_py, &analysis_mod)?)?;
+    analysis_mod.add_function(wrap_pyfunction!(
+        pe_import_call_sites_path_py,
+        &analysis_mod
+    )?)?;
     // Windows driver IOCTL attack-surface mapper (dispatchers, codes, jump tables, handlers).
     analysis_mod.add_function(wrap_pyfunction!(ioctl_surface_map_bytes_py, &analysis_mod)?)?;
     analysis_mod.add_function(wrap_pyfunction!(ioctl_surface_map_path_py, &analysis_mod)?)?;
@@ -152,7 +155,8 @@ fn ioctl_surface_map_bytes_py(
     min_codes: usize,
     all_functions: bool,
 ) -> PyResult<PyObject> {
-    let surface = crate::analysis::ioctl_surface::map_ioctl_surface(&data, min_codes, all_functions);
+    let surface =
+        crate::analysis::ioctl_surface::map_ioctl_surface(&data, min_codes, all_functions);
     ioctl_surface_to_py(py, &surface)
 }
 
@@ -170,7 +174,8 @@ fn ioctl_surface_map_path_py(
     let limit = std::cmp::min(max_read_bytes, max_file_size);
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
-    let surface = crate::analysis::ioctl_surface::map_ioctl_surface(&data, min_codes, all_functions);
+    let surface =
+        crate::analysis::ioctl_surface::map_ioctl_surface(&data, min_codes, all_functions);
     ioctl_surface_to_py(py, &surface)
 }
 
@@ -615,9 +620,11 @@ fn pe_tls_path_py(
     let limit = std::cmp::min(max_read_bytes, max_file_size);
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
-    let parser =
-        crate::formats::pe::PeParser::with_options(&data, crate::formats::pe::ParseOptions::default())
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{}", e)))?;
+    let parser = crate::formats::pe::PeParser::with_options(
+        &data,
+        crate::formats::pe::ParseOptions::default(),
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{}", e)))?;
     let tls = parser
         .tls()
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
