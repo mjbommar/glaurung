@@ -601,7 +601,7 @@ fn decompile_at_py(
         // was computed, else recover on demand, then remap raw-reg keys to the
         // AST's role names (`arg0`, `ret`, ...) before rendering.
         let maps =
-            types.then(|| decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes));
+            types.then(|| decbench_type_maps(&lf_raw, &ssa, &f, cc, &param_slots, &slot_sizes));
         let (decl, width) = match &maps {
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
@@ -744,7 +744,7 @@ fn decompile_range_at_py(
     }
     Ok(if style == "decbench" {
         let maps =
-            types.then(|| decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes));
+            types.then(|| decbench_type_maps(&lf_raw, &ssa, &f, cc, &param_slots, &slot_sizes));
         let (decl, width) = match &maps {
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
@@ -968,8 +968,8 @@ fn decbench_text(
 /// 64 bits by accident, so `widen::insert_widening_casts` restores that explicitly.
 /// Both are remapped to AST role names and augmented with promoted-slot sizes.
 fn decbench_type_maps(
-    _lf: &crate::ir::types::LlirFunction,
     lf_raw: &crate::ir::types::LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
     f: &crate::ir::ast::Function,
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
@@ -978,10 +978,27 @@ fn decbench_type_maps(
     crate::ir::types_recover::TypeMap,
     crate::ir::types_recover::TypeMap,
 ) {
-    use crate::ir::types_recover::recover_types_for;
+    use crate::ir::types_recover::{recover_types_for, recover_types_valued};
     let mut decl = remap_type_map(&recover_types_for(lf_raw, cc), f, cc, param_slots);
+    let live_ins = recover_types_valued(lf_raw, ssa).live_in_types();
+    let live_ins = remap_type_map(&live_ins, f, cc, param_slots);
+    // A version-zero value is the exact caller-supplied parameter. Refine the
+    // flow-insensitive raw-register union's semantic class for those roles;
+    // later lifetimes of the same storage must not retype the parameter.
+    for slot in param_slots {
+        let role = crate::ir::types::VReg::Phys(format!("arg{slot}"));
+        if let Some(hint) = live_ins.get(&role) {
+            decl.refine_from_value(role, hint);
+        }
+    }
     merge_slot_sizes(&mut decl, slot_sizes);
     let mut width = remap_type_map(&recover_types_for(lf_raw, cc), f, cc, param_slots);
+    for slot in param_slots {
+        let role = crate::ir::types::VReg::Phys(format!("arg{slot}"));
+        if let Some(hint) = live_ins.get(&role) {
+            width.refine_from_value(role, hint);
+        }
+    }
     merge_slot_sizes(&mut width, slot_sizes);
     (decl, width)
 }
@@ -1064,7 +1081,8 @@ fn decompile_all_py(
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
         let text = if style == "decbench" {
-            let (decl, width) = decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
+            let (decl, width) =
+                decbench_type_maps(&lf_raw, &ssa, &f, cc, &param_slots, &slot_sizes);
             decbench_text(&f, Some(&decl), Some(&width))
         } else {
             render(&f)
@@ -1184,7 +1202,8 @@ fn decompile_many_py(
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
         let text = if style == "decbench" {
-            let (decl, width) = decbench_type_maps(&lf, &lf_raw, &f, cc, &param_slots, &slot_sizes);
+            let (decl, width) =
+                decbench_type_maps(&lf_raw, &ssa, &f, cc, &param_slots, &slot_sizes);
             decbench_text(&f, Some(&decl), Some(&width))
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);

@@ -27,6 +27,19 @@ use crate::ir::regview;
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, InstrAddr};
 
+/// The identity of one machine value in SSA form.
+///
+/// `base` names the canonical storage location (for example both `edi` and
+/// `rdi` map to `rdi` on x86-64); `version` identifies the particular write.
+/// Version zero is the implicit live-in definition at function entry.  This is
+/// the stable key downstream value/type/storage analyses consume instead of
+/// collapsing every lifetime of an architectural register into one fact.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SsaValue {
+    pub base: VReg,
+    pub version: u32,
+}
+
 /// A phi node placed by SSA construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Phi {
@@ -54,6 +67,34 @@ pub struct SsaInfo {
     /// Version read at this `(instruction, use_index)` pair. The use_index
     /// corresponds to the source-order uses enumerated by [`def_uses`].
     pub use_versions: HashMap<(InstrAddr, usize), u32>,
+}
+
+impl SsaInfo {
+    /// Return the SSA value defined by the instruction at `addr`.
+    pub fn def_value(&self, lf: &LlirFunction, addr: InstrAddr) -> Option<SsaValue> {
+        let ins = lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
+        let base = write_reg(&ins.op)?;
+        let version = self.def_versions.get(&addr).copied()?;
+        Some(SsaValue { base, version })
+    }
+
+    /// Return the SSA value read at the source-order use `use_index` of the
+    /// instruction at `addr`. The index is exactly the one returned by
+    /// [`def_uses`], so consumers do not need to reproduce the renamer's order.
+    pub fn use_value(
+        &self,
+        lf: &LlirFunction,
+        addr: InstrAddr,
+        use_index: usize,
+    ) -> Option<SsaValue> {
+        let ins = lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
+        let base = uses_of_op_ordered(&ins.op).get(use_index)?.clone();
+        if !is_ssa_reg(&base) {
+            return None;
+        }
+        let version = self.use_versions.get(&(addr, use_index)).copied()?;
+        Some(SsaValue { base, version })
+    }
 }
 
 /// Registers and flag predicates are SSA values. Memory remains outside SSA.
@@ -670,6 +711,55 @@ mod tests {
             0,
         )];
         assert_eq!(scratch_read, redef);
+    }
+
+    #[test]
+    fn explicit_value_queries_preserve_storage_identity_and_version() {
+        // The public value identity consumed by type recovery must expose the
+        // canonical storage (`edi` and `rdi` are one x86-64 storage location)
+        // without collapsing distinct definitions back together.
+        let lf = mk_cfg(vec![(
+            0x1000,
+            vec![
+                Op::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Value::Reg(VReg::phys("edi")),
+                },
+                assign("edi", 7),
+                Op::Assign {
+                    dst: VReg::phys("rcx"),
+                    src: Value::Reg(VReg::phys("rdi")),
+                },
+            ],
+            vec![],
+        )]);
+        let info = compute_ssa(&lf);
+        let first = InstrAddr {
+            block_idx: 0,
+            instr_idx: 0,
+        };
+        let redef = InstrAddr {
+            block_idx: 0,
+            instr_idx: 1,
+        };
+        let last = InstrAddr {
+            block_idx: 0,
+            instr_idx: 2,
+        };
+
+        assert_eq!(
+            info.use_value(&lf, first, 0),
+            Some(SsaValue {
+                base: VReg::phys("rdi"),
+                version: 0,
+            })
+        );
+        let redefined_value = info
+            .def_value(&lf, redef)
+            .expect("explicit definition value");
+        assert_eq!(redefined_value.base, VReg::phys("rdi"));
+        assert_ne!(redefined_value.version, 0);
+        assert_eq!(info.use_value(&lf, last, 0), Some(redefined_value));
     }
 
     #[test]

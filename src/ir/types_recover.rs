@@ -19,9 +19,11 @@
 //! keeps it cheap and composable. Passes that need SSA precision can
 //! consume [`crate::ir::ssa::SsaInfo`] and re-run on a per-version basis.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use crate::ir::ssa::{SsaInfo, SsaValue};
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
+use crate::ir::use_def::{def_uses, InstrAddr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeHint {
@@ -62,6 +64,40 @@ impl TypeMap {
     /// incrementally from outside this crate's module.
     pub fn upsert_public(&mut self, reg: VReg, new: TypeHint) {
         self.upsert(reg, new)
+    }
+
+    /// Refine a fact after value-keyed analysis identifies the exact value that
+    /// occupies this rendered role. This is deliberately distinct from the
+    /// union-style `upsert`: SSA identity decides scalar-vs-address class while
+    /// the older operation-level analysis retains richer scalar signedness.
+    pub(crate) fn refine_from_value(&mut self, reg: VReg, hint: TypeHint) {
+        let current = self.inner.get(&reg).copied();
+        let replace = match (current, hint) {
+            (None, _) => true,
+            // Per-value identity is decisive when raw-register union confused a
+            // scalar lifetime with an address-bearing lifetime (or vice versa).
+            (
+                Some(TypeHint::Int { .. } | TypeHint::BoolLike),
+                TypeHint::Pointer { .. } | TypeHint::CodePointer,
+            )
+            | (
+                Some(TypeHint::Pointer { .. } | TypeHint::CodePointer),
+                TypeHint::Int { .. } | TypeHint::BoolLike,
+            ) => true,
+            // Exact-value memory evidence may refine the access width or
+            // distinguish data from code pointers.
+            (
+                Some(TypeHint::Pointer { .. } | TypeHint::CodePointer),
+                TypeHint::Pointer { .. } | TypeHint::CodePointer,
+            ) => true,
+            // The older recovery contains richer scalar signedness evidence
+            // from operation context (e.g. SHR/SAR). Value identity alone is
+            // not a reason to throw that fact away.
+            _ => false,
+        };
+        if replace {
+            self.inner.insert(reg, hint);
+        }
     }
 
     /// Replace an existing integer width with an ABI-mandated width while
@@ -108,46 +144,80 @@ impl TypeMap {
     /// specific than the current entry. Pointers beat ints; specific widths
     /// beat zero-width entries; bool beats nothing.
     fn upsert(&mut self, reg: VReg, new: TypeHint) {
-        let cur = self.inner.get(&reg).copied();
-        let keep = match (cur, new) {
-            (None, _) => new,
-            // Pointer / CodePointer are the strongest (semantic) classifications
-            // and win over a plain integer or bool.
-            (
-                Some(TypeHint::Int { .. }) | Some(TypeHint::BoolLike),
-                TypeHint::Pointer { .. } | TypeHint::CodePointer,
-            ) => new,
-            // Wider pointee replaces narrower pointee.
-            (
-                Some(TypeHint::Pointer { pointee_width: a }),
-                TypeHint::Pointer { pointee_width: b },
-            ) if b > a => new,
-            // Nothing downgrades an established pointer / code-pointer.
-            (Some(TypeHint::Pointer { .. }) | Some(TypeHint::CodePointer), _) => cur.unwrap(),
-            // A value only ever tested against zero is bool-ish; that beats a
-            // plain integer, but an integer signal never overwrites it.
-            (Some(TypeHint::Int { .. }), TypeHint::BoolLike) => new,
-            (Some(TypeHint::BoolLike), TypeHint::Int { .. }) => cur.unwrap(),
-            (Some(TypeHint::BoolLike), TypeHint::BoolLike) => new,
-            // Int + Int: unsigned is sticky (we only ever *assert* unsigned, from
-            // shifts / index / movzx; signed is the silent default), and we keep
-            // the more-specific (narrower, register-sub-name-derived) width over
-            // the conservative 8-byte fallback.
-            (
-                Some(TypeHint::Int {
-                    signed: cs,
-                    width: cw,
-                }),
-                TypeHint::Int {
-                    signed: ns,
-                    width: nw,
-                },
-            ) => TypeHint::Int {
-                signed: cs && ns,
-                width: combine_int_width(cw, nw),
-            },
-        };
+        let keep = merge_type_hint(self.inner.get(&reg).copied(), new);
         self.inner.insert(reg, keep);
+    }
+}
+
+/// Type facts keyed by the value a particular definition produced, rather
+/// than by the architectural register that happened to carry it. This is the
+/// substrate used by Ghidra's Varnodes and Kuna's per-write Varnode arena; it
+/// prevents unrelated register lifetimes from poisoning each other's types.
+#[derive(Debug, Default, Clone)]
+pub struct TypeMapV {
+    inner: HashMap<SsaValue, TypeHint>,
+}
+
+impl TypeMapV {
+    pub fn get(&self, value: &SsaValue) -> Option<TypeHint> {
+        self.inner.get(value).copied()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&SsaValue, &TypeHint)> {
+        self.inner.iter()
+    }
+
+    fn upsert(&mut self, value: SsaValue, hint: TypeHint) -> bool {
+        let before = self.inner.get(&value).copied();
+        let merged = merge_type_hint(before, hint);
+        self.inner.insert(value, merged);
+        before != Some(merged)
+    }
+
+    /// Project only entry definitions back to a compatibility map. This is a
+    /// lossless projection for ABI parameters: version zero is the unique
+    /// caller-supplied value, while later scratch lifetimes remain excluded.
+    pub fn live_in_types(&self) -> TypeMap {
+        let mut out = TypeMap::default();
+        for (value, hint) in &self.inner {
+            if value.version == 0 {
+                out.upsert(value.base.clone(), *hint);
+            }
+        }
+        out
+    }
+}
+
+fn merge_type_hint(current: Option<TypeHint>, new: TypeHint) -> TypeHint {
+    match (current, new) {
+        (None, _) => new,
+        // Pointer / CodePointer are the strongest semantic classifications.
+        (
+            Some(TypeHint::Int { .. }) | Some(TypeHint::BoolLike),
+            TypeHint::Pointer { .. } | TypeHint::CodePointer,
+        ) => new,
+        (Some(TypeHint::Pointer { pointee_width: a }), TypeHint::Pointer { pointee_width: b })
+            if b > a =>
+        {
+            new
+        }
+        (Some(TypeHint::Pointer { .. }) | Some(TypeHint::CodePointer), _) => current.unwrap(),
+        (Some(TypeHint::Int { .. }), TypeHint::BoolLike) => new,
+        (Some(TypeHint::BoolLike), TypeHint::Int { .. }) => current.unwrap(),
+        (Some(TypeHint::BoolLike), TypeHint::BoolLike) => new,
+        (
+            Some(TypeHint::Int {
+                signed: cs,
+                width: cw,
+            }),
+            TypeHint::Int {
+                signed: ns,
+                width: nw,
+            },
+        ) => TypeHint::Int {
+            signed: cs && ns,
+            width: combine_int_width(cw, nw),
+        },
     }
 }
 
@@ -558,6 +628,491 @@ fn propagate_pointer_arithmetic(lf: &LlirFunction, tm: &mut TypeMap) {
     }
 }
 
+/// Raw operands paired with the SSA value each occurrence reads or writes.
+/// Keeping the raw operand beside the canonical value is important: the raw
+/// spelling retains machine width (`edi` is four bytes), while [`SsaValue`]
+/// supplies the cross-view identity (`edi` and `rdi` are the same storage).
+struct InstructionValues {
+    def: Option<(VReg, SsaValue)>,
+    uses: Vec<Option<(VReg, SsaValue)>>,
+}
+
+fn instruction_values(lf: &LlirFunction, ssa: &SsaInfo, addr: InstrAddr) -> InstructionValues {
+    let op = &lf.blocks[addr.block_idx].instrs[addr.instr_idx].op;
+    let (raw_def, raw_uses) = def_uses(op);
+    let def = raw_def.zip(ssa.def_value(lf, addr));
+    let uses = raw_uses
+        .into_iter()
+        .enumerate()
+        .map(|(index, raw)| ssa.use_value(lf, addr, index).map(|value| (raw, value)))
+        .collect();
+    InstructionValues { def, uses }
+}
+
+fn operand_value(
+    operand: &Value,
+    values: &InstructionValues,
+    cursor: &mut usize,
+) -> Option<SsaValue> {
+    if !matches!(operand, Value::Reg(_)) {
+        return None;
+    }
+    let value = values
+        .uses
+        .get(*cursor)
+        .and_then(|entry| entry.as_ref())
+        .map(|(_, value)| value.clone());
+    *cursor += 1;
+    value
+}
+
+fn frame_slot(addr: &crate::ir::types::MemOp) -> Option<(String, i64)> {
+    if addr.index.is_some() {
+        return None;
+    }
+    match addr.base.as_ref() {
+        Some(base @ VReg::Phys(name)) if is_frame_base(base) => Some((name.clone(), addr.disp)),
+        _ => None,
+    }
+}
+
+fn unify_values(tm: &mut TypeMapV, a: &SsaValue, b: &SsaValue) -> bool {
+    let a_hint = tm.get(a);
+    let b_hint = tm.get(b);
+    let mut changed = false;
+    if let Some(hint) = a_hint {
+        changed |= tm.upsert(b.clone(), hint);
+    }
+    if let Some(hint) = b_hint {
+        changed |= tm.upsert(a.clone(), hint);
+    }
+    changed
+}
+
+/// Values participating in a phi whose result can reach a real instruction
+/// use. Our SSA builder deliberately places unpruned phis; treating a dead phi
+/// as a type-equivalence edge merges unrelated storage lifetimes at CFG exits.
+fn live_phi_values(lf: &LlirFunction, ssa: &SsaInfo) -> HashSet<SsaValue> {
+    let mut live = HashSet::new();
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, _) in block.instrs.iter().enumerate() {
+            let values = instruction_values(
+                lf,
+                ssa,
+                InstrAddr {
+                    block_idx,
+                    instr_idx,
+                },
+            );
+            live.extend(values.uses.into_iter().flatten().map(|(_, value)| value));
+        }
+    }
+    for _ in 0..ssa.phis.len().max(1) {
+        let mut grew = false;
+        for phi in &ssa.phis {
+            let result = SsaValue {
+                base: phi.base.clone(),
+                version: phi.dst_version,
+            };
+            if !live.contains(&result) {
+                continue;
+            }
+            for (_, version) in &phi.incoming {
+                grew |= live.insert(SsaValue {
+                    base: phi.base.clone(),
+                    version: *version,
+                });
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    live
+}
+
+/// Recover type facts per SSA definition.
+///
+/// The inference rules deliberately mirror the established raw-register pass,
+/// but all propagation edges carry [`SsaValue`] identities. Copies and phis
+/// unify values, stack spills preserve the exact value stored, and pointer
+/// arithmetic walks definition/use edges. A later constant definition can
+/// therefore be demoted without erasing an earlier pointer in the same
+/// architectural register.
+pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
+    let mut tm = TypeMapV::default();
+    let mut constant_defs: HashMap<SsaValue, TypeHint> = HashMap::new();
+    let mut copy_edges: Vec<(SsaValue, SsaValue)> = Vec::new();
+    let mut reloads: HashSet<SsaValue> = HashSet::new();
+    let mut live_in_spills: HashMap<(String, i64), Vec<SsaValue>> = HashMap::new();
+    let live_phi_values = live_phi_values(lf, ssa);
+
+    // Seed local facts and record explicit value-flow edges.
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, ins) in block.instrs.iter().enumerate() {
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
+            let values = instruction_values(lf, ssa, addr);
+
+            // Width evidence comes from the raw view at this occurrence.
+            if let Some((raw, value)) = &values.def {
+                if matches!(raw, VReg::Phys(_)) {
+                    tm.upsert(value.clone(), int_for_reg(raw));
+                }
+            }
+            for (raw, value) in values.uses.iter().flatten() {
+                if matches!(raw, VReg::Phys(_)) {
+                    tm.upsert(value.clone(), int_for_reg(raw));
+                }
+            }
+
+            match &ins.op {
+                Op::Assign { src, .. } => {
+                    if let (Some((_, dst)), Value::Reg(_)) = (&values.def, src) {
+                        if let Some((_, source)) = values.uses.first().and_then(Option::as_ref) {
+                            copy_edges.push((dst.clone(), source.clone()));
+                        }
+                    } else if matches!(src, Value::Const(_)) {
+                        if let Some((raw, dst)) = &values.def {
+                            constant_defs.insert(dst.clone(), int_for_reg(raw));
+                        }
+                    }
+                }
+                Op::Load { addr, .. } => {
+                    let mut use_index = 0usize;
+                    if addr.base.is_some() {
+                        if let Some((_, base)) =
+                            values.uses.get(use_index).and_then(|entry| entry.as_ref())
+                        {
+                            tm.upsert(
+                                base.clone(),
+                                TypeHint::Pointer {
+                                    pointee_width: addr.size.max(1),
+                                },
+                            );
+                        }
+                        use_index += 1;
+                    }
+                    if addr.index.is_some() {
+                        if let Some((raw, index)) =
+                            values.uses.get(use_index).and_then(|entry| entry.as_ref())
+                        {
+                            tm.upsert(
+                                index.clone(),
+                                TypeHint::Int {
+                                    signed: false,
+                                    width: reg_width_bytes(raw),
+                                },
+                            );
+                        }
+                    }
+                    if frame_slot(addr).is_some() {
+                        if let Some((_, dst)) = &values.def {
+                            reloads.insert(dst.clone());
+                        }
+                    }
+                }
+                Op::Store { addr, .. } => {
+                    let mut use_index = 0usize;
+                    if addr.base.is_some() {
+                        if let Some((_, base)) =
+                            values.uses.get(use_index).and_then(|entry| entry.as_ref())
+                        {
+                            tm.upsert(
+                                base.clone(),
+                                TypeHint::Pointer {
+                                    pointee_width: addr.size.max(1),
+                                },
+                            );
+                        }
+                        use_index += 1;
+                    }
+                    if addr.index.is_some() {
+                        if let Some((raw, index)) =
+                            values.uses.get(use_index).and_then(|entry| entry.as_ref())
+                        {
+                            tm.upsert(
+                                index.clone(),
+                                TypeHint::Int {
+                                    signed: false,
+                                    width: reg_width_bytes(raw),
+                                },
+                            );
+                        }
+                        use_index += 1;
+                    }
+                    if let Some(slot) = frame_slot(addr) {
+                        if let Some((_, source)) =
+                            values.uses.get(use_index).and_then(|entry| entry.as_ref())
+                        {
+                            // This projection targets caller-supplied parameters.
+                            // Preserve their entry provenance instead of letting a
+                            // later loop update to the same slot overwrite it.
+                            if source.version == 0 && matches!(source.base, VReg::Phys(_)) {
+                                let sources = live_in_spills.entry(slot).or_default();
+                                if !sources.contains(source) {
+                                    sources.push(source.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                Op::Call {
+                    target: crate::ir::types::CallTarget::Indirect(Value::Reg(_)),
+                    ..
+                }
+                | Op::IndirectJump {
+                    target: Value::Reg(_),
+                } => {
+                    if let Some((_, target)) = values.uses.first().and_then(Option::as_ref) {
+                        tm.upsert(target.clone(), TypeHint::CodePointer);
+                    }
+                }
+                Op::Bin {
+                    op: BinOp::Shr,
+                    lhs,
+                    rhs,
+                    ..
+                } => {
+                    if let Some((raw, dst)) = &values.def {
+                        tm.upsert(
+                            dst.clone(),
+                            TypeHint::Int {
+                                signed: false,
+                                width: reg_width_bytes(raw),
+                            },
+                        );
+                    }
+                    let mut cursor = 0;
+                    if let Some(lhs_value) = operand_value(lhs, &values, &mut cursor) {
+                        let raw = match lhs {
+                            Value::Reg(raw) => raw,
+                            _ => unreachable!(),
+                        };
+                        tm.upsert(
+                            lhs_value,
+                            TypeHint::Int {
+                                signed: false,
+                                width: reg_width_bytes(raw),
+                            },
+                        );
+                    }
+                    if let Some(rhs_value) = operand_value(rhs, &values, &mut cursor) {
+                        let raw = match rhs {
+                            Value::Reg(raw) => raw,
+                            _ => unreachable!(),
+                        };
+                        tm.upsert(
+                            rhs_value,
+                            TypeHint::Int {
+                                signed: false,
+                                width: reg_width_bytes(raw),
+                            },
+                        );
+                    }
+                }
+                Op::Bin {
+                    op: BinOp::Shl | BinOp::Sar,
+                    lhs,
+                    rhs,
+                    ..
+                } => {
+                    let mut cursor = 0;
+                    let _ = operand_value(lhs, &values, &mut cursor);
+                    if let Some(rhs_value) = operand_value(rhs, &values, &mut cursor) {
+                        let raw = match rhs {
+                            Value::Reg(raw) => raw,
+                            _ => unreachable!(),
+                        };
+                        tm.upsert(
+                            rhs_value,
+                            TypeHint::Int {
+                                signed: false,
+                                width: reg_width_bytes(raw),
+                            },
+                        );
+                    }
+                }
+                Op::ZExt { src, from, to, .. }
+                | Op::SExt { src, from, to, .. }
+                | Op::Trunc { src, from, to, .. } => {
+                    let signed = !matches!(&ins.op, Op::ZExt { .. });
+                    if let Some((_, dst)) = &values.def {
+                        tm.upsert(
+                            dst.clone(),
+                            TypeHint::Int {
+                                signed,
+                                width: to.bytes().min(u8::MAX as u16) as u8,
+                            },
+                        );
+                    }
+                    let mut cursor = 0;
+                    if let Some(source) = operand_value(src, &values, &mut cursor) {
+                        tm.upsert(
+                            source,
+                            TypeHint::Int {
+                                signed: true,
+                                width: from.bytes().min(u8::MAX as u16) as u8,
+                            },
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Compute scaled-index/offset values using SSA operands, not register names.
+    let mut offsets: HashSet<SsaValue> = HashSet::new();
+    for _ in 0..8 {
+        let mut grew = false;
+        for (block_idx, block) in lf.blocks.iter().enumerate() {
+            for (instr_idx, ins) in block.instrs.iter().enumerate() {
+                let Op::Bin { op, lhs, rhs, .. } = &ins.op else {
+                    continue;
+                };
+                let addr = InstrAddr {
+                    block_idx,
+                    instr_idx,
+                };
+                let values = instruction_values(lf, ssa, addr);
+                let Some((_, dst)) = &values.def else {
+                    continue;
+                };
+                let mut cursor = 0;
+                let lhs_value = operand_value(lhs, &values, &mut cursor);
+                let rhs_value = operand_value(rhs, &values, &mut cursor);
+                let is_offset = |operand: &Value, value: &Option<SsaValue>| match operand {
+                    Value::Const(_) => true,
+                    Value::Reg(_) => value.as_ref().is_some_and(|value| offsets.contains(value)),
+                    Value::Addr(_) => false,
+                };
+                let result_is_offset = match op {
+                    BinOp::Mul | BinOp::Shl => true,
+                    BinOp::Add | BinOp::Sub => {
+                        is_offset(lhs, &lhs_value) && is_offset(rhs, &rhs_value)
+                    }
+                    _ => false,
+                };
+                if result_is_offset && offsets.insert(dst.clone()) {
+                    grew = true;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+
+    // Copies, MULTIEQUAL/phi edges, pointer arithmetic, and spill slots feed
+    // each other. Iterate them as one small monotone data-flow problem.
+    for _ in 0..16 {
+        let mut changed = false;
+        for (dst, source) in &copy_edges {
+            changed |= unify_values(&mut tm, dst, source);
+        }
+        for phi in &ssa.phis {
+            let result = SsaValue {
+                base: phi.base.clone(),
+                version: phi.dst_version,
+            };
+            if !live_phi_values.contains(&result) {
+                continue;
+            }
+            for (_, version) in &phi.incoming {
+                let incoming = SsaValue {
+                    base: phi.base.clone(),
+                    version: *version,
+                };
+                changed |= unify_values(&mut tm, &result, &incoming);
+            }
+        }
+
+        for (block_idx, block) in lf.blocks.iter().enumerate() {
+            for (instr_idx, ins) in block.instrs.iter().enumerate() {
+                let addr = InstrAddr {
+                    block_idx,
+                    instr_idx,
+                };
+                let values = instruction_values(lf, ssa, addr);
+                match &ins.op {
+                    Op::Bin {
+                        op: BinOp::Add,
+                        lhs,
+                        rhs,
+                        ..
+                    } => {
+                        let Some((_, dst)) = &values.def else {
+                            continue;
+                        };
+                        let Some(TypeHint::Pointer { pointee_width }) = tm.get(dst) else {
+                            continue;
+                        };
+                        let mut cursor = 0;
+                        let lhs_value = operand_value(lhs, &values, &mut cursor);
+                        let rhs_value = operand_value(rhs, &values, &mut cursor);
+                        let is_offset = |operand: &Value, value: &Option<SsaValue>| match operand {
+                            Value::Const(_) => true,
+                            Value::Reg(_) => {
+                                value.as_ref().is_some_and(|value| offsets.contains(value))
+                            }
+                            Value::Addr(_) => false,
+                        };
+                        let is_reload = |value: &Option<SsaValue>| {
+                            value.as_ref().is_some_and(|value| reloads.contains(value))
+                        };
+                        let base = if is_reload(&lhs_value) && !is_reload(&rhs_value) {
+                            lhs_value
+                        } else if is_reload(&rhs_value) && !is_reload(&lhs_value) {
+                            rhs_value
+                        } else if is_offset(rhs, &rhs_value) && !is_offset(lhs, &lhs_value) {
+                            lhs_value
+                        } else if is_offset(lhs, &lhs_value) && !is_offset(rhs, &rhs_value) {
+                            rhs_value
+                        } else {
+                            None
+                        };
+                        if let Some(base) = base {
+                            changed |= tm.upsert(base, TypeHint::Pointer { pointee_width });
+                        }
+                    }
+                    Op::Load { addr, .. } => {
+                        let Some(slot) = frame_slot(addr) else {
+                            continue;
+                        };
+                        let Some(sources) = live_in_spills.get(&slot) else {
+                            continue;
+                        };
+                        let Some((_, dst)) = &values.def else {
+                            continue;
+                        };
+                        if let Some(TypeHint::Pointer { pointee_width }) = tm.get(dst) {
+                            for source in sources {
+                                changed |=
+                                    tm.upsert(source.clone(), TypeHint::Pointer { pointee_width });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Constants demote only the definition that received the constant. They do
+    // not erase an earlier pointer/code-pointer lifetime in the same storage.
+    for (value, hint) in constant_defs {
+        tm.inner.insert(value, hint);
+    }
+
+    tm
+}
+
 /// Produce a [`TypeMap`] for all register VRegs touched by `lf`.
 pub fn recover_types(lf: &LlirFunction) -> TypeMap {
     let mut tm = TypeMap::default();
@@ -722,6 +1277,7 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ssa::{compute_ssa, SsaValue};
     use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
 
     fn mk_block(ops: Vec<Op>) -> LlirFunction {
@@ -787,6 +1343,41 @@ mod tests {
                 signed: false,
                 width: 8,
             })
+        );
+    }
+
+    #[test]
+    fn value_refinement_preserves_richer_scalar_signedness_but_fixes_class() {
+        let role = VReg::phys("arg0");
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            role.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        tm.refine_from_value(
+            role.clone(),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        assert_eq!(
+            tm.get(&role),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            }),
+            "value identity must not discard stronger operation-level signedness"
+        );
+
+        tm.refine_from_value(role.clone(), TypeHint::Pointer { pointee_width: 1 });
+        assert_eq!(
+            tm.get(&role),
+            Some(TypeHint::Pointer { pointee_width: 1 }),
+            "value identity must correct a scalar/address class collision"
         );
     }
 
@@ -860,6 +1451,260 @@ mod tests {
             !matches!(tm.get(&VReg::phys("rdx")), Some(TypeHint::Pointer { .. })),
             "scaled index rdx must not be typed as a pointer"
         );
+    }
+
+    #[test]
+    fn valued_recovery_does_not_demote_an_earlier_pointer_definition() {
+        // One architectural register, two unrelated values:
+        //   rdi#0 is the incoming pointer and is dereferenced;
+        //   rdi#1 is a later scalar constant.
+        // Flow-insensitive recovery demotes the entire register because it sees
+        // the constant. Value-keyed recovery must keep the two facts separate.
+        let lf = mk_block(vec![
+            Op::Load {
+                dst: VReg::phys("eax"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rdi")),
+                    index: None,
+                    scale: 1,
+                    disp: 0,
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+            Op::Assign {
+                dst: VReg::phys("edi"),
+                src: Value::Const(0),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let tm = recover_types_valued(&lf, &ssa);
+        let incoming = SsaValue {
+            base: VReg::phys("rdi"),
+            version: 0,
+        };
+        let scalar = ssa
+            .def_value(
+                &lf,
+                crate::ir::use_def::InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 1,
+                },
+            )
+            .expect("constant definition value");
+
+        assert_eq!(
+            tm.get(&incoming),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+        assert!(matches!(
+            tm.get(&scalar),
+            Some(TypeHint::Int { width: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn dead_phi_does_not_merge_live_in_scalar_with_later_pointer_reuse() {
+        let block = |start_va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va,
+            end_va: start_va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(index, op)| LlirInstr {
+                    va: start_va + index as u64 * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        // rsi#0 is an integer parameter. Only one branch later reuses rsi as a
+        // pointer, and the merge-point phi is dead: nothing reads its result.
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                block(
+                    0x1000,
+                    vec![Op::CondJump {
+                        cond: VReg::phys("rsi"),
+                        target: 0x1020,
+                        inverted: false,
+                    }],
+                    vec![0x1010, 0x1020],
+                ),
+                block(
+                    0x1010,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("rsi"),
+                            src: Value::Reg(VReg::phys("rdi")),
+                        },
+                        Op::Load {
+                            dst: VReg::phys("eax"),
+                            addr: MemOp {
+                                base: Some(VReg::phys("rsi")),
+                                index: None,
+                                scale: 1,
+                                disp: 0,
+                                size: 4,
+                                ..Default::default()
+                            },
+                        },
+                    ],
+                    vec![0x1030],
+                ),
+                block(0x1020, vec![Op::Nop], vec![0x1030]),
+                block(0x1030, vec![Op::Return], vec![]),
+            ],
+        };
+        let ssa = compute_ssa(&lf);
+        assert!(
+            ssa.phis.iter().any(|phi| phi.base == VReg::phys("rsi")),
+            "fixture must contain the dead merge phi"
+        );
+        let tm = recover_types_valued(&lf, &ssa);
+        assert_eq!(
+            tm.get(&SsaValue {
+                base: VReg::phys("rsi"),
+                version: 0,
+            }),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn real_gcc_o2_loop_propagates_pointer_type_to_live_in_value() {
+        use object::{Object, ObjectSymbol};
+        use std::io::Write;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().expect("temporary memory fixture build directory");
+        let source = tmp.path().join("09_memory_effects.c");
+        let binary = tmp.path().join("09_memory_effects.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decompiler_fixtures/src/09_memory_effects.c"
+                ))
+            })
+            .expect("write the real memory-effects fixture source");
+        let build = match Command::new("gcc")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch GCC: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile the real memory-effects fixture with GCC -O2: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read GCC output");
+        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let entry = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("vec_sum"))
+            .map(|symbol| symbol.address())
+            .expect("exported vec_sum symbol");
+        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+            &data,
+            &crate::analysis::cfg::Budgets::default(),
+        );
+        let function = functions
+            .iter()
+            .find(|function| function.entry_point.value == entry)
+            .expect("discovered vec_sum function");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift vec_sum");
+        let ssa = compute_ssa(&lifted);
+        let tm = recover_types_valued(&lifted, &ssa);
+
+        assert_eq!(
+            tm.get(&SsaValue {
+                base: VReg::phys("rdi"),
+                version: 0,
+            }),
+            Some(TypeHint::Pointer { pointee_width: 4 }),
+            "the loop-carried dereference must flow through its phi and pointer increment to arg0"
+        );
+    }
+
+    #[test]
+    fn real_gcc_o0_spills_propagate_both_string_pointer_live_ins() {
+        use object::{Object, ObjectSymbol};
+        use std::io::Write;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().expect("temporary string fixture build directory");
+        let source = tmp.path().join("strops.c");
+        let binary = tmp.path().join("strops.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!("../../tests/decbench_corpus/src/strops.c"))
+            })
+            .expect("write the real DecBench string fixture source");
+        let build = match Command::new("gcc")
+            .args(["-shared", "-fPIC", "-g", "-O0", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch GCC: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile the real DecBench string fixture with GCC -O0: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read GCC output");
+        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let entry = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("str_cmp"))
+            .map(|symbol| symbol.address())
+            .expect("exported str_cmp symbol");
+        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+            &data,
+            &crate::analysis::cfg::Budgets::default(),
+        );
+        let function = functions
+            .iter()
+            .find(|function| function.entry_point.value == entry)
+            .expect("discovered str_cmp function");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift str_cmp");
+        let ssa = compute_ssa(&lifted);
+        let tm = recover_types_valued(&lifted, &ssa);
+
+        for register in ["rdi", "rsi"] {
+            assert_eq!(
+                tm.get(&SsaValue {
+                    base: VReg::phys(register),
+                    version: 0,
+                }),
+                Some(TypeHint::Pointer { pointee_width: 1 }),
+                "{register} must retain its caller-supplied string-pointer type through the spill"
+            );
+        }
     }
 
     #[test]
