@@ -1020,6 +1020,10 @@ fn decbench_type_maps(
     use crate::ir::types_recover::recover_types_for;
     let mut decl = remap_non_parameter_type_map(&recover_types_for(lf_raw, cc), cc, param_slots);
     let live_ins = prototype.parameter_type_map();
+    let result = prototype.result_type_map();
+    if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
+        decl.refine_from_value(crate::ir::types::VReg::phys("ret"), hint);
+    }
     // Only entry values with the qualified spill/reload/dereference proof are
     // allowed to refine a rendered role. The complete version-zero map remains
     // available to analysis, but prototype recovery is not yet a fixed point
@@ -1032,6 +1036,9 @@ fn decbench_type_maps(
     }
     merge_slot_sizes(&mut decl, slot_sizes);
     let mut width = remap_non_parameter_type_map(&recover_types_for(lf_raw, cc), cc, param_slots);
+    if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
+        width.refine_from_value(crate::ir::types::VReg::phys("ret"), hint);
+    }
     for slot in param_slots {
         let role = crate::ir::types::VReg::Phys(format!("arg{slot}"));
         if let Some(hint) = live_ins.get(&role) {

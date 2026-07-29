@@ -324,7 +324,7 @@ fn defs_return_reg(op: &Op, ret_names: &[&str]) -> bool {
 /// register reused purely as scratch — a loop-address `rax` overwritten (or
 /// replaced by the real return load) before any `Return` — does NOT reach, so
 /// it stays foldable.
-fn def_reaches_return(
+pub(crate) fn def_reaches_return(
     lf: &LlirFunction,
     ret_names: &[&str],
     va_to_idx: &std::collections::HashMap<u64, usize>,

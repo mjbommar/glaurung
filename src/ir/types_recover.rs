@@ -259,10 +259,23 @@ pub struct RecoveredParameter {
     pub hint: Option<TypeHint>,
 }
 
+/// The source-level return role, anchored to the exact SSA definition that
+/// reaches the ABI result register.
+///
+/// Input and output registers overlap on ARM/AArch64 (`r0`/`x0`) and on x86
+/// (`rax`).  Keeping the output value here prevents a pointer-valued live-in
+/// from contaminating a later scalar written into the same physical storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredResult {
+    pub value: SsaValue,
+    pub hint: Option<TypeHint>,
+}
+
 /// Function prototype facts recovered before AST lowering.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RecoveredPrototype {
     parameters: Vec<RecoveredParameter>,
+    result: Option<RecoveredResult>,
 }
 
 impl RecoveredPrototype {
@@ -276,6 +289,10 @@ impl RecoveredPrototype {
             .find(|parameter| parameter.slot == slot)
     }
 
+    pub fn result(&self) -> Option<&RecoveredResult> {
+        self.result.as_ref()
+    }
+
     /// Project semantic parameter slots to the renderer's source-level role
     /// names.  This is the only name projection: it does not inspect the AST or
     /// reconstruct a register alias table after naming has already run.
@@ -287,6 +304,60 @@ impl RecoveredPrototype {
             }
         }
         out
+    }
+
+    /// Project the exact SSA output to the renderer's source-level return role.
+    pub fn result_type_map(&self) -> TypeMap {
+        let mut out = TypeMap::default();
+        if let Some(RecoveredResult {
+            hint: Some(hint), ..
+        }) = &self.result
+        {
+            out.upsert_public(VReg::phys("ret"), *hint);
+        }
+        out
+    }
+}
+
+fn abi_pointer_width(cc: crate::ir::call_args::CallConv) -> u8 {
+    use crate::ir::call_args::CallConv;
+    match cc {
+        CallConv::Cdecl32 | CallConv::Arm => 4,
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => 8,
+    }
+}
+
+/// A result fact strong enough to cross the SSA-to-source prototype boundary.
+///
+/// A narrow load cannot contain a machine pointer, so its scalar class and
+/// width are conclusive. A pointer-width load remains unknown: it may be an
+/// integer or a pointer read from memory, and guessing either would reproduce
+/// the flow-insensitive contamination this prototype object is meant to stop.
+fn qualified_result_hint(
+    op: &Op,
+    valued: &TypeMapV,
+    value: &SsaValue,
+    cc: crate::ir::call_args::CallConv,
+) -> Option<TypeHint> {
+    match op {
+        Op::Load { addr, .. } if addr.size.max(1) < abi_pointer_width(cc) => Some(TypeHint::Int {
+            signed: true,
+            width: addr.size.max(1),
+        }),
+        Op::Assign {
+            src: Value::Reg(_) | Value::Const(_),
+            ..
+        }
+        | Op::Bin { .. }
+        | Op::Un { .. }
+        | Op::Cmp { .. }
+        | Op::ZExt { .. }
+        | Op::SExt { .. }
+        | Op::Trunc { .. } => valued.get(value),
+        // Calls, full-width loads, address constants, conditional updates, and
+        // opaque definitions need stronger prototype or merge evidence before
+        // they can safely decide pointer-vs-scalar class.
+        _ => None,
     }
 }
 
@@ -309,6 +380,43 @@ pub fn recover_prototype(
     let mut ordered: Vec<usize> = param_slots.iter().copied().collect();
     ordered.sort_unstable();
 
+    let ret_names = return_reg_names(cc);
+    let va_to_idx: HashMap<u64, usize> = lf
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.start_va, index))
+        .collect();
+    let mut results = Vec::new();
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, ins) in block.instrs.iter().enumerate() {
+            let (Some(VReg::Phys(dst)), _) = def_uses(&ins.op) else {
+                continue;
+            };
+            if !ret_names.contains(&dst.as_str()) {
+                continue;
+            }
+            if !crate::ir::value_number::def_reaches_return(
+                lf, ret_names, &va_to_idx, block_idx, instr_idx,
+            ) {
+                continue;
+            }
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
+            let Some(value) = ssa.def_value(lf, addr) else {
+                continue;
+            };
+            let hint = qualified_result_hint(&ins.op, &valued, &value, cc);
+            results.push(RecoveredResult { value, hint });
+        }
+    }
+    // A source-level result is one role, but this first output-facing slice
+    // carries one exact SSA value rather than a value-set or phi expression.
+    // Do not select an arbitrary branch when multiple definitions can return.
+    let result = (results.len() == 1).then(|| results.remove(0));
+
     let parameters = ordered
         .into_iter()
         .filter_map(|slot| {
@@ -325,7 +433,7 @@ pub fn recover_prototype(
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
-    RecoveredPrototype { parameters }
+    RecoveredPrototype { parameters, result }
 }
 
 fn merge_type_hint(current: Option<TypeHint>, new: TypeHint) -> TypeHint {
@@ -2065,6 +2173,123 @@ mod tests {
             }),
             "return should be narrowed to int from the 32-bit last def"
         );
+    }
+
+    #[test]
+    fn arm_return_load_keeps_input_pointer_and_output_scalar_separate() {
+        use crate::ir::call_args::CallConv;
+
+        // Real ARM leaf shape: r0 enters as a pointer and the load overwrites
+        // that same physical register with the scalar returned to the caller.
+        // Register-keyed recovery necessarily sees both roles on `r0`; the
+        // recovered prototype must retain the two SSA values instead.
+        let lf = mk_block(vec![
+            Op::Load {
+                dst: VReg::phys("r0"),
+                addr: MemOp {
+                    base: Some(VReg::phys("r0")),
+                    index: None,
+                    scale: 0,
+                    disp: 0,
+                    size: 2,
+                    ..Default::default()
+                },
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(&lf, &ssa, CallConv::Arm, &HashSet::from([0]));
+
+        assert_eq!(
+            prototype
+                .parameter(0)
+                .map(|parameter| parameter.value.clone()),
+            Some(SsaValue {
+                base: VReg::phys("r0"),
+                version: 0,
+            }),
+            "the caller-supplied address must remain the r0 live-in"
+        );
+        let result = prototype.result().expect("recovered ARM return value");
+        assert_eq!(
+            result.value,
+            SsaValue {
+                base: VReg::phys("r0"),
+                version: 1,
+            },
+            "the loaded scalar must be a distinct SSA output"
+        );
+        assert!(
+            matches!(result.hint, Some(TypeHint::Int { .. })),
+            "a scalar load result must not inherit the input pointer type"
+        );
+        assert!(matches!(
+            prototype.result_type_map().get(&VReg::phys("ret")),
+            Some(TypeHint::Int { .. })
+        ));
+    }
+
+    #[test]
+    fn prototype_result_fails_closed_for_multiple_returning_definitions() {
+        use crate::ir::call_args::CallConv;
+
+        let block = |start_va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va,
+            end_va: start_va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(index, op)| LlirInstr {
+                    va: start_va + index as u64 * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                block(
+                    0x1000,
+                    vec![Op::CondJump {
+                        cond: VReg::phys("r1"),
+                        target: 0x1020,
+                        inverted: false,
+                    }],
+                    vec![0x1010, 0x1020],
+                ),
+                block(
+                    0x1010,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("r0"),
+                            src: Value::Const(1),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+                block(
+                    0x1020,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("r0"),
+                            src: Value::Const(2),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+            ],
+        };
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(&lf, &ssa, CallConv::Arm, &HashSet::from([1]));
+
+        assert!(
+            prototype.result().is_none(),
+            "two branch-local SSA definitions cannot be represented as one exact output"
+        );
+        assert!(prototype.result_type_map().is_empty());
     }
 
     #[test]
