@@ -548,6 +548,11 @@ fn decompile_at_py(
     // Live-in argument slots (authoritative parameter set) for the type-map
     // remap, so scratch reuse of an arg register never becomes a spurious `argN`.
     let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
+    // Recover the semantic prototype while SSA value IDs are still available.
+    // It survives the AST pipeline as an immutable companion object; naming is
+    // now only a final projection (`value -> argN`), never a type-analysis key.
+    let prototype = (style == "decbench" && types)
+        .then(|| crate::ir::types_recover::recover_prototype(&lf_raw, &ssa, cc, &param_slots));
     // Build the address map first so we can apply a PDB public-symbol name
     // to the *outer* function header before lowering. The map already
     // includes PDB symbols when a cache is configured, plus exports / IAT
@@ -600,8 +605,15 @@ fn decompile_at_py(
         // DecBench wants concrete C types. Reuse the recovered TypeMap when it
         // was computed, else recover on demand, then remap raw-reg keys to the
         // AST's role names (`arg0`, `ret`, ...) before rendering.
-        let maps =
-            types.then(|| decbench_type_maps(&lf_raw, &ssa, &f, cc, &param_slots, &slot_sizes));
+        let maps = types.then(|| {
+            decbench_type_maps(
+                &lf_raw,
+                prototype.as_ref().expect("typed DecBench prototype"),
+                cc,
+                &param_slots,
+                &slot_sizes,
+            )
+        });
         let (decl, width) = match &maps {
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
@@ -721,6 +733,8 @@ fn decompile_range_at_py(
         lf_raw.clone()
     };
     let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
+    let prototype = (style == "decbench" && types)
+        .then(|| crate::ir::types_recover::recover_prototype(&lf_raw, &ssa, cc, &param_slots));
     let mut f = lower(&lf, &region, func.name.clone());
     // Inputs the shared pipeline needs. These were interleaved BETWEEN passes here, which
     // is why the four copies could not simply be diffed against each other — the pass
@@ -743,8 +757,15 @@ fn decompile_range_at_py(
         crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
     }
     Ok(if style == "decbench" {
-        let maps =
-            types.then(|| decbench_type_maps(&lf_raw, &ssa, &f, cc, &param_slots, &slot_sizes));
+        let maps = types.then(|| {
+            decbench_type_maps(
+                &lf_raw,
+                prototype.as_ref().expect("typed DecBench prototype"),
+                cc,
+                &param_slots,
+                &slot_sizes,
+            )
+        });
         let (decl, width) = match &maps {
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
@@ -793,6 +814,25 @@ fn remap_type_map(
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
 ) -> crate::ir::types_recover::TypeMap {
+    remap_type_map_impl(tm, cc, param_slots, true)
+}
+
+/// Remap non-parameter storage roles (most importantly the ABI return value)
+/// while leaving parameter projection exclusively to `RecoveredPrototype`.
+fn remap_non_parameter_type_map(
+    tm: &crate::ir::types_recover::TypeMap,
+    cc: crate::ir::call_args::CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+) -> crate::ir::types_recover::TypeMap {
+    remap_type_map_impl(tm, cc, param_slots, false)
+}
+
+fn remap_type_map_impl(
+    tm: &crate::ir::types_recover::TypeMap,
+    cc: crate::ir::call_args::CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    include_parameters: bool,
+) -> crate::ir::types_recover::TypeMap {
     // Reconstruct the alias table the naming pass used for arg/ret slots;
     // `varN` aliases are assigned by first-appearance order and we can't
     // trivially recover them here, so those keys survive untouched.
@@ -830,7 +870,7 @@ fn remap_type_map(
         // parameter. An argument-slot register reused as scratch (common at -O2,
         // e.g. `rdx`/`rcx`) must not become a spurious `argN` and inflate the
         // recovered arity/typing.
-        if !param_slots.contains(&slot) {
+        if !include_parameters || !param_slots.contains(&slot) {
             continue;
         }
         for n in *names {
@@ -960,17 +1000,16 @@ fn decbench_text(
 
 /// Build the `(declaration, width)` type-map pair the DecBench renderer needs.
 ///
-/// Both maps come from the PRE-canonicalisation LLIR (`lf_raw`), which is the only
+/// Machine-width facts come from the PRE-canonicalisation LLIR (`lf_raw`), the only
 /// place each operand's true machine width survives (`edi`=4; canonicalisation folds
 /// it into `rdi`). That width is what the declaration should state — DWARF's
 /// `dispatch(int,int,int)`, not a blanket `long` — and what the logical-shift cast
-/// needs. Declaring the true width means the body no longer computes at the machine's
-/// 64 bits by accident, so `widen::insert_widening_casts` restores that explicitly.
-/// Both are remapped to AST role names and augmented with promoted-slot sizes.
+/// needs. Parameter facts are projected from the pre-lowering `RecoveredPrototype`,
+/// which retains exact SSA live-in identity. Only non-parameter roles are remapped
+/// from storage names; both maps are then augmented with promoted-slot sizes.
 fn decbench_type_maps(
     lf_raw: &crate::ir::types::LlirFunction,
-    ssa: &crate::ir::ssa::SsaInfo,
-    f: &crate::ir::ast::Function,
+    prototype: &crate::ir::types_recover::RecoveredPrototype,
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
     slot_sizes: &std::collections::HashMap<String, u8>,
@@ -978,10 +1017,9 @@ fn decbench_type_maps(
     crate::ir::types_recover::TypeMap,
     crate::ir::types_recover::TypeMap,
 ) {
-    use crate::ir::types_recover::{recover_types_for, recover_types_valued};
-    let mut decl = remap_type_map(&recover_types_for(lf_raw, cc), f, cc, param_slots);
-    let live_ins = recover_types_valued(lf_raw, ssa).parameter_refinements();
-    let live_ins = remap_type_map(&live_ins, f, cc, param_slots);
+    use crate::ir::types_recover::recover_types_for;
+    let mut decl = remap_non_parameter_type_map(&recover_types_for(lf_raw, cc), cc, param_slots);
+    let live_ins = prototype.parameter_type_map();
     // Only entry values with the qualified spill/reload/dereference proof are
     // allowed to refine a rendered role. The complete version-zero map remains
     // available to analysis, but prototype recovery is not yet a fixed point
@@ -993,7 +1031,7 @@ fn decbench_type_maps(
         }
     }
     merge_slot_sizes(&mut decl, slot_sizes);
-    let mut width = remap_type_map(&recover_types_for(lf_raw, cc), f, cc, param_slots);
+    let mut width = remap_non_parameter_type_map(&recover_types_for(lf_raw, cc), cc, param_slots);
     for slot in param_slots {
         let role = crate::ir::types::VReg::Phys(format!("arg{slot}"));
         if let Some(hint) = live_ins.get(&role) {
@@ -1064,6 +1102,8 @@ fn decompile_all_py(
             lf_raw.clone()
         };
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
+        let prototype = (style == "decbench")
+            .then(|| crate::ir::types_recover::recover_prototype(&lf_raw, &ssa, cc, &param_slots));
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
         // One pass list, shared with every other entry point — see `run_ast_passes`.
@@ -1082,8 +1122,13 @@ fn decompile_all_py(
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
         let text = if style == "decbench" {
-            let (decl, width) =
-                decbench_type_maps(&lf_raw, &ssa, &f, cc, &param_slots, &slot_sizes);
+            let (decl, width) = decbench_type_maps(
+                &lf_raw,
+                prototype.as_ref().expect("DecBench prototype"),
+                cc,
+                &param_slots,
+                &slot_sizes,
+            );
             decbench_text(&f, Some(&decl), Some(&width))
         } else {
             render(&f)
@@ -1174,6 +1219,8 @@ fn decompile_many_py(
             lf_raw.clone()
         };
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
+        let prototype = (style == "decbench")
+            .then(|| crate::ir::types_recover::recover_prototype(&lf_raw, &ssa, cc, &param_slots));
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         let mut f = lower(&lf, &region, outer_name);
         // One pass list, shared with every other entry point — see `run_ast_passes`.
@@ -1203,8 +1250,13 @@ fn decompile_many_py(
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
         let text = if style == "decbench" {
-            let (decl, width) =
-                decbench_type_maps(&lf_raw, &ssa, &f, cc, &param_slots, &slot_sizes);
+            let (decl, width) = decbench_type_maps(
+                &lf_raw,
+                prototype.as_ref().expect("DecBench prototype"),
+                cc,
+                &param_slots,
+                &slot_sizes,
+            );
             decbench_text(&f, Some(&decl), Some(&width))
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);

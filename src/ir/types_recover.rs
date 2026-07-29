@@ -223,6 +223,109 @@ impl TypeMapV {
         }
         out
     }
+
+    /// Return the output-qualified fact for one exact caller-supplied value.
+    ///
+    /// This retains the same two-independent-parameters safety gate as
+    /// [`Self::parameter_refinements`], but does not erase SSA identity by
+    /// projecting through a raw register key first.
+    fn parameter_refinement(&self, value: &SsaValue) -> Option<TypeHint> {
+        if self
+            .parameter_refinements
+            .keys()
+            .filter(|candidate| candidate.version == 0)
+            .count()
+            < 2
+        {
+            return None;
+        }
+        (value.version == 0)
+            .then(|| self.parameter_refinements.get(value).copied())
+            .flatten()
+    }
+}
+
+/// One source-level parameter, anchored to the exact SSA live-in from which it
+/// was recovered.
+///
+/// Ghidra keeps this relationship through `Varnode -> HighVariable`; Kuna does
+/// the same through its Varnode arena and final prototype actions.  Keeping the
+/// SSA key here prevents AST naming (`rdi` -> `arg0`) from becoming a second,
+/// lossy type-analysis pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredParameter {
+    pub slot: usize,
+    pub value: SsaValue,
+    pub hint: Option<TypeHint>,
+}
+
+/// Function prototype facts recovered before AST lowering.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RecoveredPrototype {
+    parameters: Vec<RecoveredParameter>,
+}
+
+impl RecoveredPrototype {
+    pub fn parameters(&self) -> &[RecoveredParameter] {
+        &self.parameters
+    }
+
+    pub fn parameter(&self, slot: usize) -> Option<&RecoveredParameter> {
+        self.parameters
+            .iter()
+            .find(|parameter| parameter.slot == slot)
+    }
+
+    /// Project semantic parameter slots to the renderer's source-level role
+    /// names.  This is the only name projection: it does not inspect the AST or
+    /// reconstruct a register alias table after naming has already run.
+    pub fn parameter_type_map(&self) -> TypeMap {
+        let mut out = TypeMap::default();
+        for parameter in &self.parameters {
+            if let Some(hint) = parameter.hint {
+                out.upsert_public(VReg::phys(format!("arg{}", parameter.slot)), hint);
+            }
+        }
+        out
+    }
+}
+
+/// Recover the function's parameter prototype directly from SSA live-ins.
+///
+/// The raw-register pass still supplies machine-width evidence while the
+/// value-keyed pass may provide a stronger, output-qualified classification.
+/// Both are joined *before* lowering.  Subsequent AST rewriting and naming can
+/// no longer change which machine value a parameter type describes.
+pub fn recover_prototype(
+    lf: &LlirFunction,
+    ssa: &SsaInfo,
+    cc: crate::ir::call_args::CallConv,
+    param_slots: &HashSet<usize>,
+) -> RecoveredPrototype {
+    let raw = recover_types_for(lf, cc);
+    let valued = recover_types_valued(lf, ssa);
+    let slots = crate::ir::abi::argument_slots(cc);
+    let canonical = crate::ir::abi::argument_registers(cc);
+    let mut ordered: Vec<usize> = param_slots.iter().copied().collect();
+    ordered.sort_unstable();
+
+    let parameters = ordered
+        .into_iter()
+        .filter_map(|slot| {
+            let base = canonical.get(slot).map(|name| VReg::phys(*name))?;
+            let value = SsaValue { base, version: 0 };
+            let raw_hint = slots.get(slot).and_then(|aliases| {
+                aliases.iter().fold(None, |current, alias| {
+                    raw.get(&VReg::phys(*alias))
+                        .map(|candidate| merge_type_hint(current, candidate))
+                        .or(current)
+                })
+            });
+            let hint = valued.parameter_refinement(&value).or(raw_hint);
+            Some(RecoveredParameter { slot, value, hint })
+        })
+        .collect();
+    RecoveredPrototype { parameters }
 }
 
 fn merge_type_hint(current: Option<TypeHint>, new: TypeHint) -> TypeHint {
@@ -1749,6 +1852,48 @@ mod tests {
                 "{register} has the spill/reload/dereference proof required to refine a rendered parameter"
             );
         }
+
+        // Prototype recovery is a semantic projection of those exact SSA
+        // live-ins, not a second register-name rewrite performed after AST
+        // naming.  The value IDs must therefore remain available to every
+        // later lowering/rendering stage alongside their source-level slots.
+        let param_slots = crate::ir::value_number::live_in_arg_slots_llir(
+            &lifted,
+            crate::ir::call_args::CallConv::SysVAmd64,
+        );
+        let prototype = recover_prototype(
+            &lifted,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &param_slots,
+        );
+        assert_eq!(prototype.parameters().len(), 2);
+        for (slot, register) in ["rdi", "rsi"].into_iter().enumerate() {
+            let parameter = prototype
+                .parameter(slot)
+                .unwrap_or_else(|| panic!("missing recovered parameter slot {slot}"));
+            assert_eq!(
+                parameter.value,
+                SsaValue {
+                    base: VReg::phys(register),
+                    version: 0,
+                }
+            );
+            assert_eq!(
+                parameter.hint,
+                Some(TypeHint::Pointer { pointee_width: 1 }),
+                "slot {slot} must carry its qualified SSA type into the prototype"
+            );
+        }
+        let projected = prototype.parameter_type_map();
+        assert_eq!(
+            projected.get(&VReg::phys("arg0")),
+            Some(TypeHint::Pointer { pointee_width: 1 })
+        );
+        assert_eq!(
+            projected.get(&VReg::phys("arg1")),
+            Some(TypeHint::Pointer { pointee_width: 1 })
+        );
     }
 
     #[test]
