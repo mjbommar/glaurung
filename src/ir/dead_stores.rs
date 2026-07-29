@@ -135,7 +135,7 @@ fn is_dead_from(body: &[Stmt], start: usize, dst: &VReg, ret_regs: &[&str]) -> b
         // anywhere inside, we have to keep the store. If it's written
         // inside without being read, we *don't* claim death (the write may
         // be on only one path).
-        if contains_nested_read(s, dst) {
+        if contains_nested_read(s, dst) || contains_nested_exit(s) {
             return false;
         }
 
@@ -143,7 +143,10 @@ fn is_dead_from(body: &[Stmt], start: usize, dst: &VReg, ret_regs: &[&str]) -> b
         // off-limits for our intra-body analysis, so we treat the store as
         // live to be safe (except Return whose value obviously reads some
         // reg already covered by `stmt_reads`).
-        if matches!(s, Stmt::Return { .. } | Stmt::Goto { .. }) {
+        if matches!(
+            s,
+            Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break
+        ) {
             return false;
         }
     }
@@ -282,6 +285,58 @@ fn contains_nested_read(s: &Stmt, dst: &VReg) -> bool {
             stmt_reads(init, dst)
                 || body.iter().any(|s| stmt_reads(s, dst))
                 || stmt_reads(step, dst)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a nested structured statement can leave the current sequential
+/// path before a later overwrite. Such an exit makes the earlier value live on
+/// at least one path, even when the nested body does not itself read it.
+fn contains_nested_exit(statement: &Stmt) -> bool {
+    fn body_exits(body: &[Stmt]) -> bool {
+        body.iter().any(|statement| match statement {
+            Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break => {
+                true
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                body_exits(then_body)
+                    || else_body
+                        .as_ref()
+                        .is_some_and(|else_body| body_exits(else_body))
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                body_exits(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases.iter().any(|(_, body)| body_exits(body))
+                    || default.as_ref().is_some_and(|body| body_exits(body))
+            }
+            _ => false,
+        })
+    }
+
+    match statement {
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            body_exits(then_body)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|else_body| body_exits(else_body))
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            body_exits(body)
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases.iter().any(|(_, body)| body_exits(body))
+                || default.as_ref().is_some_and(|body| body_exits(body))
         }
         _ => false,
     }
@@ -517,6 +572,51 @@ mod tests {
         };
         eliminate_dead_stores(&mut f, CallConv::SysVAmd64);
         assert_eq!(f.body.len(), 3, "inner read must preserve the outer store");
+    }
+
+    #[test]
+    fn loop_value_before_conditional_break_is_not_dead() {
+        // The first assignment reaches the return when the loop breaks before
+        // the later overwrite. Treating a nested `break` as transparent made
+        // the recovered `sum_until_zero` return an uninitialised variable for
+        // an array whose first element is zero.
+        let mut f = Function {
+            name: "sum_until_zero".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::While {
+                    cond: Expr::Const(1),
+                    body: vec![
+                        Stmt::Assign {
+                            dst: reg("result"),
+                            src: Expr::Reg(reg("sum")),
+                        },
+                        Stmt::If {
+                            cond: Expr::Reg(reg("is_zero")),
+                            then_body: vec![Stmt::Break],
+                            else_body: None,
+                        },
+                        Stmt::Assign {
+                            dst: reg("result"),
+                            src: Expr::Reg(reg("updated")),
+                        },
+                    ],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("result"))),
+                },
+            ],
+        };
+
+        eliminate_dead_stores(&mut f, CallConv::SysVAmd64);
+
+        let Stmt::While { body, .. } = &f.body[0] else {
+            panic!("expected loop, got {:#?}", f.body);
+        };
+        assert!(matches!(
+            body.first(),
+            Some(Stmt::Assign { dst, .. }) if dst == &reg("result")
+        ));
     }
 
     #[test]
