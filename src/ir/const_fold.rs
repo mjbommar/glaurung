@@ -178,14 +178,16 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
     body(&mut f.body, tm);
 }
 
-/// Remove a matching extension view around a register whose recovered C
-/// declaration already has the exact inner width and signedness.
+/// Remove a matching *zero-extension* view around a register whose recovered C
+/// declaration already has the exact inner width and unsignedness.
 ///
 /// The lossless AST retains machine views until types are known. At this late
 /// boundary the declaration supplies that view in every rvalue context; the
 /// subsequent widening pass reintroduces an explicit extension only where a
-/// wider consumer genuinely needs one. Mismatched signedness or width is left
-/// untouched.
+/// wider consumer genuinely needs one. Signed extensions must stay explicit:
+/// erasing `movsxd` would make the widening pass reconstruct the bare signed
+/// declaration as a machine-register zero-extension. Mismatched signedness or
+/// width is left untouched as well.
 pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
     fn expression(expr: &mut Expr, tm: &TypeMap) {
         match expr {
@@ -227,7 +229,7 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
                     signed: inner_signed,
                     width: inner_width,
                     expr: source,
-                } if inner_width < outer_width && outer_signed == inner_signed => {
+                } if inner_width < outer_width && !*outer_signed && !*inner_signed => {
                     match source.as_ref() {
                         Expr::Reg(reg)
                             if tm.get(reg)

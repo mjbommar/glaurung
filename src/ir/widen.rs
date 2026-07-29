@@ -447,6 +447,37 @@ mod tests {
         assert!(*signed && *width == 8);
     }
 
+    #[test]
+    fn a_declared_view_fold_does_not_turn_movsxd_into_zero_extension() {
+        // GCC's optimized `fib(int)` begins with `movsxd rbp, edi`. The typed
+        // declared-view fold used to erase this exact signed 32->64 extension;
+        // contextual widening then rebuilt a zero-extension from the bare
+        // signed `int` parameter, making fib(-1) return 4294967295 instead of
+        // -1 in an actual recompiled round trip.
+        let signed_extension = Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(reg("arg0")),
+            }),
+        };
+        let tm = tm_of(&[("arg0", true, 4), ("local_8", true, 8)]);
+        let mut f = func(vec![Stmt::Assign {
+            dst: VReg::phys("local_8"),
+            src: signed_extension.clone(),
+        }]);
+
+        crate::ir::const_fold::fold_typed_declared_views(&mut f, &tm);
+        insert_widening_casts(&mut f, &tm);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected an assignment");
+        };
+        assert_eq!(src, &signed_extension);
+    }
+
     /// A value with no recovered type stays `long` and is already machine-wide.
     #[test]
     fn an_untyped_value_is_untouched() {
