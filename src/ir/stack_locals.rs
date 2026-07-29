@@ -94,9 +94,19 @@ pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> Has
         &mut sp_delta,
         &address_defs,
     );
-    map.into_values()
-        .map(|slot| (slot.name, slot.declared_size))
-        .collect()
+    // Several machine SlotKeys can intentionally collapse to one source-level
+    // role (notably `entry_rsp+0` and `esp+0` both render as `stack_top`).  Join
+    // by that final identity explicitly. A bare `collect()` made HashMap
+    // iteration order choose the declaration width, so identical inputs could
+    // alternate between `char` and `long` across processes.
+    let mut sizes = HashMap::new();
+    for slot in map.into_values() {
+        sizes
+            .entry(slot.name)
+            .and_modify(|size: &mut u8| *size = (*size).max(slot.declared_size))
+            .or_insert(slot.declared_size);
+    }
+    sizes
 }
 
 /// Where a calling convention puts the arguments that do not fit in registers:
@@ -1280,6 +1290,39 @@ mod tests {
         promote_stack_locals(&mut f);
         if let Stmt::Assign { src, .. } = &f.body[0] {
             assert_eq!(*src, Expr::Reg(reg("stack_top")));
+        }
+    }
+
+    #[test]
+    fn colliding_stack_top_views_have_one_deterministic_wide_declaration() {
+        // A mixed-width stack function can address the same rendered
+        // `stack_top` role through distinct machine views. Those are distinct
+        // SlotKeys (`entry_rsp` and `esp`) but ONE C identifier. Collecting the
+        // HashMap values directly let whichever key iterated last choose the
+        // declaration, so identical decompilations alternated between `char`
+        // and `long` (observed on blinded bin_209.elf).
+        for _ in 0..64 {
+            let mut f = Function {
+                name: "mixed_stack_top".into(),
+                entry_va: 0,
+                body: vec![
+                    Stmt::Assign {
+                        dst: reg("rax"),
+                        src: deref_of("rsp", 0, 8),
+                    },
+                    Stmt::Assign {
+                        dst: reg("al"),
+                        src: deref_of("esp", 0, 1),
+                    },
+                ],
+            };
+
+            let sizes = promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+            assert_eq!(
+                sizes.get("stack_top"),
+                Some(&8),
+                "one rendered identifier must use the widest compatible storage view"
+            );
         }
     }
 
