@@ -344,6 +344,19 @@ fn run_ast_passes(
     // `varN`) the naming pass introduces.
     let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(f, Some(cc));
     dp!("promote_stack_locals");
+    // Frame-relative storage is source-level state; the push/mov/sub sequence
+    // that establishes its machine frame is not.  Recognise the x86 prologue
+    // here, while stack promotion has made the storage identities explicit but
+    // before dead-store elimination removes the now-unused `rbp = rsp` witness.
+    // A second call after the remaining passes still handles epilogues exposed
+    // by stack-op rematerialisation.
+    if matches!(
+        cc,
+        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
+    ) {
+        crate::ir::x86_prologue::recognise_x86_prologue(f);
+    }
+    dp!("recognise_x86_frame");
     crate::ir::value_split::split_spilled_arg_reuse(f, cc);
     dp!("split_spilled_arg_reuse");
     crate::ir::naming::apply_role_names_with_params(f, cc, param_slots);
