@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +46,26 @@ METRIC_RE = re.compile(r"^\s+(ged|type_match|byte_match):\s+([0-9.]+)\s+\(mean\)
 # A metric may move slightly with an unrelated toolchain patch; a cell only fails
 # when it moves by more than this. GED is a count, so it is compared exactly.
 TOLERANCE = {"ged": 0.0, "type_match": 0.005, "byte_match": 0.005}
+MAX_DEFAULT_JOBS = 4
+
+
+def default_jobs(cpu_count: int | None = None) -> int:
+    """Return a conservative default for concurrent Joern subprocesses."""
+    available = os.cpu_count() if cpu_count is None else cpu_count
+    return max(1, min(MAX_DEFAULT_JOBS, available or 1))
+
+
+def positive_int(value: str) -> int:
+    """Parse a strictly positive worker count for argparse."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
+def cell_workdir(workdir: Path, key: str) -> Path:
+    """Return the isolated mutable directory for one matrix cell."""
+    return workdir / "cells" / key.replace(":", "-")
 
 
 def decbench_dir() -> Path | None:
@@ -136,11 +157,11 @@ def select_cells(patterns=None) -> list[str]:
     """Cell keys matching any `program:compiler:opt` glob.
 
     A full run is 56 cells, each spawning a Joern JVM to compute a graph edit
-    distance — about 37 minutes. That is affordable before a push and not
-    affordable in a loop, so a change aimed at one program can be measured
-    against that program. Fail-closed, exactly as `tools/dectest.py` is: a
-    pattern matching nothing is an error, because "0 cells, no regressions"
-    reads like success.
+    distance. It historically took about 37 minutes serially; `--jobs` now runs
+    isolated cells concurrently. A change aimed at one program can still be
+    measured against only that program. Fail-closed, exactly as
+    `tools/dectest.py` is: a pattern matching nothing is an error, because
+    "0 cells, no regressions" reads like success.
     """
     keys = all_cell_keys()
     if not patterns:
@@ -159,23 +180,49 @@ def select_cells(patterns=None) -> list[str]:
     return chosen
 
 
-def run_matrix(backend: str, workdir: Path, cwd: Path, only=None) -> dict:
+def run_cell(key: str, backend: str, workdir: Path, cwd: Path) -> dict:
+    """Compile and evaluate one independent matrix cell."""
+    program, compiler, opt = key.split(":")
+    cell_dir = cell_workdir(workdir, key)
+    cell_dir.mkdir(parents=True, exist_ok=True)
+    so = compile_cell(program, compiler, opt, cell_dir)
+    if so is None:
+        return {"error": "build failed"}
+    return evaluate(so, SRC / f"{program}.c", backend, cell_dir / "results", cwd)
+
+
+def print_cell(key: str, cell: dict) -> None:
+    """Print one stable, compact cell result as soon as it completes."""
+    if cell.get("error") == "build failed":
+        print(f"  {key:34s} BUILD FAILED", flush=True)
+        return
+    shown = " ".join(
+        f"{metric}={'-' if cell.get(metric) is None else cell[metric]}"
+        for metric in ("ged", "type_match", "byte_match")
+    )
+    print(f"  {key:34s} {shown}", flush=True)
+
+
+def run_matrix(
+    backend: str, workdir: Path, cwd: Path, only=None, jobs: int | None = None
+) -> dict:
     result: dict = {TOOLCHAIN_KEY: toolchain_fingerprint()}
-    results = workdir / "results"
-    for key in select_cells(only):
-        program, compiler, opt = key.split(":")
-        so = compile_cell(program, compiler, opt, workdir)
-        if so is None:
-            result[key] = {"error": "build failed"}
-            print(f"  {key:34s} BUILD FAILED", flush=True)
-            continue
-        cell = evaluate(so, SRC / f"{program}.c", backend, results, cwd)
-        result[key] = cell
-        shown = " ".join(
-            f"{k}={'-' if cell.get(k) is None else cell[k]}"
-            for k in ("ged", "type_match", "byte_match")
-        )
-        print(f"  {key:34s} {shown}", flush=True)
+    keys = select_cells(only)
+    worker_count = default_jobs() if jobs is None else jobs
+    if worker_count == 1:
+        for key in keys:
+            result[key] = run_cell(key, backend, workdir, cwd)
+            print_cell(key, result[key])
+        return result
+
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        futures = {
+            pool.submit(run_cell, key, backend, workdir, cwd): key for key in keys
+        }
+        for future in as_completed(futures):
+            key = futures[future]
+            result[key] = future.result()
+            print_cell(key, result[key])
     return result
 
 
@@ -229,6 +276,15 @@ def main() -> int:
     ap.add_argument("--backend", default="glaurung", help="glaurung | angr | …")
     ap.add_argument("--workdir", default=None)
     ap.add_argument(
+        "--jobs",
+        type=positive_int,
+        default=positive_int(
+            os.environ.get("GLAURUNG_DECBENCH_JOBS", str(default_jobs()))
+        ),
+        help="concurrent isolated cells (default: 4 or available CPUs; "
+        "GLAURUNG_DECBENCH_JOBS overrides)",
+    )
+    ap.add_argument(
         "--only",
         action="append",
         default=None,
@@ -266,7 +322,7 @@ def main() -> int:
     import tempfile
 
     with tempfile.TemporaryDirectory(dir=args.workdir) as td:
-        report = run_matrix(args.backend, Path(td), cwd, only=args.only)
+        report = run_matrix(args.backend, Path(td), cwd, only=args.only, jobs=args.jobs)
 
     if args.write_baseline:
         missing = [k for k, v in cells(report).items() if "error" in v]

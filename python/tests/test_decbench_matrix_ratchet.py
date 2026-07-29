@@ -144,10 +144,10 @@ def test_the_corpus_is_committed_and_matches_the_matrix_size(dm):
 
 # --- scoped runs (--only) --------------------------------------------------
 #
-# The full matrix is 56 cells, each spawning a Joern JVM: ~37 minutes. That is
-# affordable before a push and not affordable in a loop, so a change aimed at one
-# program can be measured against that program. The rules below are what stop a
-# scoped run from being mistaken for the gate.
+# The full matrix is 56 cells, each spawning a Joern JVM. It historically took
+# ~37 minutes serially; bounded isolated workers now reduce that wall clock. A
+# change aimed at one program can still be measured against that program. The
+# rules below stop a scoped run from being mistaken for the gate.
 
 
 def test_a_bare_program_name_selects_all_four_of_its_cells(dm):
@@ -196,3 +196,23 @@ def test_a_scoped_check_still_catches_a_regression_in_what_did_run(dm):
     base = _report(dm, **{"arith:gcc:O0": _cell(ged=5.0), "sort:gcc:O0": _cell()})
     cur = _report(dm, **{"arith:gcc:O0": _cell(ged=9.0)})
     assert dm.check(cur, base, scoped=True) == ["arith:gcc:O0.ged: 5.0 -> 9.0"]
+
+
+# --- wall-clock parallelism ------------------------------------------------
+
+
+def test_matrix_parallelism_is_bounded(dm):
+    """Joern is memory-heavy, so use available CPUs without launching 56 JVMs."""
+    assert dm.default_jobs(1) == 1
+    assert dm.default_jobs(2) == 2
+    assert dm.default_jobs(64) == 4
+
+
+def test_parallel_cells_have_isolated_work_directories(dm, tmp_path):
+    """Concurrent DecBench subprocesses must never share mutable result state."""
+    first = dm.cell_workdir(tmp_path, "arith:gcc:O0")
+    second = dm.cell_workdir(tmp_path, "arith:clang:O0")
+    assert first != second
+    assert first.parent == second.parent == tmp_path / "cells"
+    assert first.name == "arith-gcc-O0"
+    assert second.name == "arith-clang-O0"

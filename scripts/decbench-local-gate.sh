@@ -72,10 +72,12 @@ fi
 # semantic changes regressed ~25 of 56 cells with a green gate. A gate that can pass
 # while its only metric lane is absent is not a gate, so absence is now a FAILURE.
 #
-# It costs ~37 minutes (56 cells, each spawning a Joern JVM to compute the graph edit
-# distance), which is exactly why it is tempting to skip and exactly why the skip must
-# not be silent. Set GLAURUNG_ALLOW_NO_METRICS=1 to waive it deliberately; the waiver
-# is then reported in the FINAL line rather than mid-output where it scrolls past.
+# It historically cost ~37 minutes serially (56 cells, each spawning a Joern JVM to
+# compute the graph edit distance). The matrix now uses four isolated workers by
+# default, configurable with GLAURUNG_DECBENCH_JOBS. It is still expensive enough that
+# a skip must not be silent. Set GLAURUNG_ALLOW_NO_METRICS=1 to waive it deliberately;
+# the waiver is then reported in the FINAL line rather than mid-output where it scrolls
+# past.
 step "3/3  decbench per-cell metric ratchet"
 waived=""
 if [ ! -d "$DECBENCH_DIR" ]; then
