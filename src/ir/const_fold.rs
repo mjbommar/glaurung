@@ -38,9 +38,10 @@ fn fold_body(body: &mut [Stmt]) {
         match s {
             Stmt::IndirectGoto { target } => fold_expr(target),
             Stmt::Assign { src, .. } => fold_expr(src),
-            Stmt::Store { addr, src, .. } => {
+            Stmt::Store { addr, src, size } => {
                 fold_expr(addr);
                 fold_expr(src);
+                fold_stored_value(src, *size);
             }
             Stmt::Call { target, args, .. } => {
                 fold_expr(target);
@@ -108,6 +109,55 @@ fn fold_body(body: &mut [Stmt]) {
     }
 }
 
+fn fold_stored_value(src: &mut Expr, size: u8) {
+    if size == 0 {
+        return;
+    }
+    // A machine store observes only its low `size` bytes. Integer casts whose
+    // target is at least that wide cannot change those bits, so retaining the
+    // zero/sign-extension in source C only changes instruction selection.
+    loop {
+        let replacement = match src {
+            Expr::Cast { width, expr, .. } if *width >= size => Some(expr.as_ref().clone()),
+            _ => None,
+        };
+        let Some(replacement) = replacement else {
+            break;
+        };
+        *src = replacement;
+    }
+
+    // Likewise, a mask that keeps every stored low bit is unobservable after
+    // the truncating write (`store8(x & 0xff) == store8(x)`).
+    let required = if size >= 8 {
+        u64::MAX
+    } else {
+        (1u64 << (u32::from(size) * 8)) - 1
+    };
+    if let Some(replacement) = fold_observed_mask(src, required as i64) {
+        *src = replacement;
+        fold_expr(src);
+    }
+    let replacement = match src {
+        Expr::Bin {
+            op: BinOp::And,
+            lhs,
+            rhs,
+        } => match (lhs.as_ref(), rhs.as_ref()) {
+            (value, Expr::Const(mask)) | (Expr::Const(mask), value)
+                if (*mask as u64) & required == required =>
+            {
+                Some(value.clone())
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(replacement) = replacement {
+        *src = replacement;
+    }
+}
+
 fn fold_expr(e: &mut Expr) {
     // Recurse first — bottom-up folding composes naturally.
     match e {
@@ -132,6 +182,27 @@ fn fold_expr(e: &mut Expr) {
     }
 
     // Now try to collapse the current node.
+    if let Expr::Cast {
+        signed,
+        width,
+        expr,
+    } = e
+    {
+        let replacement = match expr.as_ref() {
+            Expr::Const(value) if cast_preserves_constant(*value, *signed, *width) => {
+                Some(Expr::Const(*value))
+            }
+            // Comparisons are exactly zero or one, so every supported integer
+            // cast preserves their complete value and signedness is irrelevant.
+            predicate @ Expr::Cmp { .. } if *width > 0 => Some(predicate.clone()),
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            *e = replacement;
+            return;
+        }
+    }
+
     if let Expr::Bin { op, lhs, rhs } = e {
         let op = *op;
 
@@ -188,6 +259,26 @@ fn fold_expr(e: &mut Expr) {
                 merge_equality_and_less(lhs, rhs).or_else(|| merge_equality_and_less(rhs, lhs))
             {
                 *e = replacement;
+                return;
+            }
+        }
+
+        // Observe only the requested bits of nested partial-register merges.
+        // This is the algebra behind x86 `setcc al; movzx eax, al`: high bits
+        // preserved in the architectural parent cannot affect a later low-byte
+        // (or low-bit) read.
+        if op == BinOp::And {
+            let masked = match (lhs.as_ref(), rhs.as_ref()) {
+                (value, Expr::Const(mask)) | (Expr::Const(mask), value) => {
+                    fold_observed_mask(value, *mask)
+                }
+                _ => None,
+            };
+            if let Some(replacement) = masked {
+                *e = replacement;
+                // The replacement is strictly shallower (one merge or mask
+                // layer disappeared), so finish any newly adjacent identity.
+                fold_expr(e);
                 return;
             }
         }
@@ -313,6 +404,59 @@ fn fold_expr(e: &mut Expr) {
     // negation, not a bitwise operation; invert it into the corresponding
     // relation so it remains readable and type-correct.
     if let Expr::Cmp { op, lhs, rhs } = e {
+        // Comparing two values after the same lossless extension is exactly the
+        // comparison at the common source width. Clang -O0 emits this around
+        // signed-int loop tests (`movsxd` on both operands); retaining both
+        // machine casts in C obscures the source relation without preserving
+        // any additional semantics.
+        if let (Some(left), Some(right)) = (
+            common_extended_operand(lhs, *op),
+            common_extended_operand(rhs, *op),
+        ) {
+            if left.0 == right.0 && left.1 == right.1 && left.2 == right.2 {
+                *lhs = Box::new(left.3.clone());
+                *rhs = Box::new(right.3.clone());
+            }
+        }
+
+        // Subtraction sets x86's zero flag: `(X - Y) == 0` is exactly
+        // `X == Y` (and likewise for `!=`) in modular machine arithmetic.
+        // Recover that relation before merging ZF with CF/SF into inclusive
+        // comparisons below.
+        let subtraction_relation = match (&*op, lhs.as_ref(), rhs.as_ref()) {
+            (
+                op @ (CmpOp::Eq | CmpOp::Ne),
+                Expr::Bin {
+                    op: BinOp::Sub,
+                    lhs: sub_lhs,
+                    rhs: sub_rhs,
+                },
+                Expr::Const(0),
+            ) => Some(Expr::Cmp {
+                op: *op,
+                lhs: sub_lhs.clone(),
+                rhs: sub_rhs.clone(),
+            }),
+            (
+                op @ (CmpOp::Eq | CmpOp::Ne),
+                Expr::Const(0),
+                Expr::Bin {
+                    op: BinOp::Sub,
+                    lhs: sub_lhs,
+                    rhs: sub_rhs,
+                },
+            ) => Some(Expr::Cmp {
+                op: *op,
+                lhs: sub_lhs.clone(),
+                rhs: sub_rhs.clone(),
+            }),
+            _ => None,
+        };
+        if let Some(replacement) = subtraction_relation {
+            *e = replacement;
+            return;
+        }
+
         let inner = match (lhs.as_ref(), rhs.as_ref()) {
             (inner @ Expr::Cmp { .. }, Expr::Const(0))
             | (Expr::Const(0), inner @ Expr::Cmp { .. }) => Some(inner),
@@ -338,6 +482,126 @@ fn fold_expr(e: &mut Expr) {
             }
         }
     }
+}
+
+fn cast_preserves_constant(value: i64, signed: bool, width: u8) -> bool {
+    let bits = u32::from(width) * 8;
+    if bits == 0 || bits > 64 {
+        return false;
+    }
+    if signed {
+        if bits == 64 {
+            true
+        } else {
+            let limit = 1i64 << (bits - 1);
+            (-limit..limit).contains(&value)
+        }
+    } else if bits == 64 {
+        value >= 0
+    } else {
+        value >= 0 && (value as u64) < (1u64 << bits)
+    }
+}
+
+/// `(outer)(inner)x` when both casts have the signedness required by `op` and
+/// strictly widen from the common inner machine width. Returns the cast shape
+/// plus `x`, allowing the caller to prove both operands use the same extension.
+fn common_extended_operand(expr: &Expr, op: CmpOp) -> Option<(bool, u8, u8, &Expr)> {
+    let Expr::Cast {
+        signed: outer_signed,
+        width: outer_width,
+        expr: outer_expr,
+    } = expr
+    else {
+        return None;
+    };
+    let Expr::Cast {
+        signed: inner_signed,
+        width: inner_width,
+        expr: inner_expr,
+    } = outer_expr.as_ref()
+    else {
+        return None;
+    };
+    if outer_signed != inner_signed || inner_width >= outer_width {
+        return None;
+    }
+    let signedness_matches = match op {
+        CmpOp::Slt | CmpOp::Sle => *outer_signed,
+        CmpOp::Ult | CmpOp::Ule => !*outer_signed,
+        CmpOp::Eq | CmpOp::Ne => true,
+    };
+    signedness_matches.then_some((
+        *outer_signed,
+        *outer_width,
+        *inner_width,
+        inner_expr.as_ref(),
+    ))
+}
+
+fn fold_observed_mask(value: &Expr, observed_mask: i64) -> Option<Expr> {
+    // Comparisons are exactly 0 or 1. Only the low bit of the mask matters.
+    if matches!(value, Expr::Cmp { .. }) {
+        return Some(if observed_mask & 1 == 1 {
+            value.clone()
+        } else {
+            Expr::Const(0)
+        });
+    }
+
+    // `(X & A) & B == X & (A & B)`; combining the constants exposes both
+    // zero masks and boolean low-bit reads.
+    if let Some((inner, inner_mask)) = and_with_constant(value) {
+        return Some(Expr::Bin {
+            op: BinOp::And,
+            lhs: Box::new(inner.clone()),
+            rhs: Box::new(Expr::Const(inner_mask & observed_mask)),
+        });
+    }
+
+    // `((X & KEEP) | Y) & OBSERVED == Y & OBSERVED` when KEEP and OBSERVED
+    // are disjoint. Handle either OR ordering; no assumption about Y is needed.
+    if let Expr::Bin {
+        op: BinOp::Or,
+        lhs,
+        rhs,
+    } = value
+    {
+        if masked_term_is_disjoint(lhs, observed_mask) {
+            return Some(Expr::Bin {
+                op: BinOp::And,
+                lhs: rhs.clone(),
+                rhs: Box::new(Expr::Const(observed_mask)),
+            });
+        }
+        if masked_term_is_disjoint(rhs, observed_mask) {
+            return Some(Expr::Bin {
+                op: BinOp::And,
+                lhs: lhs.clone(),
+                rhs: Box::new(Expr::Const(observed_mask)),
+            });
+        }
+    }
+    None
+}
+
+fn and_with_constant(expr: &Expr) -> Option<(&Expr, i64)> {
+    let Expr::Bin {
+        op: BinOp::And,
+        lhs,
+        rhs,
+    } = expr
+    else {
+        return None;
+    };
+    match (lhs.as_ref(), rhs.as_ref()) {
+        (value, Expr::Const(mask)) | (Expr::Const(mask), value) => Some((value, *mask)),
+        _ => None,
+    }
+}
+
+fn masked_term_is_disjoint(expr: &Expr, observed_mask: i64) -> bool {
+    and_with_constant(expr).is_some_and(|(_, mask)| mask & observed_mask == 0)
 }
 
 fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
@@ -571,6 +835,209 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn x86_below_or_equal_flag_identity_recovers_unsigned_less_equal() {
+        let lhs = Expr::Reg(reg("state"));
+        let rhs = Expr::Const(3);
+        let mut f = one_stmt(Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(bin(
+                BinOp::Or,
+                Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(lhs.clone()),
+                    rhs: Box::new(rhs.clone()),
+                },
+                Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(bin(BinOp::Sub, lhs.clone(), rhs.clone())),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+            )),
+            rhs: Box::new(Expr::Const(0)),
+        });
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(
+            *src,
+            Expr::Cmp {
+                op: CmpOp::Ule,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            }
+        );
+    }
+
+    #[test]
+    fn masked_partial_register_merge_keeps_only_the_observed_low_bit() {
+        let old = Expr::Reg(reg("old_parent"));
+        let predicate = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg("state"))),
+            rhs: Box::new(Expr::Const(3)),
+        };
+        let merged = bin(
+            BinOp::Or,
+            bin(BinOp::And, old, Expr::Const(-256)),
+            bin(
+                BinOp::And,
+                bin(BinOp::And, predicate.clone(), Expr::Const(255)),
+                Expr::Const(1),
+            ),
+        );
+        let mut f = one_stmt(bin(BinOp::And, merged, Expr::Const(255)));
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(*src, predicate);
+    }
+
+    #[test]
+    fn casts_of_in_range_constants_and_predicates_keep_the_same_value() {
+        let predicate = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg("state"))),
+            rhs: Box::new(Expr::Const(3)),
+        };
+        let mut zero = one_stmt(Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Const(0)),
+            }),
+        });
+        let mut boolean = one_stmt(Expr::Cast {
+            signed: false,
+            width: 4,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 1,
+                expr: Box::new(predicate.clone()),
+            }),
+        });
+
+        fold_constants(&mut zero);
+        fold_constants(&mut boolean);
+
+        assert!(matches!(
+            zero.body[0],
+            Stmt::Assign {
+                src: Expr::Const(0),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &boolean.body[0],
+            Stmt::Assign { src, .. } if src == &predicate
+        ));
+    }
+
+    #[test]
+    fn equal_sign_extensions_do_not_change_a_signed_comparison() {
+        let extended = |name| Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg(name))),
+            }),
+        };
+        let mut f = one_stmt(Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(extended("lhs")),
+            rhs: Box::new(extended("rhs")),
+        });
+
+        fold_constants(&mut f);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Assign {
+                src: Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs,
+                    rhs,
+                },
+                ..
+            } if matches!(lhs.as_ref(), Expr::Reg(r) if r == &reg("lhs"))
+                && matches!(rhs.as_ref(), Expr::Reg(r) if r == &reg("rhs"))
+        ));
+    }
+
+    #[test]
+    fn a_store_width_consumes_redundant_casts_and_low_bit_masks() {
+        let address = Expr::Reg(reg("local_value"));
+        let update = Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(reg("local_value"))),
+            rhs: Box::new(Expr::Const(1)),
+        };
+        let mut f = Function {
+            name: "stores".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: address.clone(),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(update.clone()),
+                        }),
+                    },
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_byte")),
+                    src: Expr::Bin {
+                        op: BinOp::Or,
+                        lhs: Box::new(Expr::Bin {
+                            op: BinOp::And,
+                            lhs: Box::new(Expr::Reg(reg("old_parent"))),
+                            rhs: Box::new(Expr::Const(-256)),
+                        }),
+                        rhs: Box::new(Expr::Bin {
+                            op: BinOp::And,
+                            lhs: Box::new(Expr::Deref {
+                                addr: Box::new(Expr::Reg(reg("p"))),
+                                size: 1,
+                            }),
+                            rhs: Box::new(Expr::Const(255)),
+                        }),
+                    },
+                    size: 1,
+                },
+            ],
+        };
+
+        fold_constants(&mut f);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Store { addr, src, size: 4 } if addr == &address && src == &update
+        ));
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Store {
+                src: Expr::Deref { size: 1, .. },
+                size: 1,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -5,18 +5,18 @@
 //! `while (1) { pre; if (exit) break; body }`.  Copy propagation can eliminate a
 //! pure reload-only `pre`, leaving the exit guard as the literal first statement.
 //! At that point no motion or data-flow prediction is required: the guarded
-//! infinite loop is exactly equivalent to `while (!exit) { body }`.
-//! A2 deliberately rolls that equivalence out only for constant-bound countdowns;
-//! other induction forms remain conservative until separately measured slices.
+//! infinite loop is exactly equivalent to `while (!exit) { body }`. This needs
+//! no induction-variable guess: the guard is already the literal first statement
+//! and its arm is exactly one `break`, so no work is moved or discarded.
 
 use crate::ir::ast::{negate_cmp_expr, Expr, Function, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
-/// Recover the measured constant-bound countdown subset of head-tested loops.
+/// Recover exact head-tested loops from their conservative guarded form.
 ///
 /// This pass intentionally does not move, fold, or discard any statement before
-/// the guard. If even one statement remains there, or the body is not the bounded
-/// A2 countdown shape, the conservative form stays intact.
+/// the guard. If even one statement remains there, the conservative form stays
+/// intact.
 pub fn recover_head_tested_whiles(f: &mut Function) {
     recover_body(&mut f.body);
 }
@@ -25,14 +25,12 @@ pub fn recover_head_tested_whiles(f: &mut Function) {
 ///
 /// The first A3 slice accepts only an adjacent initializer, a head guard (either
 /// direct or the conservative `if (exit) break` form), and one unconditional
-/// unit-increment tail iterator for the same variable, and the measured
-/// left-handed accumulator body (`sum = sum + value`). Decrementing loops remain
-/// `while` in this slice, preserving A2's source-while acceptance case; the
-/// right-handed accumulator shape remains conservative because the full ratchet
-/// measured byte-match regressions for that slice. Bodies containing explicit
-/// control transfers also remain conservative: until `continue` is represented
-/// explicitly, a `goto` may bypass the tail iterator and cannot safely become C
-/// `continue` semantics.
+/// unit-increment tail iterator for the same variable. Returns and structured
+/// switches are safe in the body: a return exits the function, and a switch's
+/// implicit breaks do not bypass the loop iterator. Bodies containing an explicit
+/// loop-level `break`, `goto`, or nested loop remain conservative: until
+/// `continue` is represented explicitly, such control can bypass the tail
+/// iterator and cannot safely become C `continue` semantics.
 pub fn promote_for_loops(f: &mut Function) {
     promote_for_body(&mut f.body);
 }
@@ -102,8 +100,7 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
     if step_target != init_target
         || !is_unit_increment(step, step_target)
         || !contains_reg(&loop_cond, init_target)
-        || !has_left_accumulator_update(core_body)
-        || core_body.iter().any(has_explicit_control_transfer)
+        || core_body.iter().any(has_iterator_bypass)
     {
         return None;
     }
@@ -116,33 +113,17 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
     })
 }
 
-fn has_left_accumulator_update(body: &[Stmt]) -> bool {
-    body.iter().any(|stmt| {
-        let (dst, src) = match stmt {
-            Stmt::Assign { dst, src } => (dst, src),
-            Stmt::Store {
-                addr: Expr::Reg(dst @ VReg::Phys(name)),
-                src,
-                ..
-            } if name.starts_with("local_") || name.starts_with("stack_") => (dst, src),
-            _ => return false,
-        };
-        matches!(
-            src,
-            Expr::Bin {
-                op: BinOp::Add,
-                lhs,
-                ..
-            } if matches!(lhs.as_ref(), Expr::Reg(read) if read == dst)
-        )
-    })
-}
-
 fn is_unit_increment(stmt: &Stmt, target: &VReg) -> bool {
-    let src = match stmt {
+    let mut src = match stmt {
         Stmt::Assign { src, .. } | Stmt::Store { src, .. } => src,
         _ => return false,
     };
+    // Width-changing ops are part of the update's machine semantics and remain
+    // intact in the `for` step. They should not hide the exact underlying
+    // `i + 1` identity from shape recognition.
+    while let Expr::Cast { expr, .. } = src {
+        src = expr;
+    }
     matches!(
         src,
         Expr::Bin {
@@ -165,21 +146,28 @@ fn assigned_target(stmt: &Stmt) -> Option<&VReg> {
     }
 }
 
-fn has_explicit_control_transfer(stmt: &Stmt) -> bool {
+fn has_iterator_bypass(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Goto { .. } | Stmt::Break | Stmt::Return { .. } => true,
+        Stmt::Goto { .. } | Stmt::Break => true,
         Stmt::If {
             then_body,
             else_body,
             ..
         } => {
-            then_body.iter().any(has_explicit_control_transfer)
+            then_body.iter().any(has_iterator_bypass)
                 || else_body
                     .as_ref()
-                    .is_some_and(|body| body.iter().any(has_explicit_control_transfer))
+                    .is_some_and(|body| body.iter().any(has_iterator_bypass))
         }
         Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
-        Stmt::Switch { .. } => true,
+        Stmt::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| body.iter().any(has_iterator_bypass))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(has_iterator_bypass))
+        }
         _ => false,
     }
 }
@@ -214,10 +202,6 @@ fn recover_body(stmts: &mut [Stmt]) {
                 if then_body.as_slice() != [Stmt::Break] {
                     continue;
                 }
-                if !is_constant_bound_countdown(exit_cond, &body[1..]) {
-                    continue;
-                }
-
                 *cond = negate_cmp_expr(exit_cond.clone());
                 body.remove(0);
             }
@@ -248,49 +232,6 @@ fn recover_body(stmts: &mut [Stmt]) {
     }
 }
 
-/// The deliberately bounded A2 shape: `i <= K` exits and the body decrements
-/// that same induction variable toward the constant bound.
-///
-/// Other exact head guards are semantically promotable too, but rolling them
-/// out together caused per-cell DecBench regressions that obscured the factorial
-/// acceptance case. They remain conservative until their own measured slices.
-fn is_constant_bound_countdown(exit_cond: &Expr, body: &[Stmt]) -> bool {
-    let Expr::Cmp { lhs, rhs, .. } = exit_cond else {
-        return false;
-    };
-    let Some(induction) = body.iter().find_map(countdown_target) else {
-        return false;
-    };
-
-    (contains_reg(lhs, induction) || contains_reg(rhs, induction))
-        && (contains_const(lhs) || contains_const(rhs))
-}
-
-fn countdown_target(stmt: &Stmt) -> Option<&VReg> {
-    let (dst, src) = match stmt {
-        Stmt::Assign { dst, src } => (dst, src),
-        // Promoted stack locals remain Store-to-Reg nodes in the semantic AST;
-        // the DecBench renderer prints them as ordinary local assignments.
-        Stmt::Store {
-            addr: Expr::Reg(dst),
-            src,
-            ..
-        } => (dst, src),
-        _ => return None,
-    };
-    let Expr::Bin {
-        op: BinOp::Sub,
-        lhs,
-        rhs,
-    } = src
-    else {
-        return None;
-    };
-    (matches!(lhs.as_ref(), Expr::Reg(read) if read == dst)
-        && matches!(rhs.as_ref(), Expr::Const(step) if *step > 0))
-    .then_some(dst)
-}
-
 fn contains_reg(expr: &Expr, target: &VReg) -> bool {
     match expr {
         Expr::Reg(reg) => reg == target,
@@ -318,32 +259,6 @@ fn contains_reg(expr: &Expr, target: &VReg) -> bool {
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
-        | Expr::Unknown(_) => false,
-    }
-}
-
-fn contains_const(expr: &Expr) -> bool {
-    match expr {
-        Expr::Const(_) => true,
-        Expr::Deref { addr, .. } => contains_const(addr),
-        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            contains_const(lhs) || contains_const(rhs)
-        }
-        Expr::Select {
-            cond,
-            if_true,
-            if_false,
-            ..
-        } => contains_const(cond) || contains_const(if_true) || contains_const(if_false),
-        Expr::Un { src, .. } => contains_const(src),
-        Expr::Cast { expr, .. } => contains_const(expr),
-        Expr::Reg(_)
-        | Expr::StackAddr { .. }
-        | Expr::Addr(_)
-        | Expr::Named { .. }
-        | Expr::StringLit { .. }
-        | Expr::Lea { .. }
-        | Expr::PdbFieldAddr { .. }
         | Expr::Unknown(_) => false,
     }
 }
@@ -418,7 +333,15 @@ mod tests {
     }
 
     #[test]
-    fn an_incrementing_variable_bound_loop_stays_conservative_in_a2() {
+    fn exact_first_exit_guard_recovers_incrementing_variable_bound_while() {
+        let step = Stmt::Assign {
+            dst: reg("i"),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(reg("i"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        };
         let original = Stmt::While {
             cond: Expr::Const(1),
             body: vec![
@@ -431,14 +354,7 @@ mod tests {
                     then_body: vec![Stmt::Break],
                     else_body: None,
                 },
-                Stmt::Assign {
-                    dst: reg("i"),
-                    src: Expr::Bin {
-                        op: BinOp::Add,
-                        lhs: Box::new(Expr::Reg(reg("i"))),
-                        rhs: Box::new(Expr::Const(1)),
-                    },
-                },
+                step.clone(),
             ],
         };
         let mut f = Function {
@@ -449,7 +365,17 @@ mod tests {
 
         recover_head_tested_whiles(&mut f);
 
-        assert_eq!(f.body, vec![original]);
+        assert_eq!(
+            f.body,
+            vec![Stmt::While {
+                cond: Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(reg("i"))),
+                    rhs: Box::new(Expr::Reg(reg("n"))),
+                },
+                body: vec![step],
+            }]
+        );
     }
 
     #[test]
@@ -514,6 +440,90 @@ mod tests {
                 body: vec![work],
             }]
         );
+    }
+
+    #[test]
+    fn promotes_counted_loop_with_switch_and_early_return() {
+        let induction = reg("local_i");
+        let init = Stmt::Store {
+            addr: Expr::Reg(induction.clone()),
+            src: Expr::Const(0),
+            size: 4,
+        };
+        let step = Stmt::Store {
+            addr: Expr::Reg(induction.clone()),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(induction.clone())),
+                rhs: Box::new(Expr::Const(1)),
+            },
+            size: 4,
+        };
+        let switch = Stmt::Switch {
+            discriminant: Expr::Reg(reg("state")),
+            cases: vec![
+                (Some(0), vec![Stmt::Nop]),
+                (
+                    Some(1),
+                    vec![Stmt::Return {
+                        value: Some(Expr::Const(1)),
+                    }],
+                ),
+            ],
+            default: None,
+        };
+        let condition = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(induction.clone())),
+            rhs: Box::new(Expr::Reg(reg("n"))),
+        };
+        let mut function = Function {
+            name: "fsm".to_string(),
+            entry_va: 0,
+            body: vec![
+                init.clone(),
+                Stmt::While {
+                    cond: condition.clone(),
+                    body: vec![switch.clone(), step.clone()],
+                },
+            ],
+        };
+
+        promote_for_loops(&mut function);
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::For {
+                init: Box::new(init),
+                cond: condition,
+                step: Box::new(step),
+                body: vec![switch],
+            }]
+        );
+    }
+
+    #[test]
+    fn explicit_width_casts_do_not_hide_a_unit_increment() {
+        let induction = reg("local_i");
+        let step = Stmt::Store {
+            addr: Expr::Reg(induction.clone()),
+            src: Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(Expr::Cast {
+                    signed: false,
+                    width: 4,
+                    expr: Box::new(Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(induction.clone())),
+                        rhs: Box::new(Expr::Const(1)),
+                    }),
+                }),
+            },
+            size: 4,
+        };
+
+        assert!(is_unit_increment(&step, &induction));
     }
 
     #[test]
@@ -628,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn a_right_handed_accumulator_stays_conservative_in_the_first_a3_slice() {
+    fn right_handed_accumulator_does_not_block_exact_for_recovery() {
         let induction = reg("i");
         let init = Stmt::Assign {
             dst: induction.clone(),
@@ -642,32 +652,38 @@ mod tests {
                 rhs: Box::new(Expr::Const(1)),
             },
         };
-        let original_loop = Stmt::While {
-            cond: Expr::Cmp {
-                op: CmpOp::Slt,
-                lhs: Box::new(Expr::Reg(induction.clone())),
-                rhs: Box::new(Expr::Reg(reg("n"))),
+        let cond = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(induction.clone())),
+            rhs: Box::new(Expr::Reg(reg("n"))),
+        };
+        let update = Stmt::Assign {
+            dst: reg("sum"),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(induction)),
+                rhs: Box::new(Expr::Reg(reg("sum"))),
             },
-            body: vec![
-                Stmt::Assign {
-                    dst: reg("sum"),
-                    src: Expr::Bin {
-                        op: BinOp::Add,
-                        lhs: Box::new(Expr::Reg(induction)),
-                        rhs: Box::new(Expr::Reg(reg("sum"))),
-                    },
-                },
-                step,
-            ],
+        };
+        let original_loop = Stmt::While {
+            cond: cond.clone(),
+            body: vec![update.clone(), step.clone()],
         };
         let mut f = Function {
-            name: "later_slice".into(),
+            name: "right_handed".into(),
             entry_va: 0,
-            body: vec![init.clone(), original_loop.clone()],
+            body: vec![init.clone(), original_loop],
         };
-
         promote_for_loops(&mut f);
 
-        assert_eq!(f.body, vec![init, original_loop]);
+        assert_eq!(
+            f.body,
+            vec![Stmt::For {
+                init: Box::new(init),
+                cond,
+                step: Box::new(step),
+                body: vec![update],
+            }]
+        );
     }
 }

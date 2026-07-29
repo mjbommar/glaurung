@@ -57,6 +57,28 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
     let base_slot = |name: &str| slot_of.get(name.split('#').next().unwrap_or(name)).copied();
     for block in &lf.blocks {
         for ins in &block.instrs {
+            // `xor reg, reg` and `sub reg, reg` are architectural zero idioms:
+            // their result does not depend on the incoming register value even
+            // though the generic Bin representation has two syntactic uses.
+            // Treat the idiom as the definition it really is before ordinary
+            // read-before-write classification. This is especially important
+            // for O2 accumulators such as `xor edx, edx`, where otherwise the
+            // scratch register invents a third source parameter.
+            if let Op::Bin {
+                dst: VReg::Phys(dst),
+                op: crate::ir::types::BinOp::Xor | crate::ir::types::BinOp::Sub,
+                lhs: Value::Reg(VReg::Phys(lhs)),
+                rhs: Value::Reg(VReg::Phys(rhs)),
+            } = &ins.op
+            {
+                let slots = (base_slot(dst), base_slot(lhs), base_slot(rhs));
+                if let (Some(dst_slot), Some(lhs_slot), Some(rhs_slot)) = slots {
+                    if dst_slot == lhs_slot && lhs_slot == rhs_slot {
+                        decided.entry(dst_slot).or_insert(false);
+                        continue;
+                    }
+                }
+            }
             let (def, uses) = def_uses(&ins.op);
             // A CALL's argument-register uses say what the CALLEE may read. They are
             // not evidence that THIS function has a parameter. Over-approximating uses
@@ -1461,6 +1483,36 @@ mod tests {
         assert!(
             !params.contains(&2),
             "rdx (slot 2) is sub-register scratch, not a parameter: {:?}",
+            params
+        );
+    }
+
+    #[test]
+    fn live_in_arg_slots_treats_zero_idiom_as_a_definition() {
+        use crate::ir::types::BinOp;
+        // Real GCC -O2 shape from `sum_to`: `xor edx, edx` establishes the
+        // accumulator before a later block reads rdx. Although the generic
+        // Bin op has two syntactic uses, this machine idiom is independent of
+        // the incoming register and therefore cannot prove a third parameter.
+        let lf = mk(vec![
+            Op::Bin {
+                op: BinOp::Xor,
+                dst: VReg::phys("edx"),
+                lhs: Value::Reg(VReg::phys("edx")),
+                rhs: Value::Reg(VReg::phys("edx")),
+            },
+            Op::Bin {
+                op: BinOp::Add,
+                dst: VReg::phys("rax"),
+                lhs: Value::Reg(VReg::phys("rdx")),
+                rhs: Value::Const(1),
+            },
+        ]);
+
+        let params = live_in_arg_slots_llir(&lf, CallConv::SysVAmd64);
+        assert!(
+            !params.contains(&2),
+            "zero-initialized rdx is scratch, not a parameter: {:?}",
             params
         );
     }

@@ -37,10 +37,273 @@ const MIN_CASES: usize = 4;
 
 /// Rewrite every comparison ladder in `f` as a `switch`.
 pub fn recover_switches(f: &mut Function) {
+    recover_top_level_goto_switches(&mut f.body);
     rewrite_body(&mut f.body);
     // A label is only dropped once nothing references it any more.
     let live = goto_targets(&f.body);
     prune_labels(&mut f.body, &live);
+}
+
+/// Recover the other form produced when region structuring cannot nest GCC's
+/// comparisons: a linear run of guarded gotos followed by labelled case bodies.
+///
+/// This is not a generic "labels look like cases" heuristic.  The dispatch must
+/// prove the same range/equality partition as [`try_ladder`], every case label
+/// must have exactly one incoming goto (the dispatch edge), and each carved case
+/// body must end in an unconditional transfer.  Those conditions make moving
+/// the bodies under a `Switch` control-flow preserving.
+///
+/// Only the function's top-level statement list is eligible. For a nested list,
+/// an incoming goto may live in an enclosing list and would be invisible to the
+/// exact-reference proof below; declining that shape is safer than guessing.
+fn recover_top_level_goto_switches(body: &mut Vec<Stmt>) {
+    while recover_one_goto_switch(body) {}
+}
+
+#[derive(Clone)]
+struct GotoCase {
+    value: i64,
+    label: u64,
+}
+
+struct GotoDispatch {
+    discriminant: VReg,
+    end: usize,
+    cases: Vec<GotoCase>,
+    join: u64,
+}
+
+fn recover_one_goto_switch(body: &mut Vec<Stmt>) -> bool {
+    for start in 0..body.len() {
+        let Some(dispatch) = parse_goto_dispatch(body, start) else {
+            continue;
+        };
+        let Some(join_position) = unique_label_position(body, dispatch.join) else {
+            continue;
+        };
+        if join_position < dispatch.end {
+            continue;
+        }
+
+        let mut positioned = Vec::with_capacity(dispatch.cases.len());
+        let mut valid = true;
+        for case in &dispatch.cases {
+            let Some(position) = unique_label_position(body, case.label) else {
+                valid = false;
+                break;
+            };
+            if position < dispatch.end
+                || position >= join_position
+                || count_gotos_body(body, case.label) != 1
+            {
+                valid = false;
+                break;
+            }
+            positioned.push((position, case.clone()));
+        }
+        if !valid {
+            continue;
+        }
+        positioned.sort_by_key(|(position, _)| *position);
+        if positioned.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            continue;
+        }
+        let Some((first_case_position, _)) = positioned.first() else {
+            continue;
+        };
+        if body[dispatch.end..*first_case_position]
+            .iter()
+            .any(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+        {
+            continue;
+        }
+
+        let mut cases = Vec::with_capacity(positioned.len());
+        for (case_index, (position, case)) in positioned.iter().enumerate() {
+            let next_position = positioned
+                .get(case_index + 1)
+                .map(|(next, _)| *next)
+                .unwrap_or(join_position);
+            let mut case_body = body[position + 1..next_position].to_vec();
+            if !ends_in_unconditional_transfer(&case_body) {
+                valid = false;
+                break;
+            }
+            replace_join_gotos(&mut case_body, dispatch.join);
+            drop_renderer_supplied_break(&mut case_body);
+            cases.push((Some(case.value), case_body));
+        }
+        if !valid {
+            continue;
+        }
+        // Source case order is the clearest stable spelling; dispatch-tree order
+        // is an implementation detail of GCC's binary search.
+        cases.sort_by_key(|(value, _)| *value);
+        let switch = Stmt::Switch {
+            discriminant: Expr::Reg(dispatch.discriminant),
+            cases,
+            default: None,
+        };
+        body.splice(start..join_position, std::iter::once(switch));
+        return true;
+    }
+    false
+}
+
+fn parse_goto_dispatch(body: &[Stmt], start: usize) -> Option<GotoDispatch> {
+    let mut discriminant = None;
+    let mut cases = Vec::new();
+    let mut join = None;
+    let mut reachable = Range::full();
+    let mut index = start;
+
+    loop {
+        match body.get(index)? {
+            Stmt::If {
+                cond,
+                then_body,
+                else_body: None,
+            } => {
+                let target = sole_goto(then_body)?;
+                match classify(cond, &mut discriminant)? {
+                    Test::Case(value) => {
+                        if !reachable.contains(value)
+                            || cases
+                                .iter()
+                                .any(|case: &GotoCase| case.value == value || case.label == target)
+                        {
+                            return None;
+                        }
+                        cases.push(GotoCase {
+                            value,
+                            label: target,
+                        });
+                    }
+                    Test::Prune(bound) => {
+                        if join.is_some_and(|seen| seen != target) {
+                            return None;
+                        }
+                        join = Some(target);
+                        reachable.narrow(&bound);
+                    }
+                }
+                index += 1;
+            }
+            Stmt::Goto { target } => {
+                if join.is_some_and(|seen| seen != *target) {
+                    return None;
+                }
+                join = Some(*target);
+                index += 1;
+                break;
+            }
+            _ => return None,
+        }
+    }
+
+    if cases.len() < MIN_CASES || cases.iter().any(|case| Some(case.label) == join) {
+        return None;
+    }
+    Some(GotoDispatch {
+        discriminant: discriminant?,
+        end: index,
+        cases,
+        join: join?,
+    })
+}
+
+fn unique_label_position(body: &[Stmt], target: u64) -> Option<usize> {
+    let mut positions = body.iter().enumerate().filter_map(|(index, statement)| {
+        matches!(statement, Stmt::Label(label) if *label == target).then_some(index)
+    });
+    let position = positions.next()?;
+    positions.next().is_none().then_some(position)
+}
+
+fn count_gotos_body(body: &[Stmt], target: u64) -> usize {
+    body.iter()
+        .map(|statement| count_gotos_stmt(statement, target))
+        .sum()
+}
+
+fn count_gotos_stmt(statement: &Stmt, target: u64) -> usize {
+    match statement {
+        Stmt::Goto { target: seen } => usize::from(*seen == target),
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            count_gotos_body(then_body, target)
+                + else_body
+                    .as_deref()
+                    .map(|body| count_gotos_body(body, target))
+                    .unwrap_or(0)
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            count_gotos_body(body, target)
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .map(|(_, body)| count_gotos_body(body, target))
+                .sum::<usize>()
+                + default
+                    .as_deref()
+                    .map(|body| count_gotos_body(body, target))
+                    .unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+fn ends_in_unconditional_transfer(body: &[Stmt]) -> bool {
+    body.iter()
+        .rev()
+        .find(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_) | Stmt::Label(_)))
+        .is_some_and(|statement| {
+            matches!(
+                statement,
+                Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Return { .. } | Stmt::Break
+            )
+        })
+}
+
+/// A join goto directly inside a case (possibly under an `if`) is the source
+/// `break`. Do not descend through a nested loop/switch: there the same goto may
+/// intentionally escape a different control construct and must remain explicit.
+fn replace_join_gotos(body: &mut [Stmt], join: u64) {
+    for statement in body {
+        match statement {
+            Stmt::Goto { target } if *target == join => *statement = Stmt::Break,
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                replace_join_gotos(then_body, join);
+                if let Some(else_body) = else_body {
+                    replace_join_gotos(else_body, join);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The C renderer appends the ordinary case-ending `break` itself. Keep breaks
+/// under an internal conditional, but remove the redundant terminal one created
+/// from the case's unconditional join edge.
+fn drop_renderer_supplied_break(body: &mut Vec<Stmt>) {
+    let Some(position) = body
+        .iter()
+        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+    else {
+        return;
+    };
+    if matches!(body[position], Stmt::Break) {
+        body.remove(position);
+    }
 }
 
 /// Rewrite OUTSIDE-IN: try the widest ladder rooted at each statement before
@@ -605,6 +868,106 @@ mod tests {
             };
         }
         inner
+    }
+
+    fn goto_case(value: i64, label: u64) -> Stmt {
+        Stmt::If {
+            cond: cmp(CmpOp::Eq, reg("state"), Expr::Const(value)),
+            then_body: vec![Stmt::Goto { target: label }],
+            else_body: None,
+        }
+    }
+
+    fn linear_goto_dispatch() -> Vec<Stmt> {
+        const JOIN: u64 = 0x200;
+        let mut body = vec![
+            goto_case(3, 0x130),
+            Stmt::If {
+                cond: lifted_signed_greater("state", 3),
+                then_body: vec![Stmt::Goto { target: JOIN }],
+                else_body: None,
+            },
+            goto_case(2, 0x120),
+            Stmt::If {
+                cond: lifted_signed_greater("state", 2),
+                then_body: vec![Stmt::Goto { target: JOIN }],
+                else_body: None,
+            },
+            goto_case(0, 0x100),
+            goto_case(1, 0x110),
+            Stmt::Goto { target: JOIN },
+        ];
+        for (label, value) in [(0x100, 0), (0x110, 1), (0x120, 2), (0x130, 3)] {
+            body.extend([
+                Stmt::Label(label),
+                assign("ret", value),
+                Stmt::Goto { target: JOIN },
+            ]);
+        }
+        body.extend([Stmt::Label(JOIN), Stmt::Return { value: None }]);
+        body
+    }
+
+    #[test]
+    fn a_linear_goto_dispatch_becomes_a_switch() {
+        let mut f = Function {
+            name: "fsm".into(),
+            entry_va: 0x1000,
+            body: linear_goto_dispatch(),
+        };
+        recover_switches(&mut f);
+
+        let Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } = &f.body[0]
+        else {
+            panic!("expected a switch, got:\n{:#?}", f.body);
+        };
+        assert_eq!(*discriminant, reg("state"));
+        assert_eq!(
+            cases
+                .iter()
+                .filter_map(|(value, _)| *value)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        assert!(default.is_none());
+        assert!(cases.iter().all(|(_, body)| {
+            !matches!(body.last(), Some(Stmt::Break)) && count_gotos_body(body, 0x200) == 0
+        }));
+    }
+
+    #[test]
+    fn an_external_goto_into_a_linear_case_blocks_recovery() {
+        let mut body = linear_goto_dispatch();
+        body.insert(0, Stmt::Goto { target: 0x100 });
+        let mut f = Function {
+            name: "fsm".into(),
+            entry_va: 0x1000,
+            body,
+        };
+        recover_switches(&mut f);
+        assert!(!matches!(f.body.get(1), Some(Stmt::Switch { .. })));
+    }
+
+    #[test]
+    fn a_fallthrough_linear_case_blocks_recovery() {
+        let mut body = linear_goto_dispatch();
+        let case_zero_goto = body
+            .iter()
+            .position(|statement| matches!(statement, Stmt::Label(0x100)))
+            .expect("case zero label")
+            + 2;
+        body.remove(case_zero_goto);
+        let mut f = Function {
+            name: "fsm".into(),
+            entry_va: 0x1000,
+            body,
+        };
+        recover_switches(&mut f);
+        assert!(!matches!(f.body.first(), Some(Stmt::Switch { .. })));
     }
 
     #[test]

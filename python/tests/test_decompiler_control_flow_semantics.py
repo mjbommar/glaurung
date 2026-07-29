@@ -64,6 +64,11 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
     # and the one counter increment is lexically after it but still in the loop.
     switch_at = code.find("switch (")
     assert switch_at >= 0, code
+    switch_line = code[code.rfind("\n", 0, switch_at) + 1 : switch_at]
+    assert switch_line == "        ", (
+        "the typed range proof should make the switch a direct loop-body statement",
+        code,
+    )
     switch_open = code.find("{", switch_at)
     switch_close = _matching_brace(code, switch_open)
     switch_body = code[switch_open:switch_close]
@@ -71,15 +76,84 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
         assert f"case {case}:" in switch_body, code
     assert switch_body.count("break;") >= 3, code
 
-    latch = re.search(
+    explicit_latch = re.search(
         r"(?m)^\s*([A-Za-z_]\w*)\s*=.*\(\1\s*\+\s*1\)",
         code[switch_close + 1 :],
     )
-    assert latch is not None, code
+    for_latch = re.search(
+        r"(?m)^\s*for\s*\([^;\n]*;[^;\n]*;\s*([A-Za-z_]\w*)\s*=.*"
+        r"\(\1\s*\+\s*1\).*\)\s*\{",
+        code[:switch_at],
+    )
+    for_increment = re.search(
+        r"(?m)^\s*for\s*\([^;\n]*;[^;\n]*;\s*([A-Za-z_]\w*)\+\+\s*\)\s*\{",
+        code[:switch_at],
+    )
+    assert (
+        explicit_latch is not None or for_latch is not None or for_increment is not None
+    ), code
 
     rebuilt = D.build_so(code, tmp_path, "dec_fsm", link_against=str(binary))
     assert rebuilt is not None, code
 
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "statemachine",
+            "--function",
+            "fsm",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "24",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["fsm"]["status"] == "pass", results
+
+
+def test_gcc_o0_state_dispatch_recovers_switch_and_round_trips(tmp_path: Path) -> None:
+    """A label-based GCC dispatch ladder must become the source switch."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "statemachine.c"
+    binary = tmp_path / "statemachine-gcc-O0.so"
+    compiled = subprocess.run(
+        [
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["fsm"])
+    assert code is not None
+    switch_at = code.find("switch (")
+    assert switch_at >= 0, code
+    switch_open = code.find("{", switch_at)
+    switch_close = _matching_brace(code, switch_open)
+    switch_body = code[switch_open:switch_close]
+    for case in (0, 1, 2, 3):
+        assert f"case {case}:" in switch_body, code
+
+    assert D.build_so(code, tmp_path, "dec_fsm_gcc", link_against=str(binary))
     compared = subprocess.run(
         [
             sys.executable,
@@ -253,6 +327,70 @@ def test_gcc_o0_comparison_tree_recovers_switch_and_round_trips(tmp_path: Path) 
         assert f"case {case}:" in switch_body, code
     assert "goto L_" not in code, code
     assert D.build_so(code, tmp_path, "dec_dispatch", link_against=str(binary))
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "switch_jt",
+            "--function",
+            "dispatch",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "64",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["dispatch"]["status"] == "pass", results
+
+
+def test_clang_o0_range_default_recovers_direct_return_switch(
+    tmp_path: Path,
+) -> None:
+    """Clang's range guard and result join must recover the source switch."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "switch_jt.c"
+    binary = tmp_path / "switch_jt-clang-O0.so"
+    compiled = subprocess.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["dispatch"])
+    assert code is not None
+    switch_at = code.find("switch (")
+    assert switch_at >= 0, code
+    switch_open = code.find("{", switch_at)
+    switch_close = _matching_brace(code, switch_open)
+    switch_body = code[switch_open:switch_close]
+    for case in range(8):
+        assert f"case {case}:" in switch_body, code
+    assert "default:" in switch_body, code
+    assert switch_body.count("return ") >= 9, code
+    assert "break;" not in switch_body, code
+    assert "if (" not in code[:switch_at], code
+    assert D.build_so(code, tmp_path, "dec_dispatch_clang", link_against=str(binary))
 
     compared = subprocess.run(
         [

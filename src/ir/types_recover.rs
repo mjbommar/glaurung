@@ -76,6 +76,24 @@ impl TypeMap {
         }
     }
 
+    /// Replace a stale pointee width after the prepared AST proves that every
+    /// direct access through this value has one different width. Raw-register
+    /// recovery can merge unrelated SSA-era uses of the same architectural
+    /// register; the final value identity is stronger evidence.
+    pub(crate) fn force_pointer_width(&mut self, reg: VReg, pointee_width: u8) {
+        if matches!(self.inner.get(&reg), Some(TypeHint::Pointer { .. })) {
+            self.inner.insert(reg, TypeHint::Pointer { pointee_width });
+        }
+    }
+
+    /// Replace even a stale pointer classification after a later value-flow
+    /// proof establishes that every definition reaching this role is scalar.
+    /// Callers must perform that proof on the prepared, value-keyed AST; raw
+    /// register evidence alone is deliberately not strong enough to use this.
+    pub(crate) fn force_scalar_int(&mut self, reg: VReg, signed: bool, width: u8) {
+        self.inner.insert(reg, TypeHint::Int { signed, width });
+    }
+
     /// Union-style update: only overwrite when `new` is strictly more
     /// specific than the current entry. Pointers beat ints; specific widths
     /// beat zero-width entries; bool beats nothing.

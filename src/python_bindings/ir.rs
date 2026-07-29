@@ -872,9 +872,12 @@ fn remap_type_map(
 ///    transformation (bare-return ABI register, parameter-spill coalescing,
 ///    copy-chain folding and source-level loop-form recovery) that used to happen
 ///    inside the renderer;
-/// 2. [`crate::ir::verify_defs::check`] verifies the result — the AST that is
+/// 2. [`crate::ir::guarded_switch::collapse_range_guards_with_types`] uses the
+///    recovered integer widths to prove compiler range-check wrappers around
+///    switches redundant when an untyped proof was deliberately insufficient;
+/// 3. [`crate::ir::verify_defs::check`] verifies the result — the AST that is
 ///    about to be printed, which is what makes the check trustworthy;
-/// 3. the renderer formats it, and nothing else.
+/// 4. the renderer formats it, and nothing else.
 ///
 /// Violations are reported as `// glaurung-verify:` comment lines ahead of the
 /// code. They are comments, so the emitted C is unchanged for recompilation, and
@@ -891,6 +894,12 @@ fn decbench_text(
     width: Option<&crate::ir::types_recover::TypeMap>,
 ) -> String {
     let mut prepared = crate::ir::ast::prepare_for_decbench(f);
+    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        eprintln!(
+            "\n===== after prepare_for_decbench =====\n{}",
+            crate::ir::ast::render(&prepared)
+        );
+    }
     // Preparation exposes the actual expression dataflow (notably parameter
     // spill coalescing and folded returns), so only now can high-half uses and
     // wide return definitions safely override a misleading narrow sub-register
@@ -903,6 +912,13 @@ fn decbench_text(
     if let Some(tm) = refined_width.as_mut() {
         crate::ir::ast::refine_decbench_abi_widths(&prepared, tm);
     }
+    if let Some(tm) = refined_decl.as_ref() {
+        crate::ir::guarded_switch::collapse_range_guards_with_types(&mut prepared, tm);
+    }
+    // A typed range proof may have synthesized an exhaustive switch default,
+    // exposing the same exact switch-result join as the untyped preparation
+    // path. Fold it before verification and rendering as well.
+    crate::ir::ast::fold_exhaustive_switch_returns(&mut prepared);
     let decl = refined_decl.as_ref();
     let width = refined_width.as_ref();
     // Declarations are recovered at true machine width, so a value read in a wider
@@ -943,7 +959,7 @@ fn decbench_text(
 /// 64 bits by accident, so `widen::insert_widening_casts` restores that explicitly.
 /// Both are remapped to AST role names and augmented with promoted-slot sizes.
 fn decbench_type_maps(
-    lf: &crate::ir::types::LlirFunction,
+    _lf: &crate::ir::types::LlirFunction,
     lf_raw: &crate::ir::types::LlirFunction,
     f: &crate::ir::ast::Function,
     cc: crate::ir::call_args::CallConv,

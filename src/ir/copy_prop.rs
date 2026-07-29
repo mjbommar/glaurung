@@ -52,6 +52,137 @@ pub fn propagate_copies(f: &mut Function) {
     dead_store_runs(&mut f.body);
 }
 
+/// Inline an adjacent, one-use promoted-stack value temporary. Select diamonds
+/// create the common store form; stack promotion also exposes boolean return
+/// temporaries as ordinary assignments.
+///
+/// Promoted locals are mutable variables rather than SSA values, so the general
+/// copy environment must not carry them into a loop condition or across a
+/// control-flow edge. This deliberately narrower transform accepts only:
+///
+/// `local_tmp = narrow_value; <next linear statement reads local_tmp once>`
+///
+/// A stored value must already fit its stack write width, the expression may
+/// not read memory or contain an unknown, and the local must have exactly one
+/// read in the entire structured function. Those constraints preserve the
+/// store's truncation and evaluation point while removing compiler-only storage.
+pub fn propagate_adjacent_promoted_values(f: &mut Function) {
+    loop {
+        if !fold_one_adjacent_promoted_value(&mut f.body) {
+            break;
+        }
+    }
+}
+
+fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>) -> bool {
+    for index in 0..body.len().saturating_sub(1) {
+        let candidate = match &body[index] {
+            Stmt::Assign { dst, src }
+                if is_promoted_local_reg(dst)
+                    && is_deferable_promoted_value(src)
+                    && !contains_reg(src, dst)
+                    && promoted_value_width(src).is_some() =>
+            {
+                Some((dst.clone(), src.clone()))
+            }
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                src,
+                size,
+            } if is_promoted_local_reg(dst)
+                && is_deferable_promoted_value(src)
+                && !contains_reg(src, dst)
+                && promoted_value_width(src).is_some_and(|width| width <= *size) =>
+            {
+                Some((dst.clone(), src.clone()))
+            }
+            _ => None,
+        };
+        let Some((dst, selected)) = candidate else {
+            continue;
+        };
+
+        let Some(next_index) = (index + 1..body.len())
+            .find(|next| !matches!(body[*next], Stmt::Comment(_) | Stmt::Nop))
+        else {
+            continue;
+        };
+
+        let mut next_reads = HashMap::new();
+        count_reads_stmt(&body[next_index], &mut next_reads);
+        if next_reads.get(&dst).copied().unwrap_or(0) != 1 {
+            continue;
+        }
+        let mut later_reads = HashMap::new();
+        count_reads_body(&body[next_index + 1..], &mut later_reads);
+        if later_reads.get(&dst).copied().unwrap_or(0) != 0 {
+            // Another use in this same structured run still observes the
+            // definition. Other cases/arms live in a different Vec and do not
+            // block an exact local def-use fold.
+            continue;
+        }
+
+        let substituted = match &mut body[next_index] {
+            Stmt::Assign { src, .. } | Stmt::Store { src, .. } => {
+                let copies = HashMap::from([(dst, selected)]);
+                subst(src, &copies);
+                true
+            }
+            Stmt::Return { value: Some(value) } | Stmt::Push { value } => {
+                let copies = HashMap::from([(dst, selected)]);
+                subst(value, &copies);
+                true
+            }
+            _ => false,
+        };
+        if substituted {
+            body.remove(index);
+            return true;
+        }
+    }
+
+    for statement in body {
+        let changed = match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                fold_one_adjacent_promoted_value(then_body)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(fold_one_adjacent_promoted_value)
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                fold_one_adjacent_promoted_value(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| fold_one_adjacent_promoted_value(body))
+                    || default
+                        .as_mut()
+                        .is_some_and(fold_one_adjacent_promoted_value)
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn promoted_value_width(e: &Expr) -> Option<u8> {
+    match e {
+        Expr::Const(value) if (0..=127).contains(value) => Some(1),
+        Expr::Cmp { .. } => Some(1),
+        Expr::Select { width, .. } if *width > 0 => Some(*width),
+        Expr::Cast { width, .. } if *width > 0 => Some(*width),
+        _ => None,
+    }
+}
+
 /// Is `e` safe to record as a copy source and duplicate into use sites? Only
 /// pure, stable values: a register/local reference, a constant, or a resolved
 /// address/name. Memory loads (`Deref`) and arithmetic are excluded — their
@@ -61,6 +192,21 @@ fn is_pure_copyable(e: &Expr) -> bool {
         e,
         Expr::Reg(_) | Expr::Const(_) | Expr::Addr(_) | Expr::Named { .. } | Expr::StringLit { .. }
     )
+}
+
+/// A promoted stack slot is represented as a store whose bare-register address
+/// is the source variable itself (`Store local_x = value`). It is assignment
+/// semantics, not an indirect write through a pointer named `local_x`.
+fn is_promoted_local_reg(v: &VReg) -> bool {
+    matches!(v, VReg::Phys(name) if name.starts_with("local_") || name.starts_with("stack_"))
+}
+
+/// Expressions whose evaluation may be moved from a promoted temporary store
+/// to its sole later use. AST expressions have no calls or writes; memory loads
+/// are still excluded because an intervening store could alias them, and an
+/// unknown expression must remain rooted where the lifter placed it.
+fn is_deferable_promoted_value(e: &Expr) -> bool {
+    !contains_deref(e) && !contains_unknown(e)
 }
 
 type Copies = HashMap<VReg, Expr>;
@@ -191,7 +337,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                     let record = is_pure_copyable(src)
                         || (is_scratch_reg(dst)
                             && reads.get(dst).copied().unwrap_or(0) == 1
-                            && !matches!(src, Expr::Select { .. } | Expr::Unknown(_)));
+                            && !matches!(src, Expr::Unknown(_)));
                     if record {
                         copies.insert(dst.clone(), src.clone());
                     }
@@ -467,6 +613,32 @@ fn contains_deref(e: &Expr) -> bool {
     }
 }
 
+fn contains_unknown(e: &Expr) -> bool {
+    match e {
+        Expr::Unknown(_) => true,
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Reg(_)
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => false,
+        Expr::Deref { addr, .. } => contains_unknown(addr),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            contains_unknown(lhs) || contains_unknown(rhs)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => contains_unknown(cond) || contains_unknown(if_true) || contains_unknown(if_false),
+        Expr::Un { src, .. } => contains_unknown(src),
+        Expr::Cast { expr, .. } => contains_unknown(expr),
+    }
+}
+
 /// Drop every recorded copy whose source reads memory (a pending load that a
 /// store/push could alias).
 fn invalidate_loads(copies: &mut Copies) {
@@ -547,7 +719,11 @@ fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
         // The destination of an Assign is a WRITE, not a read.
         Stmt::Assign { src, .. } => count_reads_expr(src, reads),
         Stmt::Store { addr, src, .. } => {
-            count_reads_expr(addr, reads);
+            // `Store local_x = value` is how promoted scalar assignment is
+            // encoded. Its bare local is a destination, not a pointer read.
+            if !matches!(addr, Expr::Reg(dst) if is_promoted_local_reg(dst)) {
+                count_reads_expr(addr, reads);
+            }
             count_reads_expr(src, reads);
         }
         Stmt::Call { target, args, .. } => {
@@ -626,6 +802,17 @@ fn subst(e: &mut Expr, copies: &Copies) {
     if copies.is_empty() {
         return;
     }
+    // Lea stores base/index as VRegs for the machine IR. Once a single-use
+    // index is reconstructed as a real expression (for example the signed
+    // extension of a loop counter), keeping that VReg-only container would
+    // strand an otherwise dead scratch. Expand the address to ordinary Bin
+    // arithmetic when either component has a non-register replacement.
+    let expanded_lea = expand_lea_with_copies(e, copies);
+    if let Some(expanded) = expanded_lea {
+        *e = expanded;
+        subst(e, copies);
+        return;
+    }
     // A trivial `Lea` — base only, no index, zero displacement — denotes exactly
     // its base register. When that base has a recorded copy (which for a single-
     // use address is an arithmetic expression, not a bare register), fold the
@@ -694,6 +881,62 @@ fn subst(e: &mut Expr, copies: &Copies) {
     }
 }
 
+fn expand_lea_with_copies(e: &Expr, copies: &Copies) -> Option<Expr> {
+    let Expr::Lea {
+        base,
+        index,
+        scale,
+        disp,
+        segment: None,
+    } = e
+    else {
+        return None;
+    };
+    let replacement = |reg: &VReg| {
+        copies
+            .get(reg)
+            .cloned()
+            .unwrap_or_else(|| Expr::Reg(reg.clone()))
+    };
+    let needs_expansion = base
+        .iter()
+        .chain(index.iter())
+        .any(|reg| matches!(copies.get(reg), Some(expr) if !matches!(expr, Expr::Reg(_))));
+    if !needs_expansion {
+        return None;
+    }
+
+    let mut terms = Vec::new();
+    if let Some(base) = base {
+        terms.push(replacement(base));
+    }
+    if let Some(index) = index {
+        let index = replacement(index);
+        terms.push(if *scale > 1 {
+            Expr::Bin {
+                op: crate::ir::types::BinOp::Mul,
+                lhs: Box::new(index),
+                rhs: Box::new(Expr::Const(i64::from(*scale))),
+            }
+        } else {
+            index
+        });
+    }
+    if *disp != 0 || terms.is_empty() {
+        terms.push(Expr::Const(*disp));
+    }
+    Some(
+        terms
+            .into_iter()
+            .reduce(|lhs, rhs| Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            })
+            .expect("a Lea expansion always has at least one address term"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -758,6 +1001,74 @@ mod tests {
             !dump.contains("var5"),
             "var5 should have folded into its single use, got:\n{}",
             dump
+        );
+    }
+
+    #[test]
+    fn nontrivial_lea_inlines_a_single_use_computed_index() {
+        // Clang -O0 materialises the sign-extended loop index in a scratch and
+        // then addresses `base + scratch`. Keeping Lea's index as VReg-only
+        // strands that scratch in source C; expanding the address lets the
+        // typed Cast travel to the byte load.
+        let mut f = Function {
+            name: "index".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var_index"),
+                    src: Expr::Cast {
+                        signed: true,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: true,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(reg("local_i"))),
+                        }),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("value"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("arg0")),
+                            index: Some(reg("var_index")),
+                            scale: 1,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 1,
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("value"))),
+                },
+            ],
+        };
+
+        propagate_copies(&mut f);
+
+        let dump = format!("{:?}", f.body);
+        assert!(
+            !dump.contains("var_index"),
+            "index scratch survived: {dump}"
+        );
+        assert!(
+            matches!(
+                f.body.as_slice(),
+                [Stmt::Return {
+                    value: Some(Expr::Deref { addr, size: 1 })
+                }] if matches!(
+                    addr.as_ref(),
+                    Expr::Bin {
+                        op: BinOp::Add,
+                        lhs,
+                        rhs,
+                    } if matches!(lhs.as_ref(), Expr::Reg(r) if r == &reg("arg0"))
+                        && matches!(rhs.as_ref(), Expr::Cast { width: 8, .. })
+                )
+            ),
+            "computed index should be explicit address arithmetic: {:?}",
+            f.body
         );
     }
 
@@ -874,7 +1185,7 @@ mod tests {
     }
 
     #[test]
-    fn single_use_select_stays_statement_rooted_for_one_armed_rendering() {
+    fn single_use_select_folds_into_its_only_consumer() {
         let selected = reg("var0");
         let mut f = Function {
             name: "select".into(),
@@ -904,15 +1215,11 @@ mod tests {
         assert!(
             matches!(
                 f.body.as_slice(),
-                [
-                    Stmt::Assign {
-                        src: Expr::Select { .. },
-                        ..
-                    },
-                    Stmt::Return { .. }
-                ]
+                [Stmt::Return {
+                    value: Some(Expr::Bin { lhs, .. })
+                }] if matches!(lhs.as_ref(), Expr::Select { .. })
             ),
-            "a select must stay at statement scope for one-armed rendering: {:?}",
+            "a single-use select should stay a value while losing its scratch: {:?}",
             f.body
         );
     }
@@ -1170,5 +1477,172 @@ mod tests {
         } else {
             panic!("expected if");
         }
+    }
+
+    #[test]
+    fn single_use_promoted_local_select_folds_into_next_assignment() {
+        // A stack-slot assignment diamond has already become one lazy Select:
+        // local_tmp = cond ? 1 : 2; local_state = local_tmp. The intermediate
+        // promoted slot is compiler storage, not source-level state.
+        let selected = Expr::Select {
+            cond: Box::new(Expr::Reg(reg("cond"))),
+            if_true: Box::new(Expr::Const(1)),
+            if_false: Box::new(Expr::Const(2)),
+            width: 4,
+        };
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_tmp")),
+                    src: selected.clone(),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_state")),
+                    src: Expr::Reg(reg("local_tmp")),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_state"))),
+                },
+            ],
+        };
+
+        propagate_copies(&mut f);
+
+        propagate_adjacent_promoted_values(&mut f);
+
+        assert_eq!(
+            f.body,
+            vec![Stmt::Return {
+                value: Some(selected),
+            }],
+            "the one-use promoted temporary chain should disappear"
+        );
+    }
+
+    #[test]
+    fn adjacent_boolean_promoted_local_folds_into_return() {
+        let predicate = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg("state"))),
+            rhs: Box::new(Expr::Const(3)),
+        };
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_result"),
+                    src: predicate.clone(),
+                },
+                Stmt::Comment("epilogue".into()),
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_result"))),
+                },
+            ],
+        };
+
+        propagate_adjacent_promoted_values(&mut f);
+
+        assert_eq!(
+            f.body,
+            vec![
+                Stmt::Comment("epilogue".into()),
+                Stmt::Return {
+                    value: Some(predicate),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn adjacent_promoted_value_with_a_second_read_is_kept() {
+        let selected = Expr::Select {
+            cond: Box::new(Expr::Reg(reg("cond"))),
+            if_true: Box::new(Expr::Const(1)),
+            if_false: Box::new(Expr::Const(2)),
+            width: 4,
+        };
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_tmp"),
+                    src: selected,
+                },
+                Stmt::Assign {
+                    dst: reg("first"),
+                    src: Expr::Reg(reg("local_tmp")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_tmp"))),
+                },
+            ],
+        };
+        let expected = f.clone();
+
+        propagate_adjacent_promoted_values(&mut f);
+
+        assert_eq!(
+            f, expected,
+            "a later read still needs the rooted definition"
+        );
+    }
+
+    #[test]
+    fn promoted_local_load_is_not_deferred_into_a_later_use() {
+        // Even a one-use promoted local must keep a memory load at its original
+        // evaluation point: the intervening store may alias it.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_tmp")),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Reg(reg("p"))),
+                        size: 4,
+                    },
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("q")),
+                    src: Expr::Const(9),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_tmp"))),
+                },
+            ],
+        };
+
+        propagate_copies(&mut f);
+
+        assert!(
+            matches!(
+                f.body.first(),
+                Some(Stmt::Store {
+                    addr: Expr::Reg(dst),
+                    src: Expr::Deref { .. },
+                    ..
+                }) if dst == &reg("local_tmp")
+            ),
+            "the load must remain rooted before the aliasing store: {:?}",
+            f.body
+        );
+        assert!(
+            matches!(
+                f.body.last(),
+                Some(Stmt::Return {
+                    value: Some(Expr::Reg(value))
+                }) if value == &reg("local_tmp")
+            ),
+            "the return must still read the rooted promoted local: {:?}",
+            f.body
+        );
     }
 }

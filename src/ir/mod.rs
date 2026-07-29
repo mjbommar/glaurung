@@ -33,6 +33,7 @@ pub mod copy_prop;
 pub mod dce;
 pub mod dead_stores;
 pub mod expr_reconstruct;
+pub mod guarded_switch;
 pub mod label_prune;
 pub mod lift_arm32;
 pub mod lift_arm64;

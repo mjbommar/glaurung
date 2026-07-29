@@ -21,6 +21,76 @@ pub fn prune_unreferenced_labels(f: &mut Function) {
     drop_unreferenced(&mut f.body, &referenced);
 }
 
+/// Remove statements that cannot be reached by sequential execution after an
+/// unconditional terminator, then discard labels whose only incoming goto was
+/// itself in the removed tail.
+///
+/// Every surviving label is conservatively treated as a possible entry while
+/// scanning a statement list. This means the pass can remove a tail after
+/// `return`, `goto`, `break`, or an indirect goto without pretending to solve
+/// cross-region reachability. Repeating tail removal and target-based label
+/// pruning reaches the useful fixed point for compiler-generated shared-return
+/// epilogues while preserving every externally referenced label.
+pub fn prune_unreachable_tails(f: &mut Function) {
+    loop {
+        let before = f.clone();
+        prune_unreachable_body(&mut f.body);
+        prune_unreferenced_labels(f);
+        if *f == before {
+            break;
+        }
+    }
+}
+
+fn prune_unreachable_body(body: &mut Vec<Stmt>) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                prune_unreachable_body(then_body);
+                if let Some(else_body) = else_body {
+                    prune_unreachable_body(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                prune_unreachable_body(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    prune_unreachable_body(case_body);
+                }
+                if let Some(default) = default {
+                    prune_unreachable_body(default);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut reachable = true;
+    body.retain(|statement| {
+        if matches!(statement, Stmt::Label(_)) {
+            // A label may be entered by a goto from any nested region. Target
+            // pruning below will remove it on the next iteration if no such
+            // edge survives.
+            reachable = true;
+        }
+        if !reachable {
+            return false;
+        }
+        if matches!(
+            statement,
+            Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break
+        ) {
+            reachable = false;
+        }
+        true
+    });
+}
+
 /// Collect every concrete goto target in an already-lowered AST.
 ///
 /// Lowering uses this too: raw block terminators can survive inside a recovered
@@ -215,5 +285,67 @@ mod tests {
         prune_unreferenced_labels(&mut f);
 
         assert!(f.body.iter().any(|s| matches!(s, Stmt::Label(0x100))));
+    }
+
+    #[test]
+    fn return_prunes_trailing_statements_then_their_now_unreferenced_label() {
+        let result = crate::ir::types::VReg::phys("local_4");
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(result.clone()),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Label(0x100),
+                Stmt::Return {
+                    value: Some(Expr::Reg(result.clone())),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(result),
+                    src: Expr::Const(1),
+                    size: 4,
+                },
+                Stmt::Goto { target: 0x100 },
+            ],
+        };
+
+        prune_unreachable_tails(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            2,
+            "unreachable tail and dead label: {:?}",
+            f.body
+        );
+        assert!(matches!(f.body[0], Stmt::Store { .. }));
+        assert!(matches!(f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn referenced_label_after_return_remains_a_reachable_entry() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(crate::ir::types::VReg::phys("cond")),
+                    then_body: vec![Stmt::Goto { target: 0x100 }],
+                    else_body: None,
+                },
+                Stmt::Return { value: None },
+                Stmt::Label(0x100),
+                Stmt::Return {
+                    value: Some(Expr::Const(1)),
+                },
+            ],
+        };
+
+        let expected = f.clone();
+        prune_unreachable_tails(&mut f);
+
+        assert_eq!(f, expected, "a live goto keeps its target entry reachable");
     }
 }
