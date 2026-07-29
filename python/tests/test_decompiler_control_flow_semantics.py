@@ -218,3 +218,62 @@ def test_array_address_chain_folds_and_round_trips(tmp_path: Path) -> None:
     results = json.loads(compared.stdout)
     assert compared.returncode == 0, results
     assert results["sum_array"]["status"] == "pass", results
+
+
+def test_gcc_o0_comparison_tree_recovers_switch_and_round_trips(tmp_path: Path) -> None:
+    """The reconstructed x86 signed-greater condition must remain switch-shaped."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "switch_jt.c"
+    binary = tmp_path / "switch_jt-gcc-O0.so"
+    compiled = subprocess.run(
+        [
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["dispatch"])
+    assert code is not None
+    switch_at = code.find("switch (")
+    assert switch_at >= 0, code
+    switch_open = code.find("{", switch_at)
+    switch_close = _matching_brace(code, switch_open)
+    switch_body = code[switch_open:switch_close]
+    for case in range(8):
+        assert f"case {case}:" in switch_body, code
+    assert "goto L_" not in code, code
+    assert D.build_so(code, tmp_path, "dec_dispatch", link_against=str(binary))
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "switch_jt",
+            "--function",
+            "dispatch",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "64",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["dispatch"]["status"] == "pass", results

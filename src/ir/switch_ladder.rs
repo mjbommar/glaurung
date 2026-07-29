@@ -29,7 +29,7 @@
 //! function untouched.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::{CmpOp, VReg};
+use crate::ir::types::{BinOp, CmpOp, VReg};
 
 /// Fewer arms than this stay nested `if`/`else`. Two or three equality tests read
 /// as what they are in the source, and are not what blows up the graph distance.
@@ -151,6 +151,24 @@ impl Range {
 /// range tracked in unsigned space, and mixing the two in one ladder is not a
 /// shape we can reason about — better to leave those trees alone.
 fn classify(cond: &Expr, disc: &mut Option<VReg>) -> Option<Test> {
+    // x86 `jg` is reconstructed from flags as `!(ZF || SF^OF)`. Once the flag
+    // expressions are folded, the exact AST is:
+    //
+    //   ((v == k) | ((long)(int)v < k)) == 0
+    //
+    // Both inner nodes are boolean, so this is precisely `v > k`; taking the
+    // else arm therefore proves `v <= k`. Match the whole identity rather than
+    // teaching the ladder walker about machine flags or accepting arbitrary
+    // zero-tests of bitwise expressions.
+    if let Some((v, k)) = lifted_signed_greater(cond) {
+        match disc {
+            Some(seen) if seen != &v => return None,
+            Some(_) => {}
+            None => *disc = Some(v),
+        }
+        return Some(Test::Prune(Bound::AtMost(k)));
+    }
+
     let Expr::Cmp { op, lhs, rhs } = cond else {
         return None;
     };
@@ -179,6 +197,93 @@ fn classify(cond: &Expr, disc: &mut Option<VReg>) -> Option<Test> {
         CmpOp::Sle => Some(Test::Prune(Bound::AtMost(k.checked_sub(1)?))),
         CmpOp::Ult | CmpOp::Ule => None,
     }
+}
+
+/// The exact sign-preserving 32-to-64-bit view emitted for a signed x86
+/// comparison of a 32-bit switch discriminant.
+fn signed_i32_view(expr: &Expr) -> Option<&VReg> {
+    let Expr::Cast {
+        signed: true,
+        width: 8,
+        expr,
+    } = expr
+    else {
+        return None;
+    };
+    let Expr::Cast {
+        signed: true,
+        width: 4,
+        expr,
+    } = expr.as_ref()
+    else {
+        return None;
+    };
+    let Expr::Reg(register) = expr.as_ref() else {
+        return None;
+    };
+    Some(register)
+}
+
+fn equality_on_reg(expr: &Expr) -> Option<(&VReg, i64)> {
+    let Expr::Cmp {
+        op: CmpOp::Eq,
+        lhs,
+        rhs,
+    } = expr
+    else {
+        return None;
+    };
+    match (lhs.as_ref(), rhs.as_ref()) {
+        (Expr::Reg(register), Expr::Const(value)) | (Expr::Const(value), Expr::Reg(register)) => {
+            Some((register, *value))
+        }
+        _ => None,
+    }
+}
+
+fn signed_less_on_same_reg(expr: &Expr, register: &VReg, value: i64) -> bool {
+    let Expr::Cmp {
+        op: CmpOp::Slt,
+        lhs,
+        rhs,
+    } = expr
+    else {
+        return false;
+    };
+    matches!(rhs.as_ref(), Expr::Const(k) if *k == value)
+        && signed_i32_view(lhs).is_some_and(|seen| seen == register)
+}
+
+fn lifted_signed_greater(cond: &Expr) -> Option<(VReg, i64)> {
+    let Expr::Cmp {
+        op: CmpOp::Eq,
+        lhs,
+        rhs,
+    } = cond
+    else {
+        return None;
+    };
+    let inner = match (lhs.as_ref(), rhs.as_ref()) {
+        (inner, Expr::Const(0)) | (Expr::Const(0), inner) => inner,
+        _ => return None,
+    };
+    let Expr::Bin {
+        op: BinOp::Or,
+        lhs,
+        rhs,
+    } = inner
+    else {
+        return None;
+    };
+    for (equality, less) in [(lhs.as_ref(), rhs.as_ref()), (rhs.as_ref(), lhs.as_ref())] {
+        let Some((register, value)) = equality_on_reg(equality) else {
+            continue;
+        };
+        if signed_less_on_same_reg(less, register, value) {
+            return Some((register.clone(), value));
+        }
+    }
+    None
 }
 
 /// The label a body consists of nothing but a jump to, if that is all it is.
@@ -456,6 +561,52 @@ mod tests {
         inner
     }
 
+    /// The x86 `jg` lowering that reaches this AST after flag reconstruction:
+    /// `!(ZF || SF^OF)` becomes `((v == k) | ((long)(int)v < k)) == 0`.
+    fn lifted_signed_greater(v: &str, k: i64) -> Expr {
+        let signed_i32 = Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(reg(v)),
+            }),
+        };
+        cmp(
+            CmpOp::Eq,
+            Expr::Bin {
+                op: crate::ir::types::BinOp::Or,
+                lhs: Box::new(cmp(CmpOp::Eq, reg(v), Expr::Const(k))),
+                rhs: Box::new(cmp(CmpOp::Slt, signed_i32, Expr::Const(k))),
+            },
+            Expr::Const(0),
+        )
+    }
+
+    fn real_lifted_gcc_ladder(n: i64) -> Stmt {
+        const L: u64 = 0x11a9;
+        let mut inner = Stmt::Goto { target: L };
+        for k in 0..n {
+            let prune_then = if k == n - 1 {
+                vec![Stmt::Label(L), assign("ret", -1)]
+            } else {
+                vec![Stmt::Goto { target: L }]
+            };
+            let prune = Stmt::If {
+                cond: lifted_signed_greater("arg0", k),
+                then_body: prune_then,
+                else_body: Some(vec![inner]),
+            };
+            inner = Stmt::If {
+                cond: cmp(CmpOp::Eq, reg("arg0"), Expr::Const(k)),
+                then_body: vec![assign("ret", 100 + k)],
+                else_body: Some(vec![prune]),
+            };
+        }
+        inner
+    }
+
     #[test]
     fn the_order_gcc_actually_emits_is_recovered() {
         let mut f = Function {
@@ -470,6 +621,25 @@ mod tests {
         assert_eq!(cases.len(), 8);
         assert_eq!(default.as_ref().unwrap(), &vec![assign("ret", -1)]);
         assert!(goto_targets(&f.body).is_empty(), "no goto should survive");
+    }
+
+    #[test]
+    fn the_real_lifted_signed_greater_encoding_is_recovered() {
+        let mut f = Function {
+            name: "dispatch".into(),
+            entry_va: 0x1000,
+            body: vec![real_lifted_gcc_ladder(8), Stmt::Return { value: None }],
+        };
+        recover_switches(&mut f);
+        let Stmt::Switch { cases, default, .. } = &f.body[0] else {
+            panic!(
+                "expected the real lifted comparison tree to become a switch:\n{:#?}",
+                f.body[0]
+            );
+        };
+        assert_eq!(cases.len(), 8);
+        assert_eq!(default.as_ref().unwrap(), &vec![assign("ret", -1)]);
+        assert!(goto_targets(&f.body).is_empty());
     }
 
     #[test]
