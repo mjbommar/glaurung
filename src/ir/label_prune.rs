@@ -21,7 +21,13 @@ pub fn prune_unreferenced_labels(f: &mut Function) {
     drop_unreferenced(&mut f.body, &referenced);
 }
 
-fn collect_goto_targets(body: &[Stmt], out: &mut HashSet<u64>) {
+/// Collect every concrete goto target in an already-lowered AST.
+///
+/// Lowering uses this too: raw block terminators can survive inside a recovered
+/// switch even though they are not represented as `Region::Goto` nodes.  A
+/// second, target-aware lowering pass then puts labels on the blocks those
+/// statements actually reach.
+pub(crate) fn collect_goto_targets(body: &[Stmt], out: &mut HashSet<u64>) {
     for s in body {
         match s {
             Stmt::Goto { target } => {
@@ -57,6 +63,19 @@ fn collect_goto_targets(body: &[Stmt], out: &mut HashSet<u64>) {
                 collect_goto_targets(body, out);
                 collect_expr_goto(cond, out);
             }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                collect_expr_goto(discriminant, out);
+                for (_, case_body) in cases {
+                    collect_goto_targets(case_body, out);
+                }
+                if let Some(default_body) = default {
+                    collect_goto_targets(default_body, out);
+                }
+            }
             _ => {}
         }
     }
@@ -86,6 +105,14 @@ fn drop_unreferenced(body: &mut Vec<Stmt>, referenced: &HashSet<u64>) {
                 drop_unreferenced(body, referenced)
             }
             Stmt::For { body, .. } => drop_unreferenced(body, referenced),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    drop_unreferenced(case_body, referenced);
+                }
+                if let Some(default_body) = default {
+                    drop_unreferenced(default_body, referenced);
+                }
+            }
             _ => {}
         }
     }
@@ -163,6 +190,30 @@ mod tests {
         };
         prune_unreferenced_labels(&mut f);
         // Label 0x100 must survive.
+        assert!(f.body.iter().any(|s| matches!(s, Stmt::Label(0x100))));
+    }
+
+    #[test]
+    fn label_is_kept_when_only_referenced_from_switch_arm() {
+        // A jump-table arm may converge on a loop latch emitted after the
+        // switch.  That edge is just as real as one nested in an `if`; pruning
+        // its target changes the jump into the renderer's trailing empty label.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Switch {
+                    discriminant: Expr::Reg(crate::ir::types::VReg::phys("state")),
+                    cases: vec![(Some(0), vec![Stmt::Goto { target: 0x100 }])],
+                    default: None,
+                },
+                Stmt::Label(0x100),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_unreferenced_labels(&mut f);
+
         assert!(f.body.iter().any(|s| matches!(s, Stmt::Label(0x100))));
     }
 }

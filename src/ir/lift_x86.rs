@@ -368,7 +368,12 @@ fn cmp_operand_as_value(
         return Some(Value::Reg(temp));
     }
     if instr.op_kind(idx) == OpKind::Register {
-        return Some(Value::Reg(VReg::phys(reg_name(instr.op_register(idx)))));
+        let name = reg_name(instr.op_register(idx));
+        if let Some(view) = partial_gp_view(&name) {
+            preamble.extend(read_view_ops(view, temp.clone()));
+            return Some(Value::Reg(temp));
+        }
+        return Some(Value::Reg(VReg::phys(name)));
     }
     value_of_operand(instr, idx)
 }
@@ -1681,12 +1686,21 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 OpKind::Register => {
                     let src_name = reg_name(instr.op_register(1));
                     let from = phys_reg_width(&src_name).unwrap_or(Width::W8);
-                    let src = Value::Reg(VReg::phys(src_name));
-                    if signed {
-                        vec![Op::SExt { dst, src, from, to }]
+                    // An 8-/16-bit source is a view of its full-width parent,
+                    // not an independent register.  Extract it explicitly so
+                    // SSA connects this read to partial writes such as SETcc.
+                    let (mut ops, src) = if let Some(view) = partial_gp_view(&src_name) {
+                        let value = VReg::Temp(0);
+                        (read_view_ops(view, value.clone()), Value::Reg(value))
                     } else {
-                        vec![Op::ZExt { dst, src, from, to }]
+                        (Vec::new(), Value::Reg(VReg::phys(src_name)))
+                    };
+                    if signed {
+                        ops.push(Op::SExt { dst, src, from, to });
+                    } else {
+                        ops.push(Op::ZExt { dst, src, from, to });
                     }
+                    ops
                 }
                 OpKind::Memory => {
                     let mo = mem_op_of(instr);
@@ -1854,19 +1868,28 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 let dst_name = reg_name(instr.op_register(0));
                 let width = phys_reg_width(&dst_name).unwrap_or(Width::W64);
                 let w = width.bits() as i64;
-                let dst = VReg::phys(dst_name);
+                let view = partial_gp_view(&dst_name);
+                let dst = if view.is_some() {
+                    VReg::Temp(40)
+                } else {
+                    VReg::phys(dst_name)
+                };
+                let preamble = view
+                    .map(|partial| read_view_ops(partial, dst.clone()))
+                    .unwrap_or_default();
                 if let Some(Value::Const(cnt)) = value_of_operand(instr, 1) {
                     let n = ((cnt % w) + w) % w;
                     if n == 0 {
                         return vec![Op::Nop];
                     }
-                    let (t1, t2) = (VReg::Temp(0), VReg::Temp(1));
+                    let (t1, t2) = (VReg::Temp(41), VReg::Temp(42));
                     let (a_op, a_sh, b_op, b_sh) = if matches!(mnem, Mnemonic::Rol) {
                         (BinOp::Shl, n, BinOp::Shr, w - n)
                     } else {
                         (BinOp::Shr, n, BinOp::Shl, w - n)
                     };
-                    let mut ops = vec![
+                    let mut ops = preamble;
+                    ops.extend([
                         Op::Bin {
                             dst: t1.clone(),
                             op: a_op,
@@ -1885,8 +1908,17 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             lhs: Value::Reg(t1),
                             rhs: Value::Reg(t2),
                         },
-                    ];
-                    append_rotate_flags(&mut ops, dst, matches!(mnem, Mnemonic::Rol), width, n);
+                    ]);
+                    append_rotate_flags(
+                        &mut ops,
+                        dst.clone(),
+                        matches!(mnem, Mnemonic::Rol),
+                        width,
+                        n,
+                    );
+                    if let Some(partial) = view {
+                        ops.extend(partial_write_ops(partial, Value::Reg(dst)));
+                    }
                     return ops;
                 } else if instr.op_kind(1) == OpKind::Register {
                     // Rotate by `cl`. x86 variable shifts/rotates always take the
@@ -1903,18 +1935,19 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     let mask = w - 1;
                     let cnt = VReg::phys("ecx");
                     let (t0, t1, t2, t3, t4) = (
-                        VReg::Temp(0),
-                        VReg::Temp(1),
-                        VReg::Temp(2),
-                        VReg::Temp(3),
-                        VReg::Temp(4),
+                        VReg::Temp(41),
+                        VReg::Temp(42),
+                        VReg::Temp(43),
+                        VReg::Temp(44),
+                        VReg::Temp(45),
                     );
                     let (first, second) = if matches!(mnem, Mnemonic::Ror) {
                         (BinOp::Shr, BinOp::Shl)
                     } else {
                         (BinOp::Shl, BinOp::Shr)
                     };
-                    let mut ops = vec![
+                    let mut ops = preamble;
+                    ops.extend([
                         Op::Bin {
                             dst: t0.clone(),
                             op: BinOp::And,
@@ -1946,17 +1979,20 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                             rhs: Value::Reg(t3),
                         },
                         Op::Bin {
-                            dst,
+                            dst: dst.clone(),
                             op: BinOp::Or,
                             lhs: Value::Reg(t1),
                             rhs: Value::Reg(t4),
                         },
-                    ];
+                    ]);
                     append_undef_flags(
                         &mut ops,
                         &[Flag::C, Flag::O],
                         "x86 variable-count rotate has count-sensitive CF/OF effects not yet modelled",
                     );
+                    if let Some(partial) = view {
+                        ops.extend(partial_write_ops(partial, Value::Reg(dst)));
+                    }
                     return ops;
                 }
             }
@@ -2291,20 +2327,30 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 let (mut ops, predicate) = materialize_condition(&condition);
                 match instr.op_kind(0) {
                     OpKind::Register => {
-                        let dst = VReg::phys(reg_name(instr.op_register(0)));
-                        if condition.inverted {
+                        let dst_name = reg_name(instr.op_register(0));
+                        let value = if condition.inverted {
+                            let logical_not = VReg::Temp(22);
                             ops.push(Op::Cmp {
-                                dst,
+                                dst: logical_not.clone(),
                                 op: CmpOp::Eq,
                                 lhs: Value::Reg(predicate),
                                 rhs: Value::Const(0),
                             });
-                            return ops;
+                            Value::Reg(logical_not)
+                        } else {
+                            Value::Reg(predicate)
+                        };
+                        // SETcc always writes an 8-bit view.  Model its real
+                        // read-modify-write effect on the canonical parent so a
+                        // following MOVZX reads this definition, not stale RAX.
+                        if let Some(view) = partial_gp_view(&dst_name) {
+                            ops.extend(partial_write_ops(view, value));
+                        } else {
+                            ops.push(Op::Assign {
+                                dst: VReg::phys(dst_name),
+                                src: value,
+                            });
                         }
-                        ops.push(Op::Assign {
-                            dst,
-                            src: Value::Reg(predicate),
-                        });
                         return ops;
                     }
                     OpKind::Memory => {
@@ -3172,6 +3218,55 @@ mod tests {
     }
 
     #[test]
+    fn partial_rotate_then_movzx_tracks_the_canonical_parent() {
+        // `rol $3,%di; movzwl %di,%eax` is GCC's -O2 implementation of a
+        // 16-bit rotate.  DI is a view of RDI: the rotate must read/write that
+        // view through RDI, and MOVZX must consume the updated parent.  A
+        // detached `di = ...` definition is dead after MOVZX learns proper
+        // register-view semantics, silently reducing rotl16_3(x) to x.
+        let ops = lift64(&[0x66, 0xc1, 0xc7, 0x03, 0x0f, 0xb7, 0xc7]);
+
+        for ins in &ops {
+            let (def, uses) = crate::ir::use_def::def_uses(&ins.op);
+            assert_ne!(def, Some(VReg::phys("di")), "detached DI def: {ops:#?}");
+            assert!(
+                !uses.contains(&VReg::phys("di")),
+                "detached DI use: {ops:#?}"
+            );
+        }
+        let parent_write = ops
+            .iter()
+            .position(|ins| {
+                matches!(
+                    &ins.op,
+                    Op::Bin {
+                        dst: VReg::Phys(parent),
+                        op: BinOp::Or,
+                        ..
+                    } if parent == "rdi"
+                )
+            })
+            .expect("ROL DI must update RDI");
+        let movzx_read = ops
+            .iter()
+            .rposition(|ins| {
+                matches!(
+                    &ins.op,
+                    Op::Bin {
+                        lhs: Value::Reg(VReg::Phys(parent)),
+                        op: BinOp::And,
+                        ..
+                    } if parent == "rdi"
+                )
+            })
+            .expect("MOVZX DI must read RDI");
+        assert!(
+            parent_write < movzx_read,
+            "MOVZX must follow the partial rotate's canonical write: {ops:#?}"
+        );
+    }
+
+    #[test]
     fn arithmetic_flags_cover_8_16_32_and_64_bit_operands() {
         let all: std::collections::BTreeSet<Flag> =
             [Flag::C, Flag::P, Flag::A, Flag::Z, Flag::S, Flag::O]
@@ -3566,6 +3661,91 @@ mod tests {
                 Some(Op::Ite { .. })
             ));
         }
+    }
+
+    #[test]
+    fn setcc_then_movzx_tracks_the_low_byte_through_its_parent() {
+        // `sete al; movzx eax, al` is Clang's -O0 spelling of a boolean
+        // return.  AL is not an independent SSA register: SETE updates the low
+        // byte of RAX, and MOVZX must read that newly-written byte.  Keeping a
+        // direct `al = zf` definition lets later canonicalisation read a stale
+        // RAX value instead (the DecBench statemachine returned its loop index
+        // instead of `state == 3`).
+        let ops = lift64(&[0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0]);
+
+        for ins in &ops {
+            let (def, uses) = crate::ir::use_def::def_uses(&ins.op);
+            assert_ne!(def, Some(VReg::phys("al")), "detached AL def: {ops:#?}");
+            assert!(
+                !uses.contains(&VReg::phys("al")),
+                "detached AL use: {ops:#?}"
+            );
+        }
+        assert!(
+            ops.iter().any(|ins| matches!(
+                &ins.op,
+                Op::Bin {
+                    dst: VReg::Phys(parent),
+                    op: BinOp::Or,
+                    ..
+                } if parent == "rax"
+            )),
+            "SETE must update the canonical parent: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                ops.last().map(|ins| &ins.op),
+                Some(Op::ZExt {
+                    dst: VReg::Phys(dst),
+                    src: Value::Reg(VReg::Temp(_)),
+                    from: Width::W8,
+                    to: Width::W32,
+                }) if dst == "eax"
+            ),
+            "MOVZX must extract AL from the updated parent: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn test_of_setcc_bytes_reads_their_canonical_parents() {
+        // GCC -O2 lowers `(a > 0 && b > 0)` as `setg cl; setg al;
+        // test al,cl`.  SETcc already updates RCX/RAX through their low-byte
+        // views; TEST must extract those same views.  Reading detached CL/AL
+        // loses both definitions, invents an incoming RCX argument, and makes
+        // the real sc_mixed round trip return 90 instead of 9.
+        let ops = lift64(&[0x0f, 0x9f, 0xc1, 0x0f, 0x9f, 0xc0, 0x84, 0xc8]);
+
+        for ins in &ops {
+            let (_, uses) = crate::ir::use_def::def_uses(&ins.op);
+            assert!(
+                !uses.contains(&VReg::phys("cl")) && !uses.contains(&VReg::phys("al")),
+                "TEST bypassed canonical parent definitions: {ops:#?}"
+            );
+        }
+        assert!(
+            ops.iter().any(|ins| matches!(
+                &ins.op,
+                Op::Bin {
+                    dst: VReg::Temp(10),
+                    lhs: Value::Reg(VReg::Phys(parent)),
+                    op: BinOp::And,
+                    rhs: Value::Const(255),
+                } if parent == "rax"
+            )),
+            "TEST must extract AL from RAX: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|ins| matches!(
+                &ins.op,
+                Op::Bin {
+                    dst: VReg::Temp(11),
+                    lhs: Value::Reg(VReg::Phys(parent)),
+                    op: BinOp::And,
+                    rhs: Value::Const(255),
+                } if parent == "rcx"
+            )),
+            "TEST must extract CL from RCX: {ops:#?}"
+        );
     }
 
     #[test]
@@ -4063,20 +4243,37 @@ mod tests {
     }
 
     #[test]
-    fn sete_lifts_to_flag_assign() {
+    fn sete_updates_the_low_byte_of_the_canonical_parent() {
         // sete al  (0f 94 c0)
         let ops = lift64(&[0x0f, 0x94, 0xc0]);
-        assert_eq!(ops.len(), 1, "got: {:#?}", ops);
-        match &ops[0].op {
-            Op::Assign {
-                dst,
-                src: Value::Reg(cond),
-            } => {
-                assert_eq!(*dst, VReg::phys("al"));
-                assert_eq!(*cond, VReg::Flag(Flag::Z));
+        assert_eq!(ops.len(), 3, "expected parent read/modify/write: {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Bin {
+                dst: VReg::Phys(dst),
+                op: BinOp::And,
+                lhs: Value::Reg(VReg::Phys(src)),
+                rhs: Value::Const(-256),
+            } if dst == "rax" && src == "rax"
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Bin {
+                dst: VReg::Temp(0),
+                op: BinOp::And,
+                lhs: Value::Reg(VReg::Flag(Flag::Z)),
+                rhs: Value::Const(255),
             }
-            other => panic!("expected flag Assign, got {:?}", other),
-        }
+        ));
+        assert!(matches!(
+            &ops[2].op,
+            Op::Bin {
+                dst: VReg::Phys(dst),
+                op: BinOp::Or,
+                lhs: Value::Reg(VReg::Phys(src)),
+                rhs: Value::Reg(VReg::Temp(0)),
+            } if dst == "rax" && src == "rax"
+        ));
     }
 
     #[test]

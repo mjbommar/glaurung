@@ -1510,7 +1510,11 @@ fn lower_region_inner(
                 cond: continue_cond,
             }]
         }
-        Region::Switch { dispatch, arms, .. } => {
+        Region::Switch {
+            dispatch,
+            arms,
+            join,
+        } => {
             // Lower the dispatch block as the prefix; the last
             // instruction is the indirect jump itself which we replace
             // with the structured `switch` statement. v0 emits each
@@ -1536,7 +1540,16 @@ fn lower_region_inner(
             let cases: Vec<(Option<i64>, Vec<Stmt>)> = arms
                 .iter()
                 .enumerate()
-                .map(|(i, arm)| (Some(i as i64), lower_region(arm, lf, targets)))
+                .map(|(i, arm)| {
+                    let mut body = lower_region(arm, lf, targets);
+                    if let Some(join) = join {
+                        // The renderer supplies the case `break`; a jump to the
+                        // block emitted immediately after this switch is plain
+                        // structured fallthrough, not a C goto.
+                        strip_trailing_goto(&mut body, lf.blocks[*join].start_va);
+                    }
+                    (Some(i as i64), body)
+                })
                 .collect();
             // The switched value, recovered from the dispatch's own target
             // expression: the table read indexes by exactly the value the
@@ -1595,14 +1608,118 @@ fn collect_goto_targets(r: &Region, lf: &LlirFunction, out: &mut std::collection
     }
 }
 
+/// Keep exactly one C label for each CFG block, preferring the least-nested
+/// emission when the region tree references a shared block from more than one
+/// structured path.
+///
+/// Region joins are references as well as ownership boundaries, so lowering a
+/// switch arm and the function tail can clone the same epilogue block. That is
+/// harmless while it is plain statements, but once a surviving goto requires a
+/// label both clones would spell the same `L_x:` and the C translation unit no
+/// longer compiles. The shallowest copy is the natural shared destination.
+fn deduplicate_labels(body: &mut Vec<Stmt>) {
+    fn collect_min_depth(
+        body: &[Stmt],
+        depth: usize,
+        minimum: &mut std::collections::HashMap<u64, usize>,
+    ) {
+        for stmt in body {
+            match stmt {
+                Stmt::Label(va) => {
+                    minimum
+                        .entry(*va)
+                        .and_modify(|old| *old = (*old).min(depth))
+                        .or_insert(depth);
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    collect_min_depth(then_body, depth + 1, minimum);
+                    if let Some(else_body) = else_body {
+                        collect_min_depth(else_body, depth + 1, minimum);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                    collect_min_depth(body, depth + 1, minimum)
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case_body) in cases {
+                        collect_min_depth(case_body, depth + 1, minimum);
+                    }
+                    if let Some(default_body) = default {
+                        collect_min_depth(default_body, depth + 1, minimum);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn retain_at_min_depth(
+        body: &mut Vec<Stmt>,
+        depth: usize,
+        minimum: &std::collections::HashMap<u64, usize>,
+        kept: &mut std::collections::HashSet<u64>,
+    ) {
+        body.retain_mut(|stmt| match stmt {
+            Stmt::Label(va) => minimum.get(va) == Some(&depth) && kept.insert(*va),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                retain_at_min_depth(then_body, depth + 1, minimum, kept);
+                if let Some(else_body) = else_body {
+                    retain_at_min_depth(else_body, depth + 1, minimum, kept);
+                }
+                true
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                retain_at_min_depth(body, depth + 1, minimum, kept);
+                true
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    retain_at_min_depth(case_body, depth + 1, minimum, kept);
+                }
+                if let Some(default_body) = default {
+                    retain_at_min_depth(default_body, depth + 1, minimum, kept);
+                }
+                true
+            }
+            _ => true,
+        });
+    }
+
+    let mut minimum = std::collections::HashMap::new();
+    collect_min_depth(body, 0, &mut minimum);
+    retain_at_min_depth(body, 0, &minimum, &mut std::collections::HashSet::new());
+}
+
 /// Lower an entire function given its region tree.
 pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Function {
     let mut targets = std::collections::HashSet::new();
     collect_goto_targets(region, lf, &mut targets);
+    // Region::Goto is not the only source of an explicit edge. A raw direct
+    // jump can survive inside a recovered switch arm when several cases share
+    // a latch but one case exits the loop. Discover those statements from the
+    // first lowered body, then lower once more with their targets known so the
+    // emitted destination block receives its real label. Without this pass the
+    // renderer can only append an empty label at function end, changing where
+    // the case actually transfers control.
+    let mut body = lower_region(region, lf, &targets);
+    let known_target_count = targets.len();
+    crate::ir::label_prune::collect_goto_targets(&body, &mut targets);
+    if targets.len() != known_target_count {
+        body = lower_region(region, lf, &targets);
+    }
+    deduplicate_labels(&mut body);
     let mut f = Function {
         name: name.into(),
         entry_va: lf.entry_va,
-        body: lower_region(region, lf, &targets),
+        body,
     };
     fold_returns(&mut f.body);
     f
@@ -5703,6 +5820,134 @@ function f @ 0x1000 {
             "the following region's body must remain reachable: {:#?}",
             lowered.body
         );
+    }
+
+    #[test]
+    fn a_raw_switch_arm_jump_labels_the_emitted_latch_block() {
+        // Clang -O0 jump tables inside loops have case blocks that jump to a
+        // shared increment/latch block.  These are raw `Op::Jump` terminators,
+        // not synthetic `Region::Goto` nodes.  The latch is emitted once after
+        // the switch and must carry its real address label; otherwise the C
+        // renderer pins an empty label at function end and the case skips the
+        // increment entirely.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("state")),
+                }],
+                vec![0x1010, 0x1020],
+            ),
+            (0x1010, vec![Op::Jump { target: 0x1030 }], vec![0x1030]),
+            (0x1020, vec![Op::Return], vec![]),
+            (
+                0x1030,
+                vec![Op::Assign {
+                    dst: VReg::phys("index"),
+                    src: Value::Const(1),
+                }],
+                vec![],
+            ),
+        ]);
+        let region = Region::Seq(vec![
+            Region::Switch {
+                dispatch: 0,
+                arms: vec![Region::Block(1), Region::Block(2)],
+                join: None,
+            },
+            Region::Block(3),
+        ]);
+
+        let lowered = lower(&lf, &region, "switch_latch");
+        let latch = lowered.body.windows(2).any(|pair| {
+            matches!(pair[0], Stmt::Label(0x1030))
+                && matches!(
+                    &pair[1],
+                    Stmt::Assign { dst, .. } if *dst == VReg::phys("index")
+                )
+        });
+
+        assert!(
+            latch,
+            "the raw case goto must land on the emitted latch body: {:#?}",
+            lowered.body
+        );
+    }
+
+    #[test]
+    fn switch_case_edges_to_its_join_become_fallthrough() {
+        // A switch join is emitted immediately after the switch.  Its case
+        // terminators therefore become ordinary `break`/fallthrough in C;
+        // retaining raw gotos adds false CFG nodes and can strand the one
+        // shared return inside a case when labels are materialised.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("state")),
+                }],
+                vec![0x1010, 0x1020, 0x1030],
+            ),
+            (0x1010, vec![Op::Jump { target: 0x1040 }], vec![0x1040]),
+            (0x1020, vec![Op::Jump { target: 0x1040 }], vec![0x1040]),
+            (0x1030, vec![Op::Jump { target: 0x1040 }], vec![0x1040]),
+            (0x1040, vec![Op::Return], vec![]),
+        ]);
+        let region = Region::Seq(vec![
+            Region::Switch {
+                dispatch: 0,
+                arms: vec![Region::Block(1), Region::Block(2), Region::Block(3)],
+                join: Some(4),
+            },
+            Region::Block(4),
+        ]);
+
+        let lowered = lower(&lf, &region, "switch_join");
+        let Some(Stmt::Switch { cases, .. }) = lowered.body.first() else {
+            panic!("expected switch first: {:#?}", lowered.body)
+        };
+        assert!(
+            cases.iter().all(|(_, body)| !body
+                .iter()
+                .any(|stmt| matches!(stmt, Stmt::Goto { target: 0x1040 }))),
+            "case-to-join edges must fall through: {:#?}",
+            lowered.body
+        );
+        assert!(
+            lowered
+                .body
+                .iter()
+                .any(|stmt| matches!(stmt, Stmt::Return { .. })),
+            "the shared return must remain after the switch: {:#?}",
+            lowered.body
+        );
+    }
+
+    #[test]
+    fn duplicate_shared_block_labels_keep_the_shallow_destination() {
+        let mut body = vec![
+            Stmt::Switch {
+                discriminant: Expr::Reg(VReg::phys("state")),
+                cases: vec![(Some(0), vec![Stmt::Label(0x2000)])],
+                default: None,
+            },
+            Stmt::Label(0x2000),
+            Stmt::Return { value: None },
+        ];
+
+        deduplicate_labels(&mut body);
+
+        let Stmt::Switch { cases, .. } = &body[0] else {
+            panic!("expected switch")
+        };
+        assert!(
+            !cases[0]
+                .1
+                .iter()
+                .any(|stmt| matches!(stmt, Stmt::Label(0x2000))),
+            "a nested clone must not own the shared label: {body:#?}"
+        );
+        assert!(matches!(body[1], Stmt::Label(0x2000)));
     }
 
     #[test]

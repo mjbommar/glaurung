@@ -184,6 +184,37 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         .collect();
     for ret_idx in return_positions.into_iter().rev() {
         let mut ret_idx = ret_idx;
+        // The pre-rematerialised POP spelling has the stack increment AFTER
+        // the promoted load: `rbp = stack_N; rsp += 8`.  Handle it before the
+        // generic frame-teardown case below consumes only the increment and
+        // leaves an undefined stack-slot read behind.  A preceding
+        // `rsp = rbp` makes this the full lowering of `leave` and belongs to
+        // the same machine-only epilogue.
+        if ret_idx >= 2
+            && is_rsp_add(&body[ret_idx - 1])
+            && matches!(
+                &body[ret_idx - 2],
+                Stmt::Assign { dst, src: Expr::Reg(slot) }
+                    if is_rbp(dst) && is_promoted_stack_slot(slot)
+            )
+        {
+            let start = if ret_idx >= 3
+                && matches!(
+                    &body[ret_idx - 3],
+                    Stmt::Assign { dst, src: Expr::Reg(s) }
+                        if is_rsp(dst) && is_rbp(s)
+                ) {
+                ret_idx - 3
+            } else {
+                ret_idx - 2
+            };
+            body.drain(start..ret_idx);
+            body.insert(
+                start,
+                Stmt::Comment("x86-64 epilogue: restore rbp".to_string()),
+            );
+            continue;
+        }
         // Pattern A (from `leave`): `rsp = rbp; pop rbp; return;`
         if ret_idx >= 2
             && matches!(&body[ret_idx - 1], Stmt::Pop { target: t } if is_rbp(t))
@@ -394,6 +425,41 @@ mod tests {
                         if text == "x86-64 epilogue: restore rbp"
                 )
         ));
+    }
+
+    #[test]
+    fn lowered_leave_epilogue_collapses_before_rsp_adjust_is_rewritten() {
+        // The raw `leave` expansion is `rsp = rbp; rbp = [rsp]; rsp += 8`.
+        // Stack-local promotion changes the load to `rbp = stack_top`.  This
+        // pass runs before stack-op rematerialisation, so it must consume the
+        // complete three-statement spelling itself; otherwise the generic
+        // `rsp += N; return` case inserts a comment between the load and return,
+        // permanently stranding an undefined `stack_top` read in emitted C.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Reg(reg("rbp")),
+                },
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("stack_top")),
+                },
+                rsp_add(8),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2, "stranded leave fragment: {:#?}", f.body);
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Comment(text) if text == "x86-64 epilogue: restore rbp"
+        ));
+        assert!(matches!(&f.body[1], Stmt::Return { .. }));
     }
 
     #[test]

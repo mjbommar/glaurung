@@ -53,7 +53,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::cfg_edges::{Edge, EdgeKind};
-use crate::ir::structure::{Region, entry_block};
+use crate::ir::structure::{entry_block, Region};
 
 /// What the region tree fails to account for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -683,35 +683,35 @@ mod tests {
         }
     }
 
-    /// RED #3. Real edges with no home in the tree. `4 -> 7` and `6 -> 7` are the
-    /// case arms returning to the latch; the switch has no join, so nothing declares
-    /// them.
+    /// `4 -> 7` and `6 -> 7` are case arms returning to the latch. The guarded
+    /// switch now exposes block 7 as its partial join, so those real edges must
+    /// have a structural home rather than surviving only as gotos.
     #[test]
-    fn case_arm_edges_to_the_latch_are_unaccounted() {
+    fn case_arm_edges_to_the_latch_are_accounted() {
         let errs = account_recovered(&statemachine_shape());
-        let unaccounted: Vec<(usize, usize)> = errs
-            .iter()
-            .filter_map(|e| match e {
-                AccountError::EdgeUnaccounted { from, to, .. } => Some((*from, *to)),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            !unaccounted.is_empty(),
-            "expected unaccounted edges, got {errs:?}"
-        );
+        for (from, to) in [(4usize, 7usize), (6, 7)] {
+            assert!(
+                !errs.iter().any(|error| matches!(
+                    error,
+                    AccountError::EdgeUnaccounted { from: f, to: t, .. }
+                        | AccountError::EdgeViaGoto { from: f, to: t, .. }
+                        if *f == from && *t == to
+                )),
+                "case-to-latch edge {from} -> {to} must be structured: {errs:?}"
+            );
+        }
     }
 
-    /// RED #4. The tree claims control flow the CFG does not have. Block 7 is used
-    /// as a conditional arm whose join is the epilogue, while its only real
-    /// successor is the loop header.
+    /// The repaired guarded-switch tree must not invent any edge absent from the
+    /// CFG. Residual duplicate-block diagnostics are independent of edge fidelity.
     #[test]
-    fn the_tree_claims_an_edge_that_does_not_exist() {
+    fn the_tree_claims_no_edge_that_does_not_exist() {
         let errs = account_recovered(&statemachine_shape());
         assert!(
-            errs.iter()
+            !errs
+                .iter()
                 .any(|e| matches!(e, AccountError::ImpliedEdgeAbsent { .. })),
-            "expected an implied-but-absent edge, got {errs:?}"
+            "the tree must not invent an edge: {errs:?}"
         );
     }
 
@@ -747,26 +747,11 @@ mod tests {
         );
     }
 
-    /// This was written as a third passing control and is NOT one — reported rather
-    /// than forced green, because the counterexample is smaller and more useful than
-    /// a green tick.
-    ///
     /// A sparse switch with a bounds-check default and three arms converging on one
-    /// join structures as
-    ///
-    ///     IfThenElse { cond: 0, then: Block(5), else: Switch { arms: [
-    ///         Seq[Block(2), Block(6)], Block(3), Block(4) ], join: None }, join: Some(6) }
-    ///
-    /// The FIRST arm absorbs the shared join (block 6) into itself and the `Switch`
-    /// records `join: None`, so the other two arms' edges to that join — `3 -> 6` and
-    /// `4 -> 6` — are expressed by nothing. The function passes its execution
-    /// differential today, so this is invisible to the semantic gate: whichever arm
-    /// is walked first swallows the block every arm shares.
-    ///
-    /// Pinned as-is. When a region analysis replaces the ordered matcher, exactly
-    /// these two edges should become accounted and this test should be inverted.
+    /// join is now a clean control: the enclosing conditional owns the join and the
+    /// nested switch cases stop there rather than letting the first case absorb it.
     #[test]
-    fn a_sparse_switchs_shared_join_is_absorbed_by_its_first_arm() {
+    fn a_sparse_switchs_shared_join_is_fully_accounted() {
         let lf = mk(vec![
             (0x00, vec![cj(0x50)], vec![0x10, 0x50]),
             (0x10, vec![jmp(0x20)], vec![0x20, 0x30, 0x40]),
@@ -777,16 +762,7 @@ mod tests {
             (0x60, vec![Op::Return], vec![]),
         ]);
         let errs = account_recovered(&lf);
-        for from in [3usize, 4] {
-            assert!(
-                errs.iter().any(|e| matches!(
-                    e,
-                    AccountError::EdgeUnaccounted { from: f, to: 6, .. } if *f == from
-                )),
-                "expected {from} -> 6 unaccounted (the first arm took block 6): {errs:?}"
-            );
-        }
-        assert_eq!(errs.len(), 2, "and nothing else: {errs:?}");
+        assert_eq!(errs, vec![], "a sparse guarded switch must be clean");
     }
 
     /// An edge a `Goto` expresses is a WEAKER finding, not no finding. Treating a

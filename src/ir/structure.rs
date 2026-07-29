@@ -784,6 +784,18 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
             break;
         }
         if visited.contains(&next) {
+            // An explicit machine jump is already present in `Block(cur)` and
+            // lowers to a C goto.  A LINEAR edge has no instruction to carry
+            // it: once structuring relocates `cur` away from the block that
+            // previously followed it in memory, silently stopping here drops
+            // control flow. Materialise only that adjacency edge as a region
+            // goto to the already-owned block.
+            if cfg.edges[cur]
+                .iter()
+                .any(|edge| edge.to == next && edge.kind == crate::ir::cfg_edges::EdgeKind::Linear)
+            {
+                parts.push(Region::Goto(next));
+            }
             break;
         }
         cur = next;
@@ -1135,6 +1147,35 @@ fn detect_if_shape(
         }
     }
 
+    // --- guarded multi-way body with a partial continuation ---------------
+    // A compiler guards a jump table with an out-of-range edge directly to
+    // the common latch/epilogue. Most cases reach that same block, but a case
+    // may return early. The continuation therefore does not post-dominate the
+    // dispatch, even though every non-terminating path reaches it. This is a
+    // one-armed `if (in_range) switch (...)` followed by the continuation, not
+    // an if/else whose sibling arm owns the continuation.
+    for &(body, join) in &[(t, e), (e, t)] {
+        if cfg.succs[body].len() >= 3
+            && cfg.preds[body] == vec![cond]
+            && cfg.preds[join].contains(&cond)
+            && can_reach(body, join, cfg)
+            && every_path_reaches_join_or_terminates(body, join, cfg)
+        {
+            let invert = invert_for(cfg, cond, body);
+            visited.insert(cond);
+            let then_r = build(body, cfg, visited, Some(join));
+            return Some((
+                Region::IfThen {
+                    cond,
+                    then_r: Box::new(then_r),
+                    join: Some(join),
+                    invert,
+                },
+                Some(join),
+            ));
+        }
+    }
+
     // (switch detection lives in detect_switch_shape — invoked by build()
     // before falling through to the default block path, since this fn is
     // only called for 2-successor blocks.)
@@ -1331,10 +1372,22 @@ fn detect_switch_shape(
     }
 
     let join = find_switch_join(dispatch, &arms, cfg, enclosing_stop);
+    // When the dispatch is one arm of an enclosing conditional, its local
+    // post-dominator may be absent solely because the sibling/default arm also
+    // reaches that continuation.  The enclosing boundary is still a proven
+    // join and is the correct ownership limit for every case.
+    let effective_join = join.or(enclosing_stop);
     let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
 
     visited.insert(dispatch);
     let mut sub_arms: Vec<Region> = Vec::new();
+    // A switch may have no join dominated by its dispatch while still being
+    // nested inside a region with a shared continuation.  The canonical shape
+    // is an out-of-range guard whose direct/default arm and every switch case
+    // meet at the same epilogue.  In that case `join` is None (the default path
+    // prevents dispatch dominance), but `enclosing_stop` is authoritative: no
+    // case owns or may consume that outer continuation.
+    let arm_stop = effective_join;
     for &a in &arms {
         if let Some((_, loop_body)) = &enclosing_loop {
             // Case-local returns may pass through a function epilogue outside
@@ -1342,23 +1395,23 @@ fn detect_switch_shape(
             // the shared epilogue: the loop-exit and pre-loop paths still need
             // it at function scope. Only loop-body ownership is committed.
             let mut arm_visited = visited.clone();
-            sub_arms.push(build(a, cfg, &mut arm_visited, join));
+            sub_arms.push(build(a, cfg, &mut arm_visited, arm_stop));
             visited.extend(
                 arm_visited
                     .into_iter()
                     .filter(|block| loop_body.contains(block)),
             );
         } else {
-            sub_arms.push(build(a, cfg, visited, join));
+            sub_arms.push(build(a, cfg, visited, arm_stop));
         }
     }
     Some((
         Region::Switch {
             dispatch,
             arms: sub_arms,
-            join,
+            join: effective_join,
         },
-        join,
+        effective_join,
     ))
 }
 
@@ -2314,6 +2367,126 @@ mod tests {
     }
 
     #[test]
+    fn nested_switch_arms_stop_at_the_enclosing_conditional_join() {
+        // Clang -O0 jump-table dispatch is guarded by an out-of-range branch:
+        //
+        //        b0
+        //       /  \
+        //   default b5   dispatch b1 -> b2,b3,b4
+        //       \          /   |   /
+        //                 join b6 -> return
+        //
+        // The switch has no join dominated by its dispatch because b5 also
+        // reaches b6.  Nevertheless b6 is the enclosing if/else join and no
+        // switch arm owns it.  Letting the first case consume b6 nests the one
+        // shared return in that case and makes every default path fall off the
+        // emitted C function.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1500,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1500],
+            ),
+            (0x1100, vec![Op::Nop], vec![0x1200, 0x1300, 0x1400]),
+            (0x1200, vec![Op::Nop], vec![0x1600]),
+            (0x1300, vec![Op::Nop], vec![0x1600]),
+            (0x1400, vec![Op::Nop], vec![0x1600]),
+            (0x1500, vec![Op::Nop], vec![0x1600]),
+            (0x1600, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let Region::Seq(parts) = &region else {
+            panic!("the shared join must be emitted after the conditional: {region:#?}")
+        };
+        assert!(
+            matches!(parts.last(), Some(Region::Block(6))),
+            "{region:#?}"
+        );
+
+        fn find_switch(region: &Region) -> Option<&Region> {
+            match region {
+                Region::Switch { .. } => Some(region),
+                Region::Seq(parts) => parts.iter().find_map(find_switch),
+                Region::IfThen { then_r, .. } => find_switch(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    find_switch(then_r).or_else(|| find_switch(else_r))
+                }
+                Region::While { body, .. } | Region::DoWhile { body, .. } => find_switch(body),
+                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+            }
+        }
+        let Some(Region::Switch { arms, join, .. }) = find_switch(&region) else {
+            panic!("expected nested switch: {region:#?}")
+        };
+        assert_eq!(
+            *join,
+            Some(6),
+            "the switch must expose its enclosing shared continuation"
+        );
+        assert!(
+            arms.iter().all(|arm| !arm.blocks().contains(&6)),
+            "the enclosing join must not be consumed by a switch case: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn guarded_switch_with_terminating_case_keeps_its_partial_join_outside() {
+        // The range guard can bypass the dispatch directly to b5. Most cases
+        // also reach b5, while one case returns through b6.  Since b5 does not
+        // post-dominate the returning case, a global post-dominator search
+        // misses the source shape:
+        //
+        //     if (in_range) { switch (...) { ...; case 3: return; } }
+        //     b5: latch/update;
+        //
+        // Treating it as if/else places b5 in the bypass arm and forces every
+        // continuing case to goto into that sibling arm.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::CondJump {
+                    cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1500,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1500],
+            ),
+            (0x1100, vec![Op::Nop], vec![0x1200, 0x1300, 0x1400]),
+            (0x1200, vec![Op::Jump { target: 0x1500 }], vec![0x1500]),
+            (0x1300, vec![Op::Jump { target: 0x1500 }], vec![0x1500]),
+            (0x1400, vec![Op::Return], vec![]),
+            (0x1500, vec![Op::Nop], vec![0x1600]),
+            (0x1600, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let Region::Seq(parts) = &region else {
+            panic!("expected guarded switch followed by its join: {region:#?}")
+        };
+        let Some(Region::IfThen {
+            then_r,
+            join: Some(5),
+            ..
+        }) = parts.first()
+        else {
+            panic!("expected one-armed guarded switch: {region:#?}")
+        };
+        assert!(
+            matches!(then_r.as_ref(), Region::Switch { join: Some(5), .. }),
+            "the switch and guard must share b5 as their continuation: {region:#?}"
+        );
+        assert!(
+            matches!(parts.get(1), Some(Region::Block(5))),
+            "{region:#?}"
+        );
+    }
+
+    #[test]
     fn switch_shape_arms_with_terminating_returns() {
         //   B0 dispatch → B1, B2, B3
         //   each Bi: return  (no shared join)
@@ -2497,6 +2670,54 @@ mod tests {
             has_goto(&region, 3),
             "expected a Goto to the shared false block; region={:?}",
             region
+        );
+    }
+
+    #[test]
+    fn relocated_linear_fallthrough_to_an_owned_join_becomes_a_goto() {
+        use crate::ir::types::{Flag, VReg};
+
+        let cj = |target: u64| Op::CondJump {
+            cond: VReg::Flag(Flag::S),
+            target,
+            inverted: false,
+        };
+        // The first arm owns B3 before the second arm is structured.  Inside
+        // that second arm B5 reaches B3 by machine-code adjacency, not an
+        // explicit jump.  Once B5 is nested in C, B3 is no longer lexically
+        // next, so the linear edge must be materialised as Goto(3).
+        //
+        // This is the reduced shape of Clang O2 loop_return_on_neg: its i=6
+        // negative arm fell through to a shared result block in the binary but
+        // fell out of a nested C `if`, returning an uninitialised value.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![cj(0x1100)], vec![0x1100, 0x1200]), // B0
+            (0x1100, vec![Op::Nop], vec![0x1300]),            // B1 -> shared
+            (0x1200, vec![cj(0x1500)], vec![0x1500, 0x1600]), // B2
+            (0x1300, vec![Op::Nop], vec![0x1400]),            // B3 shared
+            (0x1400, vec![Op::Return], vec![]),               // B4 epilogue
+            (0x1500, vec![Op::Nop], vec![0x1300]),            // B5 linear -> B3
+            (0x1600, vec![Op::Jump { target: 0x1400 }], vec![0x1400]), // B6 bypass
+        ]);
+
+        fn has_goto(r: &Region, target: usize) -> bool {
+            match r {
+                Region::Goto(block) => *block == target,
+                Region::Seq(parts) => parts.iter().any(|part| has_goto(part, target)),
+                Region::IfThen { then_r, .. } => has_goto(then_r, target),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    has_goto(then_r, target) || has_goto(else_r, target)
+                }
+                Region::While { body, .. } | Region::DoWhile { body, .. } => has_goto(body, target),
+                Region::Switch { arms, .. } => arms.iter().any(|arm| has_goto(arm, target)),
+                Region::Block(_) | Region::Unstructured(_) => false,
+            }
+        }
+
+        let region = recover_for(&lf);
+        assert!(
+            has_goto(&region, 3),
+            "relocated linear edge to B3 was dropped: {region:#?}"
         );
     }
 }
