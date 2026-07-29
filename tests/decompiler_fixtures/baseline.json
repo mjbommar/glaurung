@@ -222,7 +222,7 @@
   "03_loop_shapes:gcc:O2": {
     "cond_reload_and_transform": "fail",
     "cond_side_effect": "pass",
-    "dowhile_atleastonce": "fail",
+    "dowhile_atleastonce": "pass",
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
     "for_stride2": "pass",
@@ -297,8 +297,8 @@
     "default_dominant": "pass",
     "dense_compute": "fail",
     "dense_jumptable": "pass",
-    "explicit_fallthrough": "fail",
-    "fallthrough_chain": "fail",
+    "explicit_fallthrough": "pass",
+    "fallthrough_chain": "pass",
     "negative_cases": "fail",
     "negative_sparse": "pass",
     "nested_switch": "pass",
@@ -317,7 +317,7 @@
   },
   "05_cleanup_and_state_machine:clang:O2": {
     "fsm": "fail",
-    "process": "fail"
+    "process": "pass"
   },
   "05_cleanup_and_state_machine:gcc:O0": {
     "fsm": "pass",
@@ -325,7 +325,7 @@
   },
   "05_cleanup_and_state_machine:gcc:O2": {
     "fsm": "pass",
-    "process": "fail"
+    "process": "pass"
   },
   "06_calling_conventions:clang:O0": {
     "fact_mod": "fail",
@@ -408,7 +408,7 @@
     "validate_header": "fail"
   },
   "07_packet_parser:clang:O2": {
-    "parse_packet": "fail",
+    "parse_packet": "pass",
     "validate_header": "structural"
   },
   "07_packet_parser:gcc:O0": {

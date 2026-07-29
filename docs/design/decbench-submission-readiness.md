@@ -7,7 +7,71 @@ backwards from the submission rather than forwards from the code.
 **Nothing here is public.** The fork branch exists locally and has never been
 pushed; no PR, no issue, no reply upstream.
 
-Last updated: 2026-07-25.
+Last updated: 2026-07-29.
+
+## Current decision: do not submit
+
+The current native decompiler was rebuilt from Glaurung commit `3fdcb99`, run
+over all 224 blinded binaries (250 target functions), packaged, ingested into a
+fresh DecBench checkout, and scored from the resulting decompilations. The
+package SHA-256 is
+`d8731f6f9d3aa52f3212faa4f824a0b780dd1f79d15c432962ae99b9b48816b6`.
+There were no adapter or decompilation errors, so the scores below are coverage
+complete rather than a successful subset.
+
+| blinded gate | Glaurung | angr | Ghidra | decision |
+|---|---:|---:|---:|---|
+| GED, lower is better | 41.548 | 21.774 | 20.281 | not competitive |
+| compile rate | 97/250 (38.8%) | 120/250 (48.0%) | 125/250 (50.0%) | not competitive |
+| type match | 0.126 | 0.280 | 0.231 | not competitive |
+
+Only 48 of 250 blinded functions (19.2%) are perfect in either GED or compile
+comparison. The two changes immediately before the measurement changed no GED
+or type score at all; only `findutils/O0/find/prec_name` improved in byte match.
+This is strong evidence that the present bottleneck is the decompiler's middle
+architecture, not another isolated source-rendering rewrite.
+
+The 56 public cells look materially better, but they are not a submission
+signal on their own:
+
+| public aggregate | Glaurung | angr | Ghidra |
+|---|---:|---:|---:|
+| GED, lower is better | 8.378 | 9.926 | 11.426 |
+| type match | 0.737 | 0.694 | 0.903 |
+| byte match | 0.257 | 0.274 | 0.306 |
+
+That reversal between public and blinded data is a holdout-generalization
+failure. In particular, Glaurung loses 26 of 56 public GED cells to angr and 18
+to Ghidra despite winning the aggregate, and it loses 40 of 56 byte-match cells
+to Ghidra. The worst public failures remain GCC `-O2` recursion, state-machine,
+and loop recovery; optimized struct cases can obtain GED 0 while type match is
+0, which exposes the missing object/type model directly.
+
+Behavioral evidence remains useful and is kept separate from textual scores.
+The full four-lane fixture differential covers 623 functions with 256 fuzz
+inputs and has zero regressions at this head. Six formerly failing functions now
+round-trip correctly. The structural gate is 282/282 closed, with no
+placeholders, but still reports seven known definition-before-use violations.
+
+The repository-wide release gate is not green. `cargo test --all-targets`
+passes, and default `cargo clippy --all-targets` completes with the existing
+warning backlog, but strict Clippy remains red. `uv run pytest python/tests/`
+reports 2,543 passed, 43 skipped, and 30 failed. Those failures include a real
+DecBench-output C parse miss (53/56, or 94.6%, against the 95% threshold), stale
+LLM model and `pydantic-ai` API expectations, and Windows fixture/API drift.
+The benchmark and fixture ratchets themselves pass. These categories must be
+closed independently; a green decompiler ratchet does not make the repository
+release-ready.
+
+Submission should stay blocked until the typed middle is rebuilt around an
+authoritative SSA/value identity, recovered prototypes, type/value facts, and
+storage-backed high variables, with those stages iterating to a fixed point
+before region structuring. This is also the architecture used by Ghidra and made
+especially explicit by [Kuna's P0-P9 phase model](https://github.com/Noelo-Lab/kuna/blob/main/docs/phases.md).
+Each slice must preserve the behavioral gates and improve an unseen holdout,
+not merely the 56 public cells.
+
+The remainder of this document records the earlier July 25 submission audit.
 
 ## 1. The artifact we would be submitting
 
