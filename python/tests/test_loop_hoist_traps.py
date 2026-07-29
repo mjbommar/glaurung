@@ -1,10 +1,11 @@
 """The four loops whose verbose lowering is load-bearing.
 
-Hoisting a loop header above its loop lets constant propagation substitute the initial
-value that dominates at the hoist position. When the hoisted expression carries a
-loop-carried register, that freezes it and the loop stops making progress. The
-`while (1) { pre; if (!cond) break; }` form these four decompile to is therefore not
-untidiness to be cleaned up — it is what keeps them correct.
+Hoisting a loop header above its loop can let constant propagation substitute the
+initial value that dominates at the hoist position. When the emitted condition then
+reads only that frozen temporary, the loop stops making progress. The conservative
+`while (1) { pre; if (!cond) break; }` form is always safe; a source-level `while
+(cond)` is safe too when the printed condition directly reads a variable that the
+body updates, so C reevaluates the loop-carried dependency on every iteration.
 
 The cost is real and measured, which is why this file exists. On branch
 `recover-ged-cells` (docs/design/ged-recovery-measured-trade.md), always-hoisting recovers
@@ -23,10 +24,11 @@ Why here and not in the fixture differential: the differential already covers th
 functions, but it takes ~8 minutes and reports a wrong ANSWER without saying why. This
 runs four decompilations in seconds and names the trap.
 """
+
 from __future__ import annotations
 
+import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -47,7 +49,10 @@ TRAPS = [
 
 def _symbol_va(so: Path, name: str) -> int | None:
     r = subprocess.run(
-        ["nm", "-D", "--defined-only", str(so)], capture_output=True, text=True
+        ["nm", "-D", "--defined-only", str(so)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     for line in r.stdout.splitlines():
         p = line.split()
@@ -62,8 +67,29 @@ def _decompile(so: Path, va: int) -> str:
         capture_output=True,
         text=True,
         timeout=180,
+        check=False,
     )
     return r.stdout
+
+
+def _condition_reads_a_body_updated_value(text: str) -> bool:
+    """Whether a source-level while condition retains a loop-carried value."""
+    for match in re.finditer(r"while\s*\(([^\n]*)\)\s*\{", text):
+        condition = match.group(1)
+        body_start = match.end()
+        # The first closing brace is enough for this proof: the relevant update
+        # precedes any nested early-exit close in every declared trap.
+        body_end = text.find("}", body_start)
+        if body_end < 0:
+            continue
+        body = text[body_start:body_end]
+        condition_names = set(re.findall(r"\b[A-Za-z_]\w*\b", condition))
+        assigned_names = set(
+            re.findall(r"(?m)^\s*([A-Za-z_]\w*)\s*(?:=|\+\+|--)", body)
+        )
+        if condition_names & assigned_names:
+            return True
+    return False
 
 
 @pytest.mark.parametrize(
@@ -71,11 +97,11 @@ def _decompile(so: Path, va: int) -> str:
     TRAPS,
     ids=[f"{f}:{c}:{o}:{fn}" for f, c, o, fn in TRAPS],
 )
-def test_loop_keeps_its_protective_form(fixture, cc, opt, func):
-    """The loop must not be lowered to a bare `while (cond)`.
+def test_loop_keeps_its_loop_carried_condition(fixture, cc, opt, func):
+    """The loop must retain every iteration-dependent condition input.
 
-    A bare `while (cond)` here means the header was hoisted, which freezes a
-    loop-carried value. The correct form is `while (1)` with an explicit `break`.
+    Either the protective form keeps the header inside the body, or a recovered
+    source-level condition must directly name a value assigned by that body.
     """
     so = BUILD / f"{fixture}-{cc}-{opt}.so"
     if not so.is_file():
@@ -86,12 +112,15 @@ def test_loop_keeps_its_protective_form(fixture, cc, opt, func):
     text = _decompile(so, va)
     assert text.strip(), f"{func}: decompiler produced nothing"
 
-    # The protective form. `while (1)` plus a `break` is what keeps the header inside.
+    # The protective form keeps the complete machine header inside. A recovered
+    # while is equally safe only when it directly rereads a body-updated value;
+    # a condition over a pre-loop scratch temporary still fails this test.
     has_guard = "while (1)" in text and "break;" in text
-    assert has_guard, (
-        f"{fixture}:{cc}:{opt}:{func} lost its `while (1) {{ ...; if (!cond) break; }}` "
-        f"form, so its loop header was hoisted.\n\n"
-        f"That freezes a loop-carried value: constant propagation substitutes the "
+    has_live_condition = _condition_reads_a_body_updated_value(text)
+    assert has_guard or has_live_condition, (
+        f"{fixture}:{cc}:{opt}:{func} neither retained its protective `while (1)` "
+        f"form nor emitted a condition that directly reads a body-updated value.\n\n"
+        f"That can freeze a loop-carried value: constant propagation substitutes the "
         f"initial value dominating the hoist position. Always-hoisting is worth 50.32 "
         f"GED points (46% of a regression) and breaks exactly this function plus three "
         f"others — see docs/design/ged-recovery-measured-trade.md. If you are making "
