@@ -15,10 +15,8 @@ fn cfg_discovers_functions_on_sample_if_present() {
         max_instructions: 50_000,
         timeout_ms: 200,
     };
-    let (funcs, cg) = glaurung::analysis::cfg::analyze_functions_bytes(&data, &budgets);
+    let (funcs, _) = glaurung::analysis::cfg::analyze_functions_bytes(&data, &budgets);
     assert!(!funcs.is_empty(), "expected at least one function");
     let f = &funcs[0];
     assert!(!f.basic_blocks.is_empty(), "expected some basic blocks");
-    // Callgraph can be empty for trivial programs, but should be well-formed
-    assert!(cg.edge_count() >= 0);
 }
