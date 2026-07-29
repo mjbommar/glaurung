@@ -287,6 +287,16 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # tracked separately. `verify_defs` does not catch it because `rbp` is a machine
     # register, not a `varN`.
     ("10_cpp_runtime_shapes", "cpp_ctor_dtor"): {"skip_exec_lanes": ("gcc:O0", "clang:O0")},
+    # `cpp_raii_guard` has the same O0 address-taken stack-object defect: the
+    # generated C calls Guard's constructor/destructor with `rbp - 32` while
+    # `rbp` is declared but never assigned. Five consecutive pinned local runs
+    # failed, while the identical pinned CI lane passed once because the garbage
+    # address happened to be usable. That is nondeterministic memory luck, not a
+    # semantic improvement. Keep the affected O0 lanes structural until the frame
+    # slot is materialised as a real local; O2 remains executable.
+    ("10_cpp_runtime_shapes", "cpp_raii_guard"): {
+        "skip_exec_lanes": ("gcc:O0", "clang:O0")
+    },
     # `cpp_virtual_dispatch` is the same defect, one lane wider. Our emitted C
     # dereferences a `this`/vtable pointer it never assigned, so the worker takes
     # SIGSEGV (exit -11) on ALL FOUR lanes — verified by running each directly

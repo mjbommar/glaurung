@@ -506,7 +506,7 @@
     "cpp_exception": "fail",
     "cpp_lambda_capture": "fail",
     "cpp_move": "fail",
-    "cpp_raii_guard": "fail",
+    "cpp_raii_guard": "structural",
     "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:clang:O2": {
@@ -547,7 +547,7 @@
     "cpp_exception": "fail",
     "cpp_lambda_capture": "fail",
     "cpp_move": "fail",
-    "cpp_raii_guard": "fail",
+    "cpp_raii_guard": "structural",
     "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:gcc:O2": {

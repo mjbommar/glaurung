@@ -157,6 +157,18 @@ def test_skip_exec_is_structural_not_pass(monkeypatch, tmp_path):
     assert r["status"] == "structural"
 
 
+def test_nondeterministic_cpp_raii_o0_execution_is_structural():
+    """O0 RAII uses an unrecovered address-taken stack object as ``this``.
+
+    Executing that emitted C reads an uninitialised frame-pointer surrogate, so
+    pass/fail depends on whether the garbage address happens to be mapped.  Keep
+    both pinned O0 lanes structural until stack-object recovery makes execution
+    deterministic again.
+    """
+    override = M.OVERRIDES[("10_cpp_runtime_shapes", "cpp_raii_guard")]
+    assert set(override["skip_exec_lanes"]) >= {"gcc:O0", "clang:O0"}
+
+
 def test_no_executable_cases_is_not_a_pass(monkeypatch, tmp_path):
     # Zero generated cases is an infra failure (distinct `nocases` status so
     # --write-baseline refuses it), never a silent pass.
