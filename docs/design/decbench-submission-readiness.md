@@ -4,32 +4,38 @@ What has to be true before we open a PR against `Noelo-Lab/decbench`, what is
 true today, and what we would be asking a reviewer to accept. Written by working
 backwards from the submission rather than forwards from the code.
 
-**Nothing here is public.** The fork branch exists locally and has never been
-pushed; no PR, no issue, no reply upstream.
+The native DecBench adapter is preserved and pushed to the Glaurung owner's
+DecBench fork as `codex/glaurung-external-eval` at `e110ad7`. It is not merged
+into `Noelo-Lab/decbench`: there is no upstream PR, issue, or submission.
 
 Last updated: 2026-07-29.
 
 ## Current decision: do not submit
 
-The current native decompiler was rebuilt from Glaurung commit `3fdcb99`, run
+The current native decompiler was rebuilt from Glaurung commit `24b3826`, run
 over all 224 blinded binaries (250 target functions), packaged, ingested into a
-fresh DecBench checkout, and scored from the resulting decompilations. The
-package SHA-256 is
-`d8731f6f9d3aa52f3212faa4f824a0b780dd1f79d15c432962ae99b9b48816b6`.
+fresh DecBench tree, and scored from the resulting decompilations. The package
+SHA-256 is
+`a12f335ea9cb78b59749566cea310e95c614ac6b340863b6ba245b8bd06d6cc8`.
 There were no adapter or decompilation errors, so the scores below are coverage
-complete rather than a successful subset.
+complete rather than a successful subset. The package contains 225 files and
+1,717,203 uncompressed bytes.
 
 | blinded gate | Glaurung | angr | Ghidra | decision |
 |---|---:|---:|---:|---|
 | GED, lower is better | 41.548 | 21.774 | 20.281 | not competitive |
 | compile rate | 97/250 (38.8%) | 120/250 (48.0%) | 125/250 (50.0%) | not competitive |
-| type match | 0.126 | 0.280 | 0.231 | not competitive |
+| type match | 0.127 | 0.280 | 0.231 | not competitive |
 
-Only 48 of 250 blinded functions (19.2%) are perfect in either GED or compile
-comparison. The two changes immediately before the measurement changed no GED
-or type score at all; only `findutils/O0/find/prec_name` improved in byte match.
-This is strong evidence that the present bottleneck is the decompiler's middle
-architecture, not another isolated source-rendering rewrite.
+Only 48 of 250 blinded functions (19.2%) are perfect in either GED or byte-match
+comparison. Against the exact `3fdcb99` baseline, GED (`41.5481171548`), byte
+match (`0.0423053591`), and compile rate (`97/250`) are unchanged. Type match
+moved `0.1261469541 -> 0.1271417040`: 2 functions improved, 0 worsened, and 233
+were unchanged. An earlier unrestricted projection (`a4d8907`) improved 24
+functions but worsened 7 and lost two compilable functions; it was rejected.
+The qualified SSA projection at `24b3826` removes every blinded regression, but
+the very small aggregate gain is strong evidence that the present bottleneck is
+the decompiler's middle architecture, not another isolated rendering rewrite.
 
 The 56 public cells look materially better, but they are not a submission
 signal on their own:
@@ -37,7 +43,7 @@ signal on their own:
 | public aggregate | Glaurung | angr | Ghidra |
 |---|---:|---:|---:|
 | GED, lower is better | 8.378 | 9.926 | 11.426 |
-| type match | 0.737 | 0.694 | 0.903 |
+| type match | 0.743 | 0.694 | 0.903 |
 | byte match | 0.257 | 0.274 | 0.306 |
 
 That reversal between public and blinded data is a holdout-generalization
@@ -53,21 +59,24 @@ inputs and has zero regressions at this head. Six formerly failing functions now
 round-trip correctly. The structural gate is 282/282 closed, with no
 placeholders, but still reports seven known definition-before-use violations.
 
-The repository-wide release gate is not green. `cargo test --all-targets`
-passes, and default `cargo clippy --all-targets` completes with the existing
-warning backlog, but strict Clippy remains red. `uv run pytest python/tests/`
-reports 2,543 passed, 43 skipped, and 30 failed. Those failures include a real
-DecBench-output C parse miss (53/56, or 94.6%, against the 95% threshold), stale
-LLM model and `pydantic-ai` API expectations, and Windows fixture/API drift.
-The benchmark and fixture ratchets themselves pass. These categories must be
-closed independently; a green decompiler ratchet does not make the repository
-release-ready.
+The repository-wide release gate is not green. At `24b3826`,
+`cargo test --all-targets` passes, and default `cargo clippy --all-targets`
+exits 0 with the existing warning backlog, but strict Clippy fails on 100
+pre-existing errors across unrelated files. The last retained broad Python-suite
+run reported 2,543 passed, 43 skipped, and 30 failed; it was not rerun for this
+Rust-only slice. Those failures included a real DecBench-output C parse miss
+(53/56, or 94.6%, against the 95% threshold), stale LLM model and `pydantic-ai`
+API expectations, and Windows fixture/API drift. The 56-cell benchmark ratchet
+passes at this head. These categories must be closed independently; a green
+decompiler ratchet does not make the repository release-ready.
 
 Submission should stay blocked until the typed middle is rebuilt around an
 authoritative SSA/value identity, recovered prototypes, type/value facts, and
 storage-backed high variables, with those stages iterating to a fixed point
-before region structuring. This is also the architecture used by Ghidra and made
-especially explicit by [Kuna's P0-P9 phase model](https://github.com/Noelo-Lab/kuna/blob/main/docs/phases.md).
+before region structuring. This is also the architecture used by Ghidra at pinned
+revision `7a4100d54bff88530f11b577d4d2547d57630288` and made especially explicit by
+[Kuna's P0-P9 phase model](https://github.com/Noelo-Lab/kuna/blob/main/docs/phases.md)
+at audited revision `5834b3009cbcec3f3bddf1d5cafe50bb03e15474`.
 Each slice must preserve the behavioral gates and improve an unseen holdout,
 not merely the 56 public cells.
 

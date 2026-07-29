@@ -9,8 +9,64 @@
 > reconciliation.
 >
 > Scope guard: build on what already landed — `src/ir/value_number.rs`
-> (LLIR value-tagging) and `live_in_arg_slots_llir` — and keep the ~866-test
-> `cargo test` suite and the DecBench render path green at every phase.
+> (LLIR value-tagging) and `live_in_arg_slots_llir` — and keep the 1,251-test
+> Rust library suite and the DecBench render path green at every phase. The
+> original current-state audit below is retained as the migration baseline;
+> the dated checkpoint supersedes it wherever implementation has since moved.
+
+---
+
+## 2026-07-29 implementation checkpoint and reference audit
+
+The first value-identity slice landed across Glaurung commits `a4d8907`,
+`3d97b45`, and `24b3826`. The audit used Ghidra at the repository's pinned commit
+`7a4100d54bff88530f11b577d4d2547d57630288` and Kuna at
+`5834b3009cbcec3f3bddf1d5cafe50bb03e15474`. These are source comparisons, not
+comparisons inferred from rendered output.
+
+| concern | Ghidra | Kuna | Glaurung at `24b3826` |
+|---|---|---|---|
+| Per-definition value | `Varnode` owns storage, creation identity, def/use links, type, and a `HighVariable` link (`varnode.hh`) | `VarnodeId` indexes a per-function arena with the same def/use/type/high-variable links (`substrate/varnode.rs`) | `SsaValue { base, version }` is now public, and `SsaInfo::def_value` / `use_value` expose the existing renamer's identity |
+| SSA construction | `Heritage` inserts and renames SSA values, including `MULTIEQUAL` (`heritage.hh`) | `Heritage` is a first-class P3 dataflow stage (`p3_dataflow/heritage.rs`) | `compute_ssa` remains a sidecar; consumers can now query values without parsing `reg#version` strings |
+| Prototype constraints | `ActionPrototypeTypes` locks input/output types before the main heritage/type loop (`coreaction.hh`, `coreaction.cc`) | The corresponding P4 action seeds locked prototype inputs/outputs (`p4_calls/coreaction_protos.rs`) | Missing: ABI roles are inferred locally and do not feed a recovered function prototype back into analysis |
+| Type propagation | `ActionInferTypes` runs in the repeated main action loop and exchanges facts with return/space-base recovery | The P5 inference engine implements the same value/type propagation band (`p5_types/coreaction_infertypes.rs`) | `TypeMapV` now propagates facts over copies, live phis, pointer arithmetic, and entry spills, but is still a one-shot local pass |
+| Source variable formation | `ActionAssignHigh` followed by required/copy/multi-entry/adjacent/type merges forms cover-aware `HighVariable`s (`variable.hh`, `coreaction.hh`) | The HighVariable arena/model and `ActionAssignHigh` are realized; the current source explicitly records several later merge actions as incomplete (`p6_variables/variable.rs`, `coreaction_cleanup.rs`) | Missing: AST naming still assigns presentation variables after lowering and has no storage/cover-backed high-variable identity |
+
+This slice deliberately projects only qualified version-zero live-in facts back
+into the legacy ABI-role type map. The output bridge requires the concrete
+`live-in -> frame spill -> reload -> dereference` chain and at least two
+independently qualified entry values. That conservative gate is necessary because
+function-boundary over-discovery can otherwise make one address-taken scalar look
+like a pointer. It fixes a real class of register-reuse contamination, but it is
+not the target architecture: AST nodes still discard `SsaValue`, `remap_type_map`
+still bridges types by presentation name, and there is no
+prototype/type/high-variable fixed point.
+
+The final public measurement covered all 56 `(program, compiler, opt)` cells:
+zero per-cell regressions, unchanged mean GED `8.378214` and byte match `0.256964`,
+and type match `0.737170 -> 0.743396`. Clang `-O0` `strops` improved
+`0.56 -> 0.89`; GCC `-O0` stayed at `0.89`. The full behavioral and structural
+fixture gate also passed.
+
+The blinded 224-binary / 250-function round trip was tied to `24b3826` and the
+package SHA-256
+`a12f335ea9cb78b59749566cea310e95c614ac6b340863b6ba245b8bd06d6cc8`.
+Against the exact `3fdcb99` baseline, GED (`41.548117`), byte match (`0.042305`),
+and compile rate (`97/250`) were unchanged; type match improved
+`0.126146954 -> 0.127141704`, with two functions better, none worse, and 233
+unchanged. This proves the slice is a bounded improvement. It also confirms that
+Glaurung remains far behind Ghidra and angr on the blinded set.
+
+The next acceptance-bounded slices are therefore:
+
+1. Carry `SsaValue` through AST/HLIR lowering, naming, typing, and rendering;
+   delete the `remap_type_map` string round-trip.
+2. Add recovered prototype objects whose locked inputs/outputs seed the value
+   type graph, and iterate prototype, SSA, and type facts to stability.
+3. Add storage- and cover-backed high variables, then merge required/copy/phi
+   values only when their live ranges and types permit it.
+4. Require zero behavioral regressions plus an improvement on the blinded
+   DecBench package before advancing each slice.
 
 ---
 
