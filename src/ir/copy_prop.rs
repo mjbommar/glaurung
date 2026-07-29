@@ -28,16 +28,23 @@ pub fn propagate_copies(f: &mut Function) {
     // *expression* propagated to that one use without duplicating any work — this
     // reassembles a split address computation (`t = i*4; p = base + t; *p`) into
     // `*(base + i*4)` and removes the scratch locals value-numbering created.
+    //
+    // Recount after every DCE round. Machine flag calculations often add a
+    // second, ultimately dead read of an address/load temporary. The first DCE
+    // round removes that flag chain; only a fresh count can then see that the
+    // useful read is unique and fold the expression. This is the same fixpoint
+    // contract as ordinary SSA simplification, bounded here to keep it cheap.
     let mut reads: HashMap<VReg, usize> = HashMap::new();
     count_reads_body(&f.body, &mut reads);
     propagate_run_counted(&mut f.body, &reads);
     propagate_run(&mut f.body);
-    // Iterate DCE to a fixpoint: removing one dead copy can make the copy that
-    // fed it dead too. Bounded to keep it cheap.
     for _ in 0..8 {
         if !eliminate_dead_copies(&mut f.body) {
             break;
         }
+        let mut reads: HashMap<VReg, usize> = HashMap::new();
+        count_reads_body(&f.body, &mut reads);
+        propagate_run_counted(&mut f.body, &reads);
     }
     // Copy propagation exposes local dead stores (`ret = local_c; ret =
     // (local_c >> 1)` — the first write is overwritten before any read once the
@@ -752,6 +759,82 @@ mod tests {
             "var5 should have folded into its single use, got:\n{}",
             dump
         );
+    }
+
+    #[test]
+    fn newly_single_use_address_and_load_fold_after_dead_flag_cleanup() {
+        // Real GCC -O0 array loops compute flags for the address arithmetic and
+        // loaded value even though the subsequent branch never reads them.  On
+        // the first read-count pass those dead flag temporaries make `var3` and
+        // `var6` look multi-use.  Once DCE removes the flag chain, propagation
+        // must reconsider the surviving one-use address/load chain rather than
+        // strand it in the emitted C.
+        let mut f = Function {
+            name: "sum_array_shape".into(),
+            entry_va: 0,
+            body: vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::Assign {
+                        dst: reg("var3"),
+                        src: Expr::Bin {
+                            op: BinOp::Mul,
+                            lhs: Box::new(Expr::Reg(reg("local_4"))),
+                            rhs: Box::new(Expr::Const(4)),
+                        },
+                    },
+                    Stmt::Assign {
+                        dst: reg("dead_addr_sign"),
+                        src: Expr::Cmp {
+                            op: CmpOp::Slt,
+                            lhs: Box::new(Expr::Reg(reg("var3"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        },
+                    },
+                    Stmt::Assign {
+                        dst: reg("var5"),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("arg0"))),
+                            rhs: Box::new(Expr::Reg(reg("var3"))),
+                        },
+                    },
+                    Stmt::Assign {
+                        dst: reg("var6"),
+                        src: Expr::Deref {
+                            addr: Box::new(Expr::Reg(reg("var5"))),
+                            size: 4,
+                        },
+                    },
+                    Stmt::Assign {
+                        dst: reg("dead_load_sign"),
+                        src: Expr::Cmp {
+                            op: CmpOp::Slt,
+                            lhs: Box::new(Expr::Reg(reg("var6"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        },
+                    },
+                    Stmt::Assign {
+                        dst: reg("local_8"),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("local_8"))),
+                            rhs: Box::new(Expr::Reg(reg("var6"))),
+                        },
+                    },
+                ],
+            }],
+        };
+
+        propagate_copies(&mut f);
+        let dump = format!("{:?}", f.body);
+        for dead in ["var3", "var5", "var6", "dead_addr_sign", "dead_load_sign"] {
+            assert!(
+                !dump.contains(dead),
+                "{dead} should disappear after propagation/DCE reaches a fixpoint:\n{dump}"
+            );
+        }
+        assert!(dump.contains("Deref") && dump.contains("Mul"), "{dump}");
     }
 
     #[test]

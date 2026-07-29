@@ -162,3 +162,59 @@ def test_cross_block_table_base_recovers_clang_o2_switch(tmp_path: Path) -> None
     results = json.loads(compared.stdout)
     assert compared.returncode == 0, results
     assert results["fsm"]["status"] == "pass", results
+
+
+def test_array_address_chain_folds_and_round_trips(tmp_path: Path) -> None:
+    """Dead flag artifacts must not strand single-use array temporaries."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "arrays.c"
+    binary = tmp_path / "arrays-gcc-O0.so"
+    compiled = subprocess.run(
+        [
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["sum_array"])
+    assert code is not None
+    assert "arg0[" in code and "local_4" in code, code
+    assert "long var3;" not in code and "long var6;" not in code, code
+    assert (
+        D.build_so(code, tmp_path, "dec_sum_array", link_against=str(binary))
+        is not None
+    )
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "arrays",
+            "--function",
+            "sum_array",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "24",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["sum_array"]["status"] == "pass", results
