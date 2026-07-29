@@ -169,6 +169,7 @@ fn expression_width(expr: &Expr) -> Option<u8> {
         Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => Some(8),
         Expr::Reg(_) | Expr::Const(_) | Expr::Unknown(_) => None,

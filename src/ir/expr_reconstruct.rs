@@ -151,6 +151,7 @@ fn reconstruct_do_while(body: &mut Vec<Stmt>, cond: &mut Expr) {
 fn contains_reg(e: &Expr, target: &VReg) -> bool {
     match e {
         Expr::Reg(r) => r == target,
+        Expr::StackAddr { object, .. } => object == target,
         Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }
@@ -182,6 +183,7 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
 fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
     match e {
         Expr::Reg(r) => (r == target) as usize,
+        Expr::StackAddr { object, .. } => (object == target) as usize,
         Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }
@@ -261,6 +263,7 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
     *e = match take {
         Expr::Reg(r) if &r == target => with.clone(),
         Expr::Reg(r) => Expr::Reg(r),
+        Expr::StackAddr { object, size } => Expr::StackAddr { object, size },
         Expr::Const(c) => Expr::Const(c),
         Expr::Addr(a) => Expr::Addr(a),
         Expr::Named { va, name } => Expr::Named { va, name },

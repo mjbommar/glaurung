@@ -341,6 +341,7 @@ fn rewrite_expr(e: &mut Expr) {
         Expr::Un { src, .. } => rewrite_expr(src),
         Expr::Cast { expr, .. } => rewrite_expr(expr),
         Expr::Reg(_)
+        | Expr::StackAddr { .. }
         | Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Lea { .. }

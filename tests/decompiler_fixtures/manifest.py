@@ -273,30 +273,6 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     ("09_memory_effects", "vec_transform"): {"len_args": [1]},
     # 08: apply() takes a function pointer — not int-differential; check structurally.
     ("08_indirect_dispatch", "apply"): {"skip_exec": True},
-    # `cpp_ctor_dtor` builds a `Tracer` on the stack, so its `this` is the address
-    # of a stack object. We do not materialise that slot: the emitted C passes
-    # `rbp - 32` where `rbp` is a declared-but-never-assigned local, i.e. an
-    # uninitialised read. Executing it segfaults on some hosts and survives on
-    # others depending on whether that garbage address happens to be mapped — the
-    # verdict is luck, and it differed between a developer machine (fail) and CI
-    # (pass) on the same commit.
-    #
-    # Marked skip_exec so the verdict is DETERMINISTIC everywhere and the structural
-    # lane still asserts on it. This records the defect rather than hiding it: the
-    # fix is to recover an address-taken stack object as a real local, which is
-    # tracked separately. `verify_defs` does not catch it because `rbp` is a machine
-    # register, not a `varN`.
-    ("10_cpp_runtime_shapes", "cpp_ctor_dtor"): {"skip_exec_lanes": ("gcc:O0", "clang:O0")},
-    # `cpp_raii_guard` has the same O0 address-taken stack-object defect: the
-    # generated C calls Guard's constructor/destructor with `rbp - 32` while
-    # `rbp` is declared but never assigned. Five consecutive pinned local runs
-    # failed, while the identical pinned CI lane passed once because the garbage
-    # address happened to be usable. That is nondeterministic memory luck, not a
-    # semantic improvement. Keep the affected O0 lanes structural until the frame
-    # slot is materialised as a real local; O2 remains executable.
-    ("10_cpp_runtime_shapes", "cpp_raii_guard"): {
-        "skip_exec_lanes": ("gcc:O0", "clang:O0")
-    },
     # `cpp_virtual_dispatch` is the same defect, one lane wider. Our emitted C
     # dereferences a `this`/vtable pointer it never assigned, so the worker takes
     # SIGSEGV (exit -11) on ALL FOUR lanes — verified by running each directly

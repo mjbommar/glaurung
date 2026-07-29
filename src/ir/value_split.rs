@@ -104,6 +104,7 @@ impl Splitter {
     fn rename_expr(&self, e: &mut Expr) {
         match e {
             Expr::Reg(v) => self.rename_reg(v),
+            Expr::StackAddr { object, .. } => self.rename_reg(object),
             Expr::Const(_)
             | Expr::Addr(_)
             | Expr::Named { .. }

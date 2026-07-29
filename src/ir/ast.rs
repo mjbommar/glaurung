@@ -52,6 +52,19 @@ pub enum Expr {
     StringLit {
         value: String,
     },
+    /// Address of a recovered stack object.
+    ///
+    /// This is semantic storage, not arithmetic on the machine frame pointer.
+    /// Keeping it explicit prevents a valid machine expression such as
+    /// `rbp - 0x20` from becoming a read of an uninitialised C local after the
+    /// prologue is removed.
+    StackAddr {
+        object: VReg,
+        /// Conservatively recovered storage extent in bytes. The DecBench C
+        /// renderer uses an array of this size so a constructor may initialise
+        /// the complete object, not overrun a pointer-sized scalar surrogate.
+        size: u16,
+    },
     /// Address-of a memory operand: `base + index*scale + disp`.
     Lea {
         base: Option<VReg>,
@@ -1137,6 +1150,7 @@ fn extract_cond_and_strip<'a>(block: &LlirBlock, mut stmts: Vec<Stmt>) -> (Expr,
 fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
     match e {
         Expr::Reg(r) => (r == target) as usize,
+        Expr::StackAddr { object, .. } => (object == target) as usize,
         Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }
@@ -1189,6 +1203,7 @@ fn can_eagerly_evaluate(expr: &Expr) -> bool {
         Expr::Un { src, .. } => can_eagerly_evaluate(src),
         Expr::Cast { expr, .. } => can_eagerly_evaluate(expr),
         Expr::Reg(_)
+        | Expr::StackAddr { .. }
         | Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }
@@ -1955,6 +1970,10 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
             }
             out.push('"');
         }
+        Expr::StackAddr { object, .. } => {
+            out.push('&');
+            write_reg_with_type(object, tm, out);
+        }
         Expr::Lea {
             base,
             index,
@@ -2557,6 +2576,10 @@ fn write_expr_c(e: &Expr, out: &mut String) {
                 }
             }
             out.push('"');
+        }
+        Expr::StackAddr { object, .. } => {
+            out.push('&');
+            write_reg_c(object, out);
         }
         Expr::Lea {
             base,
@@ -3286,6 +3309,7 @@ fn expression_value_width(
         Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => Some(8),
         Expr::Deref { size, .. } => Some(*size),
@@ -3708,6 +3732,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
     fn re(e: &mut Expr, map: &std::collections::HashMap<String, String>) {
         match e {
             Expr::Reg(v) => rn(v, map),
+            Expr::StackAddr { object, .. } => rn(object, map),
             Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
                 if let Some(v) = base {
                     rn(v, map);
@@ -4017,6 +4042,10 @@ pub fn render_decbench_typed(
     // (`rsp & -16`, `rbp + ret`) that is a hard error on a pointer-typed operand
     // in C. Keeping them `long` preserves parseability.
     for local in &ids.locals {
+        if let Some(size) = ids.stack_objects.get(local) {
+            let _ = writeln!(out, "    unsigned char {}[{}];", local, size);
+            continue;
+        }
         let ty = if is_promoted_local(local) {
             ctype_for(local, tm)
         } else {
@@ -4050,6 +4079,10 @@ struct DecIdents {
     /// Every non-argument identifier that will appear in the body, as the exact
     /// (sanitised) spelling the writer emits. `BTreeSet` for stable output.
     locals: std::collections::BTreeSet<String>,
+    /// Recovered address-taken stack objects and their required byte extents.
+    /// Kept separate from scalar locals so the C declaration reserves the
+    /// complete object storage.
+    stack_objects: std::collections::BTreeMap<String, u16>,
     /// VAs that appear as `Stmt::Label` (defined labels).
     labels: std::collections::BTreeSet<u64>,
     /// VAs that appear as `Stmt::Goto` targets (used labels).
@@ -4127,6 +4160,18 @@ fn collect_reg(v: &VReg, ids: &mut DecIdents) {
 fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
     match e {
         Expr::Reg(v) => collect_reg(v, ids),
+        Expr::StackAddr { object, size } => {
+            collect_reg(object, ids);
+            if let VReg::Phys(name) = object {
+                if parse_arg_index(name).is_none() {
+                    let name = sanitize_c_ident(name);
+                    ids.stack_objects
+                        .entry(name)
+                        .and_modify(|known| *known = (*known).max(*size))
+                        .or_insert((*size).max(1));
+                }
+            }
+        }
         // `Named` in a value position renders as a bare VA constant, and in a
         // call-target position as an (implicitly-declared) function name; either
         // way it is not a declared local, so nothing to collect here.
@@ -4544,6 +4589,11 @@ fn write_addr_arith_dec(
 fn write_expr_dec(e: &Expr, out: &mut String) {
     match e {
         Expr::Reg(v) => write_reg_dec(v, out),
+        Expr::StackAddr { object, .. } => {
+            out.push_str("&");
+            write_reg_dec(object, out);
+            out.push_str("[0]");
+        }
         Expr::Const(c) => write_const_dec(*c, out),
         Expr::Addr(a) => {
             let _ = write!(out, "0x{:x}", a);
@@ -7028,6 +7078,33 @@ function f @ 0x1000 {
             text
         );
         assert!(text.contains("long rbp;"), "base not declared:\n{}", text);
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_stack_address_reserves_complete_object_storage() {
+        let f = Function {
+            name: "construct".to_string(),
+            entry_va: 0x20,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x1000,
+                    name: "Widget_ctor".to_string(),
+                },
+                args: vec![Expr::StackAddr {
+                    object: VReg::phys("local_20"),
+                    size: 32,
+                }],
+                dst: None,
+            }],
+        };
+
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("unsigned char local_20[32];"),
+            "address-taken storage must not be a pointer-sized scalar: {text}"
+        );
+        assert!(text.contains("Widget_ctor(&local_20[0])"), "got: {text}");
         assert_looks_like_c(&text);
     }
 

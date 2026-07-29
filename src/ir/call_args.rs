@@ -629,8 +629,30 @@ fn fold_one_call(
                         mark_arg_reads_in_expr(src, arch, &mut read_between);
                         continue;
                     }
-                    // Second assignment to the same slot before the call —
-                    // the later (earlier-indexed) one is live, so bail out.
+                    // An older SSA definition may feed the captured value for
+                    // this same architectural slot. Clang emits this for width
+                    // normalisation (`rdx#1 = 0; rdx#2 = zext rdx#1`), with flag
+                    // bookkeeping sometimes between the two definitions.
+                    // Follow that exact definition edge instead of treating the
+                    // SSA values as unrelated clobbers and abandoning every
+                    // earlier argument slot.
+                    if let Some((_, captured)) = &mut found[slot] {
+                        if reads_reg_in_expr(captured, dst) {
+                            // Pure normalisation can be stated directly in the
+                            // call argument. Memory reads stay statement-rooted:
+                            // moving a load across an intervening store would
+                            // change its value, so the argument keeps referring
+                            // to that SSA definition instead.
+                            if is_pure_arg_normalisation(src) {
+                                let replaced = substitute_exact_reg(captured, dst, src);
+                                debug_assert!(replaced);
+                            }
+                            mark_arg_reads_in_expr(src, arch, &mut read_between);
+                            continue;
+                        }
+                    }
+                    // A genuinely unrelated second assignment to the same slot
+                    // remains a boundary: the later value is live at the call.
                     break;
                 }
             }
@@ -690,6 +712,89 @@ fn fold_one_call(
     used_stmt_indices.sort_by(|a, b| b.cmp(a));
     for idx in used_stmt_indices {
         body.remove(idx);
+    }
+}
+
+/// Replace an exact SSA register use inside an ordinary value expression.
+///
+/// Address components remain VRegs by construction, so they are only rewritten
+/// when the replacement is another bare register. `StackAddr` is storage
+/// identity and intentionally does not participate in scalar substitution.
+fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> bool {
+    match expr {
+        Expr::Reg(reg) if reg == target => {
+            *expr = replacement.clone();
+            true
+        }
+        Expr::Reg(_) | Expr::StackAddr { .. } => false,
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            let Expr::Reg(replacement) = replacement else {
+                return false;
+            };
+            let mut changed = false;
+            if base.as_ref() == Some(target) {
+                *base = Some(replacement.clone());
+                changed = true;
+            }
+            if index.as_ref() == Some(target) {
+                *index = Some(replacement.clone());
+                changed = true;
+            }
+            changed
+        }
+        Expr::Deref { addr, .. } => substitute_exact_reg(addr, target, replacement),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            let left = substitute_exact_reg(lhs, target, replacement);
+            let right = substitute_exact_reg(rhs, target, replacement);
+            left || right
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            let cond = substitute_exact_reg(cond, target, replacement);
+            let if_true = substitute_exact_reg(if_true, target, replacement);
+            let if_false = substitute_exact_reg(if_false, target, replacement);
+            cond || if_true || if_false
+        }
+        Expr::Un { src, .. } => substitute_exact_reg(src, target, replacement),
+        Expr::Cast { expr, .. } => substitute_exact_reg(expr, target, replacement),
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => false,
+    }
+}
+
+fn is_pure_arg_normalisation(expr: &Expr) -> bool {
+    match expr {
+        Expr::Deref { .. } | Expr::Unknown(_) => false,
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            is_pure_arg_normalisation(lhs) && is_pure_arg_normalisation(rhs)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            is_pure_arg_normalisation(cond)
+                && is_pure_arg_normalisation(if_true)
+                && is_pure_arg_normalisation(if_false)
+        }
+        Expr::Un { src, .. } => is_pure_arg_normalisation(src),
+        Expr::Cast { expr, .. } => is_pure_arg_normalisation(expr),
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => true,
     }
 }
 
@@ -856,6 +961,7 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
         | Expr::Unknown(_) => {}
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             if let Some(base) = base {
@@ -1035,6 +1141,7 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
 fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
     match e {
         Expr::Reg(r) => r == target,
+        Expr::StackAddr { object, .. } => object == target,
         Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }
@@ -2052,6 +2159,68 @@ mod tests {
             })
             .expect("the call must survive");
         assert_eq!(args, vec![Expr::Const(7)], "body was:\n{:#?}", f.body);
+    }
+
+    #[test]
+    fn ssa_normalisation_chain_of_one_argument_does_not_hide_earlier_slots() {
+        // Clang -O0 commonly zeroes edx and then emits the architectural
+        // zero-extension as a second SSA definition immediately before a call.
+        // Treating that as an unrelated second write stopped the entire backward
+        // scan and lost this, arg1, and arg3 as well as the zero argument.
+        let mut f = Function {
+            name: "clang_ctor_call".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Reg(reg("rsi#0")),
+                },
+                Stmt::Assign {
+                    dst: reg("rcx#1"),
+                    src: Expr::Reg(reg("rcx#0")),
+                },
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rbp"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("rdx#1"),
+                    src: Expr::Const(0),
+                },
+                Stmt::Assign {
+                    dst: reg("rdx#2"),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(reg("rdx#1"))),
+                    },
+                },
+                call_to("ctor"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {:#?}", f.body);
+        };
+        assert_eq!(
+            args.len(),
+            4,
+            "all contiguous ABI slots must survive: {f:#?}"
+        );
+        assert_eq!(
+            args[2],
+            Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(Expr::Const(0)),
+            }
+        );
     }
 
     /// On a VALUE-NUMBERED body the incoming value has a version, and only a

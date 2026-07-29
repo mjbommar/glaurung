@@ -443,6 +443,7 @@ fn contains_deref(e: &Expr) -> bool {
         | Expr::StringLit { .. }
         | Expr::Unknown(_)
         | Expr::Reg(_)
+        | Expr::StackAddr { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => false,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
@@ -468,6 +469,7 @@ fn invalidate_loads(copies: &mut Copies) {
 fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
     match e {
         Expr::Reg(r) => (r == target) as usize,
+        Expr::StackAddr { object, .. } => (object == target) as usize,
         Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }
@@ -498,6 +500,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
 fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
     match e {
         Expr::Reg(r) => *reads.entry(r.clone()).or_insert(0) += 1,
+        Expr::StackAddr { object, .. } => *reads.entry(object.clone()).or_insert(0) += 1,
         Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }
@@ -642,6 +645,9 @@ fn subst(e: &mut Expr, copies: &Copies) {
                 *e = src.clone();
             }
         }
+        // A stack object's identity is stable storage, not a scalar value to
+        // replace from the copy environment.
+        Expr::StackAddr { .. } => {}
         Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }

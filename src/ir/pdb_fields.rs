@@ -240,6 +240,7 @@ fn annotate_expr(expr: &mut Expr, field_map: &PdbFieldMap) {
             }
         }
         Expr::Reg(_)
+        | Expr::StackAddr { .. }
         | Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }

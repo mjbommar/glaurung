@@ -398,7 +398,12 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
 fn walk_expr_phys(e: &Expr, cb: &mut impl FnMut(&str)) {
     match e {
         Expr::Reg(VReg::Phys(n)) => cb(n),
+        Expr::StackAddr {
+            object: VReg::Phys(n),
+            ..
+        } => cb(n),
         Expr::Reg(_)
+        | Expr::StackAddr { .. }
         | Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }
@@ -443,6 +448,7 @@ fn rename_vreg(v: &mut VReg, role: &HashMap<String, String>) {
 fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
     match e {
         Expr::Reg(v) => rename_vreg(v, role),
+        Expr::StackAddr { object, .. } => rename_vreg(object, role),
         Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }

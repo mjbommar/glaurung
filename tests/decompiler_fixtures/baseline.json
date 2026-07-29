@@ -502,11 +502,11 @@
     "_ZN7DerivedD2Ev": "structural",
     "_ZN7MovableC2EOS_": "structural",
     "_ZN7MovableC2Ei": "structural",
-    "cpp_ctor_dtor": "structural",
+    "cpp_ctor_dtor": "pass",
     "cpp_exception": "fail",
     "cpp_lambda_capture": "fail",
     "cpp_move": "fail",
-    "cpp_raii_guard": "structural",
+    "cpp_raii_guard": "pass",
     "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:clang:O2": {
@@ -543,11 +543,11 @@
     "_ZN7MovableC1Ei": "structural",
     "_ZN7MovableC2EOS_": "structural",
     "_ZN7MovableC2Ei": "structural",
-    "cpp_ctor_dtor": "structural",
+    "cpp_ctor_dtor": "pass",
     "cpp_exception": "fail",
     "cpp_lambda_capture": "fail",
     "cpp_move": "fail",
-    "cpp_raii_guard": "structural",
+    "cpp_raii_guard": "pass",
     "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:gcc:O2": {

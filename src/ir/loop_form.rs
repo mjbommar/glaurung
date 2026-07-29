@@ -294,6 +294,7 @@ fn countdown_target(stmt: &Stmt) -> Option<&VReg> {
 fn contains_reg(expr: &Expr, target: &VReg) -> bool {
     match expr {
         Expr::Reg(reg) => reg == target,
+        Expr::StackAddr { object, .. } => object == target,
         Expr::Deref { addr, .. } => contains_reg(addr, target),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_reg(lhs, target) || contains_reg(rhs, target)
@@ -337,6 +338,7 @@ fn contains_const(expr: &Expr) -> bool {
         Expr::Un { src, .. } => contains_const(src),
         Expr::Cast { expr, .. } => contains_const(expr),
         Expr::Reg(_)
+        | Expr::StackAddr { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

@@ -290,6 +290,7 @@ fn contains_nested_read(s: &Stmt, dst: &VReg) -> bool {
 fn expr_reads(e: &Expr, dst: &VReg) -> bool {
     match e {
         Expr::Reg(r) => r == dst,
+        Expr::StackAddr { object, .. } => object == dst,
         Expr::Const(_)
         | Expr::Addr(_)
         | Expr::Named { .. }

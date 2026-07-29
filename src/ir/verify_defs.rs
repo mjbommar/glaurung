@@ -187,6 +187,9 @@ fn reads_expr(e: &Expr, out: &mut Vec<String>) {
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
+        // Taking a local object's address is legal before its scalar contents
+        // have been initialised; the callee may be the operation that writes it.
+        | Expr::StackAddr { .. }
         | Expr::Unknown(_) => {}
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             out.extend(base.as_ref().and_then(checked_name));

@@ -17,10 +17,10 @@
 //!
 //! Pointer arithmetic that isn't a concrete load/store (e.g. `rsp = rsp - 8`)
 //! is **not** touched — those are stack-pointer updates that should keep
-//! the `%rsp` form so a reader can see the prologue/epilogue shape.
-//! [`Expr::Lea`] references that *would* appear inside a store or load are
-//! folded; bare `Expr::Lea` taken of a stack slot stays untouched so it
-//! still reads as `&[%rsp+...]`.
+//! the `%rsp` form so a reader can see the prologue/epilogue shape. Address-valued
+//! call arguments are different: a constant frame-relative address is promoted
+//! to [`Expr::StackAddr`] so the C renderer passes `&local_N`, never arithmetic
+//! on an uninitialised `rbp`/`rsp` local.
 
 use std::collections::HashMap;
 
@@ -80,6 +80,7 @@ pub fn promote_stack_locals(f: &mut Function) {
 /// kept (the safest committed size).
 pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> HashMap<String, u8> {
     let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
+    let address_defs = collect_stack_address_defs(&f.body);
     let mut stack_counter = 0usize;
     let mut local_counter = 0usize;
     let ctx = StackContext { cc };
@@ -91,6 +92,7 @@ pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> Has
         &mut local_counter,
         ctx,
         &mut sp_delta,
+        &address_defs,
     );
     map.into_values()
         .map(|slot| (slot.name, slot.declared_size))
@@ -124,6 +126,7 @@ fn rewrite_body(
     local_counter: &mut usize,
     ctx: StackContext,
     sp_delta: &mut Option<i64>,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) {
     for s in body.iter_mut() {
         match s {
@@ -154,6 +157,15 @@ fn rewrite_body(
                 rewrite_expr(target, map, stack_counter, local_counter, ctx, *sp_delta);
                 for a in args {
                     rewrite_expr(a, map, stack_counter, local_counter, ctx, *sp_delta);
+                    promote_address_taken_stack_object(
+                        a,
+                        map,
+                        stack_counter,
+                        local_counter,
+                        ctx,
+                        *sp_delta,
+                        address_defs,
+                    );
                 }
             }
             Stmt::Return { value } => {
@@ -176,10 +188,19 @@ fn rewrite_body(
                     local_counter,
                     ctx,
                     &mut then_delta,
+                    address_defs,
                 );
                 let mut else_delta = incoming;
                 if let Some(eb) = else_body {
-                    rewrite_body(eb, map, stack_counter, local_counter, ctx, &mut else_delta);
+                    rewrite_body(
+                        eb,
+                        map,
+                        stack_counter,
+                        local_counter,
+                        ctx,
+                        &mut else_delta,
+                        address_defs,
+                    );
                 }
                 *sp_delta = merge_stack_deltas(then_delta, else_delta);
             }
@@ -194,6 +215,7 @@ fn rewrite_body(
                     local_counter,
                     ctx,
                     &mut body_delta,
+                    address_defs,
                 );
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
             }
@@ -210,6 +232,7 @@ fn rewrite_body(
                     local_counter,
                     ctx,
                     sp_delta,
+                    address_defs,
                 );
                 rewrite_expr(cond, map, stack_counter, local_counter, ctx, *sp_delta);
                 let loop_entry = *sp_delta;
@@ -221,6 +244,7 @@ fn rewrite_body(
                     local_counter,
                     ctx,
                     &mut body_delta,
+                    address_defs,
                 );
                 rewrite_body(
                     std::slice::from_mut(step.as_mut()),
@@ -229,6 +253,7 @@ fn rewrite_body(
                     local_counter,
                     ctx,
                     &mut body_delta,
+                    address_defs,
                 );
                 *sp_delta = merge_stack_deltas(loop_entry, body_delta);
             }
@@ -242,6 +267,7 @@ fn rewrite_body(
                     local_counter,
                     ctx,
                     &mut body_delta,
+                    address_defs,
                 );
                 rewrite_expr(cond, map, stack_counter, local_counter, ctx, body_delta);
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
@@ -274,6 +300,7 @@ fn rewrite_body(
                         local_counter,
                         ctx,
                         &mut case_delta,
+                        address_defs,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, case_delta),
@@ -289,6 +316,7 @@ fn rewrite_body(
                         local_counter,
                         ctx,
                         &mut default_delta,
+                        address_defs,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, default_delta),
@@ -439,11 +467,148 @@ fn rewrite_expr(
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::Addr(_)
+        | Expr::StackAddr { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. }
         | Expr::Named { .. }
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => {}
+    }
+}
+
+/// Recover a constant stack/frame-relative call argument as the address of a
+/// real C object. angr represents the same fact with `StackBaseOffset`; Ghidra
+/// gives its stack pointer a `TypeSpacebase` and resolves offsets through the
+/// function's local symbol map. The important invariant is shared: a stack
+/// address is storage identity, not an integer expression over a renderable
+/// machine register.
+fn promote_address_taken_stack_object(
+    expr: &mut Expr,
+    map: &mut HashMap<SlotKey, SlotVal>,
+    stack_counter: &mut usize,
+    local_counter: &mut usize,
+    ctx: StackContext,
+    sp_delta: Option<i64>,
+    address_defs: &HashMap<VReg, (String, i64)>,
+) {
+    let recovered = constant_stack_address(expr).or_else(|| match expr {
+        Expr::Reg(reg) => address_defs.get(reg).cloned(),
+        _ => None,
+    });
+    let Some((base, disp)) = recovered else {
+        return;
+    };
+    let (key_base, key_disp) = normalized_stack_slot(&base, disp, sp_delta);
+    let key = SlotKey {
+        base: key_base.clone(),
+        disp: key_disp,
+    };
+    let pointer_size = match ctx.cc {
+        Some(CallConv::Cdecl32 | CallConv::Arm) => 4,
+        Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64) | None => 8,
+    };
+    let entry = map.entry(key).or_insert_with(|| SlotVal {
+        name: alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx),
+        declared_size: pointer_size,
+        span_size: pointer_size,
+    });
+    let object = VReg::phys(entry.name.clone());
+    // A frame-local object starts at a negative offset and grows toward the
+    // frame base on the supported downward-growing stacks. Reserving the whole
+    // interval to the base is conservative (it may include padding or adjacent
+    // machine slots), but unlike a pointer-sized scalar it cannot be overrun by
+    // a constructor whose recovered source type is not yet known. Cap at the C
+    // representation's bounded u16 extent so hostile displacements cannot make
+    // the renderer request an unbounded object.
+    let size = if key_disp < 0 {
+        u16::try_from(key_disp.unsigned_abs())
+            .unwrap_or(u16::MAX)
+            .max(u16::from(pointer_size))
+    } else {
+        u16::from(pointer_size)
+    };
+    *expr = Expr::StackAddr { object, size };
+}
+
+/// Recover definitions that carry a constant frame/stack address into a call.
+///
+/// These registers are already SSA-versioned by the value model (`rax#4`,
+/// `rax#8`, ...), so their identity is path-stable. Keeping this small semantic
+/// map is the minimum equivalent of looking through an AIL virtual-variable or
+/// a Ghidra Varnode definition; it avoids asking the general expression pass to
+/// move an address computation across unrelated effects.
+fn collect_stack_address_defs(body: &[Stmt]) -> HashMap<VReg, (String, i64)> {
+    fn walk_direct(body: &[Stmt], out: &mut HashMap<VReg, (String, i64)>) {
+        for stmt in body {
+            match stmt {
+                Stmt::Assign { dst, src } => {
+                    if let Some(address) = constant_stack_address(src) {
+                        out.insert(dst.clone(), address);
+                    }
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    walk_direct(then_body, out);
+                    if let Some(body) = else_body {
+                        walk_direct(body, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => walk_direct(body, out),
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    walk_direct(std::slice::from_ref(init.as_ref()), out);
+                    walk_direct(body, out);
+                    walk_direct(std::slice::from_ref(step.as_ref()), out);
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, body) in cases {
+                        walk_direct(body, out);
+                    }
+                    if let Some(body) = default {
+                        walk_direct(body, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut defs = HashMap::new();
+    walk_direct(body, &mut defs);
+    defs
+}
+
+fn constant_stack_address(expr: &Expr) -> Option<(String, i64)> {
+    match expr {
+        Expr::Lea {
+            base: Some(VReg::Phys(base)),
+            index: None,
+            disp,
+            segment: None,
+            ..
+        } if is_stack_base(base) => Some((base.clone(), *disp)),
+        Expr::Bin { op, lhs, rhs } => {
+            let Expr::Reg(VReg::Phys(base)) = lhs.as_ref() else {
+                return None;
+            };
+            let Expr::Const(amount) = rhs.as_ref() else {
+                return None;
+            };
+            if !is_stack_base(base) {
+                return None;
+            }
+            let disp = match op {
+                crate::ir::types::BinOp::Add => *amount,
+                crate::ir::types::BinOp::Sub => amount.checked_neg()?,
+                _ => return None,
+            };
+            Some((base.clone(), disp))
+        }
+        _ => None,
     }
 }
 
@@ -927,6 +1092,121 @@ mod tests {
         };
         assert_eq!(store_name, Expr::Reg(reg("local_c")));
         assert_eq!(load_name, Expr::Reg(reg("local_c")));
+    }
+
+    #[test]
+    fn lea_call_argument_becomes_address_of_the_same_recovered_object() {
+        let mut f = Function {
+            name: "construct".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "Widget::Widget".into(),
+                    },
+                    args: vec![lea("rbp", -0x20)],
+                    dst: None,
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("rbp", -0x20, 4),
+                },
+            ],
+        };
+
+        let sizes = promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Call { args, .. } = &f.body[0] else {
+            panic!("expected call");
+        };
+        assert_eq!(
+            args,
+            &[Expr::StackAddr {
+                object: reg("local_20"),
+                size: 32,
+            }]
+        );
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "local_20"
+        ));
+        assert_eq!(sizes.get("local_20"), Some(&4));
+    }
+
+    #[test]
+    fn reconstructed_frame_arithmetic_call_argument_becomes_stack_object_address() {
+        let mut f = Function {
+            name: "construct_after_expression_reconstruction".into(),
+            entry_va: 0,
+            body: vec![Stmt::Call {
+                target: Expr::Addr(0x1000),
+                args: vec![Expr::Bin {
+                    op: crate::ir::types::BinOp::Sub,
+                    lhs: Box::new(Expr::Reg(reg("rbp"))),
+                    rhs: Box::new(Expr::Const(32)),
+                }],
+                dst: None,
+            }],
+        };
+
+        let sizes = promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Call { args, .. } = &f.body[0] else {
+            panic!("expected call");
+        };
+        assert_eq!(
+            args,
+            &[Expr::StackAddr {
+                object: reg("local_20"),
+                size: 32,
+            }]
+        );
+        assert_eq!(sizes.get("local_20"), Some(&8));
+    }
+
+    #[test]
+    fn stack_address_definition_reaching_a_call_is_materialised() {
+        // GCC -O0 computes `rax#4 = rbp - 32`, then argument reconstruction
+        // passes `rax#4` to the constructor. The address-producing definition
+        // is not adjacent to the call, so ordinary expression reconstruction
+        // deliberately leaves it statement-rooted.
+        let address = reg("rax#4");
+        let mut f = Function {
+            name: "construct_via_value".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: address.clone(),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rbp"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    },
+                },
+                Stmt::Call {
+                    target: Expr::Addr(0x1000),
+                    args: vec![Expr::Reg(address)],
+                    dst: None,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Call { args, .. } = &f.body[1] else {
+            panic!("expected call");
+        };
+        assert_eq!(
+            args,
+            &[Expr::StackAddr {
+                object: reg("local_20"),
+                size: 32,
+            }]
+        );
     }
 
     #[test]

@@ -468,11 +468,7 @@
     "06_calling_conventions:sum_arg6": [],
     "06_calling_conventions:sum_arg7": [],
     "07_packet_parser:parse_packet": [
-      "local_12 is read but never defined",
-      "local_14 is read but never defined",
-      "local_15 is read but never defined",
-      "local_16 is read but never defined",
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
+      "local_18 is read but never defined"
     ],
     "07_packet_parser:validate_header": [],
     "08_indirect_dispatch:apply": [],
@@ -486,24 +482,16 @@
     "09_memory_effects:tick": [],
     "09_memory_effects:vec_sum": [],
     "09_memory_effects:vec_transform": [],
-    "10_cpp_runtime_shapes:cpp_ctor_dtor": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
-    ],
+    "10_cpp_runtime_shapes:cpp_ctor_dtor": [],
     "10_cpp_runtime_shapes:cpp_exception": [
       "var0 is read but never defined"
     ],
-    "10_cpp_runtime_shapes:cpp_lambda_capture": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
-    ],
+    "10_cpp_runtime_shapes:cpp_lambda_capture": [],
     "10_cpp_runtime_shapes:cpp_move": [
-      "local_18 is read but never defined",
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
+      "local_18 is read but never defined"
     ],
-    "10_cpp_runtime_shapes:cpp_raii_guard": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
-    ],
+    "10_cpp_runtime_shapes:cpp_raii_guard": [],
     "10_cpp_runtime_shapes:cpp_virtual_dispatch": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
       "var0 is read but never defined"
     ],
     "11_call_shapes:call_accumulate_bytes": [],

@@ -142,6 +142,7 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
         Expr::Un { src, .. } => resolve_expr(src, addr_map),
         Expr::Cast { expr, .. } => resolve_expr(expr, addr_map),
         Expr::Reg(_)
+        | Expr::StackAddr { .. }
         | Expr::Const(_)
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. }
