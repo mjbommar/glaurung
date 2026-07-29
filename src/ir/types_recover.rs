@@ -156,6 +156,7 @@ impl TypeMap {
 #[derive(Debug, Default, Clone)]
 pub struct TypeMapV {
     inner: HashMap<SsaValue, TypeHint>,
+    parameter_refinements: HashMap<SsaValue, TypeHint>,
 }
 
 impl TypeMapV {
@@ -174,12 +175,37 @@ impl TypeMapV {
         before != Some(merged)
     }
 
+    fn upsert_parameter_refinement(&mut self, value: SsaValue, hint: TypeHint) -> bool {
+        let before = self.parameter_refinements.get(&value).copied();
+        let merged = merge_type_hint(before, hint);
+        self.parameter_refinements.insert(value, merged);
+        before != Some(merged)
+    }
+
     /// Project only entry definitions back to a compatibility map. This is a
     /// lossless projection for ABI parameters: version zero is the unique
     /// caller-supplied value, while later scratch lifetimes remain excluded.
     pub fn live_in_types(&self) -> TypeMap {
         let mut out = TypeMap::default();
         for (value, hint) in &self.inner {
+            if value.version == 0 {
+                out.upsert(value.base.clone(), *hint);
+            }
+        }
+        out
+    }
+
+    /// Entry-value facts strong enough to change a rendered parameter today.
+    ///
+    /// The full value map is analysis evidence, but output-facing prototype
+    /// recovery is not yet a fixed point with function boundaries and callee
+    /// prototypes. Until that architecture lands, qualify only the concrete
+    /// O0 chain `live-in -> frame spill -> reload -> dereference`; projecting
+    /// every live-in fact can replace a better legacy prototype with evidence
+    /// from an over-discovered tail or an unknown direct callee.
+    pub fn parameter_refinements(&self) -> TypeMap {
+        let mut out = TypeMap::default();
+        for (value, hint) in &self.parameter_refinements {
             if value.version == 0 {
                 out.upsert(value.base.clone(), *hint);
             }
@@ -1090,8 +1116,9 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                         };
                         if let Some(TypeHint::Pointer { pointee_width }) = tm.get(dst) {
                             for source in sources {
-                                changed |=
-                                    tm.upsert(source.clone(), TypeHint::Pointer { pointee_width });
+                                let hint = TypeHint::Pointer { pointee_width };
+                                changed |= tm.upsert(source.clone(), hint);
+                                changed |= tm.upsert_parameter_refinement(source.clone(), hint);
                             }
                         }
                     }
@@ -1694,6 +1721,7 @@ mod tests {
         .expect("lift str_cmp");
         let ssa = compute_ssa(&lifted);
         let tm = recover_types_valued(&lifted, &ssa);
+        let refinements = tm.parameter_refinements();
 
         for register in ["rdi", "rsi"] {
             assert_eq!(
@@ -1704,7 +1732,46 @@ mod tests {
                 Some(TypeHint::Pointer { pointee_width: 1 }),
                 "{register} must retain its caller-supplied string-pointer type through the spill"
             );
+            assert_eq!(
+                refinements.get(&VReg::phys(register)),
+                Some(TypeHint::Pointer { pointee_width: 1 }),
+                "{register} has the spill/reload/dereference proof required to refine a rendered parameter"
+            );
         }
+    }
+
+    #[test]
+    fn direct_live_in_fact_is_not_yet_a_rendered_parameter_refinement() {
+        // A direct memory use proves that this SSA value is address-bearing,
+        // but it is not enough to rewrite the source prototype while function
+        // boundaries and recovered callees are still incomplete. The first
+        // output-facing slice deliberately accepts only the stronger O0
+        // spill/reload/dereference chain exercised above.
+        let lf = mk_block(vec![Op::Load {
+            dst: VReg::phys("eax"),
+            addr: MemOp {
+                base: Some(VReg::phys("rdi")),
+                index: None,
+                scale: 1,
+                disp: 0,
+                size: 4,
+                ..Default::default()
+            },
+        }]);
+        let ssa = compute_ssa(&lf);
+        let tm = recover_types_valued(&lf, &ssa);
+
+        assert_eq!(
+            tm.get(&SsaValue {
+                base: VReg::phys("rdi"),
+                version: 0,
+            }),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+        assert!(
+            tm.parameter_refinements().is_empty(),
+            "unqualified live-in facts must remain analysis evidence, not rendered prototype facts"
+        );
     }
 
     #[test]

@@ -980,11 +980,12 @@ fn decbench_type_maps(
 ) {
     use crate::ir::types_recover::{recover_types_for, recover_types_valued};
     let mut decl = remap_type_map(&recover_types_for(lf_raw, cc), f, cc, param_slots);
-    let live_ins = recover_types_valued(lf_raw, ssa).live_in_types();
+    let live_ins = recover_types_valued(lf_raw, ssa).parameter_refinements();
     let live_ins = remap_type_map(&live_ins, f, cc, param_slots);
-    // A version-zero value is the exact caller-supplied parameter. Refine the
-    // flow-insensitive raw-register union's semantic class for those roles;
-    // later lifetimes of the same storage must not retype the parameter.
+    // Only entry values with the qualified spill/reload/dereference proof are
+    // allowed to refine a rendered role. The complete version-zero map remains
+    // available to analysis, but prototype recovery is not yet a fixed point
+    // with function boundaries and direct-callee types.
     for slot in param_slots {
         let role = crate::ir::types::VReg::Phys(format!("arg{slot}"));
         if let Some(hint) = live_ins.get(&role) {
