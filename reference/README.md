@@ -44,11 +44,12 @@ consulted directly from their upstream repository.
 - **unicorn**: Lightweight CPU emulator engine
 
 ## Decompilers
-- **[kuna](https://github.com/Noelo-Lab/kuna)** *(external)*: Rust, agent-first decompiler
+- **[kuna](https://github.com/Noelo-Lab/kuna)**: Rust, agent-first decompiler
   derived from Ghidra, with a phase-addressed P0-P9 pipeline, an explicit
   SSA/call/type/variable fixed-point band, tunable transforms, and a DecBench
   refinement loop. Use it as an active architecture and measurement comparator,
-  not only as a source of test cases.
+  not only as a source of test cases. The `reference/kuna` submodule pins the
+  revision used by Glaurung's design and benchmark audits.
 - **retdec**: Machine code to high-level language decompiler
 - **reko**: Open source decompiler for machine code binaries
 - **b2r2**: Binary analysis framework with advanced IR lifting and decompilation

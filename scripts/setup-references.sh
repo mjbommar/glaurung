@@ -36,6 +36,7 @@ declare -A SUBMODULES=(
     ["reference/object"]="https://github.com/gimli-rs/object.git"
 
     # Decompilers
+    ["reference/kuna"]="https://github.com/Noelo-Lab/kuna.git"
     ["reference/pycdc"]="https://github.com/zrax/pycdc.git"
     ["reference/falcon"]="https://github.com/falconre/falcon.git"
 

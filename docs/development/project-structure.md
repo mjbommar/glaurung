@@ -19,6 +19,8 @@ glaurung/
 │   └── project-structure.md
 ├── reference/              # Reference implementations for study
 │   ├── angr/              # Binary analysis platform
+│   ├── ghidra/            # Production decompiler architecture reference
+│   ├── kuna/              # Rust decompiler and DecBench comparator
 │   ├── cle/               # Binary loader
 │   ├── claripy/           # Constraint solver
 │   └── LIEF/              # Binary instrumentation
@@ -47,6 +49,8 @@ Technical documentation, guides, and references.
 ### Reference Implementations (`reference/`)
 Included for study and design inspiration:
 - **angr**: Symbolic execution and binary analysis
+- **ghidra**: Production reverse-engineering and decompiler reference
+- **kuna**: Rust decompiler with a phase-addressed typed SSA pipeline
 - **cle**: Cross-platform binary loading
 - **claripy**: Abstract constraint solving
 - **LIEF**: Binary format instrumentation

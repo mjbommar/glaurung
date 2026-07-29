@@ -131,3 +131,6 @@
 [submodule "reference/falcon"]
 	path = reference/falcon
 	url = https://github.com/falconre/falcon.git
+[submodule "reference/kuna"]
+	path = reference/kuna
+	url = https://github.com/Noelo-Lab/kuna.git
