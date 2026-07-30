@@ -32,7 +32,7 @@ selectors = [
 ]
 
 [region]
-description = "The Phase 4 region-ownership set — 179 pass / 13 fail in the current baseline."
+description = "The Phase 4 region-ownership set — 181 pass / 11 fail in the current baseline."
 selectors = [
     "03_loop_shapes",
     "04_switch_shapes",
@@ -45,7 +45,7 @@ description = "Switch and ladder recovery (04) — all 64 cells pass in the curr
 selectors = ["04_switch_shapes"]
 
 [loops]
-description = "Every loop shape: plain (03), rotated (12), early-exit (13) — 115 pass / 13 fail."
+description = "Every loop shape: plain (03), rotated (12), early-exit (13) — 117 pass / 11 fail."
 selectors = ["03_loop_shapes", "12_loop_rotation", "13_loop_early_exit"]
 
 [early-exit]
@@ -81,5 +81,5 @@ description = "Every fixture at -O2, both compilers. Where cmov, merged values a
 selectors = ["*:gcc:O2", "*:clang:O2"]
 
 [clang-o0]
-description = "Every Clang -O0 fixture — 125 pass / 14 fail / 19 structural behavior cells."
+description = "Every Clang -O0 fixture — 127 pass / 12 fail / 19 structural behavior cells."
 selectors = ["*:clang:O0"]

@@ -117,6 +117,45 @@ def test_batch_decompile_returns_every_requested_real_function():
     assert "batch_mul(" in recovered[exported["batch_mul"]]
 
 
+def test_round_trip_includes_a_referenced_local_static_callee() -> None:
+    """A correct caller must not fail merely because its callee is local.
+
+    Linking the standalone decompiled caller against the original shared object
+    supplies exported siblings, but ELF local symbols are not visible to the
+    dynamic linker. The harness must include Glaurung's decompilation of that
+    exact local callee so the differential reaches behavior instead of crashing
+    at ``dlopen`` with ``undefined symbol``.
+    """
+    binary = _compile_so(
+        "static __attribute__((noinline)) int local_step(int x) {\n"
+        "    return (x * 5 + 1) & 7;\n"
+        "}\n"
+        "int calls_local_step(int x) {\n"
+        "    int total = 0;\n"
+        "    for (int i = 0; i < 8; i++) { x = local_step(x); total += x; }\n"
+        "    return total;\n"
+        "}",
+        "local_static_callee",
+    )
+    signature = next(
+        sig for sig in D.signatures(binary) if sig["name"] == "calls_local_step"
+    )
+    caller = D.decompiled_c(binary, signature["va"])
+    assert caller is not None
+    assert "local_step(" in caller
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        result = D.run_function(
+            signature,
+            "fx",
+            binary,
+            Path(td),
+            seed=1234,
+            fuzz=24,
+        )
+    assert result["status"] == "pass", result
+
+
 def test_real_optimized_shared_store_and_return_keeps_declared_output_contract():
     """Debug contracts disambiguate optimized store-only and returned values.
 

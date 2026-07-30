@@ -37,6 +37,7 @@ import ctypes
 import hashlib
 import json
 import random
+import re
 import signal
 import subprocess
 import sys
@@ -240,6 +241,29 @@ def exported_symbols(binary: str) -> set[str]:
     return set(exported_functions(binary))
 
 
+def defined_functions(binary: str) -> dict[str, int]:
+    """Every named, defined ELF function in ``.symtab``.
+
+    Unlike ``exported_functions``, this includes local/static functions. A
+    stripped binary may have no full symbol table; returning an empty map keeps
+    local-callee completion fail-closed and lets the existing unresolved-symbol
+    verdict describe the limitation.
+    """
+    out: dict[str, int] = {}
+    with open(binary, "rb") as fh:
+        symtab = ELFFile(fh).get_section_by_name(".symtab")
+        if symtab is None:
+            return out
+        for symbol in symtab.iter_symbols():  # ty: ignore[unresolved-attribute]
+            if (
+                symbol.name
+                and symbol["st_info"]["type"] in ("STT_FUNC", "STT_GNU_IFUNC")
+                and symbol["st_shndx"] != "SHN_UNDEF"
+            ):
+                out.setdefault(symbol.name, symbol["st_value"])
+    return out
+
+
 def signatures(binary: str) -> list[dict]:
     out = []
     with open(binary, "rb") as fh:
@@ -359,6 +383,81 @@ def decompiled_many_c(binary: str, vas: list[int]) -> dict[int, str]:
             line for line in code.splitlines() if not line.strip().startswith("//")
         )
     return recovered
+
+
+_EXTERN_FUNCTION_DECL = re.compile(
+    r"(?m)^[ \t]*extern[ \t]+[^;\n{}()]*?\b"
+    r"(?P<name>[A-Za-z_]\w*)[ \t]*\([^;\n{}]*\)[ \t]*;[ \t]*\n?"
+)
+
+
+def include_referenced_local_callees(binary: str, root_c: str) -> str:
+    """Prepend decompiled definitions for local callees named by ``root_c``.
+
+    A standalone decompiled function is normally linked against the original
+    fixture so calls to exported siblings retain their real behavior. ELF local
+    symbols cannot be resolved by that dynamic link. Glaurung already recovered
+    their exact symbol names and call targets, so recursively decompile those
+    referenced local functions and compile them into the differential object.
+
+    Resolution is exact and bounded: only ``extern`` declarations whose name is
+    present in the original ``.symtab`` are considered, and at most 32 helpers
+    are included. Missing/stripped/ambiguous cases remain unresolved and fail as
+    before rather than substituting guessed behavior.
+    """
+    if _EXTERN_FUNCTION_DECL.search(root_c) is None:
+        return root_c
+
+    local = {
+        name: va
+        for name, va in defined_functions(binary).items()
+        if name not in exported_functions(binary)
+    }
+    if not local:
+        return root_c
+
+    snippets: dict[str, str] = {}
+    visiting: set[str] = set()
+
+    def references(code: str) -> list[str]:
+        return list(
+            dict.fromkeys(
+                match.group("name")
+                for match in _EXTERN_FUNCTION_DECL.finditer(code)
+                if match.group("name") in local
+            )
+        )
+
+    def visit(name: str) -> None:
+        if (
+            name in snippets
+            or name in visiting
+            or len(snippets) + len(visiting) >= 32
+        ):
+            return
+        visiting.add(name)
+        helper = decompiled_c(binary, local[name])
+        if helper is not None:
+            for dependency in references(helper):
+                visit(dependency)
+            snippets[name] = helper
+        visiting.remove(name)
+
+    for name in references(root_c):
+        visit(name)
+    if not snippets:
+        return root_c
+
+    included = set(snippets)
+
+    def remove_included_declaration(match: re.Match[str]) -> str:
+        return "" if match.group("name") in included else match.group(0)
+
+    ordered = [
+        _EXTERN_FUNCTION_DECL.sub(remove_included_declaration, code)
+        for code in [*snippets.values(), root_c]
+    ]
+    return "\n".join(ordered)
 
 
 def build_so(
@@ -827,6 +926,7 @@ def run_function(
     )
     if c is None:
         return {"status": "fail", "detail": "decompile failed"}
+    c = include_referenced_local_callees(binary, c)
     dec_so = build_so(c, workdir, f"dec_{name}", link_against=binary)
     if dec_so is None:
         return {"status": "fail", "detail": "decompiled C failed to compile"}

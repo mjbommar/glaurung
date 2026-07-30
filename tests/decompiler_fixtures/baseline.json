@@ -161,7 +161,7 @@
   },
   "03_loop_shapes:clang:O0": {
     "cond_reload_and_transform": "fail",
-    "cond_side_effect": "fail",
+    "cond_side_effect": "pass",
     "dowhile_atleastonce": "pass",
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
@@ -201,7 +201,7 @@
   },
   "03_loop_shapes:gcc:O0": {
     "cond_reload_and_transform": "pass",
-    "cond_side_effect": "fail",
+    "cond_side_effect": "pass",
     "dowhile_atleastonce": "pass",
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
@@ -405,7 +405,7 @@
   },
   "07_packet_parser:clang:O0": {
     "parse_packet": "fail",
-    "validate_header": "fail"
+    "validate_header": "pass"
   },
   "07_packet_parser:clang:O2": {
     "parse_packet": "pass",
@@ -413,7 +413,7 @@
   },
   "07_packet_parser:gcc:O0": {
     "parse_packet": "fail",
-    "validate_header": "fail"
+    "validate_header": "pass"
   },
   "07_packet_parser:gcc:O2": {
     "parse_packet": "fail",
