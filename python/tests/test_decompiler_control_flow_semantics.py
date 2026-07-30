@@ -73,9 +73,23 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
     switch_open = code.find("{", switch_at)
     switch_close = _matching_brace(code, switch_open)
     switch_body = code[switch_open:switch_close]
-    for case in (0, 1, 2):
+    for case in (0, 1, 2, 3):
         assert f"case {case}:" in switch_body, code
     assert switch_body.count("break;") >= 3, code
+
+    # The terminating case is built with a borrowed view of the shared
+    # epilogue. Its case-local setup still belongs to the switch; if ownership
+    # is not committed, `build_full` appends that block after the function's
+    # ordinary return as an unreachable assignment + goto. The final
+    # substantive top-level statement must therefore remain the real return.
+    function_open = code.find("{")
+    function_close = _matching_brace(code, function_open)
+    substantive = [
+        line.strip()
+        for line in code[function_open + 1 : function_close].splitlines()
+        if line.strip() and not line.lstrip().startswith("//")
+    ]
+    assert substantive[-1].startswith("return "), code
 
     explicit_latch = re.search(
         r"(?m)^\s*([A-Za-z_]\w*)\s*=.*\(\1\s*\+\s*1\)",

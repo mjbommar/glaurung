@@ -1665,6 +1665,27 @@ fn contains_multiway_before(start: usize, boundary: usize, cfg: &Cfg) -> bool {
     false
 }
 
+/// Commit the blocks a switch arm uniquely owns while leaving a shared tail
+/// available to the enclosing region.
+///
+/// A switch arm inside a natural loop can leave through a case-local block and
+/// then enter the same epilogue as the loop's ordinary exit. The dispatch
+/// dominates the case-local path, but not that shared epilogue, so dominance is
+/// the ownership boundary missing from a loop-membership-only filter.
+fn commit_borrowed_switch_arm(
+    dispatch: usize,
+    loop_body: &HashSet<usize>,
+    cfg: &Cfg,
+    borrowed: HashSet<usize>,
+    visited: &mut HashSet<usize>,
+) {
+    visited.extend(
+        borrowed
+            .into_iter()
+            .filter(|&block| loop_body.contains(&block) || cfg.dominates(dispatch, block)),
+    );
+}
+
 /// Recognise a switch dispatch (#193).
 ///
 /// Pattern: `cur` has N>=3 successors. Each arm should have `cur` as
@@ -1724,14 +1745,12 @@ fn detect_switch_shape(
             // Case-local returns may pass through a function epilogue outside
             // the loop. Render that path in the case, but do not globally claim
             // the shared epilogue: the loop-exit and pre-loop paths still need
-            // it at function scope. Only loop-body ownership is committed.
+            // it at function scope. Case-local blocks dominated by the
+            // dispatch are uniquely owned even when they sit outside the
+            // natural-loop body.
             let mut arm_visited = visited.clone();
             let arm = build(a, cfg, &mut arm_visited, arm_stop);
-            visited.extend(
-                arm_visited
-                    .into_iter()
-                    .filter(|block| loop_body.contains(block)),
-            );
+            commit_borrowed_switch_arm(dispatch, loop_body, cfg, arm_visited, visited);
             arm
         } else {
             build(a, cfg, visited, arm_stop)
@@ -1815,11 +1834,7 @@ fn detect_guarded_switch_shape(
         } else if let Some((_, loop_body)) = &enclosing_loop {
             let mut arm_visited = visited.clone();
             let region = build(arm, cfg, &mut arm_visited, join);
-            visited.extend(
-                arm_visited
-                    .into_iter()
-                    .filter(|block| loop_body.contains(block)),
-            );
+            commit_borrowed_switch_arm(dispatch, loop_body, cfg, arm_visited, visited);
             region
         } else {
             build(arm, cfg, visited, join)

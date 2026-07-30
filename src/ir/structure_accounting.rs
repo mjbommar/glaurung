@@ -798,6 +798,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_statemachine_terminating_case_is_owned_once() {
+        let errs = account_recovered(&statemachine_shape());
+        assert!(
+            !errs
+                .iter()
+                .any(|error| matches!(error, AccountError::BlockDuplicated { block: 5, .. })),
+            "the terminating switch case must not be appended again as leftover: {errs:?}"
+        );
+    }
+
     // --- controls: shapes we DO structure correctly must stay silent -----------
 
     /// Control: a plain diamond. Both arms reconverge at a real join.
