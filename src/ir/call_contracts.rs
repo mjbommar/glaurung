@@ -321,6 +321,18 @@ fn recover_call_site_spec_with_types(
 }
 
 fn recovered_argument_type(argument: &Expr, types: Option<&TypeMap>) -> &'static str {
+    fn arithmetic_type(left: &'static str, right: &'static str) -> &'static str {
+        if left == "double" || right == "double" {
+            "double"
+        } else if left == "float" || right == "float" {
+            "float"
+        } else if left == right {
+            left
+        } else {
+            "long"
+        }
+    }
+
     match argument {
         Expr::Reg(register) => types
             .and_then(|types| types.get(register))
@@ -368,6 +380,16 @@ fn recovered_argument_type(argument: &Expr, types: Option<&TypeMap>) -> &'static
         Expr::Select { width: 1, .. } => "signed char",
         Expr::Select { width: 2, .. } => "short",
         Expr::Select { width: 4, .. } => "int",
+        Expr::Bin { lhs, rhs, .. } => arithmetic_type(
+            recovered_argument_type(lhs, types),
+            recovered_argument_type(rhs, types),
+        ),
+        Expr::Select {
+            if_true, if_false, ..
+        } => arithmetic_type(
+            recovered_argument_type(if_true, types),
+            recovered_argument_type(if_false, types),
+        ),
         Expr::Un { src, .. } => recovered_argument_type(src, types),
         _ => "long",
     }
@@ -668,6 +690,55 @@ mod tests {
             ["int", "const char *"]
         );
         assert!(!contract.is_variadic);
+    }
+
+    #[test]
+    fn math_contract_preserves_unary_float_storage_class() {
+        let contract = lookup("asinf@plt").expect("asinf belongs in the libc catalog");
+
+        assert_eq!(contract.return_type, "float");
+        assert_eq!(
+            contract
+                .params
+                .iter()
+                .map(|parameter| parameter.c_type.as_str())
+                .collect::<Vec<_>>(),
+            ["float"]
+        );
+        assert!(!contract.is_variadic);
+    }
+
+    #[test]
+    fn recovered_composite_float_argument_retains_its_storage_class() {
+        let mut function = Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![named_call(
+                "arm_sqrt",
+                vec![Expr::Bin {
+                    op: crate::ir::types::BinOp::Add,
+                    lhs: Box::new(Expr::Reg(VReg::phys("s14"))),
+                    rhs: Box::new(Expr::Reg(VReg::phys("s15"))),
+                }],
+                Some(VReg::phys("s0")),
+            )],
+        };
+        let mut types = TypeMap::default();
+        for register in ["s0", "s14", "s15"] {
+            types.upsert_public(VReg::phys(register), TypeHint::Float { width: 4 });
+        }
+
+        super::refine_call_site_specs(&mut function, Some(&types));
+
+        let Stmt::Call {
+            call_spec: Some(call_spec),
+            ..
+        } = &function.body[0]
+        else {
+            panic!("expected a refined call specification")
+        };
+        assert_eq!(call_spec.call_prototype.return_type, "float");
+        assert_eq!(call_spec.call_prototype.parameter_types, ["float"]);
     }
 
     #[test]

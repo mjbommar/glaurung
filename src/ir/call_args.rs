@@ -829,6 +829,90 @@ fn direct_call_target_va(statement: &Stmt) -> Option<u64> {
     }
 }
 
+/// Source-ordered AAPCS-VFP storage selected by a locked library prototype.
+///
+/// The core and VFP banks advance independently. This is exactly why a flat
+/// liveness-derived register prefix cannot reconstruct mixed hard-float calls:
+/// `int, float, int` occupies `r0, s0, r1`, while two floats occupy `s0, s1`.
+/// Stack-spilled and variadic layouts are withheld until the AST models their
+/// outgoing storage explicitly.
+fn known_arm_hard_float_layout(statement: &Stmt) -> Option<Vec<VReg>> {
+    let name = match statement {
+        Stmt::Call {
+            target: Expr::Named { name, .. },
+            ..
+        } => name,
+        _ => return None,
+    };
+    let contract = crate::ir::call_contracts::lookup(name)?;
+    if contract.is_variadic {
+        return None;
+    }
+
+    let mut core_slot = 0usize;
+    let mut vfp_slot = 0usize;
+    let mut layout = Vec::with_capacity(contract.params.len());
+    for parameter in contract.params {
+        let c_type = parameter.c_type.trim();
+        let storage = match c_type {
+            "float" => {
+                if vfp_slot >= 16 {
+                    return None;
+                }
+                let register = VReg::phys(format!("s{vfp_slot}"));
+                vfp_slot += 1;
+                register
+            }
+            "double" => {
+                vfp_slot += vfp_slot % 2;
+                if vfp_slot + 1 >= 16 {
+                    return None;
+                }
+                let register = VReg::phys(format!("d{}", vfp_slot / 2));
+                vfp_slot += 2;
+                register
+            }
+            "long double" | "long long" | "unsigned long long" | "int64_t" | "uint64_t" => {
+                return None;
+            }
+            _ if c_type.contains('*')
+                || matches!(
+                    c_type,
+                    "char"
+                        | "signed char"
+                        | "unsigned char"
+                        | "short"
+                        | "unsigned short"
+                        | "int"
+                        | "unsigned int"
+                        | "long"
+                        | "unsigned long"
+                        | "pid_t"
+                        | "socklen_t"
+                        | "useconds_t"
+                        | "size_t"
+                        | "ssize_t"
+                        | "intptr_t"
+                        | "uintptr_t"
+                        | "time_t"
+                        | "clock_t"
+                        | "pthread_t"
+                ) =>
+            {
+                if core_slot >= 4 {
+                    return None;
+                }
+                let register = VReg::phys(format!("r{core_slot}"));
+                core_slot += 1;
+                register
+            }
+            _ => return None,
+        };
+        layout.push(storage);
+    }
+    Some(layout)
+}
+
 /// Fold a call setup according to a recovered callee's source-ordered storage.
 ///
 /// This deliberately accepts only an adjacent, side-effect-free assignment
@@ -1004,8 +1088,18 @@ fn fold_one_call(
             return;
         }
     }
-    if arch == CallConv::ArmHardFloat && fold_one_arm_hard_float_call(body, call_idx) {
-        return;
+    if arch == CallConv::ArmHardFloat {
+        if let Some(layout) = known_arm_hard_float_layout(&body[call_idx]) {
+            if !layout.is_empty() {
+                let _ = fold_one_recovered_layout_call(body, call_idx, &layout);
+            }
+            // A locked fixed-arity declaration is stronger than a scratch
+            // register prefix even when the setup was not locally foldable.
+            return;
+        }
+        if fold_one_arm_hard_float_call(body, call_idx) {
+            return;
+        }
     }
     // A missing leading slot may be forwarded from this function's entry only
     // when the call terminates the current structured body.  Otherwise a
@@ -2587,6 +2681,42 @@ mod tests {
             ]
         );
         assert_eq!(dst, &Some(reg("s0")));
+    }
+
+    #[test]
+    fn named_unary_float_contract_ignores_unrelated_vfp_scratch_storage() {
+        let mut f = Function {
+            name: "hard_float_math_caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("s15#1"),
+                    src: Expr::Reg(reg("s0#1")),
+                },
+                Stmt::Assign {
+                    dst: reg("s0#2"),
+                    src: Expr::Reg(reg("s15#1")),
+                },
+                call_to("asinf"),
+                Stmt::Assign {
+                    dst: reg("s14#1"),
+                    src: Expr::Reg(reg("s0#3")),
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::ArmHardFloat);
+
+        let call = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call { args, dst, .. } => Some((args, dst)),
+                _ => None,
+            })
+            .expect("math call remains in the body");
+        assert_eq!(call.0, &[Expr::Reg(reg("s15#1"))]);
+        assert_eq!(call.1, &Some(reg("s0")));
     }
 
     #[test]

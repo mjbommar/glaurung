@@ -1224,6 +1224,62 @@ mod tests {
     }
 
     #[test]
+    fn thumb_lighthouse_vfp_sequence_has_complete_register_footprints() {
+        // Exact instructions around the real DecBench lighthouse math calls.
+        // These definitions feed s0 before tanf/asinf; any opaque operation
+        // severs the argument dataflow even when the library prototype is known.
+        let cases = [
+            (
+                [0x27, 0xee, 0xa7, 0x7a],
+                "vmul.f32",
+                vec![Value::Reg(VReg::phys("s15")), Value::Reg(VReg::phys("s15"))],
+                VReg::phys("s14"),
+            ),
+            (
+                [0x77, 0xee, 0xc7, 0x7a],
+                "vsub.f32",
+                vec![Value::Reg(VReg::phys("s15")), Value::Reg(VReg::phys("s14"))],
+                VReg::phys("s15"),
+            ),
+            (
+                [0xc7, 0xee, 0x27, 0x6a],
+                "vdiv.f32",
+                vec![Value::Reg(VReg::phys("s14")), Value::Reg(VReg::phys("s15"))],
+                VReg::phys("s13"),
+            ),
+        ];
+        for (bytes, expected_name, expected_inputs, expected_output) in cases {
+            let lifted = lift_bytes(&bytes, 0x805_d062, true);
+            assert!(
+                matches!(
+                    lifted.as_slice(),
+                    [LlirInstr {
+                        op: Op::Intrinsic { name, ins, outs, .. },
+                        ..
+                    }] if name == expected_name
+                        && ins == &expected_inputs
+                        && outs == &[(expected_output, Width::W32)]
+                ),
+                "{expected_name} footprint: {lifted:#?}"
+            );
+        }
+
+        let core_move = lift_bytes(&[0x07, 0xee, 0x10, 0x3a], 0x805_d086, true);
+        assert!(
+            matches!(
+                core_move.as_slice(),
+                [LlirInstr {
+                    op: Op::Intrinsic { name, ins, outs, .. },
+                    ..
+                }] if name == "vmov"
+                    && ins == &[Value::Reg(VReg::phys("r3"))]
+                    && outs == &[(VReg::phys("s14"), Width::W32)]
+            ),
+            "core-to-VFP move footprint: {core_move:#?}"
+        );
+    }
+
+    #[test]
     fn thumb_vmov_f32_immediate_preserves_ieee_payload() {
         // `vmov.f32 s15, #8` (`3.0f`) from the real DecBench dynThrottle
         // function. Capstone reports this operand as an f64, so the decoder

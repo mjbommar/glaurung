@@ -564,7 +564,7 @@ fn normalize_value_hint_for_abi(hint: TypeHint, cc: crate::ir::call_args::CallCo
     }
 }
 
-fn scalar_float_intrinsic_width(name: &str) -> Option<u8> {
+fn scalar_float_intrinsic_name_width(name: &str) -> Option<u8> {
     match name {
         "addss" | "subss" | "mulss" | "divss" => Some(4),
         "addsd" | "subsd" | "mulsd" | "divsd" => Some(8),
@@ -586,6 +586,35 @@ fn scalar_float_intrinsic_width(name: &str) -> Option<u8> {
         }
         _ => None,
     }
+}
+
+fn scalar_vfp_register(register: &VReg) -> bool {
+    matches!(register, VReg::Phys(name) if {
+        let base = crate::ir::abi::ssa_base(name);
+        base.strip_prefix('s').is_some_and(|index| index.parse::<u8>().is_ok())
+            || base.strip_prefix('d').is_some_and(|index| index.parse::<u8>().is_ok())
+    })
+}
+
+fn scalar_float_intrinsic_width(
+    name: &str,
+    ins: &[Value],
+    outs: &[(VReg, crate::ir::types::Width)],
+) -> Option<u8> {
+    if let Some(width) = scalar_float_intrinsic_name_width(name) {
+        return Some(width);
+    }
+    if name != "vmov" {
+        return None;
+    }
+    let ([Value::Reg(source)], [(destination, width)]) = (ins, outs) else {
+        return None;
+    };
+    if scalar_vfp_register(source) || !scalar_vfp_register(destination) {
+        return None;
+    }
+    let width = u8::try_from(width.bytes()).ok()?;
+    matches!(width, 4 | 8).then_some(width)
 }
 
 fn arm_single_vfp_slot(register: &VReg) -> Option<usize> {
@@ -770,10 +799,13 @@ fn qualified_result_hint(
     storage_class: ResultHintClass,
 ) -> Option<TypeHint> {
     if storage_class == ResultHintClass::Float {
-        let Op::Intrinsic { name, outs, .. } = op else {
+        let Op::Intrinsic {
+            name, ins, outs, ..
+        } = op
+        else {
             return None;
         };
-        let semantic_width = scalar_float_intrinsic_width(name)?;
+        let semantic_width = scalar_float_intrinsic_width(name, ins, outs)?;
         let declared_width = outs
             .iter()
             .find(|(register, _)| register == &value.base)
@@ -1571,17 +1603,22 @@ fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
         }
         Op::Intrinsic {
             name, ins, outs, ..
-        } if scalar_float_intrinsic_width(name).is_some() => {
-            let width = scalar_float_intrinsic_width(name).expect("guarded scalar float width");
-            let hint = TypeHint::Float { width };
-            for value in ins {
-                if let Value::Reg(register @ VReg::Phys(_)) = value {
-                    tm.upsert(register.clone(), hint);
+        } => {
+            if let Some(width) = scalar_float_intrinsic_width(name, ins, outs) {
+                let hint = TypeHint::Float { width };
+                for value in ins {
+                    if let Value::Reg(register @ VReg::Phys(_)) = value {
+                        if name != "vmov" || scalar_vfp_register(register) {
+                            tm.upsert(register.clone(), hint);
+                        }
+                    }
                 }
-            }
-            for (register, _) in outs {
-                if matches!(register, VReg::Phys(_)) {
-                    tm.upsert(register.clone(), hint);
+                for (register, _) in outs {
+                    if matches!(register, VReg::Phys(_))
+                        && (name != "vmov" || scalar_vfp_register(register))
+                    {
+                        tm.upsert(register.clone(), hint);
+                    }
                 }
             }
         }
@@ -3534,6 +3571,47 @@ int never_returns(void) { for (;;) {} }
         };
 
         assert_eq!(arm_vfp_live_in_slots(&lf), vec![0]);
+    }
+
+    #[test]
+    fn core_to_vfp_move_propagates_float_storage_class_to_loaded_bits() {
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1008,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Load {
+                            dst: VReg::phys("r3"),
+                            addr: MemOp::plain(Some(VReg::phys("r0")), None, 0, 4, 4),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Intrinsic {
+                            name: "vmov".into(),
+                            ins: vec![Value::Reg(VReg::phys("r3"))],
+                            outs: vec![(VReg::phys("s14"), crate::ir::types::Width::W32)],
+                            reads_mem: false,
+                            writes_mem: false,
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+
+        let types = recover_types_for(&lf, crate::ir::call_args::CallConv::ArmHardFloat);
+        assert!(
+            matches!(types.get(&VReg::phys("r3")), Some(TypeHint::Int { .. })),
+            "the core register carries raw bits, not a numerically converted float: {types:#?}"
+        );
+        assert_eq!(
+            types.get(&VReg::phys("s14")),
+            Some(TypeHint::Float { width: 4 })
+        );
     }
 
     #[test]

@@ -274,6 +274,14 @@
     {"name": "usleep",  "return_type": "int",
      "params": [{"name": "usec", "c_type": "useconds_t"}]},
 
+    {"name": "tanf",    "return_type": "float",
+     "params": [{"name": "x", "c_type": "float"}]},
+    {"name": "asinf",   "return_type": "float",
+     "params": [{"name": "x", "c_type": "float"}]},
+    {"name": "atan2f",  "return_type": "float",
+     "params": [{"name": "y", "c_type": "float"},
+                {"name": "x", "c_type": "float"}]},
+
     {"name": "pthread_create", "return_type": "int",
      "params": [{"name": "thread", "c_type": "pthread_t *"},
                 {"name": "attr", "c_type": "const void *"},

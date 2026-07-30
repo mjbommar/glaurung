@@ -494,11 +494,31 @@ enum ScalarFloatOperation {
     Binary(BinOp),
 }
 
-fn scalar_float_intrinsic(name: &str) -> Option<(ScalarFloatOperation, u8)> {
+fn scalar_vfp_register(register: &VReg) -> bool {
+    matches!(register, VReg::Phys(name) if {
+        let base = crate::ir::abi::ssa_base(name);
+        base.strip_prefix('s').is_some_and(|n| n.parse::<u8>().is_ok())
+            || base.strip_prefix('d').is_some_and(|n| n.parse::<u8>().is_ok())
+    })
+}
+
+fn scalar_float_intrinsic(
+    name: &str,
+    ins: &[Value],
+    outs: &[(VReg, crate::ir::types::Width)],
+) -> Option<(ScalarFloatOperation, u8)> {
     let (base, width) = if let Some(base) = name.strip_suffix(".f32") {
         (base, 4)
     } else if let Some(base) = name.strip_suffix(".f64") {
         (base, 8)
+    } else if name == "vmov"
+        && matches!(ins, [Value::Reg(source)] if !scalar_vfp_register(source))
+        && matches!(outs, [(destination, _)] if scalar_vfp_register(destination))
+    {
+        let [(_, declared_width)] = outs else {
+            return None;
+        };
+        ("vmov", u8::try_from(declared_width.bytes()).ok()?)
     } else {
         return None;
     };
@@ -524,18 +544,12 @@ fn scalar_float_intrinsic(name: &str) -> Option<(ScalarFloatOperation, u8)> {
 /// `vadd.f32 s0, s15, s15` becomes `var = var + var` with an invented live-in.
 /// Keep the entire scalar-float subset opaque until those producers are modeled.
 fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
-    fn is_vfp_register(register: &VReg) -> bool {
-        matches!(register, VReg::Phys(name) if {
-            let base = crate::ir::abi::ssa_base(name);
-            base.strip_prefix('s').is_some_and(|n| n.parse::<u8>().is_ok())
-                || base.strip_prefix('d').is_some_and(|n| n.parse::<u8>().is_ok())
-        })
-    }
-
     let mut saw_scalar_float = false;
     for instruction in lf.blocks.iter().flat_map(|block| &block.instrs) {
         match &instruction.op {
-            Op::Intrinsic { name, .. } if scalar_float_intrinsic(name).is_some() => {
+            Op::Intrinsic {
+                name, ins, outs, ..
+            } if scalar_float_intrinsic(name, ins, outs).is_some() => {
                 saw_scalar_float = true;
             }
             Op::Intrinsic { name, .. } | Op::Unknown { mnemonic: name }
@@ -555,18 +569,18 @@ fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
                         ..
                     }),
                 ..
-            } if is_vfp_register(result) => saw_scalar_float = true,
+            } if scalar_vfp_register(result) => saw_scalar_float = true,
             // A call with no typed VFP result may still clobber the value a
             // later scalar op appears to consume. Keep that region opaque.
             Op::Call { .. } => return false,
             // Scalar VFP memory traffic is represented by ordinary typed
             // Load/Store nodes. Those operations close dataflow rather than
             // creating an opaque producer.
-            Op::Load { dst, .. } if is_vfp_register(dst) => saw_scalar_float = true,
+            Op::Load { dst, .. } if scalar_vfp_register(dst) => saw_scalar_float = true,
             Op::Store {
                 src: Value::Reg(src),
                 ..
-            } if is_vfp_register(src) => saw_scalar_float = true,
+            } if scalar_vfp_register(src) => saw_scalar_float = true,
             _ => {}
         }
     }
@@ -883,7 +897,7 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         } => {
             if lower_scalar_float {
                 if let (Some((operation, width)), Some((dst, _))) =
-                    (scalar_float_intrinsic(name), outs.first())
+                    (scalar_float_intrinsic(name, ins, outs), outs.first())
                 {
                     let expression = match (operation, ins.as_slice()) {
                         (ScalarFloatOperation::Move, [src]) => Some(lower_float_value(src, width)),
@@ -6338,6 +6352,75 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
     write_expr_dec(arg, out);
 }
 
+/// Render a value proven to flow through scalar floating-point storage.
+///
+/// AAPCS-VFP commonly materialises a float field as `ldr r3, [base, #off]`
+/// followed by `vmov sN, r3`. The move preserves bits; rendering the ordinary
+/// width-only load as `*(int *)` and then applying `(float)` would perform a
+/// numeric conversion and change every nontrivial value. In a proven VFP
+/// expression, use a float-typed memory read. A surviving core-register value
+/// is reinterpreted through a C99 union rather than numerically converted.
+fn write_float_expr_dec(expr: &Expr, width: u8, out: &mut String) {
+    let float_type = if width == 4 { "float" } else { "double" };
+    match expr {
+        Expr::FloatConst {
+            width: literal_width,
+            bits,
+        } if *literal_width == width => write_float_literal(*bits, *literal_width, out),
+        Expr::Reg(register @ VReg::Phys(_)) if declared_reg_ctype(register) == float_type => {
+            write_reg_lvalue_dec(register, out);
+        }
+        Expr::Deref {
+            addr,
+            size: access_width,
+        } if *access_width == width => {
+            let _ = write!(out, "*({float_type} *)(");
+            write_expr_dec(addr, out);
+            out.push(')');
+        }
+        Expr::Bin { op, lhs, rhs }
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) =>
+        {
+            out.push('(');
+            write_float_expr_dec(lhs, width, out);
+            let _ = write!(out, " {} ", binop_sym_c(*op));
+            write_float_expr_dec(rhs, width, out);
+            out.push(')');
+        }
+        Expr::Un { op: UnOp::Neg, src } => {
+            out.push_str("(-");
+            write_float_expr_dec(src, width, out);
+            out.push(')');
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            out.push('(');
+            write_expr_dec(cond, out);
+            out.push_str(" ? ");
+            write_float_expr_dec(if_true, width, out);
+            out.push_str(" : ");
+            write_float_expr_dec(if_false, width, out);
+            out.push(')');
+        }
+        _ if width == 4 => {
+            out.push_str("((union { unsigned int bits; float value; }){ .bits = (unsigned int)(");
+            write_expr_dec(expr, out);
+            out.push_str(") }).value");
+        }
+        _ => {
+            out.push_str(
+                "((union { unsigned long long bits; double value; }){ .bits = (unsigned long long)(",
+            );
+            write_expr_dec(expr, out);
+            out.push_str(") }).value");
+        }
+    }
+}
+
 /// Render one argument against the exact parameter type consumed by this call.
 ///
 /// C validates a conditional expression's two arms before applying an outer
@@ -6358,6 +6441,15 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
         write_typed_call_arg_dec(parameter_type, if_true, out);
         out.push_str(" : ");
         write_typed_call_arg_dec(parameter_type, if_false, out);
+        out.push(')');
+        return;
+    }
+
+    if matches!(parameter_type, "float" | "double") {
+        out.push('(');
+        out.push_str(parameter_type);
+        out.push_str(")(");
+        write_float_expr_dec(arg, if parameter_type == "float" { 4 } else { 8 }, out);
         out.push(')');
         return;
     }
@@ -6600,6 +6692,11 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
         out.push_str(" : ");
         write_representation_value_dec(destination_type, if_false, out);
         out.push(')');
+        return;
+    }
+
+    if matches!(destination_type, "float" | "double") {
+        write_float_expr_dec(src, if destination_type == "float" { 4 } else { 8 }, out);
         return;
     }
 
@@ -10959,5 +11056,87 @@ function f @ 0x1000 {
         };
 
         assert!(super::scalar_float_semantics_are_closed(&lf));
+    }
+
+    #[test]
+    fn core_to_vfp_move_closes_scalar_dataflow_and_lowers_as_a_copy() {
+        // Exact semantic shape of `vmov s14, r3` in DecBench lighthouse.
+        // The core register carries the IEEE-754 payload loaded from memory;
+        // lowering retains that exact dependency, while the float-consuming
+        // renderer reinterprets its bits instead of numerically converting it.
+        let core_move = Op::Intrinsic {
+            name: "vmov".into(),
+            ins: vec![Value::Reg(VReg::phys("r3"))],
+            outs: vec![(VReg::phys("s14"), crate::ir::types::Width::W32)],
+            reads_mem: false,
+            writes_mem: false,
+        };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1004,
+                instrs: vec![LlirInstr {
+                    va: 0x1000,
+                    op: core_move.clone(),
+                }],
+                succs: vec![],
+            }],
+        };
+
+        assert!(super::scalar_float_semantics_are_closed(&lf));
+        assert_eq!(
+            super::lower_op(&core_move, true),
+            vec![Stmt::Assign {
+                dst: VReg::phys("s14"),
+                src: Expr::Reg(VReg::phys("r3")),
+            }]
+        );
+    }
+
+    #[test]
+    fn float_call_context_renders_core_loaded_bits_as_a_float_load() {
+        let rendered = render_decbench(&Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "tanf".into(),
+                },
+                args: vec![Expr::Bin {
+                    op: BinOp::Sub,
+                    lhs: Box::new(Expr::FloatConst {
+                        bits: 1.0f32.to_bits() as u64,
+                        width: 4,
+                    }),
+                    rhs: Box::new(Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                        size: 4,
+                    }),
+                }],
+                dst: Some(VReg::phys("ret")),
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: Some(CallPrototype {
+                        return_type: "float".into(),
+                        parameter_types: vec!["float".into()],
+                        variadic: false,
+                        authority: CallPrototypeAuthority::Authoritative,
+                    }),
+                    call_prototype: CallPrototype {
+                        return_type: "float".into(),
+                        parameter_types: vec!["float".into()],
+                        variadic: false,
+                        authority: CallPrototypeAuthority::Recovered,
+                    },
+                }),
+            }],
+        });
+
+        assert!(
+            rendered.contains("tanf((float)((1.0f - *(float *)(arg1))))"),
+            "the float-consuming VFP expression numerically converted integer bits:\n{rendered}"
+        );
+        assert!(!rendered.contains("*(int *)(arg1)"));
     }
 }
