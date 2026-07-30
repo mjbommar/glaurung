@@ -134,8 +134,23 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 fold_expr(src, pool);
             }
             Stmt::Call { target, args, .. } => {
+                let character_pointer_params = match target {
+                    Expr::Named { name, .. } => crate::ir::call_contracts::lookup(name)
+                        .map(|contract| {
+                            contract
+                                .params
+                                .iter()
+                                .map(|parameter| is_character_pointer(&parameter.c_type))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
                 fold_expr(target, pool);
-                for a in args {
+                for (index, a) in args.iter_mut().enumerate() {
+                    if character_pointer_params.get(index) == Some(&true) {
+                        fold_constant_string(a, pool);
+                    }
                     fold_expr(a, pool);
                 }
             }
@@ -196,6 +211,24 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
         }
+    }
+}
+
+fn is_character_pointer(c_type: &str) -> bool {
+    matches!(c_type.trim(), "char *" | "const char *" | "char *const")
+}
+
+fn fold_constant_string(expr: &mut Expr, pool: &HashMap<u64, String>) {
+    let Expr::Const(value) = expr else {
+        return;
+    };
+    let Ok(address) = u64::try_from(*value) else {
+        return;
+    };
+    if let Some(string) = pool.get(&address) {
+        *expr = Expr::StringLit {
+            value: shorten(string),
+        };
     }
 }
 
@@ -299,6 +332,52 @@ mod tests {
             ),
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn constant_call_argument_folds_only_for_authoritative_character_pointer() {
+        let mut pool = HashMap::new();
+        pool.insert(0x402004, "known".to_string());
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1060,
+                        name: "strcmp".into(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("rdi")), Expr::Const(0x402004)],
+                    dst: Some(VReg::phys("rax")),
+                    call_spec: None,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1070,
+                        name: "memset".into(),
+                    },
+                    args: vec![Expr::Const(0x402004), Expr::Const(0), Expr::Const(5)],
+                    dst: Some(VReg::phys("rax")),
+                    call_spec: None,
+                },
+            ],
+        };
+
+        fold_string_literals(&mut f, &pool);
+
+        let Stmt::Call { args, .. } = &f.body[0] else {
+            panic!("expected strcmp call");
+        };
+        assert_eq!(
+            args[1],
+            Expr::StringLit {
+                value: "known".to_string()
+            }
+        );
+        let Stmt::Call { args, .. } = &f.body[1] else {
+            panic!("expected memset call");
+        };
+        assert_eq!(args[0], Expr::Const(0x402004));
     }
 
     #[test]

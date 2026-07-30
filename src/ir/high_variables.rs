@@ -50,6 +50,7 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
 
     let mut unsafe_uses = HashSet::new();
     collect_unsafe_pointer_uses(&function.body, &mut unsafe_uses);
+    refine_authoritative_pointer_parameters(&function.body, &unsafe_uses, types);
 
     for _ in 0..=definitions.len() {
         let mut learned = Vec::new();
@@ -75,6 +76,92 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
         }
         for (reg, hint) in learned {
             types.refine_from_value(reg, hint);
+        }
+    }
+}
+
+/// Refine direct source parameters from locked library call boundaries.
+///
+/// A function argument passed unchanged to `strcmp(const char *, ...)` is
+/// stronger pointer evidence than the integer width of the ABI register that
+/// transported it.  Conflicting pointee types, indirect expressions, and any
+/// integer/arithmetic use remain fail-closed.
+fn refine_authoritative_pointer_parameters(
+    body: &[Stmt],
+    unsafe_uses: &HashSet<String>,
+    types: &mut TypeMap,
+) {
+    fn collect(body: &[Stmt], out: &mut HashMap<String, Vec<u8>>) {
+        for statement in body {
+            match statement {
+                Stmt::Call {
+                    target: Expr::Named { name, .. },
+                    args,
+                    ..
+                } => {
+                    let Some(contract) = crate::ir::call_contracts::lookup(name) else {
+                        continue;
+                    };
+                    for (argument, parameter) in args.iter().zip(&contract.params) {
+                        let Expr::Reg(VReg::Phys(argument_name)) = argument else {
+                            continue;
+                        };
+                        if crate::ir::ast::parse_arg_index(argument_name).is_none() {
+                            continue;
+                        }
+                        if let Some(width) = pointer_width_from_c_type(&parameter.c_type) {
+                            out.entry(argument_name.clone()).or_default().push(width);
+                        }
+                    }
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    collect(then_body, out);
+                    if let Some(else_body) = else_body {
+                        collect(else_body, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collect(body, out),
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    collect(std::slice::from_ref(init.as_ref()), out);
+                    collect(body, out);
+                    collect(std::slice::from_ref(step.as_ref()), out);
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case) in cases {
+                        collect(case, out);
+                    }
+                    if let Some(default) = default {
+                        collect(default, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut candidates = HashMap::new();
+    collect(body, &mut candidates);
+    for (name, widths) in candidates {
+        if unsafe_uses.contains(&name) {
+            continue;
+        }
+        let width = widths.iter().copied().max().unwrap_or(0);
+        if widths
+            .iter()
+            .all(|candidate| *candidate == 0 || width == 0 || *candidate == width)
+        {
+            types.refine_from_value(
+                VReg::phys(name),
+                TypeHint::Pointer {
+                    pointee_width: width,
+                },
+            );
         }
     }
 }
@@ -494,6 +581,70 @@ mod tests {
 
         assert_eq!(pointer_width(&types, "var1"), Some(1));
         assert_eq!(pointer_width(&types, "local_8"), Some(1));
+    }
+
+    #[test]
+    fn authoritative_call_parameter_refines_a_direct_function_argument() {
+        let function = Function {
+            name: "find_name".into(),
+            entry_va: 0,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0,
+                    name: "strcmp@plt".into(),
+                },
+                args: vec![
+                    Expr::Reg(VReg::phys("arg0")),
+                    Expr::StringLit {
+                        value: "known".into(),
+                    },
+                ],
+                dst: Some(VReg::phys("var1")),
+                call_spec: None,
+            }],
+        };
+        let mut types = TypeMap::default();
+
+        refine_pointer_high_variables(&function, &mut types);
+
+        assert_eq!(pointer_width(&types, "arg0"), Some(1));
+    }
+
+    #[test]
+    fn integer_arithmetic_blocks_call_parameter_pointer_refinement() {
+        let function = Function {
+            name: "tagged_name".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "strcmp@plt".into(),
+                    },
+                    args: vec![
+                        Expr::Reg(VReg::phys("arg0")),
+                        Expr::StringLit {
+                            value: "known".into(),
+                        },
+                    ],
+                    dst: Some(VReg::phys("var1")),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var2"),
+                    src: Expr::Bin {
+                        op: BinOp::And,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(7)),
+                    },
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+
+        refine_pointer_high_variables(&function, &mut types);
+
+        assert_eq!(pointer_width(&types, "arg0"), None);
     }
 
     #[test]

@@ -117,3 +117,86 @@ int main(void) {
     assert expected.returncode == 0, expected.stderr
     assert actual.returncode == 0, actual.stderr
     assert actual.stdout == expected.stdout
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
+def test_direct_string_argument_contract_round_trip(tmp_path: Path) -> None:
+    """Use strcmp's locked parameter type to recover a direct char pointer."""
+    original_source = tmp_path / "strcmp_arg.c"
+    original_source.write_text(
+        """
+#include <stdio.h>
+#include <string.h>
+
+__attribute__((noinline)) int matches_name(const char *candidate) {
+    return strcmp(candidate, "known") == 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    printf("%d\\n", matches_name(argv[1]));
+    return 0;
+}
+""".strip()
+        + "\n"
+    )
+    original = tmp_path / "original"
+    built = _compile(original_source, original)
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(original), max_functions=500)
+    target = next(
+        (function for function in functions if function.name == "matches_name"),
+        None,
+    )
+    assert target is not None, "matches_name was not discovered"
+    generated = g.ir.decompile_at(
+        str(original),
+        int(target.entry_point.value),
+        timeout_ms=8000,
+        style="decbench",
+    )
+
+    assert "matches_name(char * arg0)" in generated, generated
+    assert "matches_name(long" not in generated, generated
+    assert "extern int strcmp(const char *, const char *);" in generated, generated
+
+    rebuilt_source = tmp_path / "rebuilt.c"
+    rebuilt_source.write_text(
+        generated
+        + """
+
+#include <stdio.h>
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    printf("%d\\n", matches_name(argv[1]));
+    return 0;
+}
+"""
+    )
+    rebuilt = tmp_path / "rebuilt"
+    rebuilt_result = _compile(rebuilt_source, rebuilt)
+    assert rebuilt_result.returncode == 0, (
+        f"generated direct-string-argument C did not rebuild:\n"
+        f"{rebuilt_result.stderr}\n{generated}"
+    )
+
+    for candidate in ("known", "unknown", "", "known-suffix"):
+        expected = subprocess.run(
+            [str(original), candidate],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        actual = subprocess.run(
+            [str(rebuilt), candidate],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        assert expected.returncode == 0, expected.stderr
+        assert actual.returncode == 0, actual.stderr
+        assert actual.stdout == expected.stdout
