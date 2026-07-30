@@ -121,6 +121,12 @@ The four newly compilable functions are:
   width-only store cast;
 - `bin_162.c:sub_3d32` - `strncpy` result becomes `char *`.
 
+The retained submission artifact is
+`glaurung-results-7bee103.zip`, labeled with source commit
+`7bee1038fb72c2c43f257b9ade08467b20a24f0b`. Its SHA-256 is
+`b16b387e7547a8275a3cb0645beed677ed784cdb1560622cbfeace8a4e825026`.
+The concatenated C payload hash matches the measured pre-commit archive exactly.
+
 For every one of the 123 functions compilable in both archives, the normalized
 recompiled assembly is byte-for-byte identical. Consequently the retained byte
 score cannot decrease: all prior successful scores are unchanged, old failures
@@ -136,7 +142,8 @@ results; this checkpoint does not invent them.
 - `cargo test --lib`: 1,282 passed, zero failed.
 - real compiled/decompile/recompile fixture file: 35 passed, zero failed.
 - `cargo fmt --check`: passed.
-- `cargo clippy --all-targets`: passed with the repository's existing warnings.
+- `cargo clippy --all-targets` and the Python-extension variant: passed with the
+  repository's existing warnings.
 - touched Python test: Ruff passed; ty reports the file's eight existing
   unresolved harness-module/pytest-stub diagnostics.
 - raw 56-lane behavior corpus: 459 pass, 82 known semantic failures, 82 known
