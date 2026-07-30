@@ -653,6 +653,22 @@ mod tests {
     }
 
     #[test]
+    fn locale_contract_preserves_its_returned_character_pointer() {
+        let contract = lookup("setlocale@plt").expect("setlocale belongs in the libc catalog");
+
+        assert_eq!(contract.return_type, "char *");
+        assert_eq!(
+            contract
+                .params
+                .iter()
+                .map(|parameter| parameter.c_type.as_str())
+                .collect::<Vec<_>>(),
+            ["int", "const char *"]
+        );
+        assert!(!contract.is_variadic);
+    }
+
+    #[test]
     fn decbench_call_uses_declared_parameter_types_at_the_boundary() {
         let mut function = Function {
             name: "caller".into(),

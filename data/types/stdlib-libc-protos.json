@@ -82,6 +82,9 @@
      "params": [{"name": "domainname", "c_type": "const char *"},
                 {"name": "msgid", "c_type": "const char *"},
                 {"name": "category", "c_type": "int"}]},
+    {"name": "setlocale", "return_type": "char *",
+     "params": [{"name": "category", "c_type": "int"},
+                {"name": "locale", "c_type": "const char *"}]},
     {"name": "__errno_location", "return_type": "int *", "params": []},
     {"name": "__stack_chk_fail", "return_type": "void", "params": []},
 

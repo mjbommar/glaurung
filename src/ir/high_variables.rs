@@ -92,6 +92,10 @@ impl Definition {
             Self::Call(target) => classify_call(target),
         }
     }
+
+    fn is_null_initializer(&self) -> bool {
+        matches!(self, Self::Assignment(Expr::Const(0)))
+    }
 }
 
 fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>) {
@@ -157,17 +161,25 @@ fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>
 
 fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -> Option<u8> {
     let mut width = 0;
+    let mut has_pointer = false;
     for definition in definitions {
+        // C pointers are routinely initialized to NULL before a conditional
+        // allocation.  The zero is compatible with a later proven pointer but
+        // is not, by itself, evidence that an otherwise scalar local is one.
+        if definition.is_null_initializer() {
+            continue;
+        }
         match definition.classify(types) {
             ValueClass::Pointer(next) if width == 0 || next == 0 || width == next => {
                 width = width.max(next);
+                has_pointer = true;
             }
             // Unknown is not evidence. This prevents one pointer-looking branch
             // from typing a multiply-defined local.
             ValueClass::Pointer(_) | ValueClass::Scalar | ValueClass::Unknown => return None,
         }
     }
-    (!definitions.is_empty()).then_some(width)
+    has_pointer.then_some(width)
 }
 
 fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
@@ -449,6 +461,39 @@ mod tests {
         assert_eq!(pointer_width(&types, "var1"), Some(1));
         assert_eq!(pointer_width(&types, "local_8"), Some(1));
         assert_eq!(pointer_width(&types, "var2"), Some(1));
+    }
+
+    #[test]
+    fn null_initialized_local_accepts_a_later_character_pointer() {
+        let function = Function {
+            name: "save_locale".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("local_8"),
+                    src: Expr::Const(0),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "strdup@plt".into(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("arg0"))],
+                    dst: Some(VReg::phys("var1")),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("local_8"),
+                    src: Expr::Reg(VReg::phys("var1")),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+
+        refine_pointer_high_variables(&function, &mut types);
+
+        assert_eq!(pointer_width(&types, "var1"), Some(1));
+        assert_eq!(pointer_width(&types, "local_8"), Some(1));
     }
 
     #[test]
