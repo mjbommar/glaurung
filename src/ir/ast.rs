@@ -40,6 +40,13 @@ pub struct PdbFieldHint {
 pub enum Expr {
     Reg(VReg),
     Const(i64),
+    /// Exact IEEE-754 literal payload recovered from a floating-point machine
+    /// instruction. Storing bits rather than `f64` retains `Eq` and preserves
+    /// signed zero and every finite source literal without decimal roundoff.
+    FloatConst {
+        bits: u64,
+        width: u8,
+    },
     Addr(u64),
     /// A VA that the resolver has attached a symbol name to. The raw VA
     /// travels along so downstream consumers (e.g. a debugger view) can
@@ -470,6 +477,78 @@ fn lower_value(v: &Value) -> Expr {
     }
 }
 
+fn lower_float_value(value: &Value, width: u8) -> Expr {
+    match value {
+        Value::Const(bits) => Expr::FloatConst {
+            bits: *bits as u64,
+            width,
+        },
+        _ => lower_value(value),
+    }
+}
+
+fn scalar_float_intrinsic(name: &str) -> Option<(Option<BinOp>, u8)> {
+    let (base, width) = if let Some(base) = name.strip_suffix(".f32") {
+        (base, 4)
+    } else if let Some(base) = name.strip_suffix(".f64") {
+        (base, 8)
+    } else {
+        return None;
+    };
+    let operation = match base {
+        "vmov" => None,
+        "vadd" => Some(BinOp::Add),
+        "vsub" => Some(BinOp::Sub),
+        "vmul" => Some(BinOp::Mul),
+        "vdiv" => Some(BinOp::Div),
+        _ => return None,
+    };
+    Some((operation, width))
+}
+
+/// Whether every VFP value used by the scalar arithmetic subset has a modeled
+/// producer in this function.
+///
+/// Register-only hard-float leaves (arguments, exact immediates, arithmetic,
+/// and an `s0`/`d0` result) are closed and can be rendered as C. Once an opaque
+/// VFP instruction or a call participates, lowering only the arithmetic nodes
+/// would be actively misleading: an unmodeled `vldr` followed by
+/// `vadd.f32 s0, s15, s15` becomes `var = var + var` with an invented live-in.
+/// Keep the entire scalar-float subset opaque until those producers are modeled.
+fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
+    fn is_vfp_register(register: &VReg) -> bool {
+        matches!(register, VReg::Phys(name) if name.strip_prefix('s').is_some_and(|n| n.parse::<u8>().is_ok())
+            || name.strip_prefix('d').is_some_and(|n| n.parse::<u8>().is_ok()))
+    }
+
+    let mut saw_scalar_float = false;
+    for instruction in lf.blocks.iter().flat_map(|block| &block.instrs) {
+        match &instruction.op {
+            Op::Intrinsic { name, .. } if scalar_float_intrinsic(name).is_some() => {
+                saw_scalar_float = true;
+            }
+            Op::Intrinsic { name, .. } | Op::Unknown { mnemonic: name }
+                if name.starts_with('v') =>
+            {
+                return false;
+            }
+            // A call may define s0/d0, but without a recovered callee prototype
+            // its return class is not yet authoritative. Do not turn a later VFP
+            // consumer into apparently precise source arithmetic.
+            Op::Call { .. } => return false,
+            // `vpush`/`vpop` are decomposed into ordinary stores/loads by the ARM
+            // lifter, so retain this explicit storage check as well.
+            Op::Load { dst, .. } if is_vfp_register(dst) => return false,
+            Op::Store {
+                src: Value::Reg(src),
+                ..
+            } if is_vfp_register(src) => return false,
+            _ => {}
+        }
+    }
+    saw_scalar_float
+}
+
 fn lower_memop(m: &MemOp) -> Expr {
     let addr = if m.base.is_none() && m.index.is_none() && m.segment.is_none() && m.disp >= 0 {
         Expr::Addr(m.disp as u64)
@@ -572,7 +651,7 @@ fn switch_index_of(target: &Expr) -> Option<Expr> {
 }
 
 /// Lower a single LLIR op to one or more Stmts.
-fn lower_op(op: &Op) -> Vec<Stmt> {
+fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
     match op {
         Op::Nop => vec![Stmt::Nop],
         Op::Assign { dst, src } => vec![Stmt::Assign {
@@ -775,11 +854,36 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
         // comments for known system instructions — so decompiler output is
         // unchanged by the Phase-0 migration. Intrinsics carrying operands
         // (future richer lifting) render with an argument ellipsis.
-        Op::Intrinsic { name, ins, .. } => match semantic_comment_for_unknown(name) {
-            Some(comment) => vec![Stmt::Comment(comment.to_string())],
-            None if ins.is_empty() => vec![Stmt::Unknown(name.clone())],
-            None => vec![Stmt::Unknown(format!("{}(...)", name))],
-        },
+        Op::Intrinsic {
+            name, ins, outs, ..
+        } => {
+            if lower_scalar_float {
+                if let (Some((operation, width)), Some((dst, _))) =
+                    (scalar_float_intrinsic(name), outs.first())
+                {
+                    let expression = match (operation, ins.as_slice()) {
+                        (None, [src]) => Some(lower_float_value(src, width)),
+                        (Some(op), [lhs, rhs]) => Some(Expr::Bin {
+                            op,
+                            lhs: Box::new(lower_float_value(lhs, width)),
+                            rhs: Box::new(lower_float_value(rhs, width)),
+                        }),
+                        _ => None,
+                    };
+                    if let Some(src) = expression {
+                        return vec![Stmt::Assign {
+                            dst: dst.clone(),
+                            src,
+                        }];
+                    }
+                }
+            }
+            match semantic_comment_for_unknown(name) {
+                Some(comment) => vec![Stmt::Comment(comment.to_string())],
+                None if ins.is_empty() => vec![Stmt::Unknown(name.clone())],
+                None => vec![Stmt::Unknown(format!("{}(...)", name))],
+            }
+        }
         Op::Unknown { mnemonic } => match semantic_comment_for_unknown(mnemonic) {
             Some(comment) => vec![Stmt::Comment(comment.to_string())],
             None => vec![Stmt::Unknown(mnemonic.clone())],
@@ -788,10 +892,10 @@ fn lower_op(op: &Op) -> Vec<Stmt> {
 }
 
 /// Lower every op in a block to stmts.
-fn lower_block(b: &LlirBlock) -> Vec<Stmt> {
+fn lower_block(b: &LlirBlock, lower_scalar_float: bool) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(b.instrs.len());
     for ins in &b.instrs {
-        out.extend(lower_op(&ins.op));
+        out.extend(lower_op(&ins.op, lower_scalar_float));
     }
     hoist_inline_flag_conds(out)
 }
@@ -1158,6 +1262,7 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
         Expr::Reg(r) => (r == target) as usize,
         Expr::StackAddr { object, .. } => (object == target) as usize,
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -1211,6 +1316,7 @@ fn can_eagerly_evaluate(expr: &Expr) -> bool {
         Expr::Reg(_)
         | Expr::StackAddr { .. }
         | Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -1305,8 +1411,9 @@ fn lower_region(
     r: &Region,
     lf: &LlirFunction,
     targets: &std::collections::HashSet<u64>,
+    lower_scalar_float: bool,
 ) -> Vec<Stmt> {
-    let mut out = lower_region_inner(r, lf, targets);
+    let mut out = lower_region_inner(r, lf, targets, lower_scalar_float);
     // A region that *emits* a goto-target block (any shape — a plain block or a
     // structured `if`/`while` that begins at the target) gets a label at the
     // start of its statements so the jump resolves. The block's statements render
@@ -1327,16 +1434,17 @@ fn lower_region_inner(
     r: &Region,
     lf: &LlirFunction,
     targets: &std::collections::HashSet<u64>,
+    lower_scalar_float: bool,
 ) -> Vec<Stmt> {
     match r {
-        Region::Block(bi) => lower_block(&lf.blocks[*bi]),
+        Region::Block(bi) => lower_block(&lf.blocks[*bi], lower_scalar_float),
         Region::Goto(bi) => vec![Stmt::Goto {
             target: lf.blocks[*bi].start_va,
         }],
         Region::Seq(parts) => {
             let mut out = Vec::new();
             for (idx, p) in parts.iter().enumerate() {
-                let mut lowered = lower_region(p, lf, targets);
+                let mut lowered = lower_region(p, lf, targets, lower_scalar_float);
                 // A sequence emits its next region immediately after this one,
                 // so an unconditional jump to that region is ordinary
                 // fallthrough and must disappear. This includes entry jumps to
@@ -1362,7 +1470,7 @@ fn lower_region_inner(
             join,
             invert,
         } => {
-            let cond_stmts = lower_block(&lf.blocks[*cond]);
+            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
             let (cond_expr, mut pre) = extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
             // The raw condition is true when the branch is taken; if `then_r` is
             // the fall-through arm the structurer flagged `invert`, so negate.
@@ -1371,7 +1479,7 @@ fn lower_region_inner(
             } else {
                 cond_expr
             };
-            let mut then_stmts = lower_region(then_r, lf, targets);
+            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float);
             // The arm's trailing `goto <join>` is redundant — control falls
             // through to the join right after the `if`. Leaving it makes the arm
             // jump *past* the join's body (e.g. the epilogue's `return`) to a
@@ -1393,15 +1501,15 @@ fn lower_region_inner(
             join,
             invert,
         } => {
-            let cond_stmts = lower_block(&lf.blocks[*cond]);
+            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
             let (cond_expr, mut pre) = extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
             let cond_expr = if *invert {
                 negate_cmp_expr(cond_expr)
             } else {
                 cond_expr
             };
-            let mut then_stmts = lower_region(then_r, lf, targets);
-            let mut else_stmts = lower_region(else_r, lf, targets);
+            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float);
+            let mut else_stmts = lower_region(else_r, lf, targets, lower_scalar_float);
             if let Some(j) = join {
                 let jva = lf.blocks[*j].start_va;
                 strip_trailing_goto(&mut then_stmts, jva);
@@ -1415,7 +1523,7 @@ fn lower_region_inner(
             pre
         }
         Region::While { header, body, exit } => {
-            let cond_stmts = lower_block(&lf.blocks[*header]);
+            let cond_stmts = lower_block(&lf.blocks[*header], lower_scalar_float);
             let (cond_expr, pre) = extract_cond_and_strip(&lf.blocks[*header], cond_stmts);
             // `cond_expr` is the branch-TAKEN condition. Whether that is the
             // loop's CONTINUE condition depends on where the taken edge goes, and
@@ -1434,7 +1542,7 @@ fn lower_region_inner(
                 cond_expr
             };
             let cond_expr = continue_cond;
-            let mut body_stmts = lower_region(body, lf, targets);
+            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float);
             // The back-edge is what `while` MEANS. Left as an explicit `goto` to
             // the header it jumps OUT of the loop body to a label the renderer
             // pins wherever that block was emitted — after the `return`, in a
@@ -1501,8 +1609,8 @@ fn lower_region_inner(
             }
         }
         Region::DoWhile { body, cond, exit } => {
-            let mut body_stmts = lower_region(body, lf, targets);
-            let cond_stmts = lower_block(&lf.blocks[*cond]);
+            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float);
+            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
             let (cond_expr, mut latch_stmts) =
                 extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
             body_stmts.append(&mut latch_stmts);
@@ -1526,7 +1634,7 @@ fn lower_region_inner(
             // with the structured `switch` statement. v0 emits each
             // arm with its case index (positional) and an implicit
             // break at the end.
-            let mut prefix = lower_block(&lf.blocks[*dispatch]);
+            let mut prefix = lower_block(&lf.blocks[*dispatch], lower_scalar_float);
             // The switch statement IS the dispatch, so its terminator must not
             // also appear inside it. `IndirectGoto` belongs in this list for the
             // same reason `Goto` does; while the indirect jump lifted to a call
@@ -1547,7 +1655,7 @@ fn lower_region_inner(
                 .iter()
                 .enumerate()
                 .map(|(i, arm)| {
-                    let mut body = lower_region(arm, lf, targets);
+                    let mut body = lower_region(arm, lf, targets, lower_scalar_float);
                     if let Some(join) = join {
                         // The renderer supplies the case `break`; a jump to the
                         // block emitted immediately after this switch is plain
@@ -1586,7 +1694,7 @@ fn lower_region_inner(
             let mut out = Vec::new();
             for &bi in blocks {
                 out.push(Stmt::Label(lf.blocks[bi].start_va));
-                out.extend(lower_block(&lf.blocks[bi]));
+                out.extend(lower_block(&lf.blocks[bi], lower_scalar_float));
             }
             out
         }
@@ -1706,6 +1814,7 @@ fn deduplicate_labels(body: &mut Vec<Stmt>) {
 
 /// Lower an entire function given its region tree.
 pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Function {
+    let lower_scalar_float = scalar_float_semantics_are_closed(lf);
     let mut targets = std::collections::HashSet::new();
     collect_goto_targets(region, lf, &mut targets);
     // Region::Goto is not the only source of an explicit edge. A raw direct
@@ -1715,11 +1824,11 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
     // emitted destination block receives its real label. Without this pass the
     // renderer can only append an empty label at function end, changing where
     // the case actually transfers control.
-    let mut body = lower_region(region, lf, &targets);
+    let mut body = lower_region(region, lf, &targets, lower_scalar_float);
     let known_target_count = targets.len();
     crate::ir::label_prune::collect_goto_targets(&body, &mut targets);
     if targets.len() != known_target_count {
-        body = lower_region(region, lf, &targets);
+        body = lower_region(region, lf, &targets, lower_scalar_float);
     }
     deduplicate_labels(&mut body);
     let mut f = Function {
@@ -1899,8 +2008,9 @@ fn apply_default_return(body: &mut [Stmt], ret_reg: &VReg) {
 /// AArch64 without having to thread arch info through the AST.
 const RETURN_REGS: &[&str] = &[
     "rax", "eax", "ax", "al", // x86 / x86-64
-    "x0", "w0",  // AArch64
-    "r0",  // ARM32 AAPCS
+    "x0", "w0", // AArch64
+    "r0", // ARM32 AAPCS
+    "s0", "d0",  // ARM32 AAPCS hard-float
     "ret", // canonical role name after apply_role_names
 ];
 
@@ -2252,6 +2362,45 @@ fn write_pdb_field_hints(hints: &[PdbFieldHint], out: &mut String) {
     out.push_str(" */");
 }
 
+fn write_float_literal(bits: u64, width: u8, out: &mut String) {
+    let (mut rendered, suffix) = if width == 4 {
+        let value = f32::from_bits(bits as u32);
+        if value.is_nan() {
+            out.push_str("__builtin_nanf(\"\")");
+            return;
+        }
+        if value == f32::INFINITY {
+            out.push_str("__builtin_inff()");
+            return;
+        }
+        if value == f32::NEG_INFINITY {
+            out.push_str("-__builtin_inff()");
+            return;
+        }
+        (value.to_string(), "f")
+    } else {
+        let value = f64::from_bits(bits);
+        if value.is_nan() {
+            out.push_str("__builtin_nan(\"\")");
+            return;
+        }
+        if value == f64::INFINITY {
+            out.push_str("__builtin_inf()");
+            return;
+        }
+        if value == f64::NEG_INFINITY {
+            out.push_str("-__builtin_inf()");
+            return;
+        }
+        (value.to_string(), "")
+    };
+    if !rendered.contains(['.', 'e', 'E']) {
+        rendered.push_str(".0");
+    }
+    out.push_str(&rendered);
+    out.push_str(suffix);
+}
+
 fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
     match e {
         Expr::Reg(v) => {
@@ -2282,6 +2431,7 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
                 let _ = write!(out, "0x{:x}", c);
             }
         }
+        Expr::FloatConst { bits, width } => write_float_literal(*bits, *width, out),
         Expr::Addr(a) => {
             let _ = write!(out, "0x{:x}", a);
         }
@@ -2889,6 +3039,7 @@ fn write_expr_c(e: &Expr, out: &mut String) {
                 let _ = write!(out, "0x{:x}", c);
             }
         }
+        Expr::FloatConst { bits, width } => write_float_literal(*bits, *width, out),
         Expr::Addr(a) => {
             let _ = write!(out, "0x{:x}", a);
         }
@@ -3503,6 +3654,7 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
             Expr::Cast { expr, .. } => expression(expr, tm),
             Expr::Reg(_)
             | Expr::Const(_)
+            | Expr::FloatConst { .. }
             | Expr::Addr(_)
             | Expr::Named { .. }
             | Expr::StringLit { .. }
@@ -3657,7 +3809,7 @@ fn all_definitions_proven_scalar(body: &[Stmt], target: &str, tm: &TypeMap) -> b
 
 fn expression_proven_scalar(expr: &Expr, tm: &TypeMap) -> bool {
     match expr {
-        Expr::Const(_) | Expr::Cmp { .. } | Expr::Cast { .. } => true,
+        Expr::Const(_) | Expr::FloatConst { .. } | Expr::Cmp { .. } | Expr::Cast { .. } => true,
         Expr::Reg(VReg::Phys(name)) => matches!(
             tm.get(&VReg::phys(name)),
             Some(TypeHint::Int { .. } | TypeHint::BoolLike)
@@ -4035,6 +4187,7 @@ fn expression_value_width(
         } else {
             4
         }),
+        Expr::FloatConst { width, .. } => Some(*width),
         Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -4183,7 +4336,7 @@ fn widest_return_value(
 pub(crate) fn declared_int_type(ident: &str, tm: Option<&TypeMap>) -> Option<(bool, u8)> {
     if is_high_variable(ident) {
         return match tm.and_then(|types| types.get(&VReg::Phys(ident.to_string()))) {
-            Some(TypeHint::Pointer { .. } | TypeHint::CodePointer) => None,
+            Some(TypeHint::Pointer { .. } | TypeHint::CodePointer | TypeHint::Float { .. }) => None,
             _ => Some((true, 8)),
         };
     }
@@ -4253,6 +4406,8 @@ fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
         // claim this on the typed render path; the untyped path (`tm` is None)
         // stays blanket-`long` by contract.
         Expr::Const(_) if tm.is_some() => Some("int"),
+        Expr::FloatConst { width: 4, .. } if tm.is_some() => Some("float"),
+        Expr::FloatConst { .. } if tm.is_some() => Some("double"),
         _ => None,
     }
 }
@@ -4612,6 +4767,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
             Expr::Un { src, .. } => re(src, map),
             Expr::Cast { expr, .. } => re(expr, map),
             Expr::Const(_)
+            | Expr::FloatConst { .. }
             | Expr::Addr(_)
             | Expr::Named { .. }
             | Expr::StringLit { .. }
@@ -5189,7 +5345,11 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
         // call-target position as an (implicitly-declared) function name; either
         // way it is not a declared local, so nothing to collect here.
         Expr::Unknown(_) => ids.has_unknown_value = true,
-        Expr::Const(_) | Expr::Addr(_) | Expr::Named { .. } | Expr::StringLit { .. } => {}
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. } => {}
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             if let Some(b) = base {
                 collect_reg(b, ids);
@@ -5913,6 +6073,7 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             }
         }
         Expr::Const(c) => write_const_dec(*c, out),
+        Expr::FloatConst { bits, width } => write_float_literal(*bits, *width, out),
         Expr::Addr(a) => {
             let _ = write!(out, "0x{:x}", a);
         }
@@ -6376,6 +6537,7 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
         }),
         Expr::Reg(_)
         | Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Deref { .. }
         | Expr::Bin { .. }

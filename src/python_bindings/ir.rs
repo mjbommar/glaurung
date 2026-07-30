@@ -307,9 +307,13 @@ fn run_ast_passes(
     cc: crate::ir::call_args::CallConv,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     param_slots: &std::collections::HashSet<usize>,
+    parameter_roles: &std::collections::HashMap<String, usize>,
     addr_map: &std::collections::HashMap<u64, String>,
     str_pool: &std::collections::HashMap<u64, String>,
-) -> std::collections::HashMap<String, u8> {
+) -> (
+    std::collections::HashMap<String, u8>,
+    std::collections::HashMap<String, String>,
+) {
     let dump = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
     macro_rules! dp {
         ($n:expr) => {
@@ -374,7 +378,12 @@ fn run_ast_passes(
     }
     crate::ir::value_split::split_spilled_arg_reuse(f, cc);
     dp!("split_spilled_arg_reuse");
-    crate::ir::naming::apply_role_names_with_params(f, cc, param_slots);
+    let role_names = crate::ir::naming::apply_role_names_with_parameter_roles(
+        f,
+        cc,
+        param_slots,
+        parameter_roles,
+    );
     dp!("apply_role_names");
     crate::ir::canary::collapse_canary_save(f);
     if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
@@ -388,7 +397,7 @@ fn run_ast_passes(
     crate::ir::stack_idiom::rematerialise_stack_ops(f);
     crate::ir::label_prune::prune_unreferenced_labels(f);
     dp!("stack_idiom+label_prune");
-    slot_sizes
+    (slot_sizes, role_names)
 }
 
 fn lift_for_arch(data: &[u8], start_va: u64, bits: u32, arch: &str) -> PyResult<Vec<LlirInstr>> {
@@ -487,6 +496,22 @@ fn detect_arch_and_call_conv(
     (arch, cc)
 }
 
+fn arm_uses_vfp_arguments(data: &[u8]) -> bool {
+    use object::Object;
+
+    let Ok(file) = object::read::File::parse(data) else {
+        return false;
+    };
+    if file.architecture() != object::Architecture::Arm {
+        return false;
+    }
+    matches!(
+        file.flags(),
+        object::FileFlags::Elf { e_flags, .. }
+            if e_flags & object::elf::EF_ARM_ABI_FLOAT_HARD != 0
+    )
+}
+
 /// Run the full decompiler pipeline on the function whose entry is `func_va`
 /// in `path`, returning the rendered pseudocode.
 ///
@@ -538,6 +563,7 @@ fn decompile_at_py(
             ))
         })?;
     let (arch, cc) = detect_arch_and_call_conv(&data);
+    let arm_vfp_args = arm_uses_vfp_arguments(&data);
     let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
@@ -572,6 +598,7 @@ fn decompile_at_py(
             &ssa,
             cc,
             &param_slots,
+            arm_vfp_args,
             dwarf_outputs
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func_va)),
@@ -606,7 +633,11 @@ fn decompile_at_py(
     }
     dp!("lower");
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let slot_sizes = run_ast_passes(
+    let parameter_roles = prototype
+        .as_ref()
+        .map(|prototype| prototype.parameter_role_map())
+        .unwrap_or_default();
+    let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
         cc,
         prototype.as_ref().map_or(
@@ -614,6 +645,7 @@ fn decompile_at_py(
             |prototype| prototype.output_kind(),
         ),
         &param_slots,
+        &parameter_roles,
         &addr_map,
         &str_pool,
     );
@@ -650,6 +682,7 @@ fn decompile_at_py(
                 cc,
                 &param_slots,
                 &slot_sizes,
+                &role_names,
             )
         });
         let (decl, width) = match &maps {
@@ -728,6 +761,7 @@ fn decompile_range_at_py(
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let (arch, cc) = detect_arch_and_call_conv(&data);
+    let arm_vfp_args = arm_uses_vfp_arguments(&data);
     let bits = match arch {
         crate::core::binary::Arch::X86 | crate::core::binary::Arch::ARM => 32,
         crate::core::binary::Arch::X86_64 | crate::core::binary::Arch::AArch64 => 64,
@@ -786,6 +820,7 @@ fn decompile_range_at_py(
             &ssa,
             cc,
             &param_slots,
+            arm_vfp_args,
             dwarf_outputs
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func_va)),
@@ -802,7 +837,11 @@ fn decompile_range_at_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let slot_sizes = run_ast_passes(
+    let parameter_roles = prototype
+        .as_ref()
+        .map(|prototype| prototype.parameter_role_map())
+        .unwrap_or_default();
+    let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
         cc,
         prototype.as_ref().map_or(
@@ -810,6 +849,7 @@ fn decompile_range_at_py(
             |prototype| prototype.output_kind(),
         ),
         &param_slots,
+        &parameter_roles,
         &addr_map,
         &str_pool,
     );
@@ -830,6 +870,7 @@ fn decompile_range_at_py(
                 cc,
                 &param_slots,
                 &slot_sizes,
+                &role_names,
             )
         });
         let (decl, width) = match &maps {
@@ -888,17 +929,7 @@ fn remap_type_map(
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
 ) -> crate::ir::types_recover::TypeMap {
-    remap_type_map_impl(tm, cc, param_slots, true)
-}
-
-/// Remap non-parameter storage roles (most importantly the ABI return value)
-/// while leaving parameter projection exclusively to `RecoveredPrototype`.
-fn remap_non_parameter_type_map(
-    tm: &crate::ir::types_recover::TypeMap,
-    cc: crate::ir::call_args::CallConv,
-    param_slots: &std::collections::HashSet<usize>,
-) -> crate::ir::types_recover::TypeMap {
-    remap_type_map_impl(tm, cc, param_slots, false)
+    remap_type_map_impl(tm, cc, param_slots, true, None)
 }
 
 fn remap_type_map_impl(
@@ -906,6 +937,7 @@ fn remap_type_map_impl(
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
     include_parameters: bool,
+    exact_roles: Option<&std::collections::HashMap<String, String>>,
 ) -> crate::ir::types_recover::TypeMap {
     // Reconstruct the alias table the naming pass used for arg/ret slots;
     // `varN` aliases are assigned by first-appearance order and we can't
@@ -959,7 +991,7 @@ fn remap_type_map_impl(
         }
         crate::ir::call_args::CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         crate::ir::call_args::CallConv::Aarch64 => &["x0", "w0"],
-        crate::ir::call_args::CallConv::Arm => &["r0"],
+        crate::ir::call_args::CallConv::Arm => &["r0", "s0", "d0"],
     };
     for n in ret_aliases {
         alias
@@ -970,7 +1002,21 @@ fn remap_type_map_impl(
     for (reg, hint) in tm.iter() {
         match reg {
             crate::ir::types::VReg::Phys(n) => {
-                let new_name = alias.get(n).cloned().unwrap_or_else(|| n.clone());
+                // Exact first-appearance aliases are needed only for semantic
+                // float storage: unlike broad scalar guesses, a typed VFP
+                // intrinsic proves every operand's source class. Keeping this
+                // projection narrow avoids letting flow-insensitive register
+                // hints perturb unrelated call prototypes.
+                let exact = matches!(hint, crate::ir::types_recover::TypeHint::Float { .. })
+                    .then(|| exact_roles.and_then(|roles| roles.get(n)))
+                    .flatten()
+                    .filter(|role| {
+                        include_parameters || crate::ir::ast::parse_arg_index(role).is_none()
+                    })
+                    .cloned();
+                let new_name = exact
+                    .or_else(|| alias.get(n).cloned())
+                    .unwrap_or_else(|| n.clone());
                 out.upsert_public(crate::ir::types::VReg::Phys(new_name), *hint);
             }
             _ => out.upsert_public(reg.clone(), *hint),
@@ -1145,12 +1191,19 @@ fn recover_decbench_prototype(
     ssa: &crate::ir::ssa::SsaInfo,
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
+    arm_vfp_args: bool,
     declared_return: Option<&crate::debug::dwarf::DwarfReturnType>,
 ) -> crate::ir::types_recover::RecoveredPrototype {
     use crate::debug::dwarf::DwarfReturnType;
     use crate::ir::types_recover::RecoveredOutputKind;
 
-    let mut prototype = crate::ir::types_recover::recover_prototype(lf_raw, ssa, cc, param_slots);
+    let mut prototype = crate::ir::types_recover::recover_prototype_with_arm_vfp_args(
+        lf_raw,
+        ssa,
+        cc,
+        param_slots,
+        arm_vfp_args,
+    );
     match declared_return {
         Some(DwarfReturnType::Void) => {
             prototype.apply_locked_output(RecoveredOutputKind::Void, None);
@@ -1178,12 +1231,14 @@ fn decbench_type_maps(
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
     slot_sizes: &std::collections::HashMap<String, u8>,
+    role_names: &std::collections::HashMap<String, String>,
 ) -> (
     crate::ir::types_recover::TypeMap,
     crate::ir::types_recover::TypeMap,
 ) {
     use crate::ir::types_recover::recover_types_for;
-    let mut decl = remap_non_parameter_type_map(&recover_types_for(lf_raw, cc), cc, param_slots);
+    let raw = recover_types_for(lf_raw, cc);
+    let mut decl = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names));
     let live_ins = prototype.parameter_type_map();
     let result = prototype.result_type_map();
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
@@ -1197,14 +1252,14 @@ fn decbench_type_maps(
     // allowed to refine a rendered role. The complete version-zero map remains
     // available to analysis, but prototype recovery is not yet a fixed point
     // with function boundaries and direct-callee types.
-    for slot in param_slots {
-        let role = crate::ir::types::VReg::Phys(format!("arg{slot}"));
+    for parameter in prototype.parameters() {
+        let role = crate::ir::types::VReg::Phys(format!("arg{}", parameter.slot));
         if let Some(hint) = live_ins.get(&role) {
             decl.refine_from_value(role, hint);
         }
     }
     merge_slot_sizes(&mut decl, slot_sizes);
-    let mut width = remap_non_parameter_type_map(&recover_types_for(lf_raw, cc), cc, param_slots);
+    let mut width = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names));
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
         if prototype.output_is_locked() {
             width.apply_locked_fact(crate::ir::types::VReg::phys("ret"), hint);
@@ -1212,13 +1267,17 @@ fn decbench_type_maps(
             width.refine_from_value(crate::ir::types::VReg::phys("ret"), hint);
         }
     }
-    for slot in param_slots {
-        let role = crate::ir::types::VReg::Phys(format!("arg{slot}"));
+    for parameter in prototype.parameters() {
+        let role = crate::ir::types::VReg::Phys(format!("arg{}", parameter.slot));
         if let Some(hint) = live_ins.get(&role) {
             width.refine_from_value(role, hint);
         }
     }
     merge_slot_sizes(&mut width, slot_sizes);
+    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        eprintln!("\n===== exact role names =====\n{role_names:#?}");
+        eprintln!("\n===== recovered declaration types =====\n{decl:#?}");
+    }
     (decl, width)
 }
 
@@ -1258,6 +1317,7 @@ fn decompile_all_py(
     };
     let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
     let (arch, cc) = detect_arch_and_call_conv(&data);
+    let arm_vfp_args = arm_uses_vfp_arguments(&data);
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
@@ -1290,6 +1350,7 @@ fn decompile_all_py(
                 &ssa,
                 cc,
                 &param_slots,
+                arm_vfp_args,
                 dwarf_outputs
                     .as_ref()
                     .and_then(|outputs| outputs.get(&func.entry_point.value)),
@@ -1302,7 +1363,11 @@ fn decompile_all_py(
         // pruned unreferenced labels, so `--all` produced different output from `--vas`
         // for the same function, and the fixture gate's structural lane measured a
         // different pipeline from its execution lane. It cannot drift again.
-        let slot_sizes = run_ast_passes(
+        let parameter_roles = prototype
+            .as_ref()
+            .map(|prototype| prototype.parameter_role_map())
+            .unwrap_or_default();
+        let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
             cc,
             prototype.as_ref().map_or(
@@ -1310,6 +1375,7 @@ fn decompile_all_py(
                 |prototype| prototype.output_kind(),
             ),
             &param_slots,
+            &parameter_roles,
             &addr_map,
             &str_pool,
         );
@@ -1329,6 +1395,7 @@ fn decompile_all_py(
                 cc,
                 &param_slots,
                 &slot_sizes,
+                &role_names,
             );
             decbench_text(
                 &f,
@@ -1392,6 +1459,7 @@ fn decompile_many_py(
     // --- one-time analysis + name/field/string maps -----------------------
     let (funcs, _cg) = analyze_functions_bytes_with_seeds(&data, &budgets, &func_vas);
     let (arch, cc) = detect_arch_and_call_conv(&data);
+    let arm_vfp_args = arm_uses_vfp_arguments(&data);
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
@@ -1436,6 +1504,7 @@ fn decompile_many_py(
                 &ssa,
                 cc,
                 &param_slots,
+                arm_vfp_args,
                 dwarf_outputs
                     .as_ref()
                     .and_then(|outputs| outputs.get(&func_va)),
@@ -1455,7 +1524,11 @@ fn decompile_many_py(
         } else {
             None
         };
-        let slot_sizes = run_ast_passes(
+        let parameter_roles = prototype
+            .as_ref()
+            .map(|prototype| prototype.parameter_role_map())
+            .unwrap_or_default();
+        let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
             cc,
             prototype.as_ref().map_or(
@@ -1463,6 +1536,7 @@ fn decompile_many_py(
                 |prototype| prototype.output_kind(),
             ),
             &param_slots,
+            &parameter_roles,
             &addr_map,
             &str_pool,
         );
@@ -1486,6 +1560,7 @@ fn decompile_many_py(
                 cc,
                 &param_slots,
                 &slot_sizes,
+                &role_names,
             );
             decbench_text(
                 &f,

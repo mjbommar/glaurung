@@ -195,6 +195,175 @@ def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> Non
     assert "return 0;" not in text, text
 
 
+@pytest.mark.slow
+def test_real_arm_hard_float_decompile_recompile_execute_round_trip(
+    tmp_path: Path,
+) -> None:
+    """Recover VFP ABI roles and scalar arithmetic from a real Cortex-M build."""
+    arm_compiler = shutil.which("arm-none-eabi-gcc")
+    host_compiler = shutil.which("gcc")
+    if arm_compiler is None:
+        pytest.skip("arm-none-eabi-gcc is unavailable")
+    if host_compiler is None:
+        pytest.skip("host gcc is unavailable")
+
+    source = tmp_path / "arm_hard_float_formula.c"
+    binary = tmp_path / "arm_hard_float_formula.elf"
+    source.write_text(
+        "__attribute__((noinline)) float arm_hard_float_formula(float throttle) {\n"
+        "    return (1.0f - throttle * throttle / 3.0f) * throttle * 1.5f;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            arm_compiler,
+            "-mcpu=cortex-m4",
+            "-mthumb",
+            "-mfloat-abi=hard",
+            "-mfpu=fpv4-sp-d16",
+            "-nostdlib",
+            "-Wl,-Ttext=0x1000",
+            "-Wl,-e,arm_hard_float_formula",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (
+            function
+            for function in functions
+            if function.name == "arm_hard_float_formula"
+        ),
+        None,
+    )
+    assert target is not None, functions
+    generated = g.ir.decompile_at(
+        str(binary),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+
+    assert "float arm_hard_float_formula(float arg0)" in generated, generated
+    assert "asm:" not in generated, generated
+    assert "return 0;" not in generated, generated
+    assert all(literal in generated for literal in ("1.0f", "3.0f", "1.5f")), generated
+
+    driver = tmp_path / "driver.c"
+    driver.write_text(
+        "#include <stdio.h>\n"
+        "#include <stdlib.h>\n"
+        "float arm_hard_float_formula(float);\n"
+        "int main(int argc, char **argv) {\n"
+        "    for (int i = 1; i < argc; ++i)\n"
+        '        printf("%.9g\\n", arm_hard_float_formula(strtof(argv[i], 0)));\n'
+        "    return 0;\n"
+        "}\n"
+    )
+    rebuilt_source = tmp_path / "rebuilt.c"
+    rebuilt_source.write_text(generated)
+    reference = tmp_path / "reference"
+    rebuilt = tmp_path / "rebuilt"
+    for implementation, output in ((source, reference), (rebuilt_source, rebuilt)):
+        compiled = subprocess.run(
+            [
+                host_compiler,
+                "-std=c11",
+                "-O2",
+                "-o",
+                str(output),
+                str(implementation),
+                str(driver),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compiled.returncode == 0, (
+            f"{implementation}: {compiled.stderr}\n{generated}"
+        )
+
+    inputs = ["-1.25", "-0.5", "0", "0.5", "1", "1.75"]
+    reference_run = subprocess.run(
+        [str(reference), *inputs], capture_output=True, text=True, check=False
+    )
+    rebuilt_run = subprocess.run(
+        [str(rebuilt), *inputs], capture_output=True, text=True, check=False
+    )
+    assert reference_run.returncode == 0, reference_run.stderr
+    assert rebuilt_run.returncode == 0, rebuilt_run.stderr
+    assert rebuilt_run.stdout == reference_run.stdout
+
+
+def test_real_arm_stack_backed_float_stays_conservative(tmp_path: Path) -> None:
+    """Do not invent arithmetic when VFP memory flow is still opaque."""
+    compiler = shutil.which("arm-none-eabi-gcc")
+    if compiler is None:
+        pytest.skip("arm-none-eabi-gcc is unavailable")
+
+    source = tmp_path / "arm_stack_backed_float.c"
+    binary = tmp_path / "arm_stack_backed_float.elf"
+    source.write_text(
+        "__attribute__((noinline)) float arm_stack_backed_float(float arg) {\n"
+        "    volatile float slot = arg;\n"
+        "    return slot * 2.0f;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            compiler,
+            "-mcpu=cortex-m4",
+            "-mthumb",
+            "-mfloat-abi=hard",
+            "-mfpu=fpv4-sp-d16",
+            "-nostdlib",
+            "-Wl,-Ttext=0x1000",
+            "-Wl,-e,arm_stack_backed_float",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (
+            function
+            for function in functions
+            if function.name == "arm_stack_backed_float"
+        ),
+        None,
+    )
+    assert target is not None, functions
+    generated = g.ir.decompile_at(
+        str(binary),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+
+    assert "asm: vldr" in generated, generated
+    # GCC strength-reduces ``slot * 2`` to ``vadd.f32 s0, s15, s15`` even at
+    # this target's O0. The add must remain opaque until the preceding VFP load
+    # has a modeled definition; otherwise both operands become invented live-ins.
+    assert "asm: vadd.f32" in generated, generated
+
+
 def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> None:
     """Use AAPCS spill width and reload extension to recover byte arguments."""
     compiler = shutil.which("arm-none-eabi-gcc")
@@ -410,9 +579,7 @@ def test_decompile_x86_o0_main_shows_prologue_and_epilogue():
     # source-level arithmetic.  x86 subtraction lifting emits a signed-less
     # flag temporary before the rsp write; if that dead temporary strands the
     # write outside frame recognition, DecBench sees a bogus `rsp -= N`.
-    decbench = _run(
-        [str(X86_O0_SAMPLE), "--func", "0x12d0", "--style", "decbench"]
-    )
+    decbench = _run([str(X86_O0_SAMPLE), "--func", "0x12d0", "--style", "decbench"])
     assert decbench.returncode == 0, decbench.stderr
     assert "rsp = (rsp -" not in decbench.stdout, decbench.stdout
 
@@ -514,9 +681,15 @@ def test_decbench_output_parses_with_gcc():
 
     gcc = shutil.which("gcc")
     flags = [
-        gcc, "-fsyntax-only", "-std=gnu89", "-w",
-        "-Wno-implicit-function-declaration", "-Wno-int-conversion",
-        "-Wno-implicit-int", "-Wno-builtin-declaration-mismatch", "-fno-builtin",
+        gcc,
+        "-fsyntax-only",
+        "-std=gnu89",
+        "-w",
+        "-Wno-implicit-function-declaration",
+        "-Wno-int-conversion",
+        "-Wno-implicit-int",
+        "-Wno-builtin-declaration-mismatch",
+        "-fno-builtin",
     ]
     funcs, _ = g.analysis.analyze_functions_path(str(SAMPLE), max_functions=4000)
     vas = [int(f.entry_point.value) for f in funcs]

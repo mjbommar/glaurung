@@ -1130,6 +1130,25 @@ mod tests {
     }
 
     #[test]
+    fn thumb_vmov_f32_immediate_preserves_ieee_payload() {
+        // `vmov.f32 s15, #8` (`3.0f`) from the real DecBench dynThrottle
+        // function. Capstone reports this operand as an f64, so the decoder
+        // must explicitly project it back to the instruction's f32 payload.
+        let lifted = lift_bytes(&[0xf0, 0xee, 0x08, 0x7a], 0x804343c, true);
+        assert_eq!(lifted.len(), 1, "lifted VFP immediate: {lifted:#?}");
+        assert!(
+            matches!(
+                &lifted[0].op,
+                Op::Intrinsic { name, ins, outs, .. }
+                    if name == "vmov.f32"
+                        && ins == &[Value::Const(0x4040_0000)]
+                        && outs == &[(VReg::phys("s15"), Width::W32)]
+            ),
+            "lifted VFP immediate: {lifted:#?}"
+        );
+    }
+
+    #[test]
     fn thumb_postindexed_pc_load_lifts_as_stack_pop_return() {
         // `ldr.w pc, [sp], #4`, the exact GCC epilogue encoding exercised by
         // the DecBench `write_power_mode` function.

@@ -347,6 +347,7 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
         Expr::Reg(r) => r == dst,
         Expr::StackAddr { object, .. } => object == dst,
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

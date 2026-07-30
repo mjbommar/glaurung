@@ -36,7 +36,7 @@ fn return_reg_aliases(cc: CallConv) -> &'static [&'static str] {
         CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
         CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         CallConv::Aarch64 => &["x0", "w0"],
-        CallConv::Arm => &["r0"],
+        CallConv::Arm => &["r0", "s0", "d0"],
     }
 }
 
@@ -90,6 +90,20 @@ pub fn apply_role_names_with_params(
     cc: CallConv,
     param_slots: &std::collections::HashSet<usize>,
 ) {
+    apply_role_names_with_parameter_roles(f, cc, param_slots, &HashMap::new());
+}
+
+/// Apply role names with exact prototype-owned storage bindings in addition to
+/// the convention's ordinary integer slot table. This is required for ABIs
+/// whose argument storage classes are disjoint (for example ARM hard-float
+/// `s0` versus core-register `r0`) and deliberately does not merge those names
+/// in the global ABI table.
+pub fn apply_role_names_with_parameter_roles(
+    f: &mut Function,
+    cc: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    parameter_roles: &HashMap<String, usize>,
+) -> HashMap<String, String> {
     // Build the role map: raw name → friendly name. We build it up-front so
     // that every substitution is consistent across the function.
     let mut role: HashMap<String, String> = HashMap::new();
@@ -104,6 +118,10 @@ pub fn apply_role_names_with_params(
             role.entry(name.to_string())
                 .or_insert_with(|| format!("arg{}", slot_idx));
         }
+    }
+    for (name, slot) in parameter_roles {
+        role.entry(name.clone())
+            .or_insert_with(|| format!("arg{slot}"));
     }
     for name in return_reg_aliases(cc) {
         // `ret` only wins if no arg-slot already claimed the name (x0 case
@@ -145,6 +163,7 @@ pub fn apply_role_names_with_params(
     }
 
     rewrite_body(&mut f.body, &role);
+    role
 }
 
 /// Slot indices (into [`arg_slot_tables`]) that behave like genuine live-in
@@ -409,6 +428,7 @@ fn walk_expr_phys(e: &Expr, cb: &mut impl FnMut(&str)) {
         Expr::Reg(_)
         | Expr::StackAddr { .. }
         | Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -454,6 +474,7 @@ fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
         Expr::Reg(v) => rename_vreg(v, role),
         Expr::StackAddr { object, .. } => rename_vreg(object, role),
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

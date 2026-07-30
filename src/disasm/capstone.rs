@@ -282,6 +282,20 @@ impl Disassembler for CapstoneDisassembler {
                                 ArmOperandType::Imm(i) => {
                                     operands.push(Operand::immediate(i as i64, 0))
                                 }
+                                ArmOperandType::Fp(value) => {
+                                    // Capstone exposes an ARM VFP immediate as an
+                                    // `f64`, independently of the instruction's
+                                    // encoded precision. Preserve its exact IEEE
+                                    // payload in the ordinary immediate container;
+                                    // the typed VFP intrinsic supplies the semantic
+                                    // interpretation downstream.
+                                    let (bits, width) = if mnemonic.contains(".f32") {
+                                        (i64::from((value as f32).to_bits()), 32)
+                                    } else {
+                                        (value.to_bits() as i64, 64)
+                                    };
+                                    operands.push(Operand::immediate(bits, width));
+                                }
                                 ArmOperandType::Mem(m) => {
                                     let base = if m.base().0 != 0 {
                                         Some(self.cs.reg_name(m.base()).unwrap_or_default())

@@ -707,6 +707,7 @@ fn contains_deref(e: &Expr) -> bool {
     match e {
         Expr::Deref { .. } => true,
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -733,6 +734,7 @@ fn contains_unknown(e: &Expr) -> bool {
     match e {
         Expr::Unknown(_) => true,
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -765,6 +767,7 @@ fn contains_select(e: &Expr) -> bool {
             contains_select(lhs) || contains_select(rhs)
         }
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -787,6 +790,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
         Expr::Reg(r) => (r == target) as usize,
         Expr::StackAddr { object, .. } => (object == target) as usize,
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -818,6 +822,7 @@ fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
         Expr::Reg(r) => *reads.entry(r.clone()).or_insert(0) += 1,
         Expr::StackAddr { object, .. } => *reads.entry(object.clone()).or_insert(0) += 1,
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -980,6 +985,7 @@ fn subst(e: &mut Expr, copies: &Copies) {
         // replace from the copy environment.
         Expr::StackAddr { .. } => {}
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

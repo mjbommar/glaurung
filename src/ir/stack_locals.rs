@@ -644,6 +644,7 @@ fn rewrite_expr(
         ),
         Expr::Reg(_)
         | Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::StackAddr { .. }
         | Expr::Lea { .. }

@@ -106,6 +106,7 @@ impl Splitter {
             Expr::Reg(v) => self.rename_reg(v),
             Expr::StackAddr { object, .. } => self.rename_reg(object),
             Expr::Const(_)
+            | Expr::FloatConst { .. }
             | Expr::Addr(_)
             | Expr::Named { .. }
             | Expr::StringLit { .. }

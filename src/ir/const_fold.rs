@@ -68,6 +68,7 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
             }
             Expr::Cast { expr, .. } => expression(expr, tm),
             Expr::Reg(_)
+            | Expr::FloatConst { .. }
             | Expr::Const(_)
             | Expr::Addr(_)
             | Expr::Named { .. }
@@ -209,6 +210,7 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
             }
             Expr::Cast { expr, .. } => expression(expr, tm),
             Expr::Reg(_)
+            | Expr::FloatConst { .. }
             | Expr::Const(_)
             | Expr::Addr(_)
             | Expr::Named { .. }

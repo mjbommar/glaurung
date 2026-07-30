@@ -937,6 +937,7 @@ fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> b
         Expr::Un { src, .. } => substitute_exact_reg(src, target, replacement),
         Expr::Cast { expr, .. } => substitute_exact_reg(expr, target, replacement),
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -964,6 +965,7 @@ fn is_pure_arg_normalisation(expr: &Expr) -> bool {
         Expr::Cast { expr, .. } => is_pure_arg_normalisation(expr),
         Expr::Reg(_)
         | Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -1144,6 +1146,7 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
     match e {
         Expr::Reg(r) => mark_slot_read(r, arch, read_between),
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -1329,6 +1332,7 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
         Expr::Reg(r) => r == target,
         Expr::StackAddr { object, .. } => object == target,
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

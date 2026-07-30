@@ -515,6 +515,20 @@ impl RecoveredPrototype {
         out
     }
 
+    /// Machine storage names for the exact live-in values represented by this
+    /// prototype. Integer-only ABIs derive the same mapping from their slot
+    /// tables; keeping it on the prototype also represents disjoint storage
+    /// classes such as AAPCS VFP `s0` without pretending it aliases `r0`.
+    pub fn parameter_role_map(&self) -> HashMap<String, usize> {
+        self.parameters
+            .iter()
+            .filter_map(|parameter| match &parameter.value.base {
+                VReg::Phys(name) => Some((name.clone(), parameter.slot)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Project the exact SSA output to the renderer's source-level return role.
     pub fn result_type_map(&self) -> TypeMap {
         let mut out = TypeMap::default();
@@ -550,6 +564,26 @@ fn normalize_value_hint_for_abi(hint: TypeHint, cc: crate::ir::call_args::CallCo
     }
 }
 
+fn scalar_float_intrinsic_width(name: &str) -> Option<u8> {
+    match name {
+        "addss" | "subss" | "mulss" | "divss" => Some(4),
+        "addsd" | "subsd" | "mulsd" | "divsd" => Some(8),
+        name if ["vmov.f32", "vadd.f32", "vsub.f32", "vmul.f32", "vdiv.f32"]
+            .iter()
+            .any(|operation| name.starts_with(operation)) =>
+        {
+            Some(4)
+        }
+        name if ["vmov.f64", "vadd.f64", "vsub.f64", "vmul.f64", "vdiv.f64"]
+            .iter()
+            .any(|operation| name.starts_with(operation)) =>
+        {
+            Some(8)
+        }
+        _ => None,
+    }
+}
+
 /// A result fact strong enough to cross the SSA-to-source prototype boundary.
 ///
 /// A narrow load cannot contain a machine pointer, so its scalar class and
@@ -567,27 +601,7 @@ fn qualified_result_hint(
         let Op::Intrinsic { name, outs, .. } = op else {
             return None;
         };
-        let semantic_width = match name.as_str() {
-            "addss" | "subss" | "mulss" | "divss" => Some(4),
-            "addsd" | "subsd" | "mulsd" | "divsd" => Some(8),
-            name if name.starts_with("vmov.f32")
-                || name.starts_with("vadd.f32")
-                || name.starts_with("vsub.f32")
-                || name.starts_with("vmul.f32")
-                || name.starts_with("vdiv.f32") =>
-            {
-                Some(4)
-            }
-            name if name.starts_with("vmov.f64")
-                || name.starts_with("vadd.f64")
-                || name.starts_with("vsub.f64")
-                || name.starts_with("vmul.f64")
-                || name.starts_with("vdiv.f64") =>
-            {
-                Some(8)
-            }
-            _ => None,
-        }?;
+        let semantic_width = scalar_float_intrinsic_width(name)?;
         let declared_width = outs
             .iter()
             .find(|(register, _)| register == &value.base)
@@ -895,6 +909,23 @@ pub fn recover_prototype(
     cc: crate::ir::call_args::CallConv,
     param_slots: &HashSet<usize>,
 ) -> RecoveredPrototype {
+    recover_prototype_with_arm_vfp_args(lf, ssa, cc, param_slots, false)
+}
+
+/// Recover a prototype with the binary-level ARM VFP argument contract.
+///
+/// VFP and core-register allocation are independent, so stripped mixed-class
+/// signatures are not order-identifiable from one function in isolation. The
+/// current sound subset accepts only contiguous `s0..sN` live-ins when no core
+/// argument register is live; pure-float functions are exact and mixed
+/// signatures remain conservatively on the established core-register path.
+pub fn recover_prototype_with_arm_vfp_args(
+    lf: &LlirFunction,
+    ssa: &SsaInfo,
+    cc: crate::ir::call_args::CallConv,
+    param_slots: &HashSet<usize>,
+    arm_vfp_args: bool,
+) -> RecoveredPrototype {
     let raw = recover_types_for(lf, cc);
     let valued = recover_types_valued(lf, ssa);
     let slots = crate::ir::abi::argument_slots(cc);
@@ -1074,7 +1105,7 @@ pub fn recover_prototype(
         | RecoveredOutputKind::HiddenReturn => None,
     };
 
-    let parameters = ordered
+    let mut parameters: Vec<RecoveredParameter> = ordered
         .into_iter()
         .filter_map(|slot| {
             let base = canonical.get(slot).map(|name| VReg::phys(*name))?;
@@ -1098,6 +1129,47 @@ pub fn recover_prototype(
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
+    if arm_vfp_args && matches!(cc, crate::ir::call_args::CallConv::Arm) && param_slots.is_empty() {
+        let mut first_touch: HashMap<usize, bool> = HashMap::new();
+        let single_slot = |register: &VReg| match register {
+            VReg::Phys(name) => name
+                .strip_prefix('s')
+                .and_then(|index| index.parse::<usize>().ok())
+                .filter(|index| *index < 16),
+            _ => None,
+        };
+        for block in &lf.blocks {
+            for instruction in &block.instrs {
+                let (definition, uses) = def_uses(&instruction.op);
+                for used in uses {
+                    if let Some(slot) = single_slot(&used) {
+                        first_touch.entry(slot).or_insert(true);
+                    }
+                }
+                if let Some(definition) = definition {
+                    if let Some(slot) = single_slot(&definition) {
+                        first_touch.entry(slot).or_insert(false);
+                    }
+                }
+            }
+        }
+        let mut live: Vec<usize> = first_touch
+            .into_iter()
+            .filter_map(|(slot, is_live_in)| is_live_in.then_some(slot))
+            .collect();
+        live.sort_unstable();
+        if live.iter().copied().eq(0..live.len()) {
+            parameters.extend(live.into_iter().map(|slot| RecoveredParameter {
+                slot,
+                value: SsaValue {
+                    base: VReg::phys(format!("s{slot}")),
+                    version: 0,
+                },
+                hint: Some(TypeHint::Float { width: 4 }),
+            }));
+        }
+    }
+    parameters.sort_by_key(|parameter| parameter.slot);
     RecoveredPrototype {
         parameters,
         result,
@@ -1288,6 +1360,22 @@ fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
                         width: bytes(*from),
                     },
                 );
+            }
+        }
+        Op::Intrinsic {
+            name, ins, outs, ..
+        } if scalar_float_intrinsic_width(name).is_some() => {
+            let width = scalar_float_intrinsic_width(name).expect("guarded scalar float width");
+            let hint = TypeHint::Float { width };
+            for value in ins {
+                if let Value::Reg(register @ VReg::Phys(_)) = value {
+                    tm.upsert(register.clone(), hint);
+                }
+            }
+            for (register, _) in outs {
+                if matches!(register, VReg::Phys(_)) {
+                    tm.upsert(register.clone(), hint);
+                }
             }
         }
         _ => {}
@@ -3152,6 +3240,57 @@ int never_returns(void) { for (;;) {} }
             &HashSet::new(),
         );
         assert_eq!(prototype.output_kind(), RecoveredOutputKind::Unknown);
+    }
+
+    #[test]
+    fn arm_hard_float_mixed_storage_does_not_guess_source_order() {
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1008,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::Temp(0),
+                            src: Value::Reg(VReg::phys("r0")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1002,
+                        op: Op::Intrinsic {
+                            name: "vadd.f32".into(),
+                            ins: vec![Value::Reg(VReg::phys("s0")), Value::Reg(VReg::phys("s0"))],
+                            outs: vec![(VReg::phys("s0"), crate::ir::types::Width::W32)],
+                            reads_mem: false,
+                            writes_mem: false,
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1006,
+                        op: Op::Return,
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype_with_arm_vfp_args(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::Arm,
+            &HashSet::from([0]),
+            true,
+        );
+
+        assert!(
+            prototype
+                .parameters()
+                .iter()
+                .all(|parameter| parameter.value.base != VReg::phys("s0")),
+            "mixed core/VFP source ordering is not identifiable: {prototype:#?}"
+        );
     }
 
     #[test]

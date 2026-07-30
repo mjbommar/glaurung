@@ -144,6 +144,7 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
         Expr::Reg(_)
         | Expr::StackAddr { .. }
         | Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. }
         | Expr::Named { .. }

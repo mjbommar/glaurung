@@ -186,6 +186,7 @@ fn stable_value_expr(expr: &Expr) -> bool {
         Expr::Cast { expr, .. } => stable_value_expr(expr),
         Expr::Reg(_)
         | Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -220,6 +221,7 @@ fn collect_expr_regs(expr: &Expr, out: &mut Vec<VReg>) {
             out.extend(index.iter().cloned());
         }
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -540,6 +542,7 @@ fn contains_reg(expr: &Expr, target: &VReg) -> bool {
             base.as_ref() == Some(target) || index.as_ref() == Some(target)
         }
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

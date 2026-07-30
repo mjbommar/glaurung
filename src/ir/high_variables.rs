@@ -39,8 +39,15 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
     // exact prepared definition graph proves below.
     let stale_high_variables: Vec<_> = types
         .iter()
-        .filter_map(|(reg, _)| match reg {
-            VReg::Phys(name) if is_high_variable(name) => Some(reg.clone()),
+        .filter_map(|(reg, hint)| match reg {
+            // A semantic VFP intrinsic proves the source class of every
+            // operand. Keep that exact fact; only the legacy broad scalar and
+            // pointer guesses require prepared-AST revalidation here.
+            VReg::Phys(name)
+                if is_high_variable(name) && !matches!(hint, TypeHint::Float { .. }) =>
+            {
+                Some(reg.clone())
+            }
             _ => None,
         })
         .collect();
@@ -289,6 +296,7 @@ fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
             if_false,
         ),
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Deref { .. }
         | Expr::Bin { .. }
         | Expr::Un { .. }
@@ -456,6 +464,7 @@ fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashS
         }
         Expr::Reg(_)
         | Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

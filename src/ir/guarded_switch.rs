@@ -508,6 +508,7 @@ fn count_reads_in_expr(expr: &Expr, target: &VReg) -> usize {
         }
         Expr::StackAddr { object, .. } => usize::from(object == target),
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

@@ -184,6 +184,7 @@ fn reads_expr(e: &Expr, out: &mut Vec<String>) {
     match e {
         Expr::Reg(v) => out.extend(checked_name(v)),
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

@@ -264,6 +264,7 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
         Expr::Reg(_)
         | Expr::StackAddr { .. }
         | Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. }
         | Expr::StringLit { .. }

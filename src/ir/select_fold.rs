@@ -163,6 +163,7 @@ fn expression_width(expr: &Expr) -> Option<u8> {
     match expr {
         Expr::Deref { size, .. } | Expr::Select { width: size, .. } => Some(*size),
         Expr::Cast { width, .. } => Some(*width),
+        Expr::FloatConst { width, .. } => Some(*width),
         Expr::Cmp { .. } => Some(1),
         Expr::Bin { lhs, rhs, .. } => expression_width(lhs)
             .into_iter()

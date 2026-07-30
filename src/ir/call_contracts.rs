@@ -363,6 +363,8 @@ fn recovered_argument_type(argument: &Expr, types: Option<&TypeMap>) -> &'static
         } => "int",
         Expr::Cmp { .. } => "int",
         Expr::Const(value) if i32::try_from(*value).is_ok() => "int",
+        Expr::FloatConst { width: 4, .. } => "float",
+        Expr::FloatConst { .. } => "double",
         Expr::Select { width: 1, .. } => "signed char",
         Expr::Select { width: 2, .. } => "short",
         Expr::Select { width: 4, .. } => "int",

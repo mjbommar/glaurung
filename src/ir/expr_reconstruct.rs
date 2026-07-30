@@ -153,6 +153,7 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
         Expr::Reg(r) => r == target,
         Expr::StackAddr { object, .. } => object == target,
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -185,6 +186,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
         Expr::Reg(r) => (r == target) as usize,
         Expr::StackAddr { object, .. } => (object == target) as usize,
         Expr::Const(_)
+        | Expr::FloatConst { .. }
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -265,6 +267,7 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
         Expr::Reg(r) => Expr::Reg(r),
         Expr::StackAddr { object, size } => Expr::StackAddr { object, size },
         Expr::Const(c) => Expr::Const(c),
+        Expr::FloatConst { bits, width } => Expr::FloatConst { bits, width },
         Expr::Addr(a) => Expr::Addr(a),
         Expr::Named { va, name } => Expr::Named { va, name },
         Expr::StringLit { value } => Expr::StringLit { value },
