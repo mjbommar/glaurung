@@ -8,11 +8,34 @@ The native DecBench adapter is preserved and pushed to the Glaurung owner's
 DecBench fork as `codex/glaurung-external-eval` at `e110ad7`. It is not merged
 into `Noelo-Lab/decbench`: there is no upstream PR, issue, or submission.
 
-Last updated: 2026-07-29.
+Last updated: 2026-07-30.
 
 ## Current decision: do not submit
 
-### Current output checkpoint: `a5149a1`
+### Current output checkpoint: `7abdc82`
+
+DWARF return contracts now remain locked across machine-code output recovery
+and later type refinements. This restores both optimized `cpp_raii_guard`
+behavioral lanes while leaving stripped-binary output inference unchanged. The
+complete evidence, real round trip, reference comparison, and artifact audit
+are in
+[`2026-07-30-dwarf-locked-return-contracts.md`](../analysis/decompiler/2026-07-30-dwarf-locked-return-contracts.md).
+
+The reproducible static-only artifact covers 250/250 functions in 224/224
+binaries with zero adapter errors. Its SHA-256 is
+`54ae5b6098c9afbf0e3a52a49404fe5632551ce205ff2a774af29f4564d206da`.
+Its C payload is byte-identical to a clean isolated rebuild of the preceding
+source checkpoint `7bee103`, so the change itself has zero blinded output
+delta.
+
+That audit also found that the older archive labeled `7bee103` is not
+reproducible from its named source object in the current pinned environment: it
+differs in five stripped ARM files only by explicit narrow store casts. The
+prior 127/250 compile result is therefore not relabeled as a current score.
+Fresh official GED, byte-match, type-match, and compile/fixup measurements are
+still required before submission.
+
+### Previous output checkpoint: `a5149a1`
 
 The native pipeline now applies known source-level call contracts after ABI
 argument/result reconstruction. It loads the canonical libc/POSIX and WinAPI
