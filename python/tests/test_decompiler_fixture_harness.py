@@ -278,6 +278,86 @@ def test_real_noreturn_import_terminates_the_recovered_function():
     )
 
 
+def test_real_noreturn_guard_preserves_machine_fallthrough_order():
+    """A terminal guard must not make the hot fallthrough become its body.
+
+    At ``-O0`` GCC lays this function out as a conditional branch over the
+    lexical fallthrough containing ``exit``.  Both successors terminate, so a
+    structurer that chooses its one-arm ``if`` from successor-vector order can
+    invert the presentation into ``if (success) { strncpy; return; } exit;``.
+    Compile and strip the real shared object, then require the emitted C to keep
+    the terminal guard before the normal fallthrough and round-trip through GCC.
+    """
+    source = (
+        "#include <stdlib.h>\n"
+        "#include <string.h>\n"
+        "__attribute__((noinline)) void copy_bounded(char *dst, const char *src) {\n"
+        "    unsigned long size = strlen(src);\n"
+        "    if (size > 1024) exit(7);\n"
+        "    strncpy(dst, src, 1024);\n"
+        "    dst[1024] = 0;\n"
+        "}\n"
+    )
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "noreturn_fallthrough.c"
+        binary_path = Path(td) / "noreturn_fallthrough.so"
+        source_path.write_text(source)
+        built = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-fno-reorder-functions",
+                "-fno-toplevel-reorder",
+                "-o",
+                str(binary_path),
+                str(source_path),
+            ]
+        )
+        assert built.returncode == 0, built.stderr
+        stripped = TC.run(["strip", "--strip-all", str(binary_path)])
+        assert stripped.returncode == 0, stripped.stderr
+
+        function_va = D.exported_functions(str(binary_path))["copy_bounded"]
+        decompiled = D.decompiled_c(str(binary_path), function_va)
+        assert decompiled is not None
+
+        definition = decompiled.rfind("copy_bounded(")
+        body_start = decompiled.find("{", definition)
+        body = decompiled[body_start:]
+        # Use the final occurrence so the standalone extern declarations do
+        # not masquerade as the actual call-site order under test.
+        guard = body.find("if (")
+        exit_call = body.rfind("exit(")
+        guard_close = body.find("}", exit_call)
+        copy_call = body.rfind("strncpy(")
+        assert min(guard, exit_call, guard_close, copy_call) >= 0, decompiled
+        assert guard < exit_call < guard_close < copy_call, (
+            "the terminal machine fallthrough became the trailing path:\n"
+            f"{decompiled}"
+        )
+
+        rebuilt_path = Path(td) / "noreturn_fallthrough_rebuilt.so"
+        recovered_path = Path(td) / "noreturn_fallthrough_recovered.c"
+        recovered_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu11",
+                "-Werror",
+                "-o",
+                str(rebuilt_path),
+                str(recovered_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_real_guarded_call_result_survives_a_noreturn_alternative():
     """A call value returned on the only returning path is a real output trial.
 

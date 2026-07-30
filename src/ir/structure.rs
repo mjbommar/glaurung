@@ -180,6 +180,13 @@ struct Cfg {
     /// the taken arm in the `then` slot so the rendered condition polarity is
     /// correct regardless of block address ordering.
     cond_taken: Vec<Option<usize>>,
+    /// Whether a block ends in an explicit machine return.
+    ///
+    /// A successor-free block can instead end in a non-returning call, trap, or
+    /// tail transfer. Keeping that distinction prevents the structurer from
+    /// treating two ordinary return arms like a cold non-returning guard merely
+    /// because both have zero CFG successors.
+    ends_in_return: Vec<bool>,
     /// Typed edges parallel to `succs`, OWNED here.
     ///
     /// The CFG is the thing that knows how control transfers, so it records it once
@@ -240,6 +247,16 @@ impl Cfg {
             }
         }
         let ipostdom = compute_ipostdom(n, &succs);
+        let ends_in_return = lf
+            .blocks
+            .iter()
+            .map(|block| {
+                block
+                    .instrs
+                    .last()
+                    .is_some_and(|instr| matches!(instr.op, crate::ir::types::Op::Return))
+            })
+            .collect();
         // Record each conditional block's taken-branch successor index.
         let mut cond_taken: Vec<Option<usize>> = vec![None; n];
         for (i, b) in lf.blocks.iter().enumerate() {
@@ -263,6 +280,7 @@ impl Cfg {
             dom,
             ipostdom,
             cond_taken,
+            ends_in_return,
             edges,
         }
     }
@@ -1107,6 +1125,40 @@ fn detect_if_shape(
         }
     }
 
+    // --- terminal guard with a terminal continuation -----------------------
+    // Both direct arms can be CFG terminals even though one is semantically a
+    // non-returning guard and the other is an ordinary function tail. Prefer
+    // the unique arm without an explicit machine return as the one-arm body.
+    // If both have the same terminal kind, use the semantic taken edge as the
+    // deterministic tie-breaker. Successor-vector order is never branch truth.
+    let t_terminates = cfg.preds[t] == vec![cond] && cfg.succs[t].is_empty();
+    let e_terminates = cfg.preds[e] == vec![cond] && cfg.succs[e].is_empty();
+    if t_terminates && e_terminates {
+        let body_and_cont = match (cfg.ends_in_return[t], cfg.ends_in_return[e]) {
+            (false, true) => Some((t, e)),
+            (true, false) => Some((e, t)),
+            _ => match cfg.cond_taken[cond] {
+                Some(taken) if taken == t => Some((t, e)),
+                Some(taken) if taken == e => Some((e, t)),
+                _ => None,
+            },
+        };
+        if let Some((body, cont)) = body_and_cont {
+            let invert = invert_for(cfg, cond, body);
+            visited.insert(cond);
+            let then_r = build(body, cfg, visited, None);
+            return Some((
+                Region::IfThen {
+                    cond,
+                    then_r: Box::new(then_r),
+                    join: None,
+                    invert,
+                },
+                Some(cont),
+            ));
+        }
+    }
+
     // --- if-then with early-exit body (#192) -------------------------------
     // The shape: one arm terminates the function (return / unreachable), the
     // other continues. The terminating arm becomes the `then` body of an
@@ -1235,8 +1287,6 @@ fn detect_if_shape(
     // --- if-then-else where both arms terminate (#192) ---------------------
     // Both arms exit the function; there is no continuation. We emit an
     // IfThenElse with join=None and signal the outer build to stop.
-    let t_terminates = cfg.preds[t] == vec![cond] && cfg.succs[t].is_empty();
-    let e_terminates = cfg.preds[e] == vec![cond] && cfg.succs[e].is_empty();
     if t_terminates && e_terminates {
         let invert = invert_for(cfg, cond, t);
         visited.insert(cond);
@@ -2302,6 +2352,99 @@ mod tests {
             }
             other => panic!("expected Seq; got {:?}", other),
         }
+    }
+
+    #[test]
+    fn nonreturning_terminal_guard_is_body_independent_of_successor_order() {
+        use crate::ir::types::{CallTarget, Flag, VReg};
+
+        // The branch target is the successful continuation and the lexical
+        // fallthrough is a non-returning guard body. Deliberately list the
+        // taken target first: successor-vector order is not branch semantics.
+        //
+        //   b0: if (ok) goto b2
+        //   b1: exit / unreachable       (fallthrough)
+        //   b2: normal work; return      (taken target)
+        //
+        // Both arms terminate at CFG level, but presentation must remain
+        // Seq[if (!ok) b1, b2], matching the machine fallthrough topology.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(Flag::Z),
+                    target: 0x1200,
+                    inverted: false,
+                }],
+                vec![0x1200, 0x1100],
+            ),
+            (
+                0x1100,
+                vec![Op::Call {
+                    target: CallTarget::Direct(0x9000),
+                    effects: None,
+                }],
+                vec![],
+            ),
+            (0x1200, vec![Op::Return], vec![]),
+        ]);
+
+        let r = recover_for(&lf);
+        let Region::Seq(parts) = r else {
+            panic!("expected terminal guard followed by continuation; got {r:?}");
+        };
+        assert_eq!(parts.len(), 2, "unexpected region sequence: {parts:?}");
+        match &parts[0] {
+            Region::IfThen {
+                cond,
+                then_r,
+                join,
+                invert,
+            } => {
+                assert_eq!(*cond, 0);
+                assert_eq!(**then_r, Region::Block(1));
+                assert_eq!(*join, None);
+                assert!(*invert, "the raw taken condition must be negated");
+            }
+            other => panic!("expected one-arm terminal guard; got {other:?}"),
+        }
+        assert_eq!(parts[1], Region::Block(2));
+    }
+
+    #[test]
+    fn two_returning_terminals_prefer_the_taken_edge_as_the_if_body() {
+        use crate::ir::types::{Flag, VReg};
+
+        // With two ordinary return arms there is no unique non-returning guard.
+        // Resolve the tie from the conditional's semantic taken edge, never
+        // from whichever successor happens to occupy a vector slot.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(Flag::Z),
+                    target: 0x1200,
+                    inverted: false,
+                }],
+                vec![0x1200, 0x1100],
+            ),
+            (0x1100, vec![Op::Return], vec![]),
+            (0x1200, vec![Op::Return], vec![]),
+        ]);
+
+        let r = recover_for(&lf);
+        let Region::Seq(parts) = r else {
+            panic!("expected terminal branch followed by sibling; got {r:?}");
+        };
+        assert_eq!(parts.len(), 2, "unexpected region sequence: {parts:?}");
+        match &parts[0] {
+            Region::IfThen { then_r, invert, .. } => {
+                assert_eq!(**then_r, Region::Block(2));
+                assert!(!*invert, "the taken arm uses the raw condition");
+            }
+            other => panic!("expected one-arm terminal branch; got {other:?}"),
+        }
+        assert_eq!(parts[1], Region::Block(1));
     }
 
     #[test]
