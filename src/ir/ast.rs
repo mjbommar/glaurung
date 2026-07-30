@@ -5790,14 +5790,15 @@ fn strip_implicit_pointer_index_extension(expr: &Expr) -> &Expr {
     }
 }
 
-/// Render a register in **rvalue** position. A pointer-typed argument is cast to
-/// `long` here: our byte-offset arithmetic treats it as an integer address, and
-/// leaving it a pointer would be an invalid operand for `&`/`*`/`-`/pointer±pointer.
+/// Render a register in **rvalue** position. A pointer-typed argument or complete
+/// stack object is cast to `long` here: our byte-offset arithmetic treats it as
+/// an integer address, and leaving it a pointer would be an invalid operand for
+/// `&`/`*`/`-`/pointer±pointer.
 fn write_reg_dec(v: &VReg, out: &mut String) {
     if let VReg::Phys(n) = v {
-        if dec_ptr_arg_type(n).is_some() {
+        if dec_ptr_arg_type(n).is_some() || dec_is_stack_object(n) {
             out.push_str("(long)");
-            out.push_str(n);
+            write_reg_lvalue_dec(v, out);
             return;
         }
     }
@@ -5886,9 +5887,15 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
     match e {
         Expr::Reg(v) => write_reg_dec(v, out),
         Expr::StackAddr { object, .. } => {
-            out.push_str("&");
-            write_reg_dec(object, out);
-            out.push_str("[0]");
+            if matches!(object, VReg::Phys(name) if parse_arg_index(name).is_some()) {
+                out.push_str("(void *)(");
+                write_reg_lvalue_dec(object, out);
+                out.push(')');
+            } else {
+                out.push('&');
+                write_reg_lvalue_dec(object, out);
+                out.push_str("[0]");
+            }
         }
         Expr::Const(c) => write_const_dec(*c, out),
         Expr::Addr(a) => {
@@ -6331,6 +6338,21 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
         } => {
             expression_has_pointer_representation(if_true)
                 || expression_has_pointer_representation(if_false)
+        }
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => {
+            expression_has_pointer_representation(lhs) || expression_has_pointer_representation(rhs)
+        }
+        Expr::Bin {
+            op: BinOp::Sub,
+            lhs,
+            rhs,
+        } => {
+            expression_has_pointer_representation(lhs)
+                && !expression_has_pointer_representation(rhs)
         }
         cast @ Expr::Cast { .. } => redundant_declared_integer_cast(cast).is_some_and(|reg| {
             matches!(reg, VReg::Phys(name) if dec_ptr_arg_type(name).is_some()
@@ -9580,12 +9602,78 @@ function f @ 0x1000 {
         let text = render_decbench(&f);
         assert!(text.contains("unsigned char stack_26[8];"), "{text}");
         assert!(
-            text.contains("stack_47 = (int)(stack_26);")
+            text.contains("stack_47 = (int)((long)stack_26);")
+                || text.contains("stack_47 = (int)(stack_26);")
                 || text.contains("stack_47 = (long)(stack_26);")
                 || text.contains("stack_47 = (long)stack_26;"),
             "array decay must cross an explicit machine-word boundary:\n{text}"
         );
         assert!(!text.contains("stack_47 = stack_26;"), "{text}");
+    }
+
+    #[test]
+    fn decbench_stack_pointer_arithmetic_stored_as_integer_is_explicit() {
+        let f = Function {
+            name: "advance_stack_address".to_string(),
+            entry_va: 0x20,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "consume".to_string(),
+                    },
+                    args: vec![Expr::StackAddr {
+                        object: VReg::phys("stack_1"),
+                        size: 4,
+                    }],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("stack_1")),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("stack_1"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                    size: 4,
+                },
+            ],
+        };
+
+        let text = render_decbench(&f);
+        assert!(text.contains("unsigned char stack_1[4];"), "{text}");
+        assert!(
+            text.contains("= (int)((long)(") && text.contains("(long)stack_1 + 1"),
+            "pointer arithmetic crossed an implicit pointer-to-int boundary:\n{text}"
+        );
+    }
+
+    #[test]
+    fn decbench_stack_address_reclassified_as_argument_stays_a_pointer_value() {
+        let f = Function {
+            name: "consume_reclassified_address".to_string(),
+            entry_va: 0x20,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x1000,
+                    name: "consume".to_string(),
+                },
+                args: vec![Expr::StackAddr {
+                    object: VReg::phys("arg3"),
+                    size: 8,
+                }],
+                dst: None,
+                call_spec: None,
+            }],
+        };
+
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("consume((void *)(arg3));"),
+            "a reclassified address must not subscript a scalar argument:\n{text}"
+        );
+        assert!(!text.contains("&arg3[0]"), "{text}");
     }
 
     #[test]

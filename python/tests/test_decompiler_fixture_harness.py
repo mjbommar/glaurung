@@ -402,6 +402,45 @@ def test_real_stack_object_initialization_remains_a_memory_store():
     assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
 
 
+def test_real_stack_pointer_arithmetic_store_has_an_integer_boundary():
+    """Pointer arithmetic stored through an integer slot needs a value cast."""
+    binary = _compile_so(
+        "extern void consume_bytes(void *);\n"
+        "__attribute__((noinline)) void store_advanced_stack_address(void) {\n"
+        "    unsigned char local[4];\n"
+        "    consume_bytes(local);\n"
+        "    *(int *)local = (int)(long)(local + 1);\n"
+        "    consume_bytes(local);\n"
+        "}",
+        "stack_pointer_arithmetic_store",
+    )
+    function_va = D.exported_functions(binary)["store_advanced_stack_address"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert "unsigned char local_" in decompiled, decompiled
+    assert " + 1" in decompiled, decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "stack_pointer_arithmetic_store.c"
+        output_path = Path(td) / "stack_pointer_arithmetic_store.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu2x",
+                "-Werror=int-conversion",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_real_pointer_literal_store_uses_the_memory_value_width():
     """A pointer literal stored into a machine word needs a value cast."""
     binary = _compile_so(
