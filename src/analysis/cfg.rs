@@ -305,8 +305,13 @@ fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Optio
             _ => Endianness::Little,
         };
 
-        let entry_va = obj.entry();
-        if entry_va != 0 {
+        let raw_entry_va = obj.entry();
+        if raw_entry_va != 0 {
+            // ARM ELF entry points use bit zero as the Thumb-state marker,
+            // exactly like STT_FUNC symbols and branch targets. Keep the
+            // mode as function metadata, but seed CFG recovery at the actual
+            // even code address so lifting never starts one byte late.
+            let entry_va = code_addr(raw_entry_va, arch);
             let bits = if arch.is_64_bit() { 64 } else { 32 };
             if let Ok(a) = Address::new(AddressKind::VA, entry_va, bits, None, None) {
                 entry = Some(a);
