@@ -1572,12 +1572,68 @@ fn operand_value(
     value
 }
 
-fn frame_slot(addr: &crate::ir::types::MemOp) -> Option<(String, i64)> {
+/// Registers carrying a stable address derived only by copies or a constant
+/// displacement from an architectural stack/frame pointer.
+///
+/// ARM32 GCC commonly establishes `r7 = sp + 0` and spills incoming values
+/// relative to `r7`. Following that value shape is safer than globally
+/// declaring every use of callee-saved `r7` to be a frame access.
+fn frame_base_aliases(lf: &LlirFunction) -> HashSet<VReg> {
+    let mut bases = HashSet::from([
+        VReg::phys("rbp"),
+        VReg::phys("rsp"),
+        VReg::phys("ebp"),
+        VReg::phys("esp"),
+        VReg::phys("x29"),
+        VReg::phys("w29"),
+        VReg::phys("sp"),
+    ]);
+    for _ in 0..8 {
+        let mut grew = false;
+        for block in &lf.blocks {
+            for instruction in &block.instrs {
+                let alias = match &instruction.op {
+                    Op::Assign {
+                        dst,
+                        src: Value::Reg(source),
+                    } if bases.contains(source) => Some(dst),
+                    Op::Bin {
+                        dst,
+                        op: BinOp::Add | BinOp::Sub,
+                        lhs: Value::Reg(base),
+                        rhs: Value::Const(_),
+                    } if bases.contains(base) => Some(dst),
+                    Op::Bin {
+                        dst,
+                        op: BinOp::Add,
+                        lhs: Value::Const(_),
+                        rhs: Value::Reg(base),
+                    } if bases.contains(base) => Some(dst),
+                    _ => None,
+                };
+                if let Some(alias) = alias {
+                    grew |= bases.insert(alias.clone());
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    bases
+}
+
+fn frame_slot(
+    addr: &crate::ir::types::MemOp,
+    frame_bases: &HashSet<VReg>,
+) -> Option<(String, i64)> {
     if addr.index.is_some() {
         return None;
     }
     match addr.base.as_ref() {
-        Some(base @ VReg::Phys(name)) if is_frame_base(base) => Some((name.clone(), addr.disp)),
+        Some(base @ VReg::Phys(name)) if frame_bases.contains(base) => {
+            Some((name.clone(), addr.disp))
+        }
         _ => None,
     }
 }
@@ -1650,8 +1706,13 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
     let mut constant_defs: HashMap<SsaValue, TypeHint> = HashMap::new();
     let mut copy_edges: Vec<(SsaValue, SsaValue)> = Vec::new();
     let mut reloads: HashSet<SsaValue> = HashSet::new();
-    let mut live_in_spills: HashMap<(String, i64), Vec<SsaValue>> = HashMap::new();
+    // Exact caller-supplied values spilled into frame slots, together with the
+    // store width. Width is part of the provenance proof: a later byte reload
+    // may refine an incoming byte only when the entry value was itself stored
+    // as a byte, rather than after an unrelated wider slot was partially read.
+    let mut live_in_spills: HashMap<(String, i64), Vec<(SsaValue, u8)>> = HashMap::new();
     let live_phi_values = live_phi_values(lf, ssa);
+    let frame_bases = frame_base_aliases(lf);
 
     // Seed local facts and record explicit value-flow edges.
     for (block_idx, block) in lf.blocks.iter().enumerate() {
@@ -1714,7 +1775,7 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                             );
                         }
                     }
-                    if frame_slot(addr).is_some() {
+                    if frame_slot(addr, &frame_bases).is_some() {
                         if let Some((_, dst)) = &values.def {
                             reloads.insert(dst.clone());
                         }
@@ -1749,18 +1810,19 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                         }
                         use_index += 1;
                     }
-                    if let Some(slot) = frame_slot(addr) {
+                    if let Some(slot) = frame_slot(addr, &frame_bases) {
                         if let Some((_, source)) =
                             values.uses.get(use_index).and_then(|entry| entry.as_ref())
                         {
-                            // This projection targets caller-supplied parameters.
-                            // Preserve their entry provenance instead of letting a
-                            // later loop update to the same slot overwrite it.
-                            if source.version == 0 && matches!(source.base, VReg::Phys(_)) {
-                                let sources = live_in_spills.entry(slot).or_default();
-                                if !sources.contains(source) {
-                                    sources.push(source.clone());
-                                }
+                            // Keep the exact stored value for now. GCC commonly
+                            // emits `r3 = r1; strb r3, [frame]` for an AAPCS
+                            // byte parameter, so the caller-supplied provenance
+                            // may sit behind one or more pure copies. Those copy
+                            // edges are resolved after this seed walk.
+                            let sources = live_in_spills.entry(slot).or_default();
+                            let spill = (source.clone(), addr.size.max(1));
+                            if !sources.contains(&spill) {
+                                sources.push(spill);
                             }
                         }
                     }
@@ -1859,7 +1921,7 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                         tm.upsert(
                             source,
                             TypeHint::Int {
-                                signed: true,
+                                signed,
                                 width: from.bytes().min(u8::MAX as u16) as u8,
                             },
                         );
@@ -1869,6 +1931,38 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
             }
         }
     }
+
+    // Resolve frame-spill provenance through exact copies only. This admits
+    // the real ARM `r1 -> r3 -> strb` prologue without treating arithmetic,
+    // calls, or later scratch reuse as caller input. SSA definitions make the
+    // predecessor relation single-valued; the visited set is a fail-closed
+    // guard against malformed cyclic input.
+    let copy_sources: HashMap<SsaValue, SsaValue> = copy_edges.iter().cloned().collect();
+    for spills in live_in_spills.values_mut() {
+        let mut resolved = Vec::new();
+        for (source, width) in std::mem::take(spills) {
+            let mut candidate = source;
+            let mut visited = HashSet::new();
+            loop {
+                if candidate.version == 0 && matches!(candidate.base, VReg::Phys(_)) {
+                    let spill = (candidate, width);
+                    if !resolved.contains(&spill) {
+                        resolved.push(spill);
+                    }
+                    break;
+                }
+                if !visited.insert(candidate.clone()) {
+                    break;
+                }
+                let Some(predecessor) = copy_sources.get(&candidate) else {
+                    break;
+                };
+                candidate = predecessor.clone();
+            }
+        }
+        *spills = resolved;
+    }
+    live_in_spills.retain(|_, spills| !spills.is_empty());
 
     // Compute scaled-index/offset values using SSA operands, not register names.
     let mut offsets: HashSet<SsaValue> = HashSet::new();
@@ -1904,6 +1998,107 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                 };
                 if result_is_offset && offsets.insert(dst.clone()) {
                     grew = true;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+
+    // Start from exact SSA values used as memory bases, then walk only
+    // value-preserving copies, live phis, and structurally identified pointer
+    // arithmetic backwards. A raw-register pointer hint is not sufficient:
+    // ARM call-heavy functions routinely reuse r1/r2 as later pointer scratch,
+    // which must not retype the incoming full-width integer parameters.
+    let mut address_values = HashSet::new();
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, instruction) in block.instrs.iter().enumerate() {
+            if !matches!(instruction.op, Op::Load { .. } | Op::Store { .. }) {
+                continue;
+            }
+            let values = instruction_values(
+                lf,
+                ssa,
+                InstrAddr {
+                    block_idx,
+                    instr_idx,
+                },
+            );
+            if let Some((_, base)) = values.uses.first().and_then(Option::as_ref) {
+                address_values.insert(base.clone());
+            }
+        }
+    }
+    for _ in 0..16 {
+        let mut grew = false;
+        for (dst, source) in &copy_edges {
+            if address_values.contains(dst) {
+                grew |= address_values.insert(source.clone());
+            }
+        }
+        for phi in &ssa.phis {
+            let result = SsaValue {
+                base: phi.base.clone(),
+                version: phi.dst_version,
+            };
+            if !live_phi_values.contains(&result) || !address_values.contains(&result) {
+                continue;
+            }
+            for (_, version) in &phi.incoming {
+                grew |= address_values.insert(SsaValue {
+                    base: phi.base.clone(),
+                    version: *version,
+                });
+            }
+        }
+        for (block_idx, block) in lf.blocks.iter().enumerate() {
+            for (instr_idx, instruction) in block.instrs.iter().enumerate() {
+                let Op::Bin {
+                    op: BinOp::Add | BinOp::Sub,
+                    lhs,
+                    rhs,
+                    ..
+                } = &instruction.op
+                else {
+                    continue;
+                };
+                let values = instruction_values(
+                    lf,
+                    ssa,
+                    InstrAddr {
+                        block_idx,
+                        instr_idx,
+                    },
+                );
+                let Some((_, dst)) = &values.def else {
+                    continue;
+                };
+                if !address_values.contains(dst) {
+                    continue;
+                }
+                let mut cursor = 0;
+                let lhs_value = operand_value(lhs, &values, &mut cursor);
+                let rhs_value = operand_value(rhs, &values, &mut cursor);
+                let is_offset = |operand: &Value, value: &Option<SsaValue>| match operand {
+                    Value::Const(_) => true,
+                    Value::Reg(_) => value
+                        .as_ref()
+                        .is_some_and(|candidate| offsets.contains(candidate)),
+                    Value::Addr(_) => false,
+                };
+                let base = if is_offset(rhs, &rhs_value) && !is_offset(lhs, &lhs_value) {
+                    lhs_value
+                } else if matches!(instruction.op, Op::Bin { op: BinOp::Add, .. })
+                    && is_offset(lhs, &lhs_value)
+                    && !is_offset(rhs, &rhs_value)
+                {
+                    rhs_value
+                } else {
+                    None
+                };
+                if let Some(base) = base {
+                    grew |= address_values.insert(base);
                 }
             }
         }
@@ -1985,7 +2180,7 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                         }
                     }
                     Op::Load { addr, .. } => {
-                        let Some(slot) = frame_slot(addr) else {
+                        let Some(slot) = frame_slot(addr, &frame_bases) else {
                             continue;
                         };
                         let Some(sources) = live_in_spills.get(&slot) else {
@@ -1994,12 +2189,35 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                         let Some((_, dst)) = &values.def else {
                             continue;
                         };
-                        if let Some(TypeHint::Pointer { pointee_width }) = tm.get(dst) {
-                            for source in sources {
-                                let hint = TypeHint::Pointer { pointee_width };
-                                changed |= tm.upsert(source.clone(), hint);
-                                changed |= tm.upsert_parameter_refinement(source.clone(), hint);
+                        match tm.get(dst) {
+                            Some(TypeHint::Pointer { pointee_width })
+                                if address_values.contains(dst) =>
+                            {
+                                for (source, stored_width) in sources {
+                                    if *stored_width != addr.size.max(1) {
+                                        continue;
+                                    }
+                                    let hint = TypeHint::Pointer { pointee_width };
+                                    changed |= tm.upsert(source.clone(), hint);
+                                    changed |= tm.upsert_parameter_refinement(source.clone(), hint);
+                                }
                             }
+                            Some(hint @ TypeHint::Int { width: 1 | 2, .. }) if matches!(hint, TypeHint::Int { width, .. } if width == addr.size.max(1)) =>
+                            {
+                                // A narrow entry spill followed by a same-width
+                                // reload and explicit ZExt/SExt is source-level
+                                // parameter evidence, not just storage reuse.
+                                // The extension carried by the exact reloaded SSA
+                                // value decides unsigned vs signed.
+                                for (source, stored_width) in sources {
+                                    if *stored_width != addr.size.max(1) {
+                                        continue;
+                                    }
+                                    changed |= tm.upsert(source.clone(), hint);
+                                    changed |= tm.upsert_parameter_refinement(source.clone(), hint);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     _ => {}
@@ -3263,6 +3481,129 @@ int never_returns(void) { for (;;) {} }
             tm.parameter_refinements().is_empty(),
             "one qualified live-in is not enough to rewrite a rendered prototype"
         );
+    }
+
+    #[test]
+    fn arm_narrow_spills_qualify_the_complete_parameter_tuple() {
+        // GCC -O0 AAPCS shape for `void f(T *p, unsigned char a,
+        // unsigned char b)`: spill r0 as a word, r1/r2 as bytes, then reload
+        // the byte slots with LDRB's explicit zero extension. The two narrow
+        // values independently corroborate the frame-spill provenance, so the
+        // pointer parameter can cross the same output-safety gate as them.
+        let lf = mk_block(vec![
+            Op::Bin {
+                dst: VReg::phys("r7"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("sp")),
+                rhs: Value::Const(0),
+            },
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("r7")),
+                    disp: -4,
+                    size: 4,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("r0")),
+            },
+            Op::Assign {
+                dst: VReg::phys("r3"),
+                src: Value::Reg(VReg::phys("r1")),
+            },
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("r7")),
+                    disp: -5,
+                    size: 1,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("r3")),
+            },
+            Op::Assign {
+                dst: VReg::phys("r3"),
+                src: Value::Reg(VReg::phys("r2")),
+            },
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("r7")),
+                    disp: -6,
+                    size: 1,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("r3")),
+            },
+            Op::Load {
+                dst: VReg::Temp(0),
+                addr: MemOp {
+                    base: Some(VReg::phys("r7")),
+                    disp: -4,
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+            Op::Load {
+                dst: VReg::phys("r3"),
+                addr: MemOp {
+                    base: Some(VReg::Temp(0)),
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+            Op::Load {
+                dst: VReg::Temp(1),
+                addr: MemOp {
+                    base: Some(VReg::phys("r7")),
+                    disp: -5,
+                    size: 1,
+                    ..Default::default()
+                },
+            },
+            Op::ZExt {
+                dst: VReg::phys("r1"),
+                src: Value::Reg(VReg::Temp(1)),
+                from: crate::ir::types::Width::W8,
+                to: crate::ir::types::Width::W32,
+            },
+            Op::Load {
+                dst: VReg::Temp(2),
+                addr: MemOp {
+                    base: Some(VReg::phys("r7")),
+                    disp: -6,
+                    size: 1,
+                    ..Default::default()
+                },
+            },
+            Op::ZExt {
+                dst: VReg::phys("r2"),
+                src: Value::Reg(VReg::Temp(2)),
+                from: crate::ir::types::Width::W8,
+                to: crate::ir::types::Width::W32,
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::Arm,
+            &HashSet::from([0, 1, 2]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+        for slot in [1, 2] {
+            assert_eq!(
+                prototype
+                    .parameter(slot)
+                    .and_then(|parameter| parameter.hint),
+                Some(TypeHint::Int {
+                    signed: false,
+                    width: 1,
+                }),
+                "slot {slot} must retain LDRB's unsigned byte type"
+            );
+        }
     }
 
     #[test]

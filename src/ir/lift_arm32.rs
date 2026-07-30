@@ -80,6 +80,25 @@ fn mem_size_for(mnem: &str) -> u8 {
     }
 }
 
+/// Extension performed by an ARM scalar load after reading memory.
+///
+/// `ldrb`/`ldrh` zero-extend and `ldrsb`/`ldrsh` sign-extend into the 32-bit
+/// destination register. A bare [`Op::Load`] records only the memory width, so
+/// preserve this distinct architectural behavior as a second IR operation.
+fn load_extension_for(mnem: &str) -> Option<(bool, Width)> {
+    if mnem.starts_with("ldrsb") {
+        Some((true, Width::W8))
+    } else if mnem.starts_with("ldrsh") {
+        Some((true, Width::W16))
+    } else if mnem.starts_with("ldrb") {
+        Some((false, Width::W8))
+    } else if mnem.starts_with("ldrh") {
+        Some((false, Width::W16))
+    } else {
+        None
+    }
+}
+
 /// The three-operand (and two-operand accumulate) data-processing mnemonics.
 /// The optional `s` flag-setting suffix is stripped by the caller.
 fn bin_for_mnem(m: &str) -> Option<BinOp> {
@@ -713,7 +732,27 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                         return out;
                     }
                     let base_reg = addr.base.clone();
-                    let mut out = vec![Op::Load { dst, addr }];
+                    let mut out = if let Some((signed, from)) = load_extension_for(m) {
+                        let loaded = VReg::Temp(0);
+                        let extension = if signed {
+                            Op::SExt {
+                                dst,
+                                src: Value::Reg(loaded.clone()),
+                                from,
+                                to: Width::W32,
+                            }
+                        } else {
+                            Op::ZExt {
+                                dst,
+                                src: Value::Reg(loaded.clone()),
+                                from,
+                                to: Width::W32,
+                            }
+                        };
+                        vec![Op::Load { dst: loaded, addr }, extension]
+                    } else {
+                        vec![Op::Load { dst, addr }]
+                    };
                     // Post-indexed writeback: 3rd operand is the offset.
                     if ops.len() == 3 {
                         if let (Some(base), Some(off)) = (base_reg, ops[2].immediate) {
@@ -729,18 +768,35 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 }
                 // PC-relative literal: `ldr Rd, =sym` folds to an absolute imm.
                 if let Some(abs) = ops[1].immediate {
-                    return vec![Op::Load {
-                        dst,
-                        addr: MemOp {
-                            base: None,
-                            index: None,
-                            scale: 0,
-                            disp: abs,
-                            size,
-                            segment: None,
-                            endian: Endian::Little,
-                        },
-                    }];
+                    let addr = MemOp {
+                        base: None,
+                        index: None,
+                        scale: 0,
+                        disp: abs,
+                        size,
+                        segment: None,
+                        endian: Endian::Little,
+                    };
+                    if let Some((signed, from)) = load_extension_for(m) {
+                        let loaded = VReg::Temp(0);
+                        let extension = if signed {
+                            Op::SExt {
+                                dst,
+                                src: Value::Reg(loaded.clone()),
+                                from,
+                                to: Width::W32,
+                            }
+                        } else {
+                            Op::ZExt {
+                                dst,
+                                src: Value::Reg(loaded.clone()),
+                                from,
+                                to: Width::W32,
+                            }
+                        };
+                        return vec![Op::Load { dst: loaded, addr }, extension];
+                    }
+                    return vec![Op::Load { dst, addr }];
                 }
             }
             vec![Op::Unknown {
@@ -1364,6 +1420,33 @@ mod tests {
         ] {
             assert!(no_unknown(&ops(b)), "unexpected Unknown in {:x?}", b);
         }
+    }
+
+    #[test]
+    fn ldrb_keeps_its_zero_extension_semantics() {
+        // ldrb r1, [r7, #3] = 78f9. The architectural result is a
+        // zero-extended 32-bit value, not an ambiguous one-byte load into r1.
+        // Keeping the extension explicit is also the signedness evidence type
+        // recovery needs for an unsigned-char parameter spilled at -O0.
+        let lifted = ops(&[0xf9, 0x78]);
+        assert!(
+            matches!(
+                lifted.as_slice(),
+                [
+                    Op::Load {
+                        dst: VReg::Temp(0),
+                        addr
+                    },
+                    Op::ZExt {
+                        dst: VReg::Phys(dst),
+                        src: Value::Reg(VReg::Temp(0)),
+                        from: Width::W8,
+                        to: Width::W32,
+                    }
+                ] if addr.size == 1 && dst == "r1"
+            ),
+            "ldrb lost its zero extension: {lifted:?}"
+        );
     }
 
     /// Thumb-2 IT (if-then) blocks: the `it`/`ite` prefix must become a Nop and

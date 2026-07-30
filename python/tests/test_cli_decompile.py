@@ -195,6 +195,97 @@ def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> Non
     assert "return 0;" not in text, text
 
 
+def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> None:
+    """Use AAPCS spill width and reload extension to recover byte arguments."""
+    compiler = shutil.which("arm-none-eabi-gcc")
+    if compiler is None:
+        pytest.skip("arm-none-eabi-gcc is unavailable")
+
+    source = tmp_path / "arm_narrow_params.c"
+    binary = tmp_path / "arm_narrow_params.elf"
+    source.write_text(
+        "typedef struct endpoint endpoint;\n"
+        "struct endpoint {\n"
+        "    void (*set_nak)(endpoint *, unsigned char, unsigned char);\n"
+        "    endpoint *next;\n"
+        "    int value;\n"
+        "};\n"
+        "__attribute__((noinline)) void arm_narrow_params(\n"
+        "    endpoint *device, unsigned char address, unsigned char nak) {\n"
+        "    device->set_nak(device, address, nak);\n"
+        "}\n"
+        "__attribute__((noinline)) int endpoint_notempty(endpoint *device) {\n"
+        "    return device->next != 0;\n"
+        "}\n"
+        "__attribute__((noinline)) endpoint *endpoint_remove(endpoint *device) {\n"
+        "    return device->next;\n"
+        "}\n"
+        "__attribute__((noinline)) endpoint *endpoint_ready(endpoint *device) {\n"
+        "    return device;\n"
+        "}\n"
+        "__attribute__((noinline)) void arm_word_params(\n"
+        "    endpoint *device, int count, int message) {\n"
+        "    device->value = count;\n"
+        "    while (endpoint_notempty(device)) {\n"
+        "        endpoint_ready(endpoint_remove(device))->value = message;\n"
+        "    }\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            compiler,
+            "-mcpu=cortex-m3",
+            "-mthumb",
+            "-nostdlib",
+            "-Wl,-Ttext=0x1000",
+            "-Wl,-e,arm_narrow_params",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (function for function in functions if function.name == "arm_narrow_params"),
+        None,
+    )
+    assert target is not None, functions
+    text = g.ir.decompile_at(
+        str(binary),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+
+    signature = text.splitlines()[1]
+    assert "arm_narrow_params(" in signature, text
+    assert "unsigned char arg1" in signature, text
+    assert "unsigned char arg2" in signature, text
+
+    word_target = next(
+        (function for function in functions if function.name == "arm_word_params"),
+        None,
+    )
+    assert word_target is not None, functions
+    word_text = g.ir.decompile_at(
+        str(binary),
+        int(word_target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+    word_signature = word_text.splitlines()[1]
+    assert "arm_word_params(" in word_signature, word_text
+    assert "int arg1" in word_signature, word_text
+    assert "* arg1" not in word_signature, word_text
+
+
 @pytest.mark.skipif(not ARM32_SAMPLE.exists(), reason="armhf sample missing")
 def test_decompile_requested_va_seeds_stripped_arm32(
     tmp_path: Path,
