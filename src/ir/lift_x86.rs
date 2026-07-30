@@ -1669,6 +1669,42 @@ fn packed_dword_binary_ops(instr: &iced_x86::Instruction, op: BinOp) -> Vec<Op> 
         .collect()
 }
 
+/// Lift PANDN's lane-wise `dst = (~dst) & src` semantics.
+///
+/// This cannot use [`packed_dword_binary_ops`]: unlike ordinary packed binary
+/// operations, PANDN complements the old destination before combining it with
+/// the source. Snapshot that complemented value in a temporary so the write to
+/// each destination lane remains explicit for SSA and the C backend.
+fn packed_dword_and_not_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+        || !is_xmm_register(instr.op_register(1))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "pandn".into(),
+        }];
+    }
+    let mut ops = Vec::with_capacity(8);
+    for lane in 0..4 {
+        let dst = packed_dword_lane(instr.op_register(0), lane);
+        let complemented = VReg::Temp(88 + lane as u32);
+        ops.push(Op::Un {
+            dst: complemented.clone(),
+            op: UnOp::Not,
+            src: Value::Reg(dst.clone()),
+        });
+        ops.push(Op::Bin {
+            dst,
+            op: BinOp::And,
+            lhs: Value::Reg(complemented),
+            rhs: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+        });
+    }
+    ops
+}
+
 fn packed_dword_compare_greater_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
     if instr.op_count() != 2
         || instr.op_kind(0) != OpKind::Register
@@ -2967,6 +3003,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Sbb => sbb_ops(instr),
         Mnemonic::Pxor => packed_dword_binary_ops(instr, BinOp::Xor),
         Mnemonic::Pand => packed_dword_binary_ops(instr, BinOp::And),
+        Mnemonic::Pandn => packed_dword_and_not_ops(instr),
+        Mnemonic::Por => packed_dword_binary_ops(instr, BinOp::Or),
         Mnemonic::Paddd => packed_dword_binary_ops(instr, BinOp::Add),
         Mnemonic::Pcmpgtd => packed_dword_compare_greater_ops(instr),
         Mnemonic::Pshufd => packed_dword_shuffle_ops(instr),
@@ -5205,6 +5243,59 @@ mod tests {
             4,
             "PCMPGTD must produce four all-ones/zero masks: {ops:#?}"
         );
+    }
+
+    #[test]
+    fn packed_dword_max_select_sequence_has_explicit_lane_semantics() {
+        // clang -O2 lowers a signed packed maximum to
+        //   mask = candidate > current
+        //   selected = (candidate & mask) | (current & ~mask)
+        // PANDN has the unusual destination semantics `dst = (~dst) & src`.
+        let ops = lift64(&[
+            0x66, 0x0f, 0x66, 0xe0, // pcmpgtd xmm4,xmm0
+            0x66, 0x0f, 0xdb, 0xd4, // pand xmm2,xmm4
+            0x66, 0x0f, 0xdf, 0xe0, // pandn xmm4,xmm0
+            0x66, 0x0f, 0xeb, 0xc2, // por xmm0,xmm2
+        ]);
+
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "packed max selection must be explicit: {ops:#?}"
+        );
+        for lane in 0..4 {
+            let mask = format!("xmm4_d{lane}");
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Un {
+                    dst: VReg::Temp(dst),
+                    op: UnOp::Not,
+                    src: Value::Reg(VReg::Phys(src)),
+                } if *dst == 88 + lane as u32 && src == &mask
+            )));
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Bin {
+                    dst: VReg::Phys(dst),
+                    op: BinOp::And,
+                    lhs: Value::Reg(VReg::Temp(lhs)),
+                    rhs: Value::Reg(VReg::Phys(rhs)),
+                } if dst == &mask && *lhs == 88 + lane as u32 && rhs == &format!("xmm0_d{lane}")
+            )));
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Bin {
+                    dst: VReg::Phys(dst),
+                    op: BinOp::Or,
+                    lhs: Value::Reg(VReg::Phys(lhs)),
+                    rhs: Value::Reg(VReg::Phys(rhs)),
+                } if dst == &format!("xmm0_d{lane}")
+                    && lhs == dst
+                    && rhs == &format!("xmm2_d{lane}")
+            )));
+        }
     }
 
     #[test]

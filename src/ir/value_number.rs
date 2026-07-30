@@ -530,7 +530,7 @@ pub fn value_number_with_definition_widths(
             }
         }
     }
-    insert_phi_copies(&mut out, lf, ssa, &ctx);
+    insert_phi_copies(&mut out, lf, ssa, &ctx, &mut definition_widths);
     (out, definition_widths)
 }
 
@@ -585,6 +585,7 @@ fn insert_phi_copies(
     lf: &LlirFunction,
     ssa: &crate::ir::ssa::SsaInfo,
     ctx: &VnCtx,
+    definition_widths: &mut HashMap<VReg, u8>,
 ) {
     if ssa.phis.is_empty() {
         return;
@@ -639,6 +640,51 @@ fn insert_phi_copies(
         }
         if !read.contains(&dst) {
             continue;
+        }
+        let scalarized_dword_lane = matches!(
+            &phi.base,
+            VReg::Phys(name)
+                if name
+                    .strip_prefix("xmm")
+                    .and_then(|rest| rest.rsplit_once("_d"))
+                    .is_some_and(|(register, lane)| {
+                        register.parse::<u8>().is_ok()
+                            && lane.parse::<u8>().is_ok_and(|lane| lane < 4)
+                    })
+        );
+        let phi_width = if scalarized_dword_lane {
+            let mut phi_width = None;
+            let mut width_is_exact = true;
+            for (_pred, version) in &phi.incoming {
+                let mut src = phi.base.clone();
+                tag_phys(&mut src, *version, ctx);
+                let Some(width) = definition_widths.get(&src).copied() else {
+                    width_is_exact = false;
+                    break;
+                };
+                match phi_width {
+                    None => phi_width = Some(width),
+                    Some(existing) if existing == width => {}
+                    Some(_) => {
+                        width_is_exact = false;
+                        break;
+                    }
+                }
+            }
+            width_is_exact.then_some(phi_width).flatten()
+        } else {
+            None
+        };
+        if let Some(width) = phi_width {
+            // Phi copies are synthetic and are inserted after the ordinary
+            // instruction-width scan. Propagate a width only when every
+            // incoming lane definition proves the same width. Keep this narrow
+            // to the lifter's scalarised XMM dword representation: generic GPR
+            // phi bases canonicalise 32-bit views to their 64-bit parents and
+            // therefore need a richer mixed-view value model. This prevents
+            // packed signed comparisons from silently becoming `long` without
+            // perturbing unrelated loop-carried integer types.
+            definition_widths.insert(dst.clone(), width);
         }
         for (pred, ver) in &phi.incoming {
             if *pred >= out.blocks.len() {
@@ -779,6 +825,82 @@ mod tests {
             Some(VReg::phys("rdi#2"))
         );
         assert_eq!(widths.get(&VReg::phys("rdi#2")), Some(&8));
+    }
+
+    #[test]
+    fn loop_phi_copies_retain_scalarized_lane_widths() {
+        let block = |va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va: va,
+            end_va: va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(index, op)| LlirInstr {
+                    va: va + (index as u64) * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                block(
+                    0x1000,
+                    vec![Op::Assign {
+                        dst: VReg::phys("xmm0_d0"),
+                        src: Value::Const(-9),
+                    }],
+                    vec![0x1010],
+                ),
+                block(
+                    0x1010,
+                    vec![Op::CondJump {
+                        cond: VReg::phys("rdi"),
+                        target: 0x1030,
+                        inverted: false,
+                    }],
+                    vec![0x1020, 0x1030],
+                ),
+                block(
+                    0x1020,
+                    vec![Op::Bin {
+                        dst: VReg::phys("xmm0_d0"),
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Value::Reg(VReg::phys("xmm0_d0")),
+                        rhs: Value::Const(1),
+                    }],
+                    vec![0x1010],
+                ),
+                block(
+                    0x1030,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("rbx"),
+                            src: Value::Reg(VReg::phys("xmm0_d0")),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+            ],
+        };
+        let ssa = compute_ssa(&lf);
+        let phi = ssa
+            .phis
+            .iter()
+            .find(|phi| phi.base == VReg::phys("xmm0_d0"))
+            .expect("loop must carry an XMM dword lane through a phi");
+        let phi_name = VReg::phys(format!("xmm0_d0#{}", phi.dst_version));
+
+        let (_numbered, widths) =
+            value_number_with_definition_widths(&lf, &ssa, CallConv::SysVAmd64);
+
+        assert_eq!(
+            widths.get(&phi_name),
+            Some(&4),
+            "synthetic phi copies must preserve the lane's 32-bit definition"
+        );
     }
     use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 

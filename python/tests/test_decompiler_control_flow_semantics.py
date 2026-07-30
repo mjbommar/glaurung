@@ -393,6 +393,81 @@ def test_clang_o2_vectorized_positive_sum_round_trips(tmp_path: Path) -> None:
     assert results["sum_positive"]["status"] == "pass", results
 
 
+def test_clang_o2_vectorized_max_round_trips(tmp_path: Path) -> None:
+    """PANDN/POR packed selects must preserve the winning signed lane value."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "arrays.c"
+    binary = tmp_path / "arrays-clang-O2.so"
+    compiled = subprocess.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["max_array"])
+    assert code is not None
+    for mnemonic in ("pcmpgtd", "pand", "pandn", "por", "pshufd", "movd"):
+        assert f"asm: {mnemonic}" not in code, code
+
+    rebuilt = D.build_so(
+        code, tmp_path, "dec_max_array_clang_o2", link_against=str(binary)
+    )
+    assert rebuilt is not None, code
+    original_lib = ctypes.CDLL(str(binary))
+    rebuilt_lib = ctypes.CDLL(str(rebuilt))
+    original = original_lib.max_array
+    decompiled = rebuilt_lib.max_array
+    for function in (original, decompiled):
+        function.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+        function.restype = ctypes.c_int
+
+    vectors = [
+        [-9, -8, -7, -6, -5, -4, -3, -2, -1],
+        [5, 100, -30, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8],
+        [-100, -42, -7, -9, -88, -1, -4, -6, -8, -3, -2, -11, -12, -13, -14, -15],
+    ]
+    for vector in vectors:
+        values = (ctypes.c_int * len(vector))(*vector)
+        expected = original(values, len(vector))
+        assert expected == max(vector)
+        assert decompiled(values, len(vector)) == expected, (vector, code)
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "arrays",
+            "--function",
+            "max_array",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "64",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["max_array"]["status"] == "pass", results
+
+
 def test_gcc_o0_comparison_tree_recovers_switch_and_round_trips(tmp_path: Path) -> None:
     """The reconstructed x86 signed-greater condition must remain switch-shaped."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "switch_jt.c"
