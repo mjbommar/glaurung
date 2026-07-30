@@ -553,6 +553,9 @@ fn decompile_at_py(
     // now only a final projection (`value -> argN`), never a type-analysis key.
     let prototype = (style == "decbench" && types)
         .then(|| crate::ir::types_recover::recover_prototype(&lf_raw, &ssa, cc, &param_slots));
+    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
+    }
     // Build the address map first so we can apply a PDB public-symbol name
     // to the *outer* function header before lowering. The map already
     // includes PDB symbols when a cache is configured, plus exports / IAT

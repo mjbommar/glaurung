@@ -2198,6 +2198,8 @@ fn type_annotation(hint: TypeHint) -> Option<&'static str> {
         }),
         TypeHint::BoolLike => Some("(bool)"),
         TypeHint::CodePointer => Some("(fnptr)"),
+        TypeHint::Float { width: 4 } => Some("(float)"),
+        TypeHint::Float { .. } => Some("(double)"),
         TypeHint::Int { .. } => None, // don't clutter — int is the default
     }
 }
@@ -3376,6 +3378,8 @@ fn hint_to_ctype(hint: TypeHint) -> &'static str {
         // matches most reliably as `int`.
         TypeHint::BoolLike => "int",
         TypeHint::CodePointer => "void *",
+        TypeHint::Float { width: 4 } => "float",
+        TypeHint::Float { .. } => "double",
     }
 }
 
@@ -4013,6 +4017,7 @@ fn propagate_required_widths(body: &[Stmt], required: &mut std::collections::Has
 fn type_hint_width(hint: TypeHint) -> Option<u8> {
     match hint {
         TypeHint::Int { width, .. } => Some(width),
+        TypeHint::Float { width } => Some(width),
         TypeHint::Pointer { .. } | TypeHint::CodePointer => Some(8),
         TypeHint::BoolLike => Some(4),
     }
@@ -4282,7 +4287,7 @@ pub(crate) fn inferred_return_width(body: &[Stmt], tm: Option<&TypeMap>) -> u8 {
     match infer_return_ctype(body, tm) {
         "signed char" | "unsigned char" | "char" => 1,
         "short" | "unsigned short" => 2,
-        "int" | "unsigned int" => 4,
+        "int" | "unsigned int" | "float" => 4,
         _ => 8,
     }
 }
@@ -4358,10 +4363,16 @@ fn first_return_value_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> Option<&'sta
                     return Some(t);
                 }
             }
-            // A bare return with no recoverable return register renders as the
-            // synthesized `return 0;` — an `int`, not the `long` default (only on
-            // the typed path; the untyped path keeps blanket-`long`).
-            Stmt::Return { value: None } if tm.is_some() => return Some("int"),
+            // A bare machine return renders a synthesized `return 0;` only
+            // because lowering could not express the output operation. An
+            // SSA-qualified prototype result is stronger evidence than that
+            // placeholder. Fall back to `int` only when no result type exists.
+            Stmt::Return { value: None } if tm.is_some() => {
+                return tm
+                    .and_then(|types| types.get(&VReg::phys("ret")))
+                    .map(hint_to_ctype)
+                    .or(Some("int"));
+            }
             Stmt::If {
                 then_body,
                 else_body,
@@ -7872,6 +7883,64 @@ function f @ 0x1000 {
         );
         assert_eq!(hint_to_ctype(TypeHint::BoolLike), "int");
         assert_eq!(hint_to_ctype(TypeHint::CodePointer), "void *");
+        assert_eq!(hint_to_ctype(TypeHint::Float { width: 4 }), "float");
+        assert_eq!(hint_to_ctype(TypeHint::Float { width: 8 }), "double");
+    }
+
+    #[test]
+    fn decbench_typed_emits_recovered_float_return_type() {
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let f = Function {
+            name: "square".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("ret"))),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("ret"), TypeHint::Float { width: 4 });
+
+        let text = render_decbench_typed_with_output(
+            &f,
+            Some(&tm),
+            Some(&tm),
+            RecoveredOutputKind::Direct,
+        );
+        assert!(
+            text.contains("float square(void)"),
+            "wrong signature:\n{text}"
+        );
+    }
+
+    #[test]
+    fn late_integer_width_refinement_preserves_semantic_float_result() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "square".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return { value: None }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("ret"), TypeHint::Float { width: 4 });
+
+        refine_decbench_abi_widths(&f, &mut tm);
+        assert_eq!(
+            tm.get(&VReg::phys("ret")),
+            Some(TypeHint::Float { width: 4 })
+        );
+
+        let text = render_decbench_typed_with_output(
+            &f,
+            Some(&tm),
+            Some(&tm),
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+        );
+        assert!(
+            text.contains("float square(void)"),
+            "a bare machine return overrode the recovered prototype:\n{text}"
+        );
     }
 
     #[test]

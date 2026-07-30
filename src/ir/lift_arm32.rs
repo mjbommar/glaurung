@@ -217,6 +217,41 @@ fn lift_pop(regs: &[String]) -> Vec<Op> {
 fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
     let ops = &ins.operands;
 
+    // Scalar VFP arithmetic has IEEE semantics that integer `Op::Bin` cannot
+    // represent, but its register footprint and precision are exact. Ghidra
+    // and Kuna keep these values in a dedicated floating-point storage class;
+    // retain that class boundary in LLIR with typed intrinsics.
+    if [
+        "vadd.f32", "vsub.f32", "vmul.f32", "vdiv.f32", "vadd.f64", "vsub.f64", "vmul.f64",
+        "vdiv.f64",
+    ]
+    .iter()
+    .any(|operation| mnem.starts_with(operation))
+        && ops.len() == 3
+    {
+        if let (Some(dst), Some(lhs), Some(rhs)) = (
+            operand_reg(&ops[0]),
+            operand_to_value(&ops[1]),
+            operand_to_value(&ops[2]),
+        ) {
+            let width = if mnem.contains(".f64") {
+                Width::W64
+            } else {
+                Width::W32
+            };
+            return vec![Op::Intrinsic {
+                name: mnem.to_string(),
+                ins: vec![lhs, rhs],
+                outs: vec![(dst, width)],
+                reads_mem: false,
+                writes_mem: false,
+            }];
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
     // VFP register moves are bit-preserving operations even though the source
     // type lattice cannot yet render their floating-point value.  Keep their
     // exact input/output footprint as an intrinsic so SSA and ABI recovery can

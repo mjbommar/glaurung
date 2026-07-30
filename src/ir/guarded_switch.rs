@@ -374,6 +374,7 @@ fn known_width(expr: &Expr, types: Option<&TypeMap>) -> Option<u8> {
         Expr::Reg(register) => match types?.get(register)? {
             TypeHint::Int { width, .. } => Some(width),
             TypeHint::BoolLike => Some(1),
+            TypeHint::Float { width } => Some(width),
             TypeHint::Pointer { .. } | TypeHint::CodePointer => None,
         },
         _ => None,

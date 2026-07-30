@@ -33,6 +33,10 @@ pub enum TypeHint {
     /// Signed/unsigned integer — distinguished by context (shifts tagged
     /// unsigned, arithmetic compared against signed constants tagged signed).
     Int { signed: bool, width: u8 },
+    /// IEEE-754 scalar carried in a dedicated floating-point ABI storage
+    /// class. `width` is the source value width in bytes (currently 4 or 8),
+    /// not the width of the enclosing SIMD register.
+    Float { width: u8 },
     /// Value used as a 0/1 boolean (compared equal to zero).
     BoolLike,
     /// The value is used by [`Op::Call`] as an indirect call target, so it
@@ -77,13 +81,16 @@ impl TypeMap {
             // Per-value identity is decisive when raw-register union confused a
             // scalar lifetime with an address-bearing lifetime (or vice versa).
             (
-                Some(TypeHint::Int { .. } | TypeHint::BoolLike),
+                Some(TypeHint::Int { .. } | TypeHint::Float { .. } | TypeHint::BoolLike),
                 TypeHint::Pointer { .. } | TypeHint::CodePointer,
             )
             | (
                 Some(TypeHint::Pointer { .. } | TypeHint::CodePointer),
-                TypeHint::Int { .. } | TypeHint::BoolLike,
+                TypeHint::Int { .. } | TypeHint::Float { .. } | TypeHint::BoolLike,
             ) => true,
+            // A semantic float operation tied to one SSA value is stronger
+            // than a flow-insensitive integer default for the same register.
+            (Some(TypeHint::Int { .. } | TypeHint::BoolLike), TypeHint::Float { .. }) => true,
             // Exact-value memory evidence may refine the access width or
             // distinguish data from code pointers.
             (
@@ -386,7 +393,42 @@ fn qualified_result_hint(
     valued: &TypeMapV,
     value: &SsaValue,
     cc: crate::ir::call_args::CallConv,
+    storage_class: ResultHintClass,
 ) -> Option<TypeHint> {
+    if storage_class == ResultHintClass::Float {
+        let Op::Intrinsic { name, outs, .. } = op else {
+            return None;
+        };
+        let semantic_width = match name.as_str() {
+            "addss" | "subss" | "mulss" | "divss" => Some(4),
+            "addsd" | "subsd" | "mulsd" | "divsd" => Some(8),
+            name if name.starts_with("vmov.f32")
+                || name.starts_with("vadd.f32")
+                || name.starts_with("vsub.f32")
+                || name.starts_with("vmul.f32")
+                || name.starts_with("vdiv.f32") =>
+            {
+                Some(4)
+            }
+            name if name.starts_with("vmov.f64")
+                || name.starts_with("vadd.f64")
+                || name.starts_with("vsub.f64")
+                || name.starts_with("vmul.f64")
+                || name.starts_with("vdiv.f64") =>
+            {
+                Some(8)
+            }
+            _ => None,
+        }?;
+        let declared_width = outs
+            .iter()
+            .find(|(register, _)| register == &value.base)
+            .map(|(_, width)| u8::try_from(width.bytes()).expect("LLIR width fits in u8"))?;
+        return (declared_width == semantic_width).then_some(TypeHint::Float {
+            width: semantic_width,
+        });
+    }
+
     match op {
         Op::Load { addr, .. } if addr.size.max(1) < abi_pointer_width(cc) => Some(TypeHint::Int {
             signed: true,
@@ -411,16 +453,18 @@ fn qualified_result_hint(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ResultHintClass {
     Pointer,
-    Scalar,
+    Integer,
+    Float,
 }
 
 fn result_hint_class(hint: TypeHint) -> ResultHintClass {
     match hint {
         TypeHint::Pointer { .. } | TypeHint::CodePointer => ResultHintClass::Pointer,
-        TypeHint::Int { .. } | TypeHint::BoolLike => ResultHintClass::Scalar,
+        TypeHint::Int { .. } | TypeHint::BoolLike => ResultHintClass::Integer,
+        TypeHint::Float { .. } => ResultHintClass::Float,
     }
 }
 
@@ -439,7 +483,7 @@ fn join_result_hints(facts: &[(TypeHint, bool)]) -> Option<TypeHint> {
 
     for (hint, is_literal_null) in facts {
         let class = result_hint_class(*hint);
-        if class == ResultHintClass::Scalar && !is_literal_null {
+        if class == ResultHintClass::Integer && !is_literal_null {
             saw_nonnull_scalar = true;
         }
         match joined_class {
@@ -449,7 +493,14 @@ fn join_result_hints(facts: &[(TypeHint, bool)]) -> Option<TypeHint> {
             }
             Some(current_class) if current_class == class && joined == Some(*hint) => {}
             Some(current_class) if current_class == class => return None,
-            Some(_) if !saw_nonnull_scalar => {
+            Some(current_class)
+                if !saw_nonnull_scalar
+                    && matches!(
+                        (current_class, class),
+                        (ResultHintClass::Pointer, ResultHintClass::Integer)
+                            | (ResultHintClass::Integer, ResultHintClass::Pointer)
+                    ) =>
+            {
                 // Every scalar fact seen so far is the literal zero. Preserve
                 // the pointer class regardless of branch traversal order.
                 if class == ResultHintClass::Pointer {
@@ -616,7 +667,6 @@ pub fn recover_prototype(
     let mut ordered: Vec<usize> = param_slots.iter().copied().collect();
     ordered.sort_unstable();
 
-    let ret_names = return_reg_names(cc);
     let va_to_idx: HashMap<u64, usize> = lf
         .blocks
         .iter()
@@ -642,79 +692,66 @@ pub fn recover_prototype(
     }
     let non_return_live = non_return_live_values(lf, ssa);
     let mut direct_values = Vec::new();
+    let mut qualified_values = Vec::new();
     let mut direct_facts = Vec::new();
-    for (block_idx, block) in lf.blocks.iter().enumerate() {
-        for (instr_idx, ins) in block.instrs.iter().enumerate() {
-            let (Some(VReg::Phys(dst)), _) = def_uses(&ins.op) else {
-                continue;
-            };
-            if !ret_names.contains(&dst.as_str()) {
-                continue;
-            }
-            if !crate::ir::value_number::def_reaches_return(
-                lf, ret_names, &va_to_idx, block_idx, instr_idx,
-            ) {
-                continue;
-            }
-            let addr = InstrAddr {
-                block_idx,
-                instr_idx,
-            };
-            let Some(value) = ssa.def_value(lf, addr) else {
-                continue;
-            };
-            let hint = qualified_result_hint(&ins.op, &valued, &value, cc);
-            let is_direct =
-                output_trial_is_dedicated(lf, ssa, &value, &definitions, &non_return_live);
-            if let Some(hint) = hint {
-                let is_literal_null = matches!(
-                    &ins.op,
-                    Op::Assign {
-                        src: Value::Const(0),
-                        ..
-                    }
-                );
-                if is_direct {
-                    direct_facts.push((hint, is_literal_null));
+    let mut direct_storage_classes = HashSet::new();
+    let mut has_unsupported_output_trial = false;
+    // Ghidra's ParamEntry model and Kuna's port allocate general-purpose and
+    // floating-point results from distinct resource sections. Scan them
+    // independently as well: a write to `rax` must not kill a reaching `xmm0`
+    // definition (or vice versa), and observing both is aggregate evidence.
+    for (ret_names, storage_class) in [
+        (return_reg_names(cc), ResultHintClass::Integer),
+        (float_return_reg_names(cc), ResultHintClass::Float),
+    ] {
+        for (block_idx, block) in lf.blocks.iter().enumerate() {
+            for (instr_idx, ins) in block.instrs.iter().enumerate() {
+                let (Some(VReg::Phys(dst)), _) = def_uses(&ins.op) else {
+                    continue;
+                };
+                if !ret_names.contains(&dst.as_str())
+                    || !crate::ir::value_number::def_reaches_return(
+                        lf, ret_names, &va_to_idx, block_idx, instr_idx,
+                    )
+                {
+                    continue;
                 }
-            }
-            if is_direct && !direct_values.contains(&value) {
-                direct_values.push(value);
+                let addr = InstrAddr {
+                    block_idx,
+                    instr_idx,
+                };
+                let Some(value) = ssa.def_value(lf, addr) else {
+                    continue;
+                };
+                let is_direct =
+                    output_trial_is_dedicated(lf, ssa, &value, &definitions, &non_return_live);
+                if !is_direct {
+                    continue;
+                }
+                let hint = qualified_result_hint(&ins.op, &valued, &value, cc, storage_class);
+                if storage_class == ResultHintClass::Float && hint.is_none() {
+                    has_unsupported_output_trial = true;
+                }
+                if let Some(hint) = hint {
+                    let is_literal_null = matches!(
+                        &ins.op,
+                        Op::Assign {
+                            src: Value::Const(0),
+                            ..
+                        }
+                    );
+                    direct_facts.push((hint, is_literal_null));
+                    direct_storage_classes.insert(storage_class);
+                    if !qualified_values.contains(&value) {
+                        qualified_values.push(value.clone());
+                    }
+                }
+                if !direct_values.contains(&value) {
+                    direct_values.push(value);
+                }
             }
         }
     }
-    // Ghidra and Kuna keep integer, floating-point, and aggregate output
-    // storage classes distinct.  Glaurung's source type lattice does not yet
-    // represent floating-point results, but the LLIR can still retain their
-    // architectural dataflow.  A live definition of one of those ABI result
-    // registers is positive evidence that the function is *not* void; preserve
-    // the source result as unknown instead of inventing an integer type.
-    let unsupported_ret_names = unsupported_return_reg_names(cc);
-    let has_unsupported_output_trial = lf.blocks.iter().enumerate().any(|(block_idx, block)| {
-        block.instrs.iter().enumerate().any(|(instr_idx, ins)| {
-            let Some(VReg::Phys(dst)) = def_uses(&ins.op).0 else {
-                return false;
-            };
-            if !unsupported_ret_names.contains(&dst.as_str())
-                || !crate::ir::value_number::def_reaches_return(
-                    lf,
-                    unsupported_ret_names,
-                    &va_to_idx,
-                    block_idx,
-                    instr_idx,
-                )
-            {
-                return false;
-            }
-            let addr = InstrAddr {
-                block_idx,
-                instr_idx,
-            };
-            ssa.def_value(lf, addr).is_some_and(|value| {
-                output_trial_is_dedicated(lf, ssa, &value, &definitions, &non_return_live)
-            })
-        })
-    });
     // A function has one source-level result type even when control flow has
     // several return sites. Join the qualified facts across their exact SSA
     // definitions instead of selecting an arbitrary branch or discarding the
@@ -751,10 +788,20 @@ pub fn recover_prototype(
                     } if ins.is_empty() && outs.is_empty()
                 )
             });
+    // An ABI-wide call annotation uses the general-purpose result register
+    // when the callee prototype is unknown. That synthetic write is not
+    // allowed to conflict with a semantically qualified float definition.
+    // Prefer qualified trials when any exist; retain unqualified trials only
+    // as the fail-closed legacy result when no class could be established.
+    let result_values = if qualified_values.is_empty() {
+        direct_values
+    } else {
+        qualified_values
+    };
     let output_kind = match (
         has_machine_return,
-        direct_values.is_empty(),
-        has_unsupported_output_trial,
+        result_values.is_empty(),
+        has_unsupported_output_trial || direct_storage_classes.len() > 1,
         has_opaque_semantics,
     ) {
         // A tail-call wrapper, a source-level non-returning function, and an
@@ -774,7 +821,7 @@ pub fn recover_prototype(
     };
     let result = match output_kind {
         RecoveredOutputKind::Direct => Some(RecoveredResult {
-            values: direct_values,
+            values: result_values,
             hint: join_result_hints(&direct_facts),
         }),
         RecoveredOutputKind::Unknown
@@ -810,7 +857,7 @@ fn merge_type_hint(current: Option<TypeHint>, new: TypeHint) -> TypeHint {
         (None, _) => new,
         // Pointer / CodePointer are the strongest semantic classifications.
         (
-            Some(TypeHint::Int { .. }) | Some(TypeHint::BoolLike),
+            Some(TypeHint::Int { .. }) | Some(TypeHint::Float { .. }) | Some(TypeHint::BoolLike),
             TypeHint::Pointer { .. } | TypeHint::CodePointer,
         ) => new,
         (Some(TypeHint::Pointer { pointee_width: a }), TypeHint::Pointer { pointee_width: b })
@@ -819,6 +866,18 @@ fn merge_type_hint(current: Option<TypeHint>, new: TypeHint) -> TypeHint {
             new
         }
         (Some(TypeHint::Pointer { .. }) | Some(TypeHint::CodePointer), _) => current.unwrap(),
+        (Some(TypeHint::Int { .. }) | Some(TypeHint::BoolLike), TypeHint::Float { .. }) => new,
+        (Some(TypeHint::Float { .. }), TypeHint::Int { .. } | TypeHint::BoolLike) => {
+            current.unwrap()
+        }
+        (
+            Some(TypeHint::Float {
+                width: current_width,
+            }),
+            TypeHint::Float { width: new_width },
+        ) => TypeHint::Float {
+            width: current_width.max(new_width),
+        },
         (Some(TypeHint::Int { .. }), TypeHint::BoolLike) => new,
         (Some(TypeHint::BoolLike), TypeHint::Int { .. }) => current.unwrap(),
         (Some(TypeHint::BoolLike), TypeHint::BoolLike) => new,
@@ -1048,9 +1107,8 @@ fn return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static st
     }
 }
 
-/// ABI result registers whose source types are not yet representable by the
-/// integer/pointer result lattice.
-fn unsupported_return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static str] {
+/// Dedicated floating-point result storage under `cc`, widest aliases first.
+fn float_return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static str] {
     use crate::ir::call_args::CallConv;
     match cc {
         CallConv::SysVAmd64 | CallConv::Win64 => &["xmm0", "ymm0", "zmm0"],
@@ -2549,7 +2607,7 @@ int never_returns(void) { for (;;) {} }
     }
 
     #[test]
-    fn real_unmodeled_hard_float_result_stays_unknown_instead_of_void() {
+    fn real_hard_float_result_recovers_direct_float_output() {
         use object::{Object, ObjectSymbol};
         use std::io::Write;
         use std::process::Command;
@@ -2558,7 +2616,12 @@ int never_returns(void) { for (;;) {} }
         let source = tmp.path().join("hard_float.c");
         let binary = tmp.path().join("hard_float.elf");
         std::fs::File::create(&source)
-            .and_then(|mut file| file.write_all(b"float square(float x) { return x * x; }\n"))
+            .and_then(|mut file| {
+                file.write_all(
+                    b"__attribute__((noinline)) float helper(float x) { return x + 1.0f; }\n\
+                      float square(float x) { return helper(x) * x; }\n",
+                )
+            })
             .expect("write real hard-float fixture source");
         let build = match Command::new("arm-none-eabi-gcc")
             .args([
@@ -2593,7 +2656,8 @@ int never_returns(void) { for (;;) {} }
             .symbols()
             .find(|symbol| symbol.name().ok() == Some("square"))
             .expect("square symbol")
-            .address();
+            .address()
+            & !1;
         let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
             &data,
             &crate::analysis::cfg::Budgets::default(),
@@ -2602,12 +2666,17 @@ int never_returns(void) { for (;;) {} }
             .iter()
             .find(|function| function.entry_point.value == entry)
             .expect("discovered square");
-        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+        assert!(
+            function.has_flag(crate::core::function::FunctionFlags::IS_THUMB),
+            "real Cortex-M fixture must retain Thumb mode"
+        );
+        let mut lifted = crate::ir::lift_function::lift_function_from_bytes(
             &data,
             function,
             crate::core::binary::Arch::ARM,
         )
         .expect("lift square");
+        crate::ir::abi::annotate_calls(&mut lifted, crate::ir::call_args::CallConv::Arm);
         assert!(
             lifted
                 .blocks
@@ -2625,11 +2694,19 @@ int never_returns(void) { for (;;) {} }
         );
         let prototype =
             recover_prototype(&lifted, &ssa, crate::ir::call_args::CallConv::Arm, &slots);
-        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Unknown);
+        assert_eq!(
+            prototype.output_kind(),
+            RecoveredOutputKind::Direct,
+            "lifted hard-float fixture: {lifted:#?}"
+        );
+        assert_eq!(
+            prototype.result().and_then(|result| result.hint),
+            Some(TypeHint::Float { width: 4 })
+        );
     }
 
     #[test]
-    fn real_x86_simd_float_result_stays_unknown_instead_of_void() {
+    fn real_x86_simd_float_result_recovers_direct_float_output() {
         use object::{Object, ObjectSymbol};
         use std::io::Write;
         use std::process::Command;
@@ -2638,57 +2715,74 @@ int never_returns(void) { for (;;) {} }
         let source = tmp.path().join("float_result.c");
         let binary = tmp.path().join("float_result.so");
         std::fs::File::create(&source)
-            .and_then(|mut file| file.write_all(b"float square(float x) { return x * x; }\n"))
+            .and_then(|mut file| {
+                file.write_all(
+                    b"__attribute__((noinline)) float helper(float x) { return x + 1.0f; }\n\
+                      float square(float x) { return helper(x) * x; }\n",
+                )
+            })
             .expect("write real x86 float fixture source");
-        let build = match Command::new("gcc")
-            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
-            .arg(&binary)
-            .arg(&source)
-            .output()
-        {
-            Ok(build) => build,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-            Err(error) => panic!("launch GCC: {error}"),
-        };
-        assert!(
-            build.status.success(),
-            "compile x86 float fixture: {}",
-            String::from_utf8_lossy(&build.stderr)
-        );
+        for compiler in ["gcc", "clang"] {
+            let build = match Command::new(compiler)
+                .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+                .arg(&binary)
+                .arg(&source)
+                .output()
+            {
+                Ok(build) => build,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("launch {compiler}: {error}"),
+            };
+            assert!(
+                build.status.success(),
+                "compile x86 float fixture with {compiler}: {}",
+                String::from_utf8_lossy(&build.stderr)
+            );
 
-        let data = std::fs::read(&binary).expect("read x86 float fixture");
-        let object = object::read::File::parse(data.as_slice()).expect("parse x86 float ELF");
-        let entry = object
-            .dynamic_symbols()
-            .find(|symbol| symbol.name().ok() == Some("square"))
-            .expect("square symbol")
-            .address();
-        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
-            &data,
-            &crate::analysis::cfg::Budgets::default(),
-        );
-        let function = functions
-            .iter()
-            .find(|function| function.entry_point.value == entry)
-            .expect("discovered square");
-        let lifted = crate::ir::lift_function::lift_function_from_bytes(
-            &data,
-            function,
-            crate::core::binary::Arch::X86_64,
-        )
-        .expect("lift square");
-        let ssa = compute_ssa(&lifted);
-        let slots = crate::ir::value_number::live_in_arg_slots_llir(
-            &lifted,
-            crate::ir::call_args::CallConv::SysVAmd64,
-        );
-        let prototype = recover_prototype(
-            &lifted,
-            &ssa,
-            crate::ir::call_args::CallConv::SysVAmd64,
-            &slots,
-        );
-        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Unknown);
+            let data = std::fs::read(&binary).expect("read x86 float fixture");
+            let object = object::read::File::parse(data.as_slice()).expect("parse x86 float ELF");
+            let entry = object
+                .dynamic_symbols()
+                .find(|symbol| symbol.name().ok() == Some("square"))
+                .expect("square symbol")
+                .address();
+            let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+                &data,
+                &crate::analysis::cfg::Budgets::default(),
+            );
+            let function = functions
+                .iter()
+                .find(|function| function.entry_point.value == entry)
+                .expect("discovered square");
+            let mut lifted = crate::ir::lift_function::lift_function_from_bytes(
+                &data,
+                function,
+                crate::core::binary::Arch::X86_64,
+            )
+            .expect("lift square");
+            crate::ir::abi::annotate_calls(&mut lifted, crate::ir::call_args::CallConv::SysVAmd64);
+            let ssa = compute_ssa(&lifted);
+            let slots = crate::ir::value_number::live_in_arg_slots_llir(
+                &lifted,
+                crate::ir::call_args::CallConv::SysVAmd64,
+            );
+            let prototype = recover_prototype(
+                &lifted,
+                &ssa,
+                crate::ir::call_args::CallConv::SysVAmd64,
+                &slots,
+            );
+            assert_eq!(
+                prototype.output_kind(),
+                RecoveredOutputKind::Direct,
+                "{compiler} output kind"
+            );
+            assert_eq!(
+                prototype.result().and_then(|result| result.hint),
+                Some(TypeHint::Float { width: 4 }),
+                "{compiler} output type"
+            );
+        }
     }
 
     #[test]
