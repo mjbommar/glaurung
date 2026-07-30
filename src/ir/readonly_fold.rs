@@ -5,8 +5,11 @@
 //! explicit range guard or intrinsic to the index, such as `value & 3`. Rendering the load as
 //! `*(int *)(0x20ac + index * 4)` preserves the original image's address but not
 //! standalone C semantics: the recompiled function has no object mapped at that
-//! link-time VA.  This pass retains the original load as a fail-closed fallback
-//! and materialises each guard-proven table entry as a conditional value.  C's
+//! link-time VA. Mask-derived upper bounds survive cast/copy chains and a branch
+//! excluding the known maximum refines that bound by one; mutations and unsafe
+//! control-flow boundaries discard the fact. This pass retains the original load
+//! as a fail-closed fallback and materialises each guard-proven table entry as a
+//! conditional value. C's
 //! conditional operator evaluates only the selected arm, so every in-range load
 //! is portable while an unproved index keeps the original machine expression.
 
@@ -102,16 +105,24 @@ pub fn fold_guarded_readonly_lookups(function: &mut Function, data: &ReadonlyDat
     if data.regions.is_empty() {
         return;
     }
-    fold_body(&mut function.body, data, &HashMap::new(), None);
+    fold_body(
+        &mut function.body,
+        data,
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+    );
 }
 
 fn fold_body(
     body: &mut [Stmt],
     data: &ReadonlyData,
     inherited_aliases: &HashMap<String, String>,
+    inherited_bounds: &HashMap<String, usize>,
     active_guard: Option<&Guard>,
 ) {
     let mut aliases = inherited_aliases.clone();
+    let mut bounds = inherited_bounds.clone();
     let mut current_guard = active_guard.cloned();
     for statement in body {
         match statement {
@@ -119,11 +130,17 @@ fn fold_body(
                 dst: VReg::Phys(dst),
                 src,
             } => {
-                fold_expr(src, data, &aliases, current_guard.as_ref());
+                fold_expr(src, data, &aliases, &bounds, current_guard.as_ref());
+                let source_bound = proven_index_max(src, &aliases, &bounds, current_guard.as_ref());
                 if let Some(source) = source_register(src) {
                     aliases.insert(dst.clone(), resolve_alias(source, &aliases));
                 } else {
                     aliases.remove(dst);
+                }
+                if let Some(inclusive_max) = source_bound {
+                    bounds.insert(dst.clone(), inclusive_max);
+                } else {
+                    bounds.remove(dst);
                 }
                 if current_guard
                     .as_ref()
@@ -132,20 +149,23 @@ fn fold_body(
                     current_guard = None;
                 }
             }
-            Stmt::Assign { src, .. } => fold_expr(src, data, &aliases, current_guard.as_ref()),
+            Stmt::Assign { src, .. } => {
+                fold_expr(src, data, &aliases, &bounds, current_guard.as_ref())
+            }
             Stmt::Store { addr, src, .. } => {
-                fold_expr(addr, data, &aliases, current_guard.as_ref());
-                fold_expr(src, data, &aliases, current_guard.as_ref());
+                fold_expr(addr, data, &aliases, &bounds, current_guard.as_ref());
+                fold_expr(src, data, &aliases, &bounds, current_guard.as_ref());
             }
             Stmt::Call {
                 target, args, dst, ..
             } => {
-                fold_expr(target, data, &aliases, current_guard.as_ref());
+                fold_expr(target, data, &aliases, &bounds, current_guard.as_ref());
                 for argument in args {
-                    fold_expr(argument, data, &aliases, current_guard.as_ref());
+                    fold_expr(argument, data, &aliases, &bounds, current_guard.as_ref());
                 }
                 if let Some(VReg::Phys(dst)) = dst {
                     aliases.remove(dst);
+                    bounds.remove(dst);
                     if current_guard
                         .as_ref()
                         .is_some_and(|guard| guard.index_root == *dst)
@@ -155,38 +175,41 @@ fn fold_body(
                 }
             }
             Stmt::Return { value: Some(value) } | Stmt::Push { value } => {
-                fold_expr(value, data, &aliases, current_guard.as_ref())
+                fold_expr(value, data, &aliases, &bounds, current_guard.as_ref())
             }
             Stmt::IndirectGoto { target } => {
-                fold_expr(target, data, &aliases, current_guard.as_ref())
+                fold_expr(target, data, &aliases, &bounds, current_guard.as_ref())
             }
             Stmt::If {
                 cond,
                 then_body,
                 else_body,
             } => {
-                fold_expr(cond, data, &aliases, current_guard.as_ref());
-                let guard = bounded_guard(cond, &aliases);
+                fold_expr(cond, data, &aliases, &bounds, current_guard.as_ref());
+                let guard = bounded_guard(cond, &aliases, &bounds);
                 fold_body(
                     then_body,
                     data,
                     &aliases,
+                    &bounds,
                     guard.as_ref().or(current_guard.as_ref()),
                 );
                 if let Some(else_body) = else_body {
-                    fold_body(else_body, data, &aliases, current_guard.as_ref());
+                    fold_body(else_body, data, &aliases, &bounds, current_guard.as_ref());
                 }
                 // Definitions in either branch need a join proof before aliases
                 // or an enclosing bound can be reused after the conditional.
                 aliases.clear();
+                bounds.clear();
                 current_guard = None;
             }
             Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
-                fold_expr(cond, data, &aliases, current_guard.as_ref());
+                fold_expr(cond, data, &aliases, &bounds, current_guard.as_ref());
                 // A loop body can change its index before a later iteration's
                 // lookup. Only guards recovered inside that iteration may fold.
-                fold_body(body, data, &HashMap::new(), None);
+                fold_body(body, data, &HashMap::new(), &HashMap::new(), None);
                 aliases.clear();
+                bounds.clear();
                 current_guard = None;
             }
             Stmt::For {
@@ -195,11 +218,24 @@ fn fold_body(
                 step,
                 body,
             } => {
-                fold_body(std::slice::from_mut(init.as_mut()), data, &aliases, None);
-                fold_expr(cond, data, &aliases, None);
-                fold_body(body, data, &HashMap::new(), None);
-                fold_body(std::slice::from_mut(step.as_mut()), data, &aliases, None);
+                fold_body(
+                    std::slice::from_mut(init.as_mut()),
+                    data,
+                    &aliases,
+                    &bounds,
+                    None,
+                );
+                fold_expr(cond, data, &aliases, &bounds, None);
+                fold_body(body, data, &HashMap::new(), &HashMap::new(), None);
+                fold_body(
+                    std::slice::from_mut(step.as_mut()),
+                    data,
+                    &aliases,
+                    &bounds,
+                    None,
+                );
                 aliases.clear();
+                bounds.clear();
                 current_guard = None;
             }
             Stmt::Switch {
@@ -207,22 +243,30 @@ fn fold_body(
                 cases,
                 default,
             } => {
-                fold_expr(discriminant, data, &aliases, current_guard.as_ref());
+                fold_expr(
+                    discriminant,
+                    data,
+                    &aliases,
+                    &bounds,
+                    current_guard.as_ref(),
+                );
                 for (_, case) in cases {
                     // Cases can fall through, so a sibling's writes make inherited
                     // alias/guard state unsafe without explicit case-edge SSA.
-                    fold_body(case, data, &HashMap::new(), None);
+                    fold_body(case, data, &HashMap::new(), &HashMap::new(), None);
                 }
                 if let Some(default) = default {
-                    fold_body(default, data, &HashMap::new(), None);
+                    fold_body(default, data, &HashMap::new(), &HashMap::new(), None);
                 }
                 aliases.clear();
+                bounds.clear();
                 current_guard = None;
             }
             Stmt::Pop {
                 target: VReg::Phys(dst),
             } => {
                 aliases.remove(dst);
+                bounds.remove(dst);
                 if current_guard
                     .as_ref()
                     .is_some_and(|guard| guard.index_root == *dst)
@@ -232,6 +276,7 @@ fn fold_body(
             }
             Stmt::Goto { .. } | Stmt::Label(_) | Stmt::Break => {
                 aliases.clear();
+                bounds.clear();
                 current_guard = None;
             }
             Stmt::Return { value: None }
@@ -247,15 +292,17 @@ fn fold_expr(
     expression: &mut Expr,
     data: &ReadonlyData,
     aliases: &HashMap<String, String>,
+    bounds: &HashMap<String, usize>,
     active_guard: Option<&Guard>,
 ) {
     match expression {
         Expr::Deref { addr, size } => {
-            fold_expr(addr, data, aliases, active_guard);
+            fold_expr(addr, data, aliases, bounds, active_guard);
             let Some((base, index)) = indexed_address(addr, *size) else {
                 return;
             };
-            let Some(inclusive_max) = proven_index_max(&index, aliases, active_guard) else {
+            let Some(inclusive_max) = proven_index_max(&index, aliases, bounds, active_guard)
+            else {
                 return;
             };
             let count = inclusive_max.saturating_add(1);
@@ -294,8 +341,8 @@ fn fold_expr(
             *expression = replacement;
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            fold_expr(lhs, data, aliases, active_guard);
-            fold_expr(rhs, data, aliases, active_guard);
+            fold_expr(lhs, data, aliases, bounds, active_guard);
+            fold_expr(rhs, data, aliases, bounds, active_guard);
         }
         Expr::Select {
             cond,
@@ -303,12 +350,12 @@ fn fold_expr(
             if_false,
             ..
         } => {
-            fold_expr(cond, data, aliases, active_guard);
-            fold_expr(if_true, data, aliases, active_guard);
-            fold_expr(if_false, data, aliases, active_guard);
+            fold_expr(cond, data, aliases, bounds, active_guard);
+            fold_expr(if_true, data, aliases, bounds, active_guard);
+            fold_expr(if_false, data, aliases, bounds, active_guard);
         }
         Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
-            fold_expr(src, data, aliases, active_guard)
+            fold_expr(src, data, aliases, bounds, active_guard)
         }
         Expr::Addr(_)
         | Expr::Named { .. }
@@ -323,19 +370,40 @@ fn fold_expr(
     }
 }
 
-fn bounded_guard(condition: &Expr, aliases: &HashMap<String, String>) -> Option<Guard> {
+fn bounded_guard(
+    condition: &Expr,
+    aliases: &HashMap<String, String>,
+    bounds: &HashMap<String, usize>,
+) -> Option<Guard> {
     let Expr::Cmp { op, lhs, rhs } = condition else {
         return None;
     };
-    let inclusive_max = match op {
-        CmpOp::Ule => constant_usize(rhs)?,
-        CmpOp::Ult => constant_usize(rhs)?.checked_sub(1)?,
+    let (index, inclusive_max) = match op {
+        CmpOp::Ule => (source_register(lhs)?, constant_usize(rhs)?),
+        CmpOp::Ult => (source_register(lhs)?, constant_usize(rhs)?.checked_sub(1)?),
+        CmpOp::Ne => {
+            let (index, excluded) = if let (Some(index), Some(excluded)) =
+                (source_register(lhs), constant_usize(rhs))
+            {
+                (index, excluded)
+            } else {
+                (source_register(rhs)?, constant_usize(lhs)?)
+            };
+            let known_max = known_register_bound(index, aliases, bounds)?;
+            let inclusive_max = if known_max == excluded {
+                excluded.checked_sub(1)?
+            } else if known_max < excluded {
+                known_max
+            } else {
+                return None;
+            };
+            (index, inclusive_max)
+        }
         _ => return None,
     };
     if inclusive_max >= MAX_GUARDED_ENTRIES {
         return None;
     }
-    let index = source_register(lhs)?;
     Some(Guard {
         index_root: resolve_alias(index, aliases),
         inclusive_max,
@@ -345,6 +413,7 @@ fn bounded_guard(condition: &Expr, aliases: &HashMap<String, String>) -> Option<
 fn proven_index_max(
     index: &Expr,
     aliases: &HashMap<String, String>,
+    bounds: &HashMap<String, usize>,
     active_guard: Option<&Guard>,
 ) -> Option<usize> {
     if let Expr::Bin {
@@ -359,9 +428,25 @@ fn proven_index_max(
         }
     }
 
-    let guard = active_guard?;
     let index_name = source_register(index)?;
-    (resolve_alias(index_name, aliases) == guard.index_root).then_some(guard.inclusive_max)
+    let index_root = resolve_alias(index_name, aliases);
+    if let Some(guard) = active_guard {
+        if index_root == guard.index_root {
+            return Some(guard.inclusive_max);
+        }
+    }
+    known_register_bound(index_name, aliases, bounds)
+}
+
+fn known_register_bound(
+    name: &str,
+    aliases: &HashMap<String, String>,
+    bounds: &HashMap<String, usize>,
+) -> Option<usize> {
+    bounds
+        .get(name)
+        .copied()
+        .or_else(|| bounds.get(&resolve_alias(name, aliases)).copied())
 }
 
 fn indexed_address(address: &Expr, width: u8) -> Option<(u64, Expr)> {
@@ -651,5 +736,130 @@ mod tests {
             "unproved index unexpectedly folded:\n{unbounded}"
         );
         assert!(unbounded.contains("0x20e0"), "{unbounded}");
+    }
+
+    #[test]
+    fn copied_mask_with_excluded_max_materialises_only_reachable_entries() {
+        let data = ReadonlyData {
+            regions: vec![ReadonlyRegion {
+                base: 0x20c4,
+                bytes: [37u32, 30, 500]
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect(),
+            }],
+            little_endian: true,
+        };
+        let copied_mask = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Bin {
+                    op: BinOp::And,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(3)),
+                }),
+            }),
+        };
+        let index = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(VReg::phys("var1"))),
+            }),
+        };
+        let mut function = Function {
+            name: "excluded_max_lookup".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: copied_mask,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(9000),
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(index.clone()),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                    then_body: vec![Stmt::Assign {
+                        dst: VReg::phys("ret"),
+                        src: Expr::Deref {
+                            addr: Box::new(Expr::Bin {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Addr(0x20c4)),
+                                rhs: Box::new(Expr::Bin {
+                                    op: BinOp::Mul,
+                                    lhs: Box::new(index),
+                                    rhs: Box::new(Expr::Const(4)),
+                                }),
+                            }),
+                            size: 4,
+                        },
+                    }],
+                    else_body: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                },
+            ],
+        };
+        let mut middle_exclusion = function.clone();
+        let Stmt::Assign { src, .. } = &mut middle_exclusion.body[0] else {
+            panic!("expected copied mask assignment");
+        };
+        let Expr::Cast { expr, .. } = src else {
+            panic!("expected outer mask cast");
+        };
+        let Expr::Cast { expr, .. } = expr.as_mut() else {
+            panic!("expected inner mask cast");
+        };
+        let Expr::Bin { rhs, .. } = expr.as_mut() else {
+            panic!("expected mask expression");
+        };
+        **rhs = Expr::Const(7);
+
+        let mut clobbered = function.clone();
+        let Stmt::If { then_body, .. } = &mut clobbered.body[2] else {
+            panic!("expected guarded lookup");
+        };
+        then_body.insert(
+            0,
+            Stmt::Assign {
+                dst: VReg::phys("var1"),
+                src: Expr::Const(99),
+            },
+        );
+
+        fold_guarded_readonly_lookups(&mut function, &data);
+        fold_guarded_readonly_lookups(&mut middle_exclusion, &data);
+        fold_guarded_readonly_lookups(&mut clobbered, &data);
+
+        let rendered = crate::ir::ast::render(&function);
+        for value in ["37", "30", "500"] {
+            assert!(rendered.contains(value), "missing {value}:\n{rendered}");
+        }
+        assert!(
+            rendered.contains("?"),
+            "reachable table entries were not materialised:\n{rendered}"
+        );
+        let middle_exclusion = crate::ir::ast::render(&middle_exclusion);
+        assert!(
+            !middle_exclusion.contains("?"),
+            "excluding a middle value was treated as an upper bound:\n{middle_exclusion}"
+        );
+        let clobbered = crate::ir::ast::render(&clobbered);
+        assert!(
+            !clobbered.contains("?"),
+            "an overwritten copied bound remained active:\n{clobbered}"
+        );
     }
 }
