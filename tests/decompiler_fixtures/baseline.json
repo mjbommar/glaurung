@@ -569,7 +569,7 @@
   "11_call_shapes:clang:O0": {
     "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
-    "call_fold_wide_result": "fail",
+    "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "fail",
     "call_nested": "pass",
@@ -599,7 +599,7 @@
   "11_call_shapes:gcc:O0": {
     "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
-    "call_fold_wide_result": "fail",
+    "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "fail",
     "call_nested": "pass",
@@ -614,7 +614,7 @@
   "11_call_shapes:gcc:O2": {
     "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "fail",
-    "call_fold_wide_result": "fail",
+    "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "fail",
     "call_nested": "pass",

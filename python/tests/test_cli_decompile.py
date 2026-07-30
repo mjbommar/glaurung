@@ -143,6 +143,58 @@ def test_decompile_arm32_thumb_recovers_main():
     assert "sub_" in text or "(" in text
 
 
+def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> None:
+    """Keep the ARM arg0/frame/result roles intact through the full pipeline."""
+    compiler = shutil.which("arm-none-eabi-gcc")
+    if compiler is None:
+        pytest.skip("arm-none-eabi-gcc is unavailable")
+
+    source = tmp_path / "frame_return.c"
+    binary = tmp_path / "frame_return.elf"
+    source.write_text(
+        "__attribute__((noinline)) signed char frame_return(int wait) {\n"
+        "    volatile signed char c = 0;\n"
+        "    if (wait) c = (signed char)(wait + 1);\n"
+        "    return c;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            compiler,
+            "-mcpu=cortex-m3",
+            "-mthumb",
+            "-nostdlib",
+            "-Wl,-Ttext=0x1000",
+            "-Wl,-e,frame_return",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (function for function in functions if function.name == "frame_return"), None
+    )
+    assert target is not None, functions
+    text = g.ir.decompile_at(
+        str(binary),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+
+    assert " frame_return(int arg0)" in text.splitlines()[1], text
+    assert "return local_" in text, text
+    assert "return 0;" not in text, text
+
+
 @pytest.mark.skipif(not ARM32_SAMPLE.exists(), reason="armhf sample missing")
 def test_decompile_requested_va_seeds_stripped_arm32(
     tmp_path: Path,

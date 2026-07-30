@@ -1751,6 +1751,17 @@ fn default_return_to_reg(body: &mut [Stmt]) {
     apply_default_return(body, &ret_reg);
 }
 
+/// Project a prototype-proven direct machine output onto the AST before passes
+/// that split a dual-role ABI register into source variables.
+///
+/// ARM32/AArch64 use the same register for argument zero and the direct result.
+/// A later role-splitting pass may therefore rename a post-spill result write;
+/// materialising the return first lets that pass rename the definition and use
+/// together. Unknown/void policy remains the responsibility of the caller.
+pub(crate) fn materialize_direct_output(f: &mut Function) {
+    default_return_to_reg(&mut f.body);
+}
+
 /// Remove machine output operands once prototype recovery has established that
 /// the source function is `void`.
 ///

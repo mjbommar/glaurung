@@ -505,7 +505,7 @@ fn abi_pointer_width(cc: crate::ir::call_args::CallConv) -> u8 {
 /// register-name table cannot determine a narrower width. This matters for
 /// 32-bit ARM `r0`..`r3`, whose names intentionally do not collide with x86's
 /// `r8`.. register family in [`crate::ir::types::phys_reg_width`].
-fn normalize_result_hint_for_abi(hint: TypeHint, cc: crate::ir::call_args::CallConv) -> TypeHint {
+fn normalize_value_hint_for_abi(hint: TypeHint, cc: crate::ir::call_args::CallConv) -> TypeHint {
     match hint {
         TypeHint::Int { signed, width } => TypeHint::Int {
             signed,
@@ -578,7 +578,7 @@ fn qualified_result_hint(
         | Op::SExt { .. }
         | Op::Trunc { .. } => valued
             .get(value)
-            .map(|hint| normalize_result_hint_for_abi(hint, cc)),
+            .map(|hint| normalize_value_hint_for_abi(hint, cc)),
         // Calls, full-width loads, address constants, conditional updates, and
         // opaque definitions need stronger prototype or merge evidence before
         // they can safely decide pointer-vs-scalar class.
@@ -1051,7 +1051,15 @@ pub fn recover_prototype(
                         .or(current)
                 })
             });
-            let hint = valued.parameter_refinement(&value).or(raw_hint);
+            // `r0`..`r3` have no narrower register aliases on ARM32, so the
+            // architecture-neutral raw pass falls back to an eight-byte int.
+            // The AAPCS register container is only four bytes. Apply the same
+            // ABI boundary used for result values before this fact crosses
+            // into the source-level prototype.
+            let hint = valued
+                .parameter_refinement(&value)
+                .or(raw_hint)
+                .map(|hint| normalize_value_hint_for_abi(hint, cc));
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
@@ -3387,6 +3395,40 @@ int never_returns(void) { for (;;) {} }
             prototype.result_type_map().get(&VReg::phys("ret")),
             Some(TypeHint::Int { .. })
         ));
+    }
+
+    #[test]
+    fn arm_unclassified_parameter_uses_the_abi_word_width() {
+        use crate::ir::call_args::CallConv;
+
+        // ARM32 has no narrower register spelling corresponding to x86 `edi`
+        // or AArch64 `w0`: an ordinary r0 use therefore reaches raw recovery's
+        // architecture-neutral eight-byte fallback.  The source parameter
+        // cannot exceed its four-byte AAPCS register container.
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("sp")),
+                    index: None,
+                    scale: 0,
+                    disp: 4,
+                    size: 4,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("r0")),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(&lf, &ssa, CallConv::Arm, &HashSet::from([0]));
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
     }
 
     #[test]

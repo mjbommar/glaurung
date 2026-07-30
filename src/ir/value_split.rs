@@ -333,4 +333,43 @@ mod tests {
             "an unspilled arg register must not be split"
         );
     }
+
+    #[test]
+    fn direct_arm_output_survives_the_arg0_scratch_split() {
+        // ARM32 r0 carries both arg0 on entry and the direct result on exit.
+        // Once arg0 is spilled, value splitting must rename the later r0 value
+        // and the semantic return together; otherwise the result becomes an
+        // unreferenced scratch and DecBench C falls back to `return 0`.
+        let mut f = Function {
+            name: "console_getc".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_14")),
+                    src: Expr::Reg(reg("r0")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("r3#1"),
+                    src: Expr::Reg(reg("local_9")),
+                },
+                Stmt::Assign {
+                    dst: reg("r0"),
+                    src: Expr::Reg(reg("r3#1")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        crate::ir::ast::materialize_direct_output(&mut f);
+        split_spilled_arg_reuse(&mut f, CallConv::Arm);
+
+        assert_eq!(
+            f.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(reg("scr_r0"))),
+            }),
+            "the same post-spill role split must reach the direct return"
+        );
+    }
 }

@@ -305,6 +305,7 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
 fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
     cc: crate::ir::call_args::CallConv,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
     param_slots: &std::collections::HashSet<usize>,
     addr_map: &std::collections::HashMap<u64, String>,
     str_pool: &std::collections::HashMap<u64, String>,
@@ -364,6 +365,13 @@ fn run_ast_passes(
         crate::ir::x86_prologue::recognise_x86_prologue(f);
     }
     dp!("recognise_x86_frame");
+    // Project a prototype-proven result while the raw ABI output register is
+    // still present. ARM32/AArch64 reuse arg0's register for the result; the
+    // following spill-role split must rename both its final definition and the
+    // return use together, rather than orphaning the result as scratch.
+    if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
+        crate::ir::ast::materialize_direct_output(f);
+    }
     crate::ir::value_split::split_spilled_arg_reuse(f, cc);
     dp!("split_spilled_arg_reuse");
     crate::ir::naming::apply_role_names_with_params(f, cc, param_slots);
@@ -598,7 +606,17 @@ fn decompile_at_py(
     }
     dp!("lower");
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool);
+    let slot_sizes = run_ast_passes(
+        &mut f,
+        cc,
+        prototype.as_ref().map_or(
+            crate::ir::types_recover::RecoveredOutputKind::Unknown,
+            |prototype| prototype.output_kind(),
+        ),
+        &param_slots,
+        &addr_map,
+        &str_pool,
+    );
     if matches!(
         cc,
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
@@ -784,7 +802,17 @@ fn decompile_range_at_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool);
+    let slot_sizes = run_ast_passes(
+        &mut f,
+        cc,
+        prototype.as_ref().map_or(
+            crate::ir::types_recover::RecoveredOutputKind::Unknown,
+            |prototype| prototype.output_kind(),
+        ),
+        &param_slots,
+        &addr_map,
+        &str_pool,
+    );
     if matches!(
         cc,
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
@@ -1274,7 +1302,17 @@ fn decompile_all_py(
         // pruned unreferenced labels, so `--all` produced different output from `--vas`
         // for the same function, and the fixture gate's structural lane measured a
         // different pipeline from its execution lane. It cannot drift again.
-        let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool);
+        let slot_sizes = run_ast_passes(
+            &mut f,
+            cc,
+            prototype.as_ref().map_or(
+                crate::ir::types_recover::RecoveredOutputKind::Unknown,
+                |prototype| prototype.output_kind(),
+            ),
+            &param_slots,
+            &addr_map,
+            &str_pool,
+        );
         if matches!(
             cc,
             crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
@@ -1417,7 +1455,17 @@ fn decompile_many_py(
         } else {
             None
         };
-        let slot_sizes = run_ast_passes(&mut f, cc, &param_slots, &addr_map, &str_pool);
+        let slot_sizes = run_ast_passes(
+            &mut f,
+            cc,
+            prototype.as_ref().map_or(
+                crate::ir::types_recover::RecoveredOutputKind::Unknown,
+                |prototype| prototype.output_kind(),
+            ),
+            &param_slots,
+            &addr_map,
+            &str_pool,
+        );
         if matches!(
             cc,
             crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
