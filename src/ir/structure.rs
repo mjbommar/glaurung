@@ -72,6 +72,11 @@ pub enum Region {
     /// table dispatch); each arm is a sub-region; the join is the
     /// shared post-dominator if one exists.
     Switch {
+        /// Optional range-check block folded into this switch. Ghidra, angr,
+        /// and Kuna all recover the resolved multi-way component before its
+        /// surrounding guard; retaining the guard here lets the AST discard
+        /// the compiler branch while preserving its normalization prefix.
+        guard: Option<usize>,
         dispatch: usize,
         /// Normalized case labels attached to each distinct arm, parallel to
         /// `arms`. Multiple table slots may target one block after compiler
@@ -79,8 +84,9 @@ pub enum Region {
         case_labels: Vec<Vec<i64>>,
         arms: Vec<Region>,
         /// Default region proven by a guarding conditional and also targeted
-        /// by in-range table holes. This is a borrowed structural view: the
-        /// enclosing guard remains the owner of these blocks.
+        /// by in-range table holes. When `guard` is present this region owns
+        /// the default-only blocks up to `join`; otherwise it is a borrowed
+        /// view because the enclosing conditional owns them.
         formal_default: Option<Box<Region>>,
         join: Option<usize>,
     },
@@ -145,14 +151,24 @@ impl Region {
                     }
                 }
                 Region::Switch {
+                    guard,
                     dispatch,
                     arms,
+                    formal_default,
                     join,
                     ..
                 } => {
+                    if let Some(guard) = guard {
+                        out.push(*guard);
+                    }
                     out.push(*dispatch);
                     for a in arms {
                         walk(a, out);
+                    }
+                    if guard.is_some() {
+                        if let Some(default) = formal_default {
+                            walk(default, out);
+                        }
                     }
                     if let Some(j) = join {
                         out.push(*j);
@@ -425,7 +441,9 @@ pub fn entry_block(r: &Region) -> Option<usize> {
         Region::IfThen { cond, .. } | Region::IfThenElse { cond, .. } => Some(*cond),
         Region::While { header, .. } => Some(*header),
         Region::DoWhile { body, cond, .. } => entry_block(body).or(Some(*cond)),
-        Region::Switch { dispatch, .. } => Some(*dispatch),
+        Region::Switch {
+            guard, dispatch, ..
+        } => guard.or(Some(*dispatch)),
         Region::Goto(b) => Some(*b),
         Region::Unstructured(bs) => bs.first().copied(),
     }
@@ -508,7 +526,28 @@ pub fn verify_region(succs: &[Vec<usize>], entry: usize, region: &Region) -> Vec
                 report_uncovered(*cond, succs, &covered, out);
                 walk(body, succs, out);
             }
-            Region::Switch { arms, .. } => arms.iter().for_each(|a| walk(a, succs, out)),
+            Region::Switch {
+                guard,
+                dispatch,
+                arms,
+                formal_default,
+                ..
+            } => {
+                if let Some(guard) = guard {
+                    let covered: HashSet<usize> = [
+                        Some(*dispatch),
+                        formal_default.as_deref().and_then(entry_block),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    report_uncovered(*guard, succs, &covered, out);
+                }
+                arms.iter().for_each(|a| walk(a, succs, out));
+                if let Some(default) = formal_default {
+                    walk(default, succs, out);
+                }
+            }
             Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => {}
         }
     }
@@ -860,6 +899,21 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
 
         // --- Conditional shapes ---------------------------------------------
         if cfg.succs[cur].len() == 2 {
+            // Resolved switches are collapsed before their surrounding range
+            // guard in Ghidra, angr Phoenix, and Kuna. Doing the same here is
+            // required when the default path shares a terminal tail with one
+            // explicit case: ordinary if/else ownership cannot represent that
+            // overlap without either duplicating or dropping the tail.
+            if let Some((sw, after)) = detect_guarded_switch_shape(cur, cfg, visited, stop_at) {
+                parts.push(sw);
+                match after {
+                    Some(next) => {
+                        cur = next;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
             if let Some((ite, after)) = detect_if_shape(cur, cfg, visited, stop_at) {
                 parts.push(ite);
                 match after {
@@ -1567,6 +1621,7 @@ fn detect_switch_shape(
     });
     Some((
         Region::Switch {
+            guard: None,
             dispatch,
             case_labels,
             arms: sub_arms,
@@ -1574,6 +1629,91 @@ fn detect_switch_shape(
             join: effective_join,
         },
         effective_join,
+    ))
+}
+
+/// Fold an unsigned range guard and its resolved indirect dispatch into one
+/// switch region. The guard's other edge is the formal default, including when
+/// jump-table holes also target it. A case target may itself be the shared exit
+/// reached by the default; that case becomes an empty body followed by the
+/// switch's ordinary continuation.
+fn detect_guarded_switch_shape(
+    guard: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+    enclosing_stop: Option<usize>,
+) -> Option<(Region, Option<usize>)> {
+    let [first, second] = cfg.succs[guard].as_slice() else {
+        return None;
+    };
+    let (dispatch, default_entry) =
+        [(*first, *second), (*second, *first)]
+            .into_iter()
+            .find(|(dispatch, default_entry)| {
+                cfg.is_switch_dispatch(*dispatch)
+                    && cfg.preds[*dispatch] == vec![guard]
+                    && is_guarded_switch_default(*dispatch, *default_entry, cfg)
+            })?;
+
+    let all_arms = cfg.succs[dispatch].clone();
+    let mut arms = all_arms.clone();
+    let mut case_labels = cfg.case_labels[dispatch].clone();
+    let default_position = arms.iter().position(|arm| *arm == default_entry)?;
+    arms.remove(default_position);
+    case_labels.remove(default_position);
+    if arms.is_empty() {
+        return None;
+    }
+
+    let join = find_switch_join_from(
+        guard,
+        dispatch,
+        &all_arms,
+        cfg,
+        enclosing_stop,
+        Some(default_entry),
+    )
+    .or(enclosing_stop);
+    // A non-join case must still be exclusively owned by the dispatch. A case
+    // that is the join may also be reached from the default path by definition.
+    for &arm in &arms {
+        if Some(arm) != join && !cfg.preds[arm].iter().all(|pred| *pred == dispatch) {
+            return None;
+        }
+    }
+
+    visited.insert(dispatch);
+    let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
+    let mut sub_arms = Vec::with_capacity(arms.len());
+    for &arm in &arms {
+        if Some(arm) == join {
+            // Direct dispatch-to-join is `case ...: break;`. The join is emitted
+            // once after the switch instead of being duplicated in the case.
+            sub_arms.push(Region::Seq(Vec::new()));
+        } else if let Some((_, loop_body)) = &enclosing_loop {
+            let mut arm_visited = visited.clone();
+            sub_arms.push(build(arm, cfg, &mut arm_visited, join));
+            visited.extend(
+                arm_visited
+                    .into_iter()
+                    .filter(|block| loop_body.contains(block)),
+            );
+        } else {
+            sub_arms.push(build(arm, cfg, visited, join));
+        }
+    }
+    let formal_default = Box::new(build(default_entry, cfg, visited, join));
+
+    Some((
+        Region::Switch {
+            guard: Some(guard),
+            dispatch,
+            case_labels,
+            arms: sub_arms,
+            formal_default: Some(formal_default),
+            join,
+        },
+        join,
     ))
 }
 
@@ -1597,6 +1737,17 @@ fn find_switch_join(
     arms: &[usize],
     cfg: &Cfg,
     enclosing_stop: Option<usize>,
+) -> Option<usize> {
+    find_switch_join_from(dispatch, dispatch, arms, cfg, enclosing_stop, None)
+}
+
+fn find_switch_join_from(
+    dominance_root: usize,
+    dispatch: usize,
+    arms: &[usize],
+    cfg: &Cfg,
+    enclosing_stop: Option<usize>,
+    arm_join_source: Option<usize>,
 ) -> Option<usize> {
     use std::collections::VecDeque;
     let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
@@ -1639,9 +1790,11 @@ fn find_switch_join(
         .into_iter()
         .filter_map(|(b, arm_count)| {
             (arm_count > 1
-                && !arms.contains(&b)
+                && (!arms.contains(&b)
+                    || arm_join_source
+                        .is_some_and(|source| source != b && can_reach(source, b, cfg)))
                 && cfg.preds[b].len() > 1
-                && cfg.dominates(dispatch, b))
+                && cfg.dominates(dominance_root, b))
             .then_some((arm_count, b))
         })
         .collect();

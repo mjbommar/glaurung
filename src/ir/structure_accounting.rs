@@ -130,9 +130,23 @@ fn owned(r: &Region, out: &mut Vec<usize>) {
             owned(body, out);
             out.push(*cond);
         }
-        Region::Switch { dispatch, arms, .. } => {
+        Region::Switch {
+            guard,
+            dispatch,
+            arms,
+            formal_default,
+            ..
+        } => {
+            if let Some(guard) = guard {
+                out.push(*guard);
+            }
             out.push(*dispatch);
             arms.iter().for_each(|a| owned(a, out));
+            if guard.is_some() {
+                if let Some(default) = formal_default {
+                    owned(default, out);
+                }
+            }
         }
         // A `Goto` REFERENCES a block; it does not emit it.
         Region::Goto(_) => {}
@@ -226,12 +240,20 @@ fn goto_edges(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>
             goto_edges(body, edges, out);
         }
         Region::DoWhile { body, .. } => goto_edges(body, edges, out),
-        Region::Switch { dispatch, arms, .. } => {
+        Region::Switch {
+            dispatch,
+            arms,
+            formal_default,
+            ..
+        } => {
             for a in arms {
                 if let Region::Goto(t) = a {
                     out.insert((*dispatch, *t));
                 }
                 goto_edges(a, edges, out);
+            }
+            if let Some(default) = formal_default {
+                goto_edges(default, edges, out);
             }
         }
         Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => {}
@@ -322,15 +344,26 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             implied(body, edges, out);
         }
         Region::Switch {
+            guard,
             dispatch,
             arms,
             formal_default,
             join,
             ..
         } => {
+            if let Some(guard) = guard {
+                out.insert((*guard, *dispatch));
+                if let Some(default) = formal_default {
+                    if let Some(entry) = structural_entry(default) {
+                        out.insert((*guard, entry));
+                    }
+                }
+            }
             for a in arms {
                 if let Some(e) = structural_entry(a) {
                     out.insert((*dispatch, e));
+                } else if let Some(join) = *join {
+                    out.insert((*dispatch, join));
                 }
             }
             if let Some(default) = formal_default {
@@ -344,8 +377,20 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
                         out.insert((from, j));
                     }
                 }
+                if guard.is_some() {
+                    if let Some(default) = formal_default {
+                        for (from, _) in escaping(default, edges) {
+                            out.insert((from, j));
+                        }
+                    }
+                }
             }
             arms.iter().for_each(|a| implied(a, edges, out));
+            if guard.is_some() {
+                if let Some(default) = formal_default {
+                    implied(default, edges, out);
+                }
+            }
         }
     }
 }
@@ -371,10 +416,18 @@ fn loops_and_switches(
             loops_and_switches(body, enclosing, headers, switch_owner);
             enclosing.pop();
         }
-        Region::Switch { dispatch, arms, .. } => {
+        Region::Switch {
+            dispatch,
+            arms,
+            formal_default,
+            ..
+        } => {
             switch_owner.insert(*dispatch, enclosing.clone());
             arms.iter()
                 .for_each(|a| loops_and_switches(a, enclosing, headers, switch_owner));
+            if let Some(default) = formal_default {
+                loops_and_switches(default, enclosing, headers, switch_owner);
+            }
         }
         Region::Seq(parts) => parts
             .iter()
@@ -470,7 +523,16 @@ pub fn account(
                 gotos(else_r, out);
             }
             Region::While { body, .. } | Region::DoWhile { body, .. } => gotos(body, out),
-            Region::Switch { arms, .. } => arms.iter().for_each(|a| gotos(a, out)),
+            Region::Switch {
+                arms,
+                formal_default,
+                ..
+            } => {
+                arms.iter().for_each(|a| gotos(a, out));
+                if let Some(default) = formal_default {
+                    gotos(default, out);
+                }
+            }
             Region::Block(_) | Region::Unstructured(_) => {}
         }
     }

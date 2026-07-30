@@ -1678,6 +1678,7 @@ fn lower_region_inner(
             }]
         }
         Region::Switch {
+            guard,
             dispatch,
             case_labels,
             arms,
@@ -1689,7 +1690,19 @@ fn lower_region_inner(
             // with the structured `switch` statement. v0 emits each
             // arm with its case index (positional) and an implicit
             // break at the end.
-            let mut prefix = lower_block(&lf.blocks[*dispatch], lower_scalar_float);
+            let mut prefix = guard
+                .map(|guard| lower_block(&lf.blocks[guard], lower_scalar_float))
+                .unwrap_or_default();
+            // The range branch is now represented by the switch's formal
+            // default. Keep normalization/dataflow statements from the guard,
+            // but remove its compiler-level conditional transfer.
+            while matches!(
+                prefix.last(),
+                Some(Stmt::Goto { .. }) | Some(Stmt::If { .. })
+            ) {
+                prefix.pop();
+            }
+            prefix.extend(lower_block(&lf.blocks[*dispatch], lower_scalar_float));
             let explicit_index = lf.blocks[*dispatch]
                 .instrs
                 .iter()
@@ -1793,7 +1806,16 @@ fn collect_goto_targets(r: &Region, lf: &LlirFunction, out: &mut std::collection
         Region::While { body, .. } | Region::DoWhile { body, .. } => {
             collect_goto_targets(body, lf, out)
         }
-        Region::Switch { arms, .. } => arms.iter().for_each(|a| collect_goto_targets(a, lf, out)),
+        Region::Switch {
+            arms,
+            formal_default,
+            ..
+        } => {
+            arms.iter().for_each(|a| collect_goto_targets(a, lf, out));
+            if let Some(default) = formal_default {
+                collect_goto_targets(default, lf, out);
+            }
+        }
         Region::Block(_) | Region::Unstructured(_) => {}
     }
 }
@@ -7795,6 +7817,7 @@ function f @ 0x1000 {
         ]);
         let region = Region::Seq(vec![
             Region::Switch {
+                guard: None,
                 dispatch: 0,
                 case_labels: vec![vec![0], vec![1]],
                 arms: vec![Region::Block(1), Region::Block(2)],
@@ -7842,6 +7865,7 @@ function f @ 0x1000 {
         ]);
         let region = Region::Seq(vec![
             Region::Switch {
+                guard: None,
                 dispatch: 0,
                 case_labels: vec![vec![0], vec![1], vec![2]],
                 arms: vec![Region::Block(1), Region::Block(2), Region::Block(3)],
