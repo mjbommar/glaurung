@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types_recover::{c_type_for_hint, TypeMap};
+use crate::ir::types_recover::{c_type_for_hint, TypeHint, TypeMap};
 
 #[derive(Debug, Deserialize)]
 struct PrototypeBundle {
@@ -273,7 +273,7 @@ pub fn recover_call_site_spec(
     args: &[Expr],
     dst: Option<&crate::ir::VReg>,
 ) -> CallSiteSpec {
-    recover_call_site_spec_with_types(target, args, dst, None)
+    recover_call_site_spec_with_types(target, args, dst, None, None)
 }
 
 fn recover_call_site_spec_with_types(
@@ -281,11 +281,12 @@ fn recover_call_site_spec_with_types(
     args: &[Expr],
     dst: Option<&crate::ir::VReg>,
     types: Option<&TypeMap>,
+    recovered_callee: Option<CallPrototype>,
 ) -> CallSiteSpec {
     let callee_prototype = match target {
-        Expr::Named { name, .. } => {
-            lookup(name).and_then(|contract| contract.standalone_prototype())
-        }
+        Expr::Named { name, .. } => lookup(name)
+            .and_then(|contract| contract.standalone_prototype())
+            .or(recovered_callee),
         _ => None,
     };
     let return_type = callee_prototype
@@ -406,6 +407,170 @@ pub fn refine_call_site_specs(function: &mut Function, types: Option<&TypeMap>) 
     refine_body(&mut function.body, types);
 }
 
+/// Project each call-owned return prototype onto its exact AST destination.
+///
+/// LLIR type recovery sees the physical output register, while naming assigns a
+/// fresh source role to each call result. The attached call specification is the
+/// lossless bridge between those two representations.
+pub fn refine_call_result_types(function: &Function, types: &mut TypeMap) {
+    refine_call_result_body(&function.body, types);
+}
+
+fn call_return_hint(c_type: &str) -> Option<TypeHint> {
+    match c_type.trim() {
+        "float" => Some(TypeHint::Float { width: 4 }),
+        "double" | "long double" => Some(TypeHint::Float { width: 8 }),
+        "signed char" | "char" => Some(TypeHint::Int {
+            signed: true,
+            width: 1,
+        }),
+        "unsigned char" => Some(TypeHint::Int {
+            signed: false,
+            width: 1,
+        }),
+        "short" => Some(TypeHint::Int {
+            signed: true,
+            width: 2,
+        }),
+        "unsigned short" => Some(TypeHint::Int {
+            signed: false,
+            width: 2,
+        }),
+        "int" => Some(TypeHint::Int {
+            signed: true,
+            width: 4,
+        }),
+        "unsigned int" => Some(TypeHint::Int {
+            signed: false,
+            width: 4,
+        }),
+        c_type if c_type.ends_with('*') => Some(TypeHint::Pointer { pointee_width: 0 }),
+        "void" => None,
+        _ => None,
+    }
+}
+
+fn refine_call_result_body(body: &[Stmt], types: &mut TypeMap) {
+    for statement in body {
+        match statement {
+            Stmt::Call {
+                dst: Some(dst),
+                call_spec: Some(call_spec),
+                ..
+            } => {
+                if let Some(hint) = call_return_hint(&call_spec.call_prototype.return_type) {
+                    types.refine_from_value(dst.clone(), hint);
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                refine_call_result_body(then_body, types);
+                if let Some(else_body) = else_body {
+                    refine_call_result_body(else_body, types);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                refine_call_result_body(body, types);
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                refine_call_result_body(std::slice::from_ref(init.as_ref()), types);
+                refine_call_result_body(body, types);
+                refine_call_result_body(std::slice::from_ref(step.as_ref()), types);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    refine_call_result_body(case, types);
+                }
+                if let Some(default) = default {
+                    refine_call_result_body(default, types);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Attach source-level prototypes recovered from directly called functions.
+///
+/// The key is the direct call target VA retained on [`Expr::Named`]. Catalog
+/// declarations still take priority later; this pass supplies the project-local
+/// function facts that a library-only lookup cannot know.
+pub fn apply_recovered_callee_prototypes(
+    function: &mut Function,
+    prototypes: &HashMap<u64, CallPrototype>,
+) {
+    apply_recovered_body(&mut function.body, prototypes);
+}
+
+fn apply_recovered_body(body: &mut [Stmt], prototypes: &HashMap<u64, CallPrototype>) {
+    for statement in body {
+        match statement {
+            Stmt::Call {
+                target,
+                args,
+                dst,
+                call_spec,
+            } => {
+                let recovered = match target {
+                    Expr::Named { va, .. } => prototypes.get(va).cloned(),
+                    _ => None,
+                };
+                if recovered.is_some() {
+                    *call_spec = Some(recover_call_site_spec_with_types(
+                        target,
+                        args,
+                        dst.as_ref(),
+                        None,
+                        recovered,
+                    ));
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                apply_recovered_body(then_body, prototypes);
+                if let Some(else_body) = else_body {
+                    apply_recovered_body(else_body, prototypes);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                apply_recovered_body(body, prototypes);
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                apply_recovered_body(std::slice::from_mut(init.as_mut()), prototypes);
+                apply_recovered_body(body, prototypes);
+                apply_recovered_body(std::slice::from_mut(step.as_mut()), prototypes);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    apply_recovered_body(case, prototypes);
+                }
+                if let Some(default) = default {
+                    apply_recovered_body(default, prototypes);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn recovered_callee_from_spec(call_spec: &Option<CallSiteSpec>) -> Option<CallPrototype> {
+    call_spec
+        .as_ref()
+        .and_then(|spec| spec.callee_prototype.as_ref())
+        .filter(|prototype| prototype.authority == CallPrototypeAuthority::Recovered)
+        .cloned()
+}
+
 fn refine_body(body: &mut [Stmt], types: Option<&TypeMap>) {
     for statement in body {
         match statement {
@@ -415,11 +580,13 @@ fn refine_body(body: &mut [Stmt], types: Option<&TypeMap>) {
                 dst,
                 call_spec,
             } => {
+                let recovered_callee = recovered_callee_from_spec(call_spec);
                 *call_spec = Some(recover_call_site_spec_with_types(
                     target,
                     args,
                     dst.as_ref(),
                     types,
+                    recovered_callee,
                 ));
             }
             Stmt::If {
@@ -474,7 +641,14 @@ fn apply_body(body: &mut [Stmt]) {
                         }
                     }
                 }
-                *call_spec = Some(recover_call_site_spec(target, args, dst.as_ref()));
+                let recovered_callee = recovered_callee_from_spec(call_spec);
+                *call_spec = Some(recover_call_site_spec_with_types(
+                    target,
+                    args,
+                    dst.as_ref(),
+                    None,
+                    recovered_callee,
+                ));
             }
             Stmt::If {
                 then_body,
@@ -739,6 +913,71 @@ mod tests {
         };
         assert_eq!(call_spec.call_prototype.return_type, "float");
         assert_eq!(call_spec.call_prototype.parameter_types, ["float"]);
+    }
+
+    #[test]
+    fn recovered_direct_callee_prototype_survives_contract_and_typed_refresh() {
+        let mut function = Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "constrain".into(),
+                },
+                args: vec![
+                    Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("r3"))),
+                        size: 4,
+                    },
+                    Expr::Un {
+                        op: crate::ir::types::UnOp::Neg,
+                        src: Box::new(Expr::Deref {
+                            addr: Box::new(Expr::Reg(VReg::phys("r3"))),
+                            size: 4,
+                        }),
+                    },
+                    Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("r3"))),
+                        size: 4,
+                    },
+                ],
+                dst: Some(VReg::phys("s0")),
+                call_spec: None,
+            }],
+        };
+        let recovered = CallPrototype {
+            return_type: "float".into(),
+            parameter_types: vec!["float".into(), "float".into(), "float".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let prototypes = std::collections::HashMap::from([(0x2000, recovered.clone())]);
+
+        super::apply_recovered_callee_prototypes(&mut function, &prototypes);
+        apply_known_call_contracts(&mut function);
+        super::refine_call_site_specs(&mut function, None);
+
+        let mut types = TypeMap::default();
+        super::refine_call_result_types(&function, &mut types);
+
+        let Stmt::Call {
+            call_spec: Some(call_spec),
+            ..
+        } = &function.body[0]
+        else {
+            panic!("expected a recovered direct-callee call specification")
+        };
+        assert_eq!(call_spec.callee_prototype, Some(recovered.clone()));
+        assert_eq!(call_spec.call_prototype.return_type, "float");
+        assert_eq!(
+            call_spec.call_prototype.parameter_types,
+            recovered.parameter_types
+        );
+        assert_eq!(
+            types.get(&VReg::phys("s0")),
+            Some(TypeHint::Float { width: 4 })
+        );
     }
 
     #[test]

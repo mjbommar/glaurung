@@ -195,6 +195,73 @@ def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> Non
     assert "return 0;" not in text, text
 
 
+def test_real_arm_hard_float_compare_does_not_erase_three_call_args(
+    tmp_path: Path,
+) -> None:
+    """Keep an exact s0/s1/s2 setup visible after a VFP status comparison."""
+    compiler = shutil.which("arm-none-eabi-gcc")
+    if compiler is None:
+        pytest.skip("arm-none-eabi-gcc is unavailable")
+
+    source = tmp_path / "arm_hard_float_three.c"
+    binary = tmp_path / "arm_hard_float_three.elf"
+    source.write_text(
+        "__attribute__((noinline)) float arm_hf_three(\n"
+        "    float value, float lower, float upper) {\n"
+        "    return value < lower ? lower : (value > upper ? upper : value);\n"
+        "}\n"
+        "__attribute__((noinline)) float arm_hf_three_caller(\n"
+        "    float value, float limit) {\n"
+        "    if (limit == 0.0f) return value;\n"
+        "    return arm_hf_three(value, -limit, limit);\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            compiler,
+            "-mcpu=cortex-m4",
+            "-mthumb",
+            "-mfloat-abi=hard",
+            "-mfpu=fpv4-sp-d16",
+            "-nostdlib",
+            "-Wl,-Ttext=0x1000",
+            "-Wl,-e,arm_hf_three_caller",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (function for function in functions if function.name == "arm_hf_three_caller"),
+        None,
+    )
+    assert target is not None, functions
+    generated = g.ir.decompile_at(
+        str(binary),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+        max_functions=1,
+    )
+
+    assert "extern float arm_hf_three(float, float, float);" in generated, generated
+    call_line = next(
+        (line for line in generated.splitlines() if " = arm_hf_three(" in line),
+        None,
+    )
+    assert call_line is not None, generated
+    assert call_line.count(",") == 2, call_line
+    assert "(*)(void)" not in call_line, call_line
+
+
 @pytest.mark.slow
 def test_real_arm_hard_float_decompile_recompile_execute_round_trip(
     tmp_path: Path,
@@ -360,7 +427,7 @@ def test_real_arm_hard_float_call_round_trip(tmp_path: Path) -> None:
     )
 
     assert "float arm_hf_caller(float arg0, float arg1)" in generated, generated
-    assert "arm_hf_callee(arg0, arg1)" in generated, generated
+    assert "arm_hf_callee((float)(arg0), (float)(arg1))" in generated, generated
     assert "asm:" not in generated, generated
 
     driver = tmp_path / "hard_float_call_driver.c"

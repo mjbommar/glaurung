@@ -308,7 +308,7 @@ fn run_ast_passes(
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &std::collections::HashMap<String, usize>,
-    callee_layouts: &std::collections::HashMap<u64, Vec<crate::ir::types::VReg>>,
+    callee_facts: &DirectCalleeFacts,
     addr_map: &std::collections::HashMap<u64, String>,
     str_pool: &std::collections::HashMap<u64, String>,
 ) -> (
@@ -345,9 +345,10 @@ fn run_ast_passes(
         f,
         cc,
         param_slots,
-        callee_layouts,
+        &callee_facts.layouts,
     );
     dp!("reconstruct_args");
+    crate::ir::call_contracts::apply_recovered_callee_prototypes(f, &callee_facts.prototypes);
     // ABI liveness supplies candidate call inputs/outputs; an authoritative
     // library prototype wins when one is known. This mirrors Ghidra's locked
     // FuncProto and angr's callee-prototype priority rather than asking the C
@@ -638,7 +639,7 @@ fn decompile_at_py(
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let mut callee_layout_cache = std::collections::HashMap::new();
-    let callee_layouts = recover_direct_callee_layouts(
+    let callee_facts = recover_direct_callee_layouts(
         &data,
         &funcs,
         &func,
@@ -680,7 +681,7 @@ fn decompile_at_py(
         ),
         &param_slots,
         &parameter_roles,
-        &callee_layouts,
+        &callee_facts,
         &addr_map,
         &str_pool,
     );
@@ -860,7 +861,7 @@ fn decompile_range_at_py(
     let mut f = lower(&lf, &region, func.name.clone());
     // An explicit byte range has no discovered callee Function objects from
     // which to recover cross-function storage layouts.
-    let callee_layouts = std::collections::HashMap::new();
+    let callee_facts = DirectCalleeFacts::default();
     // Inputs the shared pipeline needs. These were interleaved BETWEEN passes here, which
     // is why the four copies could not simply be diffed against each other — the pass
     // list and the local setup were braided together. None of them touch `f`, so
@@ -884,7 +885,7 @@ fn decompile_range_at_py(
         ),
         &param_slots,
         &parameter_roles,
-        &callee_layouts,
+        &callee_facts,
         &addr_map,
         &str_pool,
     );
@@ -1277,7 +1278,62 @@ fn recover_decbench_prototype(
     prototype
 }
 
-/// Recover the source-ordered physical parameter storage of direct callees.
+#[derive(Debug, Default)]
+struct DirectCalleeFacts {
+    layouts: std::collections::HashMap<u64, Vec<crate::ir::types::VReg>>,
+    prototypes: std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+}
+
+fn recovered_call_prototype(
+    prototype: &crate::ir::types_recover::RecoveredPrototype,
+) -> crate::ir::call_contracts::CallPrototype {
+    use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
+    use crate::ir::types::VReg;
+    use crate::ir::types_recover::{c_type_for_hint, RecoveredOutputKind};
+
+    fn storage_fallback(register: &VReg) -> &'static str {
+        match register {
+            VReg::Phys(name) if name.starts_with('s') => "float",
+            VReg::Phys(name) if name.starts_with('d') => "double",
+            _ => "long",
+        }
+    }
+
+    let parameter_types = prototype
+        .parameters()
+        .iter()
+        .map(|parameter| {
+            parameter
+                .hint
+                .map(c_type_for_hint)
+                .unwrap_or_else(|| storage_fallback(&parameter.value.base))
+                .to_string()
+        })
+        .collect();
+    let return_type = match prototype.output_kind() {
+        RecoveredOutputKind::Void => "void",
+        RecoveredOutputKind::Direct => prototype
+            .result()
+            .and_then(|result| result.hint)
+            .map(c_type_for_hint)
+            .or_else(|| {
+                prototype
+                    .result()
+                    .and_then(|result| result.values.first())
+                    .map(|value| storage_fallback(&value.base))
+            })
+            .unwrap_or("long"),
+        RecoveredOutputKind::Unknown | RecoveredOutputKind::HiddenReturn => "long",
+    };
+    CallPrototype {
+        return_type: return_type.to_string(),
+        parameter_types,
+        variadic: false,
+        authority: CallPrototypeAuthority::Recovered,
+    }
+}
+
+/// Recover the source-ordered physical parameter storage and prototype of direct callees.
 ///
 /// This is intentionally demand-driven and cached. AAPCS-VFP callsites need
 /// cross-function prototype evidence to interleave core and VFP registers, but
@@ -1294,16 +1350,23 @@ fn recover_direct_callee_layouts(
     budgets: &crate::analysis::cfg::Budgets,
     dwarf_outputs: Option<&std::collections::HashMap<u64, crate::debug::dwarf::DwarfReturnType>>,
     address_names: &mut std::collections::HashMap<u64, String>,
-    cache: &mut std::collections::HashMap<u64, Option<(Vec<crate::ir::types::VReg>, String)>>,
-) -> std::collections::HashMap<u64, Vec<crate::ir::types::VReg>> {
+    cache: &mut std::collections::HashMap<
+        u64,
+        Option<(
+            Vec<crate::ir::types::VReg>,
+            crate::ir::call_contracts::CallPrototype,
+            String,
+        )>,
+    >,
+) -> DirectCalleeFacts {
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
 
     if cc != crate::ir::call_args::CallConv::ArmHardFloat {
-        return std::collections::HashMap::new();
+        return DirectCalleeFacts::default();
     }
 
-    let mut layouts = std::collections::HashMap::new();
+    let mut facts = DirectCalleeFacts::default();
     for callee_address in &caller.callees {
         let callee_va = callee_address.value;
         let recovered = cache
@@ -1339,10 +1402,11 @@ fn recover_direct_callee_layouts(
                     .iter()
                     .map(|parameter| parameter.value.base.clone())
                     .collect();
-                (!layout.is_empty()).then(|| (layout, callee.name.clone()))
+                let call_prototype = recovered_call_prototype(&prototype);
+                (!layout.is_empty()).then(|| (layout, call_prototype, callee.name.clone()))
             })
             .clone();
-        if let Some((layout, name)) = recovered {
+        if let Some((layout, prototype, name)) = recovered {
             match address_names.entry(callee_va) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     entry.insert(name);
@@ -1354,10 +1418,11 @@ fn recover_direct_callee_layouts(
                 }
                 std::collections::hash_map::Entry::Occupied(_) => {}
             }
-            layouts.insert(callee_va, layout);
+            facts.layouts.insert(callee_va, layout);
+            facts.prototypes.insert(callee_va, prototype);
         }
     }
-    layouts
+    facts
 }
 
 fn float_expression_width(
@@ -1513,6 +1578,7 @@ fn decbench_type_maps(
         }
     }
     merge_slot_sizes(&mut decl, slot_sizes);
+    crate::ir::call_contracts::refine_call_result_types(f, &mut decl);
     refine_float_copy_types(&f.body, &mut decl);
     let mut width = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names));
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
@@ -1529,6 +1595,7 @@ fn decbench_type_maps(
         }
     }
     merge_slot_sizes(&mut width, slot_sizes);
+    crate::ir::call_contracts::refine_call_result_types(f, &mut width);
     refine_float_copy_types(&f.body, &mut width);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== exact role names =====\n{role_names:#?}");
@@ -1624,7 +1691,7 @@ fn decompile_all_py(
             .as_ref()
             .map(|prototype| prototype.parameter_role_map())
             .unwrap_or_default();
-        let callee_layouts = recover_direct_callee_layouts(
+        let callee_facts = recover_direct_callee_layouts(
             &data,
             &funcs,
             func,
@@ -1645,7 +1712,7 @@ fn decompile_all_py(
             ),
             &param_slots,
             &parameter_roles,
-            &callee_layouts,
+            &callee_facts,
             &addr_map,
             &str_pool,
         );
@@ -1809,7 +1876,7 @@ fn decompile_many_py(
             .as_ref()
             .map(|prototype| prototype.parameter_role_map())
             .unwrap_or_default();
-        let callee_layouts = recover_direct_callee_layouts(
+        let callee_facts = recover_direct_callee_layouts(
             &data,
             &funcs,
             func,
@@ -1830,7 +1897,7 @@ fn decompile_many_py(
             ),
             &param_slots,
             &parameter_roles,
-            &callee_layouts,
+            &callee_facts,
             &addr_map,
             &str_pool,
         );

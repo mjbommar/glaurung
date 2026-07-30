@@ -895,9 +895,20 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         Op::Intrinsic {
             name, ins, outs, ..
         } => {
-            if lower_scalar_float {
-                if let (Some((operation, width)), Some((dst, _))) =
-                    (scalar_float_intrinsic(name, ins, outs), outs.first())
+            if let (Some((operation, width)), Some((dst, _))) =
+                (scalar_float_intrinsic(name, ins, outs), outs.first())
+            {
+                // Moves and negation retain exact value semantics even when an
+                // unrelated opaque VFP status instruction prevents lowering a
+                // whole arithmetic region. Keeping these producer edges is
+                // essential at AAPCS-VFP call boundaries (`s0/s1/s2` setup).
+                // Binary operations still require the closed-value proof above
+                // so an unmodeled producer cannot become an invented live-in.
+                if lower_scalar_float
+                    || matches!(
+                        operation,
+                        ScalarFloatOperation::Move | ScalarFloatOperation::Negate
+                    )
                 {
                     let expression = match (operation, ins.as_slice()) {
                         (ScalarFloatOperation::Move, [src]) => Some(lower_float_value(src, width)),
@@ -6352,6 +6363,21 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
     write_expr_dec(arg, out);
 }
 
+/// Whether the ordinary call-argument writer already emits a C pointer value.
+/// Pointer-shaped arithmetic is deliberately absent: its internal C spelling is
+/// a machine word and therefore still needs a cast at the call boundary.
+fn call_argument_renders_as_pointer(arg: &Expr) -> bool {
+    match arg {
+        Expr::Reg(VReg::Phys(name)) => {
+            dec_ptr_arg_type(name).is_some()
+                || dec_ptr_width(name).is_some()
+                || dec_is_stack_object(name)
+        }
+        Expr::StringLit { .. } | Expr::StackAddr { .. } => true,
+        _ => false,
+    }
+}
+
 /// Render a value proven to flow through scalar floating-point storage.
 ///
 /// AAPCS-VFP commonly materialises a float field as `ldr r3, [base, #off]`
@@ -6559,6 +6585,11 @@ fn write_call_dec(
             let representation_mismatch =
                 parameter_type.ends_with('*') != expression_has_pointer_representation(a);
             if emitted_prototype.authority == CallPrototypeAuthority::Authoritative
+                // Address arithmetic is rendered in machine-word form even
+                // when its base has pointer representation. Reassert every
+                // recovered pointer parameter at the consuming boundary so C
+                // sees the ABI pointer rather than an implicit integer cast.
+                || (parameter_type.ends_with('*') && !call_argument_renders_as_pointer(a))
                 || representation_mismatch
                 // A recovered AAPCS-VFP parameter still proves the consuming
                 // storage class.  Render its complete expression in float
@@ -6772,6 +6803,23 @@ fn write_store_value_dec(src: &Expr, size: u8, out: &mut String) {
     write_expr_dec(src, out);
 }
 
+/// Select a floating pointee only when the stored value's declaration proves
+/// that storage class. Store nodes retain byte width but not source-level type;
+/// using the exact producer declaration avoids turning an AAPCS-VFP return into
+/// an integer conversion while leaving untyped four-byte stores unchanged.
+fn float_store_pointee_ctype(src: &Expr, size: u8) -> Option<&'static str> {
+    match src {
+        Expr::Reg(register @ VReg::Phys(_)) => match (declared_reg_ctype(register), size) {
+            ("float", 4) => Some("float"),
+            ("double", 8) => Some("double"),
+            _ => None,
+        },
+        Expr::FloatConst { width: 4, .. } if size == 4 => Some("float"),
+        Expr::FloatConst { width: 8, .. } if size == 8 => Some("double"),
+        _ => None,
+    }
+}
+
 fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
     match s {
         Stmt::Assign { dst, src } => {
@@ -6799,7 +6847,9 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             }
             // Use the access width so a 4-byte store emits `*(int *)`, not a
             // blanket `*(long *)` that would clobber the adjacent element.
-            let _ = write!(out, "*({} *)(", store_pointee_ctype(*size));
+            let pointee_type =
+                float_store_pointee_ctype(src, *size).unwrap_or_else(|| store_pointee_ctype(*size));
+            let _ = write!(out, "*({pointee_type} *)(");
             write_expr_dec(addr, out);
             out.push_str(") = ");
             write_store_value_dec(src, *size, out);
@@ -11013,6 +11063,46 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn recovered_pointer_parameter_casts_address_arithmetic_at_call_boundary() {
+        let recovered = CallPrototype {
+            return_type: "float".into(),
+            parameter_types: vec!["int *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let function = Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "apply".into(),
+                },
+                args: vec![Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(64)),
+                }],
+                dst: Some(VReg::phys("var0")),
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: Some(recovered.clone()),
+                    call_prototype: recovered,
+                }),
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 4 });
+        types.upsert_public(VReg::phys("var0"), TypeHint::Float { width: 4 });
+
+        let rendered = super::render_decbench_typed(&function, Some(&types), None);
+
+        assert!(
+            rendered.contains("apply((int *)(((long)arg0 + 64)))"),
+            "recovered pointer arithmetic crossed the call boundary as an integer:\n{rendered}"
+        );
+    }
+
+    #[test]
     fn exceptionally_large_decbench_function_uses_the_gcc_ice_guard() {
         let rendered = render_decbench(&Function {
             name: "generated_parser".into(),
@@ -11197,5 +11287,28 @@ function f @ 0x1000 {
             "a recovered float call numerically converted the field bits:\n{rendered}"
         );
         assert!(!rendered.contains("*(int *)"), "{rendered}");
+    }
+
+    #[test]
+    fn typed_float_store_uses_float_pointee_representation() {
+        let function = Function {
+            name: "store_result".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(VReg::phys("arg0")),
+                src: Expr::Reg(VReg::phys("var0")),
+                size: 4,
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 4 });
+        types.upsert_public(VReg::phys("var0"), TypeHint::Float { width: 4 });
+
+        let rendered = super::render_decbench_typed(&function, Some(&types), None);
+
+        assert!(
+            rendered.contains("*(float *)((long)arg0) = var0;"),
+            "a proven float store was emitted as integer memory:\n{rendered}"
+        );
     }
 }
