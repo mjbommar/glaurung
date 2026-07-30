@@ -220,6 +220,52 @@ def test_real_indirect_call_output_has_a_concrete_call_site_prototype():
     assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
 
 
+def test_real_named_call_output_declares_its_recovered_callee_prototype():
+    """A resolved project-local call must not depend on implicit C declarations.
+
+    Glaurung already recovers the callee name and the call-site argument values,
+    but emitting only ``project_transform(arg0)`` leaves an invalid C23
+    translation unit when the caller is decompiled on its own.  Exercise the
+    real ELF symbol-resolution and AST pipeline, then make the compiler enforce
+    that the recovered named call carries a concrete declaration.
+    """
+    binary = _compile_so(
+        "__attribute__((noinline)) long project_transform(long value) {\n"
+        "    return value * 3 + 1;\n"
+        "}\n"
+        "__attribute__((noinline)) long call_project_transform(long value) {\n"
+        "    return project_transform(value) + 7;\n"
+        "}",
+        "named_call_prototype",
+    )
+    caller_va = D.exported_functions(binary)["call_project_transform"]
+    decompiled = D.decompiled_c(binary, caller_va)
+    assert decompiled is not None
+    assert "project_transform(" in decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "named_call_prototype.c"
+        output_path = Path(td) / "named_call_prototype.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu11",
+                "-Werror=implicit-function-declaration",
+                "-Wstrict-prototypes",
+                "-Werror=strict-prototypes",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_real_void_libc_call_is_not_rendered_as_a_value():
     """A declared-void library call must not acquire a synthetic result.
 

@@ -3315,8 +3315,9 @@ fn cmpop_sym_c(op: CmpOp) -> &'static str {
 //     stack slots, temps, `ret`, flags) so nothing is undeclared,
 //   * lowering memory to `*(long *)(addr)` loads/stores and addresses to plain
 //     `long` arithmetic (no `&[...]`, no segment prefixes),
-//   * spelling calls as `callee(args)` or a concrete per-call function-pointer
-//     prototype for indirect targets, and
+//   * spelling calls as `callee(args)` with a recovered block-scope prototype,
+//     or a concrete per-call function-pointer prototype for indirect targets,
+//     and
 //   * turning constructs with no faithful C spelling — unmodelled instructions,
 //     pushes/pops, nops — into comments or elisions rather than invalid tokens.
 // Recovered types are used where the middle layer proves them; unresolved
@@ -4935,6 +4936,7 @@ pub fn render_decbench_typed_with_output(
             }
         }
     }
+    let named_call_prototypes = recover_named_call_prototypes(&f.body, &name);
 
     // Signature: recovered return + argument types. Record which arguments are
     // pointers so the body can cast their int↔pointer reuse (see DEC_PTR_ARGS).
@@ -4965,6 +4967,29 @@ pub fn render_decbench_typed_with_output(
         }
     }
     out.push_str(") {\n");
+
+    // A resolved named call is still a typed call site. Keep its recovered
+    // contract inside the function so the standalone fragment is valid C11/C23
+    // without hiding the function definition behind a translation-unit prelude.
+    // Authoritative library contracts are handled by the library boundary and
+    // are deliberately excluded from this evidence-derived set.
+    for (callee, prototype) in &named_call_prototypes {
+        let _ = write!(out, "    extern {} {}(", prototype.return_type, callee);
+        if prototype.parameter_types.is_empty() {
+            out.push_str("void");
+        } else {
+            for (index, parameter_type) in prototype.parameter_types.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(parameter_type);
+            }
+            if prototype.variadic {
+                out.push_str(", ...");
+            }
+        }
+        out.push_str(");\n");
+    }
 
     // Promoted stack slots and exact SSA-derived `varN` values may take a
     // recovered type. The high-variable pass admits `varN` only when every
@@ -5249,6 +5274,144 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => {}
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NamedCallObservation {
+    return_type: Option<&'static str>,
+    parameter_types: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NamedCallPrototype {
+    return_type: &'static str,
+    parameter_types: Vec<&'static str>,
+    variadic: bool,
+}
+
+fn collect_named_call_observations(
+    body: &[Stmt],
+    current_name: &str,
+    observations: &mut std::collections::BTreeMap<String, Vec<NamedCallObservation>>,
+) {
+    for statement in body {
+        match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                args,
+                dst,
+            } => {
+                let displayed = sanitize_c_ident(callee_display_name(name));
+                if displayed != current_name && crate::ir::call_contracts::lookup(name).is_none() {
+                    observations
+                        .entry(displayed)
+                        .or_default()
+                        .push(NamedCallObservation {
+                            return_type: dst.as_ref().map(declared_reg_ctype),
+                            parameter_types: args.iter().map(call_arg_ctype).collect(),
+                        });
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_named_call_observations(then_body, current_name, observations);
+                if let Some(else_body) = else_body {
+                    collect_named_call_observations(else_body, current_name, observations);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_named_call_observations(body, current_name, observations);
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                collect_named_call_observations(
+                    std::slice::from_ref(init.as_ref()),
+                    current_name,
+                    observations,
+                );
+                collect_named_call_observations(body, current_name, observations);
+                collect_named_call_observations(
+                    std::slice::from_ref(step.as_ref()),
+                    current_name,
+                    observations,
+                );
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    collect_named_call_observations(case, current_name, observations);
+                }
+                if let Some(default) = default {
+                    collect_named_call_observations(default, current_name, observations);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn infer_named_call_prototype(observations: &[NamedCallObservation]) -> Option<NamedCallPrototype> {
+    let first = observations.first()?;
+    let return_type = observations
+        .iter()
+        .filter_map(|observation| observation.return_type)
+        .try_fold(None, |known, observed| match known {
+            None => Some(Some(observed)),
+            Some(existing) if existing == observed => Some(known),
+            Some(_) => None,
+        })?
+        .unwrap_or("long");
+
+    if observations
+        .iter()
+        .all(|observation| observation.parameter_types == first.parameter_types)
+    {
+        return Some(NamedCallPrototype {
+            return_type,
+            parameter_types: first.parameter_types.clone(),
+            variadic: false,
+        });
+    }
+
+    let common_len = observations
+        .iter()
+        .map(|observation| observation.parameter_types.len())
+        .min()
+        .unwrap_or(0);
+    let prefix_len = (0..common_len)
+        .take_while(|index| {
+            let expected = first.parameter_types[*index];
+            observations
+                .iter()
+                .all(|observation| observation.parameter_types[*index] == expected)
+        })
+        .count();
+    if prefix_len == 0 {
+        return None;
+    }
+
+    Some(NamedCallPrototype {
+        return_type,
+        parameter_types: first.parameter_types[..prefix_len].to_vec(),
+        variadic: true,
+    })
+}
+
+fn recover_named_call_prototypes(
+    body: &[Stmt],
+    current_name: &str,
+) -> std::collections::BTreeMap<String, NamedCallPrototype> {
+    let mut observations = std::collections::BTreeMap::new();
+    collect_named_call_observations(body, current_name, &mut observations);
+    observations
+        .into_iter()
+        .filter_map(|(name, observations)| {
+            infer_named_call_prototype(&observations).map(|prototype| (name, prototype))
+        })
+        .collect()
 }
 
 thread_local! {
@@ -9862,5 +10025,61 @@ function f @ 0x1000 {
             "the per-iteration load was hoisted above the loop, so the condition \
              can never change:\n{out}"
         );
+    }
+
+    #[test]
+    fn named_call_prototype_preserves_an_exact_observed_contract() {
+        let observations = vec![NamedCallObservation {
+            return_type: Some("long"),
+            parameter_types: vec!["long", "char *"],
+        }];
+
+        assert_eq!(
+            infer_named_call_prototype(&observations),
+            Some(NamedCallPrototype {
+                return_type: "long",
+                parameter_types: vec!["long", "char *"],
+                variadic: false,
+            })
+        );
+    }
+
+    #[test]
+    fn named_call_prototype_uses_a_variadic_common_prefix_for_mixed_arities() {
+        let observations = vec![
+            NamedCallObservation {
+                return_type: Some("long"),
+                parameter_types: vec!["char *", "long"],
+            },
+            NamedCallObservation {
+                return_type: Some("long"),
+                parameter_types: vec!["char *", "long", "int"],
+            },
+        ];
+
+        assert_eq!(
+            infer_named_call_prototype(&observations),
+            Some(NamedCallPrototype {
+                return_type: "long",
+                parameter_types: vec!["char *", "long"],
+                variadic: true,
+            })
+        );
+    }
+
+    #[test]
+    fn named_call_prototype_rejects_conflicting_return_types() {
+        let observations = vec![
+            NamedCallObservation {
+                return_type: Some("long"),
+                parameter_types: vec!["long"],
+            },
+            NamedCallObservation {
+                return_type: Some("char *"),
+                parameter_types: vec!["long"],
+            },
+        ];
+
+        assert_eq!(infer_named_call_prototype(&observations), None);
     }
 }
