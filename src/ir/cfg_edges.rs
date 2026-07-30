@@ -63,7 +63,16 @@ pub struct Edge {
 /// A block whose terminator hands control to more targets than a conditional
 /// branch can name is an indirect dispatch — the jump-table shape.
 fn is_dispatch(succ_count: usize, terminator: Option<&Op>) -> bool {
-    succ_count > 2 && !matches!(terminator, Some(Op::CondJump { .. }))
+    match terminator {
+        // A resolved indirect transfer is a dispatch even when compiler case
+        // folding leaves only two distinct destinations. The LLIR block still
+        // carries the full table-slot sequence.
+        Some(Op::IndirectJump { .. }) => succ_count >= 2,
+        // Retain the structural fallback for synthetic/imported CFGs that do
+        // not carry an explicit indirect-jump terminator.
+        Some(Op::CondJump { .. }) => false,
+        _ => succ_count > 2,
+    }
 }
 
 /// Classify every edge of `lf`.
@@ -142,7 +151,7 @@ pub fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::types::{Flag, LlirBlock, LlirInstr, VReg};
+    use crate::ir::types::{Flag, LlirBlock, LlirInstr, VReg, Value};
 
     fn blocks(spec: &[(u64, Vec<Op>, Vec<u64>)]) -> LlirFunction {
         LlirFunction {
@@ -248,6 +257,35 @@ mod tests {
         for edge in &e[1] {
             assert_eq!(edge.kind, EdgeKind::SwitchCase, "{edge:?}");
         }
+    }
+
+    #[test]
+    fn an_indirect_table_with_two_unique_targets_is_still_a_switch() {
+        let lf = blocks(&[
+            (
+                0x00,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x10, 0x20, 0x10, 0x20],
+            ),
+            (0x10, vec![Op::Return], vec![]),
+            (0x20, vec![Op::Return], vec![]),
+        ]);
+        // Graph algorithms receive distinct destinations; the LLIR block above
+        // still carries all four resolved table slots.
+        let succs = vec![vec![1, 2], vec![], vec![]];
+
+        let edges = classify(&lf, &succs, |_, _| false);
+
+        assert!(
+            edges[0]
+                .iter()
+                .all(|edge| edge.kind == EdgeKind::SwitchCase),
+            "an indirect table does not stop being a switch when labels share bodies: {:?}",
+            edges[0]
+        );
     }
 
     /// A latch is flagged from DOMINANCE, so it is independent of the terminator —

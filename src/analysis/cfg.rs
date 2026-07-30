@@ -4427,6 +4427,20 @@ mod gcc_dispatch_corpus_tests {
     use std::io::Write;
     use std::process::Command;
 
+    fn switch_case_labels(region: &crate::ir::structure::Region) -> Option<&[Vec<i64>]> {
+        use crate::ir::structure::Region;
+        match region {
+            Region::Switch { case_labels, .. } => Some(case_labels),
+            Region::Seq(parts) => parts.iter().find_map(switch_case_labels),
+            Region::IfThen { then_r, .. } => switch_case_labels(then_r),
+            Region::IfThenElse { then_r, else_r, .. } => {
+                switch_case_labels(then_r).or_else(|| switch_case_labels(else_r))
+            }
+            Region::While { body, .. } | Region::DoWhile { body, .. } => switch_case_labels(body),
+            Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+        }
+    }
+
     #[test]
     fn gcc_o2_real_corpus_dispatch_keeps_one_function_and_eight_cfg_arms() {
         let tmp = tempfile::tempdir().expect("temporary GCC dispatch build directory");
@@ -4619,6 +4633,24 @@ mod gcc_dispatch_corpus_tests {
             dispatch.instrs.last().map(|instruction| &instruction.op),
             Some(crate::ir::types::Op::IndirectJump { .. })
         ));
+
+        let shared = functions
+            .iter()
+            .find(|function| function.name == "shared_bodies")
+            .expect("discover shared_bodies from the same real fixture");
+        let shared_lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            shared,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift the real shared_bodies CFG");
+        let shared_ssa = crate::ir::ssa::compute_ssa(&shared_lifted);
+        let shared_region = crate::ir::structure::recover_verified(&shared_lifted, &shared_ssa);
+        assert_eq!(
+            switch_case_labels(&shared_region),
+            Some([vec![0, 2], vec![1, 3]].as_slice()),
+            "four table slots sharing two bodies must remain a switch: {shared_region:#?}"
+        );
     }
 
     #[test]
@@ -4688,20 +4720,7 @@ mod gcc_dispatch_corpus_tests {
 
         let ssa = crate::ir::ssa::compute_ssa(&lifted);
         let region = crate::ir::structure::recover_verified(&lifted, &ssa);
-        fn switch_labels(region: &crate::ir::structure::Region) -> Option<&[Vec<i64>]> {
-            use crate::ir::structure::Region;
-            match region {
-                Region::Switch { case_labels, .. } => Some(case_labels),
-                Region::Seq(parts) => parts.iter().find_map(switch_labels),
-                Region::IfThen { then_r, .. } => switch_labels(then_r),
-                Region::IfThenElse { then_r, else_r, .. } => {
-                    switch_labels(then_r).or_else(|| switch_labels(else_r))
-                }
-                Region::While { body, .. } | Region::DoWhile { body, .. } => switch_labels(body),
-                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
-            }
-        }
-        let labels = switch_labels(&region).expect("recover the real dispatch as a switch");
+        let labels = switch_case_labels(&region).expect("recover the real dispatch as a switch");
         assert!(
             labels.iter().any(|labels| labels == &[2, 5]),
             "both source labels must remain attached to the shared body: {labels:?}"

@@ -312,6 +312,13 @@ impl Cfg {
     fn dominates(&self, a: usize, b: usize) -> bool {
         self.dom[a][b]
     }
+
+    fn is_switch_dispatch(&self, block: usize) -> bool {
+        !self.edges[block].is_empty()
+            && self.edges[block]
+                .iter()
+                .all(|edge| edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase)
+    }
 }
 
 /// Immediate post-dominators via an iterative set fixpoint on the reversed CFG.
@@ -829,10 +836,14 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
             }
         }
 
-        // --- Conditional shapes ---------------------------------------------
-        if cfg.succs[cur].len() == 2 {
-            if let Some((ite, after)) = detect_if_shape(cur, cfg, visited, stop_at) {
-                parts.push(ite);
+        // --- Switch shape (#193) -------------------------------------------
+        // Typed dispatch identity wins over graph out-degree. Compiler case
+        // folding can leave a four-slot indirect table with only two distinct
+        // destination blocks; treating that graph as an if/else loses the
+        // switch expression and half its labels.
+        if cfg.is_switch_dispatch(cur) {
+            if let Some((sw, after)) = detect_switch_shape(cur, cfg, visited, stop_at) {
+                parts.push(sw);
                 match after {
                     Some(next) => {
                         cur = next;
@@ -843,13 +854,10 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
             }
         }
 
-        // --- Switch shape (#193) -------------------------------------------
-        // A block with N>=3 successors is almost always a jump-table-driven
-        // switch dispatch. Each successor that's reached only from this
-        // block is an arm; the shared post-dominator (if any) is the join.
-        if cfg.succs[cur].len() >= 3 {
-            if let Some((sw, after)) = detect_switch_shape(cur, cfg, visited, stop_at) {
-                parts.push(sw);
+        // --- Conditional shapes ---------------------------------------------
+        if cfg.succs[cur].len() == 2 {
+            if let Some((ite, after)) = detect_if_shape(cur, cfg, visited, stop_at) {
+                parts.push(ite);
                 match after {
                     Some(next) => {
                         cur = next;
@@ -1485,7 +1493,7 @@ fn detect_switch_shape(
 ) -> Option<(Region, Option<usize>)> {
     let arms = cfg.succs[dispatch].clone();
     let case_labels = cfg.case_labels[dispatch].clone();
-    if arms.len() < 3 {
+    if arms.len() < 2 || !cfg.is_switch_dispatch(dispatch) {
         return None;
     }
     // Every arm must be reached only from this dispatch — a stricter
@@ -1712,6 +1720,33 @@ mod tests {
             ],
             "the shared body must retain both table indices"
         );
+    }
+
+    #[test]
+    fn a_four_slot_table_with_two_unique_bodies_still_structures_as_a_switch() {
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1100, 0x1200, 0x1100, 0x1200],
+            ),
+            (0x1100, vec![Op::Return], vec![]),
+            (0x1200, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let Region::Switch {
+            arms, case_labels, ..
+        } = region
+        else {
+            panic!("expected a shared-body switch, got {region:#?}");
+        };
+
+        assert_eq!(arms.len(), 2);
+        assert_eq!(case_labels, vec![vec![0, 2], vec![1, 3]]);
     }
 
     #[test]
