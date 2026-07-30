@@ -618,7 +618,15 @@ fn decompile_at_py(
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
         };
-        decbench_text(&f, decl, width)
+        decbench_text(
+            &f,
+            decl,
+            width,
+            prototype.as_ref().map_or(
+                crate::ir::types_recover::RecoveredOutputKind::Unknown,
+                |p| p.output_kind(),
+            ),
+        )
     } else if style == "c" {
         let body = crate::ir::ast::render_c(&f);
         match pdb_outer_name {
@@ -770,7 +778,15 @@ fn decompile_range_at_py(
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
         };
-        decbench_text(&f, decl, width)
+        decbench_text(
+            &f,
+            decl,
+            width,
+            prototype.as_ref().map_or(
+                crate::ir::types_recover::RecoveredOutputKind::Unknown,
+                |p| p.output_kind(),
+            ),
+        )
     } else if style == "c" {
         crate::ir::ast::render_c(&f)
     } else if types {
@@ -933,8 +949,9 @@ fn decbench_text(
     f: &crate::ir::ast::Function,
     decl: Option<&crate::ir::types_recover::TypeMap>,
     width: Option<&crate::ir::types_recover::TypeMap>,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
 ) -> String {
-    let mut prepared = crate::ir::ast::prepare_for_decbench(f);
+    let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!(
             "\n===== after prepare_for_decbench =====\n{}",
@@ -977,7 +994,8 @@ fn decbench_text(
         crate::ir::widen::insert_widening_casts(&mut prepared, tm);
     }
     let violations = crate::ir::verify_defs::check(&prepared);
-    let body = crate::ir::ast::render_decbench_typed(&prepared, decl, width);
+    let body =
+        crate::ir::ast::render_decbench_typed_with_output(&prepared, decl, width, output_kind);
     if violations.is_empty() {
         return body;
     }
@@ -1136,7 +1154,15 @@ fn decompile_all_py(
                 &param_slots,
                 &slot_sizes,
             );
-            decbench_text(&f, Some(&decl), Some(&width))
+            decbench_text(
+                &f,
+                Some(&decl),
+                Some(&width),
+                prototype
+                    .as_ref()
+                    .expect("DecBench prototype")
+                    .output_kind(),
+            )
         } else {
             render(&f)
         };
@@ -1264,7 +1290,15 @@ fn decompile_many_py(
                 &param_slots,
                 &slot_sizes,
             );
-            decbench_text(&f, Some(&decl), Some(&width))
+            decbench_text(
+                &f,
+                Some(&decl),
+                Some(&width),
+                prototype
+                    .as_ref()
+                    .expect("DecBench prototype")
+                    .output_kind(),
+            )
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);
             match pdb_outer_name {

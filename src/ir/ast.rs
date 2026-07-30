@@ -1733,8 +1733,8 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
 /// register (i.e. it is not void) we spell these `return <ret_reg>` rather than
 /// a bare `return;`.
 ///
-/// Applied only in the DecBench C renderer, which always commits to a non-void
-/// return type: there a bare return would be emitted as the value-losing
+/// Applied only in the DecBench C renderer when the recovered output is direct
+/// or still unknown: there a bare return would be emitted as the value-losing
 /// `return 0;`, whereas `return ret;` recovers the data dependency Joern/GED and
 /// recompilation both need. The faithful register/`render_c` views keep bare
 /// `return;` so a genuinely void function is not given an invented value.
@@ -1743,6 +1743,42 @@ fn default_return_to_reg(body: &mut [Stmt]) {
         return;
     };
     apply_default_return(body, &ret_reg);
+}
+
+/// Remove machine output operands once prototype recovery has established that
+/// the source function is `void`.
+///
+/// Lowering intentionally happens before prototype projection and may already
+/// have folded `ret = value; RET` into `return value;`. Clearing only bare
+/// returns would therefore be too late. Walk every structured region and erase
+/// the value at the semantic boundary instead.
+fn clear_return_values(body: &mut [Stmt]) {
+    for statement in body {
+        match statement {
+            Stmt::Return { value } => *value = None,
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                clear_return_values(then_body);
+                if let Some(else_body) = else_body {
+                    clear_return_values(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => clear_return_values(body),
+            Stmt::For { body, .. } => clear_return_values(body),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    clear_return_values(body);
+                }
+                if let Some(body) = default {
+                    clear_return_values(body);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Whether the body contains any `Return { value: None }` (including nested).
@@ -4737,8 +4773,23 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// output is the thing rendered, makes the emitted C verifiable — see
 /// [`crate::ir::verify_defs`].
 pub fn prepare_for_decbench(f: &Function) -> Function {
+    prepare_for_decbench_with_output(f, crate::ir::types_recover::RecoveredOutputKind::Unknown)
+}
+
+/// Prepare DecBench output with the recovered source-level output contract.
+/// Unknown/direct outputs retain the compatibility behavior; proven void
+/// outputs erase incidental return-register residue before any source-level
+/// folding runs.
+pub fn prepare_for_decbench_with_output(
+    f: &Function,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+) -> Function {
     let mut owned = f.clone();
-    default_return_to_reg(&mut owned.body);
+    if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
+        clear_return_values(&mut owned.body);
+    } else {
+        default_return_to_reg(&mut owned.body);
+    }
     coalesce_param_spills(&mut owned.body);
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);
     // Copy propagation exposes algebraic flag identities, while folding those
@@ -4787,6 +4838,21 @@ pub fn render_decbench_typed(
     tm: Option<&TypeMap>,
     width_tm: Option<&TypeMap>,
 ) -> String {
+    render_decbench_typed_with_output(
+        f,
+        tm,
+        width_tm,
+        crate::ir::types_recover::RecoveredOutputKind::Unknown,
+    )
+}
+
+/// Typed DecBench renderer with an explicit recovered output contract.
+pub fn render_decbench_typed_with_output(
+    f: &Function,
+    tm: Option<&TypeMap>,
+    width_tm: Option<&TypeMap>,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+) -> String {
     let mut ids = DecIdents::default();
     for s in &f.body {
         collect_idents_stmt(s, &mut ids);
@@ -4820,6 +4886,9 @@ pub fn render_decbench_typed(
     DEC_PTRS.with(|m| m.borrow_mut().clear());
     DEC_INT_WIDTHS.with(|m| m.borrow_mut().clear());
     DEC_INT_TYPES.with(|m| m.borrow_mut().clear());
+    DEC_VOID_OUTPUT.with(|is_void| {
+        is_void.set(output_kind == crate::ir::types_recover::RecoveredOutputKind::Void)
+    });
     if let Some(tm) = tm {
         for (v, hint) in tm.iter() {
             if let (VReg::Phys(n), TypeHint::Pointer { pointee_width }) = (v, hint) {
@@ -4853,7 +4922,13 @@ pub fn render_decbench_typed(
     // Signature: recovered return + argument types. Record which arguments are
     // pointers so the body can cast their int↔pointer reuse (see DEC_PTR_ARGS).
     DEC_PTR_ARGS.with(|m| m.borrow_mut().clear());
-    out.push_str(infer_return_ctype(&f.body, tm));
+    out.push_str(
+        if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
+            "void"
+        } else {
+            infer_return_ctype(&f.body, tm)
+        },
+    );
     out.push(' ');
     out.push_str(&name);
     out.push('(');
@@ -5185,6 +5260,11 @@ thread_local! {
     /// conversion when they are exactly the casts already represented in IR.
     static DEC_INT_TYPES: std::cell::RefCell<std::collections::HashMap<String, (bool, u8)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// Whether the current function's recovered source prototype is `void`.
+    /// Unknown scalar output uses `return 0;` for a bare machine return; a
+    /// proven void function must emit the distinct C statement `return;`.
+    static DEC_VOID_OUTPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn dec_ptr_arg_type(name: &str) -> Option<&'static str> {
@@ -5764,7 +5844,13 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
                     write_expr_dec(e, out);
                     out.push_str(";\n");
                 }
-                None => out.push_str("return 0;\n"),
+                None => {
+                    if DEC_VOID_OUTPUT.with(std::cell::Cell::get) {
+                        out.push_str("return;\n");
+                    } else {
+                        out.push_str("return 0;\n");
+                    }
+                }
             }
         }
         // No faithful, valid-C spelling — elide (Nop/Push/Pop) or comment out.
@@ -7293,6 +7379,50 @@ function f @ 0x1000 {
         assert!(
             !render_decbench(&f).contains("return ret;"),
             "the renderer must not change what is returned"
+        );
+    }
+
+    #[test]
+    fn recovered_void_output_erases_machine_register_residue_before_rendering() {
+        let f = Function {
+            name: "tick".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Store {
+                    addr: Expr::Const(0x4000),
+                    src: Expr::Reg(VReg::phys("ret")),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench_with_output(
+            &f,
+            crate::ir::types_recover::RecoveredOutputKind::Void,
+        );
+        assert_eq!(
+            prepared.body.last(),
+            Some(&Stmt::Return { value: None }),
+            "a void prototype must erase the incidental machine output"
+        );
+        let text = render_decbench_typed_with_output(
+            &prepared,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Void,
+        );
+        assert!(text.contains("void tick(void)"), "wrong signature:\n{text}");
+        assert!(text.contains("return;"), "wrong return statement:\n{text}");
+        assert!(
+            !text.contains("return ret;"),
+            "machine residue leaked:\n{text}"
         );
     }
 

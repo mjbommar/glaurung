@@ -24,6 +24,7 @@ import diff_decompile as D
 import fixture_harness as H
 import fixture_toolchain as TC
 import manifest as M
+import structural as S
 
 # Portable scratch dir: whatever manifest.tmpdir() resolves (env-driven, with a
 # system-tempfile fallback) — never a hardcoded machine path.
@@ -180,6 +181,11 @@ def test_required_missing_function_is_fail():
     # Fixture 01 really has these; delete-simulate via a fixture with a bogus
     # requirement by checking the presence logic directly.
     assert "cmp_signed" in D.M.REQUIRED_FUNCTIONS["01_conditional_polarity"]
+
+
+def test_void_signature_is_a_distinct_structural_contract():
+    assert S.has_void_signature("void tick(void) { return; }")
+    assert not S.has_void_signature("int tick(void) { return 0; }")
 
 
 def test_vector_generation_is_reproducible_across_processes():

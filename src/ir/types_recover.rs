@@ -273,11 +273,39 @@ pub struct RecoveredResult {
     pub hint: Option<TypeHint>,
 }
 
+/// The source-level meaning of the ABI output storage after output-trial
+/// recovery.
+///
+/// A return register is always live at the machine `RET`, but that does not
+/// mean the source function returns it: a void function may leave its loop
+/// index, last store value, or another scratch in the register. Ghidra's
+/// `ActionReturnRecovery` and Kuna's port distinguish these cases before
+/// building a function prototype. Keep the same distinction explicit here so
+/// the renderer never has to infer it from a name such as `ret`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RecoveredOutputKind {
+    /// Prototype recovery did not run or lacks an architecture contract;
+    /// preserve the legacy scalar rendering until stronger evidence exists.
+    #[default]
+    Unknown,
+    /// No dedicated value is produced for the caller. Register contents at
+    /// `RET` are residue from another operation.
+    Void,
+    /// One compatible source result is deliberately placed in ABI output
+    /// storage.
+    Direct,
+    /// The ABI returns an aggregate through a caller-provided hidden pointer.
+    /// Detection and storage detail are represented separately from `Direct`
+    /// even while aggregate shape recovery remains incomplete.
+    HiddenReturn,
+}
+
 /// Function prototype facts recovered before AST lowering.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RecoveredPrototype {
     parameters: Vec<RecoveredParameter>,
     result: Option<RecoveredResult>,
+    output_kind: RecoveredOutputKind,
 }
 
 impl RecoveredPrototype {
@@ -293,6 +321,10 @@ impl RecoveredPrototype {
 
     pub fn result(&self) -> Option<&RecoveredResult> {
         self.result.as_ref()
+    }
+
+    pub fn output_kind(&self) -> RecoveredOutputKind {
+        self.output_kind
     }
 
     /// Project semantic parameter slots to the renderer's source-level role
@@ -431,6 +463,140 @@ fn join_result_hints(facts: &[(TypeHint, bool)]) -> Option<TypeHint> {
     joined
 }
 
+/// Decide whether one return-register definition is dedicated to the ABI
+/// output trial rather than residue from another computation.
+///
+/// x86 32-bit writes are represented as a semantic write followed by a
+/// same-storage zero-extension into the 64-bit parent. Looking only at the
+/// final synthetic definition would call every such value "return-only". Walk
+/// back through those same-storage view/copy nodes and require the ancestor to
+/// have no use except the forwarding node. This is the compact LLIR analogue
+/// of Ghidra's incidental COPY/SUBPIECE traversal in `ancestorOpUse` and Kuna's
+/// `ancestor_op_use` port.
+fn output_trial_is_dedicated(
+    lf: &LlirFunction,
+    ssa: &SsaInfo,
+    candidate: &SsaValue,
+    definitions: &HashMap<SsaValue, InstrAddr>,
+    non_return_live: &HashSet<SsaValue>,
+) -> bool {
+    let mut current = candidate.clone();
+    let mut visited = HashSet::new();
+
+    while visited.insert(current.clone()) {
+        if non_return_live.contains(&current) {
+            return false;
+        }
+
+        let Some(addr) = definitions.get(&current).copied() else {
+            return false;
+        };
+        let op = &lf.blocks[addr.block_idx].instrs[addr.instr_idx].op;
+        let forwards_same_storage = matches!(
+            op,
+            Op::Assign {
+                src: Value::Reg(_),
+                ..
+            } | Op::ZExt {
+                src: Value::Reg(_),
+                ..
+            } | Op::SExt {
+                src: Value::Reg(_),
+                ..
+            } | Op::Trunc {
+                src: Value::Reg(_),
+                ..
+            }
+        );
+        if !forwards_same_storage {
+            return true;
+        }
+        let Some(source) = ssa.use_value(lf, addr, 0) else {
+            return true;
+        };
+        if source.base != current.base {
+            return true;
+        }
+        current = source;
+    }
+    false
+}
+
+/// Values whose dataflow reaches an observable use other than the implicit
+/// function return.
+///
+/// The lifters materialise flag calculations for every arithmetic instruction,
+/// even when those flags are dead. Raw use-counting therefore mistakes a dead
+/// flag fan-out for source-level consumption. Seed liveness only at side-effect
+/// and control-flow operations, then propagate backwards through SSA defs and
+/// phi edges. An accumulator returned after a loop stays output-only; the same
+/// register used by the loop condition or a store is live residue.
+fn non_return_live_values(lf: &LlirFunction, ssa: &SsaInfo) -> HashSet<SsaValue> {
+    let mut dependencies: HashMap<SsaValue, Vec<SsaValue>> = HashMap::new();
+    let mut live = HashSet::new();
+
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, ins) in block.instrs.iter().enumerate() {
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
+            let (raw_def, raw_uses) = def_uses(&ins.op);
+            let uses: Vec<SsaValue> = (0..raw_uses.len())
+                .filter_map(|use_idx| ssa.use_value(lf, addr, use_idx))
+                .collect();
+            if let Some(definition) = raw_def.as_ref().and_then(|_| ssa.def_value(lf, addr)) {
+                dependencies.insert(definition, uses.clone());
+            }
+            let observable = raw_def.is_none()
+                || matches!(ins.op, Op::Call { .. })
+                || matches!(
+                    ins.op,
+                    Op::Intrinsic {
+                        reads_mem: true,
+                        ..
+                    } | Op::Intrinsic {
+                        writes_mem: true,
+                        ..
+                    }
+                );
+            if observable && !matches!(ins.op, Op::Return | Op::Nop | Op::Jump { .. }) {
+                live.extend(uses);
+            }
+        }
+    }
+
+    for phi in &ssa.phis {
+        dependencies.insert(
+            SsaValue {
+                base: phi.base.clone(),
+                version: phi.dst_version,
+            },
+            phi.incoming
+                .iter()
+                .map(|(_, version)| SsaValue {
+                    base: phi.base.clone(),
+                    version: *version,
+                })
+                .collect(),
+        );
+    }
+
+    loop {
+        let before = live.len();
+        let frontier: Vec<SsaValue> = live.iter().cloned().collect();
+        for value in frontier {
+            if let Some(inputs) = dependencies.get(&value) {
+                live.extend(inputs.iter().cloned());
+            }
+        }
+        if live.len() == before {
+            break;
+        }
+    }
+    live
+}
+
 /// Recover the function's parameter prototype directly from SSA live-ins.
 ///
 /// The raw-register pass still supplies machine-width evidence while the
@@ -457,8 +623,26 @@ pub fn recover_prototype(
         .enumerate()
         .map(|(index, block)| (block.start_va, index))
         .collect();
-    let mut result_values = Vec::new();
-    let mut result_facts = Vec::new();
+    // `RET` has no explicit operand in this LLIR, so an output trial is the
+    // return-register definition that reaches it and has no other explicit
+    // consumer. A definition also consumed by a store/comparison is ordinary
+    // residue, exactly the case Ghidra rejects with `ancestorOpUse` and Kuna
+    // rejects with `ancestor_op_use`.
+    let mut definitions = HashMap::new();
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, _ins) in block.instrs.iter().enumerate() {
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
+            if let Some(value) = ssa.def_value(lf, addr) {
+                definitions.insert(value, addr);
+            }
+        }
+    }
+    let non_return_live = non_return_live_values(lf, ssa);
+    let mut direct_values = Vec::new();
+    let mut direct_facts = Vec::new();
     for (block_idx, block) in lf.blocks.iter().enumerate() {
         for (instr_idx, ins) in block.instrs.iter().enumerate() {
             let (Some(VReg::Phys(dst)), _) = def_uses(&ins.op) else {
@@ -480,6 +664,8 @@ pub fn recover_prototype(
                 continue;
             };
             let hint = qualified_result_hint(&ins.op, &valued, &value, cc);
+            let is_direct =
+                output_trial_is_dedicated(lf, ssa, &value, &definitions, &non_return_live);
             if let Some(hint) = hint {
                 let is_literal_null = matches!(
                     &ins.op,
@@ -488,10 +674,12 @@ pub fn recover_prototype(
                         ..
                     }
                 );
-                result_facts.push((hint, is_literal_null));
+                if is_direct {
+                    direct_facts.push((hint, is_literal_null));
+                }
             }
-            if !result_values.contains(&value) {
-                result_values.push(value);
+            if is_direct && !direct_values.contains(&value) {
+                direct_values.push(value);
             }
         }
     }
@@ -501,10 +689,23 @@ pub fn recover_prototype(
     // role. The compatibility join lets pointer evidence type an exact null
     // branch, while refusing to turn an unrelated nonzero scalar into a
     // pointer merely because it shares the ABI result register.
-    let result = (!result_values.is_empty()).then_some(RecoveredResult {
-        values: result_values,
-        hint: join_result_hints(&result_facts),
-    });
+    // Incidental candidates are rejected trials, not conflicting source
+    // results. One dedicated trial is therefore sufficient to establish a
+    // direct output even if unsupported instructions leave unrelated return-
+    // register residue visible on another path.
+    let output_kind = match direct_values.is_empty() {
+        true => RecoveredOutputKind::Void,
+        false => RecoveredOutputKind::Direct,
+    };
+    let result = match output_kind {
+        RecoveredOutputKind::Direct => Some(RecoveredResult {
+            values: direct_values,
+            hint: join_result_hints(&direct_facts),
+        }),
+        RecoveredOutputKind::Unknown
+        | RecoveredOutputKind::Void
+        | RecoveredOutputKind::HiddenReturn => None,
+    };
 
     let parameters = ordered
         .into_iter()
@@ -522,7 +723,11 @@ pub fn recover_prototype(
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
-    RecoveredPrototype { parameters, result }
+    RecoveredPrototype {
+        parameters,
+        result,
+        output_kind,
+    }
 }
 
 fn merge_type_hint(current: Option<TypeHint>, new: TypeHint) -> TypeHint {
@@ -1977,6 +2182,171 @@ mod tests {
             Some(TypeHint::Pointer { pointee_width: 4 }),
             "the loop-carried dereference must flow through its phi and pointer increment to arg0"
         );
+    }
+
+    #[test]
+    fn real_memory_fixture_distinguishes_void_residue_from_direct_outputs() {
+        use object::{Object, ObjectSymbol};
+        use std::io::Write;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().expect("temporary output-recovery fixture directory");
+        let source = tmp.path().join("09_memory_effects.c");
+        let binary = tmp.path().join("09_memory_effects.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decompiler_fixtures/src/09_memory_effects.c"
+                ))
+            })
+            .expect("write the real memory-effects fixture source");
+        let build = match Command::new("gcc")
+            .args(["-shared", "-fPIC", "-g", "-O0", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch GCC: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile output-recovery fixture: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read output-recovery fixture");
+        let object = object::read::File::parse(data.as_slice()).expect("parse fixture ELF");
+        let entries: HashMap<String, u64> = object
+            .dynamic_symbols()
+            .filter_map(|symbol| Some((symbol.name().ok()?.to_owned(), symbol.address())))
+            .collect();
+        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+            &data,
+            &crate::analysis::cfg::Budgets::default(),
+        );
+
+        for (name, expected) in [
+            ("tick", RecoveredOutputKind::Void),
+            ("tick_n", RecoveredOutputKind::Void),
+            ("reset_counter", RecoveredOutputKind::Void),
+            ("mem_copy", RecoveredOutputKind::Void),
+            ("mem_set", RecoveredOutputKind::Void),
+            ("read_counter", RecoveredOutputKind::Direct),
+            ("cas_update", RecoveredOutputKind::Direct),
+            ("vec_sum", RecoveredOutputKind::Direct),
+        ] {
+            let entry = entries[name];
+            let function = functions
+                .iter()
+                .find(|function| function.entry_point.value == entry)
+                .unwrap_or_else(|| panic!("discovered {name}"));
+            let lifted = crate::ir::lift_function::lift_function_from_bytes(
+                &data,
+                function,
+                crate::core::binary::Arch::X86_64,
+            )
+            .unwrap_or_else(|| panic!("lift {name}"));
+            let ssa = compute_ssa(&lifted);
+            let slots = crate::ir::value_number::live_in_arg_slots_llir(
+                &lifted,
+                crate::ir::call_args::CallConv::SysVAmd64,
+            );
+            let prototype = recover_prototype(
+                &lifted,
+                &ssa,
+                crate::ir::call_args::CallConv::SysVAmd64,
+                &slots,
+            );
+            assert_eq!(
+                prototype.output_kind(),
+                expected,
+                "source result for {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_optimized_memory_fixture_keeps_loop_results_and_void_residue_distinct() {
+        use object::{Object, ObjectSymbol};
+        use std::io::Write;
+        use std::process::Command;
+
+        for compiler in ["gcc", "clang"] {
+            let tmp = tempfile::tempdir().expect("temporary optimized-output fixture directory");
+            let source = tmp.path().join("09_memory_effects.c");
+            let binary = tmp.path().join(format!("09_memory_effects-{compiler}.so"));
+            std::fs::File::create(&source)
+                .and_then(|mut file| {
+                    file.write_all(include_bytes!(
+                        "../../tests/decompiler_fixtures/src/09_memory_effects.c"
+                    ))
+                })
+                .expect("write the real memory-effects fixture source");
+            let build = match Command::new(compiler)
+                .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+                .arg(&binary)
+                .arg(&source)
+                .output()
+            {
+                Ok(build) => build,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("launch {compiler}: {error}"),
+            };
+            assert!(
+                build.status.success(),
+                "compile optimized fixture with {compiler}: {}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+
+            let data = std::fs::read(&binary).expect("read optimized fixture");
+            let object = object::read::File::parse(data.as_slice()).expect("parse fixture ELF");
+            let entries: HashMap<String, u64> = object
+                .dynamic_symbols()
+                .filter_map(|symbol| Some((symbol.name().ok()?.to_owned(), symbol.address())))
+                .collect();
+            let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+                &data,
+                &crate::analysis::cfg::Budgets::default(),
+            );
+
+            for (name, expected) in [
+                ("tick_n", RecoveredOutputKind::Void),
+                ("mem_copy", RecoveredOutputKind::Void),
+                ("mem_set", RecoveredOutputKind::Void),
+                ("cas_update", RecoveredOutputKind::Direct),
+                ("vec_sum", RecoveredOutputKind::Direct),
+            ] {
+                let entry = entries[name];
+                let function = functions
+                    .iter()
+                    .find(|function| function.entry_point.value == entry)
+                    .unwrap_or_else(|| panic!("discovered {compiler} {name}"));
+                let lifted = crate::ir::lift_function::lift_function_from_bytes(
+                    &data,
+                    function,
+                    crate::core::binary::Arch::X86_64,
+                )
+                .unwrap_or_else(|| panic!("lift {compiler} {name}"));
+                let ssa = compute_ssa(&lifted);
+                let slots = crate::ir::value_number::live_in_arg_slots_llir(
+                    &lifted,
+                    crate::ir::call_args::CallConv::SysVAmd64,
+                );
+                let prototype = recover_prototype(
+                    &lifted,
+                    &ssa,
+                    crate::ir::call_args::CallConv::SysVAmd64,
+                    &slots,
+                );
+                assert_eq!(
+                    prototype.output_kind(),
+                    expected,
+                    "source result for {compiler} -O2 {name}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -327,11 +327,13 @@ STRUCTURAL: dict[tuple[str, str], dict] = {
     ("08_indirect_dispatch", "dispatch"): {"indirect_call": True},
     ("08_indirect_dispatch", "apply"): {"indirect_call": True},
     ("08_indirect_dispatch", "tail_dispatch"): {"indirect_call": True},
-    ("09_memory_effects", "mem_set"): {"memory_store": True},
-    ("09_memory_effects", "mem_copy"): {"memory_store": True},
+    ("09_memory_effects", "mem_set"): {"memory_store": True, "void_signature": True},
+    ("09_memory_effects", "mem_copy"): {"memory_store": True, "void_signature": True},
     ("09_memory_effects", "cas_update"): {"memory_store": True},
     ("09_memory_effects", "vec_transform"): {"memory_store": True},
-    ("09_memory_effects", "tick"): {"memory_store": True},  # volatile store must survive
+    ("09_memory_effects", "tick"): {"memory_store": True, "void_signature": True},
+    ("09_memory_effects", "tick_n"): {"memory_store": True, "void_signature": True},
+    ("09_memory_effects", "reset_counter"): {"memory_store": True, "void_signature": True},
     # C++ runtime shapes — initial vtable/EH assertions (ratchet upward).
     ("10_cpp_runtime_shapes", "cpp_virtual_dispatch"): {"indirect_call": True},  # vtable dispatch
     ("10_cpp_runtime_shapes", "cpp_ctor_dtor"): {"memory_store": True},          # ctor/dtor markers
@@ -373,7 +375,7 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     "07_packet_parser": ["validate_header", "parse_packet"],
     "08_indirect_dispatch": ["dispatch", "dispatch_switch", "tail_dispatch", "apply"],
     "09_memory_effects": [
-        "tick", "read_counter", "cas_update", "mem_copy", "mem_set", "vec_sum",
+        "tick", "tick_n", "read_counter", "reset_counter", "cas_update", "mem_copy", "mem_set", "vec_sum",
         "vec_transform",
     ],
     "10_cpp_runtime_shapes": [

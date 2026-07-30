@@ -162,12 +162,24 @@ def has_for_loop(block: str) -> bool:
     return bool(re.search(r"(?m)^\s*for\s*\([^;]+;[^;]+;[^)]+\)", body))
 
 
+def has_void_signature(block: str) -> bool:
+    """The recovered source prototype explicitly returns ``void``.
+
+    This is distinct from a scalar function containing a bare machine return:
+    the latter is rendered as ``return 0`` for parseability. Only prototype
+    recovery may satisfy this predicate.
+    """
+    body = _strip_comments(block)
+    return bool(re.search(r"(?m)^\s*void\s+[A-Za-z_]\w*\s*\(", body))
+
+
 PREDICATES = {
     "indirect_call": has_indirect_call,
     "memory_store": has_memory_store,
     "nonempty": is_nonempty,
     "head_tested_while": has_head_tested_while,
     "for_loop": has_for_loop,
+    "void_signature": has_void_signature,
 }
 
 
