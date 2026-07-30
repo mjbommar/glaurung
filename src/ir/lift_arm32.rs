@@ -217,6 +217,30 @@ fn lift_pop(regs: &[String]) -> Vec<Op> {
 fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
     let ops = &ins.operands;
 
+    // VFP register moves are bit-preserving operations even though the source
+    // type lattice cannot yet render their floating-point value.  Keep their
+    // exact input/output footprint as an intrinsic so SSA and ABI recovery can
+    // see `s0`/`d0` results.  Treating them as footprint-free Unknown nodes is
+    // what made real hard-float functions masquerade as `void`.
+    if mnem.starts_with("vmov") && ops.len() == 2 {
+        if let (Some(dst), Some(src)) = (operand_reg(&ops[0]), operand_to_value(&ops[1])) {
+            let width = match &dst {
+                VReg::Phys(name) if name.starts_with('d') => Width::W64,
+                _ => Width::W32,
+            };
+            return vec![Op::Intrinsic {
+                name: mnem.to_string(),
+                ins: vec![src],
+                outs: vec![(dst, width)],
+                reads_mem: false,
+                writes_mem: false,
+            }];
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
     // --- register-list instructions (push/pop) --------------------------
     if mnem == "push" || mnem == "vpush" {
         let regs: Vec<String> = ops.iter().filter_map(operand_reg_name).collect();
@@ -639,6 +663,20 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                 };
                 let size = mem_size_for(m);
                 if let Some(addr) = operand_to_memop(&ops[1], size) {
+                    if dst == VReg::phys("pc") && addr.base == Some(VReg::phys("sp")) {
+                        let mut out = Vec::new();
+                        if let Some(off) = ops.get(2).and_then(|operand| operand.immediate) {
+                            let sp = VReg::phys("sp");
+                            out.push(Op::Bin {
+                                dst: sp.clone(),
+                                op: BinOp::Add,
+                                lhs: Value::Reg(sp),
+                                rhs: Value::Const(off),
+                            });
+                        }
+                        out.push(Op::Return);
+                        return out;
+                    }
                     let base_reg = addr.base.clone();
                     let mut out = vec![Op::Load { dst, addr }];
                     // Post-indexed writeback: 3rd operand is the offset.
@@ -976,6 +1014,43 @@ pub fn lift_bytes(bytes: &[u8], start_va: u64, thumb: bool) -> Vec<LlirInstr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thumb_vmov_f32_preserves_the_real_s0_output_footprint() {
+        // `vmov.f32 s0, s15` from the epilogue of the real DecBench
+        // `pidUpdate` ARM hard-float function.
+        let lifted = lift_bytes(&[0xb0, 0xee, 0x67, 0x0a], 0x8060508, true);
+        assert_eq!(lifted.len(), 1, "lifted VFP move: {lifted:#?}");
+        assert!(
+            matches!(
+                &lifted[0].op,
+                Op::Intrinsic {
+                    name,
+                    ins,
+                    outs,
+                    reads_mem: false,
+                    writes_mem: false,
+                } if name == "vmov.f32"
+                    && ins == &[Value::Reg(VReg::phys("s15"))]
+                    && outs == &[(VReg::phys("s0"), Width::W32)]
+            ),
+            "lifted VFP move: {lifted:#?}"
+        );
+    }
+
+    #[test]
+    fn thumb_postindexed_pc_load_lifts_as_stack_pop_return() {
+        // `ldr.w pc, [sp], #4`, the exact GCC epilogue encoding exercised by
+        // the DecBench `write_power_mode` function.
+        let lifted = lift_bytes(&[0x5d, 0xf8, 0x04, 0xfb], 0x801da76, true);
+        assert!(
+            matches!(
+                lifted.last().map(|instruction| &instruction.op),
+                Some(Op::Return)
+            ),
+            "epilogue must end in semantic Return: {lifted:#?}"
+        );
+    }
 
     /// A real Thumb-2 (Cortex-M) function body, assembled with
     /// `arm-none-eabi-as -mcpu=cortex-m4 -mthumb` and byte-swapped to

@@ -422,12 +422,23 @@ fn is_arm_cond_branch(m: &str) -> bool {
 /// return. Resolved on operands because the mnemonic alone (`pop`) does not say
 /// whether the register list includes `pc`.
 fn arm_pop_writes_pc(ins: &Instruction) -> bool {
-    let m = ins.mnemonic.to_ascii_lowercase();
+    let lower = ins.mnemonic.to_ascii_lowercase();
+    let m = lower
+        .strip_suffix(".w")
+        .or_else(|| lower.strip_suffix(".n"))
+        .unwrap_or(&lower);
     if m == "pop" || m.starts_with("ldm") {
         return ins
             .operands
             .iter()
             .any(|o| o.register.as_deref() == Some("pc"));
+    }
+    // GCC commonly spells a one-register Thumb pop as the post-indexed load
+    // `ldr.w pc, [sp], #4`.  Capstone reports it as `ldr`, not `pop`, so the
+    // destination and stack base must participate in control-flow recovery.
+    if m == "ldr" {
+        return ins.operands.first().and_then(|o| o.register.as_deref()) == Some("pc")
+            && ins.operands.get(1).and_then(|o| o.base.as_deref()) == Some("sp");
     }
     false
 }
@@ -3729,6 +3740,32 @@ mod aarch64_ctrl_flow_tests {
         for m in ["bti", "paciasp", "pacibsp", "autiasp", "autibsp", "nop"] {
             assert_eq!(class(m), (false, false, false), "{m} is not control flow");
         }
+    }
+}
+
+#[cfg(test)]
+mod arm32_ctrl_flow_tests {
+    use super::arm_pop_writes_pc;
+    use crate::core::address::{Address, AddressKind};
+    use crate::core::binary::Endianness;
+    use crate::core::disassembler::{Architecture, Disassembler};
+    use crate::disasm::capstone::CapstoneDisassembler;
+
+    #[test]
+    fn real_thumb_postindexed_pc_load_is_a_return() {
+        // `ldr.w pc, [sp], #4` from the real DecBench `write_power_mode`
+        // epilogue.  GCC uses this encoding for a one-register pop.
+        let mut backend =
+            CapstoneDisassembler::new(Architecture::ARM, Endianness::Little).expect("ARM backend");
+        backend.set_thumb_mode(true).expect("Thumb mode");
+        let address = Address::new(AddressKind::VA, 0x801da76, 32, None, None).expect("address");
+        let instruction = backend
+            .disassemble_instruction(&address, &[0x5d, 0xf8, 0x04, 0xfb])
+            .expect("decode real epilogue");
+        assert!(
+            arm_pop_writes_pc(&instruction),
+            "decoded epilogue must terminate the CFG: {instruction:#?}"
+        );
     }
 }
 
