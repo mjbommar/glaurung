@@ -975,6 +975,7 @@ fn decbench_text(
     let mut refined_width = width.cloned();
     if let Some(tm) = refined_decl.as_mut() {
         crate::ir::ast::refine_decbench_abi_widths(&prepared, tm);
+        crate::ir::high_variables::refine_pointer_high_variables(&prepared, tm);
     }
     if let Some(tm) = refined_width.as_mut() {
         crate::ir::ast::refine_decbench_abi_widths(&prepared, tm);

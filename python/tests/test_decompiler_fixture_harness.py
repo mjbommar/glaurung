@@ -186,6 +186,57 @@ def test_real_void_libc_call_is_not_rendered_as_a_value():
     assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
 
 
+def test_real_pointer_locals_keep_value_identity_across_round_trip():
+    """Pointer-producing definitions must type their exact high variables.
+
+    A value-numbered ``varN`` is one recovered value, not the physical register
+    that happened to carry it.  Declaring every such local as ``long`` loses
+    that identity for both a known pointer-returning call and a literal address.
+    Compile a real ELF containing both shapes, decompile each exported function,
+    and let the system ``getenv`` declaration plus ``-Werror`` enforce the
+    source-level pointer contract on the round trip.
+    """
+    binary = _compile_so(
+        "#include <stdlib.h>\n"
+        "__attribute__((noinline)) char *lookup_path(void) {\n"
+        "    char *value = getenv(\"PATH\");\n"
+        "    return value;\n"
+        "}\n"
+        "__attribute__((noinline)) const char *literal_path(void) {\n"
+        "    const char *value = \"/tmp/fallback\";\n"
+        "    return value;\n"
+        "}",
+        "pointer_high_variables",
+    )
+    exported = D.exported_functions(binary)
+
+    for function in ("lookup_path", "literal_path"):
+        decompiled = D.decompiled_c(binary, exported[function])
+        assert decompiled is not None
+
+        with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+            source_path = Path(td) / f"{function}.c"
+            output_path = Path(td) / f"{function}.so"
+            source_path.write_text(
+                "#include <stdlib.h>\n" + D.PRELUDE + "\n" + decompiled + "\n"
+            )
+            rebuilt = TC.run(
+                [
+                    "gcc",
+                    "-shared",
+                    "-fPIC",
+                    "-O0",
+                    "-std=gnu11",
+                    "-Werror",
+                    "-o",
+                    str(output_path),
+                    str(source_path),
+                ]
+            )
+
+        assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_compile_failure_of_decompilation_is_fail(monkeypatch, tmp_path):
     # If the decompiled C does not compile, the function FAILS (not skip).
     sig = {"name": "f", "va": 0, "params": ["int"], "ret": "int"}

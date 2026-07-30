@@ -107,6 +107,15 @@ impl TypeMap {
         }
     }
 
+    /// Discard a legacy storage-keyed fact before a later exact-value analysis
+    /// reclassifies that source identity. Final `varN` names were not consumed
+    /// by the renderer when raw-register recovery was designed, so facts that
+    /// happen to share those spellings are not trustworthy without a prepared
+    /// AST definition proof.
+    pub(crate) fn clear_value_fact(&mut self, reg: &VReg) {
+        self.inner.remove(reg);
+    }
+
     /// Replace an existing integer width with an ABI-mandated width while
     /// preserving signedness. This is intentionally narrower than `upsert`:
     /// ordinary evidence merging prefers a precise sub-register width, whereas

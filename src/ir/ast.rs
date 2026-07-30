@@ -4180,12 +4180,17 @@ fn widest_return_value(
 /// DecBench render, or `None` when it is not an integer.
 ///
 /// This is the one rule, shared with the declaration printer and with
-/// [`crate::ir::widen`]: only arguments and promoted stack slots take a recovered
-/// type. A raw machine register that survives as a local (`ret`, `varN`, temps)
-/// is declared `long` no matter what type recovery inferred for it. A second copy
-/// of that rule would let the widening pass insert a cast that *truncates* a value
-/// the printer had declared 64 bits wide.
+/// [`crate::ir::widen`]: arguments and promoted stack slots take their recovered
+/// integer type. Exact SSA-derived `varN` identities remain machine-word
+/// integers unless the prepared high-variable proof classifies them as pointers.
+/// Other raw machine registers and temps are also declared `long`.
 pub(crate) fn declared_int_type(ident: &str, tm: Option<&TypeMap>) -> Option<(bool, u8)> {
+    if is_high_variable(ident) {
+        return match tm.and_then(|types| types.get(&VReg::Phys(ident.to_string()))) {
+            Some(TypeHint::Pointer { .. } | TypeHint::CodePointer) => None,
+            _ => Some((true, 8)),
+        };
+    }
     if parse_arg_index(ident).is_none() && !is_promoted_local(ident) {
         // Declared `long`: already machine-wide, never narrowed.
         return Some((true, 8));
@@ -4892,8 +4897,8 @@ pub fn render_decbench_typed_with_output(
     // Provenance as a C comment (valid, and the harness maps by address anyway).
     let _ = writeln!(out, "// glaurung: {} @ 0x{:x}", f.name, f.entry_va);
 
-    // Record every name declared as a pointer (arguments + promoted pointer
-    // locals) with its pointee width, so the array-index render can rewrite
+    // Record every name declared as a pointer with its pointee width, so the
+    // array-index render can rewrite
     // `*(T*)(base + i*sizeof(T))` as `base[i]` for those bases.
     DEC_PTRS.with(|m| m.borrow_mut().clear());
     DEC_INT_WIDTHS.with(|m| m.borrow_mut().clear());
@@ -4904,7 +4909,7 @@ pub fn render_decbench_typed_with_output(
     if let Some(tm) = tm {
         for (v, hint) in tm.iter() {
             if let (VReg::Phys(n), TypeHint::Pointer { pointee_width }) = (v, hint) {
-                if parse_arg_index(n).is_some() || is_promoted_local(n) {
+                if parse_arg_index(n).is_some() || is_promoted_local(n) || is_high_variable(n) {
                     DEC_PTRS.with(|m| m.borrow_mut().insert(n.clone(), *pointee_width));
                 }
             }
@@ -4961,19 +4966,17 @@ pub fn render_decbench_typed_with_output(
     }
     out.push_str(") {\n");
 
-    // Local declarations. Only *promoted stack slots* (`local_c`, `stack_1`)
-    // take a recovered type — those are genuine C variables and their recovered
-    // width is a clean scalar. Raw machine registers that survive as locals
-    // (`rsp`, `rbp`, `varN`, temps, flags) stay `long`: type recovery may tag
-    // them as pointers, but they participate in bitwise/address arithmetic
-    // (`rsp & -16`, `rbp + ret`) that is a hard error on a pointer-typed operand
-    // in C. Keeping them `long` preserves parseability.
+    // Promoted stack slots and exact SSA-derived `varN` values may take a
+    // recovered type. The high-variable pass admits `varN` only when every
+    // definition agrees and no integer/address-arithmetic use exists. Physical
+    // frame/ABI registers and unproven values stay `long` to preserve C
+    // parseability (`rsp & -16`, `rbp + ret`, etc.).
     for local in &ids.locals {
         if let Some(size) = ids.stack_objects.get(local) {
             let _ = writeln!(out, "    unsigned char {}[{}];", local, size);
             continue;
         }
-        let ty = if is_promoted_local(local) {
+        let ty = if is_promoted_local(local) || is_high_variable(local) {
             ctype_for(local, tm)
         } else {
             "long"
@@ -5031,6 +5034,15 @@ pub(crate) fn parse_arg_index(name: &str) -> Option<usize> {
     // enough for unusually large generated-C interfaces while rejecting the
     // multi-million/billion indices produced by corrupt displacements.
     (index < 1024).then_some(index)
+}
+
+/// An exact source-value identity introduced from an SSA-versioned register.
+/// Unlike frame/ABI registers, a `varN` covers one recovered value lifetime and
+/// can consume facts proven on the prepared AST's definition graph.
+fn is_high_variable(name: &str) -> bool {
+    name.strip_prefix("var").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 /// The C-identifier spelling for a processor flag (`Flag::Z` -> `zf`).
@@ -5871,6 +5883,30 @@ fn write_call_dec(target: &Expr, args: &[Expr], dst: Option<&VReg>, out: &mut St
 fn write_assign_dec(dst: &VReg, src: &Expr, out: &mut String) {
     write_reg_lvalue_dec(dst, out);
     out.push_str(" = ");
+    write_assignment_value_dec(dst, src, out);
+}
+
+/// Render a value at an assignment boundary using both declarations.
+///
+/// Pointer ABI arguments are normally cast to `long` in rvalue position because
+/// the machine-level AST performs byte arithmetic on them. A proven pointer
+/// COPY must retain the pointer instead. Conversely, copying a proven pointer
+/// high variable into a destination that remains a machine word needs the
+/// explicit integer cast the old all-`long` renderer got implicitly.
+fn write_assignment_value_dec(dst: &VReg, src: &Expr, out: &mut String) {
+    let dst_pointer = declared_reg_ctype(dst).ends_with('*');
+    if let Expr::Reg(src_reg @ VReg::Phys(src_name)) = src {
+        let src_pointer = dec_ptr_arg_type(src_name).is_some() || dec_ptr_width(src_name).is_some();
+        if dst_pointer && src_pointer {
+            write_reg_lvalue_dec(src_reg, out);
+            return;
+        }
+        if !dst_pointer && src_pointer {
+            out.push_str("(long)");
+            write_reg_lvalue_dec(src_reg, out);
+            return;
+        }
+    }
     // Reassigning a scratch integer into a pointer-typed arg register: cast the
     // RHS to the pointer type so int-to-pointer conversion remains explicit.
     if let VReg::Phys(name) = dst {
@@ -5878,6 +5914,23 @@ fn write_assign_dec(dst: &VReg, src: &Expr, out: &mut String) {
             let _ = write!(out, "({})(", pointer_type);
             write_expr_dec(src, out);
             out.push(')');
+            return;
+        }
+    }
+    write_expr_dec(src, out);
+}
+
+/// Render a value stored through the width-only memory model. A pointer-valued
+/// high variable still carries machine address bits, while the current Store
+/// node knows only the access width (not the destination's source pointee type).
+/// State that representation conversion explicitly so a 32-bit pointer store
+/// remains valid C and preserves the exact four-byte write.
+fn write_store_value_dec(src: &Expr, size: u8, out: &mut String) {
+    if let Expr::Reg(reg @ VReg::Phys(name)) = src {
+        if dec_ptr_arg_type(name).is_some() || dec_ptr_width(name).is_some() {
+            let _ = write!(out, "({})((long)", store_pointee_ctype(size));
+            write_reg_lvalue_dec(reg, out);
+            out.push_str(")");
             return;
         }
     }
@@ -5904,7 +5957,7 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
                 if is_promoted_local(name) {
                     write_expr_dec(addr, out);
                     out.push_str(" = ");
-                    write_expr_dec(src, out);
+                    write_assignment_value_dec(&VReg::phys(name), src, out);
                     out.push_str(";\n");
                     return;
                 }
@@ -5914,7 +5967,7 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             let _ = write!(out, "*({} *)(", store_pointee_ctype(*size));
             write_expr_dec(addr, out);
             out.push_str(") = ");
-            write_expr_dec(src, out);
+            write_store_value_dec(src, *size, out);
             out.push_str(";\n");
         }
         Stmt::Call { target, args, dst } => {
@@ -6124,15 +6177,7 @@ fn write_for_clause_dec(s: &Stmt, out: &mut String, prefer_increment: bool) {
     }
     write_reg_lvalue_dec(dst, out);
     out.push_str(" = ");
-    if let VReg::Phys(name) = dst {
-        if let Some(pointer_type) = dec_ptr_arg_type(name) {
-            let _ = write!(out, "({})(", pointer_type);
-            write_expr_dec(src, out);
-            out.push(')');
-            return;
-        }
-    }
-    write_expr_dec(src, out);
+    write_assignment_value_dec(dst, src, out);
 }
 
 fn write_unit_step(
