@@ -230,10 +230,10 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
 
             let name = pick_name(&dwarf, &unit, &entry);
             let prototyped = matches!(
-                entry.attr_value(gimli::DW_AT_prototyped),
+                inherited_attr_value(&unit, &entry, gimli::DW_AT_prototyped),
                 Some(gimli::AttributeValue::Flag(true))
             );
-            let return_type = match entry.attr_value(gimli::DW_AT_type) {
+            let return_type = match inherited_attr_value(&unit, &entry, gimli::DW_AT_type) {
                 None => DwarfReturnType::Void,
                 Some(type_attr) => _resolve_type_string(&dwarf, &unit, type_attr)
                     .map(DwarfReturnType::Type)
@@ -263,10 +263,43 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
 type Slice<'a> = gimli::EndianSlice<'a, gimli::RunTimeEndian>;
 type Unit<'a> = gimli::Unit<Slice<'a>, usize>;
 
-fn pick_name(
-    dwarf: &gimli::Dwarf<Slice<'_>>,
-    unit: &Unit<'_>,
-    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+/// Resolve an attribute through the concrete DIE's abstract-origin or
+/// specification chain.
+///
+/// Clang O2 commonly emits the address range on a concrete `DW_TAG_subprogram`
+/// while leaving its name, prototype, and return type on an abstract subprogram.
+/// Treating the concrete DIE's missing `DW_AT_type` as `void` discards an
+/// authoritative source contract.  The chain is bounded and same-unit only;
+/// unsupported cross-unit references remain unknown rather than being guessed.
+fn inherited_attr_value<'a>(
+    unit: &Unit<'a>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'a>, usize>,
+    attribute: gimli::DwAt,
+) -> Option<gimli::AttributeValue<Slice<'a>, usize>> {
+    let mut offset = entry.offset();
+    for _ in 0..16 {
+        let current = unit.entry(offset).ok()?;
+        if let Some(value) = current.attr_value(attribute) {
+            return Some(value);
+        }
+        let reference = current
+            .attr_value(gimli::DW_AT_abstract_origin)
+            .or_else(|| current.attr_value(gimli::DW_AT_specification));
+        let Some(gimli::AttributeValue::UnitRef(next)) = reference else {
+            return None;
+        };
+        if next == offset {
+            return None;
+        }
+        offset = next;
+    }
+    None
+}
+
+fn pick_name<'a>(
+    dwarf: &gimli::Dwarf<Slice<'a>>,
+    unit: &Unit<'a>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'a>, usize>,
 ) -> Option<String> {
     // DW_AT_linkage_name (mangled) wins — matches what's in the symbol
     // table. Fall back to DW_AT_name (unqualified) only if absent.
@@ -275,7 +308,7 @@ fn pick_name(
         gimli::DW_AT_MIPS_linkage_name,
         gimli::DW_AT_name,
     ] {
-        if let Some(v) = entry.attr_value(attr) {
+        if let Some(v) = inherited_attr_value(unit, entry, attr) {
             if let Ok(s) = dwarf.attr_string(unit, v) {
                 if let Ok(t) = s.to_string() {
                     if !t.is_empty() {

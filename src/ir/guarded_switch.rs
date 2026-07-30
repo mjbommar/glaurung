@@ -515,9 +515,10 @@ fn count_reads_in_statement(statement: &Stmt, target: &VReg) -> usize {
 fn count_reads_in_expr(expr: &Expr, target: &VReg) -> usize {
     match expr {
         Expr::Reg(register) => usize::from(register == target),
-        Expr::Deref { addr, .. } | Expr::Un { src: addr, .. } | Expr::Cast { expr: addr, .. } => {
-            count_reads_in_expr(addr, target)
-        }
+        Expr::Deref { addr, .. }
+        | Expr::Un { src: addr, .. }
+        | Expr::Cast { expr: addr, .. }
+        | Expr::FunctionTableEntry { index: addr, .. } => count_reads_in_expr(addr, target),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reads_in_expr(lhs, target) + count_reads_in_expr(rhs, target)
         }

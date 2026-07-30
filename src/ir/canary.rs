@@ -340,6 +340,7 @@ fn rewrite_expr(e: &mut Expr) {
         }
         Expr::Un { src, .. } => rewrite_expr(src),
         Expr::Cast { expr, .. } => rewrite_expr(expr),
+        Expr::FunctionTableEntry { index, .. } => rewrite_expr(index),
         Expr::Reg(_)
         | Expr::FloatConst { .. }
         | Expr::StackAddr { .. }

@@ -357,6 +357,9 @@ fn fold_expr(
         Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
             fold_expr(src, data, aliases, bounds, active_guard)
         }
+        Expr::FunctionTableEntry { index, .. } => {
+            fold_expr(index, data, aliases, bounds, active_guard)
+        }
         Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

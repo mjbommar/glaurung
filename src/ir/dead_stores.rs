@@ -367,6 +367,7 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
         } => expr_reads(cond, dst) || expr_reads(if_true, dst) || expr_reads(if_false, dst),
         Expr::Un { src, .. } => expr_reads(src, dst),
         Expr::Cast { expr, .. } => expr_reads(expr, dst),
+        Expr::FunctionTableEntry { index, .. } => expr_reads(index, dst),
     }
 }
 

@@ -237,6 +237,9 @@ fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
                 Expr::Named { .. } => Some((**addr).clone()),
                 _ => None,
             },
+            Stmt::IndirectGoto {
+                target: target @ Expr::FunctionTableEntry { .. },
+            } => Some(target.clone()),
             _ => None,
         };
         let Some(callee) = callee else {
@@ -586,6 +589,7 @@ fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
         }
         Expr::Un { src, .. } => expr_reads_storage(src, storage),
         Expr::Cast { expr, .. } => expr_reads_storage(expr, storage),
+        Expr::FunctionTableEntry { index, .. } => expr_reads_storage(index, storage),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -1296,6 +1300,7 @@ fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> b
         }
         Expr::Un { src, .. } => substitute_exact_reg(src, target, replacement),
         Expr::Cast { expr, .. } => substitute_exact_reg(expr, target, replacement),
+        Expr::FunctionTableEntry { index, .. } => substitute_exact_reg(index, target, replacement),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -1307,7 +1312,7 @@ fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> b
 
 fn is_pure_arg_normalisation(expr: &Expr) -> bool {
     match expr {
-        Expr::Deref { .. } | Expr::Unknown(_) => false,
+        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } | Expr::Unknown(_) => false,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             is_pure_arg_normalisation(lhs) && is_pure_arg_normalisation(rhs)
         }
@@ -1537,6 +1542,7 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
         }
         Expr::Un { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
         Expr::Cast { expr, .. } => mark_arg_reads_in_expr(expr, arch, read_between),
+        Expr::FunctionTableEntry { index, .. } => mark_arg_reads_in_expr(index, arch, read_between),
     }
 }
 
@@ -1716,6 +1722,7 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
         }
         Expr::Un { src, .. } => reads_reg_in_expr(src, target),
         Expr::Cast { expr, .. } => reads_reg_in_expr(expr, target),
+        Expr::FunctionTableEntry { index, .. } => reads_reg_in_expr(index, target),
     }
 }
 

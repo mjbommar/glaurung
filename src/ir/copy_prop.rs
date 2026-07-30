@@ -705,7 +705,7 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
 /// post-store value.
 fn contains_deref(e: &Expr) -> bool {
     match e {
-        Expr::Deref { .. } => true,
+        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } => true,
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -754,15 +754,17 @@ fn contains_unknown(e: &Expr) -> bool {
         } => contains_unknown(cond) || contains_unknown(if_true) || contains_unknown(if_false),
         Expr::Un { src, .. } => contains_unknown(src),
         Expr::Cast { expr, .. } => contains_unknown(expr),
+        Expr::FunctionTableEntry { index, .. } => contains_unknown(index),
     }
 }
 
 fn contains_select(e: &Expr) -> bool {
     match e {
         Expr::Select { .. } => true,
-        Expr::Deref { addr, .. } | Expr::Un { src: addr, .. } | Expr::Cast { expr: addr, .. } => {
-            contains_select(addr)
-        }
+        Expr::Deref { addr, .. }
+        | Expr::Un { src: addr, .. }
+        | Expr::Cast { expr: addr, .. }
+        | Expr::FunctionTableEntry { index: addr, .. } => contains_select(addr),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_select(lhs) || contains_select(rhs)
         }
@@ -814,6 +816,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
         }
         Expr::Un { src, .. } => count_reg_uses(src, target),
         Expr::Cast { expr, .. } => count_reg_uses(expr, target),
+        Expr::FunctionTableEntry { index, .. } => count_reg_uses(index, target),
     }
 }
 
@@ -852,6 +855,7 @@ fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
         }
         Expr::Un { src, .. } => count_reads_expr(src, reads),
         Expr::Cast { expr, .. } => count_reads_expr(expr, reads),
+        Expr::FunctionTableEntry { index, .. } => count_reads_expr(index, reads),
     }
 }
 
@@ -1021,6 +1025,7 @@ fn subst(e: &mut Expr, copies: &Copies) {
         }
         Expr::Un { src, .. } => subst(src, copies),
         Expr::Cast { expr, .. } => subst(expr, copies),
+        Expr::FunctionTableEntry { index, .. } => subst(index, copies),
     }
 }
 

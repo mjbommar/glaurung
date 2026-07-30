@@ -261,6 +261,7 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
         }
         Expr::Un { src, .. } => fold_expr(src, pool),
         Expr::Cast { expr, .. } => fold_expr(expr, pool),
+        Expr::FunctionTableEntry { index, .. } => fold_expr(index, pool),
         Expr::Reg(_)
         | Expr::StackAddr { .. }
         | Expr::Const(_)

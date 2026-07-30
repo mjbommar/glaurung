@@ -172,7 +172,7 @@ fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
 /// same value, and an opaque expression has no inspectable dependency set.
 fn stable_value_expr(expr: &Expr) -> bool {
     match expr {
-        Expr::Deref { .. } | Expr::Unknown(_) => false,
+        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } | Expr::Unknown(_) => false,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             stable_value_expr(lhs) && stable_value_expr(rhs)
         }
@@ -216,6 +216,7 @@ fn collect_expr_regs(expr: &Expr, out: &mut Vec<VReg>) {
         }
         Expr::Un { src, .. } => collect_expr_regs(src, out),
         Expr::Cast { expr, .. } => collect_expr_regs(expr, out),
+        Expr::FunctionTableEntry { index, .. } => collect_expr_regs(index, out),
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             out.extend(base.iter().cloned());
             out.extend(index.iter().cloned());
@@ -538,6 +539,7 @@ fn contains_reg(expr: &Expr, target: &VReg) -> bool {
         }
         Expr::Un { src, .. } => contains_reg(src, target),
         Expr::Cast { expr, .. } => contains_reg(expr, target),
+        Expr::FunctionTableEntry { index, .. } => contains_reg(index, target),
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             base.as_ref() == Some(target) || index.as_ref() == Some(target)
         }

@@ -645,6 +645,15 @@ fn rewrite_expr(
             sp_delta,
             address_defs,
         ),
+        Expr::FunctionTableEntry { index, .. } => rewrite_expr(
+            index,
+            map,
+            stack_counter,
+            local_counter,
+            ctx,
+            sp_delta,
+            address_defs,
+        ),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }

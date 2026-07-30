@@ -36,6 +36,16 @@ pub struct PdbFieldHint {
 /// references and constants without reconstructing use-def chains. The
 /// expression-reconstruction pass can later replace `Reg` with compound
 /// subexpressions.
+/// Exact callable target carried by a relocation-proven function-pointer table.
+///
+/// The address remains available for cross-reference while the symbol name lets
+/// the standalone C renderer reconstruct a portable initializer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionTableTarget {
+    pub va: u64,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Reg(VReg),
@@ -54,6 +64,20 @@ pub enum Expr {
     Named {
         va: u64,
         name: String,
+    },
+    /// One indexed element of a symbol-backed function-pointer table whose
+    /// complete contents were proven by object relocations.
+    ///
+    /// This is deliberately distinct from a generic dereference.  Re-emitting
+    /// the input image VA is not portable, while replacing a writable table by
+    /// direct calls would discard its data semantics.  The DecBench renderer
+    /// therefore materialises the table and indexes it by name.
+    FunctionTableEntry {
+        table_va: u64,
+        table_name: String,
+        pointer_size: u8,
+        index: Box<Expr>,
+        targets: Vec<FunctionTableTarget>,
     },
     /// A C-string literal recovered from the binary's rodata. The printer
     /// renders this with proper `"..."` quoting and C-style escapes.
@@ -1339,6 +1363,7 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
         }
         Expr::Un { src, .. } => count_reg_uses_in_expr(src, target),
         Expr::Cast { expr, .. } => count_reg_uses_in_expr(expr, target),
+        Expr::FunctionTableEntry { index, .. } => count_reg_uses_in_expr(index, target),
     }
 }
 
@@ -1358,7 +1383,7 @@ fn moving_condition_to_end_is_safe(condition: &Expr, following: &[Stmt]) -> bool
 
 fn expr_reads_memory(expr: &Expr) -> bool {
     match expr {
-        Expr::Deref { .. } => true,
+        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } => true,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_reads_memory(lhs) || expr_reads_memory(rhs)
         }
@@ -1448,7 +1473,7 @@ fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
 /// opaque expressions are not.
 fn can_eagerly_evaluate(expr: &Expr) -> bool {
     match expr {
-        Expr::Deref { .. } | Expr::Unknown(_) => false,
+        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } | Expr::Unknown(_) => false,
         Expr::Bin { op: BinOp::Div, .. } => false,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             can_eagerly_evaluate(lhs) && can_eagerly_evaluate(rhs)
@@ -2693,6 +2718,13 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
         Expr::Named { name, .. } => {
             let _ = write!(out, "{}", name);
         }
+        Expr::FunctionTableEntry {
+            table_name, index, ..
+        } => {
+            let _ = write!(out, "{}[", table_name);
+            write_expr_ctx(index, tm, out);
+            out.push(']');
+        }
         Expr::StringLit { value } => {
             out.push('"');
             for ch in value.chars() {
@@ -3301,6 +3333,13 @@ fn write_expr_c(e: &Expr, out: &mut String) {
         Expr::Named { name, .. } => {
             let _ = write!(out, "{}", name);
         }
+        Expr::FunctionTableEntry {
+            table_name, index, ..
+        } => {
+            let _ = write!(out, "{}[", table_name);
+            write_expr_c(index, out);
+            out.push(']');
+        }
         Expr::StringLit { value } => {
             out.push('"');
             for ch in value.chars() {
@@ -3907,6 +3946,7 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
                 expression(if_false, tm);
             }
             Expr::Cast { expr, .. } => expression(expr, tm),
+            Expr::FunctionTableEntry { index, .. } => expression(index, tm),
             Expr::Reg(_)
             | Expr::Const(_)
             | Expr::FloatConst { .. }
@@ -4085,6 +4125,7 @@ fn expression_proven_scalar(expr: &Expr, tm: &TypeMap) -> bool {
         | Expr::StackAddr { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => false,
+        Expr::FunctionTableEntry { .. } => false,
     }
 }
 
@@ -4449,6 +4490,7 @@ fn expression_value_width(
         | Expr::StackAddr { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => Some(8),
+        Expr::FunctionTableEntry { pointer_size, .. } => Some(*pointer_size),
         Expr::Deref { size, .. } => Some(*size),
         // x86's ordinary 32-bit return write is represented after
         // canonicalisation as a zero-extension into the 64-bit parent. That
@@ -5023,6 +5065,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
             }
             Expr::Un { src, .. } => re(src, map),
             Expr::Cast { expr, .. } => re(expr, map),
+            Expr::FunctionTableEntry { index, .. } => re(index, map),
             Expr::Const(_)
             | Expr::FloatConst { .. }
             | Expr::Addr(_)
@@ -5443,6 +5486,38 @@ pub fn render_decbench_typed_with_output(
         out.push_str(");\n");
     }
 
+    // A relocation-proven table is source-level data, not a raw image address
+    // and not a set of guessed direct calls. Materialise it as a function-local
+    // static object so standalone C preserves pointer-table indexing and storage
+    // lifetime. Exact local target declarations also let the differential
+    // harness include their real decompilations before compiling this fragment.
+    let mut table_target_names = std::collections::BTreeSet::new();
+    for (_, targets) in ids.function_tables.values() {
+        for target in targets {
+            let displayed = sanitize_c_ident(callee_display_name(&target.name));
+            if displayed != name && !named_call_declarations.contains_key(&displayed) {
+                table_target_names.insert(displayed);
+            }
+        }
+    }
+    for target in &table_target_names {
+        let _ = writeln!(out, "    extern void {}(void);", target);
+    }
+    for (table_name, targets) in ids.function_tables.values() {
+        let table_name = sanitize_c_ident(table_name);
+        let _ = writeln!(
+            out,
+            "    static void (*{}[{}])(void) = {{",
+            table_name,
+            targets.len()
+        );
+        for target in targets {
+            let target = sanitize_c_ident(callee_display_name(&target.name));
+            let _ = writeln!(out, "        (void (*)(void)){},", target);
+        }
+        out.push_str("    };\n");
+    }
+
     // Promoted stack slots and exact SSA-derived `varN` values may take a
     // recovered type. The high-variable pass admits `varN` only when every
     // definition agrees and no integer/address-arithmetic use exists. Physical
@@ -5504,6 +5579,9 @@ struct DecIdents {
     /// Recursive statement count used only for the exceptional GCC RTL-ICE
     /// compilation guard in the DecBench renderer.
     statement_count: usize,
+    /// Relocation-proven function tables referenced by the body, keyed by
+    /// original VA so repeated call sites emit one stable local definition.
+    function_tables: std::collections::BTreeMap<u64, (String, Vec<FunctionTableTarget>)>,
 }
 
 /// If `name` is exactly `arg` followed by decimal digits, return that index.
@@ -5607,6 +5685,18 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
         | Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. } => {}
+        Expr::FunctionTableEntry {
+            table_va,
+            table_name,
+            index,
+            targets,
+            ..
+        } => {
+            collect_idents_expr(index, ids);
+            ids.function_tables
+                .entry(*table_va)
+                .or_insert_with(|| (table_name.clone(), targets.clone()));
+        }
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             if let Some(b) = base {
                 collect_reg(b, ids);
@@ -6339,6 +6429,14 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         Expr::Named { va, .. } => {
             let _ = write!(out, "0x{:x}", va);
         }
+        Expr::FunctionTableEntry {
+            table_name, index, ..
+        } => {
+            out.push_str(&sanitize_c_ident(table_name));
+            out.push('[');
+            write_expr_dec(index, out);
+            out.push(']');
+        }
         Expr::StringLit { value } => write_string_lit(value, out),
         Expr::Lea {
             base,
@@ -6866,6 +6964,7 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
                 || dec_is_stack_object(name)
         }
         Expr::Named { .. }
+        | Expr::FunctionTableEntry { .. }
         | Expr::StringLit { .. }
         | Expr::StackAddr { .. }
         | Expr::Lea { .. }

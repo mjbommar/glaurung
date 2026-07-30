@@ -282,6 +282,7 @@ fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
     match expression {
         Expr::StringLit { .. } => ValueClass::Pointer(1),
         Expr::StackAddr { .. } => ValueClass::Pointer(0),
+        Expr::FunctionTableEntry { .. } => ValueClass::Pointer(0),
         Expr::Reg(reg @ VReg::Phys(name)) if is_trusted_copy_source(name) => match types.get(reg) {
             Some(TypeHint::Pointer { pointee_width }) => ValueClass::Pointer(pointee_width),
             Some(TypeHint::CodePointer) => ValueClass::Pointer(0),
@@ -498,6 +499,7 @@ fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashS
             collect_unsafe_expr(rhs, true, out);
         }
         Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => collect_unsafe_expr(src, true, out),
+        Expr::FunctionTableEntry { index, .. } => collect_unsafe_expr(index, true, out),
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             for reg in base.iter().chain(index.iter()) {
                 if let VReg::Phys(name) = reg {

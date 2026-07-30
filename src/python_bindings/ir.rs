@@ -314,6 +314,7 @@ fn run_ast_passes(
     callee_facts: &DirectCalleeFacts,
     addr_map: &std::collections::HashMap<u64, String>,
     str_pool: &std::collections::HashMap<u64, String>,
+    function_tables: &[crate::ir::function_tables::FunctionPointerTable],
 ) -> (
     std::collections::HashMap<String, u8>,
     std::collections::HashMap<String, String>,
@@ -341,6 +342,7 @@ fn run_ast_passes(
     // only symbol-backed terminal jumps as tail calls so the ordinary call pass
     // can see their argument-register setup and returned value.
     crate::ir::name_resolve::resolve_names(f, addr_map);
+    crate::ir::function_tables::resolve_function_table_entries(f, function_tables);
     crate::ir::call_args::recover_resolved_direct_tail_calls(f, cc, addr_map);
     crate::ir::call_args::recover_resolved_tail_calls(f, cc);
     dp!("recover_resolved_tail_calls");
@@ -672,6 +674,7 @@ fn decompile_at_py(
     dp!("lower");
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
+    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let parameter_roles = prototype
         .as_ref()
         .map(|prototype| prototype.parameter_role_map())
@@ -688,6 +691,7 @@ fn decompile_at_py(
         &callee_facts,
         &addr_map,
         &str_pool,
+        &function_tables,
     );
     recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
@@ -879,6 +883,7 @@ fn decompile_range_at_py(
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
+    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let parameter_roles = prototype
         .as_ref()
         .map(|prototype| prototype.parameter_role_map())
@@ -895,6 +900,7 @@ fn decompile_range_at_py(
         &callee_facts,
         &addr_map,
         &str_pool,
+        &function_tables,
     );
     recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
@@ -1700,6 +1706,7 @@ fn decompile_all_py(
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
+    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {
@@ -1766,6 +1773,7 @@ fn decompile_all_py(
             &callee_facts,
             &addr_map,
             &str_pool,
+            &function_tables,
         );
         recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {
@@ -1869,6 +1877,7 @@ fn decompile_many_py(
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
+    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let mut callee_layout_cache = std::collections::HashMap::new();
     // PDB-only public-symbol map for the `// PDB:` provenance comment; built
     // once, empty for non-PE inputs (so it never fires on ELF/Mach-O).
@@ -1954,6 +1963,7 @@ fn decompile_many_py(
             &callee_facts,
             &addr_map,
             &str_pool,
+            &function_tables,
         );
         recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {

@@ -164,6 +164,7 @@ fn expression_width(expr: &Expr) -> Option<u8> {
         Expr::Deref { size, .. } | Expr::Select { width: size, .. } => Some(*size),
         Expr::Cast { width, .. } => Some(*width),
         Expr::FloatConst { width, .. } => Some(*width),
+        Expr::FunctionTableEntry { pointer_size, .. } => Some(*pointer_size),
         Expr::Cmp { .. } => Some(1),
         Expr::Bin { lhs, rhs, .. } => expression_width(lhs)
             .into_iter()

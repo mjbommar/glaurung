@@ -83,13 +83,28 @@ def test_verify_diagnostics_are_opt_in():
     _td = M.tmpdir()
     with tempfile.TemporaryDirectory(**({"dir": _td} if _td else {})) as td:
         so = S._build("06_calling_conventions", Path(td))
-        cmd = ["glaurung", "decompile", str(so), "--all", "--limit", "50",
-               "--style", "decbench", "--no-color"]
-        clean = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
-                               check=True).stdout
-        asked = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
-                               check=True,
-                               env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"}).stdout
+        cmd = [
+            "glaurung",
+            "decompile",
+            str(so),
+            "--all",
+            "--limit",
+            "50",
+            "--style",
+            "decbench",
+            "--no-color",
+        ]
+        clean = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300, check=True
+        ).stdout
+        asked = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+            env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
+        ).stdout
 
     assert "glaurung-verify" not in clean, (
         "diagnostics leaked into the default render — they would ship inside a "
@@ -100,7 +115,9 @@ def test_verify_diagnostics_are_opt_in():
         "checking def-before-use"
     )
     # Same code either way: the diagnostics are additive comment lines only.
-    assert [l for l in asked.splitlines() if "glaurung-verify" not in l] == clean.splitlines()
+    assert [
+        l for l in asked.splitlines() if "glaurung-verify" not in l
+    ] == clean.splitlines()
 
 
 def test_do_while_latch_condition_is_defined(tmp_path):
@@ -234,6 +251,116 @@ def test_apply_remains_an_indirect_callback_call(report):
     assert got.get("indirect_call") is True, "apply() lost its indirect callback call"
 
 
+def test_dispatch_recovers_portable_local_function_table(tmp_path: Path) -> None:
+    """A relocation-proven local function table must survive standalone C.
+
+    Pinned GCC O0 emits ``call *ops(,%rax,8)`` for this real fixture.  A raw
+    image VA such as ``0x4040`` happens to name the table in the input DSO but
+    is unmapped in the rebuilt differential object, where calling through it
+    segfaults.  Every table slot has an exact dynamic relocation to one of the
+    five local handlers, so the decompiler can preserve the table itself rather
+    than guessing a direct callee.
+    """
+    import subprocess
+
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / "08_indirect_dispatch.c"
+    binary = tmp_path / "indirect-dispatch-gcc-O0.so"
+    compiled = S.TC.run(
+        ["gcc", "-shared", "-fPIC", "-g", "-O0", "-w", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "dispatch",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    )
+
+    assert "ops[5]" in result.stdout, result.stdout
+    for handler in ("h_add", "h_sub", "h_mul", "h_xor", "h_max"):
+        assert handler in result.stdout, result.stdout
+    assert "0x4040" not in result.stdout, result.stdout
+    assert "unrecovered indirect jump" not in result.stdout, result.stdout
+
+
+def test_optimized_tail_dispatch_recovers_portable_local_function_table(
+    tmp_path: Path,
+) -> None:
+    """A relocation-proven indexed tail jump must become a returning call."""
+    import subprocess
+
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / "08_indirect_dispatch.c"
+    binary = tmp_path / "indirect-dispatch-clang-O2.so"
+    compiled = S.TC.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-w",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "tail_dispatch",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    )
+
+    assert "ops[5]" in result.stdout, result.stdout
+    for handler in ("h_add", "h_sub", "h_mul", "h_xor", "h_max"):
+        assert handler in result.stdout, result.stdout
+    assert "unrecovered indirect jump" not in result.stdout, result.stdout
+    assert "return ret;" in result.stdout, result.stdout
+
+    helper = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "h_add",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    )
+    assert "void h_add" not in helper.stdout, helper.stdout
+    assert "return;" not in helper.stdout, helper.stdout
+    assert "100" in helper.stdout, helper.stdout
+
+
 def test_factorial_recovers_a_head_tested_while(report):
     """A real compiled factorial must retain its source-level loop form."""
     got = report["effects"].get("12_loop_rotation:factorial_while", {})
@@ -281,9 +408,7 @@ def test_sum_array_recovers_a_for_loop(tmp_path):
 
 
 @pytest.mark.parametrize("opt", ["-O0", "-O2"])
-def test_signs_renders_lifted_select_as_pure_ternary(
-    tmp_path: Path, opt: str
-) -> None:
+def test_signs_renders_lifted_select_as_pure_ternary(tmp_path: Path, opt: str) -> None:
     """Real compiled selects must retain both pure value alternatives."""
     import subprocess
 

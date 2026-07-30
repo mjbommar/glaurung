@@ -178,6 +178,7 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
         }
         Expr::Un { src, .. } => contains_reg(src, target),
         Expr::Cast { expr, .. } => contains_reg(expr, target),
+        Expr::FunctionTableEntry { index, .. } => contains_reg(index, target),
     }
 }
 
@@ -217,6 +218,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
         }
         Expr::Un { src, .. } => count_reg_uses(src, target),
         Expr::Cast { expr, .. } => count_reg_uses(expr, target),
+        Expr::FunctionTableEntry { index, .. } => count_reg_uses(index, target),
     }
 }
 
@@ -271,6 +273,22 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
         Expr::Addr(a) => Expr::Addr(a),
         Expr::Named { va, name } => Expr::Named { va, name },
         Expr::StringLit { value } => Expr::StringLit { value },
+        Expr::FunctionTableEntry {
+            table_va,
+            table_name,
+            pointer_size,
+            mut index,
+            targets,
+        } => {
+            substitute_in_expr(&mut index, target, with);
+            Expr::FunctionTableEntry {
+                table_va,
+                table_name,
+                pointer_size,
+                index,
+                targets,
+            }
+        }
         Expr::Unknown(s) => Expr::Unknown(s),
         Expr::Lea {
             base,
