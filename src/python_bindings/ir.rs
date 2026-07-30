@@ -308,6 +308,7 @@ fn run_ast_passes(
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &std::collections::HashMap<String, usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<crate::ir::types::VReg>>,
     addr_map: &std::collections::HashMap<u64, String>,
     str_pool: &std::collections::HashMap<u64, String>,
 ) -> (
@@ -340,7 +341,12 @@ fn run_ast_passes(
     crate::ir::call_args::recover_resolved_direct_tail_calls(f, cc, addr_map);
     crate::ir::call_args::recover_resolved_tail_calls(f, cc);
     dp!("recover_resolved_tail_calls");
-    crate::ir::call_args::reconstruct_args_with_params(f, cc, param_slots);
+    crate::ir::call_args::reconstruct_args_with_params_and_callee_layouts(
+        f,
+        cc,
+        param_slots,
+        callee_layouts,
+    );
     dp!("reconstruct_args");
     // ABI liveness supplies candidate call inputs/outputs; an authoritative
     // library prototype wins when one is known. This mirrors Ghidra's locked
@@ -567,6 +573,17 @@ fn decompile_at_py(
         })?;
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let arm_vfp_args = arm_uses_vfp_arguments(&data);
+    let mut callee_layout_cache = std::collections::HashMap::new();
+    let callee_layouts = recover_direct_callee_layouts(
+        &data,
+        &funcs,
+        &func,
+        arch,
+        cc,
+        arm_vfp_args,
+        dwarf_outputs.as_ref(),
+        &mut callee_layout_cache,
+    );
     let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
@@ -649,6 +666,7 @@ fn decompile_at_py(
         ),
         &param_slots,
         &parameter_roles,
+        &callee_layouts,
         &addr_map,
         &str_pool,
     );
@@ -831,6 +849,9 @@ fn decompile_range_at_py(
         )
     });
     let mut f = lower(&lf, &region, func.name.clone());
+    // An explicit byte range has no discovered callee Function objects from
+    // which to recover cross-function storage layouts.
+    let callee_layouts = std::collections::HashMap::new();
     // Inputs the shared pipeline needs. These were interleaved BETWEEN passes here, which
     // is why the four copies could not simply be diffed against each other — the pass
     // list and the local setup were braided together. None of them touch `f`, so
@@ -854,6 +875,7 @@ fn decompile_range_at_py(
         ),
         &param_slots,
         &parameter_roles,
+        &callee_layouts,
         &addr_map,
         &str_pool,
     );
@@ -1251,6 +1273,66 @@ fn recover_decbench_prototype(
     prototype
 }
 
+/// Recover the source-ordered physical parameter storage of direct callees.
+///
+/// This is intentionally demand-driven and cached. AAPCS-VFP callsites need
+/// cross-function prototype evidence to interleave core and VFP registers, but
+/// lifting every discovered function up front would double the dominant cost
+/// of large-binary decompilation. Only callees of the function currently being
+/// rendered are analyzed, and repeated callees in batch modes reuse the result.
+fn recover_direct_callee_layouts(
+    data: &[u8],
+    functions: &[crate::core::function::Function],
+    caller: &crate::core::function::Function,
+    arch: crate::core::binary::Arch,
+    cc: crate::ir::call_args::CallConv,
+    arm_vfp_args: bool,
+    dwarf_outputs: Option<&std::collections::HashMap<u64, crate::debug::dwarf::DwarfReturnType>>,
+    cache: &mut std::collections::HashMap<u64, Option<Vec<crate::ir::types::VReg>>>,
+) -> std::collections::HashMap<u64, Vec<crate::ir::types::VReg>> {
+    use crate::ir::lift_function::lift_function_from_bytes;
+    use crate::ir::ssa::compute_ssa;
+
+    if cc != crate::ir::call_args::CallConv::ArmHardFloat {
+        return std::collections::HashMap::new();
+    }
+
+    let mut layouts = std::collections::HashMap::new();
+    for callee_address in &caller.callees {
+        let callee_va = callee_address.value;
+        let recovered = cache
+            .entry(callee_va)
+            .or_insert_with(|| {
+                let callee = functions
+                    .iter()
+                    .find(|function| function.entry_point.value == callee_va)?;
+                let mut lifted = lift_function_from_bytes(data, callee, arch)?;
+                crate::ir::abi::annotate_calls(&mut lifted, cc);
+                let ssa = compute_ssa(&lifted);
+                let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lifted, cc);
+                let prototype = recover_decbench_prototype(
+                    &lifted,
+                    &ssa,
+                    cc,
+                    &parameter_slots,
+                    arm_vfp_args,
+                    dwarf_outputs.and_then(|outputs| outputs.get(&callee_va)),
+                );
+                let layout: Vec<crate::ir::types::VReg> = prototype
+                    .parameters()
+                    .iter()
+                    .map(|parameter| parameter.value.base.clone())
+                    .collect();
+                (!layout.is_empty()).then_some(layout)
+            })
+            .clone();
+        if let Some(recovered) = recovered {
+            layouts.insert(callee_va, recovered);
+        }
+    }
+    layouts
+}
+
 fn float_expression_width(
     expression: &crate::ir::ast::Expr,
     types: &crate::ir::types_recover::TypeMap,
@@ -1473,6 +1555,7 @@ fn decompile_all_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
+    let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {
         let Some(lf_raw) = lift_function_from_bytes(&data, func, arch) else {
@@ -1514,6 +1597,16 @@ fn decompile_all_py(
             .as_ref()
             .map(|prototype| prototype.parameter_role_map())
             .unwrap_or_default();
+        let callee_layouts = recover_direct_callee_layouts(
+            &data,
+            &funcs,
+            func,
+            arch,
+            cc,
+            arm_vfp_args,
+            dwarf_outputs.as_ref(),
+            &mut callee_layout_cache,
+        );
         let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
             cc,
@@ -1523,6 +1616,7 @@ fn decompile_all_py(
             ),
             &param_slots,
             &parameter_roles,
+            &callee_layouts,
             &addr_map,
             &str_pool,
         );
@@ -1616,6 +1710,7 @@ fn decompile_many_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
+    let mut callee_layout_cache = std::collections::HashMap::new();
     // PDB-only public-symbol map for the `// PDB:` provenance comment; built
     // once, empty for non-PE inputs (so it never fires on ELF/Mach-O).
     let pdb_public_map = pdb_cache
@@ -1676,6 +1771,16 @@ fn decompile_many_py(
             .as_ref()
             .map(|prototype| prototype.parameter_role_map())
             .unwrap_or_default();
+        let callee_layouts = recover_direct_callee_layouts(
+            &data,
+            &funcs,
+            func,
+            arch,
+            cc,
+            arm_vfp_args,
+            dwarf_outputs.as_ref(),
+            &mut callee_layout_cache,
+        );
         let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
             cc,
@@ -1685,6 +1790,7 @@ fn decompile_many_py(
             ),
             &param_slots,
             &parameter_roles,
+            &callee_layouts,
             &addr_map,
             &str_pool,
         );

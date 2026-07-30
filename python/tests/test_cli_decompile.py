@@ -417,6 +417,122 @@ def test_real_arm_hard_float_call_round_trip(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+def test_real_arm_mixed_hard_float_call_round_trip(tmp_path: Path) -> None:
+    """Use the callee prototype to interleave core and VFP call storage."""
+    arm_compiler = shutil.which("arm-none-eabi-gcc")
+    host_compiler = shutil.which("gcc")
+    if arm_compiler is None:
+        pytest.skip("arm-none-eabi-gcc is unavailable")
+    if host_compiler is None:
+        pytest.skip("host gcc is unavailable")
+
+    source = tmp_path / "arm_mixed_hard_float_call.c"
+    binary = tmp_path / "arm_mixed_hard_float_call.elf"
+    source.write_text(
+        "__attribute__((noinline)) float arm_hf_mixed_callee(\n"
+        "    int token, float measured, int negate) {\n"
+        "    return token + (negate ? -measured : measured);\n"
+        "}\n"
+        "__attribute__((noinline)) float arm_hf_mixed_caller(\n"
+        "    float measured, int negate) {\n"
+        "    return arm_hf_mixed_callee(7, measured, negate) + 1.0f;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            arm_compiler,
+            "-mcpu=cortex-m4",
+            "-mthumb",
+            "-mfloat-abi=hard",
+            "-mfpu=fpv4-sp-d16",
+            "-nostdlib",
+            "-Wl,-Ttext=0x1000",
+            "-Wl,-e,arm_hf_mixed_caller",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (function for function in functions if function.name == "arm_hf_mixed_caller"),
+        None,
+    )
+    assert target is not None, functions
+    generated = g.ir.decompile_at(
+        str(binary),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+
+    assert "float arm_hf_mixed_caller(float arg0, int arg1)" in generated, generated
+    assert "arm_hf_mixed_callee(7, arg0, arg1)" in generated, generated
+    assert "asm:" not in generated, generated
+
+    driver = tmp_path / "mixed_call_driver.c"
+    driver.write_text(
+        "#include <stdio.h>\n"
+        "float arm_hf_mixed_caller(float, int);\n"
+        "int main(void) {\n"
+        '    printf("%.9g %.9g %.9g\\n", arm_hf_mixed_caller(2.5f, 0),\n'
+        "           arm_hf_mixed_caller(2.5f, 1),\n"
+        "           arm_hf_mixed_caller(-3.25f, 1));\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    helper = tmp_path / "mixed_call_helper.c"
+    helper.write_text(
+        "__attribute__((noinline)) float arm_hf_mixed_callee(\n"
+        "    int token, float measured, int negate) {\n"
+        "    return token + (negate ? -measured : measured);\n"
+        "}\n"
+    )
+    rebuilt_source = tmp_path / "mixed_call_rebuilt.c"
+    rebuilt_source.write_text(
+        "float arm_hf_mixed_callee(int, float, int);\n" + generated
+    )
+    reference = tmp_path / "mixed_call_reference"
+    rebuilt = tmp_path / "mixed_call_rebuilt"
+    compile_inputs = (
+        ([source, driver], reference),
+        ([rebuilt_source, helper, driver], rebuilt),
+    )
+    for inputs, output in compile_inputs:
+        compiled = subprocess.run(
+            [
+                host_compiler,
+                "-std=c11",
+                "-O2",
+                "-o",
+                str(output),
+                *(str(path) for path in inputs),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compiled.returncode == 0, f"{inputs}: {compiled.stderr}\n{generated}"
+
+    reference_run = subprocess.run(
+        [str(reference)], capture_output=True, text=True, check=False
+    )
+    rebuilt_run = subprocess.run(
+        [str(rebuilt)], capture_output=True, text=True, check=False
+    )
+    assert reference_run.returncode == 0, reference_run.stderr
+    assert rebuilt_run.returncode == 0, rebuilt_run.stderr
+    assert rebuilt_run.stdout == reference_run.stdout
+
+
+@pytest.mark.slow
 def test_real_arm_mixed_hard_float_spills_preserve_source_parameter_order(
     tmp_path: Path,
 ) -> None:

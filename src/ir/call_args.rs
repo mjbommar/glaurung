@@ -507,7 +507,27 @@ pub fn reconstruct_args_with_params(
     arch: CallConv,
     param_slots: &std::collections::HashSet<usize>,
 ) {
-    fold_body(&mut f.body, arch, param_slots);
+    reconstruct_args_with_params_and_callee_layouts(
+        f,
+        arch,
+        param_slots,
+        &std::collections::HashMap::new(),
+    );
+}
+
+/// Reconstruct call arguments while honoring exact direct-callee storage.
+///
+/// AAPCS-VFP allocates core and floating-point parameters from independent
+/// banks. Their source order is therefore not derivable from the caller's
+/// register names alone. A recovered callee prototype supplies that missing
+/// order as one physical storage register per source parameter.
+pub fn reconstruct_args_with_params_and_callee_layouts(
+    f: &mut Function,
+    arch: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+) {
+    fold_body(&mut f.body, arch, param_slots, callee_layouts);
     attribute_call_results(&mut f.body, arch);
 }
 
@@ -751,7 +771,12 @@ fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
     }
 }
 
-fn fold_body(body: &mut Vec<Stmt>, arch: CallConv, param_slots: &std::collections::HashSet<usize>) {
+fn fold_body(
+    body: &mut Vec<Stmt>,
+    arch: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+) {
     // Recurse into nested bodies first so we don't miss calls inside arms.
     for s in body.iter_mut() {
         match s {
@@ -760,15 +785,15 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv, param_slots: &std::collection
                 else_body,
                 ..
             } => {
-                fold_body(then_body, arch, param_slots);
+                fold_body(then_body, arch, param_slots, callee_layouts);
                 if let Some(eb) = else_body {
-                    fold_body(eb, arch, param_slots);
+                    fold_body(eb, arch, param_slots, callee_layouts);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                fold_body(body, arch, param_slots)
+                fold_body(body, arch, param_slots, callee_layouts)
             }
-            Stmt::For { body, .. } => fold_body(body, arch, param_slots),
+            Stmt::For { body, .. } => fold_body(body, arch, param_slots, callee_layouts),
             _ => {}
         }
     }
@@ -790,8 +815,89 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv, param_slots: &std::collection
     // preceding arg assignments for a later call first.
     call_positions.reverse();
     for call_idx in call_positions {
-        fold_one_call(body, call_idx, arch, param_slots);
+        fold_one_call(body, call_idx, arch, param_slots, callee_layouts);
     }
+}
+
+fn direct_call_target_va(statement: &Stmt) -> Option<u64> {
+    match statement {
+        Stmt::Call {
+            target: Expr::Named { va, .. } | Expr::Addr(va),
+            ..
+        } => Some(*va),
+        _ => None,
+    }
+}
+
+/// Fold a call setup according to a recovered callee's source-ordered storage.
+///
+/// This deliberately accepts only an adjacent, side-effect-free assignment
+/// window. Moving a load-valued argument across a store or another call would
+/// change its value, so less obvious shapes remain explicit until the AST owns
+/// a full reaching-definition query.
+fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout: &[VReg]) -> bool {
+    if layout.is_empty() {
+        return false;
+    }
+    let mut found: Vec<Option<(usize, Expr, VReg)>> = vec![None; layout.len()];
+    let mut index = call_idx;
+    while index > 0 && found.iter().any(Option::is_none) {
+        index -= 1;
+        match &body[index] {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src,
+            } => {
+                let base = ssa_base(name);
+                let Some(slot) = layout.iter().position(
+                    |storage| matches!(storage, VReg::Phys(storage) if ssa_base(storage) == base),
+                ) else {
+                    continue;
+                };
+                if found[slot].is_none() {
+                    found[slot] = Some((index, src.clone(), VReg::Phys(name.clone())));
+                }
+            }
+            Stmt::Nop | Stmt::Comment(_) => {}
+            _ => break,
+        }
+    }
+    if found.iter().any(Option::is_none) {
+        return false;
+    }
+
+    // Removing a setup assignment must not leave another captured expression
+    // referring to that exact definition. Decline instead of inventing a
+    // substitution across register banks.
+    let removed: Vec<VReg> = found
+        .iter()
+        .flatten()
+        .map(|(_, _, destination)| destination.clone())
+        .collect();
+    if found.iter().flatten().any(|(_, expression, _)| {
+        removed
+            .iter()
+            .any(|destination| reads_reg_in_expr(expression, destination))
+    }) {
+        return false;
+    }
+
+    let arguments: Vec<Expr> = found
+        .iter()
+        .flatten()
+        .map(|(_, expression, _)| expression.clone())
+        .collect();
+    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+        *args = arguments;
+    } else {
+        return false;
+    }
+    let mut used: Vec<usize> = found.iter().flatten().map(|(index, _, _)| *index).collect();
+    used.sort_unstable_by(|left, right| right.cmp(left));
+    for index in used {
+        body.remove(index);
+    }
+    true
 }
 
 fn arm_hard_float_slot_of(name: &str) -> Option<usize> {
@@ -885,10 +991,18 @@ fn fold_one_call(
     call_idx: usize,
     arch: CallConv,
     param_slots: &std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
 ) {
     if arch == CallConv::Cdecl32 {
         fold_one_cdecl32_call(body, call_idx);
         return;
+    }
+    if let Some(layout) =
+        direct_call_target_va(&body[call_idx]).and_then(|target| callee_layouts.get(&target))
+    {
+        if fold_one_recovered_layout_call(body, call_idx, layout) {
+            return;
+        }
     }
     if arch == CallConv::ArmHardFloat && fold_one_arm_hard_float_call(body, call_idx) {
         return;
@@ -2470,6 +2584,55 @@ mod tests {
                     bits: 2.0f32.to_bits() as u64,
                     width: 4,
                 },
+            ]
+        );
+        assert_eq!(dst, &Some(reg("s0")));
+    }
+
+    #[test]
+    fn recovered_callee_layout_interleaves_arm_core_and_vfp_arguments() {
+        let mut f = Function {
+            name: "mixed_hard_float_caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                assign("r1#1", 22),
+                Stmt::Assign {
+                    dst: reg("s0#1"),
+                    src: Expr::FloatConst {
+                        bits: 2.5f32.to_bits() as u64,
+                        width: 4,
+                    },
+                },
+                assign("r0", 7),
+                call_to("mixed_float"),
+                Stmt::Assign {
+                    dst: reg("s14#1"),
+                    src: Expr::Reg(reg("s0#2")),
+                },
+            ],
+        };
+        let layouts =
+            std::collections::HashMap::from([(0x2000, vec![reg("r0"), reg("s0"), reg("r1")])]);
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::ArmHardFloat,
+            &Default::default(),
+            &layouts,
+        );
+
+        let Stmt::Call { args, dst, .. } = &f.body[0] else {
+            panic!("mixed setup did not fold into the call: {:#?}", f.body);
+        };
+        assert_eq!(
+            args,
+            &[
+                Expr::Const(7),
+                Expr::FloatConst {
+                    bits: 2.5f32.to_bits() as u64,
+                    width: 4,
+                },
+                Expr::Const(22),
             ]
         );
         assert_eq!(dst, &Some(reg("s0")));

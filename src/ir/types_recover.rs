@@ -605,7 +605,21 @@ fn arm_single_vfp_slot(register: &VReg) -> Option<usize> {
 /// AAPCS allocation and rejects isolated callee-saved/scratch registers.
 fn arm_vfp_live_in_slots(lf: &LlirFunction) -> Vec<usize> {
     let mut first_touch: HashMap<usize, bool> = HashMap::new();
-    for block in &lf.blocks {
+    // `LlirFunction::blocks` is a CFG collection, not a guaranteed address or
+    // dominance order. A join/return block can therefore precede the entry
+    // block in the vector and make the function's final `s0` result definition
+    // look like the first touch of its incoming `s0` parameter. Always examine
+    // the entry block first; only it has an unconditional machine entry state.
+    let blocks = lf
+        .blocks
+        .iter()
+        .filter(|block| block.start_va == lf.entry_va)
+        .chain(
+            lf.blocks
+                .iter()
+                .filter(|block| block.start_va != lf.entry_va),
+        );
+    for block in blocks {
         for instruction in &block.instrs {
             let (definition, uses) = def_uses(&instruction.op);
             // `CallEffects.args` is an ABI-wide may-read set, not evidence
@@ -632,11 +646,14 @@ fn arm_vfp_live_in_slots(lf: &LlirFunction) -> Vec<usize> {
         .filter_map(|(slot, is_live_in)| is_live_in.then_some(slot))
         .collect();
     live.sort_unstable();
-    if live.iter().copied().eq(0..live.len()) {
-        live
-    } else {
-        Vec::new()
+    let mut prefix = Vec::new();
+    for slot in live {
+        if slot != prefix.len() {
+            break;
+        }
+        prefix.push(slot);
     }
+    prefix
 }
 
 /// Recover source order for a mixed ARM core/VFP signature from an entry spill
@@ -3481,6 +3498,42 @@ int never_returns(void) { for (;;) {} }
                 .all(|parameter| parameter.value.base != VReg::phys("s0")),
             "mixed core/VFP source ordering is not identifiable: {prototype:#?}"
         );
+    }
+
+    #[test]
+    fn arm_vfp_live_in_prefix_ignores_an_isolated_scratch_read() {
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1008,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Store {
+                            addr: MemOp::plain(Some(VReg::phys("sp")), None, 0, 0, 4),
+                            src: Value::Reg(VReg::phys("s0")),
+                        },
+                    },
+                    // An unsupported producer can leave only this later read
+                    // visible. It is scratch evidence, not a reason to discard
+                    // the proven contiguous parameter prefix beginning at s0.
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Intrinsic {
+                            name: "vadd.f32".into(),
+                            ins: vec![Value::Reg(VReg::phys("s14")), Value::Reg(VReg::phys("s0"))],
+                            outs: vec![(VReg::phys("s15"), crate::ir::types::Width::W32)],
+                            reads_mem: false,
+                            writes_mem: false,
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+
+        assert_eq!(arm_vfp_live_in_slots(&lf), vec![0]);
     }
 
     #[test]
