@@ -106,6 +106,44 @@ def test_batch_decompile_returns_every_requested_real_function():
     assert "batch_mul(" in recovered[exported["batch_mul"]]
 
 
+def test_real_indirect_call_output_has_a_concrete_call_site_prototype():
+    """An unknown call target still needs a concrete call-site prototype.
+
+    GCC 15 defaults to C23, where ``f()`` means zero parameters rather than an
+    unspecified parameter list.  The pinned GCC 11 lane diagnoses the same
+    semantic defect under ``-Wstrict-prototypes``.  This crosses the real
+    pipeline from the existing function-pointer fixture through native
+    decompilation and back through the compiler; a text-only assertion would
+    not prove that the emitted declarator is accepted as a real prototype.
+    """
+    source = (SRC / "08_indirect_dispatch.c").read_text()
+    binary = _compile_so(source, "indirect_call_c23")
+    apply_va = D.exported_functions(binary)["apply"]
+    decompiled = D.decompiled_c(binary, apply_va)
+    assert decompiled is not None
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "indirect_call.c"
+        output_path = Path(td) / "indirect_call.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu11",
+                "-Wstrict-prototypes",
+                "-Werror",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_compile_failure_of_decompilation_is_fail(monkeypatch, tmp_path):
     # If the decompiled C does not compile, the function FAILS (not skip).
     sig = {"name": "f", "va": 0, "params": ["int"], "ret": "int"}

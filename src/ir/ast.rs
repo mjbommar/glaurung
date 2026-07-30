@@ -3315,12 +3315,13 @@ fn cmpop_sym_c(op: CmpOp) -> &'static str {
 //     stack slots, temps, `ret`, flags) so nothing is undeclared,
 //   * lowering memory to `*(long *)(addr)` loads/stores and addresses to plain
 //     `long` arithmetic (no `&[...]`, no segment prefixes),
-//   * spelling calls as `callee(args)` (implicit-declaration, a warning only)
-//     or `((long (*)())(target))(args)` for indirect targets, and
+//   * spelling calls as `callee(args)` or a concrete per-call function-pointer
+//     prototype for indirect targets, and
 //   * turning constructs with no faithful C spelling — unmodelled instructions,
 //     pushes/pops, nops — into comments or elisions rather than invalid tokens.
-// Types are intentionally uniform `long` (ABI word width); real type recovery
-// is a separate, later effort. See `docs/analysis/decompiler/pipeline.md`.
+// Recovered types are used where the middle layer proves them; unresolved
+// values retain the conservative `long` ABI-word fallback. See
+// `docs/analysis/decompiler/pipeline.md`.
 
 /// Render `f` as parseable C for the DecBench harness (and any consumer that
 /// needs valid C rather than the register-level `render_c` view). See the
@@ -5755,10 +5756,11 @@ fn write_string_lit(value: &str, out: &mut String) {
     out.push('"');
 }
 
-/// Render a call: `callee(args)` for a resolved symbol (implicit declaration,
-/// a warning only), else `((long (*)())(target))(args)` so an indirect target
-/// through a `long`-typed value is a valid call rather than "called object is
-/// not a function".
+/// Render a call: `callee(args)` for a resolved symbol, else cast an indirect
+/// target to a concrete prototype derived from the call site's recovered value
+/// types. An empty `(*)()` parameter list is not a prototype in C11 and means
+/// zero parameters in C23, so it cannot truthfully or portably represent an
+/// unknown call with arguments.
 /// The name to call a PLT/IAT stub by: the function it forwards to.
 ///
 /// The address map records a stub as `foo@plt` because that is what it IS, and
@@ -5769,11 +5771,71 @@ fn callee_display_name(name: &str) -> &str {
     name.split_once('@').map_or(name, |(base, _)| base)
 }
 
-fn write_call_dec(target: &Expr, args: &[Expr], out: &mut String) {
+fn declared_reg_ctype(reg: &VReg) -> &'static str {
+    let VReg::Phys(name) = reg else {
+        return "long";
+    };
+    dec_ptr_arg_type(name)
+        .or_else(|| {
+            dec_ptr_width(name)
+                .map(|pointee_width| hint_to_ctype(TypeHint::Pointer { pointee_width }))
+        })
+        .or_else(|| dec_int_type(name).map(|(signed, width)| int_ctype(signed, width)))
+        .unwrap_or("long")
+}
+
+fn call_arg_ctype(arg: &Expr) -> &'static str {
+    match arg {
+        Expr::Reg(reg) => declared_reg_ctype(reg),
+        Expr::StringLit { .. } => "const char *",
+        Expr::StackAddr { .. } => "void *",
+        Expr::Deref { size, .. } => store_pointee_ctype(*size),
+        Expr::Cast { signed, width, .. } => int_ctype(*signed, *width),
+        Expr::Cmp { .. } => "int",
+        Expr::Const(value) if i32::try_from(*value).is_ok() => "int",
+        Expr::Un { src, .. } => call_arg_ctype(src),
+        Expr::Select { width, .. } => int_ctype(true, *width),
+        Expr::Const(_)
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
+        | Expr::Bin { .. }
+        | Expr::Unknown(_) => "long",
+    }
+}
+
+fn write_call_arg_dec(arg: &Expr, out: &mut String) {
+    // `write_reg_dec` casts pointer arguments to integer addresses for machine
+    // arithmetic. At a call boundary the recovered pointer declaration is the
+    // stronger fact, so pass the pointer itself to the matching prototype.
+    if let Expr::Reg(reg @ VReg::Phys(name)) = arg {
+        if dec_ptr_arg_type(name).is_some() {
+            write_reg_lvalue_dec(reg, out);
+            return;
+        }
+    }
+    write_expr_dec(arg, out);
+}
+
+fn write_call_dec(target: &Expr, args: &[Expr], dst: Option<&VReg>, out: &mut String) {
     match target {
         Expr::Named { name, .. } => out.push_str(&sanitize_c_ident(callee_display_name(name))),
         _ => {
-            out.push_str("((long (*)())(");
+            out.push_str("((");
+            out.push_str(dst.map_or("void", declared_reg_ctype));
+            out.push_str(" (*)(");
+            if args.is_empty() {
+                out.push_str("void");
+            } else {
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(call_arg_ctype(arg));
+                }
+            }
+            out.push_str("))(");
             write_expr_dec(target, out);
             out.push_str("))");
         }
@@ -5783,7 +5845,7 @@ fn write_call_dec(target: &Expr, args: &[Expr], out: &mut String) {
         if i > 0 {
             out.push_str(", ");
         }
-        write_expr_dec(a, out);
+        write_call_arg_dec(a, out);
     }
     out.push(')');
 }
@@ -5844,7 +5906,7 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             if let Some(VReg::Phys(n)) = dst {
                 let _ = write!(out, "{} = ", sanitize_c_ident(n));
             }
-            write_call_dec(target, args, out);
+            write_call_dec(target, args, dst.as_ref(), out);
             out.push_str(";\n");
         }
         Stmt::Return { value } => {
@@ -8935,6 +8997,11 @@ function f @ 0x1000 {
                     args: vec![Expr::Reg(VReg::phys("arg0"))],
                     dst: None,
                 },
+                Stmt::Call {
+                    target: Expr::Reg(VReg::phys("var0")),
+                    args: vec![],
+                    dst: None,
+                },
             ],
         };
         let text = dec_pipeline(&f);
@@ -8942,7 +9009,10 @@ function f @ 0x1000 {
         // Unknown/poison values are deliberately not propagated: keeping the
         // assignment rooted preserves the visible undefined-value boundary.
         assert!(
-            text.contains("var0 = __unknown(0);") && text.contains("((long (*)())(var0))(arg0);"),
+            text.contains("var0 = __unknown(0);")
+                && text.contains("((void (*)(long))(var0))(arg0);")
+                && text.contains("((void (*)(void))(var0))();")
+                && !text.contains("(*)()"),
             "indirect call:\n{}",
             text
         );
