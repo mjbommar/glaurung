@@ -308,6 +308,14 @@ def test_decompile_vas_batch_emits_named_json():
     assert got_vas <= set(vas)
 
 
+def test_requested_va_budget_counts_unique_targets_only() -> None:
+    """Address-scoped discovery must stop after the requested functions."""
+    from glaurung.cli.commands.decompile import _requested_function_budget
+
+    assert _requested_function_budget([0x1000, 0x2000, 0x1000]) == 2
+    assert _requested_function_budget([]) == 1
+
+
 @pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
 def test_decbench_output_parses_with_gcc():

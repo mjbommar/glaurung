@@ -257,6 +257,7 @@ class DecompileCommand(BaseCommand):
                     types=args.types,
                     style=style,
                     pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
+                    max_functions=_requested_function_budget(vas),
                 )
                 if as_json:
                     payload = [
@@ -388,3 +389,8 @@ def _parse_va_list(raw: str) -> list[int]:
     if not out:
         raise ValueError("--vas was empty")
     return out
+
+
+def _requested_function_budget(vas: list[int]) -> int:
+    """Bound address-scoped discovery to the unique requested entries."""
+    return max(len(set(vas)), 1)
