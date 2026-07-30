@@ -683,6 +683,38 @@ pub fn recover_prototype(
             }
         }
     }
+    // Ghidra and Kuna keep integer, floating-point, and aggregate output
+    // storage classes distinct.  Glaurung's source type lattice does not yet
+    // represent floating-point results, but the LLIR can still retain their
+    // architectural dataflow.  A live definition of one of those ABI result
+    // registers is positive evidence that the function is *not* void; preserve
+    // the source result as unknown instead of inventing an integer type.
+    let unsupported_ret_names = unsupported_return_reg_names(cc);
+    let has_unsupported_output_trial = lf.blocks.iter().enumerate().any(|(block_idx, block)| {
+        block.instrs.iter().enumerate().any(|(instr_idx, ins)| {
+            let Some(VReg::Phys(dst)) = def_uses(&ins.op).0 else {
+                return false;
+            };
+            if !unsupported_ret_names.contains(&dst.as_str())
+                || !crate::ir::value_number::def_reaches_return(
+                    lf,
+                    unsupported_ret_names,
+                    &va_to_idx,
+                    block_idx,
+                    instr_idx,
+                )
+            {
+                return false;
+            }
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
+            ssa.def_value(lf, addr).is_some_and(|value| {
+                output_trial_is_dedicated(lf, ssa, &value, &definitions, &non_return_live)
+            })
+        })
+    });
     // A function has one source-level result type even when control flow has
     // several return sites. Join the qualified facts across their exact SSA
     // definitions instead of selecting an arbitrary branch or discarding the
@@ -693,9 +725,52 @@ pub fn recover_prototype(
     // results. One dedicated trial is therefore sufficient to establish a
     // direct output even if unsupported instructions leave unrelated return-
     // register residue visible on another path.
-    let output_kind = match direct_values.is_empty() {
-        true => RecoveredOutputKind::Void,
-        false => RecoveredOutputKind::Direct,
+    let has_machine_return = lf
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .any(|instruction| matches!(instruction.op, Op::Return));
+    // ARM32 still lowers broad VFP/DSP instruction families through the
+    // footprint-free migration fallback.  Unlike the x86 path (where SIMD
+    // arithmetic used for outputs is footprinted above), absence of an ARM
+    // result trial in the presence of such an op is not trustworthy.
+    let has_opaque_semantics = matches!(cc, crate::ir::call_args::CallConv::Arm)
+        && lf
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .any(|instruction| {
+                matches!(
+                    &instruction.op,
+                    Op::Intrinsic {
+                        ins,
+                        outs,
+                        reads_mem: true,
+                        writes_mem: true,
+                        ..
+                    } if ins.is_empty() && outs.is_empty()
+                )
+            });
+    let output_kind = match (
+        has_machine_return,
+        direct_values.is_empty(),
+        has_unsupported_output_trial,
+        has_opaque_semantics,
+    ) {
+        // A tail-call wrapper, a source-level non-returning function, and an
+        // incomplete CFG all have no machine RET. None provides evidence for
+        // `void`; keep the source result unknown until call/prototype recovery
+        // can distinguish them.
+        (false, _, _, _) => RecoveredOutputKind::Unknown,
+        // Mixed integer/FP storage can be an aggregate result.  Until that
+        // source shape is representable, guessing either half is unsound.
+        (true, _, true, _) => RecoveredOutputKind::Unknown,
+        // A footprint-free intrinsic is a fact gap, not evidence that no
+        // result exists.  A dedicated modeled return trial can still prove a
+        // direct result; without one, fail closed rather than inventing void.
+        (true, true, false, true) => RecoveredOutputKind::Unknown,
+        (true, true, false, false) => RecoveredOutputKind::Void,
+        (true, false, false, _) => RecoveredOutputKind::Direct,
     };
     let result = match output_kind {
         RecoveredOutputKind::Direct => Some(RecoveredResult {
@@ -970,6 +1045,18 @@ fn return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static st
         CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         CallConv::Aarch64 => &["x0", "w0"],
         CallConv::Arm => &["r0"],
+    }
+}
+
+/// ABI result registers whose source types are not yet representable by the
+/// integer/pointer result lattice.
+fn unsupported_return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static str] {
+    use crate::ir::call_args::CallConv;
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 => &["xmm0", "ymm0", "zmm0"],
+        CallConv::Cdecl32 => &["st0", "xmm0"],
+        CallConv::Aarch64 => &["v0", "q0", "d0", "s0", "h0", "b0"],
+        CallConv::Arm => &["d0", "s0"],
     }
 }
 
@@ -2347,6 +2434,261 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn real_noreturn_and_tailcall_functions_do_not_masquerade_as_void() {
+        use object::{Object, ObjectSymbol};
+        use std::io::Write;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().expect("temporary no-return fixture directory");
+        let source = tmp.path().join("no_return.c");
+        let binary = tmp.path().join("no_return.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(
+                    br#"
+__attribute__((noinline)) int callee(int x) { return x + 1; }
+int tail_result(int x) { return callee(x); }
+int never_returns(void) { for (;;) {} }
+"#,
+                )
+            })
+            .expect("write real no-return fixture source");
+        let build = match Command::new("gcc")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch GCC: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile no-return fixture: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read no-return fixture");
+        let object = object::read::File::parse(data.as_slice()).expect("parse fixture ELF");
+        let entries: HashMap<String, u64> = object
+            .dynamic_symbols()
+            .filter_map(|symbol| Some((symbol.name().ok()?.to_owned(), symbol.address())))
+            .collect();
+        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+            &data,
+            &crate::analysis::cfg::Budgets::default(),
+        );
+
+        for (name, expected) in [
+            ("callee", RecoveredOutputKind::Direct),
+            ("tail_result", RecoveredOutputKind::Unknown),
+            ("never_returns", RecoveredOutputKind::Unknown),
+        ] {
+            let entry = entries[name];
+            let function = functions
+                .iter()
+                .find(|function| function.entry_point.value == entry)
+                .unwrap_or_else(|| panic!("discovered {name}"));
+            let lifted = crate::ir::lift_function::lift_function_from_bytes(
+                &data,
+                function,
+                crate::core::binary::Arch::X86_64,
+            )
+            .unwrap_or_else(|| panic!("lift {name}"));
+            let ssa = compute_ssa(&lifted);
+            let slots = crate::ir::value_number::live_in_arg_slots_llir(
+                &lifted,
+                crate::ir::call_args::CallConv::SysVAmd64,
+            );
+            let prototype = recover_prototype(
+                &lifted,
+                &ssa,
+                crate::ir::call_args::CallConv::SysVAmd64,
+                &slots,
+            );
+            assert_eq!(
+                prototype.output_kind(),
+                expected,
+                "source result for {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn opaque_machine_semantics_prevent_void_inference() {
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1004,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::opaque("unmodeled-result-op"),
+                    },
+                    LlirInstr {
+                        va: 0x1002,
+                        op: Op::Return,
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::Arm,
+            &HashSet::new(),
+        );
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Unknown);
+    }
+
+    #[test]
+    fn real_unmodeled_hard_float_result_stays_unknown_instead_of_void() {
+        use object::{Object, ObjectSymbol};
+        use std::io::Write;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().expect("temporary hard-float fixture directory");
+        let source = tmp.path().join("hard_float.c");
+        let binary = tmp.path().join("hard_float.elf");
+        std::fs::File::create(&source)
+            .and_then(|mut file| file.write_all(b"float square(float x) { return x * x; }\n"))
+            .expect("write real hard-float fixture source");
+        let build = match Command::new("arm-none-eabi-gcc")
+            .args([
+                "-mcpu=cortex-m4",
+                "-mthumb",
+                "-mfloat-abi=hard",
+                "-mfpu=fpv4-sp-d16",
+                "-nostdlib",
+                "-Wl,-Ttext=0x1000",
+                "-Wl,-e,square",
+                "-g",
+                "-O2",
+                "-o",
+            ])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch arm-none-eabi-gcc: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile hard-float fixture: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read hard-float fixture");
+        let object = object::read::File::parse(data.as_slice()).expect("parse hard-float ELF");
+        let entry = object
+            .symbols()
+            .find(|symbol| symbol.name().ok() == Some("square"))
+            .expect("square symbol")
+            .address();
+        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+            &data,
+            &crate::analysis::cfg::Budgets::default(),
+        );
+        let function = functions
+            .iter()
+            .find(|function| function.entry_point.value == entry)
+            .expect("discovered square");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::ARM,
+        )
+        .expect("lift square");
+        assert!(
+            lifted
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .any(|instruction| {
+                    matches!(instruction.op, Op::Unknown { .. } | Op::Intrinsic { .. })
+                }),
+            "fixture must exercise an unmodeled VFP result"
+        );
+        let ssa = compute_ssa(&lifted);
+        let slots = crate::ir::value_number::live_in_arg_slots_llir(
+            &lifted,
+            crate::ir::call_args::CallConv::Arm,
+        );
+        let prototype =
+            recover_prototype(&lifted, &ssa, crate::ir::call_args::CallConv::Arm, &slots);
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Unknown);
+    }
+
+    #[test]
+    fn real_x86_simd_float_result_stays_unknown_instead_of_void() {
+        use object::{Object, ObjectSymbol};
+        use std::io::Write;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().expect("temporary x86 float fixture directory");
+        let source = tmp.path().join("float_result.c");
+        let binary = tmp.path().join("float_result.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| file.write_all(b"float square(float x) { return x * x; }\n"))
+            .expect("write real x86 float fixture source");
+        let build = match Command::new("gcc")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch GCC: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile x86 float fixture: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read x86 float fixture");
+        let object = object::read::File::parse(data.as_slice()).expect("parse x86 float ELF");
+        let entry = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("square"))
+            .expect("square symbol")
+            .address();
+        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+            &data,
+            &crate::analysis::cfg::Budgets::default(),
+        );
+        let function = functions
+            .iter()
+            .find(|function| function.entry_point.value == entry)
+            .expect("discovered square");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift square");
+        let ssa = compute_ssa(&lifted);
+        let slots = crate::ir::value_number::live_in_arg_slots_llir(
+            &lifted,
+            crate::ir::call_args::CallConv::SysVAmd64,
+        );
+        let prototype = recover_prototype(
+            &lifted,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &slots,
+        );
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Unknown);
     }
 
     #[test]

@@ -1313,6 +1313,50 @@ fn scalar_move_ops(instr: &iced_x86::Instruction, width: u8, mnemonic: &str) -> 
     }
 }
 
+/// Lift a scalar SSE arithmetic instruction with its real register footprint.
+///
+/// The integer LLIR cannot yet express IEEE-754 arithmetic, so representing
+/// these as `Bin` would silently assign the wrong semantics.  A typed
+/// intrinsic still records the architectural destination and inputs, which is
+/// enough for SSA, liveness, and ABI output recovery to remain sound while the
+/// float value/type lattice is introduced.
+fn scalar_float_binary_ops(instr: &iced_x86::Instruction, width: Width, mnemonic: &str) -> Vec<Op> {
+    if instr.op_count() != 2 || instr.op_kind(0) != OpKind::Register {
+        return vec![Op::Unknown {
+            mnemonic: mnemonic.into(),
+        }];
+    }
+
+    let dst = VReg::phys(reg_name(instr.op_register(0)));
+    let mut ops = Vec::new();
+    let rhs = match instr.op_kind(1) {
+        OpKind::Register => Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+        OpKind::Memory => {
+            let tmp = VReg::Temp(12);
+            let mut addr = mem_op_of(instr);
+            addr.size = u8::try_from(width.bytes()).expect("scalar SSE width fits MemOp");
+            ops.push(Op::Load {
+                dst: tmp.clone(),
+                addr,
+            });
+            Value::Reg(tmp)
+        }
+        _ => {
+            return vec![Op::Unknown {
+                mnemonic: mnemonic.into(),
+            }];
+        }
+    };
+    ops.push(Op::Intrinsic {
+        name: mnemonic.into(),
+        ins: vec![Value::Reg(dst.clone()), rhs],
+        outs: vec![(dst, width)],
+        reads_mem: false,
+        writes_mem: false,
+    });
+    ops
+}
+
 fn adc_sbb_ops(instr: &iced_x86::Instruction, add: bool) -> Vec<Op> {
     let mnemonic = if add { "adc" } else { "sbb" };
     if instr.op_count() != 2 {
@@ -2305,6 +2349,14 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 scalar_move_ops(instr, 8, "movsd")
             }
         }
+        Mnemonic::Addss => scalar_float_binary_ops(instr, Width::W32, "addss"),
+        Mnemonic::Subss => scalar_float_binary_ops(instr, Width::W32, "subss"),
+        Mnemonic::Mulss => scalar_float_binary_ops(instr, Width::W32, "mulss"),
+        Mnemonic::Divss => scalar_float_binary_ops(instr, Width::W32, "divss"),
+        Mnemonic::Addsd => scalar_float_binary_ops(instr, Width::W64, "addsd"),
+        Mnemonic::Subsd => scalar_float_binary_ops(instr, Width::W64, "subsd"),
+        Mnemonic::Mulsd => scalar_float_binary_ops(instr, Width::W64, "mulsd"),
+        Mnemonic::Divsd => scalar_float_binary_ops(instr, Width::W64, "divsd"),
         Mnemonic::Cmp => {
             if instr.op_count() == 2 {
                 // Memory operands need to be loaded into a temp first so the
