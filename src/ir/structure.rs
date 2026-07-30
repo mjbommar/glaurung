@@ -1196,10 +1196,17 @@ fn detect_if_shape(
     }
 
     // --- if-then (no else) -------------------------------------------------
-    // `t` is the "body" arm: cond → t → join; and `e` is the join directly.
+    // One successor is the join directly; the other is an acyclic body whose
+    // non-terminating paths all reach that join. The body is often one block,
+    // but a comparison ladder inside a loop can contain several more branches.
+    // Requiring a one-block body strands those fallthrough blocks outside the
+    // loop and eventually renders them after the function return.
     for &(body, join) in &[(t, e), (e, t)] {
-        let body_single = cfg.preds[body] == vec![cond] && cfg.succs[body] == vec![join];
-        if body_single && cfg.preds[join].contains(&cond) {
+        let simple_body = cfg.succs[body] == vec![join];
+        let proven_complex_body =
+            !cfg.succs[join].is_empty() && every_path_reaches_join(body, join, cfg);
+        let body_rejoins = cfg.preds[body] == vec![cond] && (simple_body || proven_complex_body);
+        if body_rejoins && cfg.preds[join].contains(&cond) {
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
             let then_r = build(body, cfg, visited, Some(join));
@@ -1488,6 +1495,42 @@ fn every_path_reaches_join_or_terminates(start: usize, join: usize, cfg: &Cfg) -
     ) -> bool {
         if node == join || cfg.succs[node].is_empty() {
             return true;
+        }
+        if let Some(&known) = memo.get(&node) {
+            return known;
+        }
+        if !active.insert(node) {
+            return false;
+        }
+        let valid = cfg.succs[node]
+            .iter()
+            .copied()
+            .all(|succ| visit(succ, join, cfg, active, memo));
+        active.remove(&node);
+        memo.insert(node, valid);
+        valid
+    }
+
+    visit(start, join, cfg, &mut HashSet::new(), &mut HashMap::new())
+}
+
+/// True when every path from `start` reaches `join`, with no alternate terminal
+/// and no cycle before the join. This stronger predicate is required when one
+/// conditional successor is the join itself: accepting an unrelated terminal
+/// would misclassify short-circuit boolean graphs as one-armed conditionals.
+fn every_path_reaches_join(start: usize, join: usize, cfg: &Cfg) -> bool {
+    fn visit(
+        node: usize,
+        join: usize,
+        cfg: &Cfg,
+        active: &mut HashSet<usize>,
+        memo: &mut HashMap<usize, bool>,
+    ) -> bool {
+        if node == join {
+            return true;
+        }
+        if cfg.succs[node].is_empty() {
+            return false;
         }
         if let Some(&known) = memo.get(&node) {
             return known;
@@ -2221,6 +2264,64 @@ mod tests {
             !dbg.contains("Unstructured"),
             "ladder must be fully structured, got: {}",
             dbg
+        );
+    }
+
+    #[test]
+    fn comparison_ladder_inside_loop_keeps_complex_fallthrough_arm_in_body() {
+        use crate::ir::types::{Flag, VReg};
+
+        let branch = |target: u64| Op::CondJump {
+            cond: VReg::Flag(Flag::Z),
+            target,
+            inverted: false,
+        };
+        // GCC -O0 lowers a switch in a loop to a comparison ladder. At block 3
+        // the taken edge goes straight to the latch while the fallthrough edge
+        // continues through another conditional before reaching that latch:
+        //
+        //   entry -> header -> b2(case 3?) -> case3 -> latch -> header
+        //                       |                ^
+        //                       v                |
+        //                      b3(skip rest?) --+
+        //                       |
+        //                      b4(case 2?) -> case2 -> latch
+        //
+        // The complex fallthrough arm is part of the natural loop. Leaving it
+        // as a function-level leftover moves it after the return and drops the
+        // corresponding switch cases.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1100, vec![branch(0x1200)], vec![0x1200, 0x1800]), // header
+            (0x1200, vec![branch(0x1700)], vec![0x1300, 0x1700]),
+            (0x1300, vec![branch(0x1600)], vec![0x1400, 0x1600]),
+            (0x1400, vec![branch(0x1500)], vec![0x1600, 0x1500]),
+            (0x1500, vec![Op::Jump { target: 0x1600 }], vec![0x1600]),
+            (0x1600, vec![Op::Jump { target: 0x1100 }], vec![0x1100]), // latch
+            (0x1700, vec![Op::Jump { target: 0x1600 }], vec![0x1600]),
+            (0x1800, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let rendered = format!("{region:#?}");
+        assert!(
+            !rendered.contains("Unstructured"),
+            "loop ladder blocks escaped to a leftover region: {rendered}"
+        );
+        let Region::Seq(parts) = &region else {
+            panic!("expected entry, loop, and exit: {region:#?}");
+        };
+        let Some(Region::While { body, .. }) = parts
+            .iter()
+            .find(|part| matches!(part, Region::While { .. }))
+        else {
+            panic!("expected recovered loop: {region:#?}");
+        };
+        let loop_blocks: HashSet<usize> = body.blocks().into_iter().collect();
+        assert_eq!(
+            loop_blocks,
+            HashSet::from([2, 3, 4, 5, 6, 7]),
+            "every comparison and case block must remain in the loop body"
         );
     }
 
