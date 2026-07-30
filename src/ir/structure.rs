@@ -73,6 +73,10 @@ pub enum Region {
     /// shared post-dominator if one exists.
     Switch {
         dispatch: usize,
+        /// Normalized case labels attached to each distinct arm, parallel to
+        /// `arms`. Multiple table slots may target one block after compiler
+        /// case folding, so one arm can own several labels.
+        case_labels: Vec<Vec<i64>>,
         arms: Vec<Region>,
         join: Option<usize>,
     },
@@ -140,6 +144,7 @@ impl Region {
                     dispatch,
                     arms,
                     join,
+                    ..
                 } => {
                     out.push(*dispatch);
                     for a in arms {
@@ -163,6 +168,12 @@ impl Region {
 struct Cfg {
     /// Block index → list of successor block indices.
     succs: Vec<Vec<usize>>,
+    /// Block index → distinct successor position → jump-table labels.
+    ///
+    /// Graph algorithms need unique successor nodes, but switch recovery also
+    /// needs every raw table slot. Keeping both views prevents equal targets
+    /// from renumbering all later cases.
+    case_labels: Vec<Vec<Vec<i64>>>,
     /// Block index → list of predecessor block indices.
     preds: Vec<Vec<usize>>,
     /// Cached: true iff block `a` dominates block `b`.
@@ -206,6 +217,7 @@ impl Cfg {
             .map(|(i, b)| (b.start_va, i))
             .collect();
         let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut case_labels: Vec<Vec<Vec<i64>>> = vec![Vec::new(); n];
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
         for (i, b) in lf.blocks.iter().enumerate() {
             for s_va in &b.succs {
@@ -215,13 +227,24 @@ impl Cfg {
                 }
             }
         }
-        // Successor order is semantic for a jump table: entry N is source
-        // `case N`. Preserve the CFG edge insertion order while removing any
-        // duplicate target. Predecessor order carries no such meaning and may
-        // remain sorted for deterministic dataflow.
-        for successors in &mut succs {
-            let mut seen = HashSet::new();
-            successors.retain(|successor| seen.insert(*successor));
+        // Successor order is semantic for a jump table: raw entry N is source
+        // `case N`. Graph algorithms still need distinct successor nodes, so
+        // group the labels for repeated targets while retaining first-target
+        // order. This is the same two-view split used by Ghidra's address-table
+        // plus block-to-index map and angr's case-value-to-entry map.
+        for (block_index, successors) in succs.iter_mut().enumerate() {
+            let raw = std::mem::take(successors);
+            let mut target_positions: HashMap<usize, usize> = HashMap::new();
+            for (label, successor) in raw.into_iter().enumerate() {
+                if let Some(position) = target_positions.get(&successor).copied() {
+                    case_labels[block_index][position].push(label as i64);
+                } else {
+                    let position = successors.len();
+                    target_positions.insert(successor, position);
+                    successors.push(successor);
+                    case_labels[block_index].push(vec![label as i64]);
+                }
+            }
         }
         for predecessors in &mut preds {
             predecessors.sort_unstable();
@@ -276,6 +299,7 @@ impl Cfg {
         };
         Cfg {
             succs,
+            case_labels,
             preds,
             dom,
             ipostdom,
@@ -1460,6 +1484,7 @@ fn detect_switch_shape(
     enclosing_stop: Option<usize>,
 ) -> Option<(Region, Option<usize>)> {
     let arms = cfg.succs[dispatch].clone();
+    let case_labels = cfg.case_labels[dispatch].clone();
     if arms.len() < 3 {
         return None;
     }
@@ -1510,6 +1535,7 @@ fn detect_switch_shape(
     Some((
         Region::Switch {
             dispatch,
+            case_labels,
             arms: sub_arms,
             join: effective_join,
         },
@@ -1614,7 +1640,7 @@ fn innermost_natural_loop_containing(node: usize, cfg: &Cfg) -> Option<(usize, H
 mod tests {
     use super::*;
     use crate::ir::ssa::compute_ssa;
-    use crate::ir::types::{LlirBlock, LlirInstr, Op};
+    use crate::ir::types::{LlirBlock, LlirInstr, Op, VReg, Value};
 
     fn mk_cfg(spec: Vec<(u64, Vec<Op>, Vec<u64>)>) -> LlirFunction {
         let entry_va = spec.first().map(|(s, _, _)| *s).unwrap_or(0);
@@ -1640,6 +1666,52 @@ mod tests {
     fn recover_for(lf: &LlirFunction) -> Region {
         let ssa = compute_ssa(lf);
         recover(lf, &ssa)
+    }
+
+    #[test]
+    fn duplicate_jump_table_targets_keep_every_case_label() {
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![
+                    0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1300, 0x1600, 0x1700,
+                ],
+            ),
+            (0x1100, vec![Op::Return], vec![]),
+            (0x1200, vec![Op::Return], vec![]),
+            (0x1300, vec![Op::Return], vec![]),
+            (0x1400, vec![Op::Return], vec![]),
+            (0x1500, vec![Op::Return], vec![]),
+            (0x1600, vec![Op::Return], vec![]),
+            (0x1700, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let Region::Switch {
+            arms, case_labels, ..
+        } = region
+        else {
+            panic!("expected a switch, got {region:#?}");
+        };
+
+        assert_eq!(arms.len(), 7, "one body per distinct destination");
+        assert_eq!(
+            case_labels,
+            vec![
+                vec![0],
+                vec![1],
+                vec![2, 5],
+                vec![3],
+                vec![4],
+                vec![6],
+                vec![7],
+            ],
+            "the shared body must retain both table indices"
+        );
     }
 
     #[test]
@@ -2609,6 +2681,7 @@ mod tests {
                         dispatch,
                         arms,
                         join,
+                        ..
                     } => {
                         assert_eq!(*dispatch, 0);
                         assert_eq!(arms.len(), 3);
@@ -2757,6 +2830,7 @@ mod tests {
                 dispatch,
                 arms,
                 join,
+                ..
             } => {
                 assert_eq!(*dispatch, 0);
                 assert_eq!(arms.len(), 3);

@@ -4622,6 +4622,93 @@ mod gcc_dispatch_corpus_tests {
     }
 
     #[test]
+    fn clang_o2_real_dense_compute_keeps_labels_for_a_shared_case_body() {
+        let tmp = tempfile::tempdir().expect("temporary Clang dense-switch build directory");
+        let source = tmp.path().join("dense_compute.c");
+        let binary = tmp.path().join("dense_compute.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decompiler_fixtures/src/04_switch_shapes.c"
+                ))
+            })
+            .expect("write the real switch-shape fixture source");
+        let build = match Command::new("clang")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch Clang: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile dense_compute.c with Clang -O2: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read Clang output");
+        let object = object::read::File::parse(data.as_slice()).expect("parse Clang ELF");
+        let dense_va = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("dense_compute"))
+            .map(|symbol| symbol.address())
+            .expect("exported dense_compute symbol");
+        let (functions, _callgraph, _stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let function = functions
+            .iter()
+            .find(|function| {
+                function.name == "dense_compute" && function.entry_point.value == dense_va
+            })
+            .expect("discover dense_compute");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift the real dense_compute CFG");
+        let dispatch = lifted
+            .blocks
+            .iter()
+            .find(|block| block.succs.len() == 8)
+            .expect("eight-slot dense dispatch");
+        assert_eq!(
+            dispatch
+                .succs
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            7,
+            "Clang folds source cases 2 and 5 onto one multiply-by-two block"
+        );
+
+        let ssa = crate::ir::ssa::compute_ssa(&lifted);
+        let region = crate::ir::structure::recover_verified(&lifted, &ssa);
+        fn switch_labels(region: &crate::ir::structure::Region) -> Option<&[Vec<i64>]> {
+            use crate::ir::structure::Region;
+            match region {
+                Region::Switch { case_labels, .. } => Some(case_labels),
+                Region::Seq(parts) => parts.iter().find_map(switch_labels),
+                Region::IfThen { then_r, .. } => switch_labels(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    switch_labels(then_r).or_else(|| switch_labels(else_r))
+                }
+                Region::While { body, .. } | Region::DoWhile { body, .. } => switch_labels(body),
+                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+            }
+        }
+        let labels = switch_labels(&region).expect("recover the real dispatch as a switch");
+        assert!(
+            labels.iter().any(|labels| labels == &[2, 5]),
+            "both source labels must remain attached to the shared body: {labels:?}"
+        );
+    }
+
+    #[test]
     fn clang_o2_real_state_machine_carries_the_table_base_to_the_dispatch() {
         let tmp = tempfile::tempdir().expect("temporary Clang state-machine build directory");
         let source = tmp.path().join("statemachine.c");

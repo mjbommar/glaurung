@@ -325,6 +325,7 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             dispatch,
             arms,
             join,
+            ..
         } => {
             for a in arms {
                 if let Some(e) = structural_entry(a) {

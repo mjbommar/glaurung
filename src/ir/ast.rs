@@ -1679,6 +1679,7 @@ fn lower_region_inner(
         }
         Region::Switch {
             dispatch,
+            case_labels,
             arms,
             join,
         } => {
@@ -1714,20 +1715,24 @@ fn lower_region_inner(
                 let _ = &discriminant;
                 prefix.pop();
             }
-            let cases: Vec<(Option<i64>, Vec<Stmt>)> = arms
-                .iter()
-                .enumerate()
-                .map(|(i, arm)| {
-                    let mut body = lower_region(arm, lf, targets, lower_scalar_float);
-                    if let Some(join) = join {
-                        // The renderer supplies the case `break`; a jump to the
-                        // block emitted immediately after this switch is plain
-                        // structured fallthrough, not a C goto.
-                        strip_trailing_goto(&mut body, lf.blocks[*join].start_va);
-                    }
-                    (Some(i as i64), body)
-                })
-                .collect();
+            let mut cases: Vec<(Option<i64>, Vec<Stmt>)> = Vec::new();
+            for (arm_index, arm) in arms.iter().enumerate() {
+                let mut body = lower_region(arm, lf, targets, lower_scalar_float);
+                if let Some(join) = join {
+                    // The renderer supplies the case `break`; a jump to the
+                    // block emitted immediately after this switch is plain
+                    // structured fallthrough, not a C goto.
+                    strip_trailing_goto(&mut body, lf.blocks[*join].start_va);
+                }
+                let labels = case_labels
+                    .get(arm_index)
+                    .filter(|labels| !labels.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| vec![arm_index as i64]);
+                for label in labels {
+                    cases.push((Some(label), body.clone()));
+                }
+            }
             // The switched value, recovered from the dispatch's own target
             // expression: the table read indexes by exactly the value the
             // source switched on. The placeholder this replaces
@@ -7013,23 +7018,41 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             out.push_str(") {\n");
             // C forbids duplicate case labels and `case _:`; keep the first of
             // each numeric label and fold every unlabelled / duplicate arm plus
-            // the explicit default into a single `default:` block.
+            // the explicit default into a single `default:` block. Consecutive
+            // labels with the same body came from multiple jump-table entries
+            // targeting one case block, so emit stacked labels over that body
+            // exactly once, as Ghidra and angr do.
             let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
             let mut default_arms: Vec<&Vec<Stmt>> = Vec::new();
+            let mut case_groups: Vec<(Vec<i64>, &Vec<Stmt>)> = Vec::new();
             for (label, body) in cases {
                 match label {
                     Some(n) if seen.insert(*n) => {
-                        indent(out, level + 1);
-                        let _ = writeln!(out, "case {}:", n);
-                        for s in body {
-                            write_stmt_dec(s, out, level + 2);
-                        }
-                        if !case_body_has_terminal_transfer(body) {
-                            indent(out, level + 2);
-                            out.push_str("break;\n");
+                        if case_groups
+                            .last()
+                            .is_some_and(|(_, grouped_body)| *grouped_body == body)
+                        {
+                            if let Some((labels, _)) = case_groups.last_mut() {
+                                labels.push(*n);
+                            }
+                        } else {
+                            case_groups.push((vec![*n], body));
                         }
                     }
                     _ => default_arms.push(body),
+                }
+            }
+            for (labels, body) in case_groups {
+                for label in labels {
+                    indent(out, level + 1);
+                    let _ = writeln!(out, "case {}:", label);
+                }
+                for s in body {
+                    write_stmt_dec(s, out, level + 2);
+                }
+                if !case_body_has_terminal_transfer(body) {
+                    indent(out, level + 2);
+                    out.push_str("break;\n");
                 }
             }
             if let Some(def_body) = default {
@@ -7765,6 +7788,7 @@ function f @ 0x1000 {
         let region = Region::Seq(vec![
             Region::Switch {
                 dispatch: 0,
+                case_labels: vec![vec![0], vec![1]],
                 arms: vec![Region::Block(1), Region::Block(2)],
                 join: None,
             },
@@ -7810,6 +7834,7 @@ function f @ 0x1000 {
         let region = Region::Seq(vec![
             Region::Switch {
                 dispatch: 0,
+                case_labels: vec![vec![0], vec![1], vec![2]],
                 arms: vec![Region::Block(1), Region::Block(2), Region::Block(3)],
                 join: Some(4),
             },
@@ -10367,6 +10392,41 @@ function f @ 0x1000 {
             !text.contains("return 1;\n            break;")
                 && !text.contains("return 3;\n            break;"),
             "terminal returns must not be followed by dead breaks:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_switch_prints_shared_case_body_once_with_all_labels() {
+        let shared = vec![Stmt::Return {
+            value: Some(Expr::Const(20)),
+        }];
+        let f = Function {
+            name: "shared_switch".to_string(),
+            entry_va: 0x70,
+            body: vec![Stmt::Switch {
+                discriminant: Expr::Reg(VReg::phys("arg0")),
+                cases: vec![
+                    (Some(2), shared.clone()),
+                    (Some(5), shared),
+                    (
+                        Some(6),
+                        vec![Stmt::Return {
+                            value: Some(Expr::Const(60)),
+                        }],
+                    ),
+                ],
+                default: None,
+            }],
+        };
+
+        let text = render_decbench(&f);
+        assert!(text.contains("case 2:"), "{text}");
+        assert!(text.contains("case 5:"), "{text}");
+        assert_eq!(
+            text.matches("return 20;").count(),
+            1,
+            "equal destinations should render as stacked labels over one body:\n{text}"
         );
         assert_looks_like_c(&text);
     }
