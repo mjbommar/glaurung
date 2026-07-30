@@ -3012,6 +3012,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             }
             OpKind::Register => vec![Op::IndirectJump {
                 target: Value::Reg(VReg::phys(reg_name(instr.op_register(0)))),
+                index: None,
             }],
             OpKind::Memory => {
                 // The memory operand contains the destination pointer; its
@@ -3026,6 +3027,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     },
                     Op::IndirectJump {
                         target: Value::Reg(target),
+                        index: None,
                     },
                 ]
             }
@@ -4275,7 +4277,8 @@ mod tests {
         assert!(matches!(
             &ops[1].op,
             Op::IndirectJump {
-                target: Value::Reg(VReg::Temp(0))
+                target: Value::Reg(VReg::Temp(0)),
+                index: None,
             }
         ));
     }

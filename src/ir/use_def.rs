@@ -84,8 +84,11 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
         // other direction — as `Op::Call` did — let dead-code elimination believe
         // the dispatch produced a value, so the index computation was kept alive
         // only as the argument of a phantom call.
-        Op::IndirectJump { target } => {
+        Op::IndirectJump { target, index } => {
             reads_of_value(target, &mut uses);
+            if let Some(index) = index {
+                reads_of_value(index, &mut uses);
+            }
             None
         }
         Op::Un { dst, src, .. } => {

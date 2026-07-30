@@ -12,6 +12,7 @@ use crate::analysis::entry::va_to_code_file_offset;
 use crate::core::binary::Arch;
 use crate::core::function::Function;
 use crate::ir::types::*;
+use crate::ir::use_def::def_uses;
 use crate::ir::{lift_arm32, lift_arm64, lift_x86};
 
 /// Lift a byte window into LLIR using the appropriate per-arch lifter.
@@ -119,6 +120,7 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
     }
 
     recover_proven_direct_tail_calls(&mut blocks, func);
+    annotate_resolved_switch_indices(&mut blocks);
 
     if blocks.is_empty() {
         return None;
@@ -142,6 +144,244 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
         entry_va: func.entry_point.value,
         blocks,
     })
+}
+
+/// Attach the normalized index to CFG-proven multiway indirect jumps.
+///
+/// The x86 instruction itself only says `jmp rax`; the table index is an
+/// earlier value in the address expression.  In GCC -O0 the source register is
+/// reused for the table base before the load, so retaining a late `rax` use
+/// names the table target rather than the switch value.  Snapshotting the
+/// recovered index at its last safe point gives SSA and AST lowering an exact
+/// value identity, matching the normalized-variable artifact carried by
+/// Ghidra/Kuna jump-table recovery.
+fn annotate_resolved_switch_indices(blocks: &mut [LlirBlock]) {
+    let mut next_temp = blocks
+        .iter()
+        .flat_map(|block| block.instrs.iter())
+        .flat_map(|instruction| {
+            let (def, uses) = def_uses(&instruction.op);
+            def.into_iter().chain(uses)
+        })
+        .filter_map(|register| match register {
+            VReg::Temp(id) => Some(id),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+
+    for block in blocks {
+        // Only a CFG-proven dispatch receives this semantic annotation. An
+        // arbitrary computed jump with zero/one successor must stay opaque.
+        if block.succs.len() < 3 {
+            continue;
+        }
+        let Some(jump_index) = block
+            .instrs
+            .iter()
+            .rposition(|instruction| matches!(instruction.op, Op::IndirectJump { .. }))
+        else {
+            continue;
+        };
+        let Some((source, insert_at)) = switch_index_source_before(&block.instrs, jump_index)
+        else {
+            continue;
+        };
+        let snapshot = VReg::Temp(next_temp);
+        next_temp = next_temp.saturating_add(1);
+        let va = block
+            .instrs
+            .get(insert_at)
+            .map_or(block.start_va, |instruction| instruction.va);
+        block.instrs.insert(
+            insert_at,
+            LlirInstr {
+                va,
+                op: Op::Assign {
+                    dst: snapshot.clone(),
+                    src: source,
+                },
+            },
+        );
+        let adjusted_jump = jump_index + usize::from(insert_at <= jump_index);
+        if let Some(LlirInstr {
+            op: Op::IndirectJump { index, .. },
+            ..
+        }) = block.instrs.get_mut(adjusted_jump)
+        {
+            *index = Some(Value::Reg(snapshot));
+        }
+    }
+}
+
+/// Find the table index and the instruction position before which it must be
+/// snapshotted. Returns `None` unless a 4-byte table load has one concrete
+/// address component and one index component with total stride four.
+fn switch_index_source_before(
+    instructions: &[LlirInstr],
+    jump_index: usize,
+) -> Option<(Value, usize)> {
+    for load_index in (0..jump_index).rev() {
+        let Op::Load { addr, .. } = &instructions[load_index].op else {
+            continue;
+        };
+        if addr.size != 4 || addr.disp != 0 {
+            continue;
+        }
+        let mut components = Vec::with_capacity(2);
+        if let Some(base) = &addr.base {
+            components.push((base, 1u64));
+        }
+        if let Some(index) = &addr.index {
+            components.push((index, u64::from(addr.scale.max(1))));
+        }
+        let has_table_base = components.iter().any(|(register, address_scale)| {
+            *address_scale == 1
+                && resolves_to_address(instructions, register, load_index, 0).is_some()
+        });
+        if !has_table_base {
+            continue;
+        }
+        for (register, address_scale) in components {
+            if resolves_to_address(instructions, register, load_index, 0).is_some() {
+                continue;
+            }
+            if address_scale == 4 {
+                return Some((Value::Reg(register.clone()), load_index));
+            }
+            if address_scale == 1 {
+                if let Some(found) = scaled_index_source(instructions, register, load_index, 0) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn latest_definition(instructions: &[LlirInstr], register: &VReg, before: usize) -> Option<usize> {
+    (0..before)
+        .rev()
+        .find(|index| def_uses(&instructions[*index].op).0.as_ref() == Some(register))
+}
+
+fn resolves_to_address(
+    instructions: &[LlirInstr],
+    register: &VReg,
+    before: usize,
+    depth: usize,
+) -> Option<u64> {
+    if depth > 8 {
+        return None;
+    }
+    let definition = latest_definition(instructions, register, before)?;
+    match &instructions[definition].op {
+        Op::Assign {
+            src: Value::Addr(address),
+            ..
+        } => Some(*address),
+        Op::Assign {
+            src: Value::Reg(source),
+            ..
+        }
+        | Op::ZExt {
+            src: Value::Reg(source),
+            ..
+        }
+        | Op::SExt {
+            src: Value::Reg(source),
+            ..
+        } => resolves_to_address(instructions, source, definition, depth + 1),
+        _ => None,
+    }
+}
+
+fn resolves_to_zero(
+    instructions: &[LlirInstr],
+    value: &Value,
+    before: usize,
+    depth: usize,
+) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match value {
+        Value::Const(0) => true,
+        Value::Reg(register) => {
+            let Some(definition) = latest_definition(instructions, register, before) else {
+                return false;
+            };
+            match &instructions[definition].op {
+                Op::Assign { src, .. } => {
+                    resolves_to_zero(instructions, src, definition, depth + 1)
+                }
+                _ => false,
+            }
+        }
+        Value::Const(_) | Value::Addr(_) => false,
+    }
+}
+
+fn scaled_index_source(
+    instructions: &[LlirInstr],
+    register: &VReg,
+    before: usize,
+    depth: usize,
+) -> Option<(Value, usize)> {
+    if depth > 8 {
+        return None;
+    }
+    let definition = latest_definition(instructions, register, before)?;
+    match &instructions[definition].op {
+        Op::Assign {
+            src: Value::Reg(source),
+            ..
+        }
+        | Op::ZExt {
+            src: Value::Reg(source),
+            ..
+        }
+        | Op::SExt {
+            src: Value::Reg(source),
+            ..
+        } => scaled_index_source(instructions, source, definition, depth + 1),
+        Op::Bin {
+            op: BinOp::Mul,
+            lhs,
+            rhs,
+            ..
+        } => match (lhs, rhs) {
+            (source @ Value::Reg(_), Value::Const(4))
+            | (Value::Const(4), source @ Value::Reg(_)) => Some((source.clone(), definition)),
+            _ => None,
+        },
+        Op::Bin {
+            op: BinOp::Shl,
+            lhs: source @ Value::Reg(_),
+            rhs: Value::Const(2),
+            ..
+        } => Some((source.clone(), definition)),
+        Op::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+            ..
+        } => {
+            if resolves_to_zero(instructions, lhs, definition, depth + 1) {
+                if let Value::Reg(source) = rhs {
+                    return scaled_index_source(instructions, source, definition, depth + 1);
+                }
+            }
+            if resolves_to_zero(instructions, rhs, definition, depth + 1) {
+                if let Value::Reg(source) = lhs {
+                    return scaled_index_source(instructions, source, definition, depth + 1);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Materialize CFG-proven nonlocal direct jumps as LLIR tail calls.
@@ -197,6 +437,98 @@ mod tests {
     use super::*;
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use std::path::Path;
+
+    #[test]
+    fn resolved_gcc_switch_snapshots_the_index_before_table_base_clobber() {
+        let mut blocks = vec![LlirBlock {
+            start_va: 0x118a,
+            end_va: 0x11ad,
+            instrs: vec![
+                LlirInstr {
+                    va: 0x118c,
+                    op: Op::Assign {
+                        dst: VReg::Temp(0),
+                        src: Value::Const(0),
+                    },
+                },
+                LlirInstr {
+                    va: 0x118c,
+                    op: Op::Bin {
+                        dst: VReg::Temp(1),
+                        op: BinOp::Mul,
+                        lhs: Value::Reg(VReg::phys("rax")),
+                        rhs: Value::Const(4),
+                    },
+                },
+                LlirInstr {
+                    va: 0x118c,
+                    op: Op::Bin {
+                        dst: VReg::Temp(0),
+                        op: BinOp::Add,
+                        lhs: Value::Reg(VReg::Temp(0)),
+                        rhs: Value::Reg(VReg::Temp(1)),
+                    },
+                },
+                LlirInstr {
+                    va: 0x118c,
+                    op: Op::Assign {
+                        dst: VReg::phys("rdx"),
+                        src: Value::Reg(VReg::Temp(0)),
+                    },
+                },
+                LlirInstr {
+                    va: 0x1194,
+                    op: Op::Assign {
+                        dst: VReg::phys("rax"),
+                        src: Value::Addr(0x2020),
+                    },
+                },
+                LlirInstr {
+                    va: 0x119b,
+                    op: Op::Load {
+                        dst: VReg::Temp(0),
+                        addr: MemOp::plain(
+                            Some(VReg::phys("rdx")),
+                            Some(VReg::phys("rax")),
+                            1,
+                            0,
+                            4,
+                        ),
+                    },
+                },
+                LlirInstr {
+                    va: 0x11aa,
+                    op: Op::IndirectJump {
+                        target: Value::Reg(VReg::phys("rax")),
+                        index: None,
+                    },
+                },
+            ],
+            succs: (0..8).map(|index| 0x1200 + index * 0x10).collect(),
+        }];
+
+        annotate_resolved_switch_indices(&mut blocks);
+
+        let (snapshot, source) = blocks[0]
+            .instrs
+            .iter()
+            .find_map(|instruction| match &instruction.op {
+                Op::Assign {
+                    dst: snapshot @ VReg::Temp(id),
+                    src: source @ Value::Reg(VReg::Phys(name)),
+                } if *id > 1 && name == "rax" => Some((snapshot.clone(), source.clone())),
+                _ => None,
+            })
+            .expect("snapshot the normalized rax index before assigning the table base to rax");
+        assert_eq!(source, Value::Reg(VReg::phys("rax")));
+        assert!(matches!(
+            blocks[0].instrs.last().map(|instruction| &instruction.op),
+            Some(Op::IndirectJump {
+                index: Some(Value::Reg(index)),
+                ..
+            }) if index == &snapshot
+        ));
+    }
 
     #[test]
     fn proven_nonlocal_direct_jump_becomes_tail_call_before_ssa() {

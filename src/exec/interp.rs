@@ -324,7 +324,7 @@ impl<D: Domain> Machine<D> {
             // rather than falling through: control does NOT continue to the next
             // instruction, and pretending it does is how a jump modelled as a call
             // produced plausible, wrong execution.
-            Op::IndirectJump { target } => {
+            Op::IndirectJump { target, .. } => {
                 let val = self.read(target, Width::W64);
                 match self.dom.as_u64(&val) {
                     Some(a) => Flow::Jump(a),

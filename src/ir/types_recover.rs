@@ -2204,6 +2204,7 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                 }
                 | Op::IndirectJump {
                     target: Value::Reg(_),
+                    ..
                 } => {
                     if let Some((_, target)) = values.uses.first().and_then(Option::as_ref) {
                         tm.upsert(target.clone(), TypeHint::CodePointer);

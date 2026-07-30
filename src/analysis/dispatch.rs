@@ -62,6 +62,14 @@ enum Val {
     /// An absolute address materialised in the register: `lea rD,[rip+d]` or
     /// `mov rD, imm`.
     Addr(u64),
+    /// A guarded switch index multiplied by its table-entry stride.
+    ///
+    /// GCC -O0 commonly materialises this as a separate address component
+    /// (`lea rdx,[rax*4]`) before adding the table base in the load itself.
+    /// Keeping the bound attached to the value lets the later load recognize
+    /// the same expression without matching register names or instruction
+    /// positions.
+    ScaledIndex { bound: Option<u64>, scale: u64 },
     /// `(i32)*(table + idx*4)`, sign-extended — a table-relative offset.
     ///
     /// `bound` is the inclusive maximum of the register that INDEXED the table,
@@ -256,7 +264,7 @@ impl DispatchTracker {
             .iter()
             .filter_map(|(register, value)| match value {
                 Val::Addr(address) => Some((register.clone(), *address)),
-                Val::TableOffset { .. } | Val::TableTarget { .. } => None,
+                Val::ScaledIndex { .. } | Val::TableOffset { .. } | Val::TableTarget { .. } => None,
             })
             .collect()
     }
@@ -305,18 +313,52 @@ impl DispatchTracker {
             .flatten()
     }
 
-    /// A memory operand's base register, if it has one that is not `rip`.
-    fn mem_base(ins: &Instruction) -> Option<&str> {
-        ins.operands.iter().find_map(|op| {
-            op.displacement?;
-            let b = op.base.as_deref()?;
-            (b != "rip").then_some(b)
-        })
-    }
+    /// Recover `table + index*4` from the effective address of a table load.
+    ///
+    /// Both x86 encodings are accepted as value expressions:
+    ///
+    /// * clang: `[table_base + bounded_index*4]`
+    /// * GCC -O0: `[scaled_index + table_base]`, after
+    ///   `scaled_index = bounded_index*4`
+    ///
+    /// The displacement must be zero and the total index scale exactly four;
+    /// broader address arithmetic is not enough evidence for a relative-offset
+    /// jump table.
+    fn table_load_on_entry(&self, ins: &Instruction) -> Option<(u64, Option<u64>)> {
+        let memory = ins
+            .operands
+            .iter()
+            .find(|operand| operand.displacement.is_some())?;
+        if memory.displacement != Some(0) {
+            return None;
+        }
 
-    /// A memory operand's index register, if it has one.
-    fn mem_index(ins: &Instruction) -> Option<&str> {
-        ins.operands.iter().find_map(|op| op.index.as_deref())
+        let mut table = None;
+        let mut index_bound = None;
+        let mut components = Vec::with_capacity(2);
+        if let Some(base) = memory.base.as_deref().filter(|base| *base != "rip") {
+            components.push((base, 1u64));
+        }
+        if let Some(index) = memory.index.as_deref() {
+            components.push((index, u64::from(memory.scale.unwrap_or(1))));
+        }
+        for (register, address_scale) in components {
+            match self.get(register) {
+                Some(Val::Addr(address)) if address_scale == 1 && table.is_none() => {
+                    table = Some(address);
+                }
+                Some(Val::ScaledIndex { bound, scale })
+                    if address_scale.checked_mul(scale) == Some(4) && index_bound.is_none() =>
+                {
+                    index_bound = Some(bound);
+                }
+                _ if address_scale == 4 && index_bound.is_none() => {
+                    index_bound = Some(self.bounded.get(&canon(register)).copied());
+                }
+                _ => {}
+            }
+        }
+        Some((table?, index_bound?))
     }
 
     /// Record that a value is in `[0, max]`, for the register holding it and for
@@ -346,12 +388,9 @@ impl DispatchTracker {
     pub fn observe(&mut self, ins: &Instruction) {
         let m = ins.mnemonic.to_ascii_lowercase();
 
-        // Snapshot the index register's bound BEFORE any rule below mutates
-        // state. `movslq (%rcx,%rax,4),%rax` both reads `rax` as the index and
-        // writes it, so a capture that ran after the write-clears-bound rule
-        // always found nothing.
-        let index_bound_on_entry =
-            Self::mem_index(ins).and_then(|i| self.bounded.get(&canon(i)).copied());
+        // Snapshot the whole effective-address expression before the
+        // destination write kills an aliased index or table-base register.
+        let table_load_on_entry = self.table_load_on_entry(ins);
 
         // --- boundedness, tracked as a propagating fact -----------------------
         //
@@ -456,6 +495,32 @@ impl DispatchTracker {
             "lea" => {
                 if let Some(va) = Self::rip_target(ins) {
                     self.set(dest, Val::Addr(va));
+                } else if let Some(memory) = ins
+                    .operands
+                    .iter()
+                    .find(|operand| operand.displacement.is_some())
+                {
+                    let scale = u64::from(memory.scale.unwrap_or(1));
+                    let scaled_bound = memory
+                        .index
+                        .as_deref()
+                        .map(canon)
+                        .and_then(|index| self.bounded.get(&index).copied());
+                    if memory.base.is_none()
+                        && memory.displacement == Some(0)
+                        && memory.index.is_some()
+                        && scale > 1
+                    {
+                        self.set(
+                            dest,
+                            Val::ScaledIndex {
+                                bound: scaled_bound,
+                                scale,
+                            },
+                        );
+                    } else {
+                        self.clear(dest);
+                    }
                 } else {
                     self.clear(dest);
                 }
@@ -463,19 +528,10 @@ impl DispatchTracker {
             // A sign-extending load indexed off a tracked table base is the table
             // read. The index is deliberately not tracked: every entry is a
             // possible outcome, which is exactly the successor set we want.
-            "movslq" | "movsxd" | "movsx" => {
-                let base = Self::mem_base(ins).and_then(|b| self.get(b));
-                match base {
-                    Some(Val::Addr(t)) => self.set(
-                        dest,
-                        Val::TableOffset {
-                            table: t,
-                            bound: index_bound_on_entry,
-                        },
-                    ),
-                    _ => self.clear(dest),
-                }
-            }
+            "movslq" | "movsxd" | "movsx" => match table_load_on_entry {
+                Some((table, bound)) => self.set(dest, Val::TableOffset { table, bound }),
+                _ => self.clear(dest),
+            },
             // offset + base == target. Either operand order.
             "add" => {
                 let src = ins.operands.get(1).and_then(|o| o.register.as_deref());
@@ -497,7 +553,9 @@ impl DispatchTracker {
                 // immediate is kept as a candidate address so non-PIC tables,
                 // which name the table with a plain `mov`, still resolve.
                 let src = ins.operands.get(1);
-                if let Some(v) = src
+                if let Some((table, bound)) = table_load_on_entry {
+                    self.set(dest, Val::TableOffset { table, bound });
+                } else if let Some(v) = src
                     .and_then(|o| o.register.as_deref())
                     .and_then(|r| self.get(r))
                 {
@@ -621,6 +679,10 @@ mod tests {
     }
 
     fn mem_op(base: Option<&str>, disp: i64, index: Option<&str>) -> Operand {
+        mem_op_scale(base, disp, index, 4)
+    }
+
+    fn mem_op_scale(base: Option<&str>, disp: i64, index: Option<&str>, scale: u8) -> Operand {
         Operand {
             kind: OperandKind::Memory,
             size: 64,
@@ -630,7 +692,7 @@ mod tests {
             immediate: None,
             displacement: Some(disp),
             segment: None,
-            scale: Some(4),
+            scale: Some(scale),
             base: base.map(str::to_string),
             index: index.map(str::to_string),
         }
@@ -670,6 +732,85 @@ mod tests {
 
     fn tables() -> BTreeMap<u64, Vec<u64>> {
         BTreeMap::from([(0x2000, vec![0x112e, 0x113a, 0x1146, 0x1152])])
+    }
+
+    #[test]
+    fn the_real_gcc_o0_scaled_index_shape_resolves() {
+        let mut tracker = DispatchTracker::new();
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("rax".to_string(), 3)]),
+            slots: HashMap::new(),
+        }));
+        tracker.observe(&ins("mov", vec![reg_op("rax"), reg_read("rax")]));
+        tracker.observe(&ins(
+            "lea",
+            vec![reg_op("rdx"), mem_op_scale(None, 0, Some("rax"), 4)],
+        ));
+        tracker.observe(&ins(
+            "lea",
+            vec![reg_op("rax"), mem_op(Some("rip"), 0x2000, None)],
+        ));
+        tracker.observe(&ins(
+            "mov",
+            vec![reg_op("rax"), mem_op_scale(Some("rdx"), 0, Some("rax"), 1)],
+        ));
+        // The real `cdqe` has implicit operands, so observing it leaves the
+        // table-offset fact on the canonical rax/eax register.
+        tracker.observe(&ins("cdqe", Vec::new()));
+        tracker.observe(&ins(
+            "lea",
+            vec![reg_op("rdx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
+        tracker.observe(&ins("add", vec![reg_op("rax"), reg_op("rdx")]));
+
+        match tracker.resolve(&ins("jmp", vec![reg_read("rax")]), &tables()) {
+            Some(Resolution::Table { targets, .. }) => assert_eq!(targets.len(), 4),
+            other => panic!("the GCC -O0 scaled-index shape must resolve, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn iced_decoded_gcc_o0_scaled_index_shape_resolves() {
+        use crate::core::address::{Address, AddressKind};
+        use crate::core::binary::Endianness;
+        use crate::core::disassembler::{Architecture, Disassembler};
+        use crate::disasm::registry;
+
+        // GCC 11.4 -O0 `dense_compute`, from the first instruction after its
+        // range guard through the computed jump.
+        let bytes = [
+            0x89, 0xc0, 0x48, 0x8d, 0x14, 0x85, 0x00, 0x00, 0x00, 0x00, 0x48, 0x8d, 0x05, 0x85,
+            0x0e, 0x00, 0x00, 0x8b, 0x04, 0x02, 0x48, 0x98, 0x48, 0x8d, 0x15, 0x79, 0x0e, 0x00,
+            0x00, 0x48, 0x01, 0xd0, 0x3e, 0xff, 0xe0,
+        ];
+        let decoder =
+            registry::for_arch(Architecture::X86_64, Endianness::Little).expect("x86-64 decoder");
+        let mut tracker = DispatchTracker::new();
+        tracker.inherit_bound(Some(Bounds {
+            regs: HashMap::from([("rax".to_string(), 3)]),
+            slots: HashMap::new(),
+        }));
+        let mut offset = 0usize;
+        let mut jump = None;
+        while offset < bytes.len() {
+            let address =
+                Address::new(AddressKind::VA, 0x118a + offset as u64, 64, None, None).unwrap();
+            let instruction = decoder
+                .disassemble_instruction(&address, &bytes[offset..])
+                .expect("decode real GCC dispatch instruction");
+            offset += instruction.length as usize;
+            tracker.observe(&instruction);
+            if instruction.mnemonic == "jmp" {
+                jump = Some(instruction);
+                break;
+            }
+        }
+
+        let decoded_tables = BTreeMap::from([(0x2020, vec![0x112e, 0x113a, 0x1146, 0x1152])]);
+        match tracker.resolve(jump.as_ref().expect("computed jump"), &decoded_tables) {
+            Some(Resolution::Table { targets, .. }) => assert_eq!(targets.len(), 4),
+            other => panic!("the decoded GCC -O0 shape must resolve, got {other:?}"),
+        }
     }
 
     /// The real clang -O0 switch, verbatim from `switch_jt.clang.O0@0x1100`:

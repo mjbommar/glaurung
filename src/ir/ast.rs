@@ -758,7 +758,7 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         // An UNSTRUCTURED indirect jump — one the structurer did not turn into
         // a switch — still has to say so rather than vanish, or the function
         // silently reads as if control fell through.
-        Op::IndirectJump { target } => vec![Stmt::IndirectGoto {
+        Op::IndirectJump { target, .. } => vec![Stmt::IndirectGoto {
             target: lower_value(target),
         }],
         // A CondJump on its own (not absorbed into a structured If/While)
@@ -1688,6 +1688,16 @@ fn lower_region_inner(
             // arm with its case index (positional) and an implicit
             // break at the end.
             let mut prefix = lower_block(&lf.blocks[*dispatch], lower_scalar_float);
+            let explicit_index = lf.blocks[*dispatch]
+                .instrs
+                .iter()
+                .rev()
+                .find_map(|instruction| match &instruction.op {
+                    Op::IndirectJump {
+                        index: Some(index), ..
+                    } => Some(lower_value(index)),
+                    _ => None,
+                });
             // The switch statement IS the dispatch, so its terminator must not
             // also appear inside it. `IndirectGoto` belongs in this list for the
             // same reason `Goto` does; while the indirect jump lifted to a call
@@ -1725,7 +1735,7 @@ fn lower_region_inner(
             // variable, so the recovered switch read as `switch (var6)` with
             // `var6` defined nowhere. Falls back to the placeholder when the
             // index is not recognisable, rather than inventing one.
-            let discriminant = discriminant.or_else(|| {
+            let discriminant = explicit_index.or(discriminant).or_else(|| {
                 prefix.iter().rev().find_map(|st| match st {
                     Stmt::Assign { src, .. } => switch_index_of(src),
                     _ => None,
@@ -7737,6 +7747,7 @@ function f @ 0x1000 {
                 0x1000,
                 vec![Op::IndirectJump {
                     target: Value::Reg(VReg::phys("state")),
+                    index: None,
                 }],
                 vec![0x1010, 0x1020],
             ),
@@ -7787,6 +7798,7 @@ function f @ 0x1000 {
                 0x1000,
                 vec![Op::IndirectJump {
                     target: Value::Reg(VReg::phys("state")),
+                    index: None,
                 }],
                 vec![0x1010, 0x1020, 0x1030],
             ),

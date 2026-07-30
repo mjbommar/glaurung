@@ -234,9 +234,13 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
             tag_value(rhs, use_vers, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
-        // One use (the computed target), no def — mirrors `use_def::def_uses`.
-        Op::IndirectJump { target } => {
+        // Computed target plus an optional normalized switch index, no def —
+        // mirrors `use_def::def_uses`.
+        Op::IndirectJump { target, index } => {
             tag_value(target, use_vers, &mut ui, ctx);
+            if let Some(index) = index {
+                tag_value(index, use_vers, &mut ui, ctx);
+            }
         }
         Op::Un { dst, src, .. } => {
             tag_value(src, use_vers, &mut ui, ctx);

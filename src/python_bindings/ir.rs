@@ -171,9 +171,12 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("kind", "jump")?;
             d.set_item("target", *target)?;
         }
-        Op::IndirectJump { target } => {
+        Op::IndirectJump { target, index } => {
             d.set_item("kind", "indirect_jump")?;
             d.set_item("target", value_to_pyobj(py, target)?)?;
+            if let Some(index) = index {
+                d.set_item("index", value_to_pyobj(py, index)?)?;
+            }
         }
         Op::CondJump {
             cond,

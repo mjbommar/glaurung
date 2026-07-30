@@ -294,6 +294,11 @@ pub enum Op {
         /// The value jumped through, for the renderer to reconstruct the
         /// dispatch from.
         target: Value,
+        /// CFG-proven normalized jump-table index, snapshotted before the
+        /// dispatch arithmetic clobbers its source register. `None` for an
+        /// unresolved computed transfer or an indirect jump that is not a
+        /// switch.
+        index: Option<Value>,
     },
     /// Conditional jump on a previously-computed flag/bool value.
     /// `inverted = true` means "take the jump when `cond` is *not* set" —
@@ -642,7 +647,10 @@ impl fmt::Display for Op {
                 write!(f, "store[{} bytes] {:?} <- {}", addr.size, addr, src)
             }
             Op::Jump { target } => write!(f, "jmp 0x{:x}", target),
-            Op::IndirectJump { target } => write!(f, "jmp *{}", target),
+            Op::IndirectJump { target, index } => match index {
+                Some(index) => write!(f, "jmp *{} [switch index {}]", target, index),
+                None => write!(f, "jmp *{}", target),
+            },
             Op::CondJump {
                 cond,
                 target,
