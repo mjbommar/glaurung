@@ -545,7 +545,7 @@ impl RecoveredPrototype {
 fn abi_pointer_width(cc: crate::ir::call_args::CallConv) -> u8 {
     use crate::ir::call_args::CallConv;
     match cc {
-        CallConv::Cdecl32 | CallConv::Arm => 4,
+        CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => 4,
         CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => 8,
     }
 }
@@ -608,9 +608,16 @@ fn arm_vfp_live_in_slots(lf: &LlirFunction) -> Vec<usize> {
     for block in &lf.blocks {
         for instruction in &block.instrs {
             let (definition, uses) = def_uses(&instruction.op);
-            for used in uses {
-                if let Some(slot) = arm_single_vfp_slot(&used) {
-                    first_touch.entry(slot).or_insert(true);
+            // `CallEffects.args` is an ABI-wide may-read set, not evidence
+            // that all of those registers entered THIS function live. Real
+            // parameter evidence comes from machine instructions before the
+            // call; counting the conservative s0-s15 call footprint here
+            // inflated every hard-float caller to sixteen parameters.
+            if !matches!(instruction.op, Op::Call { .. }) {
+                for used in uses {
+                    if let Some(slot) = arm_single_vfp_slot(&used) {
+                        first_touch.entry(slot).or_insert(true);
+                    }
                 }
             }
             if let Some(definition) = definition {
@@ -1195,23 +1202,23 @@ pub fn recover_prototype_with_arm_vfp_args(
     // footprint-free migration fallback.  Unlike the x86 path (where SIMD
     // arithmetic used for outputs is footprinted above), absence of an ARM
     // result trial in the presence of such an op is not trustworthy.
-    let has_opaque_semantics = matches!(cc, crate::ir::call_args::CallConv::Arm)
-        && lf
-            .blocks
-            .iter()
-            .flat_map(|block| &block.instrs)
-            .any(|instruction| {
-                matches!(
-                    &instruction.op,
-                    Op::Intrinsic {
-                        ins,
-                        outs,
-                        reads_mem: true,
-                        writes_mem: true,
-                        ..
-                    } if ins.is_empty() && outs.is_empty()
-                )
-            });
+    let has_opaque_semantics = matches!(
+        cc,
+        crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat
+    ) && lf.blocks.iter().flat_map(|block| &block.instrs).any(
+        |instruction| {
+            matches!(
+                &instruction.op,
+                Op::Intrinsic {
+                    ins,
+                    outs,
+                    reads_mem: true,
+                    writes_mem: true,
+                    ..
+                } if ins.is_empty() && outs.is_empty()
+            )
+        },
+    );
     // An ABI-wide call annotation uses the general-purpose result register
     // when the callee prototype is unknown. That synthetic write is not
     // allowed to conflict with a semantically qualified float definition.
@@ -1277,7 +1284,12 @@ pub fn recover_prototype_with_arm_vfp_args(
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
-    if arm_vfp_args && matches!(cc, crate::ir::call_args::CallConv::Arm) {
+    if arm_vfp_args
+        && matches!(
+            cc,
+            crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat
+        )
+    {
         let vfp_parameters: Vec<RecoveredParameter> = arm_vfp_live_in_slots(lf)
             .into_iter()
             .map(|slot| RecoveredParameter {
@@ -1623,7 +1635,7 @@ fn return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static st
         CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
         CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         CallConv::Aarch64 => &["x0", "w0"],
-        CallConv::Arm => &["r0"],
+        CallConv::Arm | CallConv::ArmHardFloat => &["r0"],
     }
 }
 
@@ -1634,7 +1646,7 @@ fn float_return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'sta
         CallConv::SysVAmd64 | CallConv::Win64 => &["xmm0", "ymm0", "zmm0"],
         CallConv::Cdecl32 => &["st0", "xmm0"],
         CallConv::Aarch64 => &["v0", "q0", "d0", "s0", "h0", "b0"],
-        CallConv::Arm => &["d0", "s0"],
+        CallConv::Arm | CallConv::ArmHardFloat => &["d0", "s0"],
     }
 }
 

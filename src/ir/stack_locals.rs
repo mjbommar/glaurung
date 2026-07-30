@@ -125,7 +125,7 @@ fn stack_arg_layout(cc: CallConv) -> Option<(usize, i64, i64)> {
         CallConv::SysVAmd64 => Some((6, 16, 8)),
         CallConv::Cdecl32 => Some((0, 8, 4)),
         CallConv::Aarch64 => Some((8, 16, 8)),
-        CallConv::Win64 | CallConv::Arm => None,
+        CallConv::Win64 | CallConv::Arm | CallConv::ArmHardFloat => None,
     }
 }
 
@@ -451,7 +451,10 @@ fn is_stack_pointer_reg(reg: &VReg, ctx: StackContext) -> bool {
         ) if matches!(name.as_str(), "rsp" | "esp")
     ) || matches!(
         (ctx.cc, reg),
-        (Some(CallConv::Arm | CallConv::Aarch64), VReg::Phys(name)) if name == "sp"
+        (
+            Some(CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64),
+            VReg::Phys(name),
+        ) if name == "sp"
     ) || matches!(
         (ctx.cc, reg),
         (None, VReg::Phys(name)) if matches!(name.as_str(), "rsp" | "esp")
@@ -460,14 +463,14 @@ fn is_stack_pointer_reg(reg: &VReg, ctx: StackContext) -> bool {
 
 fn entry_stack_base(ctx: StackContext) -> &'static str {
     match ctx.cc {
-        Some(CallConv::Arm | CallConv::Aarch64) => "entry_sp",
+        Some(CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64) => "entry_sp",
         Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32) | None => "entry_rsp",
     }
 }
 
 fn stack_word_size(ctx: StackContext) -> i64 {
     match ctx.cc {
-        Some(CallConv::Arm | CallConv::Cdecl32) => 4,
+        Some(CallConv::Arm | CallConv::ArmHardFloat | CallConv::Cdecl32) => 4,
         Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64) | None => 8,
     }
 }
@@ -683,7 +686,7 @@ fn promote_address_taken_stack_object(
         disp: key_disp,
     };
     let pointer_size = match ctx.cc {
-        Some(CallConv::Cdecl32 | CallConv::Arm) => 4,
+        Some(CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat) => 4,
         Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64) | None => 8,
     };
     let entry = map.entry(key).or_insert_with(|| SlotVal {

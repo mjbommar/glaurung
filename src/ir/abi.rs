@@ -25,6 +25,7 @@
 
 use crate::ir::call_args::CallConv;
 use crate::ir::types::{CallEffects, LlirFunction, Op, VReg};
+use crate::ir::use_def::def_uses;
 
 /// The register a callee leaves its return value in.
 pub fn return_register(cc: CallConv) -> &'static str {
@@ -32,7 +33,7 @@ pub fn return_register(cc: CallConv) -> &'static str {
         CallConv::SysVAmd64 | CallConv::Win64 => "rax",
         CallConv::Cdecl32 => "rax",
         CallConv::Aarch64 => "x0",
-        CallConv::Arm => "r0",
+        CallConv::Arm | CallConv::ArmHardFloat => "r0",
     }
 }
 
@@ -47,6 +48,14 @@ pub fn argument_registers(cc: CallConv) -> &'static [&'static str] {
         CallConv::Cdecl32 => &[],
         CallConv::Aarch64 => &["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"],
         CallConv::Arm => &["r0", "r1", "r2", "r3"],
+        // Calls can mix the independent core and VFP allocation banks.  Keep
+        // every register candidate as a use until a recovered callee
+        // prototype can narrow the exact storage map; over-approximating uses
+        // is safe, while omitting s0-s15 deletes real argument setup.
+        CallConv::ArmHardFloat => &[
+            "r0", "r1", "r2", "r3", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9",
+            "s10", "s11", "s12", "s13", "s14", "s15",
+        ],
     }
 }
 
@@ -86,7 +95,7 @@ pub fn argument_slots(cc: CallConv) -> &'static [&'static [&'static str]] {
             &["x6", "w6"],
             &["x7", "w7"],
         ],
-        CallConv::Arm => &[&["r0"], &["r1"], &["r2"], &["r3"]],
+        CallConv::Arm | CallConv::ArmHardFloat => &[&["r0"], &["r1"], &["r2"], &["r3"]],
     }
 }
 
@@ -102,7 +111,7 @@ pub fn return_registers(cc: CallConv) -> &'static [&'static str] {
         // AAPCS hard-float returns scalar FP values in s0/d0. Keep those
         // storage alternatives visible to value numbering; prototype recovery
         // decides which class is the actual source result.
-        CallConv::Arm => &["r0", "s0", "d0"],
+        CallConv::Arm | CallConv::ArmHardFloat => &["r0", "s0", "d0"],
     }
 }
 
@@ -146,14 +155,67 @@ pub fn call_effects(cc: CallConv) -> CallEffects {
     }
 }
 
+/// Scalar VFP parameter registers in AAPCS-VFP allocation order.
+pub fn arm_hard_float_argument_slots() -> &'static [&'static [&'static str]] {
+    &[
+        &["s0"],
+        &["s1"],
+        &["s2"],
+        &["s3"],
+        &["s4"],
+        &["s5"],
+        &["s6"],
+        &["s7"],
+        &["s8"],
+        &["s9"],
+        &["s10"],
+        &["s11"],
+        &["s12"],
+        &["s13"],
+        &["s14"],
+        &["s15"],
+    ]
+}
+
+fn hard_float_result_consumed_after(block: &crate::ir::types::LlirBlock, call_idx: usize) -> VReg {
+    let mut candidates = vec!["s0", "d0", "r0"];
+    for instruction in &block.instrs[call_idx + 1..] {
+        let (definition, uses) = def_uses(&instruction.op);
+        for used in uses {
+            let VReg::Phys(name) = used else {
+                continue;
+            };
+            let base = ssa_base(&name);
+            if candidates.contains(&base) {
+                return VReg::phys(base);
+            }
+        }
+        if let Some(VReg::Phys(name)) = definition {
+            let base = ssa_base(&name);
+            candidates.retain(|candidate| *candidate != base);
+            if candidates.is_empty() {
+                break;
+            }
+        }
+        if matches!(instruction.op, Op::Call { .. } | Op::Return) {
+            break;
+        }
+    }
+    VReg::phys("r0")
+}
+
 /// Write the ABI's call effects onto every call in `lf`.
 ///
 /// Idempotent, and it never overwrites effects a caller already set (a summarised or
 /// known callee may describe itself more precisely than the convention's worst case).
 pub fn annotate_calls(lf: &mut LlirFunction, cc: CallConv) {
-    let effects = call_effects(cc);
     for block in &mut lf.blocks {
-        for instr in &mut block.instrs {
+        for index in 0..block.instrs.len() {
+            let mut effects = call_effects(cc);
+            if cc == CallConv::ArmHardFloat {
+                effects.result = Some(hard_float_result_consumed_after(block, index));
+            }
+            let instr = &mut block.instrs[index];
             if let Op::Call {
                 effects: slot @ None,
                 ..
@@ -207,6 +269,36 @@ mod tests {
                 other => panic!("expected a call, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn hard_float_call_uses_both_banks_and_selects_consumed_vfp_result() {
+        let mut lf = func(vec![
+            call_at(0x1000),
+            LlirInstr {
+                va: 0x1004,
+                op: Op::Intrinsic {
+                    name: "vmov.f32".into(),
+                    ins: vec![crate::ir::types::Value::Reg(VReg::phys("s0"))],
+                    outs: vec![(VReg::phys("s14"), crate::ir::types::Width::W32)],
+                    reads_mem: false,
+                    writes_mem: false,
+                },
+            },
+        ]);
+        annotate_calls(&mut lf, CallConv::ArmHardFloat);
+
+        let Op::Call {
+            effects: Some(effects),
+            ..
+        } = &lf.blocks[0].instrs[0].op
+        else {
+            panic!("hard-float call was not annotated: {lf:#?}");
+        };
+        assert_eq!(effects.result, Some(VReg::phys("s0")));
+        assert!(effects.args.contains(&VReg::phys("r0")));
+        assert!(effects.args.contains(&VReg::phys("s0")));
+        assert!(effects.args.contains(&VReg::phys("s15")));
     }
 
     #[test]

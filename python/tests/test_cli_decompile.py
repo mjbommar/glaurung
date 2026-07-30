@@ -305,6 +305,118 @@ def test_real_arm_hard_float_decompile_recompile_execute_round_trip(
 
 
 @pytest.mark.slow
+def test_real_arm_hard_float_call_round_trip(tmp_path: Path) -> None:
+    """Preserve VFP arguments and the VFP result across a real direct call."""
+    arm_compiler = shutil.which("arm-none-eabi-gcc")
+    host_compiler = shutil.which("gcc")
+    if arm_compiler is None:
+        pytest.skip("arm-none-eabi-gcc is unavailable")
+    if host_compiler is None:
+        pytest.skip("host gcc is unavailable")
+
+    source = tmp_path / "arm_hard_float_call.c"
+    binary = tmp_path / "arm_hard_float_call.elf"
+    source.write_text(
+        "__attribute__((noinline)) float arm_hf_callee(float x, float y) {\n"
+        "    return x * y + 1.0f;\n"
+        "}\n"
+        "__attribute__((noinline)) float arm_hf_caller(float x, float y) {\n"
+        "    return arm_hf_callee(x, y) + x;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            arm_compiler,
+            "-mcpu=cortex-m4",
+            "-mthumb",
+            "-mfloat-abi=hard",
+            "-mfpu=fpv4-sp-d16",
+            "-nostdlib",
+            "-Wl,-Ttext=0x1000",
+            "-Wl,-e,arm_hf_caller",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (function for function in functions if function.name == "arm_hf_caller"),
+        None,
+    )
+    assert target is not None, functions
+    generated = g.ir.decompile_at(
+        str(binary),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+
+    assert "float arm_hf_caller(float arg0, float arg1)" in generated, generated
+    assert "arm_hf_callee(arg0, arg1)" in generated, generated
+    assert "asm:" not in generated, generated
+
+    driver = tmp_path / "hard_float_call_driver.c"
+    driver.write_text(
+        "#include <stdio.h>\n"
+        "float arm_hf_caller(float, float);\n"
+        "int main(void) {\n"
+        '    printf("%.9g %.9g %.9g\\n", arm_hf_caller(2.0f, 3.0f),\n'
+        "           arm_hf_caller(-1.5f, 4.0f), arm_hf_caller(0.25f, -8.0f));\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    helper = tmp_path / "hard_float_call_helper.c"
+    helper.write_text(
+        "__attribute__((noinline)) float arm_hf_callee(float x, float y) {\n"
+        "    return x * y + 1.0f;\n"
+        "}\n"
+    )
+    rebuilt_source = tmp_path / "hard_float_call_rebuilt.c"
+    rebuilt_source.write_text(
+        "float arm_hf_callee(float, float);\n" + generated
+    )
+    reference = tmp_path / "hard_float_call_reference"
+    rebuilt = tmp_path / "hard_float_call_rebuilt"
+    compile_inputs = (
+        ([source, driver], reference),
+        ([rebuilt_source, helper, driver], rebuilt),
+    )
+    for inputs, output in compile_inputs:
+        compiled = subprocess.run(
+            [
+                host_compiler,
+                "-std=c11",
+                "-O2",
+                "-o",
+                str(output),
+                *(str(path) for path in inputs),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compiled.returncode == 0, f"{inputs}: {compiled.stderr}\n{generated}"
+
+    reference_run = subprocess.run(
+        [str(reference)], capture_output=True, text=True, check=False
+    )
+    rebuilt_run = subprocess.run(
+        [str(rebuilt)], capture_output=True, text=True, check=False
+    )
+    assert reference_run.returncode == 0, reference_run.stderr
+    assert rebuilt_run.returncode == 0, rebuilt_run.stderr
+    assert rebuilt_run.stdout == reference_run.stdout
+
+
+@pytest.mark.slow
 def test_real_arm_mixed_hard_float_spills_preserve_source_parameter_order(
     tmp_path: Path,
 ) -> None:

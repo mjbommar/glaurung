@@ -525,8 +525,11 @@ fn scalar_float_intrinsic(name: &str) -> Option<(ScalarFloatOperation, u8)> {
 /// Keep the entire scalar-float subset opaque until those producers are modeled.
 fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
     fn is_vfp_register(register: &VReg) -> bool {
-        matches!(register, VReg::Phys(name) if name.strip_prefix('s').is_some_and(|n| n.parse::<u8>().is_ok())
-            || name.strip_prefix('d').is_some_and(|n| n.parse::<u8>().is_ok()))
+        matches!(register, VReg::Phys(name) if {
+            let base = crate::ir::abi::ssa_base(name);
+            base.strip_prefix('s').is_some_and(|n| n.parse::<u8>().is_ok())
+                || base.strip_prefix('d').is_some_and(|n| n.parse::<u8>().is_ok())
+        })
     }
 
     let mut saw_scalar_float = false;
@@ -540,9 +543,21 @@ fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
             {
                 return false;
             }
-            // A call may define s0/d0, but without a recovered callee prototype
-            // its return class is not yet authoritative. Do not turn a later VFP
-            // consumer into apparently precise source arithmetic.
+            // AAPCS-VFP call annotation selects s0/d0 only when a subsequent
+            // machine instruction actually consumes that storage before it is
+            // overwritten.  That is a closed producer edge, unlike the legacy
+            // integer-only/default call effect, so scalar lowering may safely
+            // continue through it.
+            Op::Call {
+                effects:
+                    Some(crate::ir::types::CallEffects {
+                        result: Some(result),
+                        ..
+                    }),
+                ..
+            } if is_vfp_register(result) => saw_scalar_float = true,
+            // A call with no typed VFP result may still clobber the value a
+            // later scalar op appears to consume. Keep that region opaque.
             Op::Call { .. } => return false,
             // Scalar VFP memory traffic is represented by ordinary typed
             // Load/Store nodes. Those operations close dataflow rather than
@@ -10908,5 +10923,41 @@ function f @ 0x1000 {
             rendered.contains("__attribute__((optimize(\"O1\"))) long generated_parser(void)"),
             "the GCC 15 RTL guard was not attached to the exceptional function:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn versioned_hard_float_call_result_closes_scalar_dataflow() {
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1008,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Call {
+                            target: CallTarget::Direct(0x2000),
+                            effects: Some(crate::ir::types::CallEffects {
+                                result: Some(VReg::phys("s0#1")),
+                                args: vec![VReg::phys("s0"), VReg::phys("s1")],
+                            }),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Intrinsic {
+                            name: "vmov.f32".into(),
+                            ins: vec![Value::Reg(VReg::phys("s0#1"))],
+                            outs: vec![(VReg::phys("s14#1"), crate::ir::types::Width::W32)],
+                            reads_mem: false,
+                            writes_mem: false,
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+
+        assert!(super::scalar_float_semantics_are_closed(&lf));
     }
 }

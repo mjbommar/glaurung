@@ -1184,6 +1184,43 @@ mod tests {
             ),
             "lifted VFP move: {lifted:#?}"
         );
+
+        // `vmov.f32 s14, s0` immediately consumes a hard-float call result in
+        // the real caller fixture.  Capstone assigns a different register
+        // encoding here than in the return move above; both must retain the
+        // same two-operand data-flow shape.
+        let consumed = lift_bytes(&[0xb0, 0xee, 0x40, 0x7a], 0x104a, true);
+        assert!(
+            matches!(
+                consumed.as_slice(),
+                [LlirInstr {
+                    op: Op::Intrinsic { name, ins, outs, .. },
+                    ..
+                }] if name == "vmov.f32"
+                    && ins == &[Value::Reg(VReg::phys("s0"))]
+                    && outs == &[(VReg::phys("s14"), Width::W32)]
+            ),
+            "lifted call-result move: {consumed:#?}"
+        );
+
+        // The next real instruction combines that result with the caller's
+        // saved input.  Keep this exact binary spelling covered as well.
+        let added = lift_bytes(&[0x77, 0xee, 0x27, 0x7a], 0x1052, true);
+        assert!(
+            matches!(
+                added.as_slice(),
+                [LlirInstr {
+                    op: Op::Intrinsic { name, ins, outs, .. },
+                    ..
+                }] if name == "vadd.f32"
+                    && ins == &[
+                        Value::Reg(VReg::phys("s14")),
+                        Value::Reg(VReg::phys("s15")),
+                    ]
+                    && outs == &[(VReg::phys("s15"), Width::W32)]
+            ),
+            "lifted post-call addition: {added:#?}"
+        );
     }
 
     #[test]

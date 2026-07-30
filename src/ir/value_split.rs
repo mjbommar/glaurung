@@ -57,7 +57,7 @@ fn arg_slot_tables(cc: CallConv) -> &'static [&'static [&'static str]] {
             &["x6", "w6"],
             &["x7", "w7"],
         ],
-        CallConv::Arm => &[&["r0"], &["r1"], &["r2"], &["r3"]],
+        CallConv::Arm | CallConv::ArmHardFloat => &[&["r0"], &["r1"], &["r2"], &["r3"]],
     }
 }
 

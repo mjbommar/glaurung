@@ -488,6 +488,9 @@ fn detect_arch_and_call_conv(
 
     let cc = match (arch, is_pe) {
         (BArch::AArch64, _) => crate::ir::call_args::CallConv::Aarch64,
+        (BArch::ARM, _) if arm_uses_vfp_arguments(data) => {
+            crate::ir::call_args::CallConv::ArmHardFloat
+        }
         (BArch::ARM, _) => crate::ir::call_args::CallConv::Arm,
         (BArch::X86, _) => crate::ir::call_args::CallConv::Cdecl32,
         (BArch::X86_64, true) => crate::ir::call_args::CallConv::Win64,
@@ -971,7 +974,9 @@ fn remap_type_map_impl(
             &["x6", "w6"],
             &["x7", "w7"],
         ],
-        crate::ir::call_args::CallConv::Arm => &[&["r0"], &["r1"], &["r2"], &["r3"]],
+        crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat => {
+            &[&["r0"], &["r1"], &["r2"], &["r3"]]
+        }
     };
     for (slot, names) in arg_slots.iter().enumerate() {
         // Only alias a slot's registers to `argN` when it is a genuine live-in
@@ -993,7 +998,9 @@ fn remap_type_map_impl(
         }
         crate::ir::call_args::CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         crate::ir::call_args::CallConv::Aarch64 => &["x0", "w0"],
-        crate::ir::call_args::CallConv::Arm => &["r0", "s0", "d0"],
+        crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat => {
+            &["r0", "s0", "d0"]
+        }
     };
     for n in ret_aliases {
         alias

@@ -36,8 +36,11 @@ pub enum CallConv {
     /// 32-bit x86 cdecl: stack arguments, EAX return value.
     Cdecl32,
     Aarch64,
-    /// ARM32 AAPCS (r0-r3 args, r0 return).
+    /// ARM32 base/soft-float AAPCS (r0-r3 args, r0 return).
     Arm,
+    /// ARM32 AAPCS-VFP. Integer/pointer values use r0-r3 while scalar
+    /// floating-point values use s0-s15 and return through s0/d0.
+    ArmHardFloat,
 }
 
 /// Argument slots come from [`crate::ir::abi`], which owns them. They were
@@ -517,33 +520,73 @@ fn return_reg(arch: CallConv) -> &'static str {
 /// overwrites it? Nested bodies are treated as opaque reads (conservative): if a
 /// branch might read it, the result is consumed.
 fn return_value_is_read(body: &[Stmt], call_idx: usize, ret: &str) -> bool {
+    return_value_read_before_write(body, call_idx, ret).unwrap_or(true)
+}
+
+/// Whether `ret` is explicitly read or overwritten after a call. `None`
+/// means the structured body ended without either event.
+fn return_value_read_before_write(body: &[Stmt], call_idx: usize, ret: &str) -> Option<bool> {
     for s in &body[call_idx + 1..] {
         let mut reads = false;
         let mut writes = false;
         walk_stmt_regs(s, ret, &mut reads, &mut writes);
         if reads {
-            return true;
+            return Some(true);
         }
         if writes {
-            return false;
+            return Some(false);
         }
     }
-    // Fell off the end of this block: control continues where this walk cannot see.
-    true
+    None
+}
+
+fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
+    let register_matches =
+        |register: &VReg| matches!(register, VReg::Phys(name) if ssa_base(name) == storage);
+    match expr {
+        Expr::Reg(register) => register_matches(register),
+        Expr::StackAddr { object, .. } => register_matches(object),
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            base.as_ref().is_some_and(register_matches)
+                || index.as_ref().is_some_and(register_matches)
+        }
+        Expr::Deref { addr, .. } => expr_reads_storage(addr, storage),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_reads_storage(lhs, storage) || expr_reads_storage(rhs, storage)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expr_reads_storage(cond, storage)
+                || expr_reads_storage(if_true, storage)
+                || expr_reads_storage(if_false, storage)
+        }
+        Expr::Un { src, .. } => expr_reads_storage(src, storage),
+        Expr::Cast { expr, .. } => expr_reads_storage(expr, storage),
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => false,
+    }
 }
 
 /// Note reads and writes of `name` in `s`. A statement with a nested body reports a
 /// read if the name appears anywhere inside it, so a conditional consumer counts.
 fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
     let mut expr_reads = |e: &Expr| {
-        if reads_reg_in_expr(e, &VReg::phys(name)) {
+        if expr_reads_storage(e, name) {
             *reads = true;
         }
     };
     match s {
         Stmt::Assign { dst, src } => {
             expr_reads(src);
-            if matches!(dst, VReg::Phys(n) if n == name) {
+            if matches!(dst, VReg::Phys(n) if ssa_base(n) == name) {
                 *writes = true;
             }
         }
@@ -559,7 +602,7 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
                 expr_reads(a);
             }
             // A later call clobbers the register whether or not it took the value.
-            if dst.is_none() || matches!(dst, Some(VReg::Phys(n)) if n == name) {
+            if dst.is_none() || matches!(dst, Some(VReg::Phys(n)) if ssa_base(n) == name) {
                 *writes = true;
             }
         }
@@ -570,7 +613,7 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
         }
         Stmt::Push { value } => expr_reads(value),
         Stmt::Pop { target } => {
-            if matches!(target, VReg::Phys(n) if n == name) {
+            if matches!(target, VReg::Phys(n) if ssa_base(n) == name) {
                 *writes = true;
             }
         }
@@ -657,16 +700,28 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
 /// drop, while a missing one makes the reader take a stale value.
 fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
     let ret = return_reg(arch);
-    let consumed: Vec<bool> = (0..body.len())
+    let consumed: Vec<Option<&'static str>> = (0..body.len())
         .map(|i| {
-            matches!(&body[i], Stmt::Call { dst: None, .. }) && return_value_is_read(body, i, ret)
+            if !matches!(&body[i], Stmt::Call { dst: None, .. }) {
+                return None;
+            }
+            if arch == CallConv::ArmHardFloat {
+                for candidate in ["s0", "d0", "r0"] {
+                    if return_value_read_before_write(body, i, candidate) == Some(true) {
+                        return Some(candidate);
+                    }
+                }
+            }
+            return_value_is_read(body, i, ret).then_some(ret)
         })
         .collect();
     for (i, s) in body.iter_mut().enumerate() {
         match s {
             Stmt::Call { dst, .. } => {
-                if dst.is_none() && consumed[i] {
-                    *dst = Some(VReg::phys(ret));
+                if dst.is_none() {
+                    if let Some(result) = consumed[i] {
+                        *dst = Some(VReg::phys(result));
+                    }
                 }
             }
             Stmt::If {
@@ -739,6 +794,92 @@ fn fold_body(body: &mut Vec<Stmt>, arch: CallConv, param_slots: &std::collection
     }
 }
 
+fn arm_hard_float_slot_of(name: &str) -> Option<usize> {
+    let base = ssa_base(name);
+    crate::ir::abi::arm_hard_float_argument_slots()
+        .iter()
+        .position(|aliases| aliases.contains(&base))
+}
+
+/// Fold a proven pure-VFP call setup.
+///
+/// AAPCS-VFP has two independent allocation banks, so flattening r0-r3 and
+/// s0-s15 into one invented order would corrupt mixed signatures. This helper
+/// handles the unambiguous case: a contiguous s0..sN setup with no core-bank
+/// argument write in the same setup window. Mixed calls remain on the existing
+/// core-bank path until a recovered callee prototype supplies source order.
+fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize) -> bool {
+    let slots = crate::ir::abi::arm_hard_float_argument_slots();
+    let mut found: Vec<Option<(usize, Expr)>> = vec![None; slots.len()];
+    let mut saw_vfp = false;
+    let mut saw_core = false;
+    let mut index = call_idx;
+
+    while index > 0 {
+        index -= 1;
+        match &body[index] {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src,
+            } => {
+                if let Some(slot) = arm_hard_float_slot_of(name) {
+                    saw_vfp = true;
+                    if found[slot].is_none() {
+                        found[slot] = Some((index, src.clone()));
+                    }
+                    continue;
+                }
+                if crate::ir::abi::argument_slot_of(CallConv::Arm, name).is_some() {
+                    saw_core = true;
+                }
+                if saw_vfp {
+                    break;
+                }
+            }
+            Stmt::Nop | Stmt::Comment(_) => {}
+            _ => break,
+        }
+    }
+
+    if !saw_vfp || saw_core {
+        return false;
+    }
+    let Some(last) = found.iter().rposition(Option::is_some) else {
+        return false;
+    };
+    if found[..=last].iter().any(Option::is_none) {
+        return false;
+    }
+
+    let args = found[..=last]
+        .iter()
+        .map(|slot| {
+            slot.as_ref()
+                .expect("checked contiguous VFP prefix")
+                .1
+                .clone()
+        })
+        .collect();
+    if let Stmt::Call {
+        args: call_args, ..
+    } = &mut body[call_idx]
+    {
+        *call_args = args;
+    } else {
+        return false;
+    }
+
+    let mut used: Vec<usize> = found[..=last]
+        .iter()
+        .map(|slot| slot.as_ref().expect("checked contiguous VFP prefix").0)
+        .collect();
+    used.sort_unstable_by(|left, right| right.cmp(left));
+    for statement in used {
+        body.remove(statement);
+    }
+    true
+}
+
 fn fold_one_call(
     body: &mut Vec<Stmt>,
     call_idx: usize,
@@ -747,6 +888,9 @@ fn fold_one_call(
 ) {
     if arch == CallConv::Cdecl32 {
         fold_one_cdecl32_call(body, call_idx);
+        return;
+    }
+    if arch == CallConv::ArmHardFloat && fold_one_arm_hard_float_call(body, call_idx) {
         return;
     }
     // A missing leading slot may be forwarded from this function's entry only
@@ -2276,6 +2420,59 @@ mod tests {
             dst: None,
             call_spec: None,
         }
+    }
+
+    #[test]
+    fn arm_hard_float_call_folds_vfp_arguments_and_consumed_result() {
+        let mut f = Function {
+            name: "hard_float_caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("s1#1"),
+                    src: Expr::FloatConst {
+                        bits: 2.0f32.to_bits() as u64,
+                        width: 4,
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("s0"),
+                    src: Expr::FloatConst {
+                        bits: 1.0f32.to_bits() as u64,
+                        width: 4,
+                    },
+                },
+                call_to("float_pair"),
+                Stmt::Assign {
+                    dst: reg("s14#1"),
+                    src: Expr::Reg(reg("s0#1")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("s14#1"))),
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::ArmHardFloat);
+
+        let Stmt::Call { args, dst, .. } = &f.body[0] else {
+            panic!("VFP setup did not fold into the call: {:#?}", f.body);
+        };
+        assert_eq!(args.len(), 2, "VFP argument prefix: {:#?}", f.body);
+        assert_eq!(
+            args,
+            &[
+                Expr::FloatConst {
+                    bits: 1.0f32.to_bits() as u64,
+                    width: 4,
+                },
+                Expr::FloatConst {
+                    bits: 2.0f32.to_bits() as u64,
+                    width: 4,
+                },
+            ]
+        );
+        assert_eq!(dst, &Some(reg("s0")));
     }
 
     fn dst_of(s: &Stmt) -> &Option<VReg> {
