@@ -1719,6 +1719,15 @@ fn lower_region_inner(
             // it was neither, so the dispatch survived as a phantom call
             // statement *within* the recovered switch.
             let mut discriminant = None;
+            if let Some(position) = prefix
+                .iter()
+                .rposition(|stmt| matches!(stmt, Stmt::IndirectGoto { .. }))
+            {
+                if let Stmt::IndirectGoto { target } = &prefix[position] {
+                    discriminant = switch_index_of(target);
+                }
+                prefix.remove(position);
+            }
             while matches!(
                 prefix.last(),
                 Some(Stmt::Goto { .. }) | Some(Stmt::If { .. }) | Some(Stmt::IndirectGoto { .. })
@@ -7839,6 +7848,59 @@ function f @ 0x1000 {
         assert!(
             latch,
             "the raw case goto must land on the emitted latch body: {:#?}",
+            lowered.body
+        );
+    }
+
+    #[test]
+    fn switch_lowering_removes_dispatch_before_trailing_phi_copies() {
+        // SSA inserts edge copies after the machine terminator in the dispatch
+        // block. The indirect transfer still belongs to the Switch region even
+        // when it is no longer the final lowered statement; leaving it in front
+        // makes reachability pruning delete the entire structured switch.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![
+                    Op::IndirectJump {
+                        target: Value::Reg(VReg::phys("target")),
+                        index: Some(Value::Reg(VReg::phys("index"))),
+                    },
+                    Op::Assign {
+                        dst: VReg::phys("phi_copy"),
+                        src: Value::Const(7),
+                    },
+                ],
+                vec![0x1010, 0x1020],
+            ),
+            (0x1010, vec![Op::Return], vec![]),
+            (0x1020, vec![Op::Return], vec![]),
+        ]);
+        let region = Region::Switch {
+            guard: None,
+            dispatch: 0,
+            case_labels: vec![vec![0], vec![1]],
+            arms: vec![Region::Block(1), Region::Block(2)],
+            formal_default: None,
+            join: None,
+        };
+
+        let lowered = lower(&lf, &region, "switch_phi_copies");
+
+        assert!(
+            lowered
+                .body
+                .iter()
+                .any(|stmt| matches!(stmt, Stmt::Switch { .. })),
+            "the structured switch must survive lowering: {:#?}",
+            lowered.body
+        );
+        assert!(
+            !lowered
+                .body
+                .iter()
+                .any(|stmt| matches!(stmt, Stmt::IndirectGoto { .. })),
+            "the machine dispatch is represented by the switch: {:#?}",
             lowered.body
         );
     }

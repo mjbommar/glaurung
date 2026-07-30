@@ -4671,6 +4671,26 @@ mod gcc_dispatch_corpus_tests {
             stats.resolved_dispatches,
             stats.unresolved_indirect
         );
+
+        let fallthrough = functions
+            .iter()
+            .find(|function| function.name == "fallthrough_chain")
+            .expect("discover fallthrough_chain from the same real fixture");
+        let fallthrough_lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            fallthrough,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift the real fallthrough_chain CFG");
+        assert!(
+            fallthrough_lifted
+                .blocks
+                .iter()
+                .any(|block| block.succs.len() == 4),
+            "the four-slot fallthrough dispatch must enter the CFG: resolved={:?} unresolved={:?}",
+            stats.resolved_dispatches,
+            stats.unresolved_indirect
+        );
     }
 
     #[test]

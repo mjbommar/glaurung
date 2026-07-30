@@ -1571,26 +1571,17 @@ fn detect_switch_shape(
     if arms.is_empty() {
         return None;
     }
-    // Every arm must be reached only from this dispatch — a stricter
-    // check than the if-shape ones, but jump tables typically produce
-    // dedicated case blocks. Arms that share predecessors (e.g.
-    // fall-through cases) can land in v1.
-    for &a in &arms {
-        if !cfg.preds[a].iter().all(|&p| p == dispatch) {
-            return None;
-        }
-    }
-
     let join = find_switch_join(dispatch, &all_arms, cfg, enclosing_stop);
     // When the dispatch is one arm of an enclosing conditional, its local
     // post-dominator may be absent solely because the sibling/default arm also
     // reaches that continuation.  The enclosing boundary is still a proven
     // join and is the correct ownership limit for every case.
     let effective_join = join.or(enclosing_stop);
+    let arm_build_order = switch_arm_build_order(dispatch, &arms, cfg, effective_join)?;
     let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
 
     visited.insert(dispatch);
-    let mut sub_arms: Vec<Region> = Vec::new();
+    let mut sub_arms: Vec<Option<Region>> = vec![None; arms.len()];
     // A switch may have no join dominated by its dispatch while still being
     // nested inside a region with a shared continuation.  The canonical shape
     // is an out-of-range guard whose direct/default arm and every switch case
@@ -1598,23 +1589,30 @@ fn detect_switch_shape(
     // prevents dispatch dominance), but `enclosing_stop` is authoritative: no
     // case owns or may consume that outer continuation.
     let arm_stop = effective_join;
-    for &a in &arms {
-        if let Some((_, loop_body)) = &enclosing_loop {
+    for arm_index in arm_build_order {
+        let a = arms[arm_index];
+        let arm = if let Some((_, loop_body)) = &enclosing_loop {
             // Case-local returns may pass through a function epilogue outside
             // the loop. Render that path in the case, but do not globally claim
             // the shared epilogue: the loop-exit and pre-loop paths still need
             // it at function scope. Only loop-body ownership is committed.
             let mut arm_visited = visited.clone();
-            sub_arms.push(build(a, cfg, &mut arm_visited, arm_stop));
+            let arm = build(a, cfg, &mut arm_visited, arm_stop);
             visited.extend(
                 arm_visited
                     .into_iter()
                     .filter(|block| loop_body.contains(block)),
             );
+            arm
         } else {
-            sub_arms.push(build(a, cfg, visited, arm_stop));
-        }
+            build(a, cfg, visited, arm_stop)
+        };
+        sub_arms[arm_index] = Some(arm);
     }
+    let sub_arms = sub_arms
+        .into_iter()
+        .map(|arm| arm.expect("every validated switch arm has a build order"))
+        .collect();
     let formal_default = formal_default_entry.map(|entry| {
         let mut borrowed_visited = HashSet::from([dispatch]);
         Box::new(build(entry, cfg, &mut borrowed_visited, arm_stop))
@@ -1674,34 +1672,35 @@ fn detect_guarded_switch_shape(
         Some(default_entry),
     )
     .or(enclosing_stop);
-    // A non-join case must still be exclusively owned by the dispatch. A case
-    // that is the join may also be reached from the default path by definition.
-    for &arm in &arms {
-        if Some(arm) != join && !cfg.preds[arm].iter().all(|pred| *pred == dispatch) {
-            return None;
-        }
-    }
+    let arm_build_order = switch_arm_build_order(dispatch, &arms, cfg, join)?;
 
     visited.insert(dispatch);
     let enclosing_loop = innermost_natural_loop_containing(dispatch, cfg);
-    let mut sub_arms = Vec::with_capacity(arms.len());
-    for &arm in &arms {
-        if Some(arm) == join {
+    let mut sub_arms: Vec<Option<Region>> = vec![None; arms.len()];
+    for arm_index in arm_build_order {
+        let arm = arms[arm_index];
+        let region = if Some(arm) == join {
             // Direct dispatch-to-join is `case ...: break;`. The join is emitted
             // once after the switch instead of being duplicated in the case.
-            sub_arms.push(Region::Seq(Vec::new()));
+            Region::Seq(Vec::new())
         } else if let Some((_, loop_body)) = &enclosing_loop {
             let mut arm_visited = visited.clone();
-            sub_arms.push(build(arm, cfg, &mut arm_visited, join));
+            let region = build(arm, cfg, &mut arm_visited, join);
             visited.extend(
                 arm_visited
                     .into_iter()
                     .filter(|block| loop_body.contains(block)),
             );
+            region
         } else {
-            sub_arms.push(build(arm, cfg, visited, join));
-        }
+            build(arm, cfg, visited, join)
+        };
+        sub_arms[arm_index] = Some(region);
     }
+    let sub_arms = sub_arms
+        .into_iter()
+        .map(|arm| arm.expect("every validated guarded switch arm has a build order"))
+        .collect();
     let formal_default = Box::new(build(default_entry, cfg, visited, join));
 
     Some((
@@ -1715,6 +1714,68 @@ fn detect_guarded_switch_shape(
         },
         join,
     ))
+}
+
+/// Validate switch-arm ownership and return the order in which arm regions must
+/// be built. Case-to-case edges are source-level fallthrough. Building their
+/// destinations first leaves each source with an explicit `Goto` to the label
+/// owned by the later case, which is lossless with the existing region algebra
+/// and prevents the renderer from inventing an implicit `break`.
+fn switch_arm_build_order(
+    dispatch: usize,
+    arms: &[usize],
+    cfg: &Cfg,
+    shared_join: Option<usize>,
+) -> Option<Vec<usize>> {
+    use std::collections::VecDeque;
+
+    let positions: HashMap<usize, usize> = arms
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(position, arm)| (arm, position))
+        .collect();
+    if arms.iter().any(|arm| {
+        Some(*arm) != shared_join
+            && cfg.preds[*arm]
+                .iter()
+                .any(|pred| *pred != dispatch && !positions.contains_key(pred))
+    }) {
+        return None;
+    }
+
+    let mut indegree = vec![0usize; arms.len()];
+    for &arm in arms {
+        for successor in cfg.succs[arm]
+            .iter()
+            .filter_map(|successor| positions.get(successor).copied())
+        {
+            indegree[successor] += 1;
+        }
+    }
+    let mut queue: VecDeque<usize> = indegree
+        .iter()
+        .enumerate()
+        .filter_map(|(position, degree)| (*degree == 0).then_some(position))
+        .collect();
+    let mut topological = Vec::with_capacity(arms.len());
+    while let Some(position) = queue.pop_front() {
+        topological.push(position);
+        for successor in cfg.succs[arms[position]]
+            .iter()
+            .filter_map(|successor| positions.get(successor).copied())
+        {
+            indegree[successor] -= 1;
+            if indegree[successor] == 0 {
+                queue.push_back(successor);
+            }
+        }
+    }
+    if topological.len() != arms.len() {
+        return None;
+    }
+    topological.reverse();
+    Some(topological)
 }
 
 /// Return true when `candidate` is both a table destination and the proven
@@ -1936,6 +1997,61 @@ mod tests {
 
         assert_eq!(arms.len(), 2);
         assert_eq!(case_labels, vec![vec![0, 2], vec![1, 3]]);
+    }
+
+    #[test]
+    fn switch_cases_may_fall_through_into_later_case_entries() {
+        // Real Clang 14 -O2 shape for `fallthrough_chain`: every table slot is
+        // an entry into one suffix of a shared linear chain.  The later case
+        // blocks therefore have both the dispatch and the previous case as
+        // predecessors; that is case fallthrough, not ambiguous ownership.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1100, 0x1200, 0x1300, 0x1400],
+            ),
+            (0x1100, vec![Op::Nop], vec![0x1200]),
+            (0x1200, vec![Op::Nop], vec![0x1300]),
+            (0x1300, vec![Op::Nop], vec![0x1400]),
+            (0x1400, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let Region::Switch {
+            arms, case_labels, ..
+        } = &region
+        else {
+            panic!("expected a fallthrough switch, got {region:#?}");
+        };
+        assert_eq!(arms.len(), 4);
+        assert_eq!(case_labels, &vec![vec![0], vec![1], vec![2], vec![3]]);
+        assert!(
+            verify_region(
+                &lf.blocks
+                    .iter()
+                    .map(|block| {
+                        block
+                            .succs
+                            .iter()
+                            .map(|target| {
+                                lf.blocks
+                                    .iter()
+                                    .position(|candidate| candidate.start_va == *target)
+                                    .expect("successor belongs to test CFG")
+                            })
+                            .collect()
+                    })
+                    .collect::<Vec<Vec<usize>>>(),
+                0,
+                &region,
+            )
+            .is_empty(),
+            "fallthrough switch must retain every reachable block: {region:#?}"
+        );
     }
 
     #[test]
