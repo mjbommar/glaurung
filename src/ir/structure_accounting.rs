@@ -130,6 +130,7 @@ fn owned(r: &Region, out: &mut Vec<usize>) {
             owned(body, out);
             out.push(*cond);
         }
+        Region::RawLoop { blocks, .. } => out.extend(blocks.iter().copied()),
         Region::Switch {
             guard,
             dispatch,
@@ -256,7 +257,7 @@ fn goto_edges(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>
                 goto_edges(default, edges, out);
             }
         }
-        Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => {}
+        Region::Block(_) | Region::Goto(_) | Region::RawLoop { .. } | Region::Unstructured(_) => {}
     }
 }
 
@@ -265,6 +266,16 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
     match r {
         Region::Block(_) | Region::Unstructured(_) => {}
         Region::Goto(_) => {}
+        Region::RawLoop { blocks, .. } => {
+            // RawLoop lowering emits every machine transfer explicitly when
+            // source-order fallthrough is displaced, so its declared graph is
+            // exactly the CFG induced by its owned blocks (including exits).
+            for block in blocks {
+                for edge in edges.get(*block).into_iter().flatten() {
+                    out.insert((*block, edge.to));
+                }
+            }
+        }
         Region::Seq(parts) => {
             // A `Goto` is NOT a region control flows into: it is an explicit jump.
             // Using it as a sequential successor launders the edge into looking
@@ -416,6 +427,9 @@ fn loops_and_switches(
             loops_and_switches(body, enclosing, headers, switch_owner);
             enclosing.pop();
         }
+        Region::RawLoop { header, .. } => {
+            headers.insert(*header);
+        }
         Region::Switch {
             dispatch,
             arms,
@@ -533,7 +547,7 @@ pub fn account(
                     gotos(default, out);
                 }
             }
-            Region::Block(_) | Region::Unstructured(_) => {}
+            Region::Block(_) | Region::RawLoop { .. } | Region::Unstructured(_) => {}
         }
     }
     gotos(region, &mut goto_targets);

@@ -67,6 +67,15 @@ pub enum Region {
         cond: usize,
         exit: Option<usize>,
     },
+    /// A natural loop with multiple internal conditional latches and no
+    /// distinguished header test. Blocks are owned once and lowered in labelled
+    /// CFG form inside `while (1)`, preserving the loop boundary without
+    /// pretending one latch condition governs every back-edge.
+    RawLoop {
+        header: usize,
+        blocks: Vec<usize>,
+        exit: usize,
+    },
     /// `switch (discriminant) { case 0: <arm>; case 1: <arm>; ... }`
     /// (#193). The dispatch block has N>=3 successors (typical jump-
     /// table dispatch); each arm is a sub-region; the join is the
@@ -150,6 +159,7 @@ impl Region {
                         out.push(*e);
                     }
                 }
+                Region::RawLoop { blocks, .. } => out.extend(blocks.iter().copied()),
                 Region::Switch {
                     guard,
                     dispatch,
@@ -441,6 +451,7 @@ pub fn entry_block(r: &Region) -> Option<usize> {
         Region::IfThen { cond, .. } | Region::IfThenElse { cond, .. } => Some(*cond),
         Region::While { header, .. } => Some(*header),
         Region::DoWhile { body, cond, .. } => entry_block(body).or(Some(*cond)),
+        Region::RawLoop { header, .. } => Some(*header),
         Region::Switch {
             guard, dispatch, ..
         } => guard.or(Some(*dispatch)),
@@ -526,6 +537,7 @@ pub fn verify_region(succs: &[Vec<usize>], entry: usize, region: &Region) -> Vec
                 report_uncovered(*cond, succs, &covered, out);
                 walk(body, succs, out);
             }
+            Region::RawLoop { .. } => {}
             Region::Switch {
                 guard,
                 dispatch,
@@ -857,6 +869,20 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
             }
         }
 
+        // Multiple conditional latches can share one exit while the header is
+        // only an internal dispatch. No single condition represents that loop;
+        // retain its exact labelled CFG inside an owned `while (1)` region.
+        if let Some(loop_r) = detect_raw_multi_latch_loop(cur, cfg, visited) {
+            parts.push(loop_r.region);
+            match loop_r.exit {
+                Some(next) => {
+                    cur = next;
+                    continue;
+                }
+                None => break,
+            }
+        }
+
         // `detect_bottom_tested_loop` needs an unconsumed body entry. All other
         // shapes retain the original consume-before-detect behaviour.
         if !visited.insert(cur) {
@@ -990,6 +1016,66 @@ fn build_arm(
 struct LoopRegion {
     region: Region,
     exit: Option<usize>,
+}
+
+/// Recognise a reducible multi-latch loop whose only exits all reach the same
+/// block and whose header has no exit edge of its own.
+///
+/// Both header successors remaining in the body means the header conditional is
+/// an internal dispatch, not a loop test. Choosing either latch for `While` or
+/// `DoWhile` would drop the other back-edge. The raw-loop region retains every
+/// block and transfer once while still owning the natural-loop boundary.
+fn detect_raw_multi_latch_loop(
+    header: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+) -> Option<LoopRegion> {
+    let tails: Vec<usize> = cfg.preds[header]
+        .iter()
+        .copied()
+        .filter(|&tail| cfg.dominates(header, tail))
+        .collect();
+    if tails.len() < 2 {
+        return None;
+    }
+
+    let mut body = HashSet::new();
+    for tail in tails {
+        body.extend(natural_loop_body(header, tail, cfg));
+    }
+    if cfg.succs[header].is_empty()
+        || cfg.succs[header].iter().any(|succ| !body.contains(succ))
+        || body
+            .iter()
+            .any(|&block| block != header && !cfg.dominates(header, block))
+    {
+        return None;
+    }
+
+    let exits: HashSet<usize> = body
+        .iter()
+        .copied()
+        .flat_map(|block| cfg.succs[block].iter().copied())
+        .filter(|successor| !body.contains(successor))
+        .collect();
+    let exits: Vec<usize> = exits.into_iter().collect();
+    let [exit] = exits.as_slice() else {
+        return None;
+    };
+    let exit = *exit;
+
+    let mut blocks: Vec<usize> = body.into_iter().filter(|block| *block != header).collect();
+    blocks.sort_unstable();
+    blocks.insert(0, header);
+    visited.extend(blocks.iter().copied());
+    Some(LoopRegion {
+        region: Region::RawLoop {
+            header,
+            blocks,
+            exit,
+        },
+        exit: Some(exit),
+    })
 }
 
 /// Recognise a natural while-loop headed at `header`.
@@ -2137,7 +2223,10 @@ mod tests {
                     find_switch(then_r).or_else(|| find_switch(else_r))
                 }
                 Region::While { body, .. } | Region::DoWhile { body, .. } => find_switch(body),
-                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => None,
             }
         }
 
@@ -2214,7 +2303,10 @@ mod tests {
                     find_switch(then_r).or_else(|| find_switch(else_r))
                 }
                 Region::While { body, .. } | Region::DoWhile { body, .. } => find_switch(body),
-                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => None,
             }
         }
         let region = recover_for(&lf);
@@ -2639,7 +2731,10 @@ mod tests {
                 }
                 Region::While { body, .. } => contains_do_while(body),
                 Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
-                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => false,
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => false,
             }
         }
         assert!(
@@ -2679,6 +2774,40 @@ mod tests {
 
         let r = recover_for(&lf);
         assert_eq!(r, Region::Unstructured((0..8).collect()), "{r:#?}");
+        assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
+    fn multi_latch_loop_with_one_shared_exit_has_an_owned_raw_loop() {
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        // Reduced GCC -O2 switch-in-loop shape. The header is an internal
+        // dispatch, not the loop test: both successors remain in the body.
+        // Each arm has its own conditional latch, and both latches either
+        // re-enter the header or leave through the same exit.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1100, cond(0x1200), vec![0x1200, 0x1300]), // internal dispatch
+            (0x1200, cond(0x1100), vec![0x1100, 0x1400]), // latch 1
+            (0x1300, cond(0x1100), vec![0x1100, 0x1400]), // latch 2
+            (0x1400, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let rendered = format!("{region:#?}");
+        assert!(
+            rendered.contains("RawLoop"),
+            "the two latches need one owned loop region: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Unstructured"),
+            "loop blocks must not escape to function-level leftovers: {rendered}"
+        );
         assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
     }
 
@@ -2809,7 +2938,10 @@ mod tests {
                 }
                 Region::While { body, .. } => contains_do_while(body),
                 Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
-                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => false,
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => false,
             }
         }
         assert!(
@@ -2857,7 +2989,10 @@ mod tests {
                 }
                 Region::While { body, .. } => contains_do_while(body),
                 Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
-                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => false,
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => false,
             }
         }
         assert!(
@@ -3089,6 +3224,10 @@ mod tests {
                 Region::While { body, .. } | Region::DoWhile { body, .. } => {
                     count_block(body, target)
                 }
+                Region::RawLoop { blocks, .. } => (
+                    blocks.iter().filter(|&&block| block == target).count(),
+                    false,
+                ),
                 Region::Switch { arms, .. } => {
                     let mut count = 0;
                     let mut bad = false;
@@ -3139,6 +3278,7 @@ mod tests {
                 Region::While { body, .. } | Region::DoWhile { body, .. } => {
                     assert_no_unstructured(body)
                 }
+                Region::RawLoop { .. } => {}
                 Region::Switch { arms, .. } => {
                     arms.iter().for_each(assert_no_unstructured);
                 }
@@ -3239,7 +3379,10 @@ mod tests {
                     find_switch(then_r).or_else(|| find_switch(else_r))
                 }
                 Region::While { body, .. } | Region::DoWhile { body, .. } => find_switch(body),
-                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => None,
             }
         }
         let Some(Region::Switch { arms, join, .. }) = find_switch(&region) else {
@@ -3533,7 +3676,7 @@ mod tests {
                 }
                 Region::While { body, .. } | Region::DoWhile { body, .. } => has_goto(body, target),
                 Region::Switch { arms, .. } => arms.iter().any(|arm| has_goto(arm, target)),
-                Region::Block(_) | Region::Unstructured(_) => false,
+                Region::Block(_) | Region::RawLoop { .. } | Region::Unstructured(_) => false,
             }
         }
 

@@ -1460,6 +1460,21 @@ fn strip_trailing_goto(stmts: &mut Vec<Stmt>, target_va: u64) {
     }
 }
 
+/// The successor reached by source-order fallthrough rather than an explicit
+/// transfer in `block`'s final instruction.
+fn implicit_successor(block: &crate::ir::types::LlirBlock) -> Option<u64> {
+    match block.instrs.last().map(|instruction| &instruction.op) {
+        Some(Op::CondJump { target, .. }) => block
+            .succs
+            .iter()
+            .copied()
+            .find(|successor| successor != target),
+        Some(Op::Jump { .. } | Op::IndirectJump { .. } | Op::Return) => None,
+        _ if block.succs.len() == 1 => block.succs.first().copied(),
+        _ => None,
+    }
+}
+
 fn lower_region(
     r: &Region,
     lf: &LlirFunction,
@@ -1677,6 +1692,37 @@ fn lower_region_inner(
                 cond: continue_cond,
             }]
         }
+        Region::RawLoop {
+            header,
+            blocks,
+            exit: _,
+        } => {
+            let header_va = lf.blocks[*header].start_va;
+            let mut loop_body = Vec::new();
+            for (position, block_index) in blocks.iter().copied().enumerate() {
+                let block = &lf.blocks[block_index];
+                loop_body.push(Stmt::Label(block.start_va));
+                loop_body.extend(lower_block(block, lower_scalar_float));
+
+                // Raw blocks normally rely on source order for fallthrough. The
+                // loop owns a non-contiguous subset and starts at its header, so
+                // make every displaced fallthrough explicit. Falling off the
+                // final block naturally starts the next `while (1)` iteration.
+                let lexical_next = blocks
+                    .get(position + 1)
+                    .map(|next| lf.blocks[*next].start_va)
+                    .unwrap_or(header_va);
+                if let Some(successor) = implicit_successor(block) {
+                    if successor != lexical_next {
+                        loop_body.push(Stmt::Goto { target: successor });
+                    }
+                }
+            }
+            vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: loop_body,
+            }]
+        }
         Region::Switch {
             guard,
             dispatch,
@@ -1814,6 +1860,9 @@ fn collect_goto_targets(r: &Region, lf: &LlirFunction, out: &mut std::collection
         }
         Region::While { body, .. } | Region::DoWhile { body, .. } => {
             collect_goto_targets(body, lf, out)
+        }
+        Region::RawLoop { exit, .. } => {
+            out.insert(lf.blocks[*exit].start_va);
         }
         Region::Switch {
             arms,

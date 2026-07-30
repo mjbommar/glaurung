@@ -4437,7 +4437,10 @@ mod gcc_dispatch_corpus_tests {
                 switch_case_labels(then_r).or_else(|| switch_case_labels(else_r))
             }
             Region::While { body, .. } | Region::DoWhile { body, .. } => switch_case_labels(body),
-            Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+            Region::Block(_)
+            | Region::Goto(_)
+            | Region::RawLoop { .. }
+            | Region::Unstructured(_) => None,
         }
     }
 
@@ -4535,7 +4538,10 @@ mod gcc_dispatch_corpus_tests {
                     switch_arms(then_r).or_else(|| switch_arms(else_r))
                 }
                 Region::While { body, .. } | Region::DoWhile { body, .. } => switch_arms(body),
-                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => None,
             }
         }
         let arms = switch_arms(&region).expect("recover the real dispatch as a switch");
