@@ -43,13 +43,19 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Import the native API once per fixture lane.  The lane itself is already an
+# isolated subprocess (fixture_harness.py owns that boundary), so this keeps a
+# native crash contained without paying Python + extension startup for every
+# individual function.
+import glaurung as g
+
 # Fail-closed: a missing dependency must surface as an import error, not a skip.
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 sys.path.insert(0, str(ROOT / "tools"))
-import build_guard as BG  # ty: ignore[unresolved-import]
+import build_guard as BG
 import fixture_toolchain as TC
 import manifest as M  # ty: ignore[unresolved-import]  # added to sys.path above
 
@@ -325,6 +331,34 @@ def decompiled_c(binary: str, va: int) -> str | None:
         return None
     code = arr[0].get("pseudocode", "")
     return "\n".join(l for l in code.splitlines() if not l.strip().startswith("//"))
+
+
+def decompiled_many_c(binary: str, vas: list[int]) -> dict[int, str]:
+    """Decompile requested entry VAs in one native analysis pass.
+
+    Missing rows stay missing in the returned map so the caller reports the
+    same fail-closed ``decompile failed`` verdict as the old per-function CLI
+    path.  De-duplicate while retaining request order: the native function
+    budget is intentionally the exact number of unique authoritative seeds.
+    """
+    requested = list(dict.fromkeys(vas))
+    if not requested:
+        return {}
+    try:
+        rows = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+            binary,
+            requested,
+            style="decbench",
+            max_functions=max(1, len(requested)),
+        )
+    except (OSError, RuntimeError, ValueError):
+        return {}
+    recovered: dict[int, str] = {}
+    for _name, va, code in rows:
+        recovered[int(va)] = "\n".join(
+            line for line in code.splitlines() if not line.strip().startswith("//")
+        )
+    return recovered
 
 
 def build_so(
@@ -768,7 +802,16 @@ def exec_class(sig, fixture, lane: str | None = None) -> tuple[str, str]:
     return "exec", ""
 
 
-def run_function(sig, fixture, binary, workdir, seed, fuzz, lane=None) -> dict:
+def run_function(
+    sig,
+    fixture,
+    binary,
+    workdir,
+    seed,
+    fuzz,
+    lane=None,
+    decompiled_by_va: dict[int, str] | None = None,
+) -> dict:
     name = sig["name"]
     ov = M.override(fixture, name)
     # Structural-only functions (function-pointer callbacks, void-no-buffer,
@@ -777,7 +820,11 @@ def run_function(sig, fixture, binary, workdir, seed, fuzz, lane=None) -> dict:
     cls, why = exec_class(sig, fixture, lane)
     if cls == "structural":
         return {"status": "structural", "detail": why}
-    c = decompiled_c(binary, sig["va"])
+    c = (
+        decompiled_c(binary, sig["va"])
+        if decompiled_by_va is None
+        else decompiled_by_va.get(sig["va"])
+    )
     if c is None:
         return {"status": "fail", "detail": "decompile failed"}
     dec_so = build_so(c, workdir, f"dec_{name}", link_against=binary)
@@ -890,6 +937,14 @@ def run(
                 "status": "missing",
                 "detail": "required function missing from binary",
             }
+    selected_names = [name for name in sorted(exported) if only is None or name in only]
+    executable_sigs = [
+        sig_by_name[name]
+        for name in selected_names
+        if name in sig_by_name
+        and exec_class(sig_by_name[name], fixture, lane)[0] == "exec"
+    ]
+    decompiled_by_va = decompiled_many_c(binary, [sig["va"] for sig in executable_sigs])
     with tempfile.TemporaryDirectory(dir=M.tmpdir()) as td:
         wd = Path(td)
         for name in sorted(exported):
@@ -907,7 +962,14 @@ def run(
                 }
                 continue
             results[name] = run_function(
-                sig, fixture, binary, wd, seed, fuzz, lane=lane
+                sig,
+                fixture,
+                binary,
+                wd,
+                seed,
+                fuzz,
+                lane=lane,
+                decompiled_by_va=decompiled_by_va,
             )
     return results
 

@@ -84,6 +84,28 @@ def test_zero_dwarf_signatures_is_an_error(tmp_path):
     assert "__error__" in results
 
 
+def test_batch_decompile_returns_every_requested_real_function():
+    """One native analysis must produce every requested fixture function.
+
+    This is a real compiled shared object, not a stubbed API response: the fast
+    harness path must cross ELF discovery, CFG recovery, lifting, and DecBench C
+    rendering before it is allowed to replace one CLI process per function.
+    """
+    so = _compile_so(
+        "__attribute__((noinline)) int batch_add(int a){return a+3;}\n"
+        "__attribute__((noinline)) int batch_mul(int a){return a*5;}",
+        "batch_decompile",
+    )
+    exported = D.exported_functions(so)
+    requested = [exported["batch_add"], exported["batch_mul"]]
+
+    recovered = D.decompiled_many_c(so, requested)
+
+    assert set(recovered) == set(requested)
+    assert "batch_add(" in recovered[exported["batch_add"]]
+    assert "batch_mul(" in recovered[exported["batch_mul"]]
+
+
 def test_compile_failure_of_decompilation_is_fail(monkeypatch, tmp_path):
     # If the decompiled C does not compile, the function FAILS (not skip).
     sig = {"name": "f", "va": 0, "params": ["int"], "ret": "int"}
