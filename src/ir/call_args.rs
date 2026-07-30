@@ -791,8 +791,10 @@ fn fold_one_call(
                     // Follow that exact definition edge instead of treating the
                     // SSA values as unrelated clobbers and abandoning every
                     // earlier argument slot.
-                    if let Some((_, captured)) = &mut found[slot] {
+                    let mut feeds_captured_argument = false;
+                    for (_, captured) in found.iter_mut().flatten() {
                         if reads_reg_in_expr(captured, dst) {
+                            feeds_captured_argument = true;
                             // Pure normalisation can be stated directly in the
                             // call argument. Memory reads stay statement-rooted:
                             // moving a load across an intervening store would
@@ -807,12 +809,19 @@ fn fold_one_call(
                                 // argument keeps its exact reaching reference.
                                 let _ = substitute_exact_reg(captured, dst, src);
                             }
-                            mark_arg_reads_in_expr(src, arch, &mut read_between);
-                            continue;
                         }
                     }
-                    // A genuinely unrelated second assignment to the same slot
-                    // remains a boundary: the later value is live at the call.
+                    if feeds_captured_argument {
+                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        continue;
+                    }
+                    // An unrelated second assignment to the same ABI slot is a
+                    // boundary even when both writes carry SSA versions. SSA
+                    // proves the definitions differ; it does not prove an older
+                    // write was intended as an argument to this call. Crossing
+                    // only a direct def-use edge keeps stale values out of later
+                    // slots while still following compiler-generated register
+                    // copies and width normalisation.
                     break;
                 }
             }
@@ -2391,6 +2400,144 @@ mod tests {
             })
             .expect("the call must survive");
         assert_eq!(args, vec![Expr::Const(7)], "body was:\n{:#?}", f.body);
+    }
+
+    /// A later value in one argument register must not hide setup for a higher
+    /// slot that happened before an older SSA value of that same register.
+    ///
+    /// GCC emits this exact SysV variadic-call shape for
+    /// `fprintf(stream, fmt, global, name, incoming_int)`: `rdx#1` feeds
+    /// `r8#1`, then `rdx#2` and `rdx#3` are reused for the fourth and third
+    /// arguments. The backward scan used to stop at `rdx#2` because slot 2 was
+    /// already filled by `rdx#3`, so it never reached `r8#1` and silently
+    /// truncated the call to four arguments.
+    #[test]
+    fn value_numbered_scan_follows_captured_argument_def_use_chains() {
+        let mut f = Function {
+            name: "variadic_caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdx#1"),
+                    src: Expr::Reg(reg("rdi")),
+                },
+                Stmt::Assign {
+                    dst: reg("r8#1"),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(reg("rdx#1"))),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("rdx#2"),
+                    src: Expr::Addr(0x5040),
+                },
+                Stmt::Assign {
+                    dst: reg("rcx#1"),
+                    src: Expr::Reg(reg("rdx#2")),
+                },
+                Stmt::Assign {
+                    dst: reg("rdx#3"),
+                    src: Expr::Addr(0x6000),
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Addr(0x30a0),
+                },
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Reg(reg("rax#1")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x11d0,
+                        name: "fprintf".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert_eq!(
+            args,
+            &[
+                Expr::Reg(reg("rax#1")),
+                Expr::Addr(0x30a0),
+                Expr::Addr(0x6000),
+                Expr::Addr(0x5040),
+                Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Reg(reg("rdi"))),
+                },
+            ],
+            "body was:\n{:#?}",
+            f.body
+        );
+    }
+
+    /// A different SSA version is not, by itself, permission to keep scanning.
+    /// Optimised code frequently reuses argument registers between unrelated
+    /// calls; treating every older version as independent made a one-argument
+    /// `xmalloc(32)` consume stale values left in rsi and rdx.
+    #[test]
+    fn value_numbered_scan_stops_at_an_unrelated_older_slot_definition() {
+        let mut f = Function {
+            name: "one_argument_caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Const(2),
+                },
+                Stmt::Assign {
+                    dst: reg("rdx#1"),
+                    src: Expr::Const(3),
+                },
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Const(99),
+                },
+                Stmt::Assign {
+                    dst: reg("rdi#2"),
+                    src: Expr::Const(32),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "xmalloc".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert_eq!(args, &[Expr::Const(32)], "body was:\n{:#?}", f.body);
     }
 
     #[test]
