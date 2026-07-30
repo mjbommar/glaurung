@@ -22,7 +22,12 @@ use object::{Object, ObjectSection};
 /// One DWARF-discovered function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DwarfFunction {
-    /// Entry virtual address (lowest address across all chunks).
+    /// Entry virtual address (the primary range listed by the producer).
+    ///
+    /// Optimizing compilers may place a cold split below the hot entry in the
+    /// address space. Sorting by VA would therefore turn `foo.cold` into the
+    /// semantic entry even though the range list deliberately names the hot
+    /// chunk first.
     pub entry_va: u64,
     /// All address ranges that belong to this function. Always at least
     /// one element when `entry_va` is set; `chunks[0]` is the entry chunk.
@@ -221,7 +226,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 Ok(rs) if !rs.is_empty() => rs,
                 _ => continue,
             };
-            let entry_va = chunks.iter().map(|r| r.start).min().unwrap_or(0);
+            let entry_va = chunks.first().map(|range| range.start).unwrap_or(0);
 
             let name = pick_name(&dwarf, &unit, &entry);
             let prototyped = matches!(
@@ -348,7 +353,6 @@ fn collect_ranges(
                     });
                 }
             }
-            out.sort_unstable_by_key(|r| r.start);
             return Ok(out);
         }
     }

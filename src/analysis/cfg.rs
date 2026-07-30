@@ -2992,16 +2992,26 @@ fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usize {
     }
 
     for (parent_idx, child_idx) in &merges {
-        // Take chunks/range from child without removing the child yet — the
-        // post-loop removal pass uses indices, so we can't shift the list
-        // in place here.
-        let child_ranges: Vec<AddressRange> = {
+        // Take every child-owned graph component without removing the child
+        // yet — the post-loop removal pass uses indices, so we can't shift the
+        // list in place here. Chunks without blocks are metadata, not a merged
+        // function: address-scoped lifting would otherwise clip or call out to
+        // the executable cold fragment instead of structuring it locally.
+        let (child_entry, child_ranges, child_blocks, child_edges, child_callers, child_callees) = {
             let child = &functions[*child_idx];
-            if !child.chunks.is_empty() {
+            let ranges = if !child.chunks.is_empty() {
                 child.chunks.clone()
             } else {
                 child.range.clone().map(|r| vec![r]).unwrap_or_default()
-            }
+            };
+            (
+                child.entry_point.clone(),
+                ranges,
+                child.basic_blocks.clone(),
+                child.edges.clone(),
+                child.callers.clone(),
+                child.callees.clone(),
+            )
         };
         let parent = &mut functions[*parent_idx];
         // Ensure the parent's primary range is in chunks before appending.
@@ -3013,6 +3023,30 @@ fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usize {
         for r in child_ranges {
             parent.add_chunk(r);
         }
+        for block in child_blocks {
+            if !parent
+                .basic_blocks
+                .iter()
+                .any(|existing| existing.start_address.value == block.start_address.value)
+            {
+                parent.basic_blocks.push(block);
+            }
+        }
+        for edge in child_edges {
+            if !parent.edges.contains(&edge) {
+                parent.edges.push(edge);
+            }
+        }
+        let parent_entry = parent.entry_point.clone();
+        parent.callers.extend(
+            child_callers
+                .into_iter()
+                .filter(|caller| caller != &parent_entry),
+        );
+        parent.callees.extend(child_callees);
+        // The compiler split's entry was an interprocedural target only until
+        // the child became part of its logical parent.
+        parent.callees.remove(&child_entry);
         if !parent.has_flag(FunctionFlags::HAS_EH) {
             parent.add_flag(FunctionFlags::HAS_EH);
         }
@@ -4399,6 +4433,26 @@ mod chunk_tests {
             _func("main.cold", 0x2000, 0x20),
             _func("other", 0x3000, 0x40),
         ];
+        let primary_block = BasicBlock::new(
+            "primary".to_string(),
+            Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap(),
+            Address::new(AddressKind::VA, 0x1080, 64, None, None).unwrap(),
+            4,
+            Some(Vec::new()),
+            Some(Vec::new()),
+        );
+        let cold_block = BasicBlock::new(
+            "cold".to_string(),
+            Address::new(AddressKind::VA, 0x2000, 64, None, None).unwrap(),
+            Address::new(AddressKind::VA, 0x2020, 64, None, None).unwrap(),
+            2,
+            Some(Vec::new()),
+            Some(Vec::new()),
+        );
+        funcs[0].add_basic_block(primary_block);
+        funcs[1].add_basic_block(cold_block);
+        funcs[0].add_callee(Address::new(AddressKind::VA, 0x2000, 64, None, None).unwrap());
+        funcs[1].add_callee(Address::new(AddressKind::VA, 0x5000, 64, None, None).unwrap());
         let merged = merge_compiler_split_chunks(&mut funcs);
         assert_eq!(merged, 1);
         assert_eq!(funcs.len(), 2, "child symbol should be dropped");
@@ -4407,6 +4461,19 @@ mod chunk_tests {
         assert_eq!(main.total_size(), 0x80 + 0x20);
         assert!(main.has_flag(FunctionFlags::HAS_EH));
         assert!(main.contains_va(0x2010));
+        assert_eq!(
+            main.basic_blocks
+                .iter()
+                .map(|block| block.start_address.value)
+                .collect::<Vec<_>>(),
+            vec![0x1000, 0x2000],
+            "merging a split function must retain the child's executable CFG"
+        );
+        assert!(
+            !main.callees.iter().any(|callee| callee.value == 0x2000),
+            "the merged child entry is local control flow, not a callee"
+        );
+        assert!(main.callees.iter().any(|callee| callee.value == 0x5000));
     }
 
     #[test]
@@ -4479,6 +4546,26 @@ mod gcc_dispatch_corpus_tests {
             .find(|symbol| symbol.name().ok() == Some("dispatch"))
             .map(|symbol| symbol.address())
             .expect("exported dispatch symbol");
+        let dwarf_dispatch = crate::debug::dwarf::extract_dwarf_functions(&data)
+            .into_iter()
+            .find(|function| function.name.as_deref() == Some("dispatch"))
+            .expect("DWARF dispatch subprogram");
+        assert_eq!(
+            dwarf_dispatch.entry_va, dispatch_va,
+            "the producer's first range is the semantic hot entry"
+        );
+        assert_eq!(
+            dwarf_dispatch.chunks.first().map(|range| range.start),
+            Some(dispatch_va)
+        );
+        assert!(
+            dwarf_dispatch
+                .chunks
+                .iter()
+                .skip(1)
+                .any(|range| range.start < dispatch_va),
+            "the lower-address cold range must remain auxiliary: {dwarf_dispatch:?}"
+        );
 
         let (functions, _callgraph, stats) =
             analyze_functions_bytes_with_stats(&data, &Budgets::default());
@@ -4505,9 +4592,96 @@ mod gcc_dispatch_corpus_tests {
             crate::core::binary::Arch::X86_64,
         )
         .expect("lift the real dispatch CFG");
+        let cold_va = named[0]
+            .all_ranges()
+            .iter()
+            .map(|range| range.start.value)
+            .find(|start| *start < dispatch_va)
+            .expect("DWARF cold range");
         assert_eq!(
             lifted.blocks[0].start_va, dispatch_va,
             "LLIR block zero is the semantic entry, even when a cold split has a lower VA"
+        );
+        assert!(
+            lifted.blocks.iter().any(|block| block.start_va == cold_va),
+            "the DWARF-owned cold range must retain its executable block"
+        );
+        assert!(
+            lifted.blocks.iter().any(|block| {
+                block.succs.contains(&cold_va)
+                    && matches!(
+                        block.instrs.last().map(|instruction| &instruction.op),
+                        Some(crate::ir::types::Op::Jump { target })
+                            | Some(crate::ir::types::Op::CondJump { target, .. })
+                            if *target == cold_va
+                    )
+            }),
+            "the hot-to-cold jump must remain an intraprocedural CFG edge"
+        );
+
+        let scoped_budgets = Budgets {
+            max_functions: 1,
+            ..Budgets::default()
+        };
+        let (scoped_functions, _scoped_callgraph) =
+            analyze_functions_bytes_with_seeds(&data, &scoped_budgets, &[dispatch_va]);
+        let scoped_dispatch = scoped_functions
+            .iter()
+            .find(|function| function.entry_point.value == dispatch_va)
+            .expect("address-scoped dispatch discovery");
+        assert!(
+            scoped_dispatch
+                .basic_blocks
+                .iter()
+                .any(|block| block.start_address.value == cold_va),
+            "address-scoped discovery must hydrate every DWARF-owned range: blocks={:?}, ranges={:?}",
+            scoped_dispatch
+                .basic_blocks
+                .iter()
+                .map(|block| block.start_address.value)
+                .collect::<Vec<_>>(),
+            scoped_dispatch.all_ranges()
+        );
+        let scoped_lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            scoped_dispatch,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift address-scoped dispatch CFG");
+        assert!(
+            scoped_lifted
+                .blocks
+                .iter()
+                .any(|block| block.succs.contains(&cold_va)),
+            "address-scoped lifting must retain the hot-to-cold edge: basic={:?}, lifted={:?}",
+            scoped_dispatch
+                .basic_blocks
+                .iter()
+                .map(|block| (
+                    block.start_address.value,
+                    block.id.clone(),
+                    block.successor_ids.clone()
+                ))
+                .collect::<Vec<_>>(),
+            scoped_lifted
+                .blocks
+                .iter()
+                .map(|block| (block.start_va, block.succs.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            scoped_lifted.blocks.iter().all(|block| {
+                block.instrs.iter().all(|instruction| {
+                    !matches!(
+                        instruction.op,
+                        crate::ir::types::Op::Call {
+                            target: crate::ir::types::CallTarget::Direct(target),
+                            ..
+                        } if target == cold_va
+                    )
+                })
+            }),
+            "the owned cold range must never be rewritten as a sibling call"
         );
         let dispatch_block = lifted
             .blocks

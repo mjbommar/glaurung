@@ -269,7 +269,7 @@ fn guarded_switch_after_early_return(guard: &Stmt, following: &Stmt) -> Option<(
     let Expr::Const(bound) = lhs.as_ref() else {
         return None;
     };
-    if !matches!(then_body.as_slice(), [Stmt::Return { .. }]) {
+    if !is_straight_line_return_body(then_body) {
         return None;
     }
     let Stmt::Switch { cases, default, .. } = following else {
@@ -285,6 +285,34 @@ fn guarded_switch_after_early_return(guard: &Stmt, following: &Stmt) -> Option<(
     };
     *default = Some(then_body.clone());
     Some((switch, rhs.as_ref().clone()))
+}
+
+/// Whether an early guard arm executes only ordinary statements and then
+/// unconditionally returns.
+///
+/// GCC commonly spells a cold default as `call; return result`, rather than a
+/// single return expression. Moving that sequence into a switch default keeps
+/// its execution condition and order. Control-bearing statements are rejected:
+/// in particular, moving a `break` from an enclosing loop into a switch would
+/// silently retarget it to the switch.
+fn is_straight_line_return_body(body: &[Stmt]) -> bool {
+    let Some((last, prefix)) = body.split_last() else {
+        return false;
+    };
+    matches!(last, Stmt::Return { .. })
+        && prefix.iter().all(|statement| {
+            matches!(
+                statement,
+                Stmt::Assign { .. }
+                    | Stmt::Store { .. }
+                    | Stmt::Call { .. }
+                    | Stmt::Nop
+                    | Stmt::Unknown(_)
+                    | Stmt::Comment(_)
+                    | Stmt::Push { .. }
+                    | Stmt::Pop { .. }
+            )
+        })
 }
 
 fn labels_within_unsigned_bound(cases: &[(Option<i64>, Vec<Stmt>)], bound: i64) -> bool {
@@ -763,6 +791,106 @@ mod tests {
                 default: Some(default_body),
             }]
         );
+    }
+
+    #[test]
+    fn merges_straight_line_call_and_return_into_the_exhaustive_switch_default() {
+        let guarded_value = unsigned(4, Expr::Reg(VReg::phys("op")));
+        let result = VReg::phys("ret");
+        let cases: Vec<(Option<i64>, Vec<Stmt>)> = (0..=1)
+            .map(|case| {
+                (
+                    Some(case),
+                    vec![Stmt::Return {
+                        value: Some(Expr::Const(case)),
+                    }],
+                )
+            })
+            .collect();
+        let default_body = vec![
+            Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "dispatch_cold".to_string(),
+                },
+                args: vec![guarded_value.clone()],
+                dst: Some(result.clone()),
+                call_spec: None,
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(result)),
+            },
+        ];
+        let mut function = Function {
+            name: "optimized_dispatch_with_cold_default".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ult,
+                        lhs: Box::new(Expr::Const(1)),
+                        rhs: Box::new(guarded_value.clone()),
+                    },
+                    then_body: default_body.clone(),
+                    else_body: None,
+                },
+                Stmt::Switch {
+                    discriminant: guarded_value.clone(),
+                    cases: cases.clone(),
+                    default: None,
+                },
+            ],
+        };
+
+        collapse_range_guards(&mut function);
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Switch {
+                discriminant: guarded_value,
+                cases,
+                default: Some(default_body),
+            }]
+        );
+    }
+
+    #[test]
+    fn keeps_a_loop_breaking_guard_outside_the_following_switch() {
+        let guarded_value = unsigned(4, Expr::Reg(VReg::phys("op")));
+        let loop_body = vec![
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Const(1)),
+                    rhs: Box::new(guarded_value.clone()),
+                },
+                then_body: vec![
+                    Stmt::Break,
+                    Stmt::Return {
+                        value: Some(Expr::Const(-1)),
+                    },
+                ],
+                else_body: None,
+            },
+            Stmt::Switch {
+                discriminant: guarded_value,
+                cases: vec![(Some(0), vec![Stmt::Nop]), (Some(1), vec![Stmt::Nop])],
+                default: None,
+            },
+        ];
+        let original = Stmt::While {
+            cond: Expr::Const(1),
+            body: loop_body,
+        };
+        let mut function = Function {
+            name: "loop_break_before_dispatch".to_string(),
+            entry_va: 0,
+            body: vec![original.clone()],
+        };
+
+        collapse_range_guards(&mut function);
+
+        assert_eq!(function.body, vec![original]);
     }
 
     #[test]

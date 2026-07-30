@@ -399,6 +399,18 @@ fn recover_proven_direct_tail_calls(blocks: &mut [LlirBlock], func: &Function) {
         func.callees.iter().map(|address| address.value).collect();
 
     for block in blocks {
+        // A compiler-split child can first be discovered as a sibling and only
+        // later merged into its DWARF parent. Its direct branch may therefore
+        // have no relationship metadata even though the target block is now
+        // owned locally. Restore that exact machine edge before deciding
+        // whether any remaining target is a true tail call.
+        if let Some(Op::Jump { target } | Op::CondJump { target, .. }) =
+            block.instrs.last().map(|instruction| &instruction.op)
+        {
+            if local_starts.contains(target) && !block.succs.contains(target) {
+                block.succs.push(*target);
+            }
+        }
         if !block.succs.is_empty() {
             continue;
         }
@@ -631,6 +643,11 @@ mod tests {
                 ..
             }]
         ));
+        assert_eq!(
+            blocks[0].succs,
+            vec![0x1000],
+            "an owned jump target must remain an explicit LLIR CFG edge"
+        );
     }
 
     #[test]
