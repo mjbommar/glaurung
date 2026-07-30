@@ -528,9 +528,23 @@ impl DispatchTracker {
         ins: &Instruction,
         tables: &BTreeMap<u64, Vec<u64>>,
     ) -> Option<Resolution> {
+        self.resolve_with(ins, tables, |_table, _entry_count| None)
+    }
+
+    /// Resolve a dispatch, decoding an exact bounded table on demand when the
+    /// whole-section scan did not expose this table's starting address.
+    pub fn resolve_with<F>(
+        &self,
+        ins: &Instruction,
+        tables: &BTreeMap<u64, Vec<u64>>,
+        decode_bounded: F,
+    ) -> Option<Resolution>
+    where
+        F: FnOnce(u64, usize) -> Option<Vec<u64>>,
+    {
         let reg = ins.operands.first()?.register.as_deref()?;
         Some(match self.get(reg) {
-            Some(Val::TableTarget { table, bound }) => match tables.get(&table) {
+            Some(Val::TableTarget { table, bound }) => match bound {
                 // The scan cannot see where a table ends; the guard can. Without a
                 // guard there is NO safe entry count, so this fails closed.
                 //
@@ -545,13 +559,28 @@ impl DispatchTracker {
                 // An unrecovered jump table is honest and costs one function; a
                 // 65-arm one is confidently wrong and corrupts every function it
                 // reaches into.
-                Some(targets) => match bound {
-                    Some(b) => Resolution::Table {
-                        table_va: table,
-                        targets: targets[..targets.len().min(b as usize + 1)].to_vec(),
-                    },
-                    None => Resolution::Unresolved(Unresolved::NoBound(table)),
-                },
+                Some(bound) => {
+                    let entry_count = usize::try_from(bound)
+                        .ok()
+                        .and_then(|bound| bound.checked_add(1));
+                    let targets = entry_count.and_then(|entry_count| {
+                        tables
+                            .get(&table)
+                            .and_then(|targets| targets.get(..entry_count))
+                            .map(<[u64]>::to_vec)
+                            .or_else(|| decode_bounded(table, entry_count))
+                    });
+                    match targets {
+                        Some(targets) => Resolution::Table {
+                            table_va: table,
+                            targets,
+                        },
+                        None => Resolution::Unresolved(Unresolved::NoTableAt(table)),
+                    }
+                }
+                None if tables.contains_key(&table) => {
+                    Resolution::Unresolved(Unresolved::NoBound(table))
+                }
                 None => Resolution::Unresolved(Unresolved::NoTableAt(table)),
             },
             _ => Resolution::Unresolved(Unresolved::UnknownBase),

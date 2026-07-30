@@ -35,6 +35,87 @@ pub struct JumpTable {
     pub targets: Vec<u64>,
 }
 
+/// Decode exactly `entry_count` relative offsets at a dispatch-proven table
+/// address.
+///
+/// Whole-section scanning cannot reliably separate adjacent tables: offsets
+/// from the next table can still land in executable memory when interpreted
+/// relative to the previous table's base.  A guarded dispatch supplies the
+/// missing extent, so this path uses that proof instead of guessing an end.
+pub fn decode_bounded_relative_jump_table<F>(
+    data: &[u8],
+    table_va: u64,
+    entry_count: usize,
+    is_executable_va: F,
+) -> Option<JumpTable>
+where
+    F: Fn(u64) -> bool,
+{
+    const MAX_ENTRIES: usize = 4096;
+    if entry_count == 0 || entry_count > MAX_ENTRIES {
+        return None;
+    }
+
+    let object = object::read::File::parse(data).ok()?;
+    let little_endian = object.is_little_endian();
+    let byte_count = entry_count.checked_mul(4)?;
+    for section in object.sections() {
+        let section_va = section.address();
+        let Some(section_offset) = table_va.checked_sub(section_va) else {
+            continue;
+        };
+        let Ok(offset) = usize::try_from(section_offset) else {
+            continue;
+        };
+        let Ok(bytes) = section.data() else {
+            continue;
+        };
+        let Some(end) = offset.checked_add(byte_count) else {
+            continue;
+        };
+        let Some(entries) = bytes.get(offset..end) else {
+            continue;
+        };
+        let Some(targets) = decode_relative_entries(
+            entries,
+            table_va,
+            entry_count,
+            little_endian,
+            &is_executable_va,
+        ) else {
+            continue;
+        };
+        return Some(JumpTable { table_va, targets });
+    }
+    None
+}
+
+fn decode_relative_entries<F>(
+    bytes: &[u8],
+    table_va: u64,
+    entry_count: usize,
+    little_endian: bool,
+    is_executable_va: &F,
+) -> Option<Vec<u64>>
+where
+    F: Fn(u64) -> bool,
+{
+    let mut targets = Vec::with_capacity(entry_count);
+    for entry in bytes.get(..entry_count.checked_mul(4)?)?.chunks_exact(4) {
+        let raw = if little_endian {
+            i32::from_le_bytes(entry.try_into().ok()?)
+        } else {
+            i32::from_be_bytes(entry.try_into().ok()?)
+        };
+        let target = (table_va as i64).wrapping_add(raw as i64) as u64;
+        if !is_executable_va(target) {
+            return None;
+        }
+        targets.push(target);
+    }
+    Some(targets)
+}
+
 /// Scan rodata-shaped sections for relative-offset jump tables.
 /// `is_executable_va` returns true for any VA that lies in an
 /// executable region (passed in by the caller — `cfg.rs` already
@@ -218,6 +299,32 @@ mod tests {
         let tables = _scan_section(&data, table_va, 0x1000, 0x2000);
         assert_eq!(tables.len(), 1);
         assert_eq!(tables[0].targets[0], 0x1000);
+    }
+
+    #[test]
+    fn bounded_decode_recovers_an_adjacent_table_hidden_by_the_section_scan() {
+        let first_va = 0x4000u64;
+        let second_va = first_va + 16;
+        let first_targets = [0x1100u64, 0x1120, 0x1140, 0x1160];
+        let second_targets = [0x1200u64, 0x1220, 0x1240, 0x1260];
+        let mut bytes = Vec::new();
+        for target in first_targets {
+            bytes.extend_from_slice(&_i32_le((target as i64 - first_va as i64) as i32));
+        }
+        for target in second_targets {
+            bytes.extend_from_slice(&_i32_le((target as i64 - second_va as i64) as i32));
+        }
+        bytes.extend_from_slice(&_i32_le(0));
+
+        let scanned = _scan_section(&bytes, first_va, 0x1000, 0x2000);
+        assert_eq!(scanned.len(), 1, "the unbounded scan merges both tables");
+        assert_eq!(scanned[0].table_va, first_va);
+
+        let decoded = decode_relative_entries(&bytes[16..], second_va, 4, true, &|target| {
+            (0x1000..0x2000).contains(&target)
+        })
+        .expect("the dispatch-proven extent must recover the second table");
+        assert_eq!(decoded, second_targets);
     }
 
     #[test]

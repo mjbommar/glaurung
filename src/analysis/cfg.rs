@@ -5,7 +5,7 @@
 //! exports/PLT/etc.), disassembles within executable ranges only, splits basic
 //! blocks on control flow, and emits `Function`s plus a `CallGraph`.
 
-use crate::analysis::jump_table::discover_jump_tables;
+use crate::analysis::jump_table::{decode_bounded_relative_jump_table, discover_jump_tables};
 use crate::analysis::vtable::discover_vtables;
 use crate::core::address::{Address, AddressKind};
 use crate::core::address_range::AddressRange;
@@ -760,6 +760,21 @@ struct DiscoveryFacts<'a> {
     noreturn_targets: &'a std::collections::HashSet<u64>,
 }
 
+fn resolve_dispatch(
+    data: &[u8],
+    regions: &[ExecRegion],
+    tracker: &crate::analysis::dispatch::DispatchTracker,
+    instruction: &Instruction,
+    tables: &std::collections::BTreeMap<u64, Vec<u64>>,
+) -> Option<crate::analysis::dispatch::Resolution> {
+    tracker.resolve_with(instruction, tables, |table_va, entry_count| {
+        decode_bounded_relative_jump_table(data, table_va, entry_count, |target| {
+            in_exec_regions(regions, target).is_some()
+        })
+        .map(|table| table.targets)
+    })
+}
+
 fn discover_function(
     data: &[u8],
     arch: BArch,
@@ -963,7 +978,7 @@ fn discover_function(
                         // transfer we cannot follow. Before this, both produced
                         // the same thing — no edges — so a switch lost every arm
                         // and nothing recorded that the graph was incomplete.
-                        match dispatch.resolve(&ins, facts.tables) {
+                        match resolve_dispatch(data, regions, &dispatch, &ins, facts.tables) {
                             Some(crate::analysis::dispatch::Resolution::Table {
                                 targets, ..
                             }) => {
@@ -1153,7 +1168,9 @@ fn discover_function(
                 Some(*site),
             )
             .and_then(|(tracker, instruction)| {
-                instruction.and_then(|instruction| tracker.resolve(&instruction, facts.tables))
+                instruction.and_then(|instruction| {
+                    resolve_dispatch(data, regions, &tracker, &instruction, facts.tables)
+                })
             })
         });
         let still_exact = matches!(
@@ -4537,6 +4554,71 @@ mod gcc_dispatch_corpus_tests {
             "the resolved table jump must not also be reported unresolved: {:?}",
             stats.unresolved_indirect
         );
+    }
+
+    #[test]
+    fn clang_o0_real_dense_compute_recovers_all_eight_cfg_arms() {
+        let tmp = tempfile::tempdir().expect("temporary Clang dense-switch build directory");
+        let source = tmp.path().join("dense_compute.c");
+        let binary = tmp.path().join("dense_compute.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decompiler_fixtures/src/04_switch_shapes.c"
+                ))
+            })
+            .expect("write the real switch-shape fixture source");
+        let build = match Command::new("clang")
+            .args(["-shared", "-fPIC", "-g", "-O0", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch Clang: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile dense_compute.c with Clang -O0: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read Clang output");
+        let object = object::read::File::parse(data.as_slice()).expect("parse Clang ELF");
+        let dense_va = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("dense_compute"))
+            .map(|symbol| symbol.address())
+            .expect("exported dense_compute symbol");
+        let (functions, _callgraph, stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let function = functions
+            .iter()
+            .find(|function| {
+                function.name == "dense_compute" && function.entry_point.value == dense_va
+            })
+            .expect("discover dense_compute");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift the real dense_compute CFG");
+        let dispatch = lifted
+            .blocks
+            .iter()
+            .find(|block| block.succs.len() == 8)
+            .unwrap_or_else(|| {
+                panic!(
+                    "eight-way dense dispatch missing; resolved={:?}, unresolved={:?}, blocks={:#?}",
+                    stats.resolved_dispatches, stats.unresolved_indirect, lifted.blocks
+                )
+            });
+        assert!(matches!(
+            dispatch.instrs.last().map(|instruction| &instruction.op),
+            Some(crate::ir::types::Op::IndirectJump { .. })
+        ));
     }
 
     #[test]
