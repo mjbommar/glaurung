@@ -6560,6 +6560,12 @@ fn write_call_dec(
                 parameter_type.ends_with('*') != expression_has_pointer_representation(a);
             if emitted_prototype.authority == CallPrototypeAuthority::Authoritative
                 || representation_mismatch
+                // A recovered AAPCS-VFP parameter still proves the consuming
+                // storage class.  Render its complete expression in float
+                // context so core-loaded IEEE payloads remain bit-preserving;
+                // C's ordinary implicit conversion would invent a `vcvt` that
+                // is absent from the binary.
+                || matches!(parameter_type.as_str(), "float" | "double")
             {
                 write_typed_call_arg_dec(parameter_type, a, out);
             } else {
@@ -11138,5 +11144,58 @@ function f @ 0x1000 {
             "the float-consuming VFP expression numerically converted integer bits:\n{rendered}"
         );
         assert!(!rendered.contains("*(int *)(arg1)"));
+    }
+
+    #[test]
+    fn recovered_float_call_context_preserves_core_loaded_ieee_bits() {
+        // Exact semantic boundary from DecBench lighthouse: a project-local
+        // helper's prototype is recovered from AAPCS-VFP rather than supplied
+        // by the libc catalog, but it still consumes a float.  The preceding
+        // `ldr r3, [arg4, #16]; vmov s14, r3` is a bit-preserving field load,
+        // not an integer-to-float conversion.
+        let recovered_float = CallPrototype {
+            return_type: "float".into(),
+            parameter_types: vec!["float".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let rendered = render_decbench(&Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x80606d8,
+                    name: "arm_cos_f32".into(),
+                },
+                args: vec![Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(VReg::phys("arg0")),
+                            index: None,
+                            scale: 0,
+                            disp: 16,
+                            segment: None,
+                        }),
+                        size: 4,
+                    }),
+                    rhs: Box::new(Expr::FloatConst {
+                        bits: 1.0f32.to_bits() as u64,
+                        width: 4,
+                    }),
+                }],
+                dst: Some(VReg::phys("ret")),
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: None,
+                    call_prototype: recovered_float,
+                }),
+            }],
+        });
+
+        assert!(
+            rendered.contains("arm_cos_f32((float)((*(float *)"),
+            "a recovered float call numerically converted the field bits:\n{rendered}"
+        );
+        assert!(!rendered.contains("*(int *)"), "{rendered}");
     }
 }
