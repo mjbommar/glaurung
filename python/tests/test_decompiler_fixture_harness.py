@@ -266,6 +266,52 @@ def test_real_named_call_output_declares_its_recovered_callee_prototype():
     assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
 
 
+def test_real_known_memcpy_output_declares_a_self_contained_library_prototype():
+    """An authoritative library contract must survive into standalone C.
+
+    The call-contract pass already uses ``memcpy``'s real arity and result type,
+    but the renderer used to suppress its declaration and still cast the length
+    through the header-only spelling ``size_t``.  Compile a real imported call,
+    decompile it without source headers, and require the emitted unit itself to
+    carry every type and declaration needed by strict C11 recompilation.
+    """
+    binary = _compile_so(
+        "#include <string.h>\n"
+        "__attribute__((noinline)) void *copy_known_bytes(\n"
+        "    void *dst, const void *src, unsigned long count) {\n"
+        "    return memcpy(dst, src, count);\n"
+        "}",
+        "known_memcpy_prototype",
+    )
+    function_va = D.exported_functions(binary)["copy_known_bytes"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert "memcpy(" in decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "known_memcpy_prototype.c"
+        output_path = Path(td) / "known_memcpy_prototype.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu11",
+                "-Werror=implicit-function-declaration",
+                "-Werror=int-conversion",
+                "-Wstrict-prototypes",
+                "-Werror=strict-prototypes",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_real_void_libc_call_is_not_rendered_as_a_value():
     """A declared-void library call must not acquire a synthetic result.
 

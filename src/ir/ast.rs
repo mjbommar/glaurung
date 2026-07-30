@@ -13,6 +13,7 @@
 
 use std::fmt::{self, Write};
 
+use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
 use crate::ir::structure::Region;
 use crate::ir::types::{
     BinOp, CallTarget, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, UnOp, VReg,
@@ -4937,6 +4938,9 @@ pub fn render_decbench_typed_with_output(
         }
     }
     let named_call_prototypes = recover_named_call_prototypes(&f.body, &name);
+    DEC_NAMED_CALL_PROTOTYPES.with(|selected| {
+        *selected.borrow_mut() = named_call_prototypes.clone();
+    });
 
     // Signature: recovered return + argument types. Record which arguments are
     // pointers so the body can cast their int↔pointer reuse (see DEC_PTR_ARGS).
@@ -4968,11 +4972,11 @@ pub fn render_decbench_typed_with_output(
     }
     out.push_str(") {\n");
 
-    // A resolved named call is still a typed call site. Keep its recovered
-    // contract inside the function so the standalone fragment is valid C11/C23
-    // without hiding the function definition behind a translation-unit prelude.
-    // Authoritative library contracts are handled by the library boundary and
-    // are deliberately excluded from this evidence-derived set.
+    // A resolved named call is still a typed call site. Keep the selected
+    // authoritative-or-recovered contract inside the function so the standalone
+    // fragment is valid C11/C23 without hiding the function definition behind a
+    // translation-unit prelude. The prototype object retains its authority even
+    // though both sources share one deterministic declaration table here.
     for (callee, prototype) in &named_call_prototypes {
         let _ = write!(out, "    extern {} {}(", prototype.return_type, callee);
         if prototype.parameter_types.is_empty() {
@@ -5022,6 +5026,7 @@ pub fn render_decbench_typed_with_output(
     }
 
     out.push_str("}\n");
+    DEC_NAMED_CALL_PROTOTYPES.with(|selected| selected.borrow_mut().clear());
     out
 }
 
@@ -5282,17 +5287,13 @@ struct NamedCallObservation {
     parameter_types: Vec<&'static str>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct NamedCallPrototype {
-    return_type: &'static str,
-    parameter_types: Vec<&'static str>,
-    variadic: bool,
-}
-
 fn collect_named_call_observations(
     body: &[Stmt],
     current_name: &str,
     observations: &mut std::collections::BTreeMap<String, Vec<NamedCallObservation>>,
+    authoritative: &mut std::collections::BTreeMap<String, CallPrototype>,
+    conflicts: &mut std::collections::BTreeSet<String>,
+    fallbacks: &mut std::collections::BTreeSet<String>,
 ) {
     for statement in body {
         match statement {
@@ -5302,14 +5303,40 @@ fn collect_named_call_observations(
                 dst,
             } => {
                 let displayed = sanitize_c_ident(callee_display_name(name));
-                if displayed != current_name && crate::ir::call_contracts::lookup(name).is_none() {
-                    observations
-                        .entry(displayed)
-                        .or_default()
-                        .push(NamedCallObservation {
-                            return_type: dst.as_ref().map(declared_reg_ctype),
-                            parameter_types: args.iter().map(call_arg_ctype).collect(),
-                        });
+                if displayed == current_name {
+                    continue;
+                }
+                observations
+                    .entry(displayed.clone())
+                    .or_default()
+                    .push(NamedCallObservation {
+                        return_type: dst.as_ref().map(declared_reg_ctype),
+                        parameter_types: args.iter().map(call_arg_ctype).collect(),
+                    });
+                match crate::ir::call_contracts::lookup(name) {
+                    Some(contract) if args.len() >= contract.params.len() => {
+                        if let Some(prototype) = contract.standalone_prototype() {
+                            if let Some(existing) = authoritative.get(&displayed) {
+                                if existing != &prototype {
+                                    conflicts.insert(displayed);
+                                }
+                            } else {
+                                authoritative.insert(displayed, prototype);
+                            }
+                        }
+                    }
+                    // A known fixed or variadic contract still has a required
+                    // parameter prefix. If recovery did not find that prefix,
+                    // emitting the true declaration would make this incomplete
+                    // call invalid C. Downgrade the function-wide declaration
+                    // to the recovered common prefix; do not manufacture the
+                    // missing values.
+                    Some(_) => {
+                        fallbacks.insert(displayed);
+                    }
+                    None => {
+                        fallbacks.insert(displayed);
+                    }
                 }
             }
             Stmt::If {
@@ -5317,13 +5344,34 @@ fn collect_named_call_observations(
                 else_body,
                 ..
             } => {
-                collect_named_call_observations(then_body, current_name, observations);
+                collect_named_call_observations(
+                    then_body,
+                    current_name,
+                    observations,
+                    authoritative,
+                    conflicts,
+                    fallbacks,
+                );
                 if let Some(else_body) = else_body {
-                    collect_named_call_observations(else_body, current_name, observations);
+                    collect_named_call_observations(
+                        else_body,
+                        current_name,
+                        observations,
+                        authoritative,
+                        conflicts,
+                        fallbacks,
+                    );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_named_call_observations(body, current_name, observations);
+                collect_named_call_observations(
+                    body,
+                    current_name,
+                    observations,
+                    authoritative,
+                    conflicts,
+                    fallbacks,
+                );
             }
             Stmt::For {
                 init, step, body, ..
@@ -5332,20 +5380,47 @@ fn collect_named_call_observations(
                     std::slice::from_ref(init.as_ref()),
                     current_name,
                     observations,
+                    authoritative,
+                    conflicts,
+                    fallbacks,
                 );
-                collect_named_call_observations(body, current_name, observations);
+                collect_named_call_observations(
+                    body,
+                    current_name,
+                    observations,
+                    authoritative,
+                    conflicts,
+                    fallbacks,
+                );
                 collect_named_call_observations(
                     std::slice::from_ref(step.as_ref()),
                     current_name,
                     observations,
+                    authoritative,
+                    conflicts,
+                    fallbacks,
                 );
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    collect_named_call_observations(case, current_name, observations);
+                    collect_named_call_observations(
+                        case,
+                        current_name,
+                        observations,
+                        authoritative,
+                        conflicts,
+                        fallbacks,
+                    );
                 }
                 if let Some(default) = default {
-                    collect_named_call_observations(default, current_name, observations);
+                    collect_named_call_observations(
+                        default,
+                        current_name,
+                        observations,
+                        authoritative,
+                        conflicts,
+                        fallbacks,
+                    );
                 }
             }
             _ => {}
@@ -5353,7 +5428,7 @@ fn collect_named_call_observations(
     }
 }
 
-fn infer_named_call_prototype(observations: &[NamedCallObservation]) -> Option<NamedCallPrototype> {
+fn infer_named_call_prototype(observations: &[NamedCallObservation]) -> Option<CallPrototype> {
     let first = observations.first()?;
     let return_type = observations
         .iter()
@@ -5369,10 +5444,15 @@ fn infer_named_call_prototype(observations: &[NamedCallObservation]) -> Option<N
         .iter()
         .all(|observation| observation.parameter_types == first.parameter_types)
     {
-        return Some(NamedCallPrototype {
-            return_type,
-            parameter_types: first.parameter_types.clone(),
+        return Some(CallPrototype {
+            return_type: return_type.to_string(),
+            parameter_types: first
+                .parameter_types
+                .iter()
+                .map(|parameter| (*parameter).to_string())
+                .collect(),
             variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
         });
     }
 
@@ -5393,25 +5473,51 @@ fn infer_named_call_prototype(observations: &[NamedCallObservation]) -> Option<N
         return None;
     }
 
-    Some(NamedCallPrototype {
-        return_type,
-        parameter_types: first.parameter_types[..prefix_len].to_vec(),
+    Some(CallPrototype {
+        return_type: return_type.to_string(),
+        parameter_types: first.parameter_types[..prefix_len]
+            .iter()
+            .map(|parameter| (*parameter).to_string())
+            .collect(),
         variadic: true,
+        authority: CallPrototypeAuthority::Recovered,
     })
 }
 
 fn recover_named_call_prototypes(
     body: &[Stmt],
     current_name: &str,
-) -> std::collections::BTreeMap<String, NamedCallPrototype> {
+) -> std::collections::BTreeMap<String, CallPrototype> {
     let mut observations = std::collections::BTreeMap::new();
-    collect_named_call_observations(body, current_name, &mut observations);
-    observations
-        .into_iter()
-        .filter_map(|(name, observations)| {
-            infer_named_call_prototype(&observations).map(|prototype| (name, prototype))
-        })
-        .collect()
+    let mut prototypes = std::collections::BTreeMap::new();
+    let mut conflicts = std::collections::BTreeSet::new();
+    let mut fallbacks = std::collections::BTreeSet::new();
+    collect_named_call_observations(
+        body,
+        current_name,
+        &mut observations,
+        &mut prototypes,
+        &mut conflicts,
+        &mut fallbacks,
+    );
+    for conflict in &conflicts {
+        prototypes.remove(conflict);
+        fallbacks.remove(conflict);
+    }
+    for fallback in &fallbacks {
+        prototypes.remove(fallback);
+    }
+    for (name, observations) in observations {
+        if !fallbacks.contains(&name) {
+            continue;
+        }
+        if let std::collections::btree_map::Entry::Vacant(entry) = prototypes.entry(name) {
+            if let Some(prototype) = infer_named_call_prototype(&observations) {
+                entry.insert(prototype);
+            }
+        }
+    }
+    prototypes
 }
 
 thread_local! {
@@ -5452,6 +5558,19 @@ thread_local! {
     /// Unknown scalar output uses `return 0;` for a bare machine return; a
     /// proven void function must emit the distinct C statement `return;`.
     static DEC_VOID_OUTPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// The single declaration table selected for named calls in this render.
+    /// Argument conversions and result representation conversions must consume
+    /// this same object; independently consulting the library catalog after a
+    /// declaration was downgraded would make the call and its prototype disagree.
+    static DEC_NAMED_CALL_PROTOTYPES: std::cell::RefCell<
+        std::collections::BTreeMap<String, CallPrototype>
+    > = std::cell::RefCell::new(std::collections::BTreeMap::new());
+}
+
+fn selected_named_call_prototype(name: &str) -> Option<CallPrototype> {
+    let displayed = sanitize_c_ident(callee_display_name(name));
+    DEC_NAMED_CALL_PROTOTYPES.with(|selected| selected.borrow().get(&displayed).cloned())
 }
 
 fn dec_ptr_arg_type(name: &str) -> Option<&'static str> {
@@ -5994,10 +6113,10 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
 }
 
 fn write_call_dec(target: &Expr, args: &[Expr], dst: Option<&VReg>, out: &mut String) {
-    let contract = match target {
+    let prototype = match target {
         Expr::Named { name, .. } => {
             out.push_str(&sanitize_c_ident(callee_display_name(name)));
-            crate::ir::call_contracts::lookup(name)
+            selected_named_call_prototype(name)
         }
         _ => {
             out.push_str("((");
@@ -6024,13 +6143,16 @@ fn write_call_dec(target: &Expr, args: &[Expr], dst: Option<&VReg>, out: &mut St
         if i > 0 {
             out.push_str(", ");
         }
-        if let Some(parameter) = contract.as_ref().and_then(|known| known.params.get(i)) {
-            // Keep the authoritative source-level conversion at the call
-            // boundary. The AST's machine-word locals remain conservative,
-            // while the call itself now agrees with the same prototype that
-            // constrained arity and result production.
+        if let Some(parameter_type) = prototype
+            .as_ref()
+            .filter(|known| known.authority == CallPrototypeAuthority::Authoritative)
+            .and_then(|known| known.parameter_types.get(i))
+        {
+            // Keep an authoritative conversion at the call boundary. Recovered
+            // prototypes were inferred from these exact argument spellings, so
+            // adding casts to them would only manufacture output noise.
             out.push('(');
-            out.push_str(parameter.c_type.trim());
+            out.push_str(parameter_type);
             out.push_str(")(");
             write_call_arg_dec(a, out);
             out.push(')');
@@ -6041,6 +6163,25 @@ fn write_call_dec(target: &Expr, args: &[Expr], dst: Option<&VReg>, out: &mut St
         }
     }
     out.push(')');
+}
+
+fn write_call_result_conversion_dec(target: &Expr, dst: &VReg, out: &mut String) {
+    let Expr::Named { name, .. } = target else {
+        return;
+    };
+    let Some(return_type) =
+        selected_named_call_prototype(name).map(|prototype| prototype.return_type)
+    else {
+        return;
+    };
+    let destination_type = declared_reg_ctype(dst);
+    if return_type.ends_with('*') != destination_type.ends_with('*') {
+        // The middle layer deliberately keeps unproven values as machine
+        // words. State the representation conversion explicitly so the call
+        // still uses its authoritative pointer/scalar ABI without relying on
+        // an invalid implicit C conversion at the assignment boundary.
+        let _ = write!(out, "({destination_type})");
+    }
 }
 
 fn write_assign_dec(dst: &VReg, src: &Expr, out: &mut String) {
@@ -6139,6 +6280,9 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             // `f(x);` and then read the ARGUMENT where the return value belonged.
             if let Some(VReg::Phys(n)) = dst {
                 let _ = write!(out, "{} = ", sanitize_c_ident(n));
+            }
+            if let Some(dst) = dst {
+                write_call_result_conversion_dec(target, dst, out);
             }
             write_call_dec(target, args, dst.as_ref(), out);
             out.push_str(";\n");
@@ -10036,10 +10180,11 @@ function f @ 0x1000 {
 
         assert_eq!(
             infer_named_call_prototype(&observations),
-            Some(NamedCallPrototype {
-                return_type: "long",
-                parameter_types: vec!["long", "char *"],
+            Some(CallPrototype {
+                return_type: "long".into(),
+                parameter_types: vec!["long".into(), "char *".into()],
                 variadic: false,
+                authority: CallPrototypeAuthority::Recovered,
             })
         );
     }
@@ -10059,10 +10204,11 @@ function f @ 0x1000 {
 
         assert_eq!(
             infer_named_call_prototype(&observations),
-            Some(NamedCallPrototype {
-                return_type: "long",
-                parameter_types: vec!["char *", "long"],
+            Some(CallPrototype {
+                return_type: "long".into(),
+                parameter_types: vec!["char *".into(), "long".into()],
                 variadic: true,
+                authority: CallPrototypeAuthority::Recovered,
             })
         );
     }
@@ -10081,5 +10227,50 @@ function f @ 0x1000 {
         ];
 
         assert_eq!(infer_named_call_prototype(&observations), None);
+    }
+
+    #[test]
+    fn incomplete_authoritative_call_downgrades_to_recovered_common_prefix() {
+        let body = vec![
+            Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "dcgettext".to_string(),
+                },
+                args: vec![Expr::Const(0), Expr::Const(1), Expr::Const(5)],
+                dst: Some(VReg::phys("rax")),
+            },
+            Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "dcgettext".to_string(),
+                },
+                args: vec![Expr::Const(0)],
+                dst: Some(VReg::phys("rax")),
+            },
+        ];
+
+        let prototypes = recover_named_call_prototypes(&body, "caller");
+
+        assert_eq!(
+            prototypes.get("dcgettext"),
+            Some(&CallPrototype {
+                return_type: "long".into(),
+                parameter_types: vec!["int".into()],
+                variadic: true,
+                authority: CallPrototypeAuthority::Recovered,
+            })
+        );
+
+        let rendered = render_decbench(&Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body,
+        });
+        assert!(rendered.contains("extern long dcgettext(int, ...);"));
+        assert!(
+            !rendered.contains("(const char *)"),
+            "the downgraded recovered declaration and call casts diverged:\n{rendered}"
+        );
     }
 }
