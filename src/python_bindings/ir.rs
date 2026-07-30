@@ -363,18 +363,13 @@ fn run_ast_passes(
     let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(f, Some(cc));
     dp!("promote_stack_locals");
     // Frame-relative storage is source-level state; the push/mov/sub sequence
-    // that establishes its machine frame is not.  Recognise the x86 prologue
+    // that establishes its machine frame is not.  Recognise the machine prologue
     // here, while stack promotion has made the storage identities explicit but
     // before dead-store elimination removes the now-unused `rbp = rsp` witness.
     // A second call after the remaining passes still handles epilogues exposed
     // by stack-op rematerialisation.
-    if matches!(
-        cc,
-        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
-    ) {
-        crate::ir::x86_prologue::recognise_x86_prologue(f);
-    }
-    dp!("recognise_x86_frame");
+    recognise_machine_frame(f, cc);
+    dp!("recognise_machine_frame");
     // Project a prototype-proven result while the raw ABI output register is
     // still present. ARM32/AArch64 reuse arg0's register for the result; the
     // following spill-role split must rename both its final definition and the
@@ -404,6 +399,23 @@ fn run_ast_passes(
     crate::ir::label_prune::prune_unreferenced_labels(f);
     dp!("stack_idiom+label_prune");
     (slot_sizes, role_names)
+}
+
+/// Collapse architecture-specific machine frames after stack-slot promotion.
+///
+/// The pass is repeated after the common AST pipeline because stack-idiom
+/// rematerialisation may expose a second canonical spelling. Each recogniser
+/// is idempotent and fail-closed when the frame is not exactly balanced.
+fn recognise_machine_frame(f: &mut crate::ir::ast::Function, cc: crate::ir::call_args::CallConv) {
+    match cc {
+        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64 => {
+            crate::ir::x86_prologue::recognise_x86_prologue(f);
+        }
+        crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat => {
+            crate::ir::arm32_prologue::recognise_arm32_frame(f);
+        }
+        _ => {}
+    }
 }
 
 fn lift_for_arch(data: &[u8], start_va: u64, bits: u32, arch: &str) -> PyResult<Vec<LlirInstr>> {
@@ -672,12 +684,7 @@ fn decompile_at_py(
         &addr_map,
         &str_pool,
     );
-    if matches!(
-        cc,
-        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
-    ) {
-        crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
-    }
+    recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
     }
@@ -881,12 +888,7 @@ fn decompile_range_at_py(
         &addr_map,
         &str_pool,
     );
-    if matches!(
-        cc,
-        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
-    ) {
-        crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
-    }
+    recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
     }
@@ -1647,12 +1649,7 @@ fn decompile_all_py(
             &addr_map,
             &str_pool,
         );
-        if matches!(
-            cc,
-            crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
-        ) {
-            crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
-        }
+        recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
@@ -1837,12 +1834,7 @@ fn decompile_many_py(
             &addr_map,
             &str_pool,
         );
-        if matches!(
-            cc,
-            crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
-        ) {
-            crate::ir::x86_prologue::recognise_x86_prologue(&mut f);
-        }
+        recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }

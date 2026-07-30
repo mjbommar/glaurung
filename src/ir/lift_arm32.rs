@@ -173,56 +173,81 @@ fn cmp_flag_ops(lhs: Value, rhs: Value) -> Vec<Op> {
     ]
 }
 
+/// Architectural storage width of one ARM push/pop register-list entry.
+///
+/// Core and single-precision VFP registers occupy four bytes; double-precision
+/// VFP registers occupy eight.  Capstone expands a register range into its
+/// individual register operands, so summing these widths also handles multi-D
+/// `vpush`/`vpop` lists without a separate instruction-specific path.
+fn stack_register_width(reg: &str) -> i64 {
+    if reg
+        .strip_prefix('d')
+        .is_some_and(|index| index.parse::<u8>().is_ok())
+    {
+        8
+    } else {
+        4
+    }
+}
+
 /// `push {list}` — AAPCS stores the lowest-numbered register at the lowest
-/// address after decrementing sp by 4·N. Capstone lists the registers in
-/// ascending order, so store operand `i` at `[sp + 4·i]`.
+/// address after decrementing sp by the total register-list width. Capstone
+/// lists the registers in ascending order, so each store uses the cumulative
+/// width of its predecessors.
 fn lift_push(regs: &[String]) -> Vec<Op> {
-    let n = regs.len() as i64;
-    if n == 0 {
+    if regs.is_empty() {
         return vec![Op::Nop];
     }
+    let total_width: i64 = regs.iter().map(|reg| stack_register_width(reg)).sum();
     let sp = VReg::phys("sp");
     let mut out = vec![Op::Bin {
         dst: sp.clone(),
         op: BinOp::Sub,
         lhs: Value::Reg(sp.clone()),
-        rhs: Value::Const(4 * n),
+        rhs: Value::Const(total_width),
     }];
-    for (i, r) in regs.iter().enumerate() {
+    let mut offset = 0;
+    for r in regs {
+        let width = stack_register_width(r);
         out.push(Op::Store {
-            addr: MemOp::plain(Some(sp.clone()), None, 0, 4 * i as i64, 4),
+            addr: MemOp::plain(Some(sp.clone()), None, 0, offset, width as u8),
             src: Value::Reg(VReg::phys(r.clone())),
         });
+        offset += width;
     }
     out
 }
 
-/// `pop {list}` — mirror of push: load operand `i` from `[sp + 4·i]`, then add
-/// 4·N to sp. If `pc` is in the list the function returns, so the loads and sp
-/// adjust are followed by [`Op::Return`].
+/// `pop {list}` — mirror of push: load each operand at the cumulative width of
+/// its predecessors, then add the total register-list width to sp. If `pc` is
+/// in the list the function returns, so the loads and sp adjust are followed by
+/// [`Op::Return`].
 fn lift_pop(regs: &[String]) -> Vec<Op> {
-    let n = regs.len() as i64;
-    if n == 0 {
+    if regs.is_empty() {
         return vec![Op::Nop];
     }
+    let total_width: i64 = regs.iter().map(|reg| stack_register_width(reg)).sum();
     let sp = VReg::phys("sp");
     let mut out = Vec::new();
     let mut returns = false;
-    for (i, r) in regs.iter().enumerate() {
+    let mut offset = 0;
+    for r in regs {
+        let width = stack_register_width(r);
         if r == "pc" {
             returns = true;
-            continue; // don't materialise a write to pc; it's the return target
+        } else {
+            out.push(Op::Load {
+                dst: VReg::phys(r.clone()),
+                addr: MemOp::plain(Some(sp.clone()), None, 0, offset, width as u8),
+            });
         }
-        out.push(Op::Load {
-            dst: VReg::phys(r.clone()),
-            addr: MemOp::plain(Some(sp.clone()), None, 0, 4 * i as i64, 4),
-        });
+        offset += width;
     }
     out.push(Op::Bin {
         dst: sp.clone(),
         op: BinOp::Add,
         lhs: Value::Reg(sp),
-        rhs: Value::Const(4 * n),
+        rhs: Value::Const(total_width),
     });
     if returns {
         out.push(Op::Return);
@@ -1372,6 +1397,53 @@ mod tests {
                 Some(Op::Return)
             ),
             "epilogue must end in semantic Return: {lifted:#?}"
+        );
+    }
+
+    #[test]
+    fn thumb_vpush_vpop_double_register_preserve_eight_byte_stack_width() {
+        // Exact Cortex-M4 encodings from DecBench's real
+        // `lighthouseCalibrationMeasurementModelLh2` frame:
+        //
+        //     vpush {d8}    ed2d 8b02
+        //     vpop  {d8}    ecbd 8b02
+        //
+        // A D register is 64 bits.  Treating the VFP register list like a
+        // core-register push silently undercounts the frame by four bytes.
+        let pushed = ops(&[0x2d, 0xed, 0x02, 0x8b]);
+        assert_eq!(
+            pushed,
+            vec![
+                Op::Bin {
+                    dst: VReg::phys("sp"),
+                    op: BinOp::Sub,
+                    lhs: Value::Reg(VReg::phys("sp")),
+                    rhs: Value::Const(8),
+                },
+                Op::Store {
+                    addr: MemOp::plain(Some(VReg::phys("sp")), None, 0, 0, 8),
+                    src: Value::Reg(VReg::phys("d8")),
+                },
+            ],
+            "vpush must allocate and store the full d8 width"
+        );
+
+        let popped = ops(&[0xbd, 0xec, 0x02, 0x8b]);
+        assert_eq!(
+            popped,
+            vec![
+                Op::Load {
+                    dst: VReg::phys("d8"),
+                    addr: MemOp::plain(Some(VReg::phys("sp")), None, 0, 0, 8),
+                },
+                Op::Bin {
+                    dst: VReg::phys("sp"),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("sp")),
+                    rhs: Value::Const(8),
+                },
+            ],
+            "vpop must load and release the full d8 width"
         );
     }
 
