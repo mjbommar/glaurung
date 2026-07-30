@@ -1,7 +1,8 @@
 //! Lift bounded read-only lookup-table loads into portable AST expressions.
 //!
 //! Optimising compilers commonly lower a switch whose arms only return constants
-//! to a range guard followed by a load from `.rodata`.  Rendering the load as
+//! to a bounded index followed by a load from `.rodata`.  The bound may be an
+//! explicit range guard or intrinsic to the index, such as `value & 3`. Rendering the load as
 //! `*(int *)(0x20ac + index * 4)` preserves the original image's address but not
 //! standalone C semantics: the recompiled function has no object mapped at that
 //! link-time VA.  This pass retains the original load as a fail-closed fallback
@@ -251,19 +252,13 @@ fn fold_expr(
     match expression {
         Expr::Deref { addr, size } => {
             fold_expr(addr, data, aliases, active_guard);
-            let Some(guard) = active_guard else {
-                return;
-            };
             let Some((base, index)) = indexed_address(addr, *size) else {
                 return;
             };
-            let Some(index_name) = source_register(&index) else {
+            let Some(inclusive_max) = proven_index_max(&index, aliases, active_guard) else {
                 return;
             };
-            if resolve_alias(index_name, aliases) != guard.index_root {
-                return;
-            }
-            let count = guard.inclusive_max.saturating_add(1);
+            let count = inclusive_max.saturating_add(1);
             if count == 0 || count > MAX_GUARDED_ENTRIES {
                 return;
             }
@@ -345,6 +340,28 @@ fn bounded_guard(condition: &Expr, aliases: &HashMap<String, String>) -> Option<
         index_root: resolve_alias(index, aliases),
         inclusive_max,
     })
+}
+
+fn proven_index_max(
+    index: &Expr,
+    aliases: &HashMap<String, String>,
+    active_guard: Option<&Guard>,
+) -> Option<usize> {
+    if let Expr::Bin {
+        op: BinOp::And,
+        lhs,
+        rhs,
+    } = strip_casts(index)
+    {
+        let mask = constant_usize(lhs).or_else(|| constant_usize(rhs));
+        if mask.is_some_and(|value| value < MAX_GUARDED_ENTRIES) {
+            return mask;
+        }
+    }
+
+    let guard = active_guard?;
+    let index_name = source_register(index)?;
+    (resolve_alias(index_name, aliases) == guard.index_root).then_some(guard.inclusive_max)
 }
 
 fn indexed_address(address: &Expr, width: u8) -> Option<(u64, Expr)> {
@@ -564,5 +581,75 @@ mod tests {
             !invalid_guard.contains("?"),
             "lookup folded after guard root changed:\n{invalid_guard}"
         );
+    }
+
+    #[test]
+    fn masked_lookup_materialises_only_the_proven_table_extent() {
+        let data = ReadonlyData {
+            regions: vec![ReadonlyRegion {
+                base: 0x20e0,
+                bytes: [1u32, 10, 100, 1000]
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect(),
+            }],
+            little_endian: true,
+        };
+        let lookup = |index: Expr| Expr::Deref {
+            addr: Box::new(Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Addr(0x20e0)),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(index),
+                    }),
+                    rhs: Box::new(Expr::Const(4)),
+                }),
+            }),
+            size: 4,
+        };
+        let mut masked = Function {
+            name: "masked_lookup".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(lookup(Expr::Bin {
+                    op: BinOp::And,
+                    lhs: Box::new(Expr::Reg(VReg::phys("index"))),
+                    rhs: Box::new(Expr::Const(3)),
+                })),
+            }],
+        };
+        let mut unbounded = Function {
+            name: "unbounded_lookup".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(lookup(Expr::Reg(VReg::phys("index")))),
+            }],
+        };
+
+        fold_guarded_readonly_lookups(&mut masked, &data);
+        fold_guarded_readonly_lookups(&mut unbounded, &data);
+
+        let rendered = crate::ir::ast::render(&masked);
+        for value in ["1", "10", "100", "1000"] {
+            assert!(rendered.contains(value), "missing {value}:\n{rendered}");
+        }
+        assert!(
+            rendered.contains("?"),
+            "masked table was not folded:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("0x20e0"),
+            "fail-closed fallback load must remain:\n{rendered}"
+        );
+        let unbounded = crate::ir::ast::render(&unbounded);
+        assert!(
+            !unbounded.contains("?"),
+            "unproved index unexpectedly folded:\n{unbounded}"
+        );
+        assert!(unbounded.contains("0x20e0"), "{unbounded}");
     }
 }
