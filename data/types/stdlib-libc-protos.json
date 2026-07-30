@@ -61,6 +61,8 @@
                 {"name": "whence", "c_type": "int"}]},
     {"name": "ftell",   "return_type": "long",
      "params": [{"name": "stream", "c_type": "FILE *"}]},
+    {"name": "perror",  "return_type": "void",
+     "params": [{"name": "s", "c_type": "const char *"}]},
 
     {"name": "strlen",  "return_type": "size_t",
      "params": [{"name": "s", "c_type": "const char *"}]},

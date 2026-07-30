@@ -144,6 +144,48 @@ def test_real_indirect_call_output_has_a_concrete_call_site_prototype():
     assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
 
 
+def test_real_void_libc_call_is_not_rendered_as_a_value():
+    """A declared-void library call must not acquire a synthetic result.
+
+    Return-register liveness alone is insufficient: on SysV AMD64, a later
+    load into RAX after ``perror`` used to make the call look value-producing.
+    This compiles a real ELF import, crosses symbol resolution and the native
+    AST pipeline, then asks the C compiler to enforce the system declaration.
+    """
+    binary = _compile_so(
+        "#include <stdio.h>\n"
+        "__attribute__((noinline)) int report_and_test(const char *s) {\n"
+        "    perror(s);\n"
+        "    return s != 0;\n"
+        "}",
+        "void_libc_call",
+    )
+    report_va = D.exported_functions(binary)["report_and_test"]
+    decompiled = D.decompiled_c(binary, report_va)
+    assert decompiled is not None
+    assert "perror(" in decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "void_libc_call.c"
+        output_path = Path(td) / "void_libc_call.so"
+        source_path.write_text("#include <stdio.h>\n" + D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu11",
+                "-Werror",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_compile_failure_of_decompilation_is_fail(monkeypatch, tmp_path):
     # If the decompiled C does not compile, the function FAILS (not skip).
     sig = {"name": "f", "va": 0, "params": ["int"], "ret": "int"}

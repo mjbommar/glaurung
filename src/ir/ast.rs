@@ -5819,8 +5819,11 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
 }
 
 fn write_call_dec(target: &Expr, args: &[Expr], dst: Option<&VReg>, out: &mut String) {
-    match target {
-        Expr::Named { name, .. } => out.push_str(&sanitize_c_ident(callee_display_name(name))),
+    let contract = match target {
+        Expr::Named { name, .. } => {
+            out.push_str(&sanitize_c_ident(callee_display_name(name)));
+            crate::ir::call_contracts::lookup(name)
+        }
         _ => {
             out.push_str("((");
             out.push_str(dst.map_or("void", declared_reg_ctype));
@@ -5838,14 +5841,29 @@ fn write_call_dec(target: &Expr, args: &[Expr], dst: Option<&VReg>, out: &mut St
             out.push_str("))(");
             write_expr_dec(target, out);
             out.push_str("))");
+            None
         }
-    }
+    };
     out.push('(');
     for (i, a) in args.iter().enumerate() {
         if i > 0 {
             out.push_str(", ");
         }
-        write_call_arg_dec(a, out);
+        if let Some(parameter) = contract.as_ref().and_then(|known| known.params.get(i)) {
+            // Keep the authoritative source-level conversion at the call
+            // boundary. The AST's machine-word locals remain conservative,
+            // while the call itself now agrees with the same prototype that
+            // constrained arity and result production.
+            out.push('(');
+            out.push_str(parameter.c_type.trim());
+            out.push_str(")(");
+            write_call_arg_dec(a, out);
+            out.push(')');
+        } else {
+            // Variadic tails and unknown calls retain their recovered value
+            // spelling; default argument promotions belong to the C compiler.
+            write_call_arg_dec(a, out);
+        }
     }
     out.push(')');
 }

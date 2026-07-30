@@ -337,6 +337,12 @@ fn run_ast_passes(
     dp!("recover_resolved_tail_calls");
     crate::ir::call_args::reconstruct_args_with_params(f, cc, param_slots);
     dp!("reconstruct_args");
+    // ABI liveness supplies candidate call inputs/outputs; an authoritative
+    // library prototype wins when one is known. This mirrors Ghidra's locked
+    // FuncProto and angr's callee-prototype priority rather than asking the C
+    // renderer to paper over a semantically impossible AST result.
+    crate::ir::call_contracts::apply_known_call_contracts(f);
+    dp!("apply_known_call_contracts");
     crate::ir::strings_fold::fold_string_literals(f, str_pool);
     crate::ir::canary::recognise_canary(f);
     dp!("canary+strings");
