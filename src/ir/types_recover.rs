@@ -22,7 +22,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::ssa::{SsaInfo, SsaValue};
-use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
+use crate::ir::types::{BinOp, LlirFunction, MemOp, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, InstrAddr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -568,20 +568,168 @@ fn scalar_float_intrinsic_width(name: &str) -> Option<u8> {
     match name {
         "addss" | "subss" | "mulss" | "divss" => Some(4),
         "addsd" | "subsd" | "mulsd" | "divsd" => Some(8),
-        name if ["vmov.f32", "vadd.f32", "vsub.f32", "vmul.f32", "vdiv.f32"]
-            .iter()
-            .any(|operation| name.starts_with(operation)) =>
+        name if [
+            "vmov.f32", "vneg.f32", "vadd.f32", "vsub.f32", "vmul.f32", "vdiv.f32",
+        ]
+        .iter()
+        .any(|operation| name.starts_with(operation)) =>
         {
             Some(4)
         }
-        name if ["vmov.f64", "vadd.f64", "vsub.f64", "vmul.f64", "vdiv.f64"]
-            .iter()
-            .any(|operation| name.starts_with(operation)) =>
+        name if [
+            "vmov.f64", "vneg.f64", "vadd.f64", "vsub.f64", "vmul.f64", "vdiv.f64",
+        ]
+        .iter()
+        .any(|operation| name.starts_with(operation)) =>
         {
             Some(8)
         }
         _ => None,
     }
+}
+
+fn arm_single_vfp_slot(register: &VReg) -> Option<usize> {
+    match register {
+        VReg::Phys(name) => name
+            .strip_prefix('s')
+            .and_then(|index| index.parse::<usize>().ok())
+            .filter(|index| *index < 16),
+        _ => None,
+    }
+}
+
+/// Contiguous scalar VFP registers whose first touch is a read.
+///
+/// A hard-float argument is a version-zero use.  A scratch/result register is
+/// defined before it is read.  Requiring a contiguous `s0..sN` prefix follows
+/// AAPCS allocation and rejects isolated callee-saved/scratch registers.
+fn arm_vfp_live_in_slots(lf: &LlirFunction) -> Vec<usize> {
+    let mut first_touch: HashMap<usize, bool> = HashMap::new();
+    for block in &lf.blocks {
+        for instruction in &block.instrs {
+            let (definition, uses) = def_uses(&instruction.op);
+            for used in uses {
+                if let Some(slot) = arm_single_vfp_slot(&used) {
+                    first_touch.entry(slot).or_insert(true);
+                }
+            }
+            if let Some(definition) = definition {
+                if let Some(slot) = arm_single_vfp_slot(&definition) {
+                    first_touch.entry(slot).or_insert(false);
+                }
+            }
+        }
+    }
+    let mut live: Vec<usize> = first_touch
+        .into_iter()
+        .filter_map(|(slot, is_live_in)| is_live_in.then_some(slot))
+        .collect();
+    live.sort_unstable();
+    if live.iter().copied().eq(0..live.len()) {
+        live
+    } else {
+        Vec::new()
+    }
+}
+
+/// Recover source order for a mixed ARM core/VFP signature from an entry spill
+/// sequence.
+///
+/// GCC's Cortex-M O0 prologue stores incoming parameters in declaration order
+/// into strictly descending `sp` slots.  The two conditions are checked
+/// independently: instruction order alone could be register-class grouping,
+/// and offsets alone could be unrelated saves.  Every candidate must occur
+/// exactly once before a control-transfer boundary; otherwise this declines.
+fn arm_mixed_entry_spill_order(lf: &LlirFunction, candidates: &[VReg]) -> Option<Vec<VReg>> {
+    let entry = lf
+        .blocks
+        .iter()
+        .find(|block| block.start_va == lf.entry_va)?;
+    let candidate_set: HashSet<VReg> = candidates.iter().cloned().collect();
+    let mut origins: HashMap<VReg, VReg> = candidates
+        .iter()
+        .cloned()
+        .map(|register| (register.clone(), register))
+        .collect();
+    let mut stack_bases = HashSet::from([VReg::phys("sp")]);
+    let mut spills: Vec<(i64, VReg)> = Vec::new();
+
+    for instruction in &entry.instrs {
+        match &instruction.op {
+            Op::Assign {
+                dst,
+                src: Value::Reg(src),
+            }
+            | Op::ZExt {
+                dst,
+                src: Value::Reg(src),
+                ..
+            }
+            | Op::SExt {
+                dst,
+                src: Value::Reg(src),
+                ..
+            }
+            | Op::Trunc {
+                dst,
+                src: Value::Reg(src),
+                ..
+            } => {
+                if let Some(origin) = origins.get(src).cloned() {
+                    origins.insert(dst.clone(), origin);
+                }
+                if stack_bases.contains(src) {
+                    stack_bases.insert(dst.clone());
+                }
+            }
+            Op::Bin {
+                dst,
+                op: BinOp::Add,
+                lhs: Value::Reg(base),
+                rhs: Value::Const(0),
+            }
+            | Op::Bin {
+                dst,
+                op: BinOp::Add,
+                lhs: Value::Const(0),
+                rhs: Value::Reg(base),
+            } => {
+                if stack_bases.contains(base) {
+                    stack_bases.insert(dst.clone());
+                }
+            }
+            Op::Store {
+                addr:
+                    MemOp {
+                        base: Some(base),
+                        index: None,
+                        disp,
+                        ..
+                    },
+                src: Value::Reg(src),
+            } if stack_bases.contains(base) => {
+                let Some(origin) = origins.get(src).cloned() else {
+                    continue;
+                };
+                if candidate_set.contains(&origin)
+                    && !spills.iter().any(|(_, recorded)| recorded == &origin)
+                {
+                    spills.push((*disp, origin));
+                }
+            }
+            Op::Call { .. }
+            | Op::Jump { .. }
+            | Op::IndirectJump { .. }
+            | Op::CondJump { .. }
+            | Op::Return => break,
+            _ => {}
+        }
+    }
+
+    if spills.len() != candidates.len() || !spills.windows(2).all(|pair| pair[0].0 > pair[1].0) {
+        return None;
+    }
+    Some(spills.into_iter().map(|(_, register)| register).collect())
 }
 
 /// A result fact strong enough to cross the SSA-to-source prototype boundary.
@@ -1129,44 +1277,49 @@ pub fn recover_prototype_with_arm_vfp_args(
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
-    if arm_vfp_args && matches!(cc, crate::ir::call_args::CallConv::Arm) && param_slots.is_empty() {
-        let mut first_touch: HashMap<usize, bool> = HashMap::new();
-        let single_slot = |register: &VReg| match register {
-            VReg::Phys(name) => name
-                .strip_prefix('s')
-                .and_then(|index| index.parse::<usize>().ok())
-                .filter(|index| *index < 16),
-            _ => None,
-        };
-        for block in &lf.blocks {
-            for instruction in &block.instrs {
-                let (definition, uses) = def_uses(&instruction.op);
-                for used in uses {
-                    if let Some(slot) = single_slot(&used) {
-                        first_touch.entry(slot).or_insert(true);
-                    }
-                }
-                if let Some(definition) = definition {
-                    if let Some(slot) = single_slot(&definition) {
-                        first_touch.entry(slot).or_insert(false);
-                    }
-                }
-            }
-        }
-        let mut live: Vec<usize> = first_touch
+    if arm_vfp_args && matches!(cc, crate::ir::call_args::CallConv::Arm) {
+        let vfp_parameters: Vec<RecoveredParameter> = arm_vfp_live_in_slots(lf)
             .into_iter()
-            .filter_map(|(slot, is_live_in)| is_live_in.then_some(slot))
-            .collect();
-        live.sort_unstable();
-        if live.iter().copied().eq(0..live.len()) {
-            parameters.extend(live.into_iter().map(|slot| RecoveredParameter {
+            .map(|slot| RecoveredParameter {
                 slot,
                 value: SsaValue {
                     base: VReg::phys(format!("s{slot}")),
                     version: 0,
                 },
                 hint: Some(TypeHint::Float { width: 4 }),
-            }));
+            })
+            .collect();
+
+        if parameters.is_empty() {
+            // Pure-float signatures are ordered directly by their contiguous
+            // AAPCS VFP allocation, exactly as before.
+            parameters = vfp_parameters;
+        } else if !vfp_parameters.is_empty() {
+            // The two AAPCS storage classes do not by themselves identify
+            // source order.  Interleave them only when the entry's concrete
+            // spill sequence proves one order.
+            let candidates: Vec<VReg> = parameters
+                .iter()
+                .chain(&vfp_parameters)
+                .map(|parameter| parameter.value.base.clone())
+                .collect();
+            if let Some(source_order) = arm_mixed_entry_spill_order(lf, &candidates) {
+                let mut by_register: HashMap<VReg, RecoveredParameter> = parameters
+                    .into_iter()
+                    .chain(vfp_parameters)
+                    .map(|parameter| (parameter.value.base.clone(), parameter))
+                    .collect();
+                parameters = source_order
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(slot, register)| {
+                        by_register.remove(&register).map(|mut parameter| {
+                            parameter.slot = slot;
+                            parameter
+                        })
+                    })
+                    .collect();
+            }
         }
     }
     parameters.sort_by_key(|parameter| parameter.slot);
@@ -1263,6 +1416,26 @@ fn int_for_reg(v: &VReg) -> TypeHint {
     }
 }
 
+fn value_hint_for_reg(v: &VReg) -> TypeHint {
+    match v {
+        VReg::Phys(name)
+            if name
+                .strip_prefix('s')
+                .is_some_and(|index| index.parse::<u8>().is_ok()) =>
+        {
+            TypeHint::Float { width: 4 }
+        }
+        VReg::Phys(name)
+            if name
+                .strip_prefix('d')
+                .is_some_and(|index| index.parse::<u8>().is_ok()) =>
+        {
+            TypeHint::Float { width: 8 }
+        }
+        _ => int_for_reg(v),
+    }
+}
+
 /// Tag every physical register that carries a value in `op` with a
 /// width-appropriate signed-int hint. The `upsert` policy keeps a more-specific
 /// classification (pointer / bool / code-pointer / narrower width), so this only
@@ -1270,7 +1443,7 @@ fn int_for_reg(v: &VReg) -> TypeHint {
 fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
     let tag = |val: &Value, tm: &mut TypeMap| {
         if let Value::Reg(r @ VReg::Phys(_)) = val {
-            tm.upsert(r.clone(), int_for_reg(r));
+            tm.upsert(r.clone(), value_hint_for_reg(r));
         }
     };
     let bytes = |width: crate::ir::types::Width| width.bytes().min(u8::MAX as u16) as u8;
@@ -1280,21 +1453,26 @@ fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
         Op::IndirectJump { .. } => {}
         Op::Assign { dst, src } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), int_for_reg(dst));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst));
             }
             tag(src, tm);
         }
         Op::Store { src, .. } => tag(src, tm),
+        Op::Load { dst, .. } => {
+            if let VReg::Phys(_) = dst {
+                tm.upsert(dst.clone(), value_hint_for_reg(dst));
+            }
+        }
         Op::Bin { dst, lhs, rhs, .. } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), int_for_reg(dst));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst));
             }
             tag(lhs, tm);
             tag(rhs, tm);
         }
         Op::Un { dst, src, .. } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), int_for_reg(dst));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst));
             }
             tag(src, tm);
         }
@@ -3290,6 +3468,93 @@ int never_returns(void) { for (;;) {} }
                 .iter()
                 .all(|parameter| parameter.value.base != VReg::phys("s0")),
             "mixed core/VFP source ordering is not identifiable: {prototype:#?}"
+        );
+    }
+
+    #[test]
+    fn arm_hard_float_descending_entry_spills_recover_mixed_source_order() {
+        // Real GCC Cortex-M O0 prologues spill incoming parameters in source
+        // order to strictly descending frame offsets.  `pidUpdate` uses this
+        // exact class sequence: r0 -> [r7+12], s0 -> [r7+8], r1 (via r3) ->
+        // [r7+7], after establishing r7 = sp. Unlike the no-spill case above,
+        // this is direct ordering
+        // evidence rather than a preferred register-class convention.
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1010,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Bin {
+                            dst: VReg::phys("r7"),
+                            op: BinOp::Add,
+                            lhs: Value::Reg(VReg::phys("sp")),
+                            rhs: Value::Const(0),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1002,
+                        op: Op::Store {
+                            addr: MemOp::plain(Some(VReg::phys("r7")), None, 0, 12, 4),
+                            src: Value::Reg(VReg::phys("r0")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Store {
+                            addr: MemOp::plain(Some(VReg::phys("r7")), None, 0, 8, 4),
+                            src: Value::Reg(VReg::phys("s0")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1008,
+                        op: Op::Assign {
+                            dst: VReg::phys("r3"),
+                            src: Value::Reg(VReg::phys("r1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x100a,
+                        op: Op::Store {
+                            addr: MemOp::plain(Some(VReg::phys("r7")), None, 0, 7, 1),
+                            src: Value::Reg(VReg::phys("r3")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x100c,
+                        op: Op::Return,
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype_with_arm_vfp_args(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::Arm,
+            &HashSet::from([0, 1]),
+            true,
+        );
+
+        assert_eq!(
+            prototype
+                .parameters()
+                .iter()
+                .map(|parameter| (parameter.slot, parameter.value.base.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, VReg::phys("r0")),
+                (1, VReg::phys("s0")),
+                (2, VReg::phys("r1")),
+            ],
+            "mixed parameter roles: {prototype:#?}"
+        );
+        assert_eq!(
+            prototype.parameters()[1].hint,
+            Some(TypeHint::Float { width: 4 })
         );
     }
 

@@ -120,8 +120,10 @@ pub fn apply_role_names_with_parameter_roles(
         }
     }
     for (name, slot) in parameter_roles {
-        role.entry(name.clone())
-            .or_insert_with(|| format!("arg{slot}"));
+        // Prototype recovery owns the exact source-role binding. In a mixed
+        // AAPCS signature r1 may be source arg2 because s0 is source arg1, so
+        // the ordinary core-register slot table must not win here.
+        role.insert(name.clone(), format!("arg{slot}"));
     }
     for name in return_reg_aliases(cc) {
         // `ret` only wins if no arg-slot already claimed the name (x0 case
@@ -724,6 +726,49 @@ mod tests {
         apply_role_names(&mut f, CallConv::Aarch64);
         let text = render(&f);
         assert!(text.contains("return %arg0;"), "got: {}", text);
+    }
+
+    #[test]
+    fn exact_mixed_arm_roles_override_core_register_slot_numbers() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("r3"),
+                    src: Expr::Reg(reg("r1")),
+                },
+                Stmt::Assign {
+                    dst: reg("s1"),
+                    src: Expr::Reg(reg("s0")),
+                },
+            ],
+        };
+        let roles = HashMap::from([
+            ("r0".to_string(), 0),
+            ("s0".to_string(), 1),
+            ("r1".to_string(), 2),
+        ]);
+        apply_role_names_with_parameter_roles(
+            &mut f,
+            CallConv::Arm,
+            &std::collections::HashSet::from([0, 1]),
+            &roles,
+        );
+
+        assert_eq!(
+            f.body,
+            vec![
+                Stmt::Assign {
+                    dst: reg("var0"),
+                    src: Expr::Reg(reg("arg2")),
+                },
+                Stmt::Assign {
+                    dst: reg("var1"),
+                    src: Expr::Reg(reg("arg1")),
+                },
+            ]
+        );
     }
 
     #[test]

@@ -677,6 +677,7 @@ fn decompile_at_py(
         // AST's role names (`arg0`, `ret`, ...) before rendering.
         let maps = types.then(|| {
             decbench_type_maps(
+                &f,
                 &lf_raw,
                 prototype.as_ref().expect("typed DecBench prototype"),
                 cc,
@@ -865,6 +866,7 @@ fn decompile_range_at_py(
     Ok(if style == "decbench" {
         let maps = types.then(|| {
             decbench_type_maps(
+                &f,
                 &lf_raw,
                 prototype.as_ref().expect("typed DecBench prototype"),
                 cc,
@@ -1002,6 +1004,32 @@ fn remap_type_map_impl(
     for (reg, hint) in tm.iter() {
         match reg {
             crate::ir::types::VReg::Phys(n) => {
+                if matches!(hint, crate::ir::types_recover::TypeHint::Float { .. }) {
+                    // Raw type recovery sees the architectural VFP register
+                    // (`s15`), while value numbering deliberately splits its
+                    // definitions (`s15#1`, `s15#2`, ...). Every such exact
+                    // role carries the same scalar storage class; projecting
+                    // only an exact bare-name match leaves merged values as
+                    // `long` and silently truncates float arithmetic in C.
+                    let mut projected = false;
+                    if let Some(roles) = exact_roles {
+                        for (storage, role) in roles {
+                            if crate::ir::abi::ssa_base(storage) == n
+                                && (include_parameters
+                                    || crate::ir::ast::parse_arg_index(role).is_none())
+                            {
+                                out.upsert_public(
+                                    crate::ir::types::VReg::Phys(role.clone()),
+                                    *hint,
+                                );
+                                projected = true;
+                            }
+                        }
+                    }
+                    if projected {
+                        continue;
+                    }
+                }
                 // Exact first-appearance aliases are needed only for semantic
                 // float storage: unlike broad scalar guesses, a typed VFP
                 // intrinsic proves every operand's source class. Keeping this
@@ -1216,6 +1244,115 @@ fn recover_decbench_prototype(
     prototype
 }
 
+fn float_expression_width(
+    expression: &crate::ir::ast::Expr,
+    types: &crate::ir::types_recover::TypeMap,
+) -> Option<u8> {
+    use crate::ir::ast::Expr;
+    use crate::ir::types_recover::TypeHint;
+
+    match expression {
+        Expr::Reg(register) => match types.get(register) {
+            Some(TypeHint::Float { width }) => Some(width),
+            _ => None,
+        },
+        Expr::FloatConst { width, .. } => Some(*width),
+        Expr::Un { src, .. } => float_expression_width(src, types),
+        Expr::Bin { lhs, rhs, .. } => {
+            float_expression_width(lhs, types).or_else(|| float_expression_width(rhs, types))
+        }
+        Expr::Select {
+            if_true, if_false, ..
+        } => float_expression_width(if_true, types)
+            .or_else(|| float_expression_width(if_false, types)),
+        _ => None,
+    }
+}
+
+/// Carry semantic float facts through the source-level copies introduced by
+/// stack promotion and SSA-merge lowering.
+///
+/// The raw LLIR map proves that `s0`/`s15` carry floats, but a promoted stack
+/// slot is named only later (`local_c`). Treating its four-byte extent as an
+/// integer changes a numeric float copy into a C conversion. This small fixed
+/// point preserves the already-proven class without guessing from width alone.
+fn refine_float_copy_types(
+    body: &[crate::ir::ast::Stmt],
+    types: &mut crate::ir::types_recover::TypeMap,
+) {
+    use crate::ir::ast::{Expr, Stmt};
+    use crate::ir::types::{VReg, VReg::Phys};
+    use crate::ir::types_recover::TypeHint;
+
+    fn refine(
+        destination: &VReg,
+        source: &Expr,
+        types: &mut crate::ir::types_recover::TypeMap,
+        changed: &mut bool,
+    ) {
+        let Some(width) = float_expression_width(source, types) else {
+            return;
+        };
+        let hint = TypeHint::Float { width };
+        if types.get(destination) != Some(hint) {
+            types.refine_from_value(destination.clone(), hint);
+            *changed = true;
+        }
+    }
+
+    fn visit(body: &[Stmt], types: &mut crate::ir::types_recover::TypeMap, changed: &mut bool) {
+        for statement in body {
+            match statement {
+                Stmt::Assign { dst, src } => refine(dst, src, types, changed),
+                Stmt::Store {
+                    addr: Expr::Reg(destination @ Phys(name)),
+                    src,
+                    ..
+                } if name.starts_with("local_") || name.starts_with("stack_") => {
+                    refine(destination, src, types, changed);
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    visit(then_body, types, changed);
+                    if let Some(else_body) = else_body {
+                        visit(else_body, types, changed);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    visit(body, types, changed)
+                }
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    visit(std::slice::from_ref(init.as_ref()), types, changed);
+                    visit(body, types, changed);
+                    visit(std::slice::from_ref(step.as_ref()), types, changed);
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case_body) in cases {
+                        visit(case_body, types, changed);
+                    }
+                    if let Some(default) = default {
+                        visit(default, types, changed);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        visit(body, types, &mut changed);
+        if !changed {
+            break;
+        }
+    }
+}
+
 /// Build the `(declaration, width)` type-map pair the DecBench renderer needs.
 ///
 /// Machine-width facts come from the PRE-canonicalisation LLIR (`lf_raw`), the only
@@ -1226,6 +1363,7 @@ fn recover_decbench_prototype(
 /// which retains exact SSA live-in identity. Only non-parameter roles are remapped
 /// from storage names; both maps are then augmented with promoted-slot sizes.
 fn decbench_type_maps(
+    f: &crate::ir::ast::Function,
     lf_raw: &crate::ir::types::LlirFunction,
     prototype: &crate::ir::types_recover::RecoveredPrototype,
     cc: crate::ir::call_args::CallConv,
@@ -1259,6 +1397,7 @@ fn decbench_type_maps(
         }
     }
     merge_slot_sizes(&mut decl, slot_sizes);
+    refine_float_copy_types(&f.body, &mut decl);
     let mut width = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names));
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
         if prototype.output_is_locked() {
@@ -1274,6 +1413,7 @@ fn decbench_type_maps(
         }
     }
     merge_slot_sizes(&mut width, slot_sizes);
+    refine_float_copy_types(&f.body, &mut width);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== exact role names =====\n{role_names:#?}");
         eprintln!("\n===== recovered declaration types =====\n{decl:#?}");
@@ -1390,6 +1530,7 @@ fn decompile_all_py(
         }
         let text = if style == "decbench" {
             let (decl, width) = decbench_type_maps(
+                &f,
                 &lf_raw,
                 prototype.as_ref().expect("DecBench prototype"),
                 cc,
@@ -1555,6 +1696,7 @@ fn decompile_many_py(
             .cloned();
         let text = if style == "decbench" {
             let (decl, width) = decbench_type_maps(
+                &f,
                 &lf_raw,
                 prototype.as_ref().expect("DecBench prototype"),
                 cc,

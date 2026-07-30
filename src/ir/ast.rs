@@ -487,7 +487,14 @@ fn lower_float_value(value: &Value, width: u8) -> Expr {
     }
 }
 
-fn scalar_float_intrinsic(name: &str) -> Option<(Option<BinOp>, u8)> {
+#[derive(Clone, Copy)]
+enum ScalarFloatOperation {
+    Move,
+    Negate,
+    Binary(BinOp),
+}
+
+fn scalar_float_intrinsic(name: &str) -> Option<(ScalarFloatOperation, u8)> {
     let (base, width) = if let Some(base) = name.strip_suffix(".f32") {
         (base, 4)
     } else if let Some(base) = name.strip_suffix(".f64") {
@@ -496,11 +503,12 @@ fn scalar_float_intrinsic(name: &str) -> Option<(Option<BinOp>, u8)> {
         return None;
     };
     let operation = match base {
-        "vmov" => None,
-        "vadd" => Some(BinOp::Add),
-        "vsub" => Some(BinOp::Sub),
-        "vmul" => Some(BinOp::Mul),
-        "vdiv" => Some(BinOp::Div),
+        "vmov" => ScalarFloatOperation::Move,
+        "vneg" => ScalarFloatOperation::Negate,
+        "vadd" => ScalarFloatOperation::Binary(BinOp::Add),
+        "vsub" => ScalarFloatOperation::Binary(BinOp::Sub),
+        "vmul" => ScalarFloatOperation::Binary(BinOp::Mul),
+        "vdiv" => ScalarFloatOperation::Binary(BinOp::Div),
         _ => return None,
     };
     Some((operation, width))
@@ -536,13 +544,14 @@ fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
             // its return class is not yet authoritative. Do not turn a later VFP
             // consumer into apparently precise source arithmetic.
             Op::Call { .. } => return false,
-            // `vpush`/`vpop` are decomposed into ordinary stores/loads by the ARM
-            // lifter, so retain this explicit storage check as well.
-            Op::Load { dst, .. } if is_vfp_register(dst) => return false,
+            // Scalar VFP memory traffic is represented by ordinary typed
+            // Load/Store nodes. Those operations close dataflow rather than
+            // creating an opaque producer.
+            Op::Load { dst, .. } if is_vfp_register(dst) => saw_scalar_float = true,
             Op::Store {
                 src: Value::Reg(src),
                 ..
-            } if is_vfp_register(src) => return false,
+            } if is_vfp_register(src) => saw_scalar_float = true,
             _ => {}
         }
     }
@@ -862,8 +871,12 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                     (scalar_float_intrinsic(name), outs.first())
                 {
                     let expression = match (operation, ins.as_slice()) {
-                        (None, [src]) => Some(lower_float_value(src, width)),
-                        (Some(op), [lhs, rhs]) => Some(Expr::Bin {
+                        (ScalarFloatOperation::Move, [src]) => Some(lower_float_value(src, width)),
+                        (ScalarFloatOperation::Negate, [src]) => Some(Expr::Un {
+                            op: UnOp::Neg,
+                            src: Box::new(lower_float_value(src, width)),
+                        }),
+                        (ScalarFloatOperation::Binary(op), [lhs, rhs]) => Some(Expr::Bin {
                             op,
                             lhs: Box::new(lower_float_value(lhs, width)),
                             rhs: Box::new(lower_float_value(rhs, width)),

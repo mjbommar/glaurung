@@ -295,6 +295,63 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
         }];
     }
 
+    // Scalar VFP loads/stores use the same effective-address semantics as the
+    // integer memory operations, but the destination/source register retains
+    // the floating storage class for type recovery.  Keeping these as real
+    // Load/Store nodes makes stack spills and object-field dataflow visible to
+    // SSA instead of severing every O0 hard-float expression at memory.
+    if mnem == "vldr" && ops.len() == 2 {
+        if let Some(dst) = operand_reg(&ops[0]) {
+            let size = match &dst {
+                VReg::Phys(name) if name.starts_with('d') => 8,
+                _ => 4,
+            };
+            if let Some(addr) = operand_to_memop(&ops[1], size) {
+                return vec![Op::Load { dst, addr }];
+            }
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+    if mnem == "vstr" && ops.len() == 2 {
+        if let Some(src) = operand_to_value(&ops[0]) {
+            let size = match &src {
+                Value::Reg(VReg::Phys(name)) if name.starts_with('d') => 8,
+                _ => 4,
+            };
+            if let Some(addr) = operand_to_memop(&ops[1], size) {
+                return vec![Op::Store { addr, src }];
+            }
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
+    // Float negation is a numeric unary operation, unlike the bit-preserving
+    // vmov family.  Retain it as a typed intrinsic so the AST can lower it to
+    // source `-x` without pretending integer two's-complement semantics.
+    if (mnem.starts_with("vneg.f32") || mnem.starts_with("vneg.f64")) && ops.len() == 2 {
+        if let (Some(dst), Some(src)) = (operand_reg(&ops[0]), operand_to_value(&ops[1])) {
+            let width = if mnem.contains(".f64") {
+                Width::W64
+            } else {
+                Width::W32
+            };
+            return vec![Op::Intrinsic {
+                name: mnem.to_string(),
+                ins: vec![src],
+                outs: vec![(dst, width)],
+                reads_mem: false,
+                writes_mem: false,
+            }];
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
     // --- register-list instructions (push/pop) --------------------------
     if mnem == "push" || mnem == "vpush" {
         let regs: Vec<String> = ops.iter().filter_map(operand_reg_name).collect();
@@ -1145,6 +1202,69 @@ mod tests {
                         && outs == &[(VReg::phys("s15"), Width::W32)]
             ),
             "lifted VFP immediate: {lifted:#?}"
+        );
+    }
+
+    #[test]
+    fn thumb_vfp_memory_and_negation_have_explicit_dataflow() {
+        // Exact instructions from the real DecBench crazyflie `pidUpdate`
+        // prologue/body.  These are semantic float operations, not opaque
+        // comments: the spill layout identifies mixed-class parameter order,
+        // while the load/negate chain must retain the value reaching s15.
+        let store = lift_bytes(&[0x8d, 0xed, 0x02, 0x0a], 0x8060286, true);
+        assert!(
+            matches!(
+                store.as_slice(),
+                [LlirInstr {
+                    op: Op::Store {
+                        addr: MemOp {
+                            base: Some(base),
+                            index: None,
+                            disp: 8,
+                            size: 4,
+                            ..
+                        },
+                        src: Value::Reg(src),
+                    },
+                    ..
+                }] if base == &VReg::phys("sp") && src == &VReg::phys("s0")
+            ),
+            "lifted VFP store: {store:#?}"
+        );
+
+        let load = lift_bytes(&[0xdd, 0xed, 0x02, 0x7a], 0x806029c, true);
+        assert!(
+            matches!(
+                load.as_slice(),
+                [LlirInstr {
+                    op: Op::Load {
+                        dst,
+                        addr: MemOp {
+                            base: Some(base),
+                            index: None,
+                            disp: 8,
+                            size: 4,
+                            ..
+                        },
+                    },
+                    ..
+                }] if dst == &VReg::phys("s15") && base == &VReg::phys("sp")
+            ),
+            "lifted VFP load: {load:#?}"
+        );
+
+        let negate = lift_bytes(&[0xf1, 0xee, 0x67, 0x7a], 0x806033a, true);
+        assert!(
+            matches!(
+                negate.as_slice(),
+                [LlirInstr {
+                    op: Op::Intrinsic { name, ins, outs, .. },
+                    ..
+                }] if name == "vneg.f32"
+                    && ins == &[Value::Reg(VReg::phys("s15"))]
+                    && outs == &[(VReg::phys("s15"), Width::W32)]
+            ),
+            "lifted VFP negate: {negate:#?}"
         );
     }
 

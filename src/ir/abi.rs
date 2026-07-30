@@ -99,7 +99,10 @@ pub fn return_registers(cc: CallConv) -> &'static [&'static str] {
         // the head of the alias set as the decompiler's logical return value.
         CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         CallConv::Aarch64 => &["x0", "w0"],
-        CallConv::Arm => &["r0"],
+        // AAPCS hard-float returns scalar FP values in s0/d0. Keep those
+        // storage alternatives visible to value numbering; prototype recovery
+        // decides which class is the actual source result.
+        CallConv::Arm => &["r0", "s0", "d0"],
     }
 }
 

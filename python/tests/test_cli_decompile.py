@@ -304,11 +304,120 @@ def test_real_arm_hard_float_decompile_recompile_execute_round_trip(
     assert rebuilt_run.stdout == reference_run.stdout
 
 
-def test_real_arm_stack_backed_float_stays_conservative(tmp_path: Path) -> None:
-    """Do not invent arithmetic when VFP memory flow is still opaque."""
+@pytest.mark.slow
+def test_real_arm_mixed_hard_float_spills_preserve_source_parameter_order(
+    tmp_path: Path,
+) -> None:
+    """Use real GCC spill evidence to interleave core and VFP parameters."""
+    arm_compiler = shutil.which("arm-none-eabi-gcc")
+    host_compiler = shutil.which("gcc")
+    if arm_compiler is None:
+        pytest.skip("arm-none-eabi-gcc is unavailable")
+    if host_compiler is None:
+        pytest.skip("host gcc is unavailable")
+
+    source = tmp_path / "arm_mixed_storage.c"
+    binary = tmp_path / "arm_mixed_storage.elf"
+    source.write_text(
+        "__attribute__((noinline)) float arm_mixed_storage(\n"
+        "    int token, float measured, int negate) {\n"
+        "    (void)token;\n"
+        "    return negate ? -measured : measured;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            arm_compiler,
+            "-mcpu=cortex-m4",
+            "-mthumb",
+            "-mfloat-abi=hard",
+            "-mfpu=fpv4-sp-d16",
+            "-nostdlib",
+            "-Wl,-Ttext=0x1000",
+            "-Wl,-e,arm_mixed_storage",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (function for function in functions if function.name == "arm_mixed_storage"),
+        None,
+    )
+    assert target is not None, functions
+    generated = g.ir.decompile_at(
+        str(binary),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+
+    assert (
+        "float arm_mixed_storage(int arg0, float arg1, int arg2)"
+        in generated
+    ), generated
+    assert "asm:" not in generated, generated
+
+    driver = tmp_path / "mixed_driver.c"
+    driver.write_text(
+        "#include <stdio.h>\n"
+        "float arm_mixed_storage(int, float, int);\n"
+        "int main(void) {\n"
+        '    printf("%.9g %.9g\\n", arm_mixed_storage(7, 1.25f, 0),\n'
+        "           arm_mixed_storage(7, 1.25f, 1));\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    rebuilt_source = tmp_path / "mixed_rebuilt.c"
+    rebuilt_source.write_text(generated)
+    reference = tmp_path / "mixed_reference"
+    rebuilt = tmp_path / "mixed_rebuilt"
+    for implementation, output in ((source, reference), (rebuilt_source, rebuilt)):
+        compiled = subprocess.run(
+            [
+                host_compiler,
+                "-std=c11",
+                "-O2",
+                "-o",
+                str(output),
+                str(implementation),
+                str(driver),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compiled.returncode == 0, (
+            f"{implementation}: {compiled.stderr}\n{generated}"
+        )
+
+    reference_run = subprocess.run(
+        [str(reference)], capture_output=True, text=True, check=False
+    )
+    rebuilt_run = subprocess.run(
+        [str(rebuilt)], capture_output=True, text=True, check=False
+    )
+    assert reference_run.returncode == 0, reference_run.stderr
+    assert rebuilt_run.returncode == 0, rebuilt_run.stderr
+    assert rebuilt_run.stdout == reference_run.stdout
+
+
+def test_real_arm_stack_backed_float_round_trip(tmp_path: Path) -> None:
+    """Preserve float representation through a real promoted stack slot."""
     compiler = shutil.which("arm-none-eabi-gcc")
+    host_compiler = shutil.which("gcc")
     if compiler is None:
         pytest.skip("arm-none-eabi-gcc is unavailable")
+    if host_compiler is None:
+        pytest.skip("host gcc is unavailable")
 
     source = tmp_path / "arm_stack_backed_float.c"
     binary = tmp_path / "arm_stack_backed_float.elf"
@@ -357,11 +466,51 @@ def test_real_arm_stack_backed_float_stays_conservative(tmp_path: Path) -> None:
         timeout_ms=8000,
     )
 
-    assert "asm: vldr" in generated, generated
-    # GCC strength-reduces ``slot * 2`` to ``vadd.f32 s0, s15, s15`` even at
-    # this target's O0. The add must remain opaque until the preceding VFP load
-    # has a modeled definition; otherwise both operands become invented live-ins.
-    assert "asm: vadd.f32" in generated, generated
+    assert "float arm_stack_backed_float(float arg0)" in generated, generated
+    assert "asm:" not in generated, generated
+
+    driver = tmp_path / "stack_float_driver.c"
+    driver.write_text(
+        "#include <stdio.h>\n"
+        "float arm_stack_backed_float(float);\n"
+        "int main(void) {\n"
+        '    printf("%.9g %.9g\\n", arm_stack_backed_float(1.25f),\n'
+        "           arm_stack_backed_float(-2.5f));\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    rebuilt_source = tmp_path / "stack_float_rebuilt.c"
+    rebuilt_source.write_text(generated)
+    reference = tmp_path / "stack_float_reference"
+    rebuilt = tmp_path / "stack_float_rebuilt"
+    for implementation, output in ((source, reference), (rebuilt_source, rebuilt)):
+        compiled = subprocess.run(
+            [
+                host_compiler,
+                "-std=c11",
+                "-O2",
+                "-o",
+                str(output),
+                str(implementation),
+                str(driver),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compiled.returncode == 0, (
+            f"{implementation}: {compiled.stderr}\n{generated}"
+        )
+
+    reference_run = subprocess.run(
+        [str(reference)], capture_output=True, text=True, check=False
+    )
+    rebuilt_run = subprocess.run(
+        [str(rebuilt)], capture_output=True, text=True, check=False
+    )
+    assert reference_run.returncode == 0, reference_run.stderr
+    assert rebuilt_run.returncode == 0, rebuilt_run.stderr
+    assert rebuilt_run.stdout == reference_run.stdout
 
 
 def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> None:

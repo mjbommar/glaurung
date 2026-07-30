@@ -305,9 +305,17 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
             tag_value(e, use_vers, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
+        // A single-output intrinsic fits the ordinary SSA model exactly. This
+        // includes scalar VFP operations such as `vneg s15, s15`; tagging both
+        // sides is what connects the use to the preceding `vldr` definition.
+        Op::Intrinsic { ins, outs, .. } if outs.len() == 1 => {
+            for input in ins {
+                tag_value(input, use_vers, &mut ui, ctx);
+            }
+            tag_phys(&mut outs[0].0, def_ver, ctx);
+        }
         // Multi-output intrinsics (`cpuid`, ...) don't fit the single-def SSA
-        // model cleanly, so leave them untagged for now; a function that uses one
-        // must be excluded before this pass is wired into lowering.
+        // model cleanly, so leave them untagged for now.
         Op::Intrinsic { .. } | Op::Jump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => {}
     }
 }
@@ -1363,6 +1371,57 @@ mod tests {
             Op::Assign {
                 dst: VReg::phys("rcx#1"),
                 src: Value::Reg(VReg::phys("rbx#2"))
+            }
+        );
+    }
+
+    #[test]
+    fn single_output_intrinsic_uses_the_reaching_ssa_value() {
+        let lf = mk(vec![
+            Op::Load {
+                dst: VReg::phys("s15"),
+                addr: crate::ir::types::MemOp::plain(Some(VReg::phys("sp")), None, 0, 8, 4),
+            },
+            Op::Intrinsic {
+                name: "vneg.f32".into(),
+                ins: vec![Value::Reg(VReg::phys("s15"))],
+                outs: vec![(VReg::phys("s15"), crate::ir::types::Width::W32)],
+                reads_mem: false,
+                writes_mem: false,
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::Arm);
+
+        assert_eq!(
+            out.blocks[0].instrs[1].op,
+            Op::Intrinsic {
+                name: "vneg.f32".into(),
+                ins: vec![Value::Reg(VReg::phys("s15#1"))],
+                outs: vec![(VReg::phys("s15#2"), crate::ir::types::Width::W32)],
+                reads_mem: false,
+                writes_mem: false,
+            }
+        );
+    }
+
+    #[test]
+    fn arm_float_result_that_reaches_return_keeps_its_abi_name() {
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("s0"),
+                src: Value::Reg(VReg::phys("s15")),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::Arm);
+
+        assert_eq!(
+            out.blocks[0].instrs[0].op,
+            Op::Assign {
+                dst: VReg::phys("s0"),
+                src: Value::Reg(VReg::phys("s15")),
             }
         );
     }
