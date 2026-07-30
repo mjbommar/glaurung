@@ -217,7 +217,7 @@
     "nested_pairs": "pass",
     "two_latches": "pass",
     "while_prefix": "pass",
-    "while_reload_header": "fail"
+    "while_reload_header": "pass"
   },
   "03_loop_shapes:gcc:O2": {
     "cond_reload_and_transform": "fail",
@@ -457,12 +457,12 @@
   "09_memory_effects:clang:O2": {
     "cas_update": "pass",
     "mem_copy": "fail",
-    "mem_set": "fail",
+    "mem_set": "pass",
     "read_counter": "fail",
     "reset_counter": "structural",
     "tick": "structural",
     "tick_n": "structural",
-    "vec_sum": "fail",
+    "vec_sum": "pass",
     "vec_transform": "fail"
   },
   "09_memory_effects:gcc:O0": {
@@ -641,7 +641,7 @@
     "do_while_control": "pass",
     "down_by_negative_imm": "pass",
     "factorial_while": "pass",
-    "find_first_set": "fail",
+    "find_first_set": "pass",
     "for_accumulate": "pass",
     "nested_rotated": "pass",
     "skip_odd_sum": "fail"
@@ -663,7 +663,7 @@
     "factorial_while": "pass",
     "find_first_set": "pass",
     "for_accumulate": "pass",
-    "nested_rotated": "fail",
+    "nested_rotated": "pass",
     "skip_odd_sum": "pass"
   },
   "13_loop_early_exit:clang:O0": {

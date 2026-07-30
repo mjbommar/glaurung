@@ -5,7 +5,9 @@ initial value that dominates at the hoist position. When the emitted condition t
 reads only that frozen temporary, the loop stops making progress. The conservative
 `while (1) { pre; if (!cond) break; }` form is always safe; a source-level `while
 (cond)` is safe too when the printed condition directly reads a variable that the
-body updates, so C reevaluates the loop-carried dependency on every iteration.
+body updates, so C reevaluates the loop-carried dependency on every iteration. A
+labelled CFG with an explicit backward `goto` is also safe: it preserves the machine
+header in place instead of hoisting its condition.
 
 The cost is real and measured, which is why this file exists. On branch
 `recover-ged-cells` (docs/design/ged-recovery-measured-trade.md), always-hoisting recovers
@@ -92,6 +94,18 @@ def _condition_reads_a_body_updated_value(text: str) -> bool:
     return False
 
 
+def _has_explicit_backward_goto(text: str) -> bool:
+    """Whether labelled fallback retains an actual syntactic back-edge."""
+    labels = {
+        match.group(1): match.start()
+        for match in re.finditer(r"(?m)^\s*(L_[0-9a-fA-F]+):\s*;", text)
+    }
+    return any(
+        labels.get(match.group(1), len(text)) < match.start()
+        for match in re.finditer(r"\bgoto\s+(L_[0-9a-fA-F]+)\s*;", text)
+    )
+
+
 @pytest.mark.parametrize(
     ("fixture", "cc", "opt", "func"),
     TRAPS,
@@ -100,8 +114,9 @@ def _condition_reads_a_body_updated_value(text: str) -> bool:
 def test_loop_keeps_its_loop_carried_condition(fixture, cc, opt, func):
     """The loop must retain every iteration-dependent condition input.
 
-    Either the protective form keeps the header inside the body, or a recovered
-    source-level condition must directly name a value assigned by that body.
+    The protective form can keep the header inside the body, a recovered
+    source-level condition can directly name a value assigned by that body, or
+    labelled fallback can retain the header through an explicit back-edge.
     """
     so = BUILD / f"{fixture}-{cc}-{opt}.so"
     if not so.is_file():
@@ -113,13 +128,16 @@ def test_loop_keeps_its_loop_carried_condition(fixture, cc, opt, func):
     assert text.strip(), f"{func}: decompiler produced nothing"
 
     # The protective form keeps the complete machine header inside. A recovered
-    # while is equally safe only when it directly rereads a body-updated value;
-    # a condition over a pre-loop scratch temporary still fails this test.
+    # while is equally safe only when it directly rereads a body-updated value.
+    # Exact labelled fallback is safe when it retains a syntactic back-edge. A
+    # condition over a pre-loop scratch temporary still fails this test.
     has_guard = "while (1)" in text and "break;" in text
     has_live_condition = _condition_reads_a_body_updated_value(text)
-    assert has_guard or has_live_condition, (
+    has_backward_goto = _has_explicit_backward_goto(text)
+    assert has_guard or has_live_condition or has_backward_goto, (
         f"{fixture}:{cc}:{opt}:{func} neither retained its protective `while (1)` "
-        f"form nor emitted a condition that directly reads a body-updated value.\n\n"
+        f"form, emitted a condition that directly reads a body-updated value, nor "
+        f"retained an explicit backward goto.\n\n"
         f"That can freeze a loop-carried value: constant propagation substitutes the "
         f"initial value dominating the hoist position. Always-hoisting is worth 50.32 "
         f"GED points (46% of a regression) and breaks exactly this function plus three "

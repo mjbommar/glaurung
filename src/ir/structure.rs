@@ -663,12 +663,70 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
     let leftover: Vec<usize> = (0..lf.blocks.len())
         .filter(|b| !visited.contains(b))
         .collect();
-    if leftover.is_empty() {
+    let has_leftover = !leftover.is_empty();
+    let region = if !has_leftover {
         region
     } else {
         let mut parts = flatten_seq(region);
         parts.push(Region::Unstructured(leftover));
         Region::Seq(parts)
+    };
+
+    // A structured loop followed by leftovers is only safe when every loop
+    // edge is still represented.  In an unrolled early-return ladder the body
+    // builder can stop at an internal conditional, leave the latch in the
+    // leftovers, and nevertheless satisfy the older block-only verifier.  The
+    // typed-edge accountant detects both the missing fallthrough/back-edge and
+    // the invented loop exits.  Fall back to the complete labelled CFG rather
+    // than emitting a partial While followed by unreachable blocks.
+    if has_leftover
+        && contains_structured_loop(&region)
+        && !contains_switch(&region)
+        && !crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region).is_empty()
+    {
+        Region::Unstructured((0..lf.blocks.len()).collect())
+    } else {
+        region
+    }
+}
+
+fn contains_switch(region: &Region) -> bool {
+    match region {
+        Region::Switch { .. } => true,
+        Region::Seq(parts) => parts.iter().any(contains_switch),
+        Region::IfThen { then_r, .. }
+        | Region::While { body: then_r, .. }
+        | Region::DoWhile { body: then_r, .. } => contains_switch(then_r),
+        Region::IfThenElse { then_r, else_r, .. } => {
+            contains_switch(then_r) || contains_switch(else_r)
+        }
+        Region::Block(_) | Region::Goto(_) | Region::RawLoop { .. } | Region::Unstructured(_) => {
+            false
+        }
+    }
+}
+
+fn contains_structured_loop(region: &Region) -> bool {
+    match region {
+        Region::While { .. } | Region::DoWhile { .. } => true,
+        Region::Seq(parts) => parts.iter().any(contains_structured_loop),
+        Region::IfThen { then_r, .. } => contains_structured_loop(then_r),
+        Region::IfThenElse { then_r, else_r, .. } => {
+            contains_structured_loop(then_r) || contains_structured_loop(else_r)
+        }
+        Region::Switch {
+            arms,
+            formal_default,
+            ..
+        } => {
+            arms.iter().any(contains_structured_loop)
+                || formal_default
+                    .as_deref()
+                    .is_some_and(contains_structured_loop)
+        }
+        Region::Block(_) | Region::Goto(_) | Region::RawLoop { .. } | Region::Unstructured(_) => {
+            false
+        }
     }
 }
 
@@ -2790,6 +2848,45 @@ mod tests {
         let r = recover_for(&lf);
         assert_eq!(r, Region::Unstructured((0..8).collect()), "{r:#?}");
         assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
+    fn single_latch_unrolled_search_with_distinct_early_returns_falls_back_totally() {
+        // Reduced Clang -O2 `find_first_set`: B1 is the loop header, B5 is its
+        // sole latch, and B1..B4 each have a different terminal success exit.
+        // The bounded While builder currently structures only the first two
+        // tests, then strands B4/B5 after a return and invents edges around B3.
+        // Until multi-exit loop ownership is total, preserve the exact labelled
+        // CFG instead of emitting a partial While.
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::C),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1230, vec![Op::Nop], vec![0x1240]),
+            (0x1240, cond(0x127b), vec![0x127b, 0x1245]),
+            (0x1245, cond(0x1274), vec![0x1274, 0x1250]),
+            (0x1250, cond(0x1278), vec![0x1278, 0x125b]),
+            (0x125b, cond(0x127c), vec![0x127c, 0x1266]),
+            (0x1266, cond(0x1240), vec![0x1240, 0x126e]),
+            (0x126e, vec![Op::Return], vec![]),
+            (0x1274, vec![Op::Return], vec![]),
+            (0x1278, vec![Op::Nop], vec![0x127b]),
+            (0x127b, vec![Op::Return], vec![]),
+            (0x127c, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let errors = verify_structure(&lf, &compute_ssa(&lf));
+        assert_eq!(
+            region,
+            Region::Unstructured((0..11).collect()),
+            "a partial While is not a semantics-preserving recovery: {region:#?}; {errors:?}"
+        );
+        assert!(errors.is_empty());
     }
 
     #[test]

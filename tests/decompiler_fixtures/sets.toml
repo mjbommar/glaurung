@@ -32,7 +32,7 @@ selectors = [
 ]
 
 [region]
-description = "The Phase 4 region-ownership set — 182 pass / 10 fail in the current baseline."
+description = "The Phase 4 region-ownership set — 185 pass / 7 fail in the current baseline."
 selectors = [
     "03_loop_shapes",
     "04_switch_shapes",
@@ -45,7 +45,7 @@ description = "Switch and ladder recovery (04) — all 64 cells pass in the curr
 selectors = ["04_switch_shapes"]
 
 [loops]
-description = "Every loop shape: plain (03), rotated (12), early-exit (13) — 118 pass / 10 fail."
+description = "Every loop shape: plain (03), rotated (12), early-exit (13) — 121 pass / 7 fail."
 selectors = ["03_loop_shapes", "12_loop_rotation", "13_loop_early_exit"]
 
 [early-exit]
@@ -69,7 +69,7 @@ description = "Integer widths and sub-register views (02). The Phase 2 value-mod
 selectors = ["02_integer_widths"]
 
 [structs]
-description = "Aggregates/memory (09) plus C++ shapes (10) — 28 pass / 15 fail / 64 structural."
+description = "Aggregates/memory (09) plus C++ shapes (10) — 30 pass / 13 fail / 64 structural."
 selectors = ["09_memory_effects", "10_cpp_runtime_shapes"]
 
 [o0]
