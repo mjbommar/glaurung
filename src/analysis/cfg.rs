@@ -3034,6 +3034,53 @@ pub fn analyze_functions_bytes_with_seeds(
     (functions, cg)
 }
 
+/// Discover exactly one trusted executable function entry.
+///
+/// Address-scoped consumers already know the entry they need. Running the
+/// whole seed pipeline merely to recover one direct callee processes unrelated
+/// symbols, vtables, and function starts before the caller's budget can stop
+/// it. This path performs only the bounded CFG walk for `entry_va`; direct
+/// xrefs are still recorded on the returned Function, while whole-binary seed
+/// augmentation remains the responsibility of the public analysis routines.
+#[cfg(feature = "python-ext")]
+pub(crate) fn discover_function_bytes_at(
+    data: &[u8],
+    budgets: &Budgets,
+    entry_va: u64,
+) -> Option<Function> {
+    let (regions, arch, end, _entry) = parse_exec_regions(data);
+    if regions.is_empty() || in_exec_regions(&regions, entry_va).is_none() {
+        return None;
+    }
+    let bits = if arch.is_64_bit() { 64 } else { 32 };
+    let entry = Address::new(AddressKind::VA, entry_va, bits, None, None).ok()?;
+    let tables = std::collections::BTreeMap::new();
+    let noreturn_targets = crate::analysis::call_semantics::imported_noreturn_targets(data);
+    let facts = DiscoveryFacts {
+        tables: &tables,
+        noreturn_targets: &noreturn_targets,
+    };
+    let (mut function, _calls, _stats) =
+        discover_function(data, arch, end, entry, &regions, budgets, &facts)?;
+
+    // Preserve the same exact-address symbol naming as whole-binary discovery
+    // without paying for its unrelated seed work.
+    if let Ok(object) = object::read::File::parse(data) {
+        for symbol in object.symbols().chain(object.dynamic_symbols()) {
+            if !symbol.is_definition() || code_addr(symbol.address(), arch) != entry_va {
+                continue;
+            }
+            if let Ok(name) = symbol.name() {
+                if !name.is_empty() {
+                    function.name = name.to_string();
+                    break;
+                }
+            }
+        }
+    }
+    Some(function)
+}
+
 /// Analyze bytes and return discovered functions, callgraph, and budget telemetry.
 pub fn analyze_functions_bytes_with_stats(
     data: &[u8],

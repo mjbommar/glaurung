@@ -532,7 +532,7 @@ fn arm_uses_vfp_arguments(data: &[u8]) -> bool {
 /// prefixes and type annotations).
 #[pyfunction]
 #[pyo3(name = "decompile_at")]
-#[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=30_000usize))]
+#[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=1usize))]
 fn decompile_at_py(
     path: String,
     func_va: u64,
@@ -573,17 +573,6 @@ fn decompile_at_py(
         })?;
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let arm_vfp_args = arm_uses_vfp_arguments(&data);
-    let mut callee_layout_cache = std::collections::HashMap::new();
-    let callee_layouts = recover_direct_callee_layouts(
-        &data,
-        &funcs,
-        &func,
-        arch,
-        cc,
-        arm_vfp_args,
-        dwarf_outputs.as_ref(),
-        &mut callee_layout_cache,
-    );
     let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
@@ -636,6 +625,19 @@ fn decompile_at_py(
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let mut callee_layout_cache = std::collections::HashMap::new();
+    let callee_layouts = recover_direct_callee_layouts(
+        &data,
+        &funcs,
+        &func,
+        arch,
+        cc,
+        arm_vfp_args,
+        &budgets,
+        dwarf_outputs.as_ref(),
+        &mut addr_map,
+        &mut callee_layout_cache,
+    );
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
@@ -1287,8 +1289,10 @@ fn recover_direct_callee_layouts(
     arch: crate::core::binary::Arch,
     cc: crate::ir::call_args::CallConv,
     arm_vfp_args: bool,
+    budgets: &crate::analysis::cfg::Budgets,
     dwarf_outputs: Option<&std::collections::HashMap<u64, crate::debug::dwarf::DwarfReturnType>>,
-    cache: &mut std::collections::HashMap<u64, Option<Vec<crate::ir::types::VReg>>>,
+    address_names: &mut std::collections::HashMap<u64, String>,
+    cache: &mut std::collections::HashMap<u64, Option<(Vec<crate::ir::types::VReg>, String)>>,
 ) -> std::collections::HashMap<u64, Vec<crate::ir::types::VReg>> {
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
@@ -1303,9 +1307,19 @@ fn recover_direct_callee_layouts(
         let recovered = cache
             .entry(callee_va)
             .or_insert_with(|| {
-                let callee = functions
+                let targeted;
+                let callee = match functions
                     .iter()
-                    .find(|function| function.entry_point.value == callee_va)?;
+                    .find(|function| function.entry_point.value == callee_va)
+                {
+                    Some(callee) => callee,
+                    None => {
+                        targeted = crate::analysis::cfg::discover_function_bytes_at(
+                            data, budgets, callee_va,
+                        )?;
+                        &targeted
+                    }
+                };
                 let mut lifted = lift_function_from_bytes(data, callee, arch)?;
                 crate::ir::abi::annotate_calls(&mut lifted, cc);
                 let ssa = compute_ssa(&lifted);
@@ -1323,11 +1337,22 @@ fn recover_direct_callee_layouts(
                     .iter()
                     .map(|parameter| parameter.value.base.clone())
                     .collect();
-                (!layout.is_empty()).then_some(layout)
+                (!layout.is_empty()).then(|| (layout, callee.name.clone()))
             })
             .clone();
-        if let Some(recovered) = recovered {
-            layouts.insert(callee_va, recovered);
+        if let Some((layout, name)) = recovered {
+            match address_names.entry(callee_va) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(name);
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry)
+                    if entry.get().starts_with("sub_") && !name.starts_with("sub_") =>
+                {
+                    entry.insert(name);
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {}
+            }
+            layouts.insert(callee_va, layout);
         }
     }
     layouts
@@ -1604,7 +1629,9 @@ fn decompile_all_py(
             arch,
             cc,
             arm_vfp_args,
+            &budgets,
             dwarf_outputs.as_ref(),
+            &mut addr_map,
             &mut callee_layout_cache,
         );
         let (slot_sizes, role_names) = run_ast_passes(
@@ -1658,7 +1685,7 @@ fn decompile_all_py(
 
 #[pyfunction]
 #[pyo3(name = "decompile_many")]
-#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=30_000usize))]
+#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=0usize))]
 #[allow(clippy::too_many_arguments)]
 fn decompile_many_py(
     py: Python<'_>,
@@ -1692,8 +1719,22 @@ fn decompile_many_py(
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
+    // Zero is the public address-scoped default: process exactly the unique
+    // requested entries. Direct-callee prototype evidence is recovered lazily
+    // by `recover_direct_callee_layouts`, so unrelated automatic seeds never
+    // need to consume this worklist merely to render one call accurately.
+    let requested_function_limit = if max_functions == 0 {
+        func_vas
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            .max(1)
+    } else {
+        max_functions
+    };
     let budgets = Budgets {
-        max_functions,
+        max_functions: requested_function_limit,
         max_blocks,
         max_instructions,
         timeout_ms,
@@ -1778,7 +1819,9 @@ fn decompile_many_py(
             arch,
             cc,
             arm_vfp_args,
+            &budgets,
             dwarf_outputs.as_ref(),
+            &mut addr_map,
             &mut callee_layout_cache,
         );
         let (slot_sizes, role_names) = run_ast_passes(

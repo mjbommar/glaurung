@@ -471,6 +471,7 @@ def test_real_arm_mixed_hard_float_call_round_trip(tmp_path: Path) -> None:
         int(target.entry_point.value),
         style="decbench",
         timeout_ms=8000,
+        max_functions=1,
     )
 
     assert "float arm_hf_mixed_caller(float arg0, int arg1)" in generated, generated
