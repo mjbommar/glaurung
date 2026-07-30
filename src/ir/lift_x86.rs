@@ -1585,6 +1585,229 @@ fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     ops
 }
 
+/// One signed/unsigned 32-bit lane of an XMM register.
+///
+/// Packed integer operations are not scalar 128-bit arithmetic. Representing
+/// the four dword lanes independently lets the existing scalar LLIR, SSA, and C
+/// backend preserve exact lane dataflow without adding a second vector AST.
+fn packed_dword_lane(register: Register, lane: usize) -> VReg {
+    VReg::phys(format!("{}_d{lane}", reg_name(register)))
+}
+
+fn is_xmm_register(register: Register) -> bool {
+    reg_name(register)
+        .strip_prefix("xmm")
+        .is_some_and(|index| index.parse::<u8>().is_ok())
+}
+
+fn packed_dword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2 {
+        return vec![Op::Unknown {
+            mnemonic: format!("{:?}", instr.mnemonic()).to_ascii_lowercase(),
+        }];
+    }
+    match (instr.op_kind(0), instr.op_kind(1)) {
+        (OpKind::Register, OpKind::Memory) if is_xmm_register(instr.op_register(0)) => (0..4)
+            .map(|lane| {
+                let mut addr = mem_op_of(instr);
+                addr.disp = addr.disp.saturating_add((lane * 4) as i64);
+                addr.size = 4;
+                Op::Load {
+                    dst: packed_dword_lane(instr.op_register(0), lane),
+                    addr,
+                }
+            })
+            .collect(),
+        (OpKind::Memory, OpKind::Register) if is_xmm_register(instr.op_register(1)) => (0..4)
+            .map(|lane| {
+                let mut addr = mem_op_of(instr);
+                addr.disp = addr.disp.saturating_add((lane * 4) as i64);
+                addr.size = 4;
+                Op::Store {
+                    addr,
+                    src: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+                }
+            })
+            .collect(),
+        (OpKind::Register, OpKind::Register)
+            if is_xmm_register(instr.op_register(0)) && is_xmm_register(instr.op_register(1)) =>
+        {
+            (0..4)
+                .map(|lane| Op::Assign {
+                    dst: packed_dword_lane(instr.op_register(0), lane),
+                    src: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+                })
+                .collect()
+        }
+        _ => vec![Op::Unknown {
+            mnemonic: format!("{:?}", instr.mnemonic()).to_ascii_lowercase(),
+        }],
+    }
+}
+
+fn packed_dword_binary_ops(instr: &iced_x86::Instruction, op: BinOp) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+        || !is_xmm_register(instr.op_register(1))
+    {
+        return vec![Op::Unknown {
+            mnemonic: format!("{:?}", instr.mnemonic()).to_ascii_lowercase(),
+        }];
+    }
+    (0..4)
+        .map(|lane| {
+            let dst = packed_dword_lane(instr.op_register(0), lane);
+            Op::Bin {
+                dst: dst.clone(),
+                op,
+                lhs: Value::Reg(dst),
+                rhs: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+            }
+        })
+        .collect()
+}
+
+fn packed_dword_compare_greater_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+        || !is_xmm_register(instr.op_register(1))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "pcmpgtd".into(),
+        }];
+    }
+    let mut ops = Vec::with_capacity(8);
+    for lane in 0..4 {
+        let dst = packed_dword_lane(instr.op_register(0), lane);
+        let src = packed_dword_lane(instr.op_register(1), lane);
+        let condition = VReg::Temp(80 + lane as u32);
+        // dst > src is the signed comparison src < dst. PCMPGTD writes an
+        // all-ones mask for true, not the boolean value one.
+        ops.push(Op::Cmp {
+            dst: condition.clone(),
+            op: CmpOp::Slt,
+            lhs: Value::Reg(src),
+            rhs: Value::Reg(dst.clone()),
+        });
+        ops.push(Op::Ite {
+            dst,
+            cond: condition,
+            t: Value::Const(-1),
+            e: Value::Const(0),
+            width: Width::W32,
+        });
+    }
+    ops
+}
+
+fn packed_dword_shuffle_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 3
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || instr.op_kind(2) != OpKind::Immediate8
+        || !is_xmm_register(instr.op_register(0))
+        || !is_xmm_register(instr.op_register(1))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "pshufd".into(),
+        }];
+    }
+    let control = instr.immediate8();
+    let mut ops = Vec::with_capacity(8);
+    // Snapshot all input lanes first: PSHUFD permits an in-place destination,
+    // and sequential assignments must not feed later selections from a lane
+    // already overwritten by this same machine instruction.
+    for lane in 0..4 {
+        ops.push(Op::Assign {
+            dst: VReg::Temp(84 + lane as u32),
+            src: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+        });
+    }
+    for lane in 0..4 {
+        let selected = ((control >> (lane * 2)) & 0x3) as u32;
+        ops.push(Op::Assign {
+            dst: packed_dword_lane(instr.op_register(0), lane),
+            src: Value::Reg(VReg::Temp(84 + selected)),
+        });
+    }
+    ops
+}
+
+fn movd_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
+    if instr.op_count() != 2 {
+        return vec![Op::Unknown {
+            mnemonic: "movd".into(),
+        }];
+    }
+    match (instr.op_kind(0), instr.op_kind(1)) {
+        (OpKind::Register, OpKind::Register) => {
+            let dst = instr.op_register(0);
+            let src = instr.op_register(1);
+            let dst_name = reg_name(dst);
+            let src_name = reg_name(src);
+            if dst_name.starts_with("xmm") {
+                let mut ops = vec![Op::Assign {
+                    dst: packed_dword_lane(dst, 0),
+                    src: Value::Reg(VReg::phys(src_name)),
+                }];
+                ops.extend((1..4).map(|lane| Op::Assign {
+                    dst: packed_dword_lane(dst, lane),
+                    src: Value::Const(0),
+                }));
+                ops
+            } else if src_name.starts_with("xmm") {
+                let src = Value::Reg(packed_dword_lane(src, 0));
+                if bits == 64 && zero_extending_gp_view(&dst_name, bits).is_some() {
+                    vec![Op::ZExt {
+                        dst: VReg::phys(dst_name),
+                        src,
+                        from: Width::W32,
+                        to: Width::W64,
+                    }]
+                } else {
+                    vec![Op::Assign {
+                        dst: VReg::phys(dst_name),
+                        src,
+                    }]
+                }
+            } else {
+                vec![Op::Unknown {
+                    mnemonic: "movd".into(),
+                }]
+            }
+        }
+        (OpKind::Register, OpKind::Memory) if is_xmm_register(instr.op_register(0)) => {
+            let dst = instr.op_register(0);
+            let mut addr = mem_op_of(instr);
+            addr.size = 4;
+            let mut ops = vec![Op::Load {
+                dst: packed_dword_lane(dst, 0),
+                addr,
+            }];
+            ops.extend((1..4).map(|lane| Op::Assign {
+                dst: packed_dword_lane(dst, lane),
+                src: Value::Const(0),
+            }));
+            ops
+        }
+        (OpKind::Memory, OpKind::Register) if is_xmm_register(instr.op_register(1)) => {
+            let mut addr = mem_op_of(instr);
+            addr.size = 4;
+            vec![Op::Store {
+                addr,
+                src: Value::Reg(packed_dword_lane(instr.op_register(1), 0)),
+            }]
+        }
+        _ => vec![Op::Unknown {
+            mnemonic: "movd".into(),
+        }],
+    }
+}
+
 /// Lift a single iced instruction into zero or more LLIR ops.
 fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     let mnem = instr.mnemonic();
@@ -2303,11 +2526,11 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: "lea".into(),
             }]
         }
-        // 128-bit SSE/SSE2 moves. We treat them as plain Load/Store/Assign
-        // with a 16-byte access size so the operand pipeline works. We lose
-        // the xmm-register distinction in favour of using capstone-reported
-        // register names verbatim (iced gives us `xmm0`, etc.).
-        Mnemonic::Movaps | Mnemonic::Movups | Mnemonic::Movdqa | Mnemonic::Movdqu => {
+        // Packed integer moves are split into explicit dword lanes so later
+        // packed comparisons/arithmetic retain their element semantics.
+        Mnemonic::Movdqa | Mnemonic::Movdqu => packed_dword_move_ops(instr),
+        // Floating-point bitwise moves still travel as a whole 128-bit value.
+        Mnemonic::Movaps | Mnemonic::Movups => {
             if instr.op_count() != 2 {
                 return vec![Op::Unknown {
                     mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
@@ -2742,6 +2965,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         }
         Mnemonic::Adc => adc_ops(instr),
         Mnemonic::Sbb => sbb_ops(instr),
+        Mnemonic::Pxor => packed_dword_binary_ops(instr, BinOp::Xor),
+        Mnemonic::Pand => packed_dword_binary_ops(instr, BinOp::And),
+        Mnemonic::Paddd => packed_dword_binary_ops(instr, BinOp::Add),
+        Mnemonic::Pcmpgtd => packed_dword_compare_greater_ops(instr),
+        Mnemonic::Pshufd => packed_dword_shuffle_ops(instr),
+        Mnemonic::Movd => movd_ops(instr, bits),
         Mnemonic::Xorps => xorps_ops(instr),
         Mnemonic::Push => push_ops(instr, bits),
         Mnemonic::Pop => pop_ops(instr, bits),
@@ -4910,12 +5139,121 @@ mod tests {
 
     #[test]
     fn movdqu_reg_mem_lifts_to_16_byte_load() {
-        // MOVDQU xmm0, [rdi]   (f3 0f 6f 07)
+        // MOVDQU xmm0, [rdi]   (f3 0f 6f 07). Packed dword users need four
+        // explicit scalar lanes, not one opaque 128-bit scalar.
         let ops = lift64(&[0xf3, 0x0f, 0x6f, 0x07]);
-        assert_eq!(ops.len(), 1);
-        match &ops[0].op {
-            Op::Load { addr, .. } => assert_eq!(addr.size, 16),
-            other => panic!("expected Load, got {:?}", other),
+        assert_eq!(ops.len(), 4, "got: {ops:#?}");
+        for (lane, instruction) in ops.iter().enumerate() {
+            match &instruction.op {
+                Op::Load {
+                    dst: VReg::Phys(dst),
+                    addr,
+                } => {
+                    assert_eq!(dst, &format!("xmm0_d{lane}"));
+                    assert_eq!(addr.size, 4);
+                    assert_eq!(addr.disp, (lane * 4) as i64);
+                }
+                other => panic!("expected lane load, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn packed_dword_positive_sum_sequence_has_explicit_lane_semantics() {
+        // The exact SSE2 core emitted by clang -O2 for fixture
+        // `13_loop_early_exit:sum_positive`: load four signed dwords, build a
+        // positive-lane mask, mask the values, and accumulate lane-wise.
+        let ops = lift64(&[
+            0x66, 0x0f, 0xef, 0xd2, // pxor xmm2,xmm2
+            0xf3, 0x0f, 0x6f, 0x1f, // movdqu xmm3,[rdi]
+            0x66, 0x0f, 0x6f, 0xfb, // movdqa xmm7,xmm3
+            0x66, 0x0f, 0x66, 0xfa, // pcmpgtd xmm7,xmm2
+            0x66, 0x0f, 0xdb, 0xfb, // pand xmm7,xmm3
+            0x66, 0x0f, 0xfe, 0xf8, // paddd xmm7,xmm0
+        ]);
+
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "packed dword dataflow must be explicit: {ops:#?}"
+        );
+        for lane in 0..4 {
+            let lane_name = format!("xmm7_d{lane}");
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Bin { dst: VReg::Phys(dst), op: BinOp::Add, .. }
+                        if dst == &lane_name
+                )),
+                "missing lane {lane} accumulator: {ops:#?}"
+            );
+        }
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(
+                    instruction.op,
+                    Op::Ite {
+                        t: Value::Const(-1),
+                        e: Value::Const(0),
+                        width: Width::W32,
+                        ..
+                    }
+                ))
+                .count(),
+            4,
+            "PCMPGTD must produce four all-ones/zero masks: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn mmx_paddd_is_not_misrepresented_as_four_xmm_dword_lanes() {
+        // PADDD mm0,mm1 is a 64-bit MMX operation with two lanes. The XMM
+        // scalariser must fail closed instead of inventing four `mm*_dN` lanes.
+        let ops = lift64(&[0x0f, 0xfe, 0xc1]);
+        assert_eq!(ops.len(), 1, "got: {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Unknown { mnemonic } if mnemonic == "paddd"
+        ));
+    }
+
+    #[test]
+    fn pshufd_and_movd_expose_the_horizontal_sum_lane() {
+        // pshufd xmm1,xmm0,0xee; paddd xmm1,xmm0;
+        // pshufd xmm0,xmm1,0x55; paddd xmm0,xmm1; movd eax,xmm0
+        let ops = lift64(&[
+            0x66, 0x0f, 0x70, 0xc8, 0xee, 0x66, 0x0f, 0xfe, 0xc8, 0x66, 0x0f, 0x70, 0xc1, 0x55,
+            0x66, 0x0f, 0xfe, 0xc1, 0x66, 0x0f, 0x7e, 0xc0,
+        ]);
+
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "horizontal reduction must be explicit: {ops:#?}"
+        );
+        assert!(ops.iter().any(|instruction| matches!(
+            &instruction.op,
+            Op::ZExt {
+                dst: VReg::Phys(dst),
+                src: Value::Reg(VReg::Phys(src)),
+                from: Width::W32,
+                to: Width::W64,
+            } if dst == "eax" && src == "xmm0_d0"
+        )));
+        // 0xee selects [2, 3, 2, 3] from xmm0. The first four ops snapshot the
+        // source and the next four write the shuffled xmm1 lanes.
+        for (lane, selected) in [2_u32, 3, 2, 3].into_iter().enumerate() {
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Value::Reg(VReg::Temp(src)),
+                } if dst == &format!("xmm1_d{lane}") && *src == 84 + selected
+            )));
         }
     }
 

@@ -309,6 +309,90 @@ def test_array_address_chain_folds_and_round_trips(tmp_path: Path) -> None:
     assert results["sum_array"]["status"] == "pass", results
 
 
+def test_clang_o2_vectorized_positive_sum_round_trips(tmp_path: Path) -> None:
+    """SSE2 lane accumulation must survive into executable decompiled C."""
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / "13_loop_early_exit.c"
+    binary = tmp_path / "13_loop_early_exit-clang-O2.so"
+    compiled = subprocess.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["sum_positive"])
+    assert code is not None
+    for mnemonic in ("pcmpgtd", "pand", "paddd", "pshufd", "movd"):
+        assert f"asm: {mnemonic}" not in code, code
+
+    rebuilt = D.build_so(
+        code, tmp_path, "dec_sum_positive_clang_o2", link_against=str(binary)
+    )
+    assert rebuilt is not None, code
+    original_lib = ctypes.CDLL(str(binary))
+    rebuilt_lib = ctypes.CDLL(str(rebuilt))
+    original = original_lib.sum_positive
+    decompiled = rebuilt_lib.sum_positive
+    for function in (original, decompiled):
+        function.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+        function.restype = ctypes.c_int
+    values = (ctypes.c_int * 16)(
+        3,
+        6,
+        -8,
+        -5,
+        -2,
+        1,
+        4,
+        7,
+        -7,
+        -4,
+        -1,
+        2,
+        5,
+        8,
+        -6,
+        -3,
+    )
+    assert original(values, 10) == 21
+    assert decompiled(values, 10) == original(values, 10)
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "13_loop_early_exit",
+            "--function",
+            "sum_positive",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "64",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["sum_positive"]["status"] == "pass", results
+
+
 def test_gcc_o0_comparison_tree_recovers_switch_and_round_trips(tmp_path: Path) -> None:
     """The reconstructed x86 signed-greater condition must remain switch-shaped."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "switch_jt.c"

@@ -519,6 +519,18 @@ pub fn phys_reg_width(name: &str) -> Option<Width> {
             return Some(Width::W128);
         }
     }
+    // Scalarised packed-dword views used by the x86 lifter. Keeping lane
+    // identity in the register name lets ordinary SSA/dataflow process SSE2
+    // operations without pretending a lane-wise add is a scalar 128-bit add.
+    if let Some((register, lane)) = n.rsplit_once("_d") {
+        if register
+            .strip_prefix("xmm")
+            .is_some_and(|index| index.parse::<u8>().is_ok())
+            && lane.parse::<u8>().is_ok_and(|index| index < 4)
+        {
+            return Some(Width::W32);
+        }
+    }
     if let Some(rest) = n.strip_prefix("ymm") {
         if rest.parse::<u8>().is_ok() {
             return Some(Width::W256);
@@ -743,6 +755,9 @@ mod tests {
     #[test]
     fn phys_reg_width_x86_vectors() {
         assert_eq!(phys_reg_width("xmm0"), Some(Width::W128));
+        assert_eq!(phys_reg_width("xmm0_d0"), Some(Width::W32));
+        assert_eq!(phys_reg_width("xmm15_d3"), Some(Width::W32));
+        assert_eq!(phys_reg_width("xmm0_d4"), None);
         assert_eq!(phys_reg_width("ymm15"), Some(Width::W256));
         assert_eq!(phys_reg_width("zmm3"), Some(Width::W512));
     }

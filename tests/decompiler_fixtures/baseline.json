@@ -186,9 +186,9 @@
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
     "for_stride2": "pass",
-    "for_sum": "fail",
+    "for_sum": "pass",
     "loop_break": "pass",
-    "loop_continue": "fail",
+    "loop_continue": "pass",
     "loop_early_return": "pass",
     "loop_return_on_neg": "pass",
     "mutate_prefix": "pass",
@@ -679,7 +679,7 @@
     "classify_run": "pass",
     "find_first": "pass",
     "has_pair": "pass",
-    "sum_positive": "fail",
+    "sum_positive": "pass",
     "sum_until_zero": "pass"
   },
   "13_loop_early_exit:gcc:O0": {

@@ -12,8 +12,8 @@
 # A set that rots — naming a renamed fixture or a deleted function — fails the
 # fast suite rather than silently shrinking someone's loop.
 #
-# Failure counts below are from the committed baseline.json (330 pass / 209 fail
-# / 84 structural) and are a snapshot, not a contract; re-read them with
+# Failure counts below are from the committed baseline.json (488 pass / 53 fail
+# / 82 structural) and are a snapshot, not a contract; re-read them with
 # `tools/dectest.py --list @<set>`.
 
 [smoke]
@@ -32,7 +32,7 @@ selectors = [
 ]
 
 [region]
-description = "The Phase 4 region-ownership acceptance set — 114 of the 209 known failures."
+description = "The Phase 4 region-ownership set — 179 pass / 13 fail in the current baseline."
 selectors = [
     "03_loop_shapes",
     "04_switch_shapes",
@@ -41,15 +41,15 @@ selectors = [
 ]
 
 [switch]
-description = "Switch and ladder recovery (04). The single worst fixture: 42 fail / 22 pass."
+description = "Switch and ladder recovery (04) — all 64 cells pass in the current baseline."
 selectors = ["04_switch_shapes"]
 
 [loops]
-description = "Every loop shape: plain (03), rotated (12), early-exit (13). 72 known failures."
+description = "Every loop shape: plain (03), rotated (12), early-exit (13) — 115 pass / 13 fail."
 selectors = ["03_loop_shapes", "12_loop_rotation", "13_loop_early_exit"]
 
 [early-exit]
-description = "13 alone — break/continue/early-return. 19 of its 24 cells fail."
+description = "13 alone — all 24 break/continue/early-return cells currently pass."
 selectors = ["13_loop_early_exit"]
 
 [flags]
@@ -69,7 +69,7 @@ description = "Integer widths and sub-register views (02). The Phase 2 value-mod
 selectors = ["02_integer_widths"]
 
 [structs]
-description = "Aggregates and memory effects (09) plus the C++ shapes (10) — 66 structural cells."
+description = "Aggregates/memory (09) plus C++ shapes (10) — 28 pass / 15 fail / 64 structural."
 selectors = ["09_memory_effects", "10_cpp_runtime_shapes"]
 
 [o0]
@@ -81,5 +81,5 @@ description = "Every fixture at -O2, both compilers. Where cmov, merged values a
 selectors = ["*:gcc:O2", "*:clang:O2"]
 
 [clang-o0]
-description = "Our weakest lane against angr (GED 6.23 vs 3.19). Includes the jump-table gap."
+description = "Every Clang -O0 fixture — 125 pass / 14 fail / 19 structural behavior cells."
 selectors = ["*:clang:O0"]
