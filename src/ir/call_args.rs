@@ -794,6 +794,14 @@ fn fold_body(
                 fold_body(body, arch, param_slots, callee_layouts)
             }
             Stmt::For { body, .. } => fold_body(body, arch, param_slots, callee_layouts),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    fold_body(case, arch, param_slots, callee_layouts);
+                }
+                if let Some(default) = default {
+                    fold_body(default, arch, param_slots, callee_layouts);
+                }
+            }
             _ => {}
         }
     }
@@ -1737,6 +1745,47 @@ mod tests {
                 size: 8,
             },
         }
+    }
+
+    #[test]
+    fn reconstructs_arguments_inside_switch_cases_and_default() {
+        let call = || Stmt::Call {
+            target: Expr::Named {
+                va: 0x4000,
+                name: "callee".into(),
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        };
+        let arm = |left, right| vec![assign("rdi#1", left), assign("rsi#1", right), call()];
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Switch {
+                discriminant: Expr::Reg(reg("rax")),
+                cases: vec![(Some(0), arm(10, 20))],
+                default: Some(arm(30, 40)),
+            }],
+        };
+
+        reconstruct_args(&mut function, CallConv::SysVAmd64);
+
+        let Stmt::Switch { cases, default, .. } = &function.body[0] else {
+            panic!("expected switch, got {:#?}", function.body);
+        };
+        let call_args = |body: &[Stmt]| match body.last() {
+            Some(Stmt::Call { args, .. }) => args.clone(),
+            other => panic!("expected arm call, got {other:#?}"),
+        };
+        assert_eq!(
+            call_args(&cases[0].1),
+            vec![Expr::Const(10), Expr::Const(20)]
+        );
+        assert_eq!(
+            call_args(default.as_deref().expect("default arm")),
+            vec![Expr::Const(30), Expr::Const(40)]
+        );
     }
 
     #[test]

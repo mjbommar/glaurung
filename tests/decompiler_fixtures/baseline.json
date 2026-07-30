@@ -422,7 +422,7 @@
   "08_indirect_dispatch:clang:O0": {
     "apply": "structural",
     "dispatch": "fail",
-    "dispatch_switch": "fail",
+    "dispatch_switch": "pass",
     "tail_dispatch": "fail"
   },
   "08_indirect_dispatch:clang:O2": {

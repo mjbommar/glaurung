@@ -81,5 +81,5 @@ description = "Every fixture at -O2, both compilers. Where cmov, merged values a
 selectors = ["*:gcc:O2", "*:clang:O2"]
 
 [clang-o0]
-description = "Every Clang -O0 fixture — 127 pass / 12 fail / 19 structural behavior cells."
+description = "Every Clang -O0 fixture — 128 pass / 11 fail / 19 structural behavior cells."
 selectors = ["*:clang:O0"]
