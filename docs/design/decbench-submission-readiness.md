@@ -12,10 +12,56 @@ Last updated: 2026-07-29.
 
 ## Current decision: do not submit
 
-### Current output checkpoint: `f02ecb9` (harness `4f80682`)
+### Current output checkpoint: `8aeba47`
 
-The current native slice normalizes ARM Thumb ELF entry points and propagates
-typed floating-point ABI results into emitted prototypes. The exact blinded
+The current native slice gives every unresolved indirect call a concrete
+call-site prototype instead of the legacy `((long (*)())(...))` escape hatch.
+That old spelling is not a prototype in C11 and means zero parameters in C23;
+GCC 15 therefore rejected calls with arguments. The replacement derives the
+return and parameter spellings from the call destination and recovered value
+types, uses `(void)` for a real zero-argument call, and preserves pointer values
+at the call boundary. This is the same contract boundary represented explicitly
+by Ghidra's `FuncCallSpecs`, angr's `CallSiteMaker`, and Kuna's P4 call/prototype
+phase, although Glaurung still lacks their full interprocedural model.
+
+The exact blinded artifact covers 250/250 target functions in 224/224 binaries
+with zero adapter or decompilation errors. Its SHA-256 is
+`c49ff3ce10fc1645eff759750176604793f1a301acc7d0f9509f03bd52751664`.
+The 224 C payloads are byte-identical to the measured candidate package; only
+the package version/timestamp metadata was relabeled after commit. A 16-worker
+static-only extraction took about 47.8 seconds, versus 58.49 seconds at four
+workers for the prior checkpoint. More workers helped only modestly because the
+individual analysis processes slowed under contention.
+
+This change removes all 1,795 empty-parameter function-pointer casts from the
+holdout output and changes 174 of 224 C files. On one DecBench revision, a
+controlled full-package A/B through the official fixup compiler moves compile
+coverage `97/250 -> 116/250`: ARM `74/84 -> 80/84`, host GCC `15/158 -> 28/158`,
+and MinGW remains `8/8`. The remaining 134 failures classify as 48 named-call
+arity failures, 37 pointer/integer type conflicts, 31 invalid void-result uses,
+and 18 other or truncated diagnostics. The same-revision official byte-match
+A/B moves `0.0497107312 -> 0.0650896163`, with 15 functions improving, zero
+regressing, and nonzero matches increasing `62 -> 76`.
+
+Those byte-match values deliberately do **not** replace the retained published
+checkpoint below: the local DecBench evaluator has moved, so only their
+same-revision delta is comparable. Full GED and type-match were not rerun for
+this 174-binary change. Compile coverage is now four functions behind angr and
+nine behind Ghidra on this slice, but the prior roughly 2x GED gap and weak type
+recovery remain. Submission is still blocked on those semantic gaps, structured
+variables/high variables, named-callee prototypes, and the measured
+`void`/hidden-sret classification failures.
+
+The real execution-differential fixture matrix remains 459 behavioral passes,
+82 failures, and 82 structural-only results, identical to the documented
+pre-change checkpoint. Its two differences from the older checked-in baseline
+are both `cpp_raii_guard` return-type failures in functions containing no call,
+so they are pre-existing typed-return debt rather than an effect of this slice.
+
+### Previous retained score checkpoint: `f02ecb9` (harness `4f80682`)
+
+The previous native slice normalized ARM Thumb ELF entry points and propagated
+typed floating-point ABI results into emitted prototypes. Its exact blinded
 artifact covers 250/250 target functions in 224/224 binaries with zero adapter
 or decompilation errors. Static extraction took 58.49 seconds wall clock; the
 slowest binary took 5.046 seconds. Its SHA-256 is
@@ -31,11 +77,6 @@ not a relabeled partial mean. It improves two additional functions to perfect
 GED, but keeps compile coverage flat: `uart_wakeup` becomes compilable while the
 newly correct floating prototype makes `pidUpdate` stop compiling under the
 benchmark harness.
-
-This is architecture progress, not competitiveness evidence. Submission remains
-blocked on the roughly 2x blinded GED gap, 11.2-point compile-rate gap to Ghidra,
-missing structured variables/high-variable model, weak interprocedural
-prototype recovery, and the measured `void`/hidden-sret classification gap.
 
 The prior complete checkpoint was rebuilt from Glaurung commit `24b3826`, run
 over all 224 blinded binaries (250 target functions), packaged, ingested into a
@@ -93,6 +134,14 @@ seconds and full type match took 107.42 seconds. The public 56-cell matrix took
 because it launches many Joern/JVM scoring jobs. More decompiler batching will
 not remove that external scorer cost; changed-cell selection and retained
 checkpoint merges are the safe wall-clock lever.
+
+For the `8aeba47` call-prototype slice, compile-only A/B over both 250-function
+packages took 3.8 seconds with 16 workers. Exact byte-match initially wasted a
+full serial DWARF pass per package; resolving each binary identity once, using
+the manifest directly for the 215 single-function binaries, and walking DWARF
+only for the nine multi-function binaries reduced the complete baseline and
+candidate A/B to 26.2 seconds. Keep that shared-address-map workflow. Do not run
+full GED inside the edit loop; its Joern cost belongs at a stable checkpoint.
 
 Behavioral evidence remains useful and is kept separate from textual scores.
 The current fixture run is red: 459 behavioral passes, 82 behavioral failures,
