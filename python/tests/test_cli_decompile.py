@@ -230,6 +230,16 @@ def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> Non
         "        endpoint_ready(endpoint_remove(device))->value = message;\n"
         "    }\n"
         "}\n"
+        "volatile unsigned int peripheral_clock = 72000000;\n"
+        "volatile unsigned int alternate_clock = 36000000;\n"
+        "__attribute__((noinline)) void arm_unsigned_scalars(\n"
+        "    unsigned int port, unsigned int baud) {\n"
+        "    unsigned int clock = peripheral_clock;\n"
+        "    if (port == 0x40011000 || port == 0x40011400) {\n"
+        "        clock = alternate_clock;\n"
+        "    }\n"
+        "    *(volatile unsigned int *)(port + 8) = (clock + baud / 2) / baud;\n"
+        "}\n"
     )
     built = subprocess.run(
         [
@@ -284,6 +294,24 @@ def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> Non
     assert "arm_word_params(" in word_signature, word_text
     assert "int arg1" in word_signature, word_text
     assert "* arg1" not in word_signature, word_text
+
+    scalar_target = next(
+        (function for function in functions if function.name == "arm_unsigned_scalars"),
+        None,
+    )
+    assert scalar_target is not None, functions
+    scalar_text = g.ir.decompile_at(
+        str(binary),
+        int(scalar_target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+    scalar_signature = scalar_text.splitlines()[1]
+    assert "arm_unsigned_scalars(" in scalar_signature, scalar_text
+    assert "int arg0" in scalar_signature, scalar_text
+    assert "unsigned int arg1" in scalar_signature, scalar_text
+    assert "* arg0" not in scalar_signature, scalar_text
+    assert "* arg1" not in scalar_signature, scalar_text
 
 
 @pytest.mark.skipif(not ARM32_SAMPLE.exists(), reason="armhf sample missing")

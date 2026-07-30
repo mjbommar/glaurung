@@ -296,27 +296,38 @@ impl TypeMapV {
 
     /// Entry-value facts strong enough to change a rendered parameter today.
     ///
-    /// The full value map is analysis evidence, but output-facing prototype
-    /// recovery is not yet a fixed point with function boundaries and callee
-    /// prototypes. Until that architecture lands, qualify only the concrete
-    /// O0 chain `live-in -> frame spill -> reload -> dereference`, and require
-    /// two independently qualified entry values before changing the prototype.
-    /// A lone address-taken scalar can otherwise acquire pointer evidence from
-    /// an over-discovered tail. Projecting every live-in fact can also replace a
-    /// better legacy prototype with evidence from an unknown direct callee.
+    /// Exact AAPCS word-scalar evidence can stand alone. Narrow scalar evidence
+    /// still needs a companion because an enum or ABI-promoted integer may be
+    /// narrowed only after entry. Pointer evidence is more ambiguous because an
+    /// integer MMIO address has the same machine shape, so it needs either a
+    /// second independently proven pointer or two proven companion parameters.
     pub fn parameter_refinements(&self) -> TypeMap {
         let mut out = TypeMap::default();
-        if self
+        let live_in_count = self
             .parameter_refinements
             .keys()
             .filter(|value| value.version == 0)
-            .count()
-            < 2
-        {
-            return out;
-        }
+            .count();
+        let pointer_count = self
+            .parameter_refinements
+            .iter()
+            .filter(|(value, hint)| {
+                value.version == 0
+                    && matches!(hint, TypeHint::Pointer { .. } | TypeHint::CodePointer)
+            })
+            .count();
+        let pointers_corroborated = pointer_count >= 2 || live_in_count >= 3;
+        let scalars_corroborated = live_in_count >= 2;
         for (value, hint) in &self.parameter_refinements {
-            if value.version == 0 {
+            let visible = match hint {
+                TypeHint::Pointer { .. } | TypeHint::CodePointer => pointers_corroborated,
+                TypeHint::Int {
+                    signed: false,
+                    width,
+                } if *width >= 4 => true,
+                _ => scalars_corroborated,
+            };
+            if value.version == 0 && visible {
                 out.upsert(value.base.clone(), *hint);
             }
         }
@@ -325,22 +336,46 @@ impl TypeMapV {
 
     /// Return the output-qualified fact for one exact caller-supplied value.
     ///
-    /// This retains the same two-independent-parameters safety gate as
+    /// This retains the same class-aware safety gate as
     /// [`Self::parameter_refinements`], but does not erase SSA identity by
     /// projecting through a raw register key first.
     fn parameter_refinement(&self, value: &SsaValue) -> Option<TypeHint> {
-        if self
+        if value.version != 0 {
+            return None;
+        }
+        let hint = self.parameter_refinements.get(value).copied()?;
+        if matches!(
+            hint,
+            TypeHint::Int {
+                signed: false,
+                width: 4..=u8::MAX,
+            }
+        ) {
+            return Some(hint);
+        }
+        let live_in_count = self
             .parameter_refinements
             .keys()
             .filter(|candidate| candidate.version == 0)
-            .count()
-            < 2
-        {
-            return None;
-        }
-        (value.version == 0)
-            .then(|| self.parameter_refinements.get(value).copied())
-            .flatten()
+            .count();
+        let pointer_count = self
+            .parameter_refinements
+            .iter()
+            .filter(|(candidate, candidate_hint)| {
+                candidate.version == 0
+                    && matches!(
+                        candidate_hint,
+                        TypeHint::Pointer { .. } | TypeHint::CodePointer
+                    )
+            })
+            .count();
+        let visible = match hint {
+            TypeHint::Pointer { .. } | TypeHint::CodePointer => {
+                pointer_count >= 2 || live_in_count >= 3
+            }
+            _ => live_in_count >= 2,
+        };
+        visible.then_some(hint)
     }
 }
 
@@ -1706,6 +1741,10 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
     let mut constant_defs: HashMap<SsaValue, TypeHint> = HashMap::new();
     let mut copy_edges: Vec<(SsaValue, SsaValue)> = Vec::new();
     let mut reloads: HashSet<SsaValue> = HashSet::new();
+    // Exact values consumed by a logical right shift. Unlike a merged
+    // unsigned type hint, this is direct machine evidence that the source
+    // operation interpreted this particular value as unsigned.
+    let mut logical_shift_values: HashSet<SsaValue> = HashSet::new();
     // Exact caller-supplied values spilled into frame slots, together with the
     // store width. Width is part of the provenance proof: a later byte reload
     // may refine an incoming byte only when the entry value was itself stored
@@ -1859,6 +1898,7 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                             Value::Reg(raw) => raw,
                             _ => unreachable!(),
                         };
+                        logical_shift_values.insert(lhs_value.clone());
                         tm.upsert(
                             lhs_value,
                             TypeHint::Int {
@@ -2202,17 +2242,34 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                                     changed |= tm.upsert_parameter_refinement(source.clone(), hint);
                                 }
                             }
-                            Some(hint @ TypeHint::Int { width: 1 | 2, .. }) if matches!(hint, TypeHint::Int { width, .. } if width == addr.size.max(1)) =>
-                            {
+                            Some(TypeHint::Int { signed, width }) => {
                                 // A narrow entry spill followed by a same-width
                                 // reload and explicit ZExt/SExt is source-level
-                                // parameter evidence, not just storage reuse.
-                                // The extension carried by the exact reloaded SSA
-                                // value decides unsigned vs signed.
+                                // parameter evidence, not just storage reuse. At
+                                // full width, accept only unsigned evidence from
+                                // an operation such as logical right shift: a
+                                // default signed machine-word fact is not enough
+                                // to distinguish an integer from a pointer.
                                 for (source, stored_width) in sources {
                                     if *stored_width != addr.size.max(1) {
                                         continue;
                                     }
+                                    let narrow_exact = width == *stored_width && width <= 2;
+                                    let aapcs_unsigned_word = !signed
+                                        && *stored_width == 4
+                                        && logical_shift_values.contains(dst)
+                                        && matches!(
+                                            &source.base,
+                                            VReg::Phys(name)
+                                                if matches!(name.as_str(), "r0" | "r1" | "r2" | "r3")
+                                        );
+                                    if !narrow_exact && !aapcs_unsigned_word {
+                                        continue;
+                                    }
+                                    let hint = TypeHint::Int {
+                                        signed,
+                                        width: addr.size.max(1),
+                                    };
                                     changed |= tm.upsert(source.clone(), hint);
                                     changed |= tm.upsert_parameter_refinement(source.clone(), hint);
                                 }
@@ -3604,6 +3661,197 @@ int never_returns(void) { for (;;) {} }
                 "slot {slot} must retain LDRB's unsigned byte type"
             );
         }
+    }
+
+    #[test]
+    fn arm_logical_shift_qualifies_one_unsigned_word_parameter() {
+        // AAPCS has no unsigned register class, but GCC's LSR for `value / 2`
+        // is exact source-level unsignedness evidence. Preserve it through the
+        // O0 frame spill without requiring an unrelated second parameter.
+        let lf = mk_block(vec![
+            Op::Bin {
+                dst: VReg::phys("r7"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("sp")),
+                rhs: Value::Const(0),
+            },
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("r7")),
+                    disp: -4,
+                    size: 4,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("r0")),
+            },
+            Op::Load {
+                dst: VReg::phys("r3"),
+                addr: MemOp {
+                    base: Some(VReg::phys("r7")),
+                    disp: -4,
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+            Op::Bin {
+                dst: VReg::phys("r2"),
+                op: BinOp::Shr,
+                lhs: Value::Reg(VReg::phys("r3")),
+                rhs: Value::Const(1),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let valued = recover_types_valued(&lf, &ssa);
+        let live_in = SsaValue {
+            base: VReg::phys("r0"),
+            version: 0,
+        };
+        assert_eq!(
+            valued.get(&live_in),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            }),
+            "LSR signedness must reach the exact spilled live-in"
+        );
+        assert_eq!(
+            valued.parameter_refinement(&live_in),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            }),
+            "the exact scalar spill proof must qualify the parameter"
+        );
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::Arm,
+            &HashSet::from([0]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn one_scalar_companion_does_not_corroborate_an_ambiguous_pointer() {
+        let pointer = SsaValue {
+            base: VReg::phys("r0"),
+            version: 0,
+        };
+        let scalar = SsaValue {
+            base: VReg::phys("r1"),
+            version: 0,
+        };
+        let third = SsaValue {
+            base: VReg::phys("r2"),
+            version: 0,
+        };
+        let mut types = TypeMapV::default();
+        types.upsert_parameter_refinement(pointer.clone(), TypeHint::Pointer { pointee_width: 4 });
+        types.upsert_parameter_refinement(
+            scalar.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        assert_eq!(types.parameter_refinement(&pointer), None);
+        assert_eq!(
+            types.parameter_refinement(&scalar),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            })
+        );
+
+        types.upsert_parameter_refinement(
+            third,
+            TypeHint::Int {
+                signed: false,
+                width: 1,
+            },
+        );
+        assert_eq!(
+            types.parameter_refinement(&pointer),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+    }
+
+    #[test]
+    fn lone_narrow_scalar_does_not_override_abi_promotion() {
+        // A compiler may spill an enum or promoted integer through a narrow
+        // slot after proving its range. One LDRB/LDRH does not by itself prove
+        // that the source declaration was char/short.
+        let live_in = SsaValue {
+            base: VReg::phys("r0"),
+            version: 0,
+        };
+        let mut types = TypeMapV::default();
+        types.upsert_parameter_refinement(
+            live_in.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 2,
+            },
+        );
+
+        assert_eq!(types.parameter_refinement(&live_in), None);
+        assert!(types.parameter_refinements().is_empty());
+    }
+
+    #[test]
+    fn x86_logical_shift_does_not_retype_a_spilled_word_parameter() {
+        // The standalone rule targets AAPCS r0-r3, whose register names do not
+        // carry width. x86 aliases already encode operand width and must keep
+        // their established prototype behavior.
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+            },
+            Op::Bin {
+                dst: VReg::phys("rcx"),
+                op: BinOp::Shr,
+                lhs: Value::Reg(VReg::phys("rax")),
+                rhs: Value::Const(1),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
     }
 
     #[test]
