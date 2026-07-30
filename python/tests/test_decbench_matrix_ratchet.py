@@ -16,6 +16,7 @@ So `MISSING` and `GONE` are regressions, not absences.
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -216,3 +217,49 @@ def test_parallel_cells_have_isolated_work_directories(dm, tmp_path):
     assert first.parent == second.parent == tmp_path / "cells"
     assert first.name == "arith-gcc-O0"
     assert second.name == "arith-clang-O0"
+
+
+def _install_decbench_process(tmp_path: Path, body: str) -> Path:
+    """Install a real subprocess fixture for evaluator failure-path coverage."""
+    executable = tmp_path / "decbench"
+    executable.write_text(f"#!/bin/sh\n{body}\n")
+    executable.chmod(0o755)
+    return executable
+
+
+def test_real_evaluator_failure_is_not_silently_reported_as_blank_metrics(
+    dm, tmp_path, monkeypatch
+):
+    _install_decbench_process(
+        tmp_path, "echo \"Decompiler 'glaurung' not found\" >&2; exit 2"
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    result = dm.evaluate(
+        tmp_path / "input.so",
+        tmp_path / "input.c",
+        "glaurung",
+        tmp_path / "results",
+        tmp_path,
+    )
+
+    assert result["ged"] is None
+    assert "exit 2" in result["error"]
+    assert "Decompiler 'glaurung' not found" in result["error"]
+
+
+def test_real_evaluator_with_no_metrics_is_an_error(dm, tmp_path, monkeypatch):
+    _install_decbench_process(tmp_path, 'echo "evaluation produced no report"; exit 0')
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    result = dm.evaluate(
+        tmp_path / "input.so",
+        tmp_path / "input.c",
+        "glaurung",
+        tmp_path / "results",
+        tmp_path,
+    )
+
+    assert result["ged"] is None
+    assert "no metrics" in result["error"]
+    assert "evaluation produced no report" in result["error"]

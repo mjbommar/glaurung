@@ -110,8 +110,12 @@ def compile_cell(program: str, compiler: str, opt: str, outdir: Path) -> Path | 
 def evaluate(
     binary: Path, source: Path, backend: str, results: Path, cwd: Path
 ) -> dict:
-    """One cell's metrics. A metric the pipeline did not produce is recorded as
-    None rather than omitted, so `--check` can tell "worse" from "gone"."""
+    """Run one cell and fail closed on evaluator errors or an empty report.
+
+    An individual absent metric remains ``None`` so ``--check`` can tell "worse"
+    from "gone". All three absent is not a valid evaluation, even when a broken
+    backend exits zero.
+    """
     env = dict(os.environ, GLAURUNG_BIN=shutil.which("glaurung") or "", NO_COLOR="1")
     env.pop("FORCE_COLOR", None)
     out: dict[str, float | None] = {"ged": None, "type_match": None, "byte_match": None}
@@ -141,6 +145,12 @@ def evaluate(
         m = METRIC_RE.match(line)
         if m:
             out[m.group(1)] = float(m.group(2))
+    diagnostic = " ".join((p.stderr.strip() or p.stdout.strip() or "no output").split())
+    diagnostic = diagnostic[-500:]
+    if p.returncode != 0:
+        return out | {"error": f"decbench exit {p.returncode}: {diagnostic}"}
+    if all(value is None for value in out.values()):
+        return out | {"error": f"decbench produced no metrics: {diagnostic}"}
     return out
 
 
@@ -193,8 +203,8 @@ def run_cell(key: str, backend: str, workdir: Path, cwd: Path) -> dict:
 
 def print_cell(key: str, cell: dict) -> None:
     """Print one stable, compact cell result as soon as it completes."""
-    if cell.get("error") == "build failed":
-        print(f"  {key:34s} BUILD FAILED", flush=True)
+    if error := cell.get("error"):
+        print(f"  {key:34s} ERROR {error}", flush=True)
         return
     shown = " ".join(
         f"{metric}={'-' if cell.get(metric) is None else cell[metric]}"
@@ -228,6 +238,15 @@ def run_matrix(
 
 def cells(report: dict) -> dict:
     return {k: v for k, v in report.items() if k != TOOLCHAIN_KEY}
+
+
+def cell_errors(report: dict) -> list[tuple[str, str]]:
+    """Return every failed cell so every command mode can fail closed."""
+    return [
+        (key, str(cell["error"]))
+        for key, cell in sorted(cells(report).items())
+        if "error" in cell
+    ]
 
 
 def check(current: dict, baseline: dict, scoped: bool = False) -> list[str]:
@@ -325,11 +344,11 @@ def main() -> int:
         report = run_matrix(args.backend, Path(td), cwd, only=args.only, jobs=args.jobs)
 
     if args.write_baseline:
-        missing = [k for k, v in cells(report).items() if "error" in v]
-        if missing:
+        failures = cell_errors(report)
+        if failures:
             print("REFUSING to write a baseline with failed cells:", file=sys.stderr)
-            for k in missing:
-                print(f"  {k}", file=sys.stderr)
+            for key, error in failures:
+                print(f"  {key}: {error}", file=sys.stderr)
             return 1
         BASELINE.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
         print(f"wrote {BASELINE}")
@@ -337,6 +356,13 @@ def main() -> int:
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
+
+    failures = cell_errors(report)
+    if failures:
+        print(f"\nDECBENCH MATRIX ERRORS ({len(failures)}):", file=sys.stderr)
+        for key, error in failures:
+            print(f"  {key}: {error}", file=sys.stderr)
+        return 1
 
     if args.check:
         if not BASELINE.exists():

@@ -12,42 +12,32 @@ Last updated: 2026-07-29.
 
 ## Current decision: do not submit
 
-### Head checkpoint: `19dde75`
+### Current output checkpoint: `f02ecb9` (harness `4f80682`)
 
-The latest slice implements compatible multi-return type propagation over the
-exact SSA values reaching the ABI result role, following Ghidra's
-`propagateAcrossReturns` design and Kuna's P5 port. It does not change the
-submission decision or the aggregate scores below. DecBench's type metric does
-not score function return types, and the 20 candidate changed outputs had
-identical GED and byte-match values before and after the change.
+The current native slice normalizes ARM Thumb ELF entry points and propagates
+typed floating-point ABI results into emitted prototypes. The exact blinded
+artifact covers 250/250 target functions in 224/224 binaries with zero adapter
+or decompilation errors. Static extraction took 58.49 seconds wall clock; the
+slowest binary took 5.046 seconds. Its SHA-256 is
+`14d13778324ae5c31fcf70fe7f3a69c1288b162c3cba41630c41fe4cdf7cb5d2`;
+it contains 225 files and 1,711,445 uncompressed bytes.
 
-The direct evidence is more informative than that benchmark blind spot. DWARF
-inspection of those 20 source functions rejected an initially broad join that
-would have regressed a correct signed `int` and an `errcode_t` scalar. The final
-exact-compatibility join retains 11 declaration changes: five move to the
-correct integer/pointer class, while six expose the still-open absence of
-explicit `void` recovery. The other nine outputs remain byte-identical to the
-prior package. The full Rust all-target gate, all 56 fixture lanes, and all 56
-public DecBench cells pass without regressions at this head.
+The 23 changed binaries (42 target functions) were rescored with the official
+GED and byte-match evaluators, then merged by exact function key into the prior
+complete checkpoint. Type match was recomputed across all 235 scoreable
+functions. That gives GED `41.3347280335`, byte match `0.0423607691`, compile
+coverage `97/250`, and type match `0.1271417040`. This is an exact delta merge,
+not a relabeled partial mean. It improves two additional functions to perfect
+GED, but keeps compile coverage flat: `uart_wakeup` becomes compilable while the
+newly correct floating prototype makes `pidUpdate` stop compiling under the
+benchmark harness.
 
 This is architecture progress, not competitiveness evidence. Submission remains
-blocked on the same roughly 2x blinded GED gap, 11.2-point compile-rate gap to
-Ghidra, missing structured variables/high-variable model, weak interprocedural
-prototype recovery, and now the specifically measured `void`/hidden-sret return
-classification gap.
+blocked on the roughly 2x blinded GED gap, 11.2-point compile-rate gap to Ghidra,
+missing structured variables/high-variable model, weak interprocedural
+prototype recovery, and the measured `void`/hidden-sret classification gap.
 
-The exact head artifact covers 250/250 functions in 224/224 binaries and has
-SHA-256
-`d1b7d5ad066e04251dd62e535aad5a4c8fe043e7b1c8f91b57fabd6e005c1956`.
-It contains 225 files and 1,716,814 uncompressed bytes. All 224 decompilations
-completed without errors; the single long-running target took 206.52 seconds.
-The 11-file delta has been rescored for GED and byte-match and the full retained
-checkpoints for type-match; those three aggregates are unchanged. Compile rate
-has not been recomputed for this package, so the complete score table below
-remains tied to the prior fully ingested artifact rather than being silently
-relabeled as a head score.
-
-The current native decompiler was rebuilt from Glaurung commit `24b3826`, run
+The prior complete checkpoint was rebuilt from Glaurung commit `24b3826`, run
 over all 224 blinded binaries (250 target functions), packaged, ingested into a
 fresh DecBench tree, and scored from the resulting decompilations. The package
 SHA-256 is
@@ -58,52 +48,65 @@ complete rather than a successful subset. The package contains 225 files and
 
 | blinded gate | Glaurung | angr | Ghidra | decision |
 |---|---:|---:|---:|---|
-| GED, lower is better | 41.548 | 21.774 | 20.281 | not competitive |
+| GED, lower is better | 41.335 | 21.774 | 20.281 | not competitive |
 | compile rate | 97/250 (38.8%) | 120/250 (48.0%) | 125/250 (50.0%) | not competitive |
 | type match | 0.127 | 0.280 | 0.231 | not competitive |
 
-Only 48 of 250 blinded functions (19.2%) are perfect in either GED or byte-match
-comparison. Against the exact `3fdcb99` baseline, GED (`41.5481171548`), byte
-match (`0.0423053591`), and compile rate (`97/250`) are unchanged. Type match
-moved `0.1261469541 -> 0.1271417040`: 2 functions improved, 0 worsened, and 233
-were unchanged. An earlier unrestricted projection (`a4d8907`) improved 24
-functions but worsened 7 and lost two compilable functions; it was rejected.
-The qualified SSA projection at `24b3826` removes every blinded regression, but
-the very small aggregate gain is strong evidence that the present bottleneck is
-the decompiler's middle architecture, not another isolated rendering rewrite.
+Against `24b3826`, GED moves `41.5481171548 -> 41.3347280335`, byte match moves
+`0.0423053591 -> 0.0423607691`, compile coverage stays `97/250`, and type match
+is bit-for-bit unchanged across all 235 scoreable functions. Seven changed
+functions move in GED: five improve and two worsen. The small net gain and the
+compile trade are evidence that the present bottleneck is the decompiler's
+middle architecture, not another isolated rendering rewrite.
 
 The 56 public cells look materially better, but they are not a submission
 signal on their own:
 
 | public aggregate | Glaurung | angr | Ghidra |
 |---|---:|---:|---:|
-| GED, lower is better | 8.378 | 9.926 | 11.426 |
+| GED, lower is better | 8.116 | 9.926 | 11.426 |
 | type match | 0.743 | 0.694 | 0.903 |
-| byte match | 0.257 | 0.274 | 0.306 |
+| byte match | 0.266 | 0.274 | 0.306 |
 
 That reversal between public and blinded data is a holdout-generalization
-failure. In particular, Glaurung loses 26 of 56 public GED cells to angr and 18
-to Ghidra despite winning the aggregate, and it loses 40 of 56 byte-match cells
-to Ghidra. The worst public failures remain GCC `-O2` recursion, state-machine,
-and loop recovery; optimized struct cases can obtain GED 0 while type match is
-0, which exposes the missing object/type model directly.
+failure. The current 56-cell public run also has two byte-match ratchet failures
+despite improving the aggregate: `arrays:clang:O0` moves `0.06 -> 0.05` and
+`sort:gcc:O2` moves `0.20 -> 0.17`. The worst public failures remain GCC `-O2`
+recursion, state-machine, and loop recovery; optimized struct cases can obtain
+GED 0 while type match is 0, which exposes the missing object/type model
+directly.
+
+### Wall-clock checkpoint
+
+`tools/diff_decompile.py` used to import and invoke Glaurung separately for each
+function. Commit `4f80682` batches the exact requested seeds once per isolated
+fixture lane while retaining per-function worker isolation for executing the
+recompiled result. On the same 56-lane fixture matrix, old and new code produced
+identical outcomes (459 behavioral passes, 82 behavioral failures, and 82
+structural results), while wall time fell `196.89s -> 34.52s` (**5.70x**) and CPU
+time fell by about 17x.
+
+The remaining long pole is scoring, not native extraction. Ingesting the current
+blinded package took 114.10 seconds; scoring the 23-binary GED delta took 376.75
+seconds and full type match took 107.42 seconds. The public 56-cell matrix took
+6:28 with eight isolated workers, 5,078 user CPU seconds, and 1.37 GB peak RSS,
+because it launches many Joern/JVM scoring jobs. More decompiler batching will
+not remove that external scorer cost; changed-cell selection and retained
+checkpoint merges are the safe wall-clock lever.
 
 Behavioral evidence remains useful and is kept separate from textual scores.
-The full four-lane fixture differential covers 623 functions with 256 fuzz
-inputs and has zero regressions at this head. Six formerly failing functions now
-round-trip correctly. The structural gate is 282/282 closed, with no
-placeholders, but still reports seven known definition-before-use violations.
+The current fixture run is red: 459 behavioral passes, 82 behavioral failures,
+and 82 structural results. Batching preserved every old/new result exactly, but
+did not turn those known failures into successes.
 
-The repository-wide release gate is not green. At `24b3826`,
-`cargo test --all-targets` passes, and default `cargo clippy --all-targets`
-exits 0 with the existing warning backlog, but strict Clippy fails on 100
-pre-existing errors across unrelated files. The last retained broad Python-suite
-run reported 2,543 passed, 43 skipped, and 30 failed; it was not rerun for this
-Rust-only slice. Those failures included a real DecBench-output C parse miss
-(53/56, or 94.6%, against the 95% threshold), stale LLM model and `pydantic-ai`
-API expectations, and Windows fixture/API drift. The 56-cell benchmark ratchet
-passes at this head. These categories must be closed independently; a green
-decompiler ratchet does not make the repository release-ready.
+The repository-wide release gate is not green. At the current native output
+checkpoint, the Rust library suite is 1,271/1,271, the focused float round-trip
+fixtures are 4/4, the type suite is 33/33, and the ARM lifter suite is 7/7.
+Default library Clippy exits 0 with the existing warning backlog; all-features
+Clippy is blocked by the absent external `BITWUZLA_LIB_DIR`. The Python fixture
+harness is 32/32. The broad Python suite was not rerun, and the public matrix is
+red on the two byte-match cells above. These categories remain independent; a
+green focused gate does not make the repository release-ready.
 
 Submission should stay blocked until the typed middle is rebuilt around an
 authoritative SSA/value identity, recovered prototypes, type/value facts, and
