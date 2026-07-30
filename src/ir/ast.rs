@@ -6400,13 +6400,27 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
 
     let destination_is_pointer = destination_type.ends_with('*');
     let source_is_pointer = expression_has_pointer_representation(src);
-    if destination_is_pointer == source_is_pointer {
-        if source_is_pointer {
-            if let Expr::Reg(reg @ VReg::Phys(_)) = src {
-                write_reg_lvalue_dec(reg, out);
-                return;
+    if destination_is_pointer && source_is_pointer {
+        match src {
+            // Register rvalues are normally rendered as machine words so byte
+            // arithmetic remains valid.  At a pointer boundary, use the
+            // declared pointer lvalue directly when no arithmetic is present.
+            Expr::Reg(reg @ VReg::Phys(_)) => write_reg_lvalue_dec(reg, out),
+            // These expressions already have a pointer type in C.
+            Expr::StringLit { .. } | Expr::StackAddr { .. } => write_expr_dec(src, out),
+            // Address arithmetic, named addresses, and LEA nodes retain a
+            // pointer *representation* in the middle layer but deliberately
+            // render as integer machine expressions.  Cast the completed
+            // expression back at the consuming boundary.
+            _ => {
+                let _ = write!(out, "({destination_type})(");
+                write_expr_dec(src, out);
+                out.push(')');
             }
         }
+        return;
+    }
+    if destination_is_pointer == source_is_pointer {
         write_expr_dec(src, out);
         return;
     }
@@ -9647,6 +9661,40 @@ function f @ 0x1000 {
             text.contains("= (int)((long)(") && text.contains("(long)stack_1 + 1"),
             "pointer arithmetic crossed an implicit pointer-to-int boundary:\n{text}"
         );
+    }
+
+    #[test]
+    fn decbench_pointer_arithmetic_assigned_to_pointer_is_explicit() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "advance_pointer".to_string(),
+            entry_va: 0x20,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("arg0"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("arg0"))),
+                },
+            ],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
+        tm.upsert_public(VReg::phys("ret"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(
+            text.contains("arg0 = (char *)((long)arg0 + arg1);")
+                || text.contains("arg0 = (char *)(((long)arg0 + arg1));"),
+            "pointer arithmetic crossed an implicit integer-to-pointer boundary:\n{text}"
+        );
+        assert_looks_like_c(&text);
     }
 
     #[test]

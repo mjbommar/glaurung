@@ -441,6 +441,42 @@ def test_real_stack_pointer_arithmetic_store_has_an_integer_boundary():
     assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
 
 
+def test_real_pointer_parameter_arithmetic_has_a_pointer_boundary():
+    """Reassigning a pointer parameter must cast integer address arithmetic back."""
+    binary = _compile_so(
+        "__attribute__((noinline)) char advance_pointer(char *cursor, long amount) {\n"
+        "    cursor += amount;\n"
+        "    return *cursor;\n"
+        "}",
+        "pointer_parameter_arithmetic",
+    )
+    function_va = D.exported_functions(binary)["advance_pointer"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert "advance_pointer(char * arg0" in decompiled, decompiled
+    assert "arg0 = (char *)" in decompiled, decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "pointer_parameter_arithmetic.c"
+        output_path = Path(td) / "pointer_parameter_arithmetic.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu2x",
+                "-Werror=int-conversion",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_real_pointer_literal_store_uses_the_memory_value_width():
     """A pointer literal stored into a machine word needs a value cast."""
     binary = _compile_so(
