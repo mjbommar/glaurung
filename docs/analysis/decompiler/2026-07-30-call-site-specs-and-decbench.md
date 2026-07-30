@@ -2,7 +2,7 @@
 
 Date: 2026-07-30
 
-Source checkpoint: `d6882dc398127697d1c289e4b6379742cc020b35`
+Source checkpoint: `6ddf4ce778b4d780cfac69de0565aec6b0ed9bb3`
 
 ## Verdict
 
@@ -13,10 +13,13 @@ with Ghidra, angr, or Kuna. The current sample tree has no source `.i` files, so
 fresh GED and type-match evidence is unavailable, and compile success does not
 establish semantic equivalence.
 
-This slice closes the immediate call-boundary architecture gap. Every call can
+This sequence closes the immediate call-boundary architecture gap. Every call can
 now retain both the stable callee contract and the exact recovered site
 contract through later AST/type refinements, and the renderer consumes the same
-contract when declaring, casting, and emitting the call.
+contract when declaring, casting, and emitting the call. The final checkpoint
+also makes imported non-returning contracts part of function discovery, so an
+optimized `exit` path cannot absorb the next function and poison the recovered
+call/return contract.
 
 ## Architecture and references
 
@@ -49,9 +52,10 @@ The design was checked against primary source rather than inferred from output:
   reference alongside Ghidra and angr.
 
 Glaurung now has the same essential boundary, but not full parity. It still
-lacks a complete calling-convention model, parameter storage maps, `noreturn`
-and side-effect attributes, and the iterative interprocedural prototype/type
-fixed point present in the mature designs.
+lacks a complete calling-convention model, parameter storage maps, general
+side-effect attributes, and the iterative interprocedural prototype/type fixed
+point present in the mature designs. `noreturn` coverage is currently a small,
+exact import-contract set rather than a general inferred attribute system.
 
 ## Real TDD witnesses
 
@@ -63,7 +67,11 @@ The RED fixtures covered:
 3. pointer literals crossing return, assignment, store, select, and call
    boundaries;
 4. address-taken stack objects and stack-pointer arithmetic;
-5. a pointer parameter reassigned from integer address arithmetic.
+5. a pointer parameter reassigned from integer address arithmetic;
+6. a stripped optimized ELF function ending in an imported `exit`, followed by
+   an adjacent function with a distinct arithmetic body; and
+7. an unknown local call result guarded by a zero check, with the failure path
+   ending in `exit` and the success path returning the value unchanged.
 
 Representative RED output was invalid C:
 
@@ -93,11 +101,11 @@ emulated, or made executable.
 Final artifact:
 
 - path:
-  `/home/mjbommar/projects/personal/decbench-evalkit-sample-set/glaurung-results-d6882dc.zip`;
-- source: `d6882dc398127697d1c289e4b6379742cc020b35`;
+  `/home/mjbommar/projects/personal/decbench-evalkit-sample-set/glaurung-results-6ddf4ce.zip`;
+- source: `6ddf4ce778b4d780cfac69de0565aec6b0ed9bb3`;
 - SHA-256:
-  `4005d09a7ad411002f30c4a1550771cf488994667a570819a5ab9f89936eb9ef`;
-- size: 356,102 bytes;
+  `bb8fac66dfc21022a35d57e45823b43302d62e0eb656c5a258fe049d34425d2d`;
+- size: 286,926 bytes;
 - coverage: 224/224 binaries and 250/250 target functions.
 
 The first full package in this slice was ingested through DecBench with zero
@@ -111,14 +119,25 @@ slow address/name ingestion pass.
 | pre-slice `7a8c4b0` | 169/250 (67.6%) | 0.1096765047271132 |
 | retained call specs `00b72e3` | 238/250 (95.2%) | 0.1500434576188256 |
 | stack representation `4aa92ec` | 248/250 (99.2%) | 0.15454538383049354 |
-| final pointer boundary `d6882dc` | **250/250 (100%)** | **0.15612902766757247** |
+| pointer boundary `d6882dc` | 250/250 (100%) | 0.15612902766757247 |
+| noreturn CFG boundary `6ddf4ce` | **250/250 (100%)** | **0.16146020536865263** |
 
-Against `7a8c4b0`, the final package has 81 compile gains and zero compile
-losses. Byte match improves for 84 functions, declines for 15, and is unchanged
-for 151; the mean delta is `+0.046452522940459276`. The largest retained
-per-function decline is `libacl/getfacl:xquote`,
+At `d6882dc`, against `7a8c4b0`, the pointer-boundary package had 81 compile
+gains and zero compile losses. Byte match improved for 84 functions, declined
+for 15, and was unchanged for 151; the mean delta was
+`+0.046452522940459276`. Its largest retained per-function decline was
+`libacl/getfacl:xquote`,
 `0.2972972972972973 -> 0.225`. Those 15 score declines remain a triage queue;
 the aggregate gain is not permission to hide them.
+
+The noreturn checkpoint resolves that specific regression at its cause. The
+original `xquote` is a 77-byte function whose error arm ends in `exit(1)`;
+previous CFG discovery continued into two adjacent functions. The exact
+single-function compile/disassemble loop now scores it at `0.6666666666666666`
+(edit distance 7), while the canonical whole-package context scores it at
+`0.5652173913043478` (distance 10), up from `0.225` (distance 31). Across all
+250 functions relative to `d6882dc`, 50 improve, 27 decline, and 173 are
+unchanged. The mean delta is `+0.00533117770108016` (`+3.41%` relative).
 
 ## Wall-clock changes
 
@@ -127,10 +146,11 @@ change:
 
 | operation | measured wall time |
 |---|---:|
-| Rust extension rebuild | 3.36 s |
+| exact one-function extract, fixup, compile, disassemble, score loop | about 2.2 s |
+| release Rust extension rebuild at `6ddf4ce` | 19.14 s |
 | focused two-binary extraction | 2.05 s |
 | focused 12-binary extraction | about 5 s |
-| exact full 250-function score with retained identities/cache | 4.85-7.71 s |
+| exact full 250-function score with retained identities/cache | 4.85-9.5 s |
 | uncontended full 224-binary extraction | about 49-51 s |
 | final full extraction while full pytest was also running | 61.66 s |
 | package validation and ZIP creation | under 0.3 s |
@@ -145,8 +165,8 @@ is retained only at the immutable handoff commit.
 
 ## Gates and limits
 
-- Rust library: 1,297 passed, zero failed.
-- Real compiled decompiler fixture file: 47 passed, zero failed, in 46.24 s.
+- Rust library: 1,298 passed, zero failed.
+- Real compiled decompiler fixture file: 49 passed, zero failed.
 - Repository-wide Python collection: 2,638 tests across 365 files. The
   eight-shard run completed in about 305 s with 2,566 passed, 43 skipped, and
   29 failed. This broad gate is not green. The failures are outside the owned
