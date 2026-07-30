@@ -235,6 +235,16 @@ def test_decompile_x86_o0_main_shows_prologue_and_epilogue():
         "x86-64 epilogue comment missing: " + result.stdout
     )
 
+    # The parseable-C renderer must not expose the machine stack allocation as
+    # source-level arithmetic.  x86 subtraction lifting emits a signed-less
+    # flag temporary before the rsp write; if that dead temporary strands the
+    # write outside frame recognition, DecBench sees a bogus `rsp -= N`.
+    decbench = _run(
+        [str(X86_O0_SAMPLE), "--func", "0x12d0", "--style", "decbench"]
+    )
+    assert decbench.returncode == 0, decbench.stderr
+    assert "rsp = (rsp -" not in decbench.stdout, decbench.stdout
+
 
 @pytest.mark.skipif(not PE32_PLUS_SAMPLE.exists(), reason="PE32+ sample missing")
 def test_decompile_pe32_plus_resolves_iat_names():

@@ -69,17 +69,24 @@ fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
     }
 }
 
-/// Return the stack-allocation width when `predicate` is the dead unsigned
-/// borrow generated for the immediately following `sub rsp, N`.
+/// Return the stack-allocation width when `predicate` is dead flag bookkeeping
+/// generated for the immediately following `sub rsp, N`.
+///
+/// `lift_x86::emit_sub_with_flags` emits both a signed-less temporary and the
+/// architectural unsigned carry before the actual
+/// subtraction. Dead-flag pruning may leave either one adjacent to the write,
+/// so both exact comparisons are valid witnesses. Liveness below remains the
+/// guard against hiding a predicate the recovered program actually reads.
 fn dead_rsp_sub_predicate(predicate: &Stmt, sub: &Stmt, suffix: &[Stmt]) -> Option<i64> {
     let width = rsp_sub_width(sub)?;
     let Stmt::Assign {
         dst: VReg::Temp(temp),
-        src: Expr::Cmp {
-            op: CmpOp::Ult,
-            lhs,
-            rhs,
-        },
+        src:
+            Expr::Cmp {
+                op: CmpOp::Ult | CmpOp::Slt,
+                lhs,
+                rhs,
+            },
     } = predicate
     else {
         return None;
@@ -409,6 +416,42 @@ mod tests {
         assert!(matches!(
             &f.body[0],
             Stmt::Comment(text) if text == "x86-64 prologue: save rbp, frame 48 bytes"
+        ));
+        assert!(matches!(&f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn dead_stack_allocation_signed_less_temp_does_not_split_the_frame_prologue() {
+        // `emit_sub_with_flags` computes both the unsigned carry and a signed-
+        // less temporary before writing rsp. Dead-flag pruning can remove the
+        // carry first and leave this exact Slt node adjacent to `sub rsp, N`.
+        // It is machine flag bookkeeping, not source control flow, and must be
+        // consumed with the frame allocation when nothing reads it.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                push_rbp(),
+                mov_rbp_rsp(),
+                Stmt::Assign {
+                    dst: VReg::Temp(32),
+                    src: Expr::Cmp {
+                        op: CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(0x10)),
+                    },
+                },
+                sub_rsp(0x10),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2, "stranded frame setup: {:#?}", f.body);
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Comment(text) if text == "x86-64 prologue: save rbp, frame 16 bytes"
         ));
         assert!(matches!(&f.body[1], Stmt::Return { .. }));
     }
