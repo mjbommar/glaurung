@@ -337,9 +337,13 @@ fn incoming_arg_expr(arch: CallConv, slot: usize, body: &[Stmt]) -> Option<Expr>
     // register is implicit — it legitimately appears nowhere — and the bare
     // canonical name is the right reference, as it always was.
     let mut versioned_anywhere = false;
+    let mut bare_live_in: Option<String> = None;
     let mut best: Option<(u32, String)> = None;
     let mut visit = |n: &str| {
         let Some((_, v)) = n.split_once('#') else {
+            if names.contains(&n) && bare_live_in.is_none() {
+                bare_live_in = Some(n.to_string());
+            }
             return;
         };
         versioned_anywhere = true;
@@ -358,17 +362,16 @@ fn incoming_arg_expr(arch: CallConv, slot: usize, body: &[Stmt]) -> Option<Expr>
             .first()
             .map(|n| Expr::Reg(VReg::Phys((*n).to_string())));
     }
-    // VALUE-NUMBERED: decline. Naming the live-in version requires knowing which
-    // version `value_number` treats as live-in, and this pass cannot see that.
-    // Guessing the lowest version present is wrong — in `cpp_virtual_dispatch` the
-    // only `rdi` in the body is a scratch use that nothing defines, so the guess
-    // produced `__stack_chk_fail(var24)`: an argument reading an undefined value,
-    // handed to a callee that takes none.
-    //
-    // Declining costs the Win64 forwarding recovery on this path only, where it
-    // was inventing wrong arguments anyway; the register path keeps it. Doing it
-    // properly means threading the live-in version out of `value_number` — see the
-    // AbiDescriptor consolidation.
+    // `value_number` deliberately leaves version zero bare. If this exact slot
+    // has a bare use, it is therefore the live-in value and is safe to backfill.
+    // The caller additionally requires `param_slots` to classify this slot as a
+    // real read-before-write parameter, preventing the old cpp_virtual_dispatch
+    // failure where a scratch register invented an undefined call argument.
+    if let Some(name) = bare_live_in {
+        return Some(Expr::Reg(VReg::Phys(name)));
+    }
+    // VALUE-NUMBERED with no bare version-zero witness: decline. Guessing the
+    // lowest numbered definition is not a live-in proof.
     let _ = best;
     None
 }
@@ -395,6 +398,18 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
             Expr::Un { src, .. } => expr(src, f),
             Expr::Cast { expr: e, .. } => expr(e, f),
             Expr::Deref { addr, .. } => expr(addr, f),
+            Expr::StackAddr { object, .. } => {
+                if let VReg::Phys(name) = object {
+                    f(name);
+                }
+            }
+            Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+                for register in [base, index].into_iter().flatten() {
+                    if let VReg::Phys(name) = register {
+                        f(name);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -734,6 +749,12 @@ fn fold_one_call(
         fold_one_cdecl32_call(body, call_idx);
         return;
     }
+    // A missing leading slot may be forwarded from this function's entry only
+    // when the call terminates the current structured body.  Otherwise a
+    // reaching definition hidden by branch structuring can be mistaken for the
+    // original parameter (for example an ARM call result held in r0).
+    let is_tail_position =
+        call_idx + 1 == body.len() || matches!(body.get(call_idx + 1), Some(Stmt::Return { .. }));
     // Map slot → (stmt_index, expression) for assignments we will eat.
     let mut found: Vec<Option<(usize, Expr)>> = vec![None; arg_slots(arch).len()];
     let mut read_between: Vec<bool> = vec![false; arg_slots(arch).len()];
@@ -801,6 +822,11 @@ fn fold_one_call(
             mark_arg_writes_in_stmt(&body[i], arch, &mut blocked_incoming);
         }
         if stop {
+            // ABI argument registers are caller-clobbered.  Explicit
+            // assignments found after this call remain valid, but an unwritten
+            // prefix can no longer be justified from this function's entry
+            // value once another call has intervened.
+            blocked_incoming.fill(true);
             break;
         }
     }
@@ -826,6 +852,7 @@ fn fold_one_call(
             // and a void callee acquires one out of thin air
             // (`__stack_chk_fail(var24)`).
             None if args_out.is_empty()
+                && is_tail_position
                 && !blocked_incoming[slot_idx]
                 && param_slots.contains(&slot_idx) =>
             {
@@ -2364,6 +2391,180 @@ mod tests {
             })
             .expect("the call must survive");
         assert_eq!(args, vec![Expr::Const(7)], "body was:\n{:#?}", f.body);
+    }
+
+    #[test]
+    fn value_numbered_tail_call_backfills_a_proven_bare_live_in_prefix() {
+        let mut f = Function {
+            name: "tail_wrapper".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rdi")),
+                        index: None,
+                        scale: 0,
+                        disp: 0x100,
+                        segment: None,
+                    },
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Const(24),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x5000,
+                        name: "sub_5000".to_string(),
+                    },
+                    args: vec![],
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax"))),
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0].into_iter().collect());
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .expect("tail call must survive");
+        assert_eq!(
+            args,
+            &vec![Expr::Reg(reg("rdi")), Expr::Const(24)],
+            "body was:\n{:#?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn value_numbered_call_does_not_backfill_across_a_prior_call_clobber() {
+        let mut f = Function {
+            name: "ordinary_caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rdi")),
+                        index: None,
+                        scale: 0,
+                        disp: 0x100,
+                        segment: None,
+                    },
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x4000,
+                        name: "sub_4000".to_string(),
+                    },
+                    args: vec![],
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Const(24),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x5000,
+                        name: "sub_5000".to_string(),
+                    },
+                    args: vec![],
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0].into_iter().collect());
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call {
+                    target: Expr::Named { name, .. },
+                    args,
+                    ..
+                } if name == "sub_5000" => Some(args),
+                _ => None,
+            })
+            .expect("later call must survive");
+        assert!(
+            args.is_empty(),
+            "a later call must not inherit an entry value clobbered by a prior call: {:#?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn value_numbered_nonterminal_call_does_not_backfill_a_live_in_prefix() {
+        let mut f = Function {
+            name: "ordinary_caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rdi")),
+                        index: None,
+                        scale: 0,
+                        disp: 0x100,
+                        segment: None,
+                    },
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Const(24),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x5000,
+                        name: "sub_5000".to_string(),
+                    },
+                    args: vec![],
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("rbx#1"),
+                    src: Expr::Const(1),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax"))),
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0].into_iter().collect());
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .expect("call must survive");
+        assert!(
+            args.is_empty(),
+            "a nonterminal call must not guess across structured data flow: {:#?}",
+            f.body
+        );
     }
 
     #[test]

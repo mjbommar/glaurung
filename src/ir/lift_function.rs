@@ -118,6 +118,8 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
         block.succs.retain(|target| owned_starts.contains(target));
     }
 
+    recover_proven_direct_tail_calls(&mut blocks, func);
+
     if blocks.is_empty() {
         return None;
     }
@@ -142,6 +144,42 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
     })
 }
 
+/// Materialize CFG-proven nonlocal direct jumps as LLIR tail calls.
+///
+/// Delaying this conversion until the AST loses the argument-register writes:
+/// SSA and value numbering quite reasonably see a plain `Jump` as reading no ABI
+/// arguments.  The discovery pass has already separated strong sibling-call
+/// targets from local CFG successors and retained their exact addresses in
+/// `Function::callees`, so making the call semantics explicit here keeps both the
+/// arguments and the returned value live through every downstream pass.
+fn recover_proven_direct_tail_calls(blocks: &mut [LlirBlock], func: &Function) {
+    let local_starts: std::collections::HashSet<u64> =
+        blocks.iter().map(|block| block.start_va).collect();
+    let callee_vas: std::collections::HashSet<u64> =
+        func.callees.iter().map(|address| address.value).collect();
+
+    for block in blocks {
+        if !block.succs.is_empty() {
+            continue;
+        }
+        let Some(last) = block.instrs.last_mut() else {
+            continue;
+        };
+        let Op::Jump { target } = last.op else {
+            continue;
+        };
+        if local_starts.contains(&target) || !callee_vas.contains(&target) {
+            continue;
+        }
+        let va = last.va;
+        last.op = Op::Call {
+            target: CallTarget::Direct(target),
+            effects: None,
+        };
+        block.instrs.push(LlirInstr { va, op: Op::Return });
+    }
+}
+
 /// Rewrite every residual [`Op::Unknown`] in `blocks` into a conservative
 /// [`Op::Intrinsic`] (see [`Op::opaque`]).
 fn lower_unknowns(blocks: &mut [LlirBlock]) {
@@ -159,6 +197,109 @@ mod tests {
     use super::*;
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use std::path::Path;
+
+    #[test]
+    fn proven_nonlocal_direct_jump_becomes_tail_call_before_ssa() {
+        let entry = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x1000,
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        let callee = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x5000,
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        let mut func = Function::new(
+            "tail_wrapper".to_string(),
+            entry,
+            crate::core::function::FunctionKind::Normal,
+        )
+        .unwrap();
+        func.add_callee(callee);
+        let mut blocks = vec![LlirBlock {
+            start_va: 0x1000,
+            end_va: 0x1010,
+            instrs: vec![
+                LlirInstr {
+                    va: 0x1000,
+                    op: Op::Assign {
+                        dst: VReg::phys("esi"),
+                        src: Value::Const(24),
+                    },
+                },
+                LlirInstr {
+                    va: 0x1005,
+                    op: Op::Jump { target: 0x5000 },
+                },
+            ],
+            succs: vec![],
+        }];
+
+        recover_proven_direct_tail_calls(&mut blocks, &func);
+
+        assert!(matches!(
+            blocks[0].instrs[1].op,
+            Op::Call {
+                target: CallTarget::Direct(0x5000),
+                effects: None
+            }
+        ));
+        assert!(matches!(blocks[0].instrs[2].op, Op::Return));
+    }
+
+    #[test]
+    fn local_direct_jump_remains_control_flow() {
+        let entry = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x1000,
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        let mut func = Function::new(
+            "loop".to_string(),
+            entry,
+            crate::core::function::FunctionKind::Normal,
+        )
+        .unwrap();
+        func.add_callee(
+            crate::core::address::Address::new(
+                crate::core::address::AddressKind::VA,
+                0x1000,
+                64,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        let mut blocks = vec![LlirBlock {
+            start_va: 0x1000,
+            end_va: 0x1010,
+            instrs: vec![LlirInstr {
+                va: 0x1005,
+                op: Op::Jump { target: 0x1000 },
+            }],
+            succs: vec![],
+        }];
+
+        recover_proven_direct_tail_calls(&mut blocks, &func);
+
+        assert!(matches!(
+            blocks[0].instrs.as_slice(),
+            [LlirInstr {
+                op: Op::Jump { target: 0x1000 },
+                ..
+            }]
+        ));
+    }
 
     #[test]
     fn lifts_hello_gcc_entry_function() {

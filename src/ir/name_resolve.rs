@@ -301,6 +301,33 @@ pub fn add_discovered_function_names(
     added
 }
 
+/// Add anonymous names for exact call targets referenced by discovered functions.
+///
+/// A bounded address-scoped analysis may preserve a tail-call boundary without
+/// spending the time to discover the target function itself.  The xref is still
+/// concrete callable-entry evidence, so expose the same deterministic `sub_<va>`
+/// spelling that full discovery would have supplied.  Existing symbol, import,
+/// export, FLIRT, DWARF, and PDB names always win.
+pub fn add_referenced_function_names(
+    out: &mut HashMap<u64, String>,
+    funcs: &[crate::core::function::Function],
+) -> usize {
+    let mut added = 0usize;
+    for func in funcs {
+        for callee in &func.callees {
+            let va = callee.value;
+            if va == 0 {
+                continue;
+            }
+            if let std::collections::hash_map::Entry::Vacant(slot) = out.entry(va) {
+                slot.insert(format!("sub_{va:x}"));
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
 fn collect_pe_exports(data: &[u8], out: &mut HashMap<u64, String>) {
     let Ok(parser) = crate::formats::pe::PeParser::new(data) else {
         return;
@@ -595,6 +622,49 @@ mod tests {
         assert_eq!(added, 1);
         assert_eq!(map.get(&0x401000).map(String::as_str), Some("sub_401000"));
         assert_eq!(map.get(&0x402000).map(String::as_str), Some("ReadFile"));
+    }
+
+    #[test]
+    fn referenced_function_names_cover_bounded_anonymous_callees() {
+        let entry = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x401000,
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        let callee = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x405000,
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        let known_callee = crate::core::address::Address::new(
+            crate::core::address::AddressKind::VA,
+            0x406000,
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        let mut func = crate::core::function::Function::new(
+            "caller".to_string(),
+            entry,
+            crate::core::function::FunctionKind::Normal,
+        )
+        .unwrap();
+        func.add_callee(callee);
+        func.add_callee(known_callee);
+        let mut map = HashMap::from([(0x406000, "known_worker".to_string())]);
+
+        let added = add_referenced_function_names(&mut map, &[func]);
+
+        assert_eq!(added, 1);
+        assert_eq!(map.get(&0x405000).map(String::as_str), Some("sub_405000"));
+        assert_eq!(map.get(&0x406000).map(String::as_str), Some("known_worker"));
     }
 
     #[test]

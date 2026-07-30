@@ -2802,7 +2802,7 @@ int never_returns(void) { for (;;) {} }
 
         for (name, expected) in [
             ("callee", RecoveredOutputKind::Direct),
-            ("tail_result", RecoveredOutputKind::Unknown),
+            ("tail_result", RecoveredOutputKind::Direct),
             ("never_returns", RecoveredOutputKind::Unknown),
         ] {
             let entry = entries[name];
@@ -2810,12 +2810,18 @@ int never_returns(void) { for (;;) {} }
                 .iter()
                 .find(|function| function.entry_point.value == entry)
                 .unwrap_or_else(|| panic!("discovered {name}"));
-            let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            let mut lifted = crate::ir::lift_function::lift_function_from_bytes(
                 &data,
                 function,
                 crate::core::binary::Arch::X86_64,
             )
             .unwrap_or_else(|| panic!("lift {name}"));
+            // The production pipeline attaches ABI call inputs/results before
+            // SSA and type recovery.  Tail-call materialization now happens at
+            // the LLIR boundary, so this fixture must exercise the same order:
+            // its synthetic Call + Return then proves a direct source result
+            // instead of looking like a value-less machine return.
+            crate::ir::abi::annotate_calls(&mut lifted, crate::ir::call_args::CallConv::SysVAmd64);
             let ssa = compute_ssa(&lifted);
             let slots = crate::ir::value_number::live_in_arg_slots_llir(
                 &lifted,

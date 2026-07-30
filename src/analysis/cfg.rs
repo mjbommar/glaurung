@@ -643,6 +643,37 @@ fn pe_tail_target_looks_like_function_start(data: &[u8], target_va: u64) -> bool
     classify_pe_thunk_head(target_va, &data[file_off..head_end]).is_some()
 }
 
+/// Does an x86 ELF direct-jump target carry strong independent function-entry
+/// evidence?
+///
+/// A bare long jump is not enough: optimized functions contain distant cold
+/// blocks and switch arms.  CET's ENDBR landing pad followed immediately by a
+/// recognised prologue is much narrower and survives fully stripping the local
+/// symbol.  This is the shape produced by sibling-call wrappers in current GCC
+/// and Clang output (for example DecBench libedit's `em_inc_search_prev`).
+fn elf_x86_tail_target_looks_like_function_start(data: &[u8], target_va: u64, arch: BArch) -> bool {
+    if !matches!(arch, BArch::X86 | BArch::X86_64) || !data.starts_with(b"\x7fELF") {
+        return false;
+    }
+    let Some(file_off) = crate::analysis::entry::va_to_code_file_offset(data, target_va) else {
+        return false;
+    };
+    let Some(head) = data.get(file_off..) else {
+        return false;
+    };
+    let landing_pad_len = match head {
+        [0xf3, 0x0f, 0x1e, 0xfa, ..] if arch == BArch::X86_64 => 4,
+        [0xf3, 0x0f, 0x1e, 0xfb, ..] if arch == BArch::X86 => 4,
+        _ => return false,
+    };
+    let after_landing_pad = &head[landing_pad_len..];
+    head_looks_like_fn_start(after_landing_pad)
+        // SysV prologues commonly save a low callee-saved register without a
+        // REX prefix.  This is too weak for the general xref-start gate, but is
+        // strong enough behind an architecture-matching CET landing pad.
+        || matches!(after_landing_pad, [0x53 | 0x55 | 0x56 | 0x57, ..])
+}
+
 /// Discover a single function starting at `entry` within executable regions.
 /// Merge one predecessor's concrete address facts into a block input.
 ///
@@ -896,7 +927,11 @@ fn discover_function(
                         && &data[..2] == b"MZ"
                         && is_exec_target
                         && pe_tail_target_looks_like_function_start(data, tgt);
-                    if is_pe_tail_target {
+                    let is_elf_x86_tail_target = unconditional
+                        && tgt != entry.value
+                        && is_exec_target
+                        && elf_x86_tail_target_looks_like_function_start(data, tgt, arch);
+                    if is_pe_tail_target || is_elf_x86_tail_target {
                         call_edges.push(FunctionXref {
                             callsite_va: cur_va,
                             target_va: tgt,
@@ -1266,6 +1301,16 @@ fn discover_function(
                     func.add_chunk(range);
                 }
             }
+        }
+    }
+
+    // Retain exact interprocedural targets on the function object.  Address-scoped
+    // decompilation intentionally stops discovery once all requested entries are
+    // found, but its name map still needs these xrefs in order to render an
+    // anonymous terminal jump as `sub_<va>(...)` rather than a dangling local goto.
+    for xref in &call_edges {
+        if let Ok(callee) = Address::new(AddressKind::VA, xref.target_va, bits, None, None) {
+            func.add_callee(callee);
         }
     }
 

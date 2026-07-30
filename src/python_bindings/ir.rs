@@ -580,6 +580,7 @@ fn decompile_at_py(
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
+    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
@@ -1233,6 +1234,7 @@ fn decompile_all_py(
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
+    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
@@ -1356,6 +1358,7 @@ fn decompile_many_py(
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
+    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);

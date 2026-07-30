@@ -278,6 +278,98 @@ def test_real_noreturn_import_terminates_the_recovered_function():
     )
 
 
+def test_real_stripped_elf_tail_wrapper_does_not_absorb_its_local_callee():
+    """A sibling call must preserve the stripped ELF function boundary.
+
+    GCC lowers the wrapper's returned call to an unconditional direct jump.  The
+    target is local and therefore has no surviving symbol after ``strip --all``,
+    but CET's landing pad plus the target prologue are strong machine-level entry
+    evidence.  Treating the jump as an ordinary CFG edge imports the complete
+    worker into this 25-byte wrapper -- exactly the blinded DecBench libedit
+    failure -- rather than recovering a small anonymous tail call.
+    """
+    source = (
+        "#include <stdio.h>\n"
+        "struct tail_state { unsigned long values[32]; unsigned long patlen; };\n"
+        "static __attribute__((noinline)) long tail_worker(\n"
+        "    struct tail_state *state, int command);\n"
+        "__attribute__((noinline, visibility(\"default\")))\n"
+        "long reset_then_tail(struct tail_state *state) {\n"
+        "    state->patlen = 0;\n"
+        "    return tail_worker(state, 24);\n"
+        "}\n"
+        "static __attribute__((noinline)) long tail_worker(\n"
+        "    struct tail_state *state, int command) {\n"
+        "    char text[128];\n"
+        "    int count = snprintf(text, sizeof(text), \"%lu:%d\",\n"
+        "                         state->values[0], command);\n"
+        "    for (int i = 1; i < 32; ++i)\n"
+        "        state->values[i] += (unsigned char)text[i & 7] + command;\n"
+        "    return count + (long)state->values[31];\n"
+        "}\n"
+    )
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "elf_tail_boundary.c"
+        binary_path = Path(td) / "elf_tail_boundary.so"
+        source_path.write_text(source)
+        built = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-fcf-protection=branch",
+                "-fno-reorder-functions",
+                "-fno-toplevel-reorder",
+                "-falign-functions=16",
+                "-o",
+                str(binary_path),
+                str(source_path),
+            ]
+        )
+        assert built.returncode == 0, built.stderr
+        stripped = TC.run(["strip", "--strip-all", str(binary_path)])
+        assert stripped.returncode == 0, stripped.stderr
+
+        functions = D.exported_functions(str(binary_path))
+        wrapper_va = functions["reset_then_tail"]
+        assert "tail_worker" not in functions
+        decompiled = D.decompiled_c(str(binary_path), wrapper_va)
+        assert decompiled is not None
+
+        assert "snprintf" not in decompiled, (
+            "the anonymous worker body was absorbed into the tail wrapper:\n"
+            f"{decompiled}"
+        )
+        assert "sub_" in decompiled, (
+            "the preserved anonymous tail target was not rendered as a call:\n"
+            f"{decompiled}"
+        )
+        assert "24" in decompiled, (
+            "the sibling-call command argument was lost before tail recovery:\n"
+            f"{decompiled}"
+        )
+
+        rebuilt_path = Path(td) / "elf_tail_boundary_rebuilt.so"
+        recovered_path = Path(td) / "elf_tail_boundary_recovered.c"
+        recovered_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-std=gnu11",
+                "-Werror",
+                "-o",
+                str(rebuilt_path),
+                str(recovered_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_real_noreturn_guard_preserves_machine_fallthrough_order():
     """A terminal guard must not make the hot fallthrough become its body.
 
