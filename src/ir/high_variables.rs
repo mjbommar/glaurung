@@ -427,6 +427,7 @@ mod tests {
                         value: "PATH".into(),
                     }],
                     dst: Some(VReg::phys("var1")),
+                    call_spec: None,
                 },
                 Stmt::Store {
                     addr: Expr::Reg(VReg::phys("local_8")),

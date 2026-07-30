@@ -1117,6 +1117,7 @@ mod tests {
                     },
                     args: vec![lea("rbp", -0x20)],
                     dst: None,
+                    call_spec: None,
                 },
                 Stmt::Assign {
                     dst: reg("eax"),
@@ -1160,6 +1161,7 @@ mod tests {
                     rhs: Box::new(Expr::Const(32)),
                 }],
                 dst: None,
+                call_spec: None,
             }],
         };
 
@@ -1201,6 +1203,7 @@ mod tests {
                     target: Expr::Addr(0x1000),
                     args: vec![Expr::Reg(address)],
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };

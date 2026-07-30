@@ -184,6 +184,7 @@ fn recover_direct_tail_calls_in_body(
             target: callee,
             args,
             dst: None,
+            call_spec: None,
         };
         body.insert(
             index + 1,
@@ -254,6 +255,7 @@ fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
             target: callee,
             args,
             dst: None,
+            call_spec: None,
         };
         body.insert(
             index + 1,
@@ -408,7 +410,9 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
                 expr(addr, f);
                 expr(src, f);
             }
-            Stmt::Call { target, args, dst } => {
+            Stmt::Call {
+                target, args, dst, ..
+            } => {
                 expr(target, f);
                 for a in args {
                     expr(a, f);
@@ -532,7 +536,9 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
             expr_reads(addr);
             expr_reads(src);
         }
-        Stmt::Call { target, args, dst } => {
+        Stmt::Call {
+            target, args, dst, ..
+        } => {
             expr_reads(target);
             for a in args {
                 expr_reads(a);
@@ -1375,7 +1381,9 @@ mod tests {
             .body
             .iter()
             .find_map(|stmt| match stmt {
-                Stmt::Call { target, args, dst } => Some((target, args, dst)),
+                Stmt::Call {
+                    target, args, dst, ..
+                } => Some((target, args, dst)),
                 _ => None,
             })
             .expect("the resolved terminal transfer must become a call");
@@ -1492,6 +1500,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1522,6 +1531,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1562,6 +1572,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1617,6 +1628,7 @@ mod tests {
             },
             args: Vec::new(),
             dst: None,
+            call_spec: None,
         });
         let mut f = Function {
             name: "caller".into(),
@@ -1681,6 +1693,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1714,6 +1727,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1744,6 +1758,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
                 Stmt::Call {
                     target: Expr::Named {
@@ -1752,6 +1767,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1780,6 +1796,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1807,6 +1824,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1834,6 +1852,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1869,6 +1888,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1926,6 +1946,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1965,6 +1986,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -1997,6 +2019,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -2030,6 +2053,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -2069,6 +2093,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -2108,6 +2133,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -2125,6 +2151,7 @@ mod tests {
             },
             args: vec![],
             dst: None,
+            call_spec: None,
         }
     }
 
@@ -2248,6 +2275,7 @@ mod tests {
                     target: Expr::Addr(0x2000),
                     args: vec![],
                     dst: None,
+                    call_spec: None,
                 }],
             };
             // A call at the end of a block counts as consumed, so this exercises the
@@ -2271,6 +2299,7 @@ mod tests {
                     target: Expr::Addr(0x2000),
                     args: vec![],
                     dst: None,
+                    call_spec: None,
                 }],
                 else_body: None,
             }],
@@ -2321,6 +2350,7 @@ mod tests {
                     },
                     args: vec![],
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -2469,6 +2499,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -2509,6 +2540,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };

@@ -593,6 +593,7 @@ mod tests {
                     },
                     args: vec![],
                     dst: None,
+                    call_spec: None,
                 },
                 // Exit-check shape:
                 Stmt::Assign {

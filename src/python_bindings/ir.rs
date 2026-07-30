@@ -1023,6 +1023,11 @@ fn decbench_text(
     if let Some(tm) = decl {
         crate::ir::widen::insert_widening_casts(&mut prepared, tm);
     }
+    // Call specifications belong to concrete AST calls, not to renderer-local
+    // symbol guesses. Refresh them after every expression/type refinement so
+    // string folding, promoted objects, and pointer facts are represented on
+    // the exact call boundary the verifier and C renderer consume.
+    crate::ir::call_contracts::refine_call_site_specs(&mut prepared, decl);
     let violations = crate::ir::verify_defs::check(&prepared);
     let body =
         crate::ir::ast::render_decbench_typed_with_output(&prepared, decl, width, output_kind);

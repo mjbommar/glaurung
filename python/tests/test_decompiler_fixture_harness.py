@@ -312,6 +312,326 @@ def test_real_known_memcpy_output_declares_a_self_contained_library_prototype():
     assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
 
 
+def test_real_pointer_literal_to_machine_word_is_an_explicit_conversion():
+    """Pointer-shaped constants need an explicit machine-word boundary.
+
+    Optimized binaries routinely materialize a string address in a register
+    whose surrounding value contract remains an integer machine word.  The C
+    renderer must preserve both facts: keep the recovered string literal, but
+    state the pointer-to-word conversion instead of relying on an invalid
+    implicit assignment.  This is a real ELF round trip and the strict compile
+    matches the diagnostic that blocked blinded DecBench functions.
+    """
+    binary = _compile_so(
+        '__attribute__((noinline)) long literal_address_word(void) {\n'
+        '    return (long)"glaurung-pointer-word";\n'
+        "}",
+        "pointer_literal_word",
+        optimization="O2",
+    )
+    function_va = D.exported_functions(binary)["literal_address_word"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert '"glaurung-pointer-word"' in decompiled, decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "pointer_literal_word.c"
+        output_path = Path(td) / "pointer_literal_word.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-std=gnu11",
+                "-Werror=int-conversion",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
+def test_real_stack_object_initialization_remains_a_memory_store():
+    """Address-taken stack arrays must not become assignable C pointers.
+
+    Stack-object recovery declares complete byte arrays.  A later store through
+    that object's address must therefore remain a memory store; spelling it as
+    ``stack_N = value`` asks C to assign to an array and DecBench's fixup can
+    only make that compile by degrading the array into a pointer.  Cross a real
+    ELF call boundary so the object is genuinely address-taken.
+    """
+    binary = _compile_so(
+        "struct pair { int first; int second; };\n"
+        "extern void consume_pair(struct pair *);\n"
+        "__attribute__((noinline)) int build_stack_pair(int value) {\n"
+        "    struct pair local;\n"
+        "    local.first = 5;\n"
+        "    local.second = value;\n"
+        "    consume_pair(&local);\n"
+        "    return local.first;\n"
+        "}",
+        "stack_object_store",
+    )
+    function_va = D.exported_functions(binary)["build_stack_pair"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert "unsigned char local_" in decompiled, decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "stack_object_store.c"
+        output_path = Path(td) / "stack_object_store.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu11",
+                "-Werror=int-conversion",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
+def test_real_pointer_literal_store_uses_the_memory_value_width():
+    """A pointer literal stored into a machine word needs a value cast."""
+    binary = _compile_so(
+        "long stored_pointer_word;\n"
+        "__attribute__((noinline)) void store_pointer_word(void) {\n"
+        '    stored_pointer_word = (long)"glaurung-store-word";\n'
+        "}",
+        "pointer_literal_store",
+        optimization="O2",
+    )
+    function_va = D.exported_functions(binary)["store_pointer_word"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert '"glaurung-store-word"' in decompiled, decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "pointer_literal_store.c"
+        output_path = Path(td) / "pointer_literal_store.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-std=gnu11",
+                "-Werror=int-conversion",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
+def test_real_pointer_word_select_converts_each_conditional_arm():
+    """An outer cast cannot repair incompatible C conditional operands."""
+    binary = _compile_so(
+        "__attribute__((noinline)) long select_pointer_word(int choose, long fallback) {\n"
+        '    return choose ? (long)"glaurung-select-word" : fallback;\n'
+        "}",
+        "pointer_word_select",
+        optimization="O2",
+    )
+    function_va = D.exported_functions(binary)["select_pointer_word"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert '"glaurung-select-word"' in decompiled, decompiled
+    assert " ? " in decompiled, decompiled
+    assert '(long)("glaurung-select-word")' in decompiled, decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "pointer_word_select.c"
+        output_path = Path(td) / "pointer_word_select.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-std=gnu2x",
+                "-Werror=int-conversion",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
+def test_real_pointer_word_select_call_converts_each_conditional_arm():
+    """Call-parameter casts cannot repair incompatible conditional operands."""
+    binary = _compile_so(
+        "#include <stdlib.h>\n"
+        "__attribute__((noinline)) void free_selected_word(int choose, long fallback) {\n"
+        '    free((void *)(choose ? (long)"glaurung-call-select" : fallback));\n'
+        "}",
+        "pointer_word_select_call",
+        optimization="O2",
+    )
+    function_va = D.exported_functions(binary)["free_selected_word"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert '"glaurung-call-select"' in decompiled, decompiled
+    assert " ? " in decompiled, decompiled
+    assert '(void *)("glaurung-call-select")' in decompiled, decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "pointer_word_select_call.c"
+        output_path = Path(td) / "pointer_word_select_call.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-std=gnu2x",
+                "-Werror=int-conversion",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
+def test_real_mixed_arity_known_calls_keep_callee_and_callsite_prototypes():
+    """A callee declaration and one incomplete machine call are distinct facts.
+
+    The first ``free`` call has an explicit SysV argument-register definition;
+    the second is a real direct machine call with no reaching ``rdi`` setup. A
+    function-wide prototype cannot describe both. The standalone C must retain
+    ``free``'s authoritative declaration and put the recovered zero-argument
+    signature on only the incomplete call site, as a function-pointer cast.
+
+    The assembly is compiled into a real ELF and is deliberately never run: its
+    purpose is to preserve the malformed call boundary found in blinded binaries
+    without asking the C compiler to repair it before decompilation.
+    """
+    binary = _compile_so(
+        "#include <stdlib.h>\n"
+        "__asm__(\n"
+        '    \".text\\n\"\n'
+        '    \".globl mixed_free_calls\\n\"\n'
+        '    \".type mixed_free_calls,@function\\n\"\n'
+        '    \"mixed_free_calls:\\n\"\n'
+        '    \"push %rbp\\n\"\n'
+        '    \"mov %rsp,%rbp\\n\"\n'
+        '    \"sub $16,%rsp\\n\"\n'
+        '    \"mov %rdi,-8(%rbp)\\n\"\n'
+        '    \"mov -8(%rbp),%rdi\\n\"\n'
+        '    \"call free@PLT\\n\"\n'
+        '    \"call free@PLT\\n\"\n'
+        '    \"leave\\n\"\n'
+        '    \"ret\\n\"\n'
+        '    \".size mixed_free_calls,.-mixed_free_calls\\n\"\n'
+        ");",
+        "mixed_arity_free",
+    )
+    function_va = D.exported_functions(binary)["mixed_free_calls"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert "extern void free(void *);" in decompiled, decompiled
+    assert "((void (*)(void))free)();" in decompiled, decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "mixed_arity_free.c"
+        output_path = Path(td) / "mixed_arity_free.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu11",
+                "-Werror=implicit-function-declaration",
+                "-Wstrict-prototypes",
+                "-Werror=strict-prototypes",
+                "-Werror=int-conversion",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
+def test_real_incomplete_recursive_call_uses_current_function_prototype():
+    """A recursive target uses the function definition plus a per-call spec.
+
+    There is no external declaration to consult here. The first recursive call
+    carries the incoming SysV argument; the second has no reaching argument
+    setup. The emitted function definition is the callee prototype, while only
+    the incomplete call is expressed through its exact recovered pointer type.
+    """
+    binary = _compile_so(
+        "__asm__(\n"
+        '    ".text\\n"\n'
+        '    ".globl mixed_recursive_calls\\n"\n'
+        '    ".type mixed_recursive_calls,@function\\n"\n'
+        '    "mixed_recursive_calls:\\n"\n'
+        '    "push %rbp\\n"\n'
+        '    "mov %rsp,%rbp\\n"\n'
+        '    "sub $16,%rsp\\n"\n'
+        '    "mov %rdi,-8(%rbp)\\n"\n'
+        '    "mov -8(%rbp),%rdi\\n"\n'
+        '    "call mixed_recursive_calls\\n"\n'
+        '    "call mixed_recursive_calls\\n"\n'
+        '    "leave\\n"\n'
+        '    "ret\\n"\n'
+        '    ".size mixed_recursive_calls,.-mixed_recursive_calls\\n"\n'
+        ");",
+        "mixed_arity_recursive",
+    )
+    function_va = D.exported_functions(binary)["mixed_recursive_calls"]
+    decompiled = D.decompiled_c(binary, function_va)
+    assert decompiled is not None
+    assert "mixed_recursive_calls(long arg0)" in decompiled, decompiled
+    assert "((long (*)(void))mixed_recursive_calls)()" in decompiled, decompiled
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "mixed_arity_recursive.c"
+        output_path = Path(td) / "mixed_arity_recursive.so"
+        source_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu11",
+                "-Wstrict-prototypes",
+                "-Werror=strict-prototypes",
+                "-Werror=implicit-function-declaration",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
 def test_real_void_libc_call_is_not_rendered_as_a_value():
     """A declared-void library call must not acquire a synthetic result.
 

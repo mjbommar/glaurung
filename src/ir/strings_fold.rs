@@ -261,6 +261,7 @@ mod tests {
                     name: "hello_str".into(),
                 }],
                 dst: None,
+                call_spec: None,
             }],
         };
         fold_string_literals(&mut f, &pool);

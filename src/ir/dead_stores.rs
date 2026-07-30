@@ -443,6 +443,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -469,6 +470,7 @@ mod tests {
                     },
                     args: vec![Expr::Reg(reg("ret"))],
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -494,6 +496,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -520,6 +523,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
                 Stmt::Assign {
                     dst: reg("ret"),
@@ -532,6 +536,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -561,6 +566,7 @@ mod tests {
                         },
                         args: vec![Expr::Reg(reg("rax"))],
                         dst: None,
+                        call_spec: None,
                     }],
                     else_body: None,
                 },
@@ -636,6 +642,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -699,6 +706,7 @@ mod tests {
                     },
                     args: vec![Expr::Reg(reg("fp"))],
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };
@@ -727,6 +735,7 @@ mod tests {
                     },
                     args: Vec::new(),
                     dst: None,
+                    call_spec: None,
                 },
             ],
         };

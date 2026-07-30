@@ -327,7 +327,9 @@ fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<Stri
                     None => undefined_reads(addr, defined, found),
                 }
             }
-            Stmt::Call { target, args, dst } => {
+            Stmt::Call {
+                target, args, dst, ..
+            } => {
                 undefined_reads(target, defined, found);
                 for a in args {
                     undefined_reads(a, defined, found);
@@ -826,6 +828,7 @@ mod tests {
                     name: "callee".into(),
                 },
                 args: vec![reg("arg0")],
+                call_spec: None,
             },
             Stmt::Return {
                 value: Some(reg("var2")),
@@ -1035,6 +1038,7 @@ mod tests {
                     disp: -32,
                     segment: None,
                 }],
+                call_spec: None,
             },
             Stmt::Return { value: None },
         ]);
@@ -1153,6 +1157,7 @@ mod tests {
                 },
                 args: vec![],
                 dst: None,
+                call_spec: None,
             },
             Stmt::Return {
                 value: Some(reg("ret")),

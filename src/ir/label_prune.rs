@@ -421,6 +421,7 @@ mod tests {
                     },
                     args: vec![],
                     dst: None,
+                    call_spec: None,
                 },
                 Stmt::Return { value: None },
                 Stmt::Label(0x364a),

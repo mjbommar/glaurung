@@ -44,6 +44,36 @@ pub enum TypeHint {
     CodePointer,
 }
 
+/// Stable standalone-C spelling for a recovered value type.
+///
+/// Call-site specifications and the DecBench renderer consume the same mapping
+/// so prototype metadata cannot drift from the declarations eventually printed.
+pub fn c_type_for_hint(hint: TypeHint) -> &'static str {
+    match hint {
+        TypeHint::Int { signed, width } => match (signed, width) {
+            (true, 1) => "signed char",
+            (false, 1) => "unsigned char",
+            (true, 2) => "short",
+            (false, 2) => "unsigned short",
+            (true, 4) => "int",
+            (false, 4) => "unsigned int",
+            (false, 8) => "unsigned long",
+            _ => "long",
+        },
+        TypeHint::Pointer { pointee_width } => match pointee_width {
+            1 => "char *",
+            2 => "short *",
+            4 => "int *",
+            8 => "long *",
+            _ => "void *",
+        },
+        TypeHint::BoolLike => "int",
+        TypeHint::CodePointer => "void *",
+        TypeHint::Float { width: 4 } => "float",
+        TypeHint::Float { .. } => "double",
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct TypeMap {
     inner: HashMap<VReg, TypeHint>,
