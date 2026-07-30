@@ -12,6 +12,41 @@ Last updated: 2026-07-29.
 
 ## Current decision: do not submit
 
+### Head checkpoint: `19dde75`
+
+The latest slice implements compatible multi-return type propagation over the
+exact SSA values reaching the ABI result role, following Ghidra's
+`propagateAcrossReturns` design and Kuna's P5 port. It does not change the
+submission decision or the aggregate scores below. DecBench's type metric does
+not score function return types, and the 20 candidate changed outputs had
+identical GED and byte-match values before and after the change.
+
+The direct evidence is more informative than that benchmark blind spot. DWARF
+inspection of those 20 source functions rejected an initially broad join that
+would have regressed a correct signed `int` and an `errcode_t` scalar. The final
+exact-compatibility join retains 11 declaration changes: five move to the
+correct integer/pointer class, while six expose the still-open absence of
+explicit `void` recovery. The other nine outputs remain byte-identical to the
+prior package. The full Rust all-target gate, all 56 fixture lanes, and all 56
+public DecBench cells pass without regressions at this head.
+
+This is architecture progress, not competitiveness evidence. Submission remains
+blocked on the same roughly 2x blinded GED gap, 11.2-point compile-rate gap to
+Ghidra, missing structured variables/high-variable model, weak interprocedural
+prototype recovery, and now the specifically measured `void`/hidden-sret return
+classification gap.
+
+The exact head artifact covers 250/250 functions in 224/224 binaries and has
+SHA-256
+`d1b7d5ad066e04251dd62e535aad5a4c8fe043e7b1c8f91b57fabd6e005c1956`.
+It contains 225 files and 1,716,814 uncompressed bytes. All 224 decompilations
+completed without errors; the single long-running target took 206.52 seconds.
+The 11-file delta has been rescored for GED and byte-match and the full retained
+checkpoints for type-match; those three aggregates are unchanged. Compile rate
+has not been recomputed for this package, so the complete score table below
+remains tied to the prior fully ingested artifact rather than being silently
+relabeled as a head score.
+
 The current native decompiler was rebuilt from Glaurung commit `24b3826`, run
 over all 224 blinded binaries (250 target functions), packaged, ingested into a
 fresh DecBench tree, and scored from the resulting decompilations. The package

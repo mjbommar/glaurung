@@ -16,6 +16,63 @@
 
 ---
 
+## 2026-07-29 compatible multi-return checkpoint
+
+Commit `19dde75` advances the recovered prototype from one arbitrarily selected
+return definition to the set of SSA definitions that actually reach the ABI
+result register. The implementation was derived from the pinned source, not
+from superficial output mimicry:
+
+- Ghidra's `ActionInferTypes::propagateAcrossReturns` and
+  `canonicalReturnOp` in `coreaction.cc` choose a canonical return type and
+  propagate it across compatible return storage.
+- Kuna's `p5_types/coreaction_infertypes.rs` preserves that return
+  propagation boundary and its P9 renderer consumes the resulting high-level
+  value/type model.
+- Glaurung's `RecoveredResult` now retains every reaching `SsaValue`. Its
+  output-facing join requires exact agreement between independently recovered
+  type facts. A pointer may cross one conflicting scalar fact only when that
+  definition is the literal C null-pointer constant `0`; pointer/nonzero-int,
+  signed/unsigned, and width conflicts fail closed.
+
+This exact-compatibility rule is important. An initial pointer-dominant join
+changed 20 of the 223 fast blinded outputs inspected. Direct DWARF return-type
+inspection showed that it regressed a correct signed `int`, converted an
+`errcode_t` scalar into a pointer, and let return-register residue invent
+pointer results for true `void` functions. The final join rejects nine of those
+20 changes. Of the 11 retained declaration changes, five move to the correct
+source return class (four integer, one pointer); six true-`void` functions still
+emit a scalar result and remain explicit defects rather than credited gains.
+
+DecBench's current `type_match` measures parameters and local variables, not
+function return types, so a complete rescore was correctly unchanged at
+`0.127141704` (235 scored functions, 8 perfect). Per-function GED and byte-match
+were also unchanged for all 20 candidate deltas. The primary evidence for this
+slice is therefore the direct DWARF comparison, plus the following independent
+regression gates:
+
+- `cargo test --all-targets`: 1,259 library tests and all integration/example/
+  benchmark targets passed.
+- Full fixture differential: 56/56 lanes, no behavioral or structural
+  regressions.
+- Public DecBench matrix: 56/56 cells, no per-cell GED, type-match, or
+  byte-match regression.
+- Default `cargo clippy --all-targets`: exit 0 with the existing warning
+  backlog; `cargo fmt --check` and `git diff --check`: clean.
+
+The exact head artifact covers 250/250 functions in 224/224 binaries. Its
+package SHA-256 is
+`d1b7d5ad066e04251dd62e535aad5a4c8fe043e7b1c8f91b57fabd6e005c1956`.
+It contains 225 files and 1,716,814 uncompressed bytes. Static analysis of the
+single long-running target completed in 206.52 seconds; no blinded binary was
+executed or emulated.
+
+The next prototype slice must recover `void` explicitly and distinguish hidden
+structure-return storage from a source-language pointer result. After that,
+callee/caller prototype facts need to participate in the same bounded fixed
+point as value typing; local return-register evidence alone cannot close either
+gap.
+
 ## 2026-07-29 implementation checkpoint and reference audit
 
 The first value-identity slice landed across Glaurung commits `a4d8907`,
