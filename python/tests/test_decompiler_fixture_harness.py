@@ -220,6 +220,113 @@ def test_real_indirect_call_output_has_a_concrete_call_site_prototype():
     assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
 
 
+def test_real_noreturn_import_terminates_the_recovered_function():
+    """A known non-returning call must not fall through into its neighbour.
+
+    Optimized ELF functions commonly end in ``exit`` without a machine ``ret``.
+    If CFG discovery treats every call as returning, its linear sweep crosses
+    alignment and decodes the next function as part of the caller.  That is not
+    merely cosmetic: the neighbour's register writes then poison call-site and
+    return-type recovery.  Compile and strip a real shared object so only the
+    dynamic imports/exports remain, reproducing the blinded DecBench boundary.
+    """
+    source = (
+        "#include <stdlib.h>\n"
+        "__attribute__((noinline)) unsigned long fail_then_exit(int fail) {\n"
+        "    if (!fail) return 0x1234567887654321ul;\n"
+        "    exit(7);\n"
+        "}\n"
+        "__attribute__((noinline)) int adjacent_after_exit(int value) {\n"
+        "    return value + 17;\n"
+        "}\n"
+    )
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "noreturn_boundary.c"
+        binary_path = Path(td) / "noreturn_boundary.so"
+        source_path.write_text(source)
+        built = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-fno-reorder-functions",
+                "-fno-toplevel-reorder",
+                "-falign-functions=16",
+                "-o",
+                str(binary_path),
+                str(source_path),
+            ]
+        )
+        assert built.returncode == 0, built.stderr
+        stripped = TC.run(["strip", "--strip-all", str(binary_path)])
+        assert stripped.returncode == 0, stripped.stderr
+
+        functions = D.exported_functions(str(binary_path))
+        assert functions["fail_then_exit"] < functions["adjacent_after_exit"]
+        decompiled = D.decompiled_c(str(binary_path), functions["fail_then_exit"])
+
+    assert decompiled is not None
+    assert "exit(" in decompiled, decompiled
+    assert "__attribute__((noreturn))" in decompiled, (
+        "standalone C must preserve the same noreturn contract used by CFG discovery:\n"
+        f"{decompiled}"
+    )
+    assert "+ 17" not in decompiled, (
+        "CFG discovery crossed a known noreturn import into the adjacent function:\n"
+        f"{decompiled}"
+    )
+
+
+def test_real_guarded_call_result_survives_a_noreturn_alternative():
+    """A call value returned on the only returning path is a real output trial.
+
+    A zero check is an additional use of the call result, but it does not make
+    that result incidental when the zero arm terminates in ``exit`` and the
+    other arm reaches the machine return unchanged.  Strip the local callee name
+    to exercise the same unknown-call contract as the blinded `xquote` sample.
+    """
+    source = (
+        "#include <stdlib.h>\n"
+        "__attribute__((noinline)) static unsigned long local_factory(int fail) {\n"
+        "    return fail ? 0ul : 0x1234567887654321ul;\n"
+        "}\n"
+        "__attribute__((noinline)) unsigned long guarded_call_result(int fail) {\n"
+        "    unsigned long value = local_factory(fail);\n"
+        "    if (value != 0) return value;\n"
+        "    exit(7);\n"
+        "}\n"
+    )
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "guarded_call_result.c"
+        binary_path = Path(td) / "guarded_call_result.so"
+        source_path.write_text(source)
+        built = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-fno-reorder-functions",
+                "-fno-toplevel-reorder",
+                "-falign-functions=16",
+                "-o",
+                str(binary_path),
+                str(source_path),
+            ]
+        )
+        assert built.returncode == 0, built.stderr
+        stripped = TC.run(["strip", "--strip-all", str(binary_path)])
+        assert stripped.returncode == 0, stripped.stderr
+
+        function_va = D.exported_functions(str(binary_path))["guarded_call_result"]
+        decompiled = D.decompiled_c(str(binary_path), function_va)
+
+    assert decompiled is not None
+    assert not decompiled.startswith("void guarded_call_result("), decompiled
+    assert "return ret;" in decompiled, decompiled
+
+
 def test_real_named_call_output_declares_its_recovered_callee_prototype():
     """A resolved project-local call must not depend on implicit C declarations.
 

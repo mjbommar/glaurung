@@ -121,6 +121,26 @@ impl TypeMap {
             return;
         }
         let current = self.inner.get(&reg).copied();
+        if let (
+            Some(TypeHint::Int { signed, .. }),
+            TypeHint::Int {
+                width: exact_width, ..
+            },
+        ) = (current, hint)
+        {
+            // SSA identity is exact width evidence even when the older
+            // storage-keyed pass has better signedness context.  Preserve that
+            // signedness, but do not let a later 32-bit reuse of the same
+            // architectural register narrow a proven ABI-wide returned value.
+            self.inner.insert(
+                reg,
+                TypeHint::Int {
+                    signed,
+                    width: exact_width,
+                },
+            );
+            return;
+        }
         let replace = match (current, hint) {
             (None, _) => true,
             // Per-value identity is decisive when raw-register union confused a
@@ -686,6 +706,73 @@ fn output_trial_is_dedicated(
     false
 }
 
+/// Whether a call result's only explicit consumption is a pure predicate chain.
+///
+/// `test rax, rax; je fatal; ret` is the canonical optimized shape: the call
+/// value is read by control flow *and* is the unchanged machine result on the
+/// only returning path.  Treating every compared value as incidental loses
+/// that output.  Follow exact SSA uses and allow only view-preserving copies,
+/// TEST's self-AND, comparisons, and the final conditional branch; any store,
+/// arithmetic, argument use, or other side effect fails closed.
+fn call_result_has_only_guard_uses(
+    lf: &LlirFunction,
+    ssa: &SsaInfo,
+    candidate: &SsaValue,
+    definitions: &HashMap<SsaValue, InstrAddr>,
+) -> bool {
+    let Some(definition) = definitions.get(candidate) else {
+        return false;
+    };
+    if !matches!(
+        lf.blocks[definition.block_idx].instrs[definition.instr_idx].op,
+        Op::Call { .. }
+    ) {
+        return false;
+    }
+
+    let mut pending = vec![candidate.clone()];
+    let mut visited = HashSet::new();
+    let mut saw_conditional_branch = false;
+    while let Some(value) = pending.pop() {
+        if !visited.insert(value.clone()) {
+            continue;
+        }
+        for (block_idx, block) in lf.blocks.iter().enumerate() {
+            for (instr_idx, instruction) in block.instrs.iter().enumerate() {
+                let addr = InstrAddr {
+                    block_idx,
+                    instr_idx,
+                };
+                let (_, uses) = def_uses(&instruction.op);
+                let uses_value = (0..uses.len())
+                    .any(|index| ssa.use_value(lf, addr, index).as_ref() == Some(&value));
+                if !uses_value {
+                    continue;
+                }
+                match &instruction.op {
+                    Op::CondJump { .. } => saw_conditional_branch = true,
+                    Op::Assign { .. }
+                    | Op::ZExt { .. }
+                    | Op::SExt { .. }
+                    | Op::Trunc { .. }
+                    | Op::Cmp { .. }
+                    | Op::Bin {
+                        op: crate::ir::types::BinOp::And,
+                        ..
+                    } => {
+                        let Some(next) = ssa.def_value(lf, addr) else {
+                            return false;
+                        };
+                        pending.push(next);
+                    }
+                    _ => return false,
+                }
+            }
+        }
+    }
+    saw_conditional_branch
+}
+
 /// Values whose dataflow reaches an observable use other than the implicit
 /// function return.
 ///
@@ -836,12 +923,22 @@ pub fn recover_prototype(
                 let Some(value) = ssa.def_value(lf, addr) else {
                     continue;
                 };
+                let guarded_call_result =
+                    call_result_has_only_guard_uses(lf, ssa, &value, &definitions);
                 let is_direct =
-                    output_trial_is_dedicated(lf, ssa, &value, &definitions, &non_return_live);
+                    output_trial_is_dedicated(lf, ssa, &value, &definitions, &non_return_live)
+                        || guarded_call_result;
                 if !is_direct {
                     continue;
                 }
-                let hint = qualified_result_hint(&ins.op, &valued, &value, cc, storage_class);
+                let hint = qualified_result_hint(&ins.op, &valued, &value, cc, storage_class)
+                    .or_else(|| {
+                        (guarded_call_result && storage_class == ResultHintClass::Integer)
+                            .then_some(TypeHint::Int {
+                                signed: true,
+                                width: abi_pointer_width(cc),
+                            })
+                    });
                 if storage_class == ResultHintClass::Float && hint.is_none() {
                     has_unsupported_output_trial = true;
                 }

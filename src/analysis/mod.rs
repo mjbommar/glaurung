@@ -7,6 +7,7 @@
 
 pub mod aarch64_literals;
 pub(crate) mod arm32_mode;
+pub(crate) mod call_semantics;
 pub mod cfg;
 pub mod cil_metadata;
 pub mod dispatch;

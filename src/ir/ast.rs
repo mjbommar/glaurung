@@ -4998,7 +4998,11 @@ pub fn render_decbench_typed_with_output(
     // translation-unit prelude. The prototype object retains its authority even
     // though both sources share one deterministic declaration table here.
     for (callee, prototype) in &named_call_declarations {
-        let _ = write!(out, "    extern {} {}(", prototype.return_type, callee);
+        out.push_str("    extern ");
+        if crate::analysis::call_semantics::is_known_noreturn_symbol(callee) {
+            out.push_str("__attribute__((noreturn)) ");
+        }
+        let _ = write!(out, "{} {}(", prototype.return_type, callee);
         if prototype.parameter_types.is_empty() {
             out.push_str("void");
         } else {

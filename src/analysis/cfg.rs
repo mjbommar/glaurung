@@ -719,6 +719,16 @@ fn replay_dispatch_block(
     Some((tracker, None))
 }
 
+struct DiscoveryFacts<'a> {
+    // Jump tables discovered once for the whole binary, indexed by table VA.
+    //
+    // These used to be consumed only as function-discovery seeds. Keeping the
+    // table-to-dispatch binding here lets the dispatching CFG acquire its arms.
+    tables: &'a std::collections::BTreeMap<u64, Vec<u64>>,
+    // Resolved import/thunk addresses whose contracts prohibit fallthrough.
+    noreturn_targets: &'a std::collections::HashSet<u64>,
+}
+
 fn discover_function(
     data: &[u8],
     arch: BArch,
@@ -726,14 +736,7 @@ fn discover_function(
     entry: Address,
     regions: &[ExecRegion],
     budgets: &Budgets,
-    // Jump tables discovered once for the whole binary, indexed by table VA.
-    //
-    // These used to be consumed only as function-discovery seeds — each arm
-    // offered as a possible new function entry — so the binding between a table
-    // and the `jmp` that reads it was never formed, and the dispatching
-    // function's own CFG got no successors at all. Passing them in is what lets
-    // `analysis::dispatch` answer "where does THIS jump go".
-    tables: &std::collections::BTreeMap<u64, Vec<u64>>,
+    facts: &DiscoveryFacts<'_>,
 ) -> Option<(Function, Vec<FunctionXref>, SingleFunctionDiscoveryStats)> {
     let darch: crate::core::disassembler::Architecture = arch.into();
     let mut backend = registry::for_arch(darch, end)?;
@@ -860,21 +863,27 @@ fn discover_function(
                 is_ret = true;
             }
             if is_call {
-                // Fallthrough continues; preserve the exact instruction VA
-                // so downstream xref tables can report callsites, not just
-                // caller-function granularity.
-                if let Some(tgt) = immediate_target(&ins) {
+                // Preserve the exact instruction VA so downstream xref tables
+                // report callsites, not just caller-function granularity.  A
+                // resolved noreturn import ends the block and the function:
+                // decoding its lexical successor would cross into padding or a
+                // neighbouring function on optimized stripped binaries.
+                let resolved_target =
+                    immediate_target(&ins).or_else(|| indirect_memory_target(data, &ins, bits));
+                if let Some(tgt) = resolved_target {
                     call_edges.push(FunctionXref {
                         callsite_va: cur_va,
                         target_va: tgt,
-                        call_type: CallType::Direct,
+                        call_type: if immediate_target(&ins).is_some() {
+                            CallType::Direct
+                        } else {
+                            CallType::Indirect
+                        },
                     });
-                } else if let Some(tgt) = indirect_memory_target(data, &ins, bits) {
-                    call_edges.push(FunctionXref {
-                        callsite_va: cur_va,
-                        target_va: tgt,
-                        call_type: CallType::Indirect,
-                    });
+                }
+                if resolved_target.is_some_and(|target| facts.noreturn_targets.contains(&target)) {
+                    blocks.insert(start_va, (end_va, instrs));
+                    break 'block;
                 }
                 // continue to fallthrough
             } else if is_branch {
@@ -919,7 +928,7 @@ fn discover_function(
                         // transfer we cannot follow. Before this, both produced
                         // the same thing — no edges — so a switch lost every arm
                         // and nothing recorded that the graph was incomplete.
-                        match dispatch.resolve(&ins, tables) {
+                        match dispatch.resolve(&ins, facts.tables) {
                             Some(crate::analysis::dispatch::Resolution::Table {
                                 targets, ..
                             }) => {
@@ -1109,7 +1118,7 @@ fn discover_function(
                 Some(*site),
             )
             .and_then(|(tracker, instruction)| {
-                instruction.and_then(|instruction| tracker.resolve(&instruction, tables))
+                instruction.and_then(|instruction| tracker.resolve(&instruction, facts.tables))
             })
         });
         let still_exact = matches!(
@@ -3006,6 +3015,7 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     if regions.is_empty() {
         return (functions, cg, stats);
     }
+    let noreturn_targets = crate::analysis::call_semantics::imported_noreturn_targets(data);
 
     // Explicit caller-provided addresses are authoritative and go first so a
     // tight function budget cannot be consumed by whole-binary heuristics
@@ -3460,6 +3470,10 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     // other seed source. Worklist-based to keep the iteration bounded
     // by a positive `max_functions` while still propagating xrefs to a
     // fixed point. `max_functions == 0` means no function-count cap.
+    let discovery_facts = DiscoveryFacts {
+        tables: &jump_table_index,
+        noreturn_targets: &noreturn_targets,
+    };
     let mut calls_all: Vec<(u64, FunctionXref)> = Vec::new(); // (caller_entry_va, xref)
     let mut worklist: std::collections::VecDeque<(Address, DiscoverySeedKind)> =
         seeds.into_iter().collect();
@@ -3492,7 +3506,7 @@ fn analyze_functions_bytes_with_stats_and_seeds(
             seed.clone(),
             &regions,
             budgets,
-            &jump_table_index,
+            &discovery_facts,
         ) {
             stats.function_seed_kinds.push((
                 f.entry_point.value,
@@ -4543,6 +4557,12 @@ mod degenerate_block_tests {
             timeout_ms: 1_000,
         };
         // The data buffer is VA-addressed by the region's file offset mapping.
+        let tables = std::collections::BTreeMap::new();
+        let noreturn_targets = std::collections::HashSet::new();
+        let facts = DiscoveryFacts {
+            tables: &tables,
+            noreturn_targets: &noreturn_targets,
+        };
         let out = discover_function(
             code,
             BArch::X86_64,
@@ -4550,7 +4570,7 @@ mod degenerate_block_tests {
             entry,
             &regions,
             &budgets,
-            &std::collections::BTreeMap::new(),
+            &facts,
         );
         let (func, _, _) = out.expect("discovery must succeed, not panic");
         // The decodable blocks survive; the empty one contributes nothing.
