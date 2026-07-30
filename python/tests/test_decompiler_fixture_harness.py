@@ -34,7 +34,9 @@ WORKDIR_KW = {"dir": _td} if _td else {}
 _SO_KEEP = []  # keep NamedTemporaryFile handles alive for the test session
 
 
-def _compile_so(c_src: str, tag: str, debug: bool = True) -> str:
+def _compile_so(
+    c_src: str, tag: str, debug: bool = True, optimization: str = "O0"
+) -> str:
     """Compile a snippet into a .so and return its path (kept for the run).
 
     Uses the pinned toolchain, like every other compile the gate performs — these
@@ -46,7 +48,16 @@ def _compile_so(c_src: str, tag: str, debug: bool = True) -> str:
     os.close(fd)
     src = path[:-3] + ".c"
     Path(src).write_text(c_src + "\n")
-    argv = ["gcc", "-shared", "-fPIC", *(["-g"] if debug else []), "-O0", "-o", path, src]
+    argv = [
+        "gcc",
+        "-shared",
+        "-fPIC",
+        *(["-g"] if debug else []),
+        f"-{optimization}",
+        "-o",
+        path,
+        src,
+    ]
     r = TC.run(argv)
     assert r.returncode == 0, r.stderr
     _SO_KEEP.append(path)
@@ -104,6 +115,71 @@ def test_batch_decompile_returns_every_requested_real_function():
     assert set(recovered) == set(requested)
     assert "batch_add(" in recovered[exported["batch_add"]]
     assert "batch_mul(" in recovered[exported["batch_mul"]]
+
+
+def test_real_optimized_shared_store_and_return_keeps_declared_output_contract():
+    """Debug contracts disambiguate optimized store-only and returned values.
+
+    At ``-O2`` both functions can leave the computed value in the ABI return
+    register while storing it through ``out``.  Machine-code liveness therefore
+    cannot soundly distinguish them.  A real DWARF function prototype can: the
+    first result is ``int`` and the second is truly ``void``.  The decompiler
+    must preserve that authoritative distinction and emit recompilable C.
+    """
+    binary = _compile_so(
+        "__attribute__((noinline)) int store_and_return(int *out, int value) {\n"
+        "    int result = value + 700;\n"
+        "    *out = result;\n"
+        "    return result;\n"
+        "}\n"
+        "__attribute__((noinline)) void store_only(int *out, int value) {\n"
+        "    *out = value + 700;\n"
+        "}",
+        "shared_store_return",
+        optimization="O2",
+    )
+    exported = D.exported_functions(binary)
+    recovered_by_va = D.decompiled_many_c(
+        binary, [exported["store_and_return"], exported["store_only"]]
+    )
+    recovered = {
+        function: recovered_by_va[exported[function]]
+        for function in ("store_and_return", "store_only")
+    }
+
+    assert recovered["store_and_return"] is not None
+    assert recovered["store_only"] is not None
+    assert recovered["store_and_return"].startswith("int store_and_return(")
+    assert recovered["store_only"].startswith("void store_only(")
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "shared_store_return.c"
+        output_path = Path(td) / "shared_store_return.so"
+        source_path.write_text(
+            D.PRELUDE
+            + "\n"
+            + recovered["store_and_return"]
+            + "\n"
+            + recovered["store_only"]
+            + "\n"
+        )
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-std=gnu11",
+                "-Werror",
+                "-o",
+                str(output_path),
+                str(source_path),
+            ]
+        )
+
+    assert rebuilt.returncode == 0, (
+        f"{rebuilt.stderr}\n{recovered['store_and_return']}\n{recovered['store_only']}"
+    )
 
 
 def test_real_indirect_call_output_has_a_concrete_call_site_prototype():

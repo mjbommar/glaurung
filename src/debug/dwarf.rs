@@ -40,6 +40,21 @@ pub struct DwarfFunction {
     pub param_count: u32,
     /// Whether the subprogram declared a prototype (`DW_AT_prototyped`).
     pub prototyped: bool,
+    /// Authoritative source-level return contract from `DW_AT_type`.
+    /// Absence of that attribute on a concrete subprogram means `void`;
+    /// an unsupported reference stays `Unknown` rather than being guessed.
+    pub return_type: DwarfReturnType,
+}
+
+/// Source-level output contract attached to a DWARF subprogram.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DwarfReturnType {
+    /// The subprogram has no `DW_AT_type`, which DWARF uses for `void`.
+    Void,
+    /// A concrete referenced type resolved to a C-like spelling.
+    Type(String),
+    /// A type attribute exists but this reader cannot resolve it safely.
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +228,12 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 entry.attr_value(gimli::DW_AT_prototyped),
                 Some(gimli::AttributeValue::Flag(true))
             );
+            let return_type = match entry.attr_value(gimli::DW_AT_type) {
+                None => DwarfReturnType::Void,
+                Some(type_attr) => _resolve_type_string(&dwarf, &unit, type_attr)
+                    .map(DwarfReturnType::Type)
+                    .unwrap_or(DwarfReturnType::Unknown),
+            };
 
             funcs.push(DwarfFunction {
                 entry_va,
@@ -222,6 +243,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 language: unit_lang.clone(),
                 param_count,
                 prototyped,
+                return_type,
             });
         }
     }

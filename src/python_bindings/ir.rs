@@ -511,6 +511,7 @@ fn decompile_at_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let budgets = Budgets {
         max_functions,
         max_blocks,
@@ -557,8 +558,17 @@ fn decompile_at_py(
     // Recover the semantic prototype while SSA value IDs are still available.
     // It survives the AST pipeline as an immutable companion object; naming is
     // now only a final projection (`value -> argN`), never a type-analysis key.
-    let prototype = (style == "decbench" && types)
-        .then(|| crate::ir::types_recover::recover_prototype(&lf_raw, &ssa, cc, &param_slots));
+    let prototype = (style == "decbench" && types).then(|| {
+        recover_decbench_prototype(
+            &lf_raw,
+            &ssa,
+            cc,
+            &param_slots,
+            dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func_va)),
+        )
+    });
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
     }
@@ -697,6 +707,7 @@ fn decompile_range_at_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let bits = match arch {
         crate::core::binary::Arch::X86 | crate::core::binary::Arch::ARM => 32,
@@ -750,8 +761,17 @@ fn decompile_range_at_py(
         lf_raw.clone()
     };
     let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
-    let prototype = (style == "decbench" && types)
-        .then(|| crate::ir::types_recover::recover_prototype(&lf_raw, &ssa, cc, &param_slots));
+    let prototype = (style == "decbench" && types).then(|| {
+        recover_decbench_prototype(
+            &lf_raw,
+            &ssa,
+            cc,
+            &param_slots,
+            dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func_va)),
+        )
+    });
     let mut f = lower(&lf, &region, func.name.clone());
     // Inputs the shared pipeline needs. These were interleaved BETWEEN passes here, which
     // is why the four copies could not simply be diffed against each other — the pass
@@ -1026,6 +1046,89 @@ fn decbench_text(
     crate::ir::verify_defs::splice_verify_comments(&body, &violations)
 }
 
+/// Index authoritative DWARF output contracts once per binary analysis.
+///
+/// Batch decompilation must not reparse debug sections for every function.
+/// The CFG analyser already consumes DWARF for boundaries and names; this
+/// compact companion map carries the output fact to typed prototype recovery.
+fn dwarf_output_contracts(
+    data: &[u8],
+) -> std::collections::HashMap<u64, crate::debug::dwarf::DwarfReturnType> {
+    crate::debug::dwarf::extract_dwarf_functions(data)
+        .into_iter()
+        .map(|function| (function.entry_va, function.return_type))
+        .collect()
+}
+
+/// Translate only DWARF scalar spellings that the current renderer can express
+/// exactly. An unrepresentable declared type still locks the output as non-void;
+/// it simply leaves machine-code recovery responsible for the concrete C type.
+fn dwarf_return_hint(c_type: &str) -> Option<crate::ir::types_recover::TypeHint> {
+    use crate::ir::types_recover::TypeHint;
+
+    let normalized = c_type
+        .split_whitespace()
+        .filter(|word| !matches!(*word, "const" | "volatile" | "restrict"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    match normalized.as_str() {
+        "_Bool" | "bool" => Some(TypeHint::BoolLike),
+        "char" | "signed char" => Some(TypeHint::Int {
+            signed: true,
+            width: 1,
+        }),
+        "unsigned char" => Some(TypeHint::Int {
+            signed: false,
+            width: 1,
+        }),
+        "short" | "short int" | "signed short" | "signed short int" => Some(TypeHint::Int {
+            signed: true,
+            width: 2,
+        }),
+        "unsigned short" | "unsigned short int" => Some(TypeHint::Int {
+            signed: false,
+            width: 2,
+        }),
+        "int" | "signed" | "signed int" => Some(TypeHint::Int {
+            signed: true,
+            width: 4,
+        }),
+        "unsigned" | "unsigned int" => Some(TypeHint::Int {
+            signed: false,
+            width: 4,
+        }),
+        "float" => Some(TypeHint::Float { width: 4 }),
+        "double" => Some(TypeHint::Float { width: 8 }),
+        _ => None,
+    }
+}
+
+/// Recover machine-code prototype facts, then apply a stronger declared output
+/// contract when one exists. Stripped binaries pass `None` and retain the
+/// existing Ghidra/Kuna-style only-use inference unchanged.
+fn recover_decbench_prototype(
+    lf_raw: &crate::ir::types::LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    cc: crate::ir::call_args::CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    declared_return: Option<&crate::debug::dwarf::DwarfReturnType>,
+) -> crate::ir::types_recover::RecoveredPrototype {
+    use crate::debug::dwarf::DwarfReturnType;
+    use crate::ir::types_recover::RecoveredOutputKind;
+
+    let mut prototype = crate::ir::types_recover::recover_prototype(lf_raw, ssa, cc, param_slots);
+    match declared_return {
+        Some(DwarfReturnType::Void) => {
+            prototype.apply_locked_output(RecoveredOutputKind::Void, None);
+        }
+        Some(DwarfReturnType::Type(c_type)) => {
+            prototype.apply_locked_output(RecoveredOutputKind::Direct, dwarf_return_hint(c_type));
+        }
+        Some(DwarfReturnType::Unknown) | None => {}
+    }
+    prototype
+}
+
 /// Build the `(declaration, width)` type-map pair the DecBench renderer needs.
 ///
 /// Machine-width facts come from the PRE-canonicalisation LLIR (`lf_raw`), the only
@@ -1050,7 +1153,11 @@ fn decbench_type_maps(
     let live_ins = prototype.parameter_type_map();
     let result = prototype.result_type_map();
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
-        decl.refine_from_value(crate::ir::types::VReg::phys("ret"), hint);
+        if prototype.output_is_locked() {
+            decl.apply_locked_fact(crate::ir::types::VReg::phys("ret"), hint);
+        } else {
+            decl.refine_from_value(crate::ir::types::VReg::phys("ret"), hint);
+        }
     }
     // Only entry values with the qualified spill/reload/dereference proof are
     // allowed to refine a rendered role. The complete version-zero map remains
@@ -1065,7 +1172,11 @@ fn decbench_type_maps(
     merge_slot_sizes(&mut decl, slot_sizes);
     let mut width = remap_non_parameter_type_map(&recover_types_for(lf_raw, cc), cc, param_slots);
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
-        width.refine_from_value(crate::ir::types::VReg::phys("ret"), hint);
+        if prototype.output_is_locked() {
+            width.apply_locked_fact(crate::ir::types::VReg::phys("ret"), hint);
+        } else {
+            width.refine_from_value(crate::ir::types::VReg::phys("ret"), hint);
+        }
     }
     for slot in param_slots {
         let role = crate::ir::types::VReg::Phys(format!("arg{slot}"));
@@ -1104,6 +1215,7 @@ fn decompile_all_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
     let budgets = Budgets {
         max_functions: limit.max(1),
         max_blocks,
@@ -1137,8 +1249,17 @@ fn decompile_all_py(
             lf_raw.clone()
         };
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
-        let prototype = (style == "decbench")
-            .then(|| crate::ir::types_recover::recover_prototype(&lf_raw, &ssa, cc, &param_slots));
+        let prototype = (style == "decbench").then(|| {
+            recover_decbench_prototype(
+                &lf_raw,
+                &ssa,
+                cc,
+                &param_slots,
+                dwarf_outputs
+                    .as_ref()
+                    .and_then(|outputs| outputs.get(&func.entry_point.value)),
+            )
+        });
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
         // One pass list, shared with every other entry point — see `run_ast_passes`.
@@ -1216,6 +1337,7 @@ fn decompile_many_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
     let budgets = Budgets {
         max_functions,
         max_blocks,
@@ -1262,8 +1384,17 @@ fn decompile_many_py(
             lf_raw.clone()
         };
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
-        let prototype = (style == "decbench")
-            .then(|| crate::ir::types_recover::recover_prototype(&lf_raw, &ssa, cc, &param_slots));
+        let prototype = (style == "decbench").then(|| {
+            recover_decbench_prototype(
+                &lf_raw,
+                &ssa,
+                cc,
+                &param_slots,
+                dwarf_outputs
+                    .as_ref()
+                    .and_then(|outputs| outputs.get(&func_va)),
+            )
+        });
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         let mut f = lower(&lf, &region, outer_name);
         // One pass list, shared with every other entry point — see `run_ast_passes`.

@@ -19,7 +19,7 @@
 //! keeps it cheap and composable. Passes that need SSA precision can
 //! consume [`crate::ir::ssa::SsaInfo`] and re-run on a per-version basis.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::ssa::{SsaInfo, SsaValue};
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
@@ -47,6 +47,9 @@ pub enum TypeHint {
 #[derive(Debug, Default, Clone)]
 pub struct TypeMap {
     inner: HashMap<VReg, TypeHint>,
+    // Locked roles are few; deterministic storage avoids adding another
+    // randomized collection to type-recovery state.
+    locked: BTreeSet<VReg>,
 }
 
 impl TypeMap {
@@ -70,11 +73,23 @@ impl TypeMap {
         self.upsert(reg, new)
     }
 
+    /// Install an authoritative external declaration exactly.
+    ///
+    /// This is intentionally not union-style inference: a locked DWARF/PDB
+    /// contract outranks storage-width residue for the same rendered role.
+    pub(crate) fn apply_locked_fact(&mut self, reg: VReg, hint: TypeHint) {
+        self.inner.insert(reg.clone(), hint);
+        self.locked.insert(reg);
+    }
+
     /// Refine a fact after value-keyed analysis identifies the exact value that
     /// occupies this rendered role. This is deliberately distinct from the
     /// union-style `upsert`: SSA identity decides scalar-vs-address class while
     /// the older operation-level analysis retains richer scalar signedness.
     pub(crate) fn refine_from_value(&mut self, reg: VReg, hint: TypeHint) {
+        if self.locked.contains(&reg) {
+            return;
+        }
         let current = self.inner.get(&reg).copied();
         let replace = match (current, hint) {
             (None, _) => true,
@@ -113,6 +128,9 @@ impl TypeMap {
     /// happen to share those spellings are not trustworthy without a prepared
     /// AST definition proof.
     pub(crate) fn clear_value_fact(&mut self, reg: &VReg) {
+        if self.locked.contains(reg) {
+            return;
+        }
         self.inner.remove(reg);
     }
 
@@ -123,6 +141,9 @@ impl TypeMap {
     /// restore the complete incoming/return eightbyte. Semantic pointer hints
     /// are never overwritten.
     pub(crate) fn force_int_width(&mut self, reg: VReg, width: u8) {
+        if self.locked.contains(&reg) {
+            return;
+        }
         if let Some(TypeHint::Int { signed, .. }) = self.inner.get(&reg).copied() {
             self.inner.insert(reg, TypeHint::Int { signed, width });
         }
@@ -133,6 +154,9 @@ impl TypeMap {
     /// zero-extension/index use, but it is not evidence that a pointer or code
     /// pointer should become an integer.
     pub(crate) fn force_int_signedness(&mut self, reg: VReg, signed: bool) {
+        if self.locked.contains(&reg) {
+            return;
+        }
         if let Some(TypeHint::Int { width, .. }) = self.inner.get(&reg).copied() {
             self.inner.insert(reg, TypeHint::Int { signed, width });
         }
@@ -143,6 +167,9 @@ impl TypeMap {
     /// recovery can merge unrelated SSA-era uses of the same architectural
     /// register; the final value identity is stronger evidence.
     pub(crate) fn force_pointer_width(&mut self, reg: VReg, pointee_width: u8) {
+        if self.locked.contains(&reg) {
+            return;
+        }
         if matches!(self.inner.get(&reg), Some(TypeHint::Pointer { .. })) {
             self.inner.insert(reg, TypeHint::Pointer { pointee_width });
         }
@@ -153,6 +180,9 @@ impl TypeMap {
     /// Callers must perform that proof on the prepared, value-keyed AST; raw
     /// register evidence alone is deliberately not strong enough to use this.
     pub(crate) fn force_scalar_int(&mut self, reg: VReg, signed: bool, width: u8) {
+        if self.locked.contains(&reg) {
+            return;
+        }
         self.inner.insert(reg, TypeHint::Int { signed, width });
     }
 
@@ -160,6 +190,9 @@ impl TypeMap {
     /// specific than the current entry. Pointers beat ints; specific widths
     /// beat zero-width entries; bool beats nothing.
     fn upsert(&mut self, reg: VReg, new: TypeHint) {
+        if self.locked.contains(&reg) {
+            return;
+        }
         let keep = merge_type_hint(self.inner.get(&reg).copied(), new);
         self.inner.insert(reg, keep);
     }
@@ -322,6 +355,7 @@ pub struct RecoveredPrototype {
     parameters: Vec<RecoveredParameter>,
     result: Option<RecoveredResult>,
     output_kind: RecoveredOutputKind,
+    output_locked: bool,
 }
 
 impl RecoveredPrototype {
@@ -341,6 +375,46 @@ impl RecoveredPrototype {
 
     pub fn output_kind(&self) -> RecoveredOutputKind {
         self.output_kind
+    }
+
+    pub(crate) fn output_is_locked(&self) -> bool {
+        self.output_locked
+    }
+
+    /// Apply an authoritative source-level output contract.
+    ///
+    /// Ghidra keeps a type-locked function output intact during return
+    /// recovery, and Kuna carries the same policy. Machine-code output trials
+    /// remain responsible for stripped binaries; a declared DWARF/PDB contract
+    /// is allowed to disambiguate identical store-and-return/store-only shapes.
+    pub(crate) fn apply_locked_output(
+        &mut self,
+        output_kind: RecoveredOutputKind,
+        hint: Option<TypeHint>,
+    ) {
+        match output_kind {
+            RecoveredOutputKind::Direct => {
+                let prior = self.result.take();
+                self.result = Some(RecoveredResult {
+                    values: prior
+                        .as_ref()
+                        .map(|result| result.values.clone())
+                        .unwrap_or_default(),
+                    hint: hint.or_else(|| prior.and_then(|result| result.hint)),
+                });
+                self.output_kind = RecoveredOutputKind::Direct;
+                self.output_locked = true;
+            }
+            RecoveredOutputKind::Void => {
+                self.result = None;
+                self.output_kind = RecoveredOutputKind::Void;
+                self.output_locked = true;
+            }
+            // An unresolved declaration is a fact gap, not permission to
+            // discard the machine-code result. Hidden-return declarations need
+            // aggregate shape support before they can be applied here.
+            RecoveredOutputKind::Unknown | RecoveredOutputKind::HiddenReturn => {}
+        }
     }
 
     /// Project semantic parameter slots to the renderer's source-level role
@@ -858,6 +932,7 @@ pub fn recover_prototype(
         parameters,
         result,
         output_kind,
+        output_locked: false,
     }
 }
 
@@ -2075,6 +2150,54 @@ mod tests {
             tm.get(&role),
             Some(TypeHint::Pointer { pointee_width: 1 }),
             "value identity must correct a scalar/address class collision"
+        );
+    }
+
+    #[test]
+    fn locked_output_fact_survives_every_inference_update_path() {
+        let role = VReg::phys("ret");
+        let declared = TypeHint::Int {
+            signed: true,
+            width: 4,
+        };
+        let mut tm = TypeMap::default();
+        tm.apply_locked_fact(role.clone(), declared);
+
+        tm.upsert_public(role.clone(), TypeHint::Pointer { pointee_width: 8 });
+        tm.refine_from_value(
+            role.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        );
+        tm.force_int_width(role.clone(), 8);
+        tm.force_int_signedness(role.clone(), false);
+        tm.force_pointer_width(role.clone(), 1);
+        tm.force_scalar_int(role.clone(), false, 8);
+        tm.clear_value_fact(&role);
+
+        assert_eq!(tm.get(&role), Some(declared));
+    }
+
+    #[test]
+    fn locked_declared_output_replaces_void_machine_inference() {
+        let hint = TypeHint::Int {
+            signed: true,
+            width: 4,
+        };
+        let mut prototype = RecoveredPrototype {
+            output_kind: RecoveredOutputKind::Void,
+            ..RecoveredPrototype::default()
+        };
+
+        prototype.apply_locked_output(RecoveredOutputKind::Direct, Some(hint));
+
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Direct);
+        assert!(prototype.output_is_locked());
+        assert_eq!(
+            prototype.result().and_then(|result| result.hint),
+            Some(hint)
         );
     }
 
