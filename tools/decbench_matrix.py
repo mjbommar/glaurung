@@ -37,6 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "tests" / "decbench_corpus" / "src"
 BASELINE = ROOT / "tests" / "decbench_corpus" / "baseline.json"
+GLAURUNG_ADAPTER = ROOT / "tools" / "decbench_glaurung.py"
 TOOLCHAIN_KEY = "__toolchain__"
 
 COMPILERS = ("gcc", "clang")
@@ -73,6 +74,28 @@ def decbench_dir() -> Path | None:
     that as its cwd (it resolves its own data relative to it)."""
     env = os.environ.get("DECBENCH_DIR")
     return Path(env) if env else None
+
+
+def decbench_command(cwd: Path, backend: str) -> list[str]:
+    """Return the evaluator command for ``backend``.
+
+    DecBench intentionally only imports its in-tree backends; it has no entry
+    point discovery for external plugins.  Glaurung therefore owns a tiny
+    adapter launcher which registers the backend before delegating to the real
+    DecBench CLI.  Reference backends continue through the stock executable.
+    """
+    if backend != "glaurung":
+        return ["decbench"]
+
+    configured = os.environ.get("DECBENCH_PYTHON")
+    candidates = [Path(configured)] if configured else []
+    candidates += [cwd / ".venv" / "bin" / "python", cwd / ".venv" / "bin" / "python3"]
+    for candidate in candidates:
+        if candidate.is_file():
+            return [str(candidate), str(GLAURUNG_ADAPTER)]
+    raise FileNotFoundError(
+        f"Glaurung's DecBench adapter needs DECBENCH_PYTHON or {cwd}/.venv/bin/python"
+    )
 
 
 def toolchain_fingerprint() -> dict:
@@ -122,7 +145,7 @@ def evaluate(
     try:
         p = subprocess.run(
             [
-                "decbench",
+                *decbench_command(cwd, backend),
                 "evaluate",
                 str(binary),
                 "-s",

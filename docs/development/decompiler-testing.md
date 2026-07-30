@@ -124,6 +124,11 @@ a regression; cells never selected are absent by construction, not lost — and
 the summary says `SCOPED: ... across N of 56 cells`.
 
 Needs `DECBENCH_DIR` (defaulted to `/nas4/data/workspace-infosec/decbench`).
+DecBench does not discover out-of-tree Python plugins, so Glaurung owns
+`tools/decbench_glaurung.py`: the matrix launches it with the DecBench
+checkout's Python, registers the backend, and then delegates to DecBench's
+normal CLI. Set `DECBENCH_PYTHON` only when that interpreter is not at
+`$DECBENCH_DIR/.venv/bin/python`; do not patch the external checkout.
 
 ## The full gate
 

@@ -219,6 +219,23 @@ def test_parallel_cells_have_isolated_work_directories(dm, tmp_path):
     assert second.name == "arith-clang-O0"
 
 
+def test_glaurung_cells_use_the_in_tree_decbench_adapter(dm, tmp_path, monkeypatch):
+    """The external DecBench checkout deliberately has no Glaurung plugin.
+
+    The metric lane must therefore launch DecBench through our owned adapter,
+    while reference backends continue to use DecBench's normal console script.
+    """
+    python = tmp_path / "python"
+    python.touch()
+    monkeypatch.setenv("DECBENCH_PYTHON", str(python))
+
+    assert dm.decbench_command(tmp_path, "glaurung") == [
+        str(python),
+        str(ROOT / "tools" / "decbench_glaurung.py"),
+    ]
+    assert dm.decbench_command(tmp_path, "angr") == ["decbench"]
+
+
 def _install_decbench_process(tmp_path: Path, body: str) -> Path:
     """Install a real subprocess fixture for evaluator failure-path coverage."""
     executable = tmp_path / "decbench"
@@ -231,21 +248,21 @@ def test_real_evaluator_failure_is_not_silently_reported_as_blank_metrics(
     dm, tmp_path, monkeypatch
 ):
     _install_decbench_process(
-        tmp_path, "echo \"Decompiler 'glaurung' not found\" >&2; exit 2"
+        tmp_path, "echo \"Decompiler 'angr' not found\" >&2; exit 2"
     )
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
 
     result = dm.evaluate(
         tmp_path / "input.so",
         tmp_path / "input.c",
-        "glaurung",
+        "angr",
         tmp_path / "results",
         tmp_path,
     )
 
     assert result["ged"] is None
     assert "exit 2" in result["error"]
-    assert "Decompiler 'glaurung' not found" in result["error"]
+    assert "Decompiler 'angr' not found" in result["error"]
 
 
 def test_real_evaluator_with_no_metrics_is_an_error(dm, tmp_path, monkeypatch):
@@ -255,7 +272,7 @@ def test_real_evaluator_with_no_metrics_is_an_error(dm, tmp_path, monkeypatch):
     result = dm.evaluate(
         tmp_path / "input.so",
         tmp_path / "input.c",
-        "glaurung",
+        "angr",
         tmp_path / "results",
         tmp_path,
     )
