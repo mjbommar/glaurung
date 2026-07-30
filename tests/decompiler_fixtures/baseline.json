@@ -434,7 +434,7 @@
   "08_indirect_dispatch:gcc:O0": {
     "apply": "structural",
     "dispatch": "pass",
-    "dispatch_switch": "fail",
+    "dispatch_switch": "pass",
     "tail_dispatch": "pass"
   },
   "08_indirect_dispatch:gcc:O2": {

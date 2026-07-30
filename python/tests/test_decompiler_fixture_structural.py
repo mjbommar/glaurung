@@ -361,6 +361,39 @@ def test_optimized_tail_dispatch_recovers_portable_local_function_table(
     assert "100" in helper.stdout, helper.stdout
 
 
+def test_gcc_o0_direct_dispatch_switch_recovers_all_cases(tmp_path: Path) -> None:
+    """A memory-operand range guard must retain every jump-table case."""
+    import subprocess
+
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / "08_indirect_dispatch.c"
+    binary = tmp_path / "indirect-dispatch-gcc-O0-switch.so"
+    compiled = S.TC.run(
+        ["gcc", "-shared", "-fPIC", "-g", "-O0", "-w", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "dispatch_switch",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    )
+    assert "switch" in result.stdout, result.stdout
+    for handler in ("h_add", "h_sub", "h_mul", "h_xor", "h_max"):
+        assert handler in result.stdout, result.stdout
+    assert "unrecovered indirect jump" not in result.stdout, result.stdout
+
+
 def test_factorial_recovers_a_head_tested_while(report):
     """A real compiled factorial must retain its source-level loop form."""
     got = report["effects"].get("12_loop_rotation:factorial_while", {})

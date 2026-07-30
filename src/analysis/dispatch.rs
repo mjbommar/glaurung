@@ -201,6 +201,10 @@ pub struct DispatchTracker {
     /// The most recent `cmp`/`sub` against an immediate, for the walker to hand
     /// to the guard's in-range successor.
     last_cmp: Option<(String, u64)>,
+    /// GCC -O0 commonly compares a spilled switch value directly in its frame
+    /// slot (`cmp [rbp-4], N`).  Keep that proof distinct from register facts so
+    /// the fallthrough block can inherit it and bind a later reload.
+    last_slot_cmp: Option<((String, i64), u64)>,
 }
 
 impl DispatchTracker {
@@ -215,6 +219,7 @@ impl DispatchTracker {
         self.reg_values.clear();
         self.slot_values.clear();
         self.last_cmp = None;
+        self.last_slot_cmp = None;
     }
 
     /// The inclusive maximum index this block's guard admits, if its predecessor
@@ -272,11 +277,15 @@ impl DispatchTracker {
             .collect()
     }
 
-    /// The register/limit pair a range check just established, for the caller to
-    /// hand to the in-range successor. `cmp $N, r` / `sub $N, r` followed by an
-    /// unsigned-above branch means the fallthrough has `r <= N`.
-    pub fn pending_bound(&self) -> Option<(String, u64)> {
-        self.last_cmp.clone()
+    /// The limit a range check just established, for the caller to hand the
+    /// exported register/slot facts to the in-range successor. `cmp $N, value`
+    /// followed by an unsigned-above branch means the fallthrough has
+    /// `value <= N`, whether `value` currently lives in a register or frame slot.
+    pub fn pending_bound(&self) -> Option<u64> {
+        self.last_cmp
+            .as_ref()
+            .map(|(_, limit)| *limit)
+            .or_else(|| self.last_slot_cmp.as_ref().map(|(_, limit)| *limit))
     }
 
     fn get(&self, reg: &str) -> Option<Val> {
@@ -407,6 +416,27 @@ impl DispatchTracker {
         }
     }
 
+    /// Record the same range fact for every live alias of a stack-slot value.
+    fn bound_slot_value(&mut self, key: &(String, i64), max: u64) {
+        if let Some(value) = self.slot_values.get(key).copied() {
+            for (register, register_value) in &self.reg_values {
+                if *register_value == value {
+                    self.bounded.insert(register.clone(), max);
+                }
+            }
+            let aliases: Vec<_> = self
+                .slot_values
+                .iter()
+                .filter(|(_, slot_value)| **slot_value == value)
+                .map(|(alias, _)| alias.clone())
+                .collect();
+            for alias in aliases {
+                self.bounded_slots.insert(alias, max);
+            }
+        }
+        self.bounded_slots.insert(key.clone(), max);
+    }
+
     /// Everything this block established, for its in-range successor to inherit.
     pub fn export_bounds(&self) -> Bounds {
         Bounds {
@@ -436,10 +466,25 @@ impl DispatchTracker {
             // walker to carry across the guard's in-range edge, and applied here
             // too so a guard in the dispatch's own block also counts.
             "cmp" | "sub" => {
+                self.last_cmp = None;
+                self.last_slot_cmp = None;
                 if let (Some(r), Some(n)) = (reg0, imm1) {
                     if n >= 0 {
                         self.last_cmp = Some((canon(r), n as u64));
                         self.bound_value(&canon(r), n as u64);
+                    }
+                } else if m == "cmp" {
+                    let stack_slot = ins.operands.first().and_then(|operand| {
+                        let base = canon(operand.base.as_deref()?);
+                        let displacement = operand.displacement?;
+                        (matches!(base.as_str(), "rbp" | "rsp") && operand.index.is_none())
+                            .then_some((base, displacement))
+                    });
+                    if let (Some(key), Some(n)) = (stack_slot, imm1) {
+                        if n >= 0 {
+                            self.last_slot_cmp = Some((key.clone(), n as u64));
+                            self.bound_slot_value(&key, n as u64);
+                        }
                     }
                 }
             }
@@ -817,6 +862,54 @@ mod tests {
         match tracker.resolve(&ins("jmp", vec![reg_read("rax")]), &tables()) {
             Some(Resolution::Table { targets, .. }) => assert_eq!(targets.len(), 4),
             other => panic!("the GCC -O0 scaled-index shape must resolve, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_gcc_o0_stack_slot_guard_bounds_the_reloaded_dispatch_index() {
+        // GCC 15 -O0 compares the spilled source value in memory, not a
+        // register: `cmp DWORD PTR [rbp-4],4; ja default`.  The in-range edge
+        // then reloads that exact slot before forming the relative table read.
+        let mut guard = DispatchTracker::new();
+        guard.observe(&ins(
+            "mov",
+            vec![mem_op(Some("rbp"), -4, None), reg_read("rdi")],
+        ));
+        guard.observe(&ins("cmp", vec![mem_op(Some("rbp"), -4, None), imm_op(4)]));
+        assert!(
+            guard.pending_bound().is_some(),
+            "the unsigned guard must expose an in-range fact"
+        );
+
+        let mut tracker = DispatchTracker::new();
+        tracker.inherit_bound(Some(guard.export_bounds()));
+        tracker.observe(&ins(
+            "mov",
+            vec![reg_op("rax"), mem_op(Some("rbp"), -4, None)],
+        ));
+        tracker.observe(&ins(
+            "lea",
+            vec![reg_op("rdx"), mem_op_scale(None, 0, Some("rax"), 4)],
+        ));
+        tracker.observe(&ins(
+            "lea",
+            vec![reg_op("rax"), mem_op(Some("rip"), 0x2000, None)],
+        ));
+        tracker.observe(&ins(
+            "mov",
+            vec![reg_op("rax"), mem_op_scale(Some("rdx"), 0, Some("rax"), 1)],
+        ));
+        tracker.observe(&ins("cdqe", Vec::new()));
+        tracker.observe(&ins(
+            "lea",
+            vec![reg_op("rdx"), mem_op(Some("rip"), 0x2000, None)],
+        ));
+        tracker.observe(&ins("add", vec![reg_op("rax"), reg_op("rdx")]));
+
+        let tables = BTreeMap::from([(0x2000, vec![0x1213, 0x1224, 0x1235, 0x1246, 0x1257])]);
+        match tracker.resolve(&ins("jmp", vec![reg_read("rax")]), &tables) {
+            Some(Resolution::Table { targets, .. }) => assert_eq!(targets.len(), 5),
+            other => panic!("the stack-slot guard must resolve, got {other:?}"),
         }
     }
 
