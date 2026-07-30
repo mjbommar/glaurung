@@ -520,7 +520,7 @@ fn rewrite_expr(
             // After recursion, see whether the addr is a bare Lea of a
             // stack slot; if so, collapse the whole deref into a Reg ref.
             if let Some((key_base, key_disp)) =
-                resolved_memory_slot(addr.as_ref(), sp_delta, address_defs)
+                resolved_memory_slot(addr.as_ref(), sp_delta, ctx, address_defs)
             {
                 let key = SlotKey {
                     base: key_base.clone(),
@@ -676,7 +676,7 @@ fn promote_address_taken_stack_object(
     let Some((base, disp)) = recovered else {
         return;
     };
-    let (key_base, key_disp) = normalized_stack_slot(&base, disp, sp_delta);
+    let (key_base, key_disp) = normalized_stack_slot(&base, disp, sp_delta, ctx);
     let key = SlotKey {
         base: key_base.clone(),
         disp: key_disp,
@@ -882,6 +882,7 @@ fn resolve_stack_address(
 fn resolved_memory_slot(
     expr: &Expr,
     sp_delta: Option<i64>,
+    ctx: StackContext,
     address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<(String, i64)> {
     let Expr::Lea {
@@ -896,7 +897,7 @@ fn resolved_memory_slot(
     };
     if let VReg::Phys(name) = base {
         if is_stack_base(name) {
-            return Some(normalized_stack_slot(name, *disp, sp_delta));
+            return Some(normalized_stack_slot(name, *disp, sp_delta, ctx));
         }
     }
     let (base, base_disp) = address_defs.get(base)?.clone();
@@ -964,7 +965,7 @@ fn try_promote_lea_to_local(
 ) {
     // A later narrower read at the exact same address can narrow the declaration,
     // while `span_size` retains the bytes this store defined for overlap recovery.
-    let Some((key_base, key_disp)) = resolved_memory_slot(addr, sp_delta, address_defs) else {
+    let Some((key_base, key_disp)) = resolved_memory_slot(addr, sp_delta, ctx, address_defs) else {
         return;
     };
     let key = SlotKey {
@@ -985,8 +986,13 @@ fn try_promote_lea_to_local(
 /// Express an rsp-relative slot against the architectural entry rsp when the
 /// current delta is known. This makes `[rsp+16]` after one push the same slot as
 /// `[entry_rsp+8]`, and gives naming an ABI-stable displacement.
-fn normalized_stack_slot(base: &str, disp: i64, sp_delta: Option<i64>) -> (String, i64) {
-    if base == "rsp" {
+fn normalized_stack_slot(
+    base: &str,
+    disp: i64,
+    sp_delta: Option<i64>,
+    ctx: StackContext,
+) -> (String, i64) {
+    if base == "rsp" || (base == "esp" && ctx.cc == Some(CallConv::Cdecl32)) {
         if let Some(delta) = sp_delta {
             return ("entry_rsp".to_string(), disp + delta);
         }
@@ -1025,15 +1031,22 @@ fn alloc_name(
             }
         }
     }
-    // A frame-pointer-omitted SysV leaf keeps rsp equal to the architectural
-    // entry value. [rsp] is the return address; eight-byte slots above it are
-    // therefore the arguments that follow the six integer register slots.
-    if ctx.cc == Some(CallConv::SysVAmd64)
-        && base == "entry_rsp"
-        && disp >= 8
-        && (disp - 8) % 8 == 0
-    {
-        return format!("arg{}", 6 + ((disp - 8) / 8) as usize);
+    // A frame-pointer-omitted x86 function addresses incoming stack arguments
+    // relative to the architectural entry stack pointer.  The return address
+    // occupies the first machine word: SysV AMD64's stacked arguments therefore
+    // start at entry_rsp+8 after six register arguments, while cdecl32 starts at
+    // entry_esp+4 and has no integer register arguments.  `esp` is normalised to
+    // the canonical `entry_rsp` spelling above so both modes share slot identity.
+    if base == "entry_rsp" {
+        match ctx.cc {
+            Some(CallConv::SysVAmd64) if disp >= 8 && (disp - 8) % 8 == 0 => {
+                return format!("arg{}", 6 + ((disp - 8) / 8) as usize);
+            }
+            Some(CallConv::Cdecl32) if disp >= 4 && (disp - 4) % 4 == 0 => {
+                return format!("arg{}", ((disp - 4) / 4) as usize);
+            }
+            _ => {}
+        }
     }
     // Positive offsets from rsp are outgoing-arg / scratch slots; negative
     // offsets from rsp are the function's own frame carved out by `sub
@@ -1149,6 +1162,107 @@ mod tests {
         ));
         assert_eq!(sizes.get("arg6"), Some(&4));
         assert_eq!(sizes.get("arg7"), Some(&8));
+    }
+
+    #[test]
+    fn an_unchanged_entry_esp_exposes_optimized_cdecl32_arguments() {
+        let mut f = Function {
+            name: "cdecl_pair".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("esp", 4, 4),
+                },
+                Stmt::Assign {
+                    dst: reg("edx"),
+                    src: deref_of("esp", 8, 4),
+                },
+            ],
+        };
+
+        let sizes = promote_stack_locals_typed(&mut f, Some(CallConv::Cdecl32));
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "arg0"
+        ));
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "arg1"
+        ));
+        assert_eq!(sizes.get("arg0"), Some(&4));
+        assert_eq!(sizes.get("arg1"), Some(&4));
+    }
+
+    #[test]
+    fn cdecl32_callee_saved_pushes_are_normalized_before_mapping_arguments() {
+        fn subtract_esp() -> Stmt {
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op: crate::ir::types::BinOp::Sub,
+                    lhs: Box::new(Expr::Reg(reg("rsp"))),
+                    rhs: Box::new(Expr::Const(4)),
+                },
+            }
+        }
+
+        let mut f = Function {
+            name: "rand_str".into(),
+            entry_va: 0,
+            body: vec![
+                subtract_esp(),
+                Stmt::Store {
+                    addr: lea("rsp", 0),
+                    src: Expr::Reg(reg("edi")),
+                    size: 4,
+                },
+                subtract_esp(),
+                Stmt::Store {
+                    addr: lea("rsp", 0),
+                    src: Expr::Reg(reg("esi")),
+                    size: 4,
+                },
+                subtract_esp(),
+                Stmt::Store {
+                    addr: lea("rsp", 0),
+                    src: Expr::Reg(reg("ebx")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("esi"),
+                    src: deref_of("esp", 20, 4),
+                },
+                Stmt::Assign {
+                    dst: reg("ebx"),
+                    src: deref_of("esp", 16, 4),
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::Cdecl32));
+
+        assert!(matches!(
+            &f.body[6],
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "arg1"
+        ));
+        assert!(matches!(
+            &f.body[7],
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "arg0"
+        ));
     }
 
     #[test]

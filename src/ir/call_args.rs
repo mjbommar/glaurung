@@ -1046,6 +1046,17 @@ fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
                     break;
                 }
             }
+            Stmt::Comment(_) | Stmt::Nop => {}
+            _ if pushed_args.is_empty() && by_offset.is_empty() => {
+                // Outgoing cdecl setup must reach the call directly (apart
+                // from comments/no-ops).  Scanning backward across an ordinary
+                // value statement can otherwise reach a frame-pointer-omitted
+                // callee-save prologue and consume `push edi/esi/ebx` as three
+                // arguments to a later zero-argument call.  Besides fabricating
+                // a prototype, removing those pushes loses the stack delta that
+                // identifies this function's own incoming parameters.
+                break;
+            }
             _ => {}
         }
         cursor = i;
@@ -1745,6 +1756,78 @@ mod tests {
             stmt,
             Stmt::Assign { dst: VReg::Phys(name), .. } if name == "rbp"
         )));
+    }
+
+    #[test]
+    fn cdecl32_does_not_scan_past_parameter_loads_into_callee_saved_prologue() {
+        let stack_sub = || Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(4)),
+            },
+        };
+        let stack_store = |name| Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg("rsp")),
+                index: None,
+                scale: 1,
+                disp: 0,
+                segment: None,
+            },
+            src: Expr::Reg(reg(name)),
+            size: 4,
+        };
+        let load = |dst, disp| Stmt::Assign {
+            dst: reg(dst),
+            src: Expr::Deref {
+                addr: Box::new(Expr::Lea {
+                    base: Some(reg("rsp")),
+                    index: None,
+                    scale: 1,
+                    disp,
+                    segment: None,
+                }),
+                size: 4,
+            },
+        };
+        let mut f = Function {
+            name: "rand_str".into(),
+            entry_va: 0,
+            body: vec![
+                stack_sub(),
+                stack_store("rdi"),
+                stack_sub(),
+                stack_store("rsi"),
+                stack_sub(),
+                stack_store("rbx"),
+                load("rsi#1", 20),
+                load("rbx#1", 16),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "GetTickCount".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert_eq!(
+            f.body.len(),
+            9,
+            "callee-save prologue was removed: {:#?}",
+            f.body
+        );
+        assert!(matches!(
+            f.body.last(),
+            Some(Stmt::Call { args, .. }) if args.is_empty()
+        ));
     }
 
     #[test]
