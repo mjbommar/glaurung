@@ -78,6 +78,10 @@ pub enum Region {
         /// case folding, so one arm can own several labels.
         case_labels: Vec<Vec<i64>>,
         arms: Vec<Region>,
+        /// Default region proven by a guarding conditional and also targeted
+        /// by in-range table holes. This is a borrowed structural view: the
+        /// enclosing guard remains the owner of these blocks.
+        formal_default: Option<Box<Region>>,
         join: Option<usize>,
     },
     /// `goto <block>;` — an explicit jump to a block that is emitted (with a
@@ -1291,7 +1295,13 @@ fn detect_if_shape(
     // one-armed `if (in_range) switch (...)` followed by the continuation, not
     // an if/else whose sibling arm owns the continuation.
     for &(body, join) in &[(t, e), (e, t)] {
-        if cfg.succs[body].len() >= 3
+        let join_is_formal_switch_default = cfg.is_switch_dispatch(body)
+            && cfg.succs[body].contains(&join)
+            && cfg.edges[cond].iter().any(|edge| {
+                edge.to == join && edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchDefault
+            });
+        if !join_is_formal_switch_default
+            && cfg.succs[body].len() >= 3
             && cfg.preds[body] == vec![cond]
             && cfg.preds[join].contains(&cond)
             && can_reach(body, join, cfg)
@@ -1491,9 +1501,20 @@ fn detect_switch_shape(
     visited: &mut HashSet<usize>,
     enclosing_stop: Option<usize>,
 ) -> Option<(Region, Option<usize>)> {
-    let arms = cfg.succs[dispatch].clone();
-    let case_labels = cfg.case_labels[dispatch].clone();
+    let all_arms = cfg.succs[dispatch].clone();
+    let mut arms = all_arms.clone();
+    let mut case_labels = cfg.case_labels[dispatch].clone();
     if arms.len() < 2 || !cfg.is_switch_dispatch(dispatch) {
+        return None;
+    }
+    let formal_default_entry = arms
+        .iter()
+        .position(|arm| is_guarded_switch_default(dispatch, *arm, cfg))
+        .map(|position| {
+            case_labels.remove(position);
+            arms.remove(position)
+        });
+    if arms.is_empty() {
         return None;
     }
     // Every arm must be reached only from this dispatch — a stricter
@@ -1506,7 +1527,7 @@ fn detect_switch_shape(
         }
     }
 
-    let join = find_switch_join(dispatch, &arms, cfg, enclosing_stop);
+    let join = find_switch_join(dispatch, &all_arms, cfg, enclosing_stop);
     // When the dispatch is one arm of an enclosing conditional, its local
     // post-dominator may be absent solely because the sibling/default arm also
     // reaches that continuation.  The enclosing boundary is still a proven
@@ -1540,15 +1561,30 @@ fn detect_switch_shape(
             sub_arms.push(build(a, cfg, visited, arm_stop));
         }
     }
+    let formal_default = formal_default_entry.map(|entry| {
+        let mut borrowed_visited = HashSet::from([dispatch]);
+        Box::new(build(entry, cfg, &mut borrowed_visited, arm_stop))
+    });
     Some((
         Region::Switch {
             dispatch,
             case_labels,
             arms: sub_arms,
+            formal_default,
             join: effective_join,
         },
         effective_join,
     ))
+}
+
+/// Return true when `candidate` is both a table destination and the proven
+/// out-of-range target of the conditional guarding `dispatch`.
+fn is_guarded_switch_default(dispatch: usize, candidate: usize, cfg: &Cfg) -> bool {
+    cfg.preds[candidate].iter().any(|guard| {
+        cfg.edges[*guard].iter().any(|edge| {
+            edge.to == candidate && edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchDefault
+        }) && cfg.edges[*guard].iter().any(|edge| edge.to == dispatch)
+    })
 }
 
 /// Walk reachable blocks from each arm and return the block reached from the
@@ -1747,6 +1783,59 @@ mod tests {
 
         assert_eq!(arms.len(), 2);
         assert_eq!(case_labels, vec![vec![0, 2], vec![1, 3]]);
+    }
+
+    #[test]
+    fn a_guard_default_reused_by_table_holes_is_a_formal_switch_default() {
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(crate::ir::types::Flag::C),
+                    target: 0x1400,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1400],
+            ),
+            (
+                0x1100,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1200, 0x1400, 0x1200, 0x1400, 0x1300, 0x1300],
+            ),
+            (0x1200, vec![Op::Jump { target: 0x1500 }], vec![0x1500]),
+            (0x1300, vec![Op::Jump { target: 0x1500 }], vec![0x1500]),
+            (0x1400, vec![Op::Jump { target: 0x1500 }], vec![0x1500]),
+            (0x1500, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        fn find_switch(region: &Region) -> Option<(&[Vec<i64>], Option<&Region>)> {
+            match region {
+                Region::Switch {
+                    case_labels,
+                    formal_default,
+                    ..
+                } => Some((case_labels, formal_default.as_deref())),
+                Region::Seq(parts) => parts.iter().find_map(find_switch),
+                Region::IfThen { then_r, .. } => find_switch(then_r),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    find_switch(then_r).or_else(|| find_switch(else_r))
+                }
+                Region::While { body, .. } | Region::DoWhile { body, .. } => find_switch(body),
+                Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => None,
+            }
+        }
+
+        let (labels, formal_default) =
+            find_switch(&region).unwrap_or_else(|| panic!("expected switch: {region:#?}"));
+        assert_eq!(labels, [vec![0, 2], vec![4, 5]]);
+        assert!(
+            formal_default.is_some_and(|default| default.blocks().contains(&4)),
+            "the guard/table shared target must be the formal default: {region:#?}"
+        );
     }
 
     #[test]

@@ -4651,6 +4651,26 @@ mod gcc_dispatch_corpus_tests {
             Some([vec![0, 2], vec![1, 3]].as_slice()),
             "four table slots sharing two bodies must remain a switch: {shared_region:#?}"
         );
+
+        let sparse = functions
+            .iter()
+            .find(|function| function.name == "shared_sparse")
+            .expect("discover shared_sparse from the same real fixture");
+        let sparse_lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            sparse,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift the real shared_sparse CFG");
+        let sparse_ssa = crate::ir::ssa::compute_ssa(&sparse_lifted);
+        let sparse_region = crate::ir::structure::recover_verified(&sparse_lifted, &sparse_ssa);
+        assert_eq!(
+            switch_case_labels(&sparse_region),
+            Some([vec![0, 10], vec![20, 30]].as_slice()),
+            "table holes that target the guard default are not explicit cases: region={sparse_region:#?} resolved={:?} unresolved={:?}",
+            stats.resolved_dispatches,
+            stats.unresolved_indirect
+        );
     }
 
     #[test]

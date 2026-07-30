@@ -179,9 +179,11 @@ pub struct DispatchTracker {
     /// Stack slots holding a bounded value, so a spill/reload carries the bound.
     /// Keyed by `(base register, displacement)`.
     bounded_slots: HashMap<(String, i64), u64>,
-    /// Slots that currently hold a copy of a register's value, recorded at the
-    /// spill. Needed because clang -O0 spills the switch value BEFORE the guard
-    /// runs:
+    /// Identity of the value currently held by each register. Copies share an
+    /// identity; every other write creates a new one.
+    reg_values: HashMap<String, u64>,
+    /// Identity of the value currently held by each tracked stack slot. Needed
+    /// because clang -O0 spills the switch value BEFORE the guard runs:
     ///
     /// ```text
     /// mov -0x8(%rbp),%eax     ; the switch value
@@ -192,10 +194,10 @@ pub struct DispatchTracker {
     /// ```
     ///
     /// The guard proves the PRE-`sub` value lies in `[0, 7]`, and that is exactly
-    /// the value sitting in the slot. So bounding a register must also bound any
-    /// slot still aliasing it. An alias is dropped as soon as the register is
-    /// written by anything else, since the slot then holds a different value.
-    slot_alias: HashMap<(String, i64), String>,
+    /// the value sitting in the slot. Value identity, rather than register name,
+    /// preserves this through compiler-inserted copies before the spill.
+    slot_values: HashMap<(String, i64), u64>,
+    next_value_id: u64,
     /// The most recent `cmp`/`sub` against an immediate, for the walker to hand
     /// to the guard's in-range successor.
     last_cmp: Option<(String, u64)>,
@@ -210,7 +212,8 @@ impl DispatchTracker {
         self.regs.clear();
         self.bounded.clear();
         self.bounded_slots.clear();
-        self.slot_alias.clear();
+        self.reg_values.clear();
+        self.slot_values.clear();
         self.last_cmp = None;
     }
 
@@ -361,14 +364,42 @@ impl DispatchTracker {
         Some((table?, index_bound?))
     }
 
-    /// Record that a value is in `[0, max]`, for the register holding it and for
-    /// any stack slot still aliasing that register. See [`Self::slot_alias`].
+    fn fresh_value(&mut self) -> u64 {
+        self.next_value_id = self.next_value_id.wrapping_add(1);
+        self.next_value_id
+    }
+
+    fn value_of(&mut self, reg: &str) -> u64 {
+        let reg = canon(reg);
+        if let Some(value) = self.reg_values.get(&reg) {
+            *value
+        } else {
+            let value = self.fresh_value();
+            self.reg_values.insert(reg, value);
+            value
+        }
+    }
+
+    fn define_fresh_value(&mut self, reg: &str) {
+        let reg = canon(reg);
+        let value = self.fresh_value();
+        self.reg_values.insert(reg.clone(), value);
+        self.bounded.remove(&reg);
+    }
+
+    /// Record that a value is in `[0, max]` for every register and stack slot
+    /// that still holds that exact value.
     fn bound_value(&mut self, reg: &str, max: u64) {
-        self.bounded.insert(reg.to_string(), max);
+        let value = self.value_of(reg);
+        for (register, register_value) in &self.reg_values {
+            if *register_value == value {
+                self.bounded.insert(register.clone(), max);
+            }
+        }
         let slots: Vec<_> = self
-            .slot_alias
+            .slot_values
             .iter()
-            .filter(|(_, r)| r.as_str() == reg)
+            .filter(|(_, slot_value)| **slot_value == value)
             .map(|(k, _)| k.clone())
             .collect();
         for k in slots {
@@ -412,20 +443,6 @@ impl DispatchTracker {
                     }
                 }
             }
-            // `and $2^k-1, reg` IS a range proof — it is how a power-of-two
-            // switch is lowered, and clang/gcc then emit NO comparison at all
-            // (`04_switch_shapes` at -O2 in both). Restricted to masks of the
-            // form 2^k-1; an arbitrary mask bounds the value but not as a dense
-            // index range.
-            "and" => {
-                if let (Some(r), Some(n)) = (reg0, imm1) {
-                    if n > 0 && (n as u64).count_zeros() == (n as u64).leading_zeros() {
-                        self.bound_value(&canon(r), n as u64);
-                    } else {
-                        self.bounded.remove(&canon(r));
-                    }
-                }
-            }
             _ => {}
         }
         // A spill carries the bound into the frame slot; the matching reload
@@ -446,7 +463,8 @@ impl DispatchTracker {
                 // store: [base+disp] <- reg
                 (Some((Some(b), d)), Some(sr), _, _) => {
                     let key = (canon(&b), d);
-                    self.slot_alias.insert(key.clone(), canon(sr));
+                    let value = self.value_of(sr);
+                    self.slot_values.insert(key.clone(), value);
                     match self.bounded.get(&canon(sr)).copied() {
                         Some(n) => {
                             self.bounded_slots.insert(key, n);
@@ -458,7 +476,13 @@ impl DispatchTracker {
                 }
                 // load: reg <- [base+disp]
                 (None, None, Some((Some(b), d)), Some(dr)) => {
-                    match self.bounded_slots.get(&(canon(&b), d)).copied() {
+                    let key = (canon(&b), d);
+                    if let Some(value) = self.slot_values.get(&key).copied() {
+                        self.reg_values.insert(canon(dr), value);
+                    } else {
+                        self.define_fresh_value(dr);
+                    }
+                    match self.bounded_slots.get(&key).copied() {
                         Some(n) => {
                             self.bounded.insert(canon(dr), n);
                         }
@@ -468,20 +492,47 @@ impl DispatchTracker {
                     }
                 }
                 // copy: reg <- reg
-                (None, Some(sr), None, Some(dr)) => match self.bounded.get(&canon(sr)).copied() {
-                    Some(n) => {
-                        self.bounded.insert(canon(dr), n);
+                (None, Some(sr), None, Some(dr)) => {
+                    let value = self.value_of(sr);
+                    self.reg_values.insert(canon(dr), value);
+                    match self.bounded.get(&canon(sr)).copied() {
+                        Some(n) => {
+                            self.bounded.insert(canon(dr), n);
+                        }
+                        None => {
+                            self.bounded.remove(&canon(dr));
+                        }
                     }
-                    None => {
-                        self.bounded.remove(&canon(dr));
+                }
+                _ => {
+                    if let Some(dr) = Self::dest_reg(ins) {
+                        self.define_fresh_value(dr);
                     }
-                },
-                _ => {}
+                }
             }
         } else if let Some(d) = Self::dest_reg(ins) {
-            // Any other write destroys the bound unless the rules above set it.
-            if !matches!(m.as_str(), "cmp" | "sub" | "and") {
-                self.bounded.remove(&canon(d));
+            // Synthetic instruction adapters may mark `cmp`'s first operand as
+            // ReadWrite even though the machine instruction does not write it.
+            // Preserve its identity just as the real decoder does.
+            if m == "cmp" {
+                // No value definition.
+            } else {
+                // `sub` first bounds its pre-write aliases above, then creates
+                // a distinct destination value. Preserve the historical bound
+                // on that result too: some adapters model a range check and
+                // subsequent table index through the same register.
+                self.define_fresh_value(d);
+            }
+            if m == "and" {
+                if let Some(n) = imm1
+                    .filter(|n| *n > 0 && (*n as u64).count_zeros() == (*n as u64).leading_zeros())
+                {
+                    self.bound_value(d, n as u64);
+                }
+            } else if m == "sub" {
+                if let Some(n) = imm1.filter(|n| *n >= 0) {
+                    self.bound_value(d, n as u64);
+                }
             }
         }
 

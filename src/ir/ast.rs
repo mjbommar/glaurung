@@ -1681,6 +1681,7 @@ fn lower_region_inner(
             dispatch,
             case_labels,
             arms,
+            formal_default,
             join,
         } => {
             // Lower the dispatch block as the prefix; the last
@@ -1733,6 +1734,13 @@ fn lower_region_inner(
                     cases.push((Some(label), body.clone()));
                 }
             }
+            let default = formal_default.as_deref().map(|region| {
+                let mut body = lower_region(region, lf, targets, lower_scalar_float);
+                if let Some(join) = join {
+                    strip_trailing_goto(&mut body, lf.blocks[*join].start_va);
+                }
+                body
+            });
             // The switched value, recovered from the dispatch's own target
             // expression: the table read indexes by exactly the value the
             // source switched on. The placeholder this replaces
@@ -1754,7 +1762,7 @@ fn lower_region_inner(
                     )))
                 }),
                 cases,
-                default: None,
+                default,
             });
             prefix
         }
@@ -7790,6 +7798,7 @@ function f @ 0x1000 {
                 dispatch: 0,
                 case_labels: vec![vec![0], vec![1]],
                 arms: vec![Region::Block(1), Region::Block(2)],
+                formal_default: None,
                 join: None,
             },
             Region::Block(3),
@@ -7836,6 +7845,7 @@ function f @ 0x1000 {
                 dispatch: 0,
                 case_labels: vec![vec![0], vec![1], vec![2]],
                 arms: vec![Region::Block(1), Region::Block(2), Region::Block(3)],
+                formal_default: None,
                 join: Some(4),
             },
             Region::Block(4),

@@ -324,12 +324,18 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
         Region::Switch {
             dispatch,
             arms,
+            formal_default,
             join,
             ..
         } => {
             for a in arms {
                 if let Some(e) = structural_entry(a) {
                     out.insert((*dispatch, e));
+                }
+            }
+            if let Some(default) = formal_default {
+                if let Some(entry) = structural_entry(default) {
+                    out.insert((*dispatch, entry));
                 }
             }
             if let Some(j) = *join {
