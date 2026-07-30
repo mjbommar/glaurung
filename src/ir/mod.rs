@@ -46,6 +46,7 @@ pub mod loop_form;
 pub mod name_resolve;
 pub mod naming;
 pub mod pdb_fields;
+pub mod readonly_fold;
 pub mod regview;
 pub mod select_fold;
 pub mod ssa;

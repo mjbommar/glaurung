@@ -606,10 +606,10 @@ fn decompile_at_py(
     // intact) while everything downstream uses the canonicalised `lf`; the
     // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
     // narrower width.
-    let lf = if style == "decbench" {
-        crate::ir::value_number::value_number(&lf_raw, &ssa, cc)
+    let (lf, definition_widths) = if style == "decbench" {
+        crate::ir::value_number::value_number_with_definition_widths(&lf_raw, &ssa, cc)
     } else {
-        lf_raw.clone()
+        (lf_raw.clone(), std::collections::HashMap::new())
     };
     // Live-in argument slots (authoritative parameter set) for the type-map
     // remap, so scratch reuse of an arg register never becomes a spurious `argN`.
@@ -671,6 +671,7 @@ fn decompile_at_py(
     }
     dp!("lower");
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
+    let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
     let parameter_roles = prototype
         .as_ref()
         .map(|prototype| prototype.parameter_role_map())
@@ -718,6 +719,7 @@ fn decompile_at_py(
                 &param_slots,
                 &slot_sizes,
                 &role_names,
+                &definition_widths,
             )
         });
         let (decl, width) = match &maps {
@@ -728,6 +730,7 @@ fn decompile_at_py(
             &f,
             decl,
             width,
+            &readonly_data,
             prototype.as_ref().map_or(
                 crate::ir::types_recover::RecoveredOutputKind::Unknown,
                 |p| p.output_kind(),
@@ -843,10 +846,10 @@ fn decompile_range_at_py(
     // intact) while everything downstream uses the canonicalised `lf`; the
     // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
     // narrower width.
-    let lf = if style == "decbench" {
-        crate::ir::value_number::value_number(&lf_raw, &ssa, cc)
+    let (lf, definition_widths) = if style == "decbench" {
+        crate::ir::value_number::value_number_with_definition_widths(&lf_raw, &ssa, cc)
     } else {
-        lf_raw.clone()
+        (lf_raw.clone(), std::collections::HashMap::new())
     };
     let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
     let prototype = (style == "decbench" && types).then(|| {
@@ -875,6 +878,7 @@ fn decompile_range_at_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
+    let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
     let parameter_roles = prototype
         .as_ref()
         .map(|prototype| prototype.parameter_role_map())
@@ -906,6 +910,7 @@ fn decompile_range_at_py(
                 &param_slots,
                 &slot_sizes,
                 &role_names,
+                &definition_widths,
             )
         });
         let (decl, width) = match &maps {
@@ -916,6 +921,7 @@ fn decompile_range_at_py(
             &f,
             decl,
             width,
+            &readonly_data,
             prototype.as_ref().map_or(
                 crate::ir::types_recover::RecoveredOutputKind::Unknown,
                 |p| p.output_kind(),
@@ -1118,6 +1124,7 @@ fn decbench_text(
     f: &crate::ir::ast::Function,
     decl: Option<&crate::ir::types_recover::TypeMap>,
     width: Option<&crate::ir::types_recover::TypeMap>,
+    readonly_data: &crate::ir::readonly_fold::ReadonlyData,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
 ) -> String {
     let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
@@ -1144,6 +1151,13 @@ fn decbench_text(
         crate::ir::const_fold::fold_typed_declared_views(&mut prepared, tm);
         crate::ir::const_fold::fold_typed_comparison_extensions(&mut prepared, tm);
         crate::ir::const_fold::fold_constants(&mut prepared);
+    }
+    crate::ir::readonly_fold::fold_guarded_readonly_lookups(&mut prepared, readonly_data);
+    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        eprintln!(
+            "\n===== after fold_guarded_readonly_lookups =====\n{}",
+            crate::ir::ast::render(&prepared)
+        );
     }
     if let Some(tm) = refined_decl.as_ref() {
         crate::ir::guarded_switch::collapse_range_guards_with_types(&mut prepared, tm);
@@ -1546,6 +1560,36 @@ fn refine_float_copy_types(
 /// needs. Parameter facts are projected from the pre-lowering `RecoveredPrototype`,
 /// which retains exact SSA live-in identity. Only non-parameter roles are remapped
 /// from storage names; both maps are then augmented with promoted-slot sizes.
+fn merge_exact_definition_widths(
+    tm: &mut crate::ir::types_recover::TypeMap,
+    definition_widths: &std::collections::HashMap<crate::ir::types::VReg, u8>,
+    role_names: &std::collections::HashMap<String, String>,
+) {
+    for (storage, &exact_width) in definition_widths {
+        let crate::ir::types::VReg::Phys(storage_name) = storage else {
+            continue;
+        };
+        let Some(role_name) = role_names.get(storage_name) else {
+            continue;
+        };
+        let role = crate::ir::types::VReg::phys(role_name);
+        let signed = match tm.get(&role) {
+            Some(crate::ir::types_recover::TypeHint::Int { signed, .. }) => signed,
+            // The definition map proves storage width, not source-language
+            // signedness. Preserve richer evidence when present and otherwise
+            // keep the renderer's conservative signed-integer default.
+            _ => true,
+        };
+        tm.refine_from_value(
+            role,
+            crate::ir::types_recover::TypeHint::Int {
+                signed,
+                width: exact_width,
+            },
+        );
+    }
+}
+
 fn decbench_type_maps(
     f: &crate::ir::ast::Function,
     lf_raw: &crate::ir::types::LlirFunction,
@@ -1554,6 +1598,7 @@ fn decbench_type_maps(
     param_slots: &std::collections::HashSet<usize>,
     slot_sizes: &std::collections::HashMap<String, u8>,
     role_names: &std::collections::HashMap<String, String>,
+    definition_widths: &std::collections::HashMap<crate::ir::types::VReg, u8>,
 ) -> (
     crate::ir::types_recover::TypeMap,
     crate::ir::types_recover::TypeMap,
@@ -1581,6 +1626,7 @@ fn decbench_type_maps(
         }
     }
     merge_slot_sizes(&mut decl, slot_sizes);
+    merge_exact_definition_widths(&mut decl, definition_widths, role_names);
     crate::ir::call_contracts::refine_call_result_types(f, &mut decl);
     refine_float_copy_types(&f.body, &mut decl);
     let mut width = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names));
@@ -1598,6 +1644,7 @@ fn decbench_type_maps(
         }
     }
     merge_slot_sizes(&mut width, slot_sizes);
+    merge_exact_definition_widths(&mut width, definition_widths, role_names);
     crate::ir::call_contracts::refine_call_result_types(f, &mut width);
     refine_float_copy_types(&f.body, &mut width);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
@@ -1652,6 +1699,7 @@ fn decompile_all_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
+    let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
     let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {
@@ -1665,10 +1713,10 @@ fn decompile_all_py(
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
-        let lf = if style == "decbench" {
-            crate::ir::value_number::value_number(&lf_raw, &ssa, cc)
+        let (lf, definition_widths) = if style == "decbench" {
+            crate::ir::value_number::value_number_with_definition_widths(&lf_raw, &ssa, cc)
         } else {
-            lf_raw.clone()
+            (lf_raw.clone(), std::collections::HashMap::new())
         };
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let prototype = (style == "decbench").then(|| {
@@ -1732,11 +1780,13 @@ fn decompile_all_py(
                 &param_slots,
                 &slot_sizes,
                 &role_names,
+                &definition_widths,
             );
             decbench_text(
                 &f,
                 Some(&decl),
                 Some(&width),
+                &readonly_data,
                 prototype
                     .as_ref()
                     .expect("DecBench prototype")
@@ -1818,6 +1868,7 @@ fn decompile_many_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
+    let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
     let mut callee_layout_cache = std::collections::HashMap::new();
     // PDB-only public-symbol map for the `// PDB:` provenance comment; built
     // once, empty for non-PE inputs (so it never fires on ELF/Mach-O).
@@ -1843,10 +1894,10 @@ fn decompile_many_py(
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
-        let lf = if style == "decbench" {
-            crate::ir::value_number::value_number(&lf_raw, &ssa, cc)
+        let (lf, definition_widths) = if style == "decbench" {
+            crate::ir::value_number::value_number_with_definition_widths(&lf_raw, &ssa, cc)
         } else {
-            lf_raw.clone()
+            (lf_raw.clone(), std::collections::HashMap::new())
         };
         let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let prototype = (style == "decbench").then(|| {
@@ -1921,11 +1972,13 @@ fn decompile_many_py(
                 &param_slots,
                 &slot_sizes,
                 &role_names,
+                &definition_widths,
             );
             decbench_text(
                 &f,
                 Some(&decl),
                 Some(&width),
+                &readonly_data,
                 prototype
                     .as_ref()
                     .expect("DecBench prototype")

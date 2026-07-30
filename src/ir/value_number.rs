@@ -19,7 +19,7 @@
 //! This pass is pure (returns a rewritten copy) and is validated in isolation
 //! before being threaded into the lowering pipeline.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::call_args::CallConv;
 use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
@@ -426,6 +426,46 @@ pub fn value_number(
     ssa: &crate::ir::ssa::SsaInfo,
     cc: CallConv,
 ) -> LlirFunction {
+    value_number_with_definition_widths(lf, ssa, cc).0
+}
+
+fn width_bytes(width: crate::ir::types::Width) -> u8 {
+    ((width.bits().saturating_add(7)) / 8).min(u8::MAX as u16) as u8
+}
+
+/// Machine width of the value defined by one raw LLIR operation.
+///
+/// Most operations inherit the physical destination view (`edi` = 4 bytes).
+/// Explicit conversion operations are the important exception: their result
+/// width is the conversion target even when the lifter writes it through the
+/// source sub-register spelling before value numbering canonicalises that
+/// spelling to its full-width parent.
+fn operation_definition_width(op: &Op) -> Option<u8> {
+    match op {
+        Op::ZExt { to, .. } | Op::SExt { to, .. } | Op::Trunc { to, .. } => Some(width_bytes(*to)),
+        Op::Extract { hi, lo, .. } if hi > lo => {
+            Some((hi.saturating_sub(*lo).saturating_add(7) / 8).min(u8::MAX as u16) as u8)
+        }
+        Op::Ite { width, .. } => Some(width_bytes(*width)),
+        Op::Load { addr, .. } => Some(addr.size.max(1)),
+        Op::Intrinsic { outs, .. } if outs.len() == 1 => Some(width_bytes(outs[0].1)),
+        _ => def_uses(op).0.and_then(|dst| dst.width()).map(width_bytes),
+    }
+}
+
+/// Value-number `lf` and retain the exact storage width of each numbered
+/// definition.
+///
+/// SSA deliberately gives aliased register views one identity (`edi` and `rdi`
+/// both become `rdi#N`). That is correct for dataflow, but the spelling erased by
+/// canonicalisation is also the only proof that an arithmetic definition wraps
+/// at 32 bits. Keeping this companion map makes width part of the value model
+/// without coupling source-level role names (`var0`, `ret`) to machine registers.
+pub fn value_number_with_definition_widths(
+    lf: &LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    cc: CallConv,
+) -> (LlirFunction, HashMap<VReg, u8>) {
     let ret_names = return_reg_names(cc);
     // Keep bare every return-register def that can reach a `Return` without being
     // overwritten — the value(s) the function actually returns. Keeping ALL of
@@ -469,6 +509,7 @@ pub fn value_number(
     let ctx = VnCtx { keep, temps };
 
     let mut out = lf.clone();
+    let mut definition_widths = HashMap::new();
     for (bi, block) in out.blocks.iter_mut().enumerate() {
         for (ii, ins) in block.instrs.iter_mut().enumerate() {
             let addr = InstrAddr {
@@ -481,10 +522,16 @@ pub fn value_number(
                 .map(|k| ssa.use_versions.get(&(addr, k)).copied().unwrap_or(0))
                 .collect();
             tag_op(&mut ins.op, def_ver, &use_vers, &ctx);
+            if let (Some(dst), Some(width)) = (
+                def_uses(&ins.op).0,
+                operation_definition_width(&lf.blocks[bi].instrs[ii].op),
+            ) {
+                definition_widths.insert(dst, width);
+            }
         }
     }
     insert_phi_copies(&mut out, lf, ssa, &ctx);
-    out
+    (out, definition_widths)
 }
 
 /// Translate *out* of SSA: give every phi result an actual definition.
@@ -700,6 +747,39 @@ fn build_temp_remap(lf: &LlirFunction, ssa: &crate::ir::ssa::SsaInfo) -> TempRem
 mod tests {
     use super::*;
     use crate::ir::ssa::compute_ssa;
+
+    #[test]
+    fn exact_definition_widths_survive_parent_register_canonicalisation() {
+        let lf = mk(vec![
+            Op::Bin {
+                dst: VReg::phys("edi"),
+                op: crate::ir::types::BinOp::Add,
+                lhs: Value::Reg(VReg::phys("edi")),
+                rhs: Value::Const(3),
+            },
+            Op::ZExt {
+                dst: VReg::phys("edi"),
+                src: Value::Reg(VReg::phys("edi")),
+                from: crate::ir::types::Width::W32,
+                to: crate::ir::types::Width::W64,
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+
+        let (numbered, widths) =
+            value_number_with_definition_widths(&lf, &ssa, CallConv::SysVAmd64);
+
+        assert_eq!(
+            def_uses(&numbered.blocks[0].instrs[0].op).0,
+            Some(VReg::phys("rdi#1"))
+        );
+        assert_eq!(widths.get(&VReg::phys("rdi#1")), Some(&4));
+        assert_eq!(
+            def_uses(&numbered.blocks[0].instrs[1].op).0,
+            Some(VReg::phys("rdi#2"))
+        );
+        assert_eq!(widths.get(&VReg::phys("rdi#2")), Some(&8));
+    }
     use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
     fn mk(ops: Vec<Op>) -> LlirFunction {

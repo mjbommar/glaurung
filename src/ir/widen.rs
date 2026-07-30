@@ -304,6 +304,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn exact_narrow_value_assignment_keeps_wrapping_arithmetic_narrow() {
+        let tm = tm_of(&[("arg0", false, 4), ("var0", false, 4)]);
+        let mut f = func(vec![Stmt::Assign {
+            dst: VReg::phys("var0"),
+            src: bin(BinOp::Add, reg("arg0"), Expr::Const(3)),
+        }]);
+
+        insert_widening_casts(&mut f, &tm);
+
+        let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(out.contains("unsigned int var0;"), "{out}");
+        assert!(out.contains("var0 = (arg0 + 3);"), "{out}");
+        assert!(!out.contains("unsigned long"), "{out}");
+    }
+
     /// `reconstruct_64`: `(uint64_t)hi << 32`. A 32-bit shift by 32 is undefined;
     /// the machine shifts the 64-bit parent.
     #[test]

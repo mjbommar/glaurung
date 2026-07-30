@@ -33,18 +33,20 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
     let mut definitions: HashMap<String, Vec<Definition>> = HashMap::new();
     collect_definitions(&function.body, &mut definitions);
 
-    // The legacy map is keyed by raw storage. Before this feature the renderer
-    // intentionally ignored all `varN` facts; preserve that safety boundary by
-    // clearing any accidental spelling collision and relearning only facts the
-    // exact prepared definition graph proves below.
+    // The legacy map is keyed by raw storage. Before exact SSA definition-width
+    // recovery the renderer intentionally ignored all scalar `varN` facts. The
+    // integer and float facts reaching this pass are now projected from exact
+    // value identities, so preserve them; pointer-like classifications still
+    // need the prepared definition graph below to rule out storage collisions.
     let stale_high_variables: Vec<_> = types
         .iter()
         .filter_map(|(reg, hint)| match reg {
-            // A semantic VFP intrinsic proves the source class of every
-            // operand. Keep that exact fact; only the legacy broad scalar and
-            // pointer guesses require prepared-AST revalidation here.
+            // Semantic FP operations and numbered machine definitions prove
+            // their source class/width. Only pointer-like or boolean residue
+            // requires prepared-AST revalidation here.
             VReg::Phys(name)
-                if is_high_variable(name) && !matches!(hint, TypeHint::Float { .. }) =>
+                if is_high_variable(name)
+                    && !matches!(hint, TypeHint::Float { .. } | TypeHint::Int { .. }) =>
             {
                 Some(reg.clone())
             }
@@ -518,6 +520,40 @@ mod tests {
             Some(TypeHint::Pointer { pointee_width }) => Some(pointee_width),
             _ => None,
         }
+    }
+
+    #[test]
+    fn exact_integer_value_width_survives_pointer_refinement() {
+        let function = Function {
+            name: "negative_cases".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var0"),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(3)),
+                },
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        refine_pointer_high_variables(&function, &mut types);
+
+        assert_eq!(
+            types.get(&VReg::phys("var0")),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            })
+        );
     }
 
     #[test]

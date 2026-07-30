@@ -4437,12 +4437,14 @@ fn widest_return_value(
 ///
 /// This is the one rule, shared with the declaration printer and with
 /// [`crate::ir::widen`]: arguments and promoted stack slots take their recovered
-/// integer type. Exact SSA-derived `varN` identities remain machine-word
-/// integers unless the prepared high-variable proof classifies them as pointers.
-/// Other raw machine registers and temps are also declared `long`.
+/// integer type. Exact SSA-derived `varN` identities use their value-specific
+/// integer fact when one exists; otherwise they remain machine-word integers
+/// unless the prepared high-variable proof classifies them as pointers. Other
+/// raw machine registers and temps are also declared `long`.
 pub(crate) fn declared_int_type(ident: &str, tm: Option<&TypeMap>) -> Option<(bool, u8)> {
     if is_high_variable(ident) {
         return match tm.and_then(|types| types.get(&VReg::Phys(ident.to_string()))) {
+            Some(TypeHint::Int { signed, width }) => Some((signed, width)),
             Some(TypeHint::Pointer { .. } | TypeHint::CodePointer | TypeHint::Float { .. }) => None,
             _ => Some((true, 8)),
         };
