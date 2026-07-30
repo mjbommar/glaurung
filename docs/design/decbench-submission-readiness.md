@@ -12,7 +12,25 @@ Last updated: 2026-07-30.
 
 ## Current decision: do not submit
 
-### Current output checkpoint: `7abdc82`
+### Current output checkpoint: `d6882dc`
+
+The call-site specification, stack representation, and pointer-boundary slices
+now produce a valid static-only package covering all 250 target functions in
+224 binaries. DecBench's official byte-match metric compiles 250/250 functions
+with mean `0.15612902766757247`, up from 169/250 and
+`0.1096765047271132` at the immutable pre-slice checkpoint. The final package
+SHA-256 is
+`4005d09a7ad411002f30c4a1550771cf488994667a570819a5ab9f89936eb9ef`.
+
+The package is mechanically ready to submit for measurement. The competitive
+decision remains **do not claim parity or publication readiness**: the current
+sample tree cannot produce fresh GED/type-match values, byte-match has 15
+per-function declines despite its large net gain, and compile success is not a
+behavioral oracle. Full architecture, TDD, wall-clock, package, and comparison
+evidence is in
+[`2026-07-30-call-site-specs-and-decbench.md`](../analysis/decompiler/2026-07-30-call-site-specs-and-decbench.md).
+
+### Previous output checkpoint: `7abdc82`
 
 DWARF return contracts now remain locked across machine-code output recovery
 and later type refinements. This restores both optimized `cpp_raii_guard`
