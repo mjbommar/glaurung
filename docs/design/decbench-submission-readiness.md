@@ -12,9 +12,66 @@ Last updated: 2026-07-29.
 
 ## Current decision: do not submit
 
-### Current output checkpoint: `8aeba47`
+### Current output checkpoint: `a5149a1`
 
-The current native slice gives every unresolved indirect call a concrete
+The native pipeline now applies known source-level call contracts after ABI
+argument/result reconstruction. It loads the canonical libc/POSIX and WinAPI
+prototype bundles once, normalizes ELF/PLT, Mach-O, and imported-name
+decorations, truncates only fixed non-variadic calls, preserves variadic tails,
+and removes impossible result destinations from declared-`void` functions. The
+DecBench renderer uses the same contract for fixed-parameter conversions, so a
+machine-word local passed to `free(void *)` is emitted as an explicit pointer
+conversion instead of forcing the benchmark compiler to discard the real
+prototype.
+
+This is the same authority rule used by Ghidra's locked `FuncProto`, angr's
+callee-prototype-first `CallSiteMaker`, and Kuna's P4 call/prototype phase. It is
+still a bounded step rather than parity with them: Glaurung does not yet persist
+the contract on every call node, distinguish imported from same-named internal
+symbols, or iterate interprocedural prototypes with SSA and dead-code recovery.
+
+The TDD witness is a real GCC-built ELF import. Before the change,
+`report_and_test` rendered `var1 = perror(arg0);` and the strict C round trip
+failed with `void value not ignored`. It now renders
+`perror((const char *)(arg0));` and recompiles under `-std=gnu11 -Werror` without
+warning suppression. This crosses binary compilation, symbol resolution,
+native lifting, AST passes, C rendering, and recompilation; it is not a
+generated-text-only assertion.
+
+The exact blinded artifact covers 250/250 target functions in 224/224 binaries
+with zero adapter or decompilation errors. Its SHA-256 is
+`62ddd3ea87bd56e9739a0e90b278af1f40ade09dfd5fbe46f866ff0145070e64`.
+The 224 C payloads are byte-identical to the measured pre-commit candidate; only
+the package metadata was relabeled to immutable commit `a5149a1`. Blinded
+binaries were statically analyzed only and were never executed, emulated, or
+made executable.
+
+Against `8aeba47`, 100 of 224 C payloads change. Across the complete holdout,
+the number of known calls whose first fixed parameter is explicitly typed moves
+`69 -> 642`, while invalid assignments from known void calls move `196 -> 0`
+(`free` 125, `exit` 60, `perror` 7, `abort` 3, `_exit` 1). The official fixup
+compiler A/B moves coverage `116/250 -> 123/250`: ARM remains `80/84`, host GCC
+moves `28/158 -> 35/158`, and MinGW remains `8/8`. Seven functions become
+compilable and zero regress. On this metric alone, the checkpoint is now above
+the retained angr count (`120/250`) and two functions behind Ghidra (`125/250`).
+
+The same-revision official byte-match A/B moves
+`0.06508961626342266 -> 0.07416449761048222`. Eight functions improve, zero
+regress, nonzero matches move `76 -> 83`, and perfect matches remain four. Full
+GED and type-match were not rerun: their retained values remain substantially
+behind Ghidra and angr, so the submission decision is still **do not submit**.
+
+Local gates for this checkpoint are: 1,276/1,276 Rust library tests plus every
+integration/example/benchmark target; Clippy exit 0 with the existing warning
+backlog; 36/36 focused Python fixture/harness tests; and the full 56-lane
+behavioral matrix with the same two pre-existing `cpp_raii_guard` baseline
+deltas in functions containing no calls. The owned Python test passes Ruff.
+Repository-wide Ruff and `ty` remain red on the pre-existing backlog (3,516 and
+1,988 diagnostics respectively) and are not claimed green.
+
+### Previous output checkpoint: `8aeba47`
+
+The prior native slice gave every unresolved indirect call a concrete
 call-site prototype instead of the legacy `((long (*)())(...))` escape hatch.
 That old spelling is not a prototype in C11 and means zero parameters in C23;
 GCC 15 therefore rejected calls with arguments. The replacement derives the
