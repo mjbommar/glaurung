@@ -978,7 +978,7 @@ fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
                             .iter()
                             .map(|stmt| count_reg_uses_in_stmt(stmt, flag))
                             .sum();
-                        if reads == 0 {
+                        if reads == 0 && moving_condition_to_end_is_safe(src, &out[i + 1..]) {
                             if matches!(flag, VReg::FlagValue { .. }) {
                                 // A local scan cannot prove a versioned predicate
                                 // dead: a successor block may read this exact SSA
@@ -1284,7 +1284,7 @@ fn extract_cond_and_strip<'a>(block: &LlirBlock, mut stmts: Vec<Stmt>) -> (Expr,
                             .filter(|(j, _)| *j != i)
                             .map(|(_, s)| count_reg_uses_in_stmt(s, cond))
                             .sum::<usize>();
-                        if usages == 0 {
+                        if usages == 0 && moving_condition_to_end_is_safe(src, &stmts[i + 1..]) {
                             if let Stmt::Assign { src, .. } = stmts.remove(i) {
                                 let cond_expr = if inverted { negate_cmp_expr(src) } else { src };
                                 return (cond_expr, stmts);
@@ -1339,6 +1339,105 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
         }
         Expr::Un { src, .. } => count_reg_uses_in_expr(src, target),
         Expr::Cast { expr, .. } => count_reg_uses_in_expr(expr, target),
+    }
+}
+
+/// Whether evaluating `condition` after `following` observes the same state as
+/// evaluating it before those statements.
+///
+/// A machine predicate is a value snapshot.  Folding its defining comparison
+/// into a later C `if`/`while` condition is only legal when no intervening
+/// statement changes a register or memory read by that comparison.  This is the
+/// same ordering distinction Ghidra, angr, and Kuna preserve explicitly for
+/// `cmp rax, rcx; mov rdx, rcx; jb ...`.
+fn moving_condition_to_end_is_safe(condition: &Expr, following: &[Stmt]) -> bool {
+    !following
+        .iter()
+        .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+}
+
+fn expr_reads_memory(expr: &Expr) -> bool {
+    match expr {
+        Expr::Deref { .. } => true,
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_reads_memory(lhs) || expr_reads_memory(rhs)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => expr_reads_memory(cond) || expr_reads_memory(if_true) || expr_reads_memory(if_false),
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => expr_reads_memory(src),
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_)
+        | Expr::Reg(_)
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => false,
+    }
+}
+
+fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
+    let writes_read_register = |dst: &VReg| count_reg_uses_in_expr(condition, dst) > 0;
+    match stmt {
+        Stmt::Assign { dst, .. } => writes_read_register(dst),
+        Stmt::Store { addr, .. } => {
+            let promoted_local_write = matches!(addr,
+                Expr::Reg(VReg::Phys(name))
+                    if (name.starts_with("local_") || name.starts_with("stack_"))
+                        && count_reg_uses_in_expr(condition, &VReg::phys(name)) > 0
+            );
+            promoted_local_write || expr_reads_memory(condition)
+        }
+        // Calls may change memory and caller-saved registers whose implicit
+        // clobbers are not all represented by the structured Call statement.
+        Stmt::Call { .. } | Stmt::Push { .. } | Stmt::Pop { .. } | Stmt::Unknown(_) => true,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body
+                .iter()
+                .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                || else_body.as_ref().is_some_and(|body| {
+                    body.iter()
+                        .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                })
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body
+            .iter()
+            .any(|stmt| stmt_may_change_condition_input(stmt, condition)),
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            stmt_may_change_condition_input(init, condition)
+                || body
+                    .iter()
+                    .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                || stmt_may_change_condition_input(step, condition)
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases.iter().any(|(_, body)| {
+                body.iter()
+                    .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+            }) || default.as_ref().is_some_and(|body| {
+                body.iter()
+                    .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+            })
+        }
+        Stmt::IndirectGoto { .. }
+        | Stmt::Return { .. }
+        | Stmt::Goto { .. }
+        | Stmt::Label(_)
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Comment(_) => false,
     }
 }
 
@@ -7716,6 +7815,85 @@ mod tests {
         assert!(
             !out.contains("goto L_1010"),
             "the do-while back-edge must be implicit, not a goto:\n{out}"
+        );
+    }
+
+    /// A post-tested loop may update a comparison operand after the machine
+    /// comparison but before its conditional jump.  Clang does exactly this in
+    /// `mutate_reverse`: `cmp rax, rcx; mov rdx, rcx; jb loop`.  Moving the
+    /// comparison into C's trailing `while (...)` re-evaluates it after the move
+    /// and drops the final swap.  Preserve the predicate as a value snapshot.
+    #[test]
+    fn a_bottom_tested_loop_snapshots_a_condition_before_later_operand_write() {
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Assign {
+                        dst: VReg::phys("rax"),
+                        src: Value::Const(7),
+                    },
+                    Op::Assign {
+                        dst: VReg::phys("rcx"),
+                        src: Value::Const(1),
+                    },
+                ],
+                vec![0x1010],
+            ),
+            (
+                0x1010,
+                vec![
+                    Op::Bin {
+                        dst: VReg::phys("rax"),
+                        op: BinOp::Sub,
+                        lhs: Value::Reg(VReg::phys("rax")),
+                        rhs: Value::Const(1),
+                    },
+                    Op::Bin {
+                        dst: VReg::phys("rdx"),
+                        op: BinOp::Add,
+                        lhs: Value::Reg(VReg::phys("rcx")),
+                        rhs: Value::Const(1),
+                    },
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::C),
+                        op: CmpOp::Ult,
+                        lhs: Value::Reg(VReg::phys("rcx")),
+                        rhs: Value::Reg(VReg::phys("rax")),
+                    },
+                    Op::Assign {
+                        dst: VReg::phys("rcx"),
+                        src: Value::Reg(VReg::phys("rdx")),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::C),
+                        target: 0x1010,
+                        inverted: false,
+                    },
+                ],
+                vec![0x1010, 0x1020],
+            ),
+            (0x1020, vec![Op::Return], vec![]),
+        ]);
+
+        let out = lower_and_render(&lf, "snapshot");
+        let compare = out.find("%cf = (%rcx u< %rax);").unwrap_or_else(|| {
+            panic!("the machine comparison must remain a predicate snapshot:\n{out}")
+        });
+        let overwrite = out
+            .find("%rcx = %rdx;")
+            .expect("the post-compare register update must remain in the latch");
+        assert!(
+            compare < overwrite,
+            "the snapshot must precede the overwrite:\n{out}"
+        );
+        assert!(
+            out.contains("} while (%cf);"),
+            "the loop must consume the snapshotted predicate, not re-evaluate it:\n{out}"
+        );
+        assert!(
+            !out.contains("} while ((%rcx u< %rax));"),
+            "the moved comparison observes the wrong rcx value:\n{out}"
         );
     }
 

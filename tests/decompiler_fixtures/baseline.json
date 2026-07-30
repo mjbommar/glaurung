@@ -192,7 +192,7 @@
     "loop_early_return": "pass",
     "loop_return_on_neg": "pass",
     "mutate_prefix": "pass",
-    "mutate_reverse": "fail",
+    "mutate_reverse": "pass",
     "nested_carry": "pass",
     "nested_pairs": "fail",
     "two_latches": "fail",
