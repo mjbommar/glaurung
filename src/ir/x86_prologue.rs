@@ -224,6 +224,35 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         .collect();
     for ret_idx in return_positions.into_iter().rev() {
         let mut ret_idx = ret_idx;
+        // An earlier recognition round may already have replaced `pop rbp`
+        // with its provenance comment while leaving the preceding frame-size
+        // adjustment in place.  The second idempotent round must still consume
+        // that machine-only adjustment; otherwise it renders as a fake mutable
+        // source variable immediately before the return.
+        if ret_idx >= 2
+            && matches!(
+                &body[ret_idx - 1],
+                Stmt::Comment(text) if text.starts_with("x86-64 epilogue:")
+            )
+        {
+            let mut cursor = ret_idx - 1;
+            while cursor > 0
+                && matches!(
+                    &body[cursor - 1],
+                    Stmt::Nop
+                        | Stmt::Assign {
+                            dst: VReg::Temp(_),
+                            ..
+                        }
+                )
+            {
+                cursor -= 1;
+            }
+            if cursor > 0 && is_rsp_add(&body[cursor - 1]) {
+                body.remove(cursor - 1);
+                ret_idx -= 1;
+            }
+        }
         // The pre-rematerialised POP spelling has the stack increment AFTER
         // the promoted load: `rbp = stack_N; rsp += 8`.  Handle it before the
         // generic frame-teardown case below consumes only the increment and
@@ -692,6 +721,52 @@ mod tests {
             &f.body[0],
             Stmt::Comment(s) if s.contains("x86-64 epilogue")
         ));
+    }
+
+    #[test]
+    fn second_epilogue_round_swallows_rsp_add_before_existing_comment() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                rsp_add(0x20),
+                Stmt::Comment("x86-64 epilogue: restore rbp".into()),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2, "stranded frame teardown: {:#?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Comment(text) if text.contains("epilogue")));
+        assert!(matches!(&f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn second_epilogue_round_finds_rsp_add_before_dead_flag_temporaries() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                rsp_add(0x20),
+                Stmt::Assign {
+                    dst: VReg::Temp(900),
+                    src: Expr::Const(0),
+                },
+                Stmt::Comment("x86-64 epilogue: restore rbp".into()),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert!(
+            !f.body.iter().any(is_rsp_add),
+            "stranded frame teardown: {:#?}",
+            f.body
+        );
+        assert!(matches!(&f.body[1], Stmt::Comment(text) if text.contains("epilogue")));
+        assert!(matches!(&f.body[2], Stmt::Return { .. }));
     }
 
     #[test]

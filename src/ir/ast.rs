@@ -2397,6 +2397,91 @@ pub fn fold_exhaustive_switch_returns(function: &mut Function) {
     fold_exhaustive_switch_returns_body(&mut function.body);
 }
 
+/// Move a joined result return into every arm of an exhaustive `if` tree.
+///
+/// Both arms must end by defining the exact returned value (possibly through
+/// another exhaustive `if`).  Calls and other statements earlier in an arm stay
+/// in place; only its terminal definition becomes a return.  Machine-epilogue
+/// comments and nops may separate the `if` from the joined return because they
+/// carry no source-level state.
+pub fn fold_exhaustive_if_returns(function: &mut Function) {
+    fold_returns(&mut function.body);
+    fold_exhaustive_if_returns_body(&mut function.body);
+}
+
+fn fold_exhaustive_if_returns_body(body: &mut Vec<Stmt>) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                fold_exhaustive_if_returns_body(then_body);
+                if let Some(else_body) = else_body {
+                    fold_exhaustive_if_returns_body(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                fold_exhaustive_if_returns_body(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    fold_exhaustive_if_returns_body(case_body);
+                }
+                if let Some(default_body) = default {
+                    fold_exhaustive_if_returns_body(default_body);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut index = 0;
+    while index + 1 < body.len() {
+        let mut return_index = index + 1;
+        while match body.get(return_index) {
+            Some(Stmt::Nop) => true,
+            Some(Stmt::Comment(text)) => text.starts_with("x86-64 epilogue:"),
+            _ => false,
+        } {
+            return_index += 1;
+        }
+        let Some((result, return_template)) = (match body.get(return_index) {
+            Some(Stmt::Return { value: Some(value) }) => {
+                cast_chain_root_reg(value).map(|result| (result.clone(), value.clone()))
+            }
+            _ => None,
+        }) else {
+            index += 1;
+            continue;
+        };
+        let Stmt::If {
+            cond,
+            mut then_body,
+            else_body: Some(mut else_body),
+        } = body[index].clone()
+        else {
+            index += 1;
+            continue;
+        };
+        if !turn_terminal_result_into_return(&mut then_body, &result, &return_template)
+            || !turn_terminal_result_into_return(&mut else_body, &result, &return_template)
+        {
+            index += 1;
+            continue;
+        }
+
+        body[index] = Stmt::If {
+            cond,
+            then_body,
+            else_body: Some(else_body),
+        };
+        body.drain(index + 1..=return_index);
+        index += 1;
+    }
+}
+
 fn fold_exhaustive_switch_returns_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
         match statement {
@@ -2528,6 +2613,22 @@ fn turn_terminal_result_into_return(
             true
         }
         Stmt::Return { .. } => true,
+        Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } => {
+            let mut converted_then = then_body.clone();
+            let mut converted_else = else_body.clone();
+            if !turn_terminal_result_into_return(&mut converted_then, result, return_template)
+                || !turn_terminal_result_into_return(&mut converted_else, result, return_template)
+            {
+                return false;
+            }
+            *then_body = converted_then;
+            *else_body = converted_else;
+            true
+        }
         _ => false,
     }
 }
@@ -5238,8 +5339,9 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 ///    the wrapper cannot select a case the switch would not select itself.
 /// 11. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
-/// 12. `fold_exhaustive_switch_returns` moves an immediately joined result return
-///    into every arm only when an explicit default makes the switch exhaustive.
+/// 12. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
+///    immediately joined result return into every arm only when both `if` arms,
+///    or an explicit switch default, make the control flow exhaustive.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
 /// impure: the AST that was checked or dumped was not the AST that was printed,
@@ -5302,6 +5404,7 @@ pub fn prepare_for_decbench_with_output(
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
     crate::ir::switch_ladder::recover_switches(&mut owned);
     crate::ir::guarded_switch::collapse_range_guards(&mut owned);
+    fold_exhaustive_if_returns(&mut owned);
     fold_exhaustive_switch_returns(&mut owned);
     crate::ir::loop_form::promote_for_loops(&mut owned);
     owned
@@ -10924,6 +11027,110 @@ function f @ 0x1000 {
             ),
             "{default:#?}"
         );
+    }
+
+    #[test]
+    fn prepare_turns_a_nested_exhaustive_if_result_join_into_direct_returns() {
+        let result = VReg::phys("local_8");
+        let inner = Stmt::If {
+            cond: Expr::Reg(VReg::phys("arg1")),
+            then_body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "recursive".into(),
+                    },
+                    args: vec![Expr::Const(20)],
+                    dst: Some(VReg::phys("var1")),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Reg(VReg::phys("var1")),
+                },
+            ],
+            else_body: Some(vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "recursive".into(),
+                    },
+                    args: vec![Expr::Const(30)],
+                    dst: Some(VReg::phys("var2")),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Reg(VReg::phys("var2")),
+                },
+            ]),
+        };
+        let f = Function {
+            name: "recursive".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("arg0")),
+                    then_body: vec![
+                        Stmt::Call {
+                            target: Expr::Named {
+                                va: 0x1000,
+                                name: "recursive".into(),
+                            },
+                            args: vec![Expr::Reg(VReg::phys("arg0"))],
+                            dst: Some(VReg::phys("var0")),
+                            call_spec: None,
+                        },
+                        inner,
+                    ],
+                    else_body: Some(vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(10),
+                    }]),
+                },
+                Stmt::Comment("x86-64 epilogue: restore rbp".into()),
+                Stmt::Return {
+                    value: Some(Expr::Reg(result)),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+
+        assert_eq!(
+            prepared.body.len(),
+            1,
+            "joined return survived: {:#?}",
+            prepared.body
+        );
+        let Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } = &prepared.body[0]
+        else {
+            panic!("expected exhaustive if: {:#?}", prepared.body)
+        };
+        assert!(matches!(
+            else_body.last(),
+            Some(Stmt::Return { value: Some(_) })
+        ));
+        let Some(Stmt::If {
+            then_body: inner_then,
+            else_body: Some(inner_else),
+            ..
+        }) = then_body.last()
+        else {
+            panic!("expected nested exhaustive if: {then_body:#?}")
+        };
+        assert!(matches!(
+            inner_then.last(),
+            Some(Stmt::Return { value: Some(_) })
+        ));
+        assert!(matches!(
+            inner_else.last(),
+            Some(Stmt::Return { value: Some(_) })
+        ));
     }
 
     #[test]

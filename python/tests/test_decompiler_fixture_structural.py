@@ -558,6 +558,49 @@ def test_classify_collapses_same_destination_diamonds(tmp_path: Path) -> None:
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
+def test_recursion_clang_o0_recovers_exhaustive_direct_returns(tmp_path: Path) -> None:
+    """Recursive result joins must become source-level returns, without frame residue."""
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "recursion.c"
+    binary = tmp_path / "recursion-clang-O0.so"
+    compiled = TC.run(
+        ["clang", "-shared", "-fPIC", "-g", "-O0", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    outputs: dict[str, str] = {}
+    for function in ("fib", "ackermann"):
+        result = subprocess.run(
+            [
+                "glaurung",
+                "decompile",
+                binary,
+                "--func",
+                function,
+                "--style",
+                "decbench",
+                "--no-color",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+            env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
+        )
+        outputs[function] = result.stdout
+        assert "rsp =" not in result.stdout, result.stdout
+        assert "return local_" not in result.stdout, result.stdout
+        assert "glaurung-verify" not in result.stdout, result.stdout
+
+    assert outputs["fib"].count("return ") == 2, outputs["fib"]
+    assert outputs["ackermann"].count("return ") == 3, outputs["ackermann"]
+
+
 def test_declared_structural_predicates_are_all_present(report):
     # A declared predicate must actually be evaluated (True/False), never absent —
     # a structural assertion that silently does not run is a fail-open gap.
