@@ -725,7 +725,22 @@ fn emit_shift_with_flags(dst: VReg, op: BinOp, rhs: Value, width: Width) -> Vec<
             ops
         }
         variable => {
-            let mut ops = vec![emit_bin(dst, op, variable)];
+            // Every x86 variable-count shift masks CL before executing: five
+            // bits for 8/16/32-bit operands and six for 64-bit operands. C does
+            // not—it makes a count at least as wide as the promoted left
+            // operand undefined—so leaving the raw count in the AST changes
+            // executable behavior for precisely those values. Preserve the
+            // architectural count as ordinary dataflow.
+            let masked_count = VReg::Temp(29);
+            let mut ops = vec![
+                Op::Bin {
+                    dst: masked_count.clone(),
+                    op: BinOp::And,
+                    lhs: variable,
+                    rhs: Value::Const(mask),
+                },
+                emit_bin(dst, op, Value::Reg(masked_count)),
+            ];
             append_undef_flags(
                 &mut ops,
                 &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
@@ -3807,16 +3822,30 @@ mod tests {
     fn variable_shift_count_uses_the_canonical_ecx_view() {
         // shr edx, cl. The CL encoding reads the value previously written via
         // ECX; leaving it as a separate `cl` register creates an undefined
-        // pseudo-argument after SSA and naming.
+        // pseudo-argument after SSA and naming. The machine then masks that
+        // value to five bits. Emitted C must state the mask explicitly because
+        // an oversized C shift is undefined instead of using x86 semantics.
         let ops = lift64(&[0xd3, 0xea]);
+        let masked = ops
+            .iter()
+            .find_map(|ins| match &ins.op {
+                Op::Bin {
+                    dst,
+                    op: BinOp::And,
+                    lhs: Value::Reg(VReg::Phys(count)),
+                    rhs: Value::Const(31),
+                } if count == "ecx" => Some(dst.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("variable shift did not mask ECX: {ops:#?}"));
         assert!(
             ops.iter().any(|ins| matches!(
                 &ins.op,
                 Op::Bin {
                     op: BinOp::Shr,
-                    rhs: Value::Reg(VReg::Phys(count)),
+                    rhs: Value::Reg(count),
                     ..
-                } if count == "ecx"
+                } if count == &masked
             )),
             "got: {ops:#?}"
         );

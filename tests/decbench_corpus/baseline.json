@@ -4,7 +4,7 @@
     "gcc": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0"
   },
   "arith:clang:O0": {
-    "byte_match": 0.29,
+    "byte_match": 0.26,
     "ged": 1.0,
     "type_match": 1.0
   },
