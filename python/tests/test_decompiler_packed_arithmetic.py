@@ -39,3 +39,15 @@ def test_clang_qword_horizontal_sum_round_trips() -> None:
 
     lane = observed["12_loop_rotation:clang:O2"]
     assert lane == {"skip_odd_sum": "pass"}, lane
+
+
+def test_clang_packed_sign_mask_round_trips() -> None:
+    """Packed arithmetic shifts must preserve signed per-element selection."""
+    observed = H.run_lanes(
+        [("03_loop_shapes", "clang", "O2", ("two_latches",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["03_loop_shapes:clang:O2"]
+    assert lane == {"two_latches": "pass"}, lane

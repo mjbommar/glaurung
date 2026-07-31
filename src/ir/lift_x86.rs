@@ -1806,6 +1806,35 @@ fn packed_dword_immediate_shift_left_ops(instr: &iced_x86::Instruction) -> Vec<O
         .collect()
 }
 
+/// Lift PSRAD's immediate form as four signed 32-bit lane shifts.
+///
+/// Counts above the lane width produce the sign mask, which is equivalent to
+/// shifting each signed dword by 31. Non-immediate count operands remain
+/// unsupported until their low-64-bit count extraction is represented.
+fn packed_dword_immediate_arithmetic_shift_right_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Immediate8
+        || !is_xmm_register(instr.op_register(0))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "psrad".into(),
+        }];
+    }
+    let count = instr.immediate8().min(31);
+    (0..4)
+        .map(|lane| {
+            let dst = packed_dword_lane(instr.op_register(0), lane);
+            Op::Bin {
+                dst: dst.clone(),
+                op: BinOp::Sar,
+                lhs: Value::Reg(dst),
+                rhs: Value::Const(i64::from(count)),
+            }
+        })
+        .collect()
+}
+
 /// Interleave the low two dwords of the destination and source.
 ///
 /// All four input lanes are snapshotted before the destination is overwritten,
@@ -3347,6 +3376,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Paddd => packed_dword_binary_ops(instr, BinOp::Add),
         Mnemonic::Psubd => packed_dword_binary_ops(instr, BinOp::Sub),
         Mnemonic::Pslld => packed_dword_immediate_shift_left_ops(instr),
+        Mnemonic::Psrad => packed_dword_immediate_arithmetic_shift_right_ops(instr),
         Mnemonic::Punpckldq => packed_dword_unpack_low_ops(instr),
         Mnemonic::Paddq => packed_qword_add_ops(instr),
         Mnemonic::Pcmpeqd => packed_dword_compare_equal_ops(instr),
@@ -5738,6 +5768,30 @@ mod tests {
             &mmx_ops[0].op,
             Op::Unknown { mnemonic } if mnemonic == "pslld"
         ));
+    }
+
+    #[test]
+    fn packed_dword_arithmetic_shift_builds_sign_masks_and_saturates_count() {
+        let ops = lift64(&[
+            0x66, 0x0f, 0x72, 0xe2, 0x1f, // psrad xmm2,31
+            0x66, 0x0f, 0x72, 0xe1, 0xff, // psrad xmm1,255
+        ]);
+        assert_eq!(ops.len(), 8, "got: {ops:#?}");
+        for (instruction, expected_register) in ops.iter().zip(
+            (0..4)
+                .map(|lane| format!("xmm2_d{lane}"))
+                .chain((0..4).map(|lane| format!("xmm1_d{lane}"))),
+        ) {
+            assert!(matches!(
+                &instruction.op,
+                Op::Bin {
+                    dst: VReg::Phys(dst),
+                    op: BinOp::Sar,
+                    lhs: Value::Reg(VReg::Phys(lhs)),
+                    rhs: Value::Const(31),
+                } if dst == &expected_register && lhs == dst
+            ));
+        }
     }
 
     #[test]
