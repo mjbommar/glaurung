@@ -5782,6 +5782,7 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
     crate::ir::loop_form::recover_sentinel_search_loops(&mut owned);
+    crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
     crate::ir::switch_ladder::recover_switches(&mut owned);
@@ -5794,6 +5795,10 @@ pub fn prepare_for_decbench_with_output(
     fold_exhaustive_if_returns(&mut owned);
     fold_exhaustive_switch_returns(&mut owned);
     crate::ir::loop_form::promote_for_loops(&mut owned);
+    // Loop promotion can expose sequential terminal guards that were nested in
+    // the recovered CFG during the earlier pass. Fuse that final exact shape
+    // as well; the transformation is adjacency-checked and idempotent.
+    crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
     owned
 }
 

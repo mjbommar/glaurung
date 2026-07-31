@@ -49,6 +49,77 @@ pub fn collapse_shared_assignment_guards(function: &mut Function) {
     }
 }
 
+/// Fuse adjacent `if (condition) { break; }` statements.
+///
+/// The source-level disjunction preserves the original left-to-right behavior:
+/// the second condition is evaluated exactly when the first is false. Requiring
+/// exact adjacency prevents any intervening effect from being skipped.
+pub fn collapse_adjacent_break_guards(function: &mut Function) {
+    while collapse_break_one(&mut function.body) {}
+}
+
+fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
+    for index in 0..body.len() {
+        if index + 1 < body.len() {
+            let left = break_guard_condition(&body[index]);
+            let right = break_guard_condition(&body[index + 1]);
+            if let (Some(left), Some(right)) = (left, right) {
+                body[index] = Stmt::If {
+                    cond: Expr::Bin {
+                        op: BinOp::LogicalOr,
+                        lhs: Box::new(left),
+                        rhs: Box::new(right),
+                    },
+                    then_body: vec![Stmt::Break],
+                    else_body: None,
+                };
+                body.remove(index + 1);
+                return true;
+            }
+        }
+
+        let changed = match &mut body[index] {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collapse_break_one(then_body) || else_body.as_mut().is_some_and(collapse_break_one)
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collapse_break_one(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases.iter_mut().any(|(_, body)| collapse_break_one(body))
+                    || default.as_mut().is_some_and(collapse_break_one)
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collapse_break_one(try_body)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| collapse_break_one(&mut catch.body))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn break_guard_condition(statement: &Stmt) -> Option<Expr> {
+    let Stmt::If {
+        cond,
+        then_body,
+        else_body: None,
+    } = statement
+    else {
+        return None;
+    };
+    matches!(then_body.as_slice(), [Stmt::Break]).then(|| cond.clone())
+}
+
 fn collapse_assignment_one(
     body: &mut Vec<Stmt>,
     labels: &HashMap<u64, usize>,
@@ -514,5 +585,82 @@ mod tests {
         assert!(rendered.contains("goto L_122d;"), "{rendered}");
         assert!(rendered.contains("L_122d: ;"), "{rendered}");
         assert!(!rendered.contains(" && "), "{rendered}");
+    }
+
+    #[test]
+    fn adjacent_break_guards_become_one_short_circuit_guard() {
+        let mut function = Function {
+            name: "stop_search".into(),
+            entry_va: 0x1300,
+            body: vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::If {
+                        cond: Expr::Cmp {
+                            op: crate::ir::types::CmpOp::Slt,
+                            lhs: Box::new(Expr::Reg(reg("best"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        },
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                    Stmt::If {
+                        cond: Expr::Cmp {
+                            op: crate::ir::types::CmpOp::Eq,
+                            lhs: Box::new(Expr::Reg(reg("distance"))),
+                            rhs: Box::new(Expr::Const(0x7fff_ffff)),
+                        },
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                    Stmt::Assign {
+                        dst: reg("iteration"),
+                        src: Expr::Const(1),
+                    },
+                ],
+            }],
+        };
+
+        super::collapse_adjacent_break_guards(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches(" || ").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("break;").count(), 1, "{rendered}");
+        assert!(rendered.contains("iteration = 1;"), "{rendered}");
+    }
+
+    #[test]
+    fn an_intervening_effect_blocks_break_guard_fusion() {
+        let mut function = Function {
+            name: "ordered_effect".into(),
+            entry_va: 0x1400,
+            body: vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::If {
+                        cond: Expr::Reg(reg("first")),
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                    Stmt::Assign {
+                        dst: reg("effect"),
+                        src: Expr::Const(1),
+                    },
+                    Stmt::If {
+                        cond: Expr::Reg(reg("second")),
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                ],
+            }],
+        };
+
+        super::collapse_adjacent_break_guards(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(rendered.matches("if (").count(), 2, "{rendered}");
+        assert!(!rendered.contains(" || "), "{rendered}");
+        assert_eq!(rendered.matches("break;").count(), 2, "{rendered}");
     }
 }

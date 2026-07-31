@@ -117,7 +117,7 @@ def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
     # iteration loop, best-node scan, and edge-relaxation scan.
     assert code.count("while (") + code.count("for (") >= 4, code
     assert code.count("for (") >= 2, code
-    assert code.count("break;") >= 2, code
+    assert code.count("break;") == 1, code
     # GCC -O0 lowers the six input checks to a shared labelled exit. Recover
     # their source-level short-circuit predicate before the first natural loop;
     # the two remaining gotos belong to the best-node scan, not validation.
