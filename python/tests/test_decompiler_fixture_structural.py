@@ -655,7 +655,9 @@ def test_recursion_gcc_o2_inherits_declared_parameter_types(tmp_path: Path) -> N
         timeout=300,
         check=True,
     ).stdout
-    assert "long fib(int arg0)" in fib, fib
+    assert (
+        "long fib(int arg0)" in fib or "long int fib(int arg0)" in fib
+    ), fib
 
     ackermann = subprocess.run(
         [
@@ -673,7 +675,10 @@ def test_recursion_gcc_o2_inherits_declared_parameter_types(tmp_path: Path) -> N
         timeout=300,
         check=True,
     ).stdout
-    assert "long ackermann(long arg0, long arg1)" in ackermann, ackermann
+    assert (
+        "long ackermann(long arg0, long arg1)" in ackermann
+        or "long int ackermann(long int arg0, long int arg1)" in ackermann
+    ), ackermann
     assert "arg2" not in ackermann, ackermann
 
     differential = subprocess.run(

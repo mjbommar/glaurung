@@ -594,9 +594,7 @@
     "06_calling_conventions:sum_arg2": [],
     "06_calling_conventions:sum_arg6": [],
     "06_calling_conventions:sum_arg7": [],
-    "07_packet_parser:parse_packet": [
-      "local_18 is read but never defined"
-    ],
+    "07_packet_parser:parse_packet": [],
     "07_packet_parser:validate_header": [],
     "08_indirect_dispatch:apply": [],
     "08_indirect_dispatch:dispatch": [],
@@ -616,9 +614,7 @@
       "var0 is read but never defined"
     ],
     "10_cpp_runtime_shapes:cpp_lambda_capture": [],
-    "10_cpp_runtime_shapes:cpp_move": [
-      "local_18 is read but never defined"
-    ],
+    "10_cpp_runtime_shapes:cpp_move": [],
     "10_cpp_runtime_shapes:cpp_raii_guard": [],
     "10_cpp_runtime_shapes:cpp_virtual_dispatch": [
       "var0 is read but never defined"
@@ -659,12 +655,9 @@
     "14_flag_effects:dec_preserves_carry": [],
     "14_flag_effects:shift_until_zero": [],
     "14_flag_effects:sub_then_sign": [],
-    "15_binary_search_tree:bst_inorder_checksum": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
-    ],
+    "15_binary_search_tree:bst_inorder_checksum": [],
     "15_binary_search_tree:bst_search": [],
     "16_red_black_tree:rb_validate": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
       "var4 is read but never defined"
     ],
     "17_hash_table:hash_insert": [],
@@ -673,25 +666,14 @@
     "18_binary_heap:heap_push": [],
     "19_disjoint_set:dsu_find": [],
     "19_disjoint_set:dsu_union": [],
-    "20_graph_bfs:graph_bfs": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
-    ],
-    "21_graph_dfs:graph_dfs": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
-    ],
-    "22_dijkstra:dijkstra_dense": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
-    ],
-    "23_topological_sort:topological_sort": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
-    ],
+    "20_graph_bfs:graph_bfs": [],
+    "21_graph_dfs:graph_dfs": [],
+    "22_dijkstra:dijkstra_dense": [],
+    "23_topological_sort:topological_sort": [],
     "24_merge_sort:merge_sort_i32": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
       "var3 is read but never defined"
     ],
-    "25_kmp_search:kmp_search": [
-      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
-    ],
+    "25_kmp_search:kmp_search": [],
     "26_sparse_matrix:csr_matvec": [],
     "27_newton_raphson:newton_isqrt": [],
     "28_euler_ode:euler_decay_q16": [],

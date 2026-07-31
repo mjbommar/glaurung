@@ -53,6 +53,27 @@ pub struct DwarfFunction {
     /// Absence of that attribute on a concrete subprogram means `void`;
     /// an unsupported reference stays `Unknown` rather than being guessed.
     pub return_type: DwarfReturnType,
+    /// Source variables with a fixed frame-relative location and known size.
+    /// These are authoritative object boundaries for stack-slot promotion.
+    pub stack_objects: Vec<DwarfStackObject>,
+}
+
+/// Coordinate used by a variable's ``DW_OP_fbreg`` location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DwarfStackBase {
+    /// ``DW_AT_frame_base`` is a concrete architectural register.
+    Register(u16),
+    /// ``DW_AT_frame_base`` is ``DW_OP_call_frame_cfa``.
+    CallFrameCfa,
+}
+
+/// One fixed-size source object resident in a function's stack frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DwarfStackObject {
+    pub base: DwarfStackBase,
+    pub offset: i64,
+    pub byte_size: u16,
+    pub aggregate: bool,
 }
 
 /// Source-level output contract attached to a DWARF subprogram.
@@ -181,17 +202,22 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
         // depth precisely. `entries_tree` was unreliable on clang
         // `-gdwarf-5` output in practice.
         let mut cursor = unit.entries();
-        // Each frame: (subprogram offset, direct parameter offsets, depth).
+        // Each frame: (subprogram offset, direct parameter offsets, variable
+        // offsets anywhere in this subprogram, depth).
         // Retaining the actual DIE identities is essential at -O2: GCC puts
         // their types on abstract parameter DIEs and only their locations on
         // the concrete children.
         let mut open: Vec<(
             gimli::UnitOffset<usize>,
             Vec<gimli::UnitOffset<usize>>,
+            Vec<gimli::UnitOffset<usize>>,
             isize,
         )> = Vec::new();
-        let mut emitted: Vec<(gimli::UnitOffset<usize>, Vec<gimli::UnitOffset<usize>>)> =
-            Vec::new();
+        let mut emitted: Vec<(
+            gimli::UnitOffset<usize>,
+            Vec<gimli::UnitOffset<usize>>,
+            Vec<gimli::UnitOffset<usize>>,
+        )> = Vec::new();
 
         loop {
             let depth_of_next = cursor.next_depth();
@@ -200,10 +226,10 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 _ => break,
             }
             // Pop any subprograms whose subtree we've left.
-            while let Some((_, _, sub_depth)) = open.last() {
+            while let Some((_, _, _, sub_depth)) = open.last() {
                 if depth_of_next <= *sub_depth {
-                    if let Some((off, parameters, _)) = open.pop() {
-                        emitted.push((off, parameters));
+                    if let Some((off, parameters, variables, _)) = open.pop() {
+                        emitted.push((off, parameters, variables));
                     }
                 } else {
                     break;
@@ -215,23 +241,28 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
             };
             match entry.tag() {
                 gimli::DW_TAG_subprogram => {
-                    open.push((entry.offset(), Vec::new(), depth_of_next));
+                    open.push((entry.offset(), Vec::new(), Vec::new(), depth_of_next));
                 }
                 gimli::DW_TAG_formal_parameter => {
                     if let Some(top) = open.last_mut() {
-                        if depth_of_next == top.2 + 1 {
+                        if depth_of_next == top.3 + 1 {
                             top.1.push(entry.offset());
                         }
+                    }
+                }
+                gimli::DW_TAG_variable => {
+                    if let Some(top) = open.last_mut() {
+                        top.2.push(entry.offset());
                     }
                 }
                 _ => {}
             }
         }
-        while let Some((off, parameters, _)) = open.pop() {
-            emitted.push((off, parameters));
+        while let Some((off, parameters, variables, _)) = open.pop() {
+            emitted.push((off, parameters, variables));
         }
 
-        for (off, parameter_offsets) in emitted {
+        for (off, parameter_offsets, variable_offsets) in emitted {
             let entry = match unit.entry(off) {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -274,6 +305,8 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 })
                 .collect::<Vec<_>>();
             let param_count = parameter_types.len() as u32;
+            let stack_objects =
+                dwarf_stack_objects_for_subprogram(&unit, &entry, variable_offsets.into_iter());
 
             funcs.push(DwarfFunction {
                 entry_va,
@@ -285,6 +318,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 parameter_types,
                 prototyped,
                 return_type,
+                stack_objects,
             });
         }
     }
@@ -330,6 +364,91 @@ fn inherited_attr_value<'a>(
         offset = next;
     }
     None
+}
+
+fn single_expression_operation<'a>(
+    unit: &Unit<'a>,
+    value: gimli::AttributeValue<Slice<'a>, usize>,
+) -> Option<gimli::Operation<Slice<'a>, usize>> {
+    let gimli::AttributeValue::Exprloc(expression) = value else {
+        return None;
+    };
+    let mut operations = expression.operations(unit.encoding());
+    let operation = operations.next().ok()??;
+    if operations.next().ok()?.is_some() {
+        return None;
+    }
+    Some(operation)
+}
+
+fn referenced_type_info<'a>(
+    unit: &Unit<'a>,
+    value: gimli::AttributeValue<Slice<'a>, usize>,
+) -> Option<(u64, bool)> {
+    let gimli::AttributeValue::UnitRef(mut offset) = value else {
+        return None;
+    };
+    for _ in 0..32 {
+        let entry = unit.entry(offset).ok()?;
+        let size = _byte_size_of(&entry);
+        if size != 0 {
+            let aggregate = matches!(
+                entry.tag(),
+                gimli::DW_TAG_structure_type
+                    | gimli::DW_TAG_class_type
+                    | gimli::DW_TAG_union_type
+                    | gimli::DW_TAG_array_type
+            );
+            return Some((size, aggregate));
+        }
+        let gimli::AttributeValue::UnitRef(next) =
+            inherited_attr_value(unit, &entry, gimli::DW_AT_type)?
+        else {
+            return None;
+        };
+        if next == offset {
+            return None;
+        }
+        offset = next;
+    }
+    None
+}
+
+fn dwarf_stack_objects_for_subprogram<'a>(
+    unit: &Unit<'a>,
+    subprogram: &gimli::DebuggingInformationEntry<Slice<'a>, usize>,
+    variables: impl Iterator<Item = gimli::UnitOffset<usize>>,
+) -> Vec<DwarfStackObject> {
+    let base = match inherited_attr_value(unit, subprogram, gimli::DW_AT_frame_base)
+        .and_then(|value| single_expression_operation(unit, value))
+    {
+        Some(gimli::Operation::Register { register }) => DwarfStackBase::Register(register.0),
+        Some(gimli::Operation::CallFrameCFA) => DwarfStackBase::CallFrameCfa,
+        _ => return Vec::new(),
+    };
+    let mut objects = variables
+        .filter_map(|offset| {
+            let variable = unit.entry(offset).ok()?;
+            let offset = match inherited_attr_value(unit, &variable, gimli::DW_AT_location)
+                .and_then(|value| single_expression_operation(unit, value))
+            {
+                Some(gimli::Operation::FrameOffset { offset }) => offset,
+                _ => return None,
+            };
+            let (byte_size, aggregate) = inherited_attr_value(unit, &variable, gimli::DW_AT_type)
+                .and_then(|value| referenced_type_info(unit, value))?;
+            let byte_size = u16::try_from(byte_size).ok().filter(|size| *size != 0)?;
+            Some(DwarfStackObject {
+                base,
+                offset,
+                byte_size,
+                aggregate,
+            })
+        })
+        .collect::<Vec<_>>();
+    objects.sort_by_key(|object| (object.offset, object.byte_size));
+    objects.dedup();
+    objects
 }
 
 fn pick_name<'a>(

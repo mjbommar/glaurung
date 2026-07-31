@@ -316,6 +316,7 @@ fn run_ast_passes(
     addr_map: &std::collections::HashMap<u64, String>,
     str_pool: &std::collections::HashMap<u64, String>,
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
+    stack_object_hints: &[crate::ir::stack_locals::StackObjectHint],
 ) -> (
     std::collections::HashMap<String, u8>,
     std::collections::HashMap<String, String>,
@@ -374,11 +375,13 @@ fn run_ast_passes(
     // Stack-slot promotion runs before register renaming so the aliases (`stack_0`,
     // `local_0`, ...) it allocates cannot collide with the role names (`arg0`, `ret`,
     // `varN`) the naming pass introduces.
-    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed_with_parameter_count(
-        f,
-        Some(cc),
-        locked_parameter_count,
-    );
+    let slot_sizes =
+        crate::ir::stack_locals::promote_stack_locals_typed_with_parameter_count_and_objects(
+            f,
+            Some(cc),
+            locked_parameter_count,
+            stack_object_hints,
+        );
     dp!("promote_stack_locals");
     // Frame-relative storage is source-level state; the push/mov/sub sequence
     // that establishes its machine frame is not.  Recognise the machine prologue
@@ -694,6 +697,12 @@ fn decompile_at_py(
         .as_ref()
         .map(|prototype| prototype.parameter_role_map())
         .unwrap_or_default();
+    let stack_object_hints = dwarf_stack_object_hints(
+        dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&func_va)),
+        cc,
+    );
     let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
         cc,
@@ -708,6 +717,7 @@ fn decompile_at_py(
         &addr_map,
         &str_pool,
         &function_tables,
+        &stack_object_hints,
     );
     recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
@@ -914,6 +924,12 @@ fn decompile_range_at_py(
         .as_ref()
         .map(|prototype| prototype.parameter_role_map())
         .unwrap_or_default();
+    let stack_object_hints = dwarf_stack_object_hints(
+        dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&func_va)),
+        cc,
+    );
     let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
         cc,
@@ -928,6 +944,7 @@ fn decompile_range_at_py(
         &addr_map,
         &str_pool,
         &function_tables,
+        &stack_object_hints,
     );
     recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
@@ -1271,6 +1288,7 @@ fn decbench_text(
 struct DwarfPrototypeContract {
     parameter_types: Vec<crate::debug::dwarf::DwarfParameterType>,
     return_type: crate::debug::dwarf::DwarfReturnType,
+    stack_objects: Vec<crate::debug::dwarf::DwarfStackObject>,
 }
 
 fn dwarf_output_contracts(data: &[u8]) -> std::collections::HashMap<u64, DwarfPrototypeContract> {
@@ -1282,8 +1300,46 @@ fn dwarf_output_contracts(data: &[u8]) -> std::collections::HashMap<u64, DwarfPr
                 DwarfPrototypeContract {
                     parameter_types: function.parameter_types,
                     return_type: function.return_type,
+                    stack_objects: function.stack_objects,
                 },
             )
+        })
+        .collect()
+}
+
+fn dwarf_stack_object_hints(
+    contract: Option<&DwarfPrototypeContract>,
+    cc: crate::ir::call_args::CallConv,
+) -> Vec<crate::ir::stack_locals::StackObjectHint> {
+    use crate::debug::dwarf::DwarfStackBase;
+    use crate::ir::call_args::CallConv;
+
+    let Some(contract) = contract else {
+        return Vec::new();
+    };
+    contract
+        .stack_objects
+        .iter()
+        .filter(|object| object.aggregate)
+        .filter_map(|object| {
+            let (base, adjustment) = match (cc, object.base) {
+                (CallConv::SysVAmd64 | CallConv::Win64, DwarfStackBase::Register(6)) => ("rbp", 0),
+                (CallConv::SysVAmd64 | CallConv::Win64, DwarfStackBase::CallFrameCfa) => {
+                    ("rbp", 16)
+                }
+                (CallConv::Cdecl32, DwarfStackBase::Register(5)) => ("ebp", 0),
+                (CallConv::Cdecl32, DwarfStackBase::CallFrameCfa) => ("ebp", 8),
+                (CallConv::Aarch64, DwarfStackBase::Register(29)) => ("x29", 0),
+                (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::Register(11 | 7)) => {
+                    ("fp", 0)
+                }
+                _ => return None,
+            };
+            Some(crate::ir::stack_locals::StackObjectHint {
+                base: base.to_string(),
+                disp: object.offset.checked_add(adjustment)?,
+                size: object.byte_size,
+            })
         })
         .collect()
 }
@@ -1947,6 +2003,12 @@ fn decompile_all_py(
             .as_ref()
             .map(|prototype| prototype.parameter_role_map())
             .unwrap_or_default();
+        let stack_object_hints = dwarf_stack_object_hints(
+            dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func.entry_point.value)),
+            cc,
+        );
         let callee_facts = recover_direct_callee_layouts(
             &data,
             &funcs,
@@ -1973,6 +2035,7 @@ fn decompile_all_py(
             &addr_map,
             &str_pool,
             &function_tables,
+            &stack_object_hints,
         );
         recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {
@@ -2148,6 +2211,12 @@ fn decompile_many_py(
             .as_ref()
             .map(|prototype| prototype.parameter_role_map())
             .unwrap_or_default();
+        let stack_object_hints = dwarf_stack_object_hints(
+            dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func_va)),
+            cc,
+        );
         let callee_facts = recover_direct_callee_layouts(
             &data,
             &funcs,
@@ -2174,6 +2243,7 @@ fn decompile_many_py(
             &addr_map,
             &str_pool,
             &function_tables,
+            &stack_object_hints,
         );
         recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {
@@ -2249,7 +2319,11 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
 
 #[cfg(test)]
 mod tests {
-    use super::{dwarf_return_hint, merge_exact_definition_widths};
+    use super::{
+        dwarf_return_hint, dwarf_stack_object_hints, merge_exact_definition_widths,
+        DwarfPrototypeContract,
+    };
+    use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
     use crate::ir::call_args::CallConv;
     use crate::ir::types::VReg;
     use crate::ir::types_recover::{TypeHint, TypeMap};
@@ -2315,5 +2389,37 @@ mod tests {
             dwarf_return_hint("const unsigned int *", CallConv::SysVAmd64),
             Some(TypeHint::Pointer { pointee_width: 4 })
         );
+    }
+
+    #[test]
+    fn dwarf_arm_frame_registers_map_to_stack_object_hints() {
+        let contract = DwarfPrototypeContract {
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: vec![
+                DwarfStackObject {
+                    base: DwarfStackBase::Register(11),
+                    offset: -24,
+                    byte_size: 16,
+                    aggregate: true,
+                },
+                DwarfStackObject {
+                    base: DwarfStackBase::Register(7),
+                    offset: -8,
+                    byte_size: 8,
+                    aggregate: true,
+                },
+            ],
+        };
+
+        let hints = dwarf_stack_object_hints(Some(&contract), CallConv::Arm);
+
+        assert_eq!(hints.len(), 2);
+        assert_eq!(hints[0].base, "fp");
+        assert_eq!(hints[0].disp, -24);
+        assert_eq!(hints[0].size, 16);
+        assert_eq!(hints[1].base, "fp");
+        assert_eq!(hints[1].disp, -8);
+        assert_eq!(hints[1].size, 8);
     }
 }

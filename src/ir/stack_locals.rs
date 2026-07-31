@@ -77,6 +77,14 @@ struct StackContext {
     parameter_count: Option<usize>,
 }
 
+/// Authoritative source-level extent for one stack-resident aggregate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StackObjectHint {
+    pub base: String,
+    pub disp: i64,
+    pub size: u16,
+}
+
 fn is_active_stack_base(name: &str, ctx: StackContext) -> bool {
     is_stack_base(name)
         && !(ctx.rbp_repurposed && matches!(crate::ir::abi::ssa_base(name), "rbp" | "ebp" | "bp"))
@@ -137,6 +145,16 @@ pub fn promote_stack_locals_typed_with_parameter_count(
     cc: Option<CallConv>,
     parameter_count: Option<usize>,
 ) -> HashMap<String, u8> {
+    promote_stack_locals_typed_with_parameter_count_and_objects(f, cc, parameter_count, &[])
+}
+
+/// Promote stack storage with optional debug-proven aggregate boundaries.
+pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
+    f: &mut Function,
+    cc: Option<CallConv>,
+    parameter_count: Option<usize>,
+    object_hints: &[StackObjectHint],
+) -> HashMap<String, u8> {
     let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
     let mut stack_counter = 0usize;
     let mut local_counter = 0usize;
@@ -145,6 +163,32 @@ pub fn promote_stack_locals_typed_with_parameter_count(
         rbp_repurposed: rbp_is_repurposed(&f.body, cc),
         parameter_count,
     };
+    for hint in object_hints {
+        if hint.size == 0 || !is_active_stack_base(&hint.base, ctx) {
+            continue;
+        }
+        let key = SlotKey {
+            base: hint.base.clone(),
+            disp: hint.disp,
+        };
+        let name = alloc_name(
+            &hint.base,
+            hint.disp,
+            &mut stack_counter,
+            &mut local_counter,
+            ctx,
+        );
+        map.entry(key)
+            .and_modify(|slot| {
+                slot.object_size = Some(slot.object_size.unwrap_or(0).max(hint.size));
+            })
+            .or_insert(SlotVal {
+                name,
+                declared_size: 1,
+                span_size: 1,
+                object_size: Some(hint.size),
+            });
+    }
     let address_defs = collect_stack_address_defs(&f.body, ctx);
     let label_deltas = collect_label_stack_deltas(&f.body, ctx, &address_defs);
     seed_indexed_stack_objects(
@@ -167,6 +211,7 @@ pub fn promote_stack_locals_typed_with_parameter_count(
         &address_defs,
         &label_deltas,
     );
+    reconcile_late_address_taken_objects(&mut f.body, &map);
     // Several machine SlotKeys can intentionally collapse to one source-level
     // role (notably `entry_rsp+0` and `esp+0` both render as `stack_top`).  Join
     // by that final identity explicitly. A bare `collect()` made HashMap
@@ -802,6 +847,20 @@ fn rewrite_body(
                     *sp_delta,
                     address_defs,
                 );
+                // A by-reference closure capture stores a frame address into a
+                // field before the closure is called. This escape is every bit
+                // as strong as passing the address directly to a callee: the
+                // pointee must retain storage identity instead of rendering as
+                // arithmetic on an uninitialised frame register.
+                promote_address_taken_stack_object(
+                    src,
+                    map,
+                    stack_counter,
+                    local_counter,
+                    ctx,
+                    *sp_delta,
+                    address_defs,
+                );
             }
             Stmt::Call { target, args, .. } => {
                 rewrite_expr(
@@ -1349,6 +1408,180 @@ fn rewrite_expr(
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => {}
     }
+}
+
+/// Revisit promoted scalar accesses when an address escape was discovered
+/// later in statement order.
+///
+/// A closure commonly initializes its captured scalar before storing
+/// ``&scalar`` into the closure object. The first access has already become a
+/// bare promoted local by the time the later store proves that the slot is an
+/// addressable object. Reconcile those earlier and later scalar spellings with
+/// the final slot map so the renderer declares and accesses one byte object.
+fn reconcile_late_address_taken_objects(body: &mut [Stmt], map: &HashMap<SlotKey, SlotVal>) {
+    let mut objects: HashMap<VReg, (u16, u8)> = HashMap::new();
+    for slot in map.values() {
+        let Some(size) = slot.object_size else {
+            continue;
+        };
+        objects
+            .entry(VReg::phys(slot.name.clone()))
+            .and_modify(|known| {
+                known.0 = known.0.max(size);
+                known.1 = known.1.max(slot.declared_size);
+            })
+            .or_insert((size, slot.declared_size));
+    }
+    if objects.is_empty() {
+        return;
+    }
+
+    fn object_address(reg: &VReg, objects: &HashMap<VReg, (u16, u8)>) -> Option<Expr> {
+        objects.get(reg).map(|(size, _)| Expr::StackAddr {
+            object: reg.clone(),
+            size: *size,
+        })
+    }
+
+    fn rewrite_value(expr: &mut Expr, objects: &HashMap<VReg, (u16, u8)>) {
+        if let Expr::Reg(reg) = expr {
+            if let Some((size, width)) = objects.get(reg) {
+                *expr = Expr::Deref {
+                    addr: Box::new(Expr::StackAddr {
+                        object: reg.clone(),
+                        size: *size,
+                    }),
+                    size: *width,
+                };
+            }
+            return;
+        }
+        match expr {
+            Expr::Deref { addr, .. } => {
+                if let Expr::Reg(reg) = addr.as_ref() {
+                    if let Some(address) = object_address(reg, objects) {
+                        **addr = address;
+                        return;
+                    }
+                }
+                rewrite_value(addr, objects);
+            }
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                rewrite_value(lhs, objects);
+                rewrite_value(rhs, objects);
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                rewrite_value(cond, objects);
+                rewrite_value(if_true, objects);
+                rewrite_value(if_false, objects);
+            }
+            Expr::Un { src, .. } => rewrite_value(src, objects),
+            Expr::Cast { expr, .. } => rewrite_value(expr, objects),
+            Expr::FunctionTableEntry { index, .. } => rewrite_value(index, objects),
+            Expr::WideArithmetic { args, .. } => {
+                for arg in args {
+                    rewrite_value(arg, objects);
+                }
+            }
+            Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Unknown(_) => {}
+            Expr::Reg(_) => unreachable!(),
+        }
+    }
+
+    fn walk(body: &mut [Stmt], objects: &HashMap<VReg, (u16, u8)>) {
+        for statement in body {
+            match statement {
+                Stmt::Assign { src, .. } => rewrite_value(src, objects),
+                Stmt::Store { addr, src, .. } => {
+                    if let Expr::Reg(reg) = addr {
+                        if let Some(address) = object_address(reg, objects) {
+                            *addr = address;
+                        }
+                    }
+                    rewrite_value(src, objects);
+                }
+                Stmt::Call {
+                    target,
+                    args,
+                    dst: _,
+                    call_spec: _,
+                } => {
+                    rewrite_value(target, objects);
+                    for arg in args {
+                        rewrite_value(arg, objects);
+                    }
+                }
+                Stmt::Return { value } => {
+                    if let Some(value) = value {
+                        rewrite_value(value, objects);
+                    }
+                }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    rewrite_value(cond, objects);
+                    walk(then_body, objects);
+                    if let Some(else_body) = else_body {
+                        walk(else_body, objects);
+                    }
+                }
+                Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+                    rewrite_value(cond, objects);
+                    walk(body, objects);
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    walk(std::slice::from_mut(init.as_mut()), objects);
+                    rewrite_value(cond, objects);
+                    walk(std::slice::from_mut(step.as_mut()), objects);
+                    walk(body, objects);
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    rewrite_value(discriminant, objects);
+                    for (_, case) in cases {
+                        walk(case, objects);
+                    }
+                    if let Some(default) = default {
+                        walk(default, objects);
+                    }
+                }
+                Stmt::IndirectGoto { target } => rewrite_value(target, objects),
+                Stmt::Push { value } => rewrite_value(value, objects),
+                Stmt::Pop { .. }
+                | Stmt::Label(_)
+                | Stmt::Goto { .. }
+                | Stmt::Break
+                | Stmt::Nop
+                | Stmt::Unknown(_)
+                | Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    walk(body, &objects);
 }
 
 /// Recover a constant stack/frame-relative call argument as the address of a
@@ -3315,6 +3548,152 @@ mod tests {
                 object: reg("local_20"),
                 size: 32,
             }]
+        );
+    }
+
+    #[test]
+    fn stack_address_stored_in_a_closure_keeps_the_pointee_object() {
+        // GCC/Clang -O0 lower a by-reference lambda capture as:
+        //   [rbp-0x28] = 0; rax = rbp-0x28; [rbp-0x18] = rax
+        // The address escape is a memory-store value, not a direct call
+        // argument. Every access to rbp-0x28 must nevertheless use the same C
+        // object before and after the pointer is installed in the closure.
+        let address = reg("rax#4");
+        let mut f = Function {
+            name: "capture_by_reference".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -0x28),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("rbp", -0x20),
+                    src: Expr::Reg(reg("edi")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: address.clone(),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rbp"))),
+                        rhs: Box::new(Expr::Const(0x28)),
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("rbp", -0x18),
+                    src: Expr::Reg(address),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: reg("edx"),
+                    src: deref_of("rbp", -0x28, 4),
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(
+            matches!(
+                &f.body[0],
+                Stmt::Store {
+                    addr: Expr::StackAddr { object, size: 8 },
+                    ..
+                } if object == &reg("local_28")
+            ),
+            "initializer lost the captured object's identity: {f:#?}"
+        );
+        assert!(
+            matches!(
+                &f.body[3],
+                Stmt::Store {
+                    addr: Expr::Reg(destination),
+                    src: Expr::StackAddr { object, size: 8 },
+                    size: 8,
+                } if destination == &reg("local_18") && object == &reg("local_28")
+            ),
+            "closure field did not receive &local_28: {f:#?}"
+        );
+        assert!(
+            matches!(
+                &f.body[4],
+                Stmt::Assign {
+                    src: Expr::Deref { addr, size: 4 },
+                    ..
+                } if matches!(addr.as_ref(), Expr::StackAddr { object, size: 8 }
+                    if object == &reg("local_28"))
+            ),
+            "post-call read lost the captured object's identity: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn debug_aggregate_extent_unifies_closure_fields() {
+        let mut f = Function {
+            name: "invoke_closure".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -0x20),
+                    src: Expr::Reg(reg("edi")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("rbp", -0x18),
+                    src: Expr::Reg(reg("rax")),
+                    size: 8,
+                },
+                Stmt::Call {
+                    target: Expr::Addr(0x1000),
+                    args: vec![lea("rbp", -0x20)],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+        let hints = [StackObjectHint {
+            base: "rbp".into(),
+            disp: -0x20,
+            size: 16,
+        }];
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &hints,
+        );
+
+        assert!(
+            matches!(
+                &f.body[0],
+                Stmt::Store {
+                    addr: Expr::StackAddr { object, size: 16 },
+                    ..
+                } if object == &reg("local_20")
+            ),
+            "first closure field escaped the aggregate: {f:#?}"
+        );
+        assert!(
+            matches!(
+                &f.body[1],
+                Stmt::Store { addr: Expr::Bin { lhs, rhs, .. }, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 16 }
+                        if object == &reg("local_20"))
+                        && rhs.as_ref() == &Expr::Const(8)
+            ),
+            "second closure field did not alias offset eight: {f:#?}"
+        );
+        assert!(
+            matches!(
+                &f.body[2],
+                Stmt::Call { args, .. }
+                    if matches!(args.as_slice(), [Expr::StackAddr { object, size: 16 }]
+                        if object == &reg("local_20"))
+            ),
+            "closure call lost the 16-byte object: {f:#?}"
         );
     }
 
