@@ -2725,8 +2725,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         }
         // Rotate `rol`/`ror r, {imm | cl}` lifts to the shift/shift/or identity
         // `(x << n) | (x >> (w-n))` (the consuming `or`'s width comes from the
-        // physical dst, so the temps need no explicit width). Memory forms
-        // remain unmodelled for now.
+        // physical dst, so the temps need no explicit width). Immediate-count
+        // memory forms use the same identity around an exact load/store pair.
         Mnemonic::Rol | Mnemonic::Ror => {
             if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Register {
                 let dst_name = reg_name(instr.op_register(0));
@@ -2858,6 +2858,67 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         ops.extend(partial_write_ops(partial, Value::Reg(dst)));
                     }
                     return ops;
+                }
+            }
+            if instr.op_count() == 2 && instr.op_kind(0) == OpKind::Memory {
+                let addr = mem_op_of(instr);
+                let width = Width::from_bytes(u16::from(addr.size));
+                if matches!(width, Width::W8 | Width::W16 | Width::W32 | Width::W64) {
+                    if let Some(Value::Const(cnt)) = value_of_operand(instr, 1) {
+                        let w = i64::from(width.bits());
+                        let n = ((cnt % w) + w) % w;
+                        if n == 0 {
+                            return vec![Op::Nop];
+                        }
+                        let (value, first, second, result) = (
+                            VReg::Temp(40),
+                            VReg::Temp(41),
+                            VReg::Temp(42),
+                            VReg::Temp(43),
+                        );
+                        let (first_op, first_shift, second_op, second_shift) =
+                            if matches!(mnem, Mnemonic::Rol) {
+                                (BinOp::Shl, n, BinOp::Shr, w - n)
+                            } else {
+                                (BinOp::Shr, n, BinOp::Shl, w - n)
+                            };
+                        let mut ops = vec![
+                            Op::Load {
+                                dst: value.clone(),
+                                addr: addr.clone(),
+                            },
+                            Op::Bin {
+                                dst: first.clone(),
+                                op: first_op,
+                                lhs: Value::Reg(value.clone()),
+                                rhs: Value::Const(first_shift),
+                            },
+                            Op::Bin {
+                                dst: second.clone(),
+                                op: second_op,
+                                lhs: Value::Reg(value),
+                                rhs: Value::Const(second_shift),
+                            },
+                            Op::Bin {
+                                dst: result.clone(),
+                                op: BinOp::Or,
+                                lhs: Value::Reg(first),
+                                rhs: Value::Reg(second),
+                            },
+                            Op::Store {
+                                addr,
+                                src: Value::Reg(result.clone()),
+                            },
+                        ];
+                        append_rotate_flags(
+                            &mut ops,
+                            result,
+                            matches!(mnem, Mnemonic::Rol),
+                            width,
+                            n,
+                        );
+                        return ops;
+                    }
                 }
             }
             vec![Op::Unknown {
@@ -4062,6 +4123,50 @@ mod tests {
         assert!(
             parent_write < movzx_read,
             "MOVZX must follow the partial rotate's canonical write: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn memory_rotate_lifts_as_an_exact_load_rotate_store() {
+        // rol dword ptr [rbp-0x34], 1 -- GCC -O0 emits this for the packet
+        // checksum's portable `(sum << 1) | (sum >> 31)` idiom.
+        let ops = lift64(&[0xd1, 0x45, 0xcc]);
+        assert!(
+            matches!(
+                &ops[0].op,
+                Op::Load { dst: VReg::Temp(40), addr }
+                    if addr.base == Some(VReg::phys("rbp")) && addr.disp == -0x34 && addr.size == 4
+            ),
+            "missing dword load: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Bin {
+                    dst: VReg::Temp(43),
+                    op: BinOp::Or,
+                    lhs: Value::Reg(VReg::Temp(41)),
+                    rhs: Value::Reg(VReg::Temp(42)),
+                }
+            )),
+            "missing rotate recombination: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Store {
+                    addr,
+                    src: Value::Reg(VReg::Temp(43)),
+                } if addr.base == Some(VReg::phys("rbp")) && addr.disp == -0x34 && addr.size == 4
+            )),
+            "missing dword writeback: {ops:#?}"
+        );
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "memory rotate remained opaque: {ops:#?}"
         );
     }
 

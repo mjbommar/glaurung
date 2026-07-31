@@ -51,3 +51,15 @@ def test_gcc_bswap_payload_summary_round_trips() -> None:
 
     lane = observed["07_packet_parser:gcc:O2"]
     assert lane == {"parse_packet": "pass"}, lane
+
+
+def test_gcc_memory_rotate_checksum_round_trips() -> None:
+    """A memory-destination ROL must update the spilled packet checksum."""
+    observed = H.run_lanes(
+        [("07_packet_parser", "gcc", "O0", ("parse_packet",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["07_packet_parser:gcc:O0"]
+    assert lane == {"parse_packet": "pass"}, lane
