@@ -331,6 +331,8 @@ fn run_ast_passes(
     dp!("reconstruct");
     crate::ir::const_fold::fold_constants(f);
     dp!("fold_constants");
+    crate::ir::select_fold::fold_boolean_masks(f);
+    dp!("fold_boolean_masks");
     // Per-definition first: it removes writes an unread overwrite supersedes, which the
     // per-name pass below cannot see (flags are un-versioned, so one read keeps every
     // write of that name alive).

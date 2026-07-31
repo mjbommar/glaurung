@@ -1,7 +1,146 @@
 //! Collapse structurally proven assignment diamonds into pure selects.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::VReg;
+use crate::ir::types::{UnOp, VReg};
+
+/// Render exact comparison masks as arithmetic values instead of fake branches.
+///
+/// C comparisons evaluate to exactly `0` or `1`, so `-(comparison)` is exactly
+/// equivalent to `(comparison) ? -1 : 0`.  The restriction to [`Expr::Cmp`] is
+/// essential: negating an arbitrary truthy integer would not preserve select
+/// semantics.
+pub fn fold_boolean_masks(function: &mut Function) {
+    fold_masks_in_body(&mut function.body);
+}
+
+fn fold_masks_in_body(body: &mut [Stmt]) {
+    for statement in body {
+        fold_masks_in_stmt(statement);
+    }
+}
+
+fn fold_masks_in_stmt(statement: &mut Stmt) {
+    match statement {
+        Stmt::Assign { src, .. } => fold_masks_in_expr(src),
+        Stmt::Store { addr, src, .. } => {
+            fold_masks_in_expr(addr);
+            fold_masks_in_expr(src);
+        }
+        Stmt::Call { target, args, .. } => {
+            fold_masks_in_expr(target);
+            for argument in args {
+                fold_masks_in_expr(argument);
+            }
+        }
+        Stmt::Return { value } => {
+            if let Some(value) = value {
+                fold_masks_in_expr(value);
+            }
+        }
+        Stmt::IndirectGoto { target } => fold_masks_in_expr(target),
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            fold_masks_in_expr(cond);
+            fold_masks_in_body(then_body);
+            if let Some(else_body) = else_body {
+                fold_masks_in_body(else_body);
+            }
+        }
+        Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+            fold_masks_in_expr(cond);
+            fold_masks_in_body(body);
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            fold_masks_in_stmt(init);
+            fold_masks_in_expr(cond);
+            fold_masks_in_stmt(step);
+            fold_masks_in_body(body);
+        }
+        Stmt::Push { value } => fold_masks_in_expr(value),
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            fold_masks_in_expr(discriminant);
+            for (_, case_body) in cases {
+                fold_masks_in_body(case_body);
+            }
+            if let Some(default) = default {
+                fold_masks_in_body(default);
+            }
+        }
+        Stmt::Pop { .. }
+        | Stmt::Goto { .. }
+        | Stmt::Label(_)
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_) => {}
+    }
+}
+
+fn fold_masks_in_expr(expr: &mut Expr) {
+    match expr {
+        Expr::FunctionTableEntry { index, .. } => fold_masks_in_expr(index),
+        Expr::Deref { addr, .. } => fold_masks_in_expr(addr),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            fold_masks_in_expr(lhs);
+            fold_masks_in_expr(rhs);
+        }
+        Expr::Un { src, .. } => fold_masks_in_expr(src),
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            fold_masks_in_expr(cond);
+            fold_masks_in_expr(if_true);
+            fold_masks_in_expr(if_false);
+        }
+        Expr::Cast { expr, .. } => fold_masks_in_expr(expr),
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
+        | Expr::Unknown(_) => {}
+    }
+
+    let replacement = match expr {
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } if matches!(cond.as_ref(), Expr::Cmp { .. })
+            && matches!(if_true.as_ref(), Expr::Const(-1))
+            && matches!(if_false.as_ref(), Expr::Const(0)) =>
+        {
+            Some(Expr::Un {
+                op: UnOp::Neg,
+                src: cond.clone(),
+            })
+        }
+        _ => None,
+    };
+    if let Some(replacement) = replacement {
+        *expr = replacement;
+    }
+}
 
 /// Collapse exact two-arm, same-destination assignment diamonds.
 ///
@@ -185,7 +324,7 @@ fn expression_width(expr: &Expr) -> Option<u8> {
 mod tests {
     use super::*;
     use crate::ir::ast::{Expr, Stmt};
-    use crate::ir::types::VReg;
+    use crate::ir::types::{CmpOp, VReg};
 
     fn reg(name: &str) -> VReg {
         VReg::phys(name)
@@ -207,6 +346,52 @@ mod tests {
             entry_va: 0x1000,
             body,
         }
+    }
+
+    #[test]
+    fn comparison_select_mask_becomes_arithmetic_negation() {
+        let comparison = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("left"))),
+            rhs: Box::new(Expr::Reg(reg("right"))),
+        };
+        let mut f = function(vec![assign(
+            "mask",
+            Expr::Select {
+                cond: Box::new(comparison),
+                if_true: Box::new(Expr::Const(-1)),
+                if_false: Box::new(Expr::Const(0)),
+                width: 4,
+            },
+        )]);
+
+        fold_boolean_masks(&mut f);
+
+        assert!(matches!(
+            f.body.as_slice(),
+            [Stmt::Assign {
+                src: Expr::Un {
+                    op: UnOp::Neg,
+                    src,
+                },
+                ..
+            }] if matches!(src.as_ref(), Expr::Cmp { op: CmpOp::Slt, .. })
+        ));
+    }
+
+    #[test]
+    fn arbitrary_truthy_select_mask_is_not_folded() {
+        let original = Expr::Select {
+            cond: Box::new(Expr::Reg(reg("truthy"))),
+            if_true: Box::new(Expr::Const(-1)),
+            if_false: Box::new(Expr::Const(0)),
+            width: 4,
+        };
+        let mut f = function(vec![assign("mask", original.clone())]);
+
+        fold_boolean_masks(&mut f);
+
+        assert_eq!(f.body, vec![assign("mask", original)]);
     }
 
     #[test]

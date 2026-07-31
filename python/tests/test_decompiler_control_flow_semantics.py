@@ -419,6 +419,10 @@ def test_clang_o2_vectorized_max_round_trips(tmp_path: Path) -> None:
     assert code is not None
     for mnemonic in ("pcmpgtd", "pand", "pandn", "por", "pshufd", "movd"):
         assert f"asm: {mnemonic}" not in code, code
+    assert "? -1 : 0" not in code, (
+        "packed compare masks are arithmetic 0/-1 values, not source-level branches",
+        code,
+    )
 
     rebuilt = D.build_so(
         code, tmp_path, "dec_max_array_clang_o2", link_against=str(binary)
