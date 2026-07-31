@@ -32,6 +32,158 @@ pub fn collapse_shared_exit_guard_ladders(function: &mut Function) {
     }
 }
 
+/// Collapse a cross-branch shared assignment into one short-circuit guard.
+///
+/// GCC -O0 commonly lowers `if (a && (b || !c)) { update; }` by putting the
+/// update behind a label in `b`'s true arm, jumping back to it from `!c`, and
+/// jumping forward over it from `c`. Recovery is permitted only when both
+/// labels and both gotos are uniquely owned by that exact adjacent shape.
+pub fn collapse_shared_assignment_guards(function: &mut Function) {
+    loop {
+        let mut labels = HashMap::new();
+        let mut gotos = HashMap::new();
+        count_targets(&function.body, &mut labels, &mut gotos);
+        if !collapse_assignment_one(&mut function.body, &labels, &gotos) {
+            break;
+        }
+    }
+}
+
+fn collapse_assignment_one(
+    body: &mut Vec<Stmt>,
+    labels: &HashMap<u64, usize>,
+    gotos: &HashMap<u64, usize>,
+) -> bool {
+    for index in 0..body.len() {
+        if index + 1 < body.len() {
+            if let Some((condition, update_body, update_label, join_label)) =
+                recover_shared_assignment(&body[index], &body[index + 1])
+            {
+                let labels_are_owned = labels.get(&update_label).copied() == Some(1)
+                    && labels.get(&join_label).copied() == Some(1);
+                let gotos_are_owned = gotos.get(&update_label).copied() == Some(1)
+                    && gotos.get(&join_label).copied() == Some(1);
+                if labels_are_owned && gotos_are_owned {
+                    body.splice(
+                        index..=index + 1,
+                        [Stmt::If {
+                            cond: condition,
+                            then_body: update_body,
+                            else_body: None,
+                        }],
+                    );
+                    return true;
+                }
+            }
+        }
+
+        let changed = match &mut body[index] {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collapse_assignment_one(then_body, labels, gotos)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(|body| collapse_assignment_one(body, labels, gotos))
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collapse_assignment_one(body, labels, gotos)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| collapse_assignment_one(body, labels, gotos))
+                    || default
+                        .as_mut()
+                        .is_some_and(|body| collapse_assignment_one(body, labels, gotos))
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collapse_assignment_one(try_body, labels, gotos)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| collapse_assignment_one(&mut catch.body, labels, gotos))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn recover_shared_assignment(
+    statement: &Stmt,
+    following: &Stmt,
+) -> Option<(Expr, Vec<Stmt>, u64, u64)> {
+    let Stmt::If {
+        cond: outer_condition,
+        then_body,
+        else_body: None,
+    } = statement
+    else {
+        return None;
+    };
+    let [Stmt::If {
+        cond: direct_update_condition,
+        then_body: direct_update_body,
+        else_body: Some(indirect_update_body),
+    }] = then_body.as_slice()
+    else {
+        return None;
+    };
+    let (Stmt::Label(update_label), update_body) = direct_update_body.split_first()? else {
+        return None;
+    };
+    if !matches!(update_body, [Stmt::Assign { .. } | Stmt::Store { .. }]) {
+        return None;
+    }
+    let [Stmt::If {
+        cond: skip_condition,
+        then_body: skip_body,
+        else_body: None,
+    }, Stmt::Goto {
+        target: indirect_update_label,
+    }] = indirect_update_body.as_slice()
+    else {
+        return None;
+    };
+    let [Stmt::Goto {
+        target: skipped_update_label,
+    }] = skip_body.as_slice()
+    else {
+        return None;
+    };
+    let Stmt::Label(join_label) = following else {
+        return None;
+    };
+    if update_label != indirect_update_label
+        || join_label != skipped_update_label
+        || update_label == join_label
+    {
+        return None;
+    }
+
+    let indirect_condition = negate_exact_condition(skip_condition.clone())?;
+    let update_condition = Expr::Bin {
+        op: BinOp::LogicalOr,
+        lhs: Box::new(direct_update_condition.clone()),
+        rhs: Box::new(indirect_condition),
+    };
+    Some((
+        Expr::Bin {
+            op: BinOp::LogicalAnd,
+            lhs: Box::new(outer_condition.clone()),
+            rhs: Box::new(update_condition),
+        },
+        update_body.to_vec(),
+        *update_label,
+        *join_label,
+    ))
+}
+
 fn count_targets(body: &[Stmt], labels: &mut HashMap<u64, usize>, gotos: &mut HashMap<u64, usize>) {
     for statement in body {
         match statement {
@@ -283,5 +435,84 @@ mod tests {
         assert!(rendered.contains("goto L_117a;"), "{rendered}");
         assert!(rendered.contains("L_117a: ;"), "{rendered}");
         assert!(!rendered.contains(" || "), "{rendered}");
+    }
+
+    fn best_node_ladder(extra_update_target: bool) -> Function {
+        let mut body = vec![
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: crate::ir::types::CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(reg("used"))),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+                then_body: vec![Stmt::If {
+                    cond: Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(reg("best"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    then_body: vec![
+                        Stmt::Label(0x122d),
+                        Stmt::Assign {
+                            dst: reg("best"),
+                            src: Expr::Reg(reg("candidate")),
+                        },
+                    ],
+                    else_body: Some(vec![
+                        Stmt::If {
+                            cond: Expr::Cmp {
+                                op: crate::ir::types::CmpOp::Sle,
+                                lhs: Box::new(Expr::Reg(reg("best_distance"))),
+                                rhs: Box::new(Expr::Reg(reg("candidate_distance"))),
+                            },
+                            then_body: vec![Stmt::Goto { target: 0x1233 }],
+                            else_body: None,
+                        },
+                        Stmt::Goto { target: 0x122d },
+                    ]),
+                }],
+                else_body: None,
+            },
+            Stmt::Label(0x1233),
+        ];
+        if extra_update_target {
+            body.push(Stmt::Goto { target: 0x122d });
+        }
+        body.push(Stmt::Return {
+            value: Some(Expr::Reg(reg("best"))),
+        });
+        Function {
+            name: "choose_best".into(),
+            entry_va: 0x1200,
+            body,
+        }
+    }
+
+    #[test]
+    fn cross_branch_shared_assignment_becomes_one_short_circuit_guard() {
+        let mut function = best_node_ladder(false);
+
+        super::collapse_shared_assignment_guards(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches(" && ").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches(" || ").count(), 1, "{rendered}");
+        assert!(!rendered.contains("goto "), "{rendered}");
+        assert!(!rendered.contains("L_122d"), "{rendered}");
+        assert!(!rendered.contains("L_1233"), "{rendered}");
+        assert!(rendered.contains("best = candidate;"), "{rendered}");
+    }
+
+    #[test]
+    fn an_external_jump_to_the_shared_assignment_blocks_recovery() {
+        let mut function = best_node_ladder(true);
+
+        super::collapse_shared_assignment_guards(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert!(rendered.contains("goto L_122d;"), "{rendered}");
+        assert!(rendered.contains("L_122d: ;"), "{rendered}");
+        assert!(!rendered.contains(" && "), "{rendered}");
     }
 }

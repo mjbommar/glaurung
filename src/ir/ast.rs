@@ -5767,6 +5767,7 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
     crate::ir::guard_chain::collapse_shared_exit_guard_ladders(&mut owned);
+    crate::ir::guard_chain::collapse_shared_assignment_guards(&mut owned);
     // Region recovery may clone a comparison tree's shared default into
     // sequential terminal guards. Recover that switch before two-case tails
     // become `Select` expressions and erase the final equality arms. The

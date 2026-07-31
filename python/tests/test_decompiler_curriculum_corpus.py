@@ -126,6 +126,11 @@ def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
     assert validation_prefix.count(" || ") >= 5, code
     assert "goto " not in validation_prefix, code
     assert "ret = 0;" in validation_prefix, code
+    # The best-node scan is the second shared-label shape in this fixture. It
+    # must recover as `unused && (best < 0 || distance[i] < distance[best])`,
+    # leaving no unstructured control flow anywhere in the function.
+    assert " && " in code, code
+    assert "goto " not in code, code
     for dead_copy in ("var15", "var18", "var22", "var23", "var45", "var59"):
         assert dead_copy not in code, code
 
