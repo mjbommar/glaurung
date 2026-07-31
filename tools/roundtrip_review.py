@@ -62,7 +62,10 @@ def source_of(src: Path, name: str) -> str | None:
     real parser would be more robust and is not what makes this useful.
     """
     text = src.read_text()
-    m = re.search(rf"^[^\n]*\b{re.escape(name)}\s*\(", text, re.M)
+    # Stop at the first occurrence on the line. A greedy prefix selects the
+    # final self-call in a one-line recursive definition, after which there is
+    # no opening function brace to match and the report silently omits it.
+    m = re.search(rf"^[^\n]*?\b{re.escape(name)}\s*\(", text, re.MULTILINE)
     if not m:
         return None
     start = text.rfind("\n", 0, m.start()) + 1
