@@ -1644,6 +1644,74 @@ fn packed_dword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
     }
 }
 
+/// Move the low 64 bits of an XMM register as two explicit dword lanes.
+///
+/// The XMM load/register forms clear the upper 64 bits; the memory store form
+/// writes only the two low lanes. MMX and general-purpose-register MOVQ forms
+/// deliberately remain unsupported rather than being given XMM semantics.
+fn packed_qword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2 {
+        return vec![Op::Unknown {
+            mnemonic: "movq".into(),
+        }];
+    }
+    match (instr.op_kind(0), instr.op_kind(1)) {
+        (OpKind::Register, OpKind::Memory) if is_xmm_register(instr.op_register(0)) => {
+            let dst = instr.op_register(0);
+            let mut ops: Vec<_> = (0..2)
+                .map(|lane| {
+                    let mut addr = mem_op_of(instr);
+                    addr.disp = addr.disp.saturating_add((lane * 4) as i64);
+                    addr.size = 4;
+                    Op::Load {
+                        dst: packed_dword_lane(dst, lane),
+                        addr,
+                    }
+                })
+                .collect();
+            ops.extend((2..4).map(|lane| Op::Assign {
+                dst: packed_dword_lane(dst, lane),
+                src: Value::Const(0),
+            }));
+            ops
+        }
+        (OpKind::Memory, OpKind::Register) if is_xmm_register(instr.op_register(1)) => {
+            let src = instr.op_register(1);
+            (0..2)
+                .map(|lane| {
+                    let mut addr = mem_op_of(instr);
+                    addr.disp = addr.disp.saturating_add((lane * 4) as i64);
+                    addr.size = 4;
+                    Op::Store {
+                        addr,
+                        src: Value::Reg(packed_dword_lane(src, lane)),
+                    }
+                })
+                .collect()
+        }
+        (OpKind::Register, OpKind::Register)
+            if is_xmm_register(instr.op_register(0)) && is_xmm_register(instr.op_register(1)) =>
+        {
+            let dst = instr.op_register(0);
+            let src = instr.op_register(1);
+            let mut ops: Vec<_> = (0..2)
+                .map(|lane| Op::Assign {
+                    dst: packed_dword_lane(dst, lane),
+                    src: Value::Reg(packed_dword_lane(src, lane)),
+                })
+                .collect();
+            ops.extend((2..4).map(|lane| Op::Assign {
+                dst: packed_dword_lane(dst, lane),
+                src: Value::Const(0),
+            }));
+            ops
+        }
+        _ => vec![Op::Unknown {
+            mnemonic: "movq".into(),
+        }],
+    }
+}
+
 fn packed_dword_binary_ops(instr: &iced_x86::Instruction, op: BinOp) -> Vec<Op> {
     if instr.op_count() != 2
         || instr.op_kind(0) != OpKind::Register
@@ -3118,6 +3186,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Pcmpgtd => packed_dword_compare_greater_ops(instr),
         Mnemonic::Pshufd => packed_dword_shuffle_ops(instr),
         Mnemonic::Movd => movd_ops(instr, bits),
+        Mnemonic::Movq => packed_qword_move_ops(instr),
         Mnemonic::Xorps => xorps_ops(instr),
         Mnemonic::Push => push_ops(instr, bits),
         Mnemonic::Pop => pop_ops(instr, bits),
@@ -5581,6 +5650,50 @@ mod tests {
                     dst: VReg::Phys(dst),
                     src: Value::Reg(VReg::Temp(src)),
                 } if dst == &format!("xmm1_d{lane}") && *src == 84 + selected
+            )));
+        }
+    }
+
+    #[test]
+    fn movq_xmm_memory_moves_exactly_two_dword_lanes() {
+        // movq xmm0,qword ptr [rax]; movq qword ptr [rax],xmm0.  GCC uses
+        // this pair to load and conditionally swap adjacent i32 elements.
+        // The upper two XMM lanes are cleared on the load and are not stored.
+        let ops = lift64(&[0xf3, 0x0f, 0x7e, 0x00, 0x66, 0x0f, 0xd6, 0x00]);
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "packed qword moves must be explicit: {ops:#?}"
+        );
+        for lane in 0..2 {
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Load {
+                    dst: VReg::Phys(dst),
+                    addr,
+                } if dst == &format!("xmm0_d{lane}")
+                    && addr.disp == (lane * 4) as i64
+                    && addr.size == 4
+            )));
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Store {
+                    addr,
+                    src: Value::Reg(VReg::Phys(src)),
+                } if src == &format!("xmm0_d{lane}")
+                    && addr.disp == (lane * 4) as i64
+                    && addr.size == 4
+            )));
+        }
+        for lane in 2..4 {
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Value::Const(0),
+                } if dst == &format!("xmm0_d{lane}")
             )));
         }
     }

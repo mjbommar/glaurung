@@ -578,6 +578,58 @@ def test_clang_o0_variable_shift_counts_round_trip(tmp_path: Path) -> None:
     assert results["shifts"]["status"] == "pass", results
 
 
+def test_gcc_o2_packed_bubble_swap_round_trips(tmp_path: Path) -> None:
+    """GCC's MOVQ/PSHUFD adjacent-i32 swap must preserve buffer effects."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "sort.c"
+    binary = tmp_path / "sort-gcc-O2.so"
+    compiled = subprocess.run(
+        [
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["bubble"])
+    assert code is not None
+    assert "asm: movq" not in code, code
+    assert D.build_so(code, tmp_path, "dec_bubble_gcc_o2", link_against=str(binary))
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "sort",
+            "--function",
+            "bubble",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "64",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["bubble"]["status"] == "pass", results
+
+
 def test_gcc_o0_comparison_tree_recovers_switch_and_round_trips(tmp_path: Path) -> None:
     """The reconstructed x86 signed-greater condition must remain switch-shaped."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "switch_jt.c"
