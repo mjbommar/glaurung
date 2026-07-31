@@ -1835,22 +1835,23 @@ fn packed_dword_immediate_arithmetic_shift_right_ops(instr: &iced_x86::Instructi
         .collect()
 }
 
-/// Interleave the low two dwords of the destination and source.
-///
-/// All four input lanes are snapshotted before the destination is overwritten,
-/// which preserves the in-place form (`punpckldq xmm0,xmm0`) exactly.
-fn packed_dword_unpack_low_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+/// Snapshot two low dwords from each operand and write the requested lane order.
+fn packed_low_unpack_ops(
+    instr: &iced_x86::Instruction,
+    mnemonic: &str,
+    lane_order: [u32; 4],
+) -> Vec<Op> {
     if instr.op_count() != 2
         || instr.op_kind(0) != OpKind::Register
         || !is_xmm_register(instr.op_register(0))
     {
         return vec![Op::Unknown {
-            mnemonic: "punpckldq".into(),
+            mnemonic: mnemonic.into(),
         }];
     }
     let Some((mut ops, sources)) = packed_dword_sources(instr, 92) else {
         return vec![Op::Unknown {
-            mnemonic: "punpckldq".into(),
+            mnemonic: mnemonic.into(),
         }];
     };
     let dst = instr.op_register(0);
@@ -1865,13 +1866,26 @@ fn packed_dword_unpack_low_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
             src: source,
         });
     }
-    for (lane, temporary) in [104_u32, 106, 105, 107].into_iter().enumerate() {
+    for (lane, temporary) in lane_order.into_iter().enumerate() {
         ops.push(Op::Assign {
             dst: packed_dword_lane(dst, lane),
             src: Value::Reg(VReg::Temp(temporary)),
         });
     }
     ops
+}
+
+/// Interleave the low two dwords: `[dst0, src0, dst1, src1]`.
+///
+/// All inputs are snapshotted before the destination is overwritten, which
+/// preserves the in-place form (`punpckldq xmm0,xmm0`) exactly.
+fn packed_dword_unpack_low_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    packed_low_unpack_ops(instr, "punpckldq", [104, 106, 105, 107])
+}
+
+/// Interleave the complete low qwords: `[dst0, dst1, src0, src1]`.
+fn packed_qword_unpack_low_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    packed_low_unpack_ops(instr, "punpcklqdq", [104, 105, 106, 107])
 }
 
 /// Add two packed 64-bit lanes while retaining carry between their dword views.
@@ -3378,6 +3392,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Pslld => packed_dword_immediate_shift_left_ops(instr),
         Mnemonic::Psrad => packed_dword_immediate_arithmetic_shift_right_ops(instr),
         Mnemonic::Punpckldq => packed_dword_unpack_low_ops(instr),
+        Mnemonic::Punpcklqdq => packed_qword_unpack_low_ops(instr),
         Mnemonic::Paddq => packed_qword_add_ops(instr),
         Mnemonic::Pcmpeqd => packed_dword_compare_equal_ops(instr),
         Mnemonic::Pcmpgtd => packed_dword_compare_greater_ops(instr),
@@ -6015,6 +6030,27 @@ mod tests {
                 lo: Value::Reg(VReg::Phys(lo)),
             } if dst == "rax" && hi == "xmm0_d1" && lo == "xmm0_d0"
         )));
+    }
+
+    #[test]
+    fn packed_qword_unpack_interleaves_complete_low_qwords() {
+        let ops = lift64(&[0x66, 0x0f, 0x6c, 0xde]); // punpcklqdq xmm3,xmm6
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "qword unpack must expose its lane permutation: {ops:#?}"
+        );
+        for (lane, temporary) in [104_u32, 105, 106, 107].into_iter().enumerate() {
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Value::Reg(VReg::Temp(src)),
+                } if dst == &format!("xmm3_d{lane}") && *src == temporary
+            )));
+        }
     }
 
     #[test]

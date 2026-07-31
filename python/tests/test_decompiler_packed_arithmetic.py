@@ -51,3 +51,15 @@ def test_clang_packed_sign_mask_round_trips() -> None:
 
     lane = observed["03_loop_shapes:clang:O2"]
     assert lane == {"two_latches": "pass"}, lane
+
+
+def test_clang_packed_qword_unpack_round_trips() -> None:
+    """Low-qword unpacking must preserve every nested-pair contribution."""
+    observed = H.run_lanes(
+        [("03_loop_shapes", "clang", "O2", ("nested_pairs",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["03_loop_shapes:clang:O2"]
+    assert lane == {"nested_pairs": "pass"}, lane
