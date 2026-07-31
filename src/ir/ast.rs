@@ -2046,6 +2046,17 @@ fn lower_region_inner(
             let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
             let (cond_expr, mut latch_stmts) =
                 extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
+            // A shared arm can explicitly jump to the bottom test (source-level
+            // `continue`). The condition block is otherwise absorbed into the
+            // DoWhile node and never emitted as a region of its own, so retain
+            // its label at the precise in-loop point where its non-branch
+            // statements execute. Without this, label repair can only append an
+            // empty target after the function return and the jump skips the
+            // latch and result path entirely.
+            let latch_va = lf.blocks[*cond].start_va;
+            if targets.contains(&latch_va) {
+                body_stmts.push(Stmt::Label(latch_va));
+            }
             body_stmts.append(&mut latch_stmts);
             let continue_cond = if exit_is_taken_branch(lf, *cond, *exit) {
                 negate_cmp_expr(cond_expr)
@@ -9480,6 +9491,71 @@ function f @ 0x1000 {
         assert!(
             latch,
             "the raw case goto must land on the emitted latch body: {:#?}",
+            lowered.body
+        );
+    }
+
+    #[test]
+    fn a_goto_to_a_do_while_latch_labels_the_in_loop_condition_site() {
+        // A shared fallthrough inside one loop arm can require an explicit
+        // goto to the bottom-test block. DoWhile lowering absorbs that block's
+        // statements and condition, so the target label belongs immediately
+        // before those latch statements inside the loop—not as an empty label
+        // after the function return.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::Assign {
+                    dst: VReg::phys("body_value"),
+                    src: Value::Const(1),
+                }],
+                vec![0x1010],
+            ),
+            (
+                0x1010,
+                vec![
+                    Op::Assign {
+                        dst: VReg::phys("latch_value"),
+                        src: Value::Const(2),
+                    },
+                    Op::CondJump {
+                        cond: VReg::Flag(Flag::Z),
+                        target: 0x1000,
+                        inverted: false,
+                    },
+                ],
+                vec![0x1000, 0x1020],
+            ),
+            (0x1020, vec![Op::Return], vec![]),
+        ]);
+        let region = Region::DoWhile {
+            body: Box::new(Region::Seq(vec![Region::Block(0), Region::Goto(1)])),
+            cond: 1,
+            exit: Some(2),
+        };
+
+        let lowered = lower(&lf, &region, "latch_target");
+        let Stmt::DoWhile { body, .. } = &lowered.body[0] else {
+            panic!("expected do-while: {:#?}", lowered.body);
+        };
+        let label = body
+            .iter()
+            .position(|statement| matches!(statement, Stmt::Label(0x1010)));
+        let latch = body.iter().position(
+            |statement| matches!(statement, Stmt::Assign { dst, .. } if *dst == VReg::phys("latch_value")),
+        );
+
+        assert_eq!(
+            label.zip(latch).map(|(label, latch)| latch - label),
+            Some(1)
+        );
+        assert!(
+            !lowered
+                .body
+                .iter()
+                .skip(1)
+                .any(|statement| matches!(statement, Stmt::Label(0x1010))),
+            "the latch target escaped the loop: {:#?}",
             lowered.body
         );
     }

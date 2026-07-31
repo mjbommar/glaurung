@@ -1126,16 +1126,16 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         if succs.len() != 1 {
             // A conditional that did not fit a high-level shape still lowers
             // its taken edge from the machine CondJump. Its fallthrough edge,
-            // however, exists only by source adjacency. If sibling recovery
-            // already moved that successor elsewhere, materialise the displaced
-            // fallthrough as a goto instead of silently losing the edge.
+            // however, exists only by source adjacency. Once this builder stops
+            // at the unstructured conditional, no region owns that adjacency;
+            // materialise it as a goto whether its shared target was built by a
+            // sibling already or will be built later.
             if succs.len() == 2 {
                 if let Some(fallthrough) = cfg.edges[cur]
                     .iter()
                     .find(|edge| {
                         edge.kind == crate::ir::cfg_edges::EdgeKind::Fallthrough
                             && Some(edge.to) != stop_at
-                            && visited.contains(&edge.to)
                     })
                     .map(|edge| edge.to)
                 {
@@ -3553,6 +3553,49 @@ mod tests {
                     | crate::ir::structure_accounting::AccountError::SwitchArmOutsideLoop { .. }
             )),
             "{accounting:#?}\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_shared_fallthrough_owned_by_the_later_sibling_keeps_its_edge() {
+        // Clang 21 emits this inside topological-sort's queue seed loop. B1's
+        // taken edge reaches the join, while its fallthrough reaches B4, which
+        // is also the tail of the sibling arm. The sibling is built later, so
+        // B4 is not visited yet when B1 declines high-level if recovery:
+        //
+        //             B0
+        //           /    \
+        //         B1      B2
+        //        /  \\      |
+        //    join   B4 <- B3
+        //             \\   /
+        //              join
+        //
+        // Dropping B1 -> B4 makes accounting reject all otherwise recovered
+        // loops and falls back to whole-function labelled CFG.
+        let conditional = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, conditional(0x1300), vec![0x1200, 0x1300]),
+            (0x1100, vec![Op::Jump { target: 0x1200 }], vec![0x1200]),
+            (0x1200, vec![Op::Jump { target: 0x1300 }], vec![0x1300]),
+            (0x1300, conditional(0x1400), vec![0x1400, 0x1500]),
+            (0x1400, vec![Op::Return], vec![]),
+            (0x1500, vec![Op::Jump { target: 0x1300 }], vec![0x1300]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        let region = build(0, &cfg, &mut HashSet::new(), Some(3));
+
+        assert!(
+            format!("{region:#?}").contains("Goto(\n            2"),
+            "the displaced fallthrough needs an explicit edge: {region:#?}"
         );
     }
 
