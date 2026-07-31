@@ -70,6 +70,13 @@ typedef unsigned char uint8_t; typedef signed char int8_t;
 typedef unsigned short uint16_t; typedef short int16_t;
 typedef unsigned int uint32_t; typedef int int32_t;
 typedef unsigned long uint64_t; typedef long int64_t;
+typedef unsigned char byte; typedef signed char sbyte;
+typedef unsigned short ushort; typedef short shortint;
+typedef unsigned int uint; typedef unsigned long ulong;
+typedef unsigned long long ulonglong; typedef long long longlong;
+typedef uint8_t undefined1; typedef uint16_t undefined2;
+typedef uint32_t undefined4; typedef uint64_t undefined8;
+typedef __uint128_t undefined16;
 long __unknown(long x){ (void)x; return 0; }
 """
 
@@ -1125,6 +1132,7 @@ def run(
     seed: int,
     fuzz: int,
     only: set[str] | None = None,
+    decompiled_by_va: dict[int, str] | None = None,
 ) -> dict:
     """`only` restricts which functions are executed and reported.
 
@@ -1171,7 +1179,10 @@ def run(
         if name in sig_by_name
         and exec_class(sig_by_name[name], fixture, lane)[0] == "exec"
     ]
-    decompiled_by_va = decompiled_many_c(binary, [sig["va"] for sig in executable_sigs])
+    if decompiled_by_va is None:
+        decompiled_by_va = decompiled_many_c(
+            binary, [sig["va"] for sig in executable_sigs]
+        )
     with tempfile.TemporaryDirectory(dir=M.tmpdir()) as td:
         wd = Path(td)
         for name in sorted(exported):

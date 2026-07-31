@@ -1601,6 +1601,40 @@ def test_exit_code_distinguishes_infra_from_semantic():
     assert D.exit_code({"__error__": "no dwarf"}) == 2
 
 
+def test_recompile_prelude_accepts_ghidra_scalar_dialect(tmp_path):
+    rebuilt = D.build_so(
+        "uint32_t dialect_identity(uint value) { return value; }",
+        tmp_path,
+        "ghidra_scalar_dialect",
+    )
+
+    assert rebuilt is not None
+
+
+def test_run_uses_injected_backend_source_without_invoking_glaurung(monkeypatch):
+    original = _compile_so("int injected(int value){return value+1;}", "injected")
+    address = D.exported_functions(original)["injected"]
+    monkeypatch.setattr(
+        D,
+        "decompiled_many_c",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Glaurung must not run for injected code"
+        ),
+    )
+
+    results = D.run(
+        original,
+        str(SRC / "01_conditional_polarity.c"),
+        "fx",
+        seed=1234,
+        fuzz=8,
+        only={"injected"},
+        decompiled_by_va={address: "int injected(int value){return value+1;}"},
+    )
+
+    assert results == {"injected": {"status": "pass", "detail": "18 cases"}}
+
+
 def test_json_mode_returns_two_on_infra(tmp_path):
     # A stripped binary -> no DWARF -> __error__ -> nonzero (infra) exit.
     src = tmp_path / "x.c"

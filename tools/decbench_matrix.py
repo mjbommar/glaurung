@@ -49,6 +49,9 @@ TOOLCHAIN_KEY = "__toolchain__"
 COMPILERS = ("gcc", "clang")
 OPTS = {"O0": ["-O0"], "O2": ["-O2"]}
 METRIC_RE = re.compile(r"^\s+(ged|type_match|byte_match):\s+([0-9.]+)\s+\(mean\)")
+FUNCTION_MARKER_RE = re.compile(
+    r"^// Function: .+ @ 0x([0-9a-fA-F]+)\s*$", re.MULTILINE
+)
 
 # A metric may move slightly with an unrelated toolchain patch; a cell only fails
 # when it moves by more than this. GED is a count, so it is compared exactly.
@@ -141,7 +144,8 @@ def decbench_command(cwd: Path, backend: str) -> list[str]:
     DecBench CLI.  Reference backends continue through the stock executable.
     """
     if backend != "glaurung":
-        return ["decbench"]
+        local = cwd / ".venv" / "bin" / "decbench"
+        return [str(local)] if local.is_file() else ["decbench"]
 
     configured = os.environ.get("DECBENCH_PYTHON")
     candidates = [Path(configured)] if configured else []
@@ -192,8 +196,89 @@ def compile_cell(
     return out if r.returncode == 0 else None
 
 
+def parse_decompiled_functions(combined_c: str) -> dict[int, str]:
+    """Split DecBench's combined C artifact into exact address-keyed functions."""
+    matches = list(FUNCTION_MARKER_RE.finditer(combined_c))
+    parsed: dict[int, str] = {}
+    for index, match in enumerate(matches):
+        address = int(match.group(1), 16)
+        if address in parsed:
+            raise ValueError(f"duplicate decompiled address 0x{address:x}")
+        end = (
+            matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(combined_c)
+        )
+        code = combined_c[match.end() : end].strip()
+        if not code:
+            raise ValueError(f"empty decompiled function at 0x{address:x}")
+        parsed[address] = code
+    if not parsed:
+        raise ValueError("combined C artifact has no function markers")
+    return parsed
+
+
+def behavior_problems(verdicts: dict, required: list[str]) -> list[str]:
+    """Return every absent or non-passing required behavioral verdict."""
+    problems: list[str] = []
+    for function in required:
+        verdict = verdicts.get(function)
+        if verdict is None:
+            problems.append(f"{function}: missing verdict")
+            continue
+        status = verdict.get("status")
+        if status != "pass":
+            detail = verdict.get("detail", "no detail")
+            problems.append(f"{function}: {status or 'invalid'} ({detail})")
+    return problems
+
+
+def evaluate_behavior(
+    binary: Path,
+    source: Path,
+    fixture: str,
+    backend: str,
+    results: Path,
+) -> tuple[dict, list[str]]:
+    """Recompile and execute one backend artifact against the original binary."""
+    artifact_dir = results / "single_binary"
+    artifacts = sorted(artifact_dir.glob(f"*_{binary.stem}.c"))
+    if len(artifacts) != 1:
+        return {}, [
+            (
+                f"{backend}: expected one combined C artifact for {binary.name}, "
+                f"found {len(artifacts)}"
+            )
+        ]
+
+    import diff_decompile as differential
+
+    try:
+        decompiled = parse_decompiled_functions(artifacts[0].read_text())
+    except (OSError, ValueError) as exc:
+        return {}, [f"{backend}: invalid combined C artifact ({exc})"]
+    required = differential.M.REQUIRED_FUNCTIONS.get(fixture, [])
+    if not required:
+        return {}, [f"{fixture}: no required-function contract"]
+    verdicts = differential.run(
+        str(binary),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=differential.M.FIXTURE_FUZZ,
+        only=set(required),
+        decompiled_by_va=decompiled,
+    )
+    return verdicts, behavior_problems(verdicts, required)
+
+
 def evaluate(
-    binary: Path, source: Path, backend: str, results: Path, cwd: Path
+    binary: Path,
+    source: Path,
+    backend: str,
+    results: Path,
+    cwd: Path,
+    behavior_fixture: str | None = None,
 ) -> dict:
     """Run one cell and fail closed on evaluator errors or an empty report.
 
@@ -235,6 +320,13 @@ def evaluate(
         return out | {"error": f"decbench exit {p.returncode}: {diagnostic}"}
     if all(value is None for value in out.values()):
         return out | {"error": f"decbench produced no metrics: {diagnostic}"}
+    if behavior_fixture is not None:
+        verdicts, problems = evaluate_behavior(
+            binary, source, behavior_fixture, backend, results
+        )
+        out["behavior"] = verdicts
+        if problems:
+            out["error"] = "behavior: " + "; ".join(problems)
     return out
 
 
@@ -295,7 +387,12 @@ def select_cells(
 
 
 def run_cell(
-    key: str, backend: str, workdir: Path, cwd: Path, source_dir: Path = SRC
+    key: str,
+    backend: str,
+    workdir: Path,
+    cwd: Path,
+    source_dir: Path = SRC,
+    behavior: bool = False,
 ) -> dict:
     """Compile and evaluate one independent matrix cell."""
     program, compiler, opt = key.split(":")
@@ -304,7 +401,14 @@ def run_cell(
     so = compile_cell(program, compiler, opt, cell_dir, source_dir)
     if so is None:
         return {"error": "build failed"}
-    return evaluate(so, source_dir / f"{program}.c", backend, cell_dir / "results", cwd)
+    return evaluate(
+        so,
+        source_dir / f"{program}.c",
+        backend,
+        cell_dir / "results",
+        cwd,
+        behavior_fixture=program if behavior else None,
+    )
 
 
 def print_cell(key: str, cell: dict) -> None:
@@ -327,19 +431,22 @@ def run_matrix(
     jobs: int | None = None,
     source_dir: Path = SRC,
     programs: list[str] | tuple[str, ...] | None = None,
+    behavior: bool = False,
 ) -> dict:
     result: dict = {TOOLCHAIN_KEY: toolchain_fingerprint()}
     keys = select_cells(only, source_dir, programs)
     worker_count = default_jobs() if jobs is None else jobs
     if worker_count == 1:
         for key in keys:
-            result[key] = run_cell(key, backend, workdir, cwd, source_dir)
+            result[key] = run_cell(
+                key, backend, workdir, cwd, source_dir, behavior=behavior
+            )
             print_cell(key, result[key])
         return result
 
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
         futures = {
-            pool.submit(run_cell, key, backend, workdir, cwd, source_dir): key
+            pool.submit(run_cell, key, backend, workdir, cwd, source_dir, behavior): key
             for key in keys
         }
         for future in as_completed(futures):
@@ -403,6 +510,11 @@ def check(current: dict, baseline: dict, scoped: bool = False) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true", help="print the report")
+    ap.add_argument(
+        "--behavior",
+        action="store_true",
+        help="also rebuild and execute each backend's decompiled curriculum C",
+    )
     ap.add_argument("--check", action="store_true", help="compare against the baseline")
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--backend", default="glaurung", help="glaurung | angr | …")
@@ -437,6 +549,10 @@ def main() -> int:
     source_dir = corpus_source(args.corpus)
     programs = corpus_programs(args.corpus)
 
+    if args.behavior and args.corpus != "curriculum":
+        print("--behavior currently requires --corpus curriculum", file=sys.stderr)
+        return 2
+
     if args.list:
         for key in select_cells(args.only, source_dir, programs):
             print(key)
@@ -469,6 +585,7 @@ def main() -> int:
             jobs=args.jobs,
             source_dir=source_dir,
             programs=programs,
+            behavior=args.behavior,
         )
 
     if args.write_baseline:

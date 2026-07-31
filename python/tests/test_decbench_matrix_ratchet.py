@@ -339,3 +339,29 @@ def test_real_evaluator_with_no_metrics_is_an_error(dm, tmp_path, monkeypatch):
     assert result["ged"] is None
     assert "no metrics" in result["error"]
     assert "evaluation produced no report" in result["error"]
+
+
+def test_combined_backend_c_is_split_by_exact_function_address(dm):
+    combined = """// Function: first @ 0x1010
+int first(int x) { return x + 1; }
+
+// Function: second @ 0x20a0
+long second(long x) { return x - 2; }
+
+"""
+
+    assert dm.parse_decompiled_functions(combined) == {
+        0x1010: "int first(int x) { return x + 1; }",
+        0x20A0: "long second(long x) { return x - 2; }",
+    }
+
+
+def test_behavior_gate_fails_closed_on_any_required_nonpass(dm):
+    assert (
+        dm.behavior_problems({"f": {"status": "pass", "detail": "cases"}}, ["f"])
+        == []
+    )
+    assert dm.behavior_problems(
+        {"f": {"status": "fail", "detail": "return differs"}}, ["f"]
+    ) == ["f: fail (return differs)"]
+    assert dm.behavior_problems({}, ["f"]) == ["f: missing verdict"]

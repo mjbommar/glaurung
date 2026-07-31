@@ -130,6 +130,25 @@ checkout's Python, registers the backend, and then delegates to DecBench's
 normal CLI. Set `DECBENCH_PYTHON` only when that interpreter is not at
 `$DECBENCH_DIR/.venv/bin/python`; do not patch the external checkout.
 
+Metric similarity is not a behavioral verdict. For the undergraduate
+curriculum, add `--behavior` to consume the exact combined C artifact produced
+by the selected DecBench backend, compile each required function, and execute
+the fixture's deterministic boundary and seeded fuzz vectors against the
+original binary:
+
+```bash
+DECBENCH_DIR=/nas4/data/workspace-infosec/decbench \
+  tools/decbench_matrix.py --backend ghidra --corpus curriculum --behavior \
+  --only '27_newton_raphson:gcc:O0' --json
+```
+
+The lane fails closed when an artifact is absent or malformed, a required
+function has no verdict, the generated C does not compile, a worker crashes or
+does not terminate, a return value differs, or any mutable output buffer
+differs. Decompiler-dialect scalar names such as Ghidra's `uint` and
+`undefined4` have explicit fixed-width compatibility typedefs in the shared
+recompile prelude; they are not guessed per result.
+
 ## The full gate
 
 ```bash
