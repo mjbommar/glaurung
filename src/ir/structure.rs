@@ -864,6 +864,12 @@ fn has_loop_conditional_with_join_beyond_loop(cfg: &Cfg) -> bool {
             if cfg.succs[cond].len() != 2 {
                 continue;
             }
+            // A direct edge to the loop header's own distinguished exit is a
+            // source-level `break`, not an epilogue join owned by this body
+            // conditional. The builder has a dedicated lossless shape for it.
+            if loop_break_shape(cond, header, cfg).is_some() {
+                continue;
+            }
             let Some(join) = cfg.ipostdom[cond] else {
                 continue;
             };
@@ -883,9 +889,7 @@ fn has_loop_conditional_with_join_beyond_loop(cfg: &Cfg) -> bool {
             let reaches_nonlocal_join = cfg.succs[cond]
                 .iter()
                 .filter(|&&succ| {
-                    succ != join
-                        && !can_reach(succ, header, cfg)
-                        && linear_chain_reaches(succ, join, cfg)
+                    succ != join && !can_reach(succ, header, cfg) && can_reach(succ, join, cfg)
                 })
                 .count();
             if reaches_next_iteration > 0 && reaches_nonlocal_join > 0 {
@@ -896,16 +900,65 @@ fn has_loop_conditional_with_join_beyond_loop(cfg: &Cfg) -> bool {
     false
 }
 
-fn linear_chain_reaches(start: usize, target: usize, cfg: &Cfg) -> bool {
-    let mut current = start;
-    let mut seen = HashSet::new();
-    while current != target && seen.insert(current) {
-        let [next] = cfg.succs[current].as_slice() else {
-            return false;
-        };
-        current = *next;
+/// A conditional inside the natural loop headed at `header` whose one edge
+/// reaches that loop's ordinary exit through an optional linear bridge and
+/// whose sibling continues to a latch.
+///
+/// The bridge is retained in the returned region, so result setup on a
+/// break/early-return path is not discarded or moved after the loop.
+fn loop_break_shape(cond: usize, header: usize, cfg: &Cfg) -> Option<(usize, usize, usize, bool)> {
+    if cfg.succs.get(cond)?.len() != 2 || cfg.succs.get(header)?.len() != 2 {
+        return None;
     }
-    current == target
+    let tails: Vec<usize> = cfg.preds[header]
+        .iter()
+        .copied()
+        .filter(|&tail| cfg.dominates(header, tail))
+        .collect();
+    if tails.is_empty() {
+        return None;
+    }
+    let mut body = HashSet::new();
+    for tail in tails {
+        body.extend(natural_loop_body(header, tail, cfg));
+    }
+    let header_exits: Vec<usize> = cfg.succs[header]
+        .iter()
+        .copied()
+        .filter(|successor| !body.contains(successor))
+        .collect();
+    let [exit] = header_exits.as_slice() else {
+        return None;
+    };
+    let exit = *exit;
+    for break_entry in cfg.succs[cond].iter().copied() {
+        let continuation = cfg.succs[cond]
+            .iter()
+            .copied()
+            .find(|&successor| successor != break_entry)?;
+        if !body.contains(&continuation) || !can_reach(continuation, header, cfg) {
+            continue;
+        }
+        if break_entry != exit {
+            let mut current = break_entry;
+            let mut seen = HashSet::new();
+            while current != exit && seen.insert(current) {
+                if body.contains(&current)
+                    || !cfg.dominates(cond, current)
+                    || cfg.succs[current].len() != 1
+                {
+                    break;
+                }
+                current = cfg.succs[current][0];
+            }
+            if current != exit {
+                continue;
+            }
+        }
+        let taken = cfg.cond_taken[cond]?;
+        return Some((exit, continuation, break_entry, taken != break_entry));
+    }
+    None
 }
 
 /// Recursively build a Region starting at `start`, stopping at `stop_at`
@@ -995,6 +1048,30 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
 
         // --- Conditional shapes ---------------------------------------------
         if cfg.succs[cur].len() == 2 {
+            // While building a natural-loop body, an edge directly to the
+            // header's distinguished exit is a lossless `break` shape. Consume
+            // the conditional here and continue down its body sibling instead
+            // of letting global post-dominance absorb the exit epilogue as a
+            // local join and strand the rest of the loop as leftovers.
+            if let Some(header) = stop_at {
+                if let Some((exit, continuation, break_entry, invert)) =
+                    loop_break_shape(cur, header, cfg)
+                {
+                    let break_region = if break_entry == exit {
+                        Region::Goto(exit)
+                    } else {
+                        build(break_entry, cfg, visited, Some(exit))
+                    };
+                    parts.push(Region::IfThen {
+                        cond: cur,
+                        then_r: Box::new(break_region),
+                        join: None,
+                        invert,
+                    });
+                    cur = continuation;
+                    continue;
+                }
+            }
             // Resolved switches are collapsed before their surrounding range
             // guard in Ghidra, angr Phoenix, and Kuna. Doing the same here is
             // required when the default path shares a terminal tail with one
@@ -1033,6 +1110,24 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
         // `stop_at` to bound recursion inside sub-regions.
         let succs = &cfg.succs[cur];
         if succs.len() != 1 {
+            // A conditional that did not fit a high-level shape still lowers
+            // its taken edge from the machine CondJump. Its fallthrough edge,
+            // however, exists only by source adjacency. If sibling recovery
+            // already moved that successor elsewhere, materialise the displaced
+            // fallthrough as a goto instead of silently losing the edge.
+            if succs.len() == 2 {
+                if let Some(fallthrough) = cfg.edges[cur]
+                    .iter()
+                    .find(|edge| {
+                        edge.kind == crate::ir::cfg_edges::EdgeKind::Fallthrough
+                            && Some(edge.to) != stop_at
+                            && visited.contains(&edge.to)
+                    })
+                    .map(|edge| edge.to)
+                {
+                    parts.push(Region::Goto(fallthrough));
+                }
+            }
             break;
         }
         let next = succs[0];
@@ -2348,7 +2443,7 @@ mod tests {
             (0x1200, vec![Op::Return], vec![]),
         ]);
 
-        let region = recover_for(&lf);
+        let region = recover_verified(&lf, &compute_ssa(&lf));
         let Region::Switch {
             arms, case_labels, ..
         } = region
@@ -3010,13 +3105,13 @@ mod tests {
     }
 
     #[test]
-    fn single_latch_unrolled_search_with_distinct_early_returns_falls_back_totally() {
+    fn single_latch_unrolled_search_with_distinct_early_returns_stays_structured() {
         // Reduced Clang -O2 `find_first_set`: B1 is the loop header, B5 is its
         // sole latch, and B1..B4 each have a different terminal success exit.
         // The bounded While builder currently structures only the first two
         // tests, then strands B4/B5 after a return and invents edges around B3.
-        // Until multi-exit loop ownership is total, preserve the exact labelled
-        // CFG instead of emitting a partial While.
+        // Terminal arms stay as returns inside the loop, while the ordinary
+        // exhaustion bridge becomes an owned loop exit.
         let cond = |target| {
             vec![Op::CondJump {
                 cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::C),
@@ -3040,10 +3135,11 @@ mod tests {
 
         let region = recover_for(&lf);
         let errors = verify_structure(&lf, &compute_ssa(&lf));
-        assert_eq!(
-            region,
-            Region::Unstructured((0..11).collect()),
-            "a partial While is not a semantics-preserving recovery: {region:#?}; {errors:?}"
+        let rendered = format!("{region:#?}");
+        assert!(rendered.contains("While"), "loop was lost: {rendered}");
+        assert!(
+            !rendered.contains("Unstructured"),
+            "early-return arms escaped the loop: {rendered}"
         );
         assert!(errors.is_empty());
     }
@@ -3143,7 +3239,7 @@ mod tests {
     }
 
     #[test]
-    fn loop_early_return_through_shared_epilogue_falls_back_totally() {
+    fn loop_early_return_bridge_keeps_result_setup_inside_the_loop() {
         // GCC -O0 `fsm`: the loop header B1 normally exits through epilogue B6,
         // while B2 may return early through B5 -> B6 and its sibling continues
         // through the state-update ladder and latch.  B6 post-dominates B2 but
@@ -3166,9 +3262,105 @@ mod tests {
             (0x1600, vec![Op::Return], vec![]),
         ]);
 
-        let r = recover_for(&lf);
-        assert_eq!(r, Region::Unstructured((0..7).collect()), "{r:#?}");
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        let candidate = build_full(&lf, &cfg);
+        let accounting =
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &candidate);
+        assert!(
+            !accounting.iter().any(|error| matches!(
+                error,
+                crate::ir::structure_accounting::AccountError::BlockDropped { .. }
+                    | crate::ir::structure_accounting::AccountError::EdgeUnaccounted { .. }
+                    | crate::ir::structure_accounting::AccountError::BackEdgeUnowned { .. }
+                    | crate::ir::structure_accounting::AccountError::ImpliedEdgeAbsent { .. }
+                    | crate::ir::structure_accounting::AccountError::GotoTargetMissing { .. }
+                    | crate::ir::structure_accounting::AccountError::SwitchArmOutsideLoop { .. }
+            )),
+            "candidate failed structural accounting: {candidate:#?}\n{accounting:#?}"
+        );
+
+        let r = recover_verified(&lf, &ssa);
+        let rendered = format!("{r:#?}");
+        assert!(rendered.contains("While"), "loop was lost: {rendered}");
+        assert!(
+            !rendered.contains("Unstructured"),
+            "the result-setup bridge escaped the loop: {rendered}"
+        );
         assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
+    fn branching_cleanup_after_loop_early_exit_forces_lossless_fallback() {
+        // Clang -O0 `process`: an internal retry-loop condition can leave for
+        // a BRANCHING cleanup ladder whose terminal return is also reached by
+        // the loop's ordinary success path.  Pulling that shared return into
+        // the loop body makes the success-path jump disappear during AST
+        // lowering.  This is not the representable direct/linear `break`
+        // bridge handled below, so retain the complete labelled CFG.
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (0x1100, cond(0x1500), vec![0x1200, 0x1500]), // retry header / success
+            (0x1200, cond(0x1600), vec![0x1300, 0x1600]), // continue / cleanup
+            (0x1300, vec![Op::Nop], vec![0x1400]),
+            (0x1400, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1500, vec![Op::Nop], vec![0x1900]), // success setup
+            (0x1600, cond(0x1800), vec![0x1700, 0x1800]), // cleanup ladder
+            (0x1700, vec![Op::Nop], vec![0x1900]),
+            (0x1800, vec![Op::Nop], vec![0x1900]),
+            (0x1900, vec![Op::Return], vec![]), // shared epilogue
+        ]);
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+
+        assert!(has_loop_conditional_with_join_beyond_loop(&cfg));
+        assert_eq!(
+            recover_verified(&lf, &ssa),
+            Region::Unstructured((0..10).collect())
+        );
+    }
+
+    #[test]
+    fn direct_break_to_the_natural_loop_exit_keeps_the_rest_of_the_body() {
+        // GCC -O0 Dijkstra shape: the loop header has the ordinary exhaustion
+        // exit, and a body guard jumps DIRECTLY to that same exit (`break`).
+        // The sibling continues through more body work and the one latch.  This
+        // is representable without assigning the epilogue to the conditional:
+        // `if (done) goto exit; work; latch;` inside the recovered While.
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100]),
+            (0x1100, cond(0x1500), vec![0x1200, 0x1500]), // header / exhausted
+            (0x1200, cond(0x1500), vec![0x1300, 0x1500]), // work / direct break
+            (0x1300, vec![Op::Nop], vec![0x1400]),        // remaining body work
+            (0x1400, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1500, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_verified(&lf, &compute_ssa(&lf));
+        let rendered = format!("{region:#?}");
+        assert!(rendered.contains("While"), "loop was lost: {rendered}");
+        assert!(
+            rendered.contains("Goto(\n"),
+            "break edge was lost: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Unstructured"),
+            "remaining body blocks escaped the loop: {rendered}"
+        );
     }
 
     #[test]
@@ -3226,9 +3418,9 @@ mod tests {
         // Reduced only at the instruction level from the real GCC 15 -O2 CFG
         // for recursive Fibonacci. GCC expands most recursion into nested
         // loops, with one cold bridge (B31) re-entering B23. The speculative
-        // region tree duplicated the epilogue and claimed B19->B15 and
-        // B21->B23 edges which do not exist. AST lowering then erased six
-        // conditional latches as empty `if`s; fib(20) never terminated.
+        // region tree duplicated the epilogue and left a nested back-edge
+        // unowned. AST lowering then erased six conditional latches as empty
+        // `if`s; fib(20) never terminated.
         let cj = |target| {
             vec![Op::CondJump {
                 cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
@@ -3280,9 +3472,11 @@ mod tests {
         assert!(
             accounting.iter().any(|error| matches!(
                 error,
-                crate::ir::structure_accounting::AccountError::ImpliedEdgeAbsent { .. }
+                crate::ir::structure_accounting::AccountError::BlockDuplicated { .. }
+                    | crate::ir::structure_accounting::AccountError::BackEdgeUnowned { .. }
+                    | crate::ir::structure_accounting::AccountError::ImpliedEdgeAbsent { .. }
             )),
-            "the reduced real CFG must exercise the invented-edge defect: {accounting:?}"
+            "the reduced real CFG must retain a soundness finding: {accounting:?}"
         );
 
         let region = recover_verified(&lf, &ssa);

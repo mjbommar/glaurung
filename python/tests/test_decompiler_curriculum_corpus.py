@@ -8,6 +8,7 @@ the fixture differential in all four compiler/optimization lanes.
 from __future__ import annotations
 
 import importlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 M = importlib.import_module("manifest")
 H = importlib.import_module("fixture_harness")
+D = importlib.import_module("diff_decompile")
 
 
 EXPECTED_CURRICULUM = {
@@ -83,6 +85,35 @@ def test_curriculum_pointer_contracts_are_declared() -> None:
         contract = M.OVERRIDES.get(key)
         assert contract is not None, f"missing safe execution contract for {key}"
         assert contract.get("len_args") or contract.get("arg_values"), key
+
+
+@pytest.mark.slow
+def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
+    """A body-local break must not collapse the whole reducible CFG to gotos."""
+    source = FIXTURES / "src" / "22_dijkstra.c"
+    binary = tmp_path / "22_dijkstra-gcc-O0.so"
+    compiled = subprocess.run(
+        [
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["dijkstra_dense"])
+    assert code is not None
+    assert code.count("while (") >= 3, code
+    assert code.count("break;") >= 2, code
 
 
 @pytest.mark.slow

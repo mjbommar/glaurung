@@ -1800,6 +1800,28 @@ fn strip_trailing_goto(stmts: &mut Vec<Stmt>, target_va: u64) {
     }
 }
 
+/// Spell a direct edge from the current loop body to its distinguished exit as
+/// `break`. Recurse through conditionals only: inside a nested loop or switch,
+/// a C `break` would target that inner construct rather than this loop.
+fn recover_direct_loop_breaks(stmts: &mut [Stmt], exit_va: u64) {
+    for statement in stmts {
+        match statement {
+            Stmt::Goto { target } if *target == exit_va => *statement = Stmt::Break,
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_direct_loop_breaks(then_body, exit_va);
+                if let Some(else_body) = else_body {
+                    recover_direct_loop_breaks(else_body, exit_va);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// The successor reached by source-order fallthrough rather than an explicit
 /// transfer in `block`'s final instruction.
 fn implicit_successor(block: &crate::ir::types::LlirBlock) -> Option<u64> {
@@ -1951,6 +1973,9 @@ fn lower_region_inner(
             };
             let cond_expr = continue_cond;
             let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float);
+            if let Some(exit) = exit {
+                recover_direct_loop_breaks(&mut body_stmts, lf.blocks[*exit].start_va);
+            }
             // The back-edge is what `while` MEANS. Left as an explicit `goto` to
             // the header it jumps OUT of the loop body to a label the renderer
             // pins wherever that block was emitted — after the `return`, in a

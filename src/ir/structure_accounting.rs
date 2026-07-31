@@ -306,8 +306,15 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             for (i, part) in parts.iter().enumerate() {
                 let next = parts[i + 1..].iter().find_map(structural_entry);
                 if let Some(next) = next {
-                    for (from, _) in escaping(part, edges) {
-                        out.insert((from, next));
+                    for (from, target) in escaping(part, edges) {
+                        // A preceding arm may end in an explicit jump out of
+                        // the sequence (for example, a loop `break`).  That
+                        // edge does not also fall through into the next
+                        // sibling merely because the sibling follows it in
+                        // the region tree.
+                        if target == next || !has_explicit_goto(part, from, target, edges) {
+                            out.insert((from, next));
+                        }
                     }
                 }
             }
@@ -361,9 +368,15 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             if let Some(x) = *exit {
                 out.insert((*header, x));
             }
-            // The body's escaping edges are the latch: they return to the header.
-            for (from, _) in escaping(body, edges) {
-                out.insert((from, *header));
+            // The body's ordinary escaping edges are the latch: they return to
+            // the header. An explicit goto to the distinguished exit is a
+            // source-level break and must not also invent a latch edge.
+            for (from, target) in escaping(body, edges) {
+                let is_explicit_exit =
+                    *exit == Some(target) && has_explicit_goto(body, from, target, edges);
+                if !is_explicit_exit {
+                    out.insert((from, *header));
+                }
             }
             implied(body, edges, out);
         }
@@ -373,8 +386,12 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             if let Some(x) = *exit {
                 out.insert((*cond, x));
             }
-            for (from, _) in escaping(body, edges) {
-                out.insert((from, *cond));
+            for (from, target) in escaping(body, edges) {
+                let is_explicit_exit =
+                    *exit == Some(target) && has_explicit_goto(body, from, target, edges);
+                if !is_explicit_exit {
+                    out.insert((from, *cond));
+                }
             }
             implied(body, edges, out);
         }
