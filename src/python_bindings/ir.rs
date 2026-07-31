@@ -1405,27 +1405,29 @@ fn dwarf_return_hint(
     }
     match normalized.as_str() {
         "_Bool" | "bool" => Some(TypeHint::BoolLike),
-        "char" | "signed char" => Some(TypeHint::Int {
+        "char" | "signed char" | "int8_t" => Some(TypeHint::Int {
             signed: true,
             width: 1,
         }),
-        "unsigned char" => Some(TypeHint::Int {
+        "unsigned char" | "uint8_t" => Some(TypeHint::Int {
             signed: false,
             width: 1,
         }),
-        "short" | "short int" | "signed short" | "signed short int" => Some(TypeHint::Int {
-            signed: true,
-            width: 2,
-        }),
-        "unsigned short" | "unsigned short int" => Some(TypeHint::Int {
+        "short" | "short int" | "signed short" | "signed short int" | "int16_t" => {
+            Some(TypeHint::Int {
+                signed: true,
+                width: 2,
+            })
+        }
+        "unsigned short" | "unsigned short int" | "uint16_t" => Some(TypeHint::Int {
             signed: false,
             width: 2,
         }),
-        "int" | "signed" | "signed int" => Some(TypeHint::Int {
+        "int" | "signed" | "signed int" | "int32_t" => Some(TypeHint::Int {
             signed: true,
             width: 4,
         }),
-        "unsigned" | "unsigned int" => Some(TypeHint::Int {
+        "unsigned" | "unsigned int" | "uint32_t" => Some(TypeHint::Int {
             signed: false,
             width: 4,
         }),
@@ -1439,7 +1441,7 @@ fn dwarf_return_hint(
                 width: c_long_width,
             })
         }
-        "long long" | "long long int" | "signed long long" | "signed long long int" => {
+        "long long" | "long long int" | "signed long long" | "signed long long int" | "int64_t" => {
             Some(TypeHint::Int {
                 signed: true,
                 width: 8,
@@ -1448,7 +1450,8 @@ fn dwarf_return_hint(
         "unsigned long long"
         | "unsigned long long int"
         | "long long unsigned"
-        | "long long unsigned int" => Some(TypeHint::Int {
+        | "long long unsigned int"
+        | "uint64_t" => Some(TypeHint::Int {
             signed: false,
             width: 8,
         }),
@@ -2427,6 +2430,28 @@ mod tests {
         assert_eq!(
             dwarf_return_hint("const unsigned int *", CallConv::SysVAmd64),
             Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+    }
+
+    #[test]
+    fn dwarf_fixed_width_integer_aliases_keep_their_exact_widths() {
+        assert_eq!(
+            dwarf_return_hint("uint32_t", CallConv::SysVAmd64),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            })
+        );
+        assert_eq!(
+            dwarf_return_hint("const int32_t *", CallConv::SysVAmd64),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+        assert_eq!(
+            dwarf_return_hint("int64_t", CallConv::Win64),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
         );
     }
 

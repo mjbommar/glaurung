@@ -5849,6 +5849,14 @@ fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
             | "unsigned long long int"
             | "long long unsigned"
             | "long long unsigned int"
+            | "int8_t"
+            | "uint8_t"
+            | "int16_t"
+            | "uint16_t"
+            | "int32_t"
+            | "uint32_t"
+            | "int64_t"
+            | "uint64_t"
             | "float"
             | "double"
     ) || (allow_void && base == "void")
@@ -13183,6 +13191,43 @@ function f @ 0x1000 {
                 variadic: false,
                 authority: CallPrototypeAuthority::Recovered,
             })
+        );
+    }
+
+    #[test]
+    fn authoritative_fixed_width_prototype_is_kept_at_the_function_boundary() {
+        let function = Function {
+            name: "fixed_width".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        size: 4,
+                    }),
+                    rhs: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                }),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "uint32_t".into(),
+            parameter_types: vec!["const int32_t *".into(), "int32_t".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+        );
+
+        assert!(
+            rendered.contains("uint32_t fixed_width(const int32_t * arg0, int32_t arg1)"),
+            "fixed-width DWARF prototype was discarded:\n{rendered}"
         );
     }
 
