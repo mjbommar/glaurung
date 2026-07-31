@@ -64,6 +64,36 @@ def _compile_so(
     return path
 
 
+def _compile_cpp_so(
+    cpp_src: str,
+    tag: str,
+    debug: bool = True,
+    optimization: str = "O0",
+    compiler: str = "g++",
+) -> str:
+    """Compile a C++ snippet with the same pinned toolchain as the corpus."""
+    import os
+
+    fd, path = tempfile.mkstemp(suffix=".so", prefix=f"h_{tag}_", **WORKDIR_KW)
+    os.close(fd)
+    src = path[:-3] + ".cpp"
+    Path(src).write_text(cpp_src + "\n")
+    argv = [
+        compiler,
+        "-shared",
+        "-fPIC",
+        *(["-g"] if debug else []),
+        f"-{optimization}",
+        "-o",
+        path,
+        src,
+    ]
+    result = TC.run(argv)
+    assert result.returncode == 0, result.stderr
+    _SO_KEEP.append(path)
+    return path
+
+
 def test_pyelftools_is_a_declared_dependency():
     # Fail-closed relies on the import at module load — verify it is a real dep,
     # not an undeclared global that silently disappears.
@@ -166,6 +196,81 @@ def test_round_trip_includes_a_referenced_local_static_callee() -> None:
     caller = D.decompiled_c(binary, signature["va"])
     assert caller is not None
     assert "local_step(" in caller
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        result = D.run_function(
+            signature,
+            "fx",
+            binary,
+            Path(td),
+            seed=1234,
+            fuzz=24,
+        )
+    assert result["status"] == "pass", result
+
+
+def test_round_trip_resolves_a_sanitized_clang_lambda_symbol() -> None:
+    """Clang's local lambda symbol contains ``$``, which C cannot spell.
+
+    The decompiler sanitizes that byte at the call site. Local-callee closure
+    must resolve the sanitized identifier back to the unique raw ELF symbol,
+    include its body under the called name, and reach an exact behavioral diff.
+    """
+    binary = _compile_cpp_so(
+        'extern "C" int calls_local_clang_lambda(int x) {\n'
+        "    auto add_x = [x](int y) { return x + y; };\n"
+        "    return add_x(37);\n"
+        "}",
+        "local_clang_lambda",
+        compiler="clang++",
+    )
+    local_symbols = D.defined_functions(binary)
+    assert any("$" in symbol for symbol in local_symbols)
+    signature = next(
+        sig for sig in D.signatures(binary) if sig["name"] == "calls_local_clang_lambda"
+    )
+    caller = D.decompiled_c(binary, signature["va"])
+    assert caller is not None
+    called = D._EXTERN_FUNCTION_DECL.search(caller)
+    assert called is not None
+    assert "$" not in called.group("name")
+
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        result = D.run_function(
+            signature,
+            "fx",
+            binary,
+            Path(td),
+            seed=1234,
+            fuzz=24,
+        )
+    assert result["status"] == "pass", result
+
+
+def test_round_trip_rebinds_a_demangled_local_cpp_callee() -> None:
+    """The included definition must retain the caller's exact C identifier.
+
+    Glaurung renders a local C++ helper definition with its readable demangled
+    name, while the wrapper's direct call retains the unique mangled ELF symbol.
+    Merely prepending the helper therefore leaves the called symbol undefined.
+    The harness must rebind that exact helper definition before recompilation so
+    this real source-to-binary-to-C-to-binary comparison reaches behavior.
+    """
+    binary = _compile_cpp_so(
+        "static __attribute__((noinline)) int local_cpp_step(int x) {\n"
+        "    return (x * 9) - 17;\n"
+        "}\n"
+        'extern "C" int calls_local_cpp_step(int x) {\n'
+        "    return local_cpp_step(x) + 23;\n"
+        "}",
+        "local_cpp_callee",
+    )
+    signature = next(
+        sig for sig in D.signatures(binary) if sig["name"] == "calls_local_cpp_step"
+    )
+    caller = D.decompiled_c(binary, signature["va"])
+    assert caller is not None
+    assert "_ZL14local_cpp_stepi(" in caller
 
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         result = D.run_function(

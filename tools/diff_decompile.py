@@ -410,6 +410,35 @@ _EXTERN_FUNCTION_DECL = re.compile(
     r"(?m)^[ \t]*extern[ \t]+[^;\n{}()]*?\b"
     r"(?P<name>[A-Za-z_]\w*)[ \t]*\([^;\n{}]*\)[ \t]*;[ \t]*\n?"
 )
+_FUNCTION_DEFINITION = re.compile(
+    r"(?m)^(?!extern\b)(?P<prefix>[A-Za-z_][A-Za-z0-9_ \t*]*[ \t]+)"
+    r"(?P<name>[A-Za-z_]\w*)(?P<suffix>[ \t]*\([^;\n{}]*\)[ \t]*\{)"
+)
+
+
+def _c_identifier(symbol: str) -> str:
+    """Return the identifier emitted when an ELF symbol is rendered as C."""
+    identifier = re.sub(r"[^A-Za-z0-9_]", "_", symbol)
+    if identifier and identifier[0].isdigit():
+        identifier = f"_{identifier}"
+    return identifier
+
+
+def _rebind_function_definition(code: str, target: str) -> str | None:
+    """Rename one decompiled definition and its direct self-call tokens.
+
+    The readable name chosen for a helper definition is not necessarily the
+    exact mangled identifier retained at its caller. Returning ``None`` when a
+    unique top-level definition cannot be identified keeps closure fail-closed.
+    """
+    definition = _FUNCTION_DEFINITION.search(code)
+    if definition is None:
+        return None
+    current = definition.group("name")
+    if current == target:
+        return code
+    function_token = re.compile(rf"\b{re.escape(current)}\b(?=[ \t]*\()")
+    return function_token.sub(target, code)
 
 
 def include_referenced_local_callees(binary: str, root_c: str) -> str:
@@ -429,10 +458,22 @@ def include_referenced_local_callees(binary: str, root_c: str) -> str:
     if _EXTERN_FUNCTION_DECL.search(root_c) is None:
         return root_c
 
+    exports = exported_functions(binary)
+    alias_candidates: dict[str, list[tuple[str, int]]] = {}
+    for symbol, va in defined_functions(binary).items():
+        if symbol in exports:
+            continue
+        for alias in {symbol, _c_identifier(symbol)}:
+            if not alias or re.fullmatch(r"[A-Za-z_]\w*", alias) is None:
+                continue
+            alias_candidates.setdefault(alias, []).append((symbol, va))
+    # A sanitized name can collide (for example ``a$b`` and ``a_b``). Refuse to
+    # guess which body a call denotes; leaving the declaration unresolved is the
+    # accurate fail-closed result.
     local = {
-        name: va
-        for name, va in defined_functions(binary).items()
-        if name not in exported_functions(binary)
+        alias: candidates[0]
+        for alias, candidates in alias_candidates.items()
+        if len(set(candidates)) == 1
     }
     if not local:
         return root_c
@@ -457,11 +498,14 @@ def include_referenced_local_callees(binary: str, root_c: str) -> str:
         ):
             return
         visiting.add(name)
-        helper = decompiled_c(binary, local[name])
+        _symbol, va = local[name]
+        helper = decompiled_c(binary, va)
         if helper is not None:
             for dependency in references(helper):
                 visit(dependency)
-            snippets[name] = helper
+            rebound = _rebind_function_definition(helper, name)
+            if rebound is not None:
+                snippets[name] = rebound
         visiting.remove(name)
 
     for name in references(root_c):
