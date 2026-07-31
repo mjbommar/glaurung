@@ -5698,27 +5698,30 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 7. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
 ///    immediately adjacent, sole eager guard use without claiming that physical
 ///    role is globally SSA.
-/// 8. `label_prune::recover_forward_exit_regions` turns exact forward skips to
+/// 8. `copy_prop::propagate_adjacent_overwritten_values` carries one pure,
+///    immediately consumed value into the assignment that overwrites the same
+///    physical scratch without treating that scratch as globally SSA.
+/// 9. `label_prune::recover_forward_exit_regions` turns exact forward skips to
 ///    an adjacent join into guarded continuations, including a tail loop exit
 ///    that is provably the source-level `break`.
-/// 9. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
+/// 10. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
 ///    `label; body; if (condition) goto label` into the exact source-level
 ///    `do { body } while (condition)` form.
-/// 10. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+/// 11. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 11. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
+/// 12. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
 ///    uniquely labelled return tails at their goto sites, recovering ordinary
 ///    early returns without inventing or reordering an effect.
-/// 12. `switch_ladder::recover_switches` runs before select formation and again
+/// 13. `switch_ladder::recover_switches` runs before select formation and again
 ///    after loop/copy recovery, converting proven comparison ladders into
 ///    `switch` nodes without losing a two-case tail to a ternary expression.
-/// 13. `guarded_switch::collapse_range_guards` removes a compiler range-check
+/// 14. `guarded_switch::collapse_range_guards` removes a compiler range-check
 ///    wrapper only when its unsigned domain and every switch label prove that
 ///    the wrapper cannot select a case the switch would not select itself.
-/// 14. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+/// 15. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
-/// 15. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
+/// 16. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
 ///    immediately joined result return into every arm only when both `if` arms,
 ///    or an explicit switch default, make the control flow exhaustive.
 ///
@@ -5748,6 +5751,12 @@ pub fn prepare_for_decbench_with_output(
     }
     coalesce_param_spills(&mut owned.body);
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);
+    // Shared return labels are already exact at this point. Inline them before
+    // copy/fold so a predicate definition that precedes `if (...) return` can
+    // remain available on the nonjoining guard's fallthrough. A later
+    // idempotent invocation still catches tails exposed by intervening folds.
+    crate::ir::label_prune::inline_terminal_goto_tails(&mut owned);
+    fold_returns(&mut owned.body);
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
     // monotone pair to a small bounded fixpoint: x86 partial-register returns
@@ -5788,6 +5797,7 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::select_fold::fold_boolean_masks(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
+    crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned);
     // Recover shared return epilogues before general forward joins. Otherwise a
     // goto from a loop to `return -1` is faithfully but less clearly rendered
     // as `break; ... return -1` instead of the exact early return.

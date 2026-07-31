@@ -302,6 +302,93 @@ pub fn propagate_adjacent_guard_values(f: &mut Function) {
     }
 }
 
+/// Inline a pure value into the immediately following assignment that both
+/// consumes and overwrites it.
+///
+/// Optimised conditional indexing commonly becomes `result = predicate;
+/// result = table[result];`. The first value has exactly one observable use:
+/// the second assignment's right-hand side, after which the same destination
+/// is overwritten. Moving a nontrapping, nonselect expression into that RHS is
+/// exact and does not rely on the physical register being globally SSA.
+pub fn propagate_adjacent_overwritten_values(function: &mut Function) {
+    while fold_one_adjacent_overwritten_value(&mut function.body) {}
+}
+
+fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
+    for statement in body.iter_mut() {
+        let changed = match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                fold_one_adjacent_overwritten_value(then_body)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(fold_one_adjacent_overwritten_value)
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                fold_one_adjacent_overwritten_value(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| fold_one_adjacent_overwritten_value(body))
+                    || default
+                        .as_mut()
+                        .is_some_and(fold_one_adjacent_overwritten_value)
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                fold_one_adjacent_overwritten_value(try_body)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| fold_one_adjacent_overwritten_value(&mut catch.body))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+
+    for index in 0..body.len().saturating_sub(1) {
+        let Some((destination, source)) = (match &body[index] {
+            Stmt::Assign { dst, src }
+                if is_scratch_reg(dst)
+                    && !is_promoted_local_reg(dst)
+                    && !contains_reg(src, dst)
+                    && !contains_deref(src)
+                    && !contains_unknown(src)
+                    && !contains_select(src) =>
+            {
+                Some((dst.clone(), src.clone()))
+            }
+            _ => None,
+        }) else {
+            continue;
+        };
+        let Some(next_index) = (index + 1..body.len())
+            .find(|next| !matches!(body[*next], Stmt::Comment(_) | Stmt::Nop))
+        else {
+            continue;
+        };
+        let Stmt::Assign {
+            dst: overwritten,
+            src: consumer,
+        } = &mut body[next_index]
+        else {
+            continue;
+        };
+        if *overwritten != destination || count_reg_uses(consumer, &destination) != 1 {
+            continue;
+        }
+        subst(consumer, &HashMap::from([(destination.clone(), source)]));
+        body.remove(index);
+        return true;
+    }
+    false
+}
+
 fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
     for statement in body.iter_mut() {
         let changed = match statement {
@@ -566,6 +653,16 @@ fn is_deferable_promoted_value(e: &Expr) -> bool {
 
 type Copies = HashMap<VReg, Expr>;
 
+/// Whether an `if` arm cannot contribute state to the lexical fallthrough.
+///
+/// This intentionally recognises only the exact one-statement return arm. A
+/// call followed by a return is also nonjoining, but retaining aliases around
+/// richer bodies needs an effect proof this local propagation pass does not
+/// attempt.
+fn is_exact_return_guard(then_body: &[Stmt], else_body: &Option<Vec<Stmt>>) -> bool {
+    else_body.is_none() && matches!(then_body, [Stmt::Return { .. }])
+}
+
 /// Invalidate every copy whose destination *is* `written`, or whose source
 /// *reads* `written` (its recorded value is now stale).
 fn invalidate(copies: &mut Copies, written: &VReg) {
@@ -613,12 +710,15 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 then_body,
                 else_body,
             } => {
+                let return_guard = is_exact_return_guard(then_body, else_body);
                 subst(cond, &copies);
                 propagate_run(then_body);
                 if let Some(eb) = else_body {
                     propagate_run(eb);
                 }
-                copies.clear();
+                if !return_guard {
+                    copies.clear();
+                }
             }
             Stmt::While { cond, body } => {
                 subst(cond, &copies);
@@ -891,12 +991,15 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 then_body,
                 else_body,
             } => {
+                let return_guard = is_exact_return_guard(then_body, else_body);
                 subst(cond, &copies);
                 propagate_run_counted(then_body, reads);
                 if let Some(eb) = else_body {
                     propagate_run_counted(eb, reads);
                 }
-                copies.clear();
+                if !return_guard {
+                    copies.clear();
+                }
             }
             Stmt::While { cond, body } => {
                 subst(cond, &copies);
@@ -2021,6 +2124,102 @@ mod tests {
     }
 
     #[test]
+    fn versioned_predicates_survive_a_nonjoining_return_guard() {
+        let sf = VReg::FlagValue {
+            flag: crate::ir::types::Flag::S,
+            version: 1,
+        };
+        let of = VReg::FlagValue {
+            flag: crate::ir::types::Flag::O,
+            version: 1,
+        };
+        let zf = VReg::FlagValue {
+            flag: crate::ir::types::Flag::Z,
+            version: 1,
+        };
+        let lhs = Expr::Reg(reg("arg0"));
+        let rhs = Expr::Reg(reg("arg1"));
+        let equality = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(lhs.clone()),
+            rhs: Box::new(rhs.clone()),
+        };
+        let less = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(lhs.clone()),
+            rhs: Box::new(rhs.clone()),
+        };
+        let sign = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("difference"))),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let mut function = Function {
+            name: "return_guarded_predicate".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: zf.clone(),
+                    src: equality.clone(),
+                },
+                Stmt::Assign {
+                    dst: sf.clone(),
+                    src: sign.clone(),
+                },
+                Stmt::Assign {
+                    dst: of.clone(),
+                    src: Expr::Bin {
+                        op: BinOp::Xor,
+                        lhs: Box::new(less),
+                        rhs: Box::new(sign),
+                    },
+                },
+                Stmt::If {
+                    cond: Expr::Reg(zf.clone()),
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Const(0)),
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: reg("predicate"),
+                    src: Expr::Bin {
+                        op: BinOp::Or,
+                        lhs: Box::new(Expr::Reg(zf)),
+                        rhs: Box::new(Expr::Bin {
+                            op: BinOp::Xor,
+                            lhs: Box::new(Expr::Reg(sf)),
+                            rhs: Box::new(Expr::Reg(of)),
+                        }),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("predicate"))),
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+        crate::ir::const_fold::fold_constants(&mut function);
+        propagate_copies(&mut function);
+
+        let dump = format!("{:#?}", function.body);
+        assert!(!dump.contains("FlagValue"), "{dump}");
+        assert!(
+            dump.contains("op: Sle") && !dump.contains("op: Slt"),
+            "{dump}"
+        );
+        assert!(matches!(
+            &function.body[0],
+            Stmt::If {
+                cond,
+                then_body,
+                else_body: None,
+            } if cond == &equality && matches!(then_body.as_slice(), [Stmt::Return { .. }])
+        ));
+    }
+
+    #[test]
     fn reload_temp_is_propagated_and_removed() {
         // t10 = local_3; zf = (t10 == 7); return zf
         // t10 folds into the comparison (reading local_3); zf, read once, folds
@@ -2551,6 +2750,106 @@ mod tests {
         assert!(
             !dump.contains("ret"),
             "the scratch read must be replaced: {dump}"
+        );
+    }
+
+    #[test]
+    fn adjacent_predicate_folds_into_the_assignment_that_overwrites_it() {
+        let result = reg("result");
+        let mut function = Function {
+            name: "predicate_index".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Cmp {
+                        op: CmpOp::Sle,
+                        lhs: Box::new(Expr::Reg(reg("lhs"))),
+                        rhs: Box::new(Expr::Reg(reg("rhs"))),
+                    },
+                },
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("base"))),
+                            rhs: Box::new(Expr::Bin {
+                                op: BinOp::Mul,
+                                lhs: Box::new(Expr::Reg(result.clone())),
+                                rhs: Box::new(Expr::Const(4)),
+                            }),
+                        }),
+                        size: 4,
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result.clone())),
+                },
+            ],
+        };
+
+        propagate_adjacent_overwritten_values(&mut function);
+
+        assert_eq!(function.body.len(), 2, "{:#?}", function.body);
+        let Stmt::Assign { dst, src } = &function.body[0] else {
+            panic!("overwriting assignment disappeared: {:#?}", function.body);
+        };
+        assert_eq!(dst, &result);
+        assert_eq!(count_reg_uses(src, &result), 0);
+        assert!(format!("{src:#?}").contains("op: Sle"), "{src:#?}");
+    }
+
+    #[test]
+    fn adjacent_overwrite_keeps_impure_or_multiply_read_values() {
+        let result = reg("result");
+        let overwrite = |source: Expr, consumer: Expr| Function {
+            name: "unsafe_predicate_index".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: source,
+                },
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: consumer,
+                },
+            ],
+        };
+        let mut memory_source = overwrite(
+            Expr::Deref {
+                addr: Box::new(Expr::Reg(reg("cursor"))),
+                size: 4,
+            },
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(result.clone())),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        );
+        let mut multiply_read = overwrite(
+            Expr::Cmp {
+                op: CmpOp::Sle,
+                lhs: Box::new(Expr::Reg(reg("lhs"))),
+                rhs: Box::new(Expr::Reg(reg("rhs"))),
+            },
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(result.clone())),
+                rhs: Box::new(Expr::Reg(result.clone())),
+            },
+        );
+        let expected_memory = memory_source.clone();
+        let expected_multiple = multiply_read.clone();
+
+        propagate_adjacent_overwritten_values(&mut memory_source);
+        propagate_adjacent_overwritten_values(&mut multiply_read);
+
+        assert_eq!(memory_source, expected_memory, "loads must not be moved");
+        assert_eq!(
+            multiply_read, expected_multiple,
+            "a value used twice must not be duplicated"
         );
     }
 
