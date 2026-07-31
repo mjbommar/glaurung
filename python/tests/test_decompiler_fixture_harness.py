@@ -95,6 +95,29 @@ def test_zero_dwarf_signatures_is_an_error(tmp_path):
     assert "__error__" in results
 
 
+def test_gcc_o2_signatures_follow_concrete_abstract_origins() -> None:
+    """Optimized GCC keeps code ranges and source prototypes on separate DIEs."""
+    binary = _compile_so(
+        "long fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }\n"
+        "long ackermann(long m, long n) {\n"
+        "  if (m == 0) return n + 1;\n"
+        "  if (n == 0) return ackermann(m - 1, 1);\n"
+        "  return ackermann(m - 1, ackermann(m, n - 1));\n"
+        "}",
+        "gcc_o2_abstract_origin",
+        optimization="O2",
+    )
+
+    recovered = {signature["name"]: signature for signature in D.signatures(binary)}
+
+    assert recovered["fib"]["params"] == [{"k": "int", "w": 4, "s": True}]
+    assert recovered["fib"]["ret"] == {"k": "int", "w": 8, "s": True}
+    assert recovered["ackermann"]["params"] == [
+        {"k": "int", "w": 8, "s": True},
+        {"k": "int", "w": 8, "s": True},
+    ]
+
+
 def test_batch_decompile_returns_every_requested_real_function():
     """One native analysis must produce every requested fixture function.
 
@@ -1145,6 +1168,7 @@ def test_worker_crash_is_fail(monkeypatch, tmp_path):
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         r = D.run_function(sig, "fx", orig_so, Path(td), seed=1, fuzz=1)
     assert r["status"] == "fail", r
+    assert "on []" in r["detail"], r
 
 
 def test_a_nonterminating_decompilation_is_a_divergence_not_a_timeout(monkeypatch):
@@ -1167,6 +1191,7 @@ def test_a_nonterminating_decompilation_is_a_divergence_not_a_timeout(monkeypatc
         elapsed = time.time() - t0
     assert r["status"] == "fail", r
     assert "did not terminate" in r["detail"], r
+    assert "on [" in r["detail"], r
     assert elapsed < D.WORKER_TIMEOUT_S, (
         f"non-termination must be caught by the per-call budget "
         f"({D.DECOMPILED_CALL_BUDGET_S}s), not the worker timeout: took {elapsed:.1f}s"

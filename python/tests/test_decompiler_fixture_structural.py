@@ -624,6 +624,78 @@ def test_recursion_clang_o0_recovers_exhaustive_direct_returns(tmp_path: Path) -
     assert verdicts["ackermann"]["status"] == "pass", verdicts["ackermann"]
 
 
+def test_recursion_gcc_o2_inherits_declared_parameter_types(tmp_path: Path) -> None:
+    """A concrete optimized DIE must inherit the source prototype it implements."""
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "recursion.c"
+    binary = tmp_path / "recursion-gcc-O2.so"
+    compiled = TC.run(
+        ["gcc", "-shared", "-fPIC", "-g", "-O2", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    fib = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "fib",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    ).stdout
+    assert "long fib(int arg0)" in fib, fib
+
+    ackermann = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "ackermann",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    ).stdout
+    assert "long ackermann(long arg0, long arg1)" in ackermann, ackermann
+    assert "arg2" not in ackermann, ackermann
+
+    differential = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "recursion",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=900,
+        check=True,
+    )
+    verdicts = json.loads(differential.stdout)
+    assert verdicts["fib"]["status"] == "pass", verdicts["fib"]
+    assert verdicts["ackermann"]["status"] == "pass", verdicts["ackermann"]
+
+
 def test_declared_structural_predicates_are_all_present(report):
     # A declared predicate must actually be evaluated (True/False), never absent —
     # a structural assertion that silently does not run is a fail-open gap.

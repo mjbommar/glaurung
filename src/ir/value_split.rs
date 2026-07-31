@@ -8,13 +8,12 @@
 //! parameter reused as a scratch int produces `arg2 = <int>` (an int↔pointer
 //! assignment) that modern C rejects, tanking the recompile (byte_match).
 //!
-//! This pass exploits the spill invariant: once an argument register has been
-//! stored to its frame slot, every later occurrence of that register is scratch,
-//! not the parameter. So it renames those post-spill occurrences to a fresh
-//! `scr_<reg>` name — which is in no argument table, so the naming pass folds it
-//! into an ordinary `varN` local with a plain scalar type. The parameter itself
-//! (the single pre-spill read that feeds the spill store) keeps the register
-//! name and its recovered pointer type. Result: `arg2 = ret` becomes
+//! This pass exploits a stricter spill invariant: after an argument register has
+//! been stored to its frame slot, a later *definition* of that register starts
+//! its scratch lifetime. Reads and repeated spill stores before that definition
+//! are still the incoming parameter. Scratch occurrences get a fresh `scr_<reg>`
+//! name — which is in no argument table, so the naming pass folds it into an
+//! ordinary `varN` local with a plain scalar type. Result: `arg2 = ret` becomes
 //! `varK = ret`, with no int↔pointer conflict.
 //!
 //! Gated on "the register was actually spilled", so register-resident parameters
@@ -64,8 +63,10 @@ fn arg_slot_tables(cc: CallConv) -> &'static [&'static [&'static str]] {
 struct Splitter {
     /// register sub-name -> argument slot index
     slot_of: HashMap<&'static str, usize>,
-    /// slots whose spill store has already been seen (register now scratch)
+    /// slots whose spill store has already been seen
     spilled: HashSet<usize>,
+    /// slots whose first post-spill definition has started a scratch lifetime
+    scratch: HashSet<usize>,
 }
 
 /// Rename an argument register's scratch reuse after it has been spilled.
@@ -79,6 +80,7 @@ pub fn split_spilled_arg_reuse(f: &mut Function, cc: CallConv) {
     let mut sp = Splitter {
         slot_of,
         spilled: HashSet::new(),
+        scratch: HashSet::new(),
     };
     sp.walk_body(&mut f.body);
 }
@@ -94,7 +96,7 @@ impl Splitter {
     fn rename_reg(&self, v: &mut VReg) {
         if let VReg::Phys(n) = v {
             if let Some(slot) = self.slot(n) {
-                if self.spilled.contains(&slot) {
+                if self.scratch.contains(&slot) {
                     *n = format!("scr_{}", n);
                 }
             }
@@ -151,7 +153,7 @@ impl Splitter {
         {
             if is_promoted_local(dst) {
                 if let Some(slot) = self.slot(srcname) {
-                    if !self.spilled.contains(&slot) {
+                    if !self.scratch.contains(&slot) {
                         return Some(slot);
                     }
                 }
@@ -160,18 +162,42 @@ impl Splitter {
         None
     }
 
+    /// A write to an already-spilled argument register starts its scratch value.
+    fn scratch_definition_slot(&self, s: &Stmt) -> Option<usize> {
+        let Stmt::Assign {
+            dst: VReg::Phys(name),
+            ..
+        } = s
+        else {
+            return None;
+        };
+        let slot = self.slot(name)?;
+        self.spilled.contains(&slot).then_some(slot)
+    }
+
+    fn rename_as_scratch(v: &mut VReg) {
+        if let VReg::Phys(name) = v {
+            *name = format!("scr_{name}");
+        }
+    }
+
     fn walk_body(&mut self, body: &mut [Stmt]) {
         for s in body.iter_mut() {
             // Detect the spill BEFORE renaming this statement, so the parameter
             // read that feeds it is preserved; mark the slot spilled AFTER, so
-            // only *subsequent* occurrences are renamed.
+            // a later definition can begin the scratch lifetime.
             let spill = self.spill_slot(s);
+            let scratch_definition = self.scratch_definition_slot(s);
 
             // Rename the statement's own (non-nested) register occurrences.
             match s {
                 Stmt::Assign { dst, src } => {
-                    self.rename_reg(dst);
                     self.rename_expr(src);
+                    if scratch_definition.is_some() {
+                        Self::rename_as_scratch(dst);
+                    } else {
+                        self.rename_reg(dst);
+                    }
                 }
                 Stmt::Store { addr, src, .. } => {
                     self.rename_expr(addr);
@@ -209,6 +235,9 @@ impl Splitter {
 
             if let Some(slot) = spill {
                 self.spilled.insert(slot);
+            }
+            if let Some(slot) = scratch_definition {
+                self.scratch.insert(slot);
             }
 
             // Recurse into nested bodies (they follow in program order).
@@ -305,6 +334,48 @@ mod tests {
             Stmt::Assign {
                 dst: reg("rcx"),
                 src: Expr::Reg(reg("scr_rdx"))
+            }
+        );
+    }
+
+    #[test]
+    fn repeated_parameter_spills_remain_the_same_live_in_until_a_definition() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_0")),
+                    src: Expr::Reg(reg("rdi")),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_1")),
+                    src: Expr::Reg(reg("rdi")),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Reg(reg("rdi")),
+                },
+            ],
+        };
+
+        split_spilled_arg_reuse(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(
+            f.body[1],
+            Stmt::Store {
+                addr: Expr::Reg(reg("stack_1")),
+                src: Expr::Reg(reg("rdi")),
+                size: 8,
+            }
+        );
+        assert_eq!(
+            f.body[2],
+            Stmt::Assign {
+                dst: reg("rax"),
+                src: Expr::Reg(reg("rdi")),
             }
         );
     }

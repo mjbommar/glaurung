@@ -43,6 +43,10 @@ pub struct DwarfFunction {
     pub language: Option<String>,
     /// Count of `DW_TAG_formal_parameter` children. Roughly = arity.
     pub param_count: u32,
+    /// Source-level parameter contracts in declaration order. A concrete
+    /// optimized subprogram may inherit each type through its parameter DIE's
+    /// `DW_AT_abstract_origin`.
+    pub parameter_types: Vec<DwarfParameterType>,
     /// Whether the subprogram declared a prototype (`DW_AT_prototyped`).
     pub prototyped: bool,
     /// Authoritative source-level return contract from `DW_AT_type`.
@@ -59,6 +63,15 @@ pub enum DwarfReturnType {
     /// A concrete referenced type resolved to a C-like spelling.
     Type(String),
     /// A type attribute exists but this reader cannot resolve it safely.
+    Unknown,
+}
+
+/// One source-level parameter type recovered from DWARF.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DwarfParameterType {
+    /// A concrete referenced type resolved to a C-like spelling.
+    Type(String),
+    /// The parameter exists, but its declared type cannot be resolved safely.
     Unknown,
 }
 
@@ -168,9 +181,17 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
         // depth precisely. `entries_tree` was unreliable on clang
         // `-gdwarf-5` output in practice.
         let mut cursor = unit.entries();
-        // Each frame: (subprogram offset, param count seen, subprogram depth).
-        let mut open: Vec<(gimli::UnitOffset<usize>, u32, isize)> = Vec::new();
-        let mut emitted: Vec<(gimli::UnitOffset<usize>, u32)> = Vec::new();
+        // Each frame: (subprogram offset, direct parameter offsets, depth).
+        // Retaining the actual DIE identities is essential at -O2: GCC puts
+        // their types on abstract parameter DIEs and only their locations on
+        // the concrete children.
+        let mut open: Vec<(
+            gimli::UnitOffset<usize>,
+            Vec<gimli::UnitOffset<usize>>,
+            isize,
+        )> = Vec::new();
+        let mut emitted: Vec<(gimli::UnitOffset<usize>, Vec<gimli::UnitOffset<usize>>)> =
+            Vec::new();
 
         loop {
             let depth_of_next = cursor.next_depth();
@@ -179,10 +200,11 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 _ => break,
             }
             // Pop any subprograms whose subtree we've left.
-            while let Some(&(off, count, sub_depth)) = open.last() {
-                if depth_of_next <= sub_depth {
-                    emitted.push((off, count));
-                    open.pop();
+            while let Some((_, _, sub_depth)) = open.last() {
+                if depth_of_next <= *sub_depth {
+                    if let Some((off, parameters, _)) = open.pop() {
+                        emitted.push((off, parameters));
+                    }
                 } else {
                     break;
                 }
@@ -193,23 +215,23 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
             };
             match entry.tag() {
                 gimli::DW_TAG_subprogram => {
-                    open.push((entry.offset(), 0, depth_of_next));
+                    open.push((entry.offset(), Vec::new(), depth_of_next));
                 }
                 gimli::DW_TAG_formal_parameter => {
                     if let Some(top) = open.last_mut() {
                         if depth_of_next == top.2 + 1 {
-                            top.1 += 1;
+                            top.1.push(entry.offset());
                         }
                     }
                 }
                 _ => {}
             }
         }
-        while let Some((off, count, _)) = open.pop() {
-            emitted.push((off, count));
+        while let Some((off, parameters, _)) = open.pop() {
+            emitted.push((off, parameters));
         }
 
-        for (off, param_count) in emitted {
+        for (off, parameter_offsets) in emitted {
             let entry = match unit.entry(off) {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -239,6 +261,19 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                     .map(DwarfReturnType::Type)
                     .unwrap_or(DwarfReturnType::Unknown),
             };
+            let parameter_types = parameter_offsets
+                .into_iter()
+                .map(|parameter_offset| {
+                    let Ok(parameter) = unit.entry(parameter_offset) else {
+                        return DwarfParameterType::Unknown;
+                    };
+                    inherited_attr_value(&unit, &parameter, gimli::DW_AT_type)
+                        .and_then(|type_attr| _resolve_type_string(&dwarf, &unit, type_attr))
+                        .map(DwarfParameterType::Type)
+                        .unwrap_or(DwarfParameterType::Unknown)
+                })
+                .collect::<Vec<_>>();
+            let param_count = parameter_types.len() as u32;
 
             funcs.push(DwarfFunction {
                 entry_va,
@@ -247,6 +282,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 source_file: unit_name.clone(),
                 language: unit_lang.clone(),
                 param_count,
+                parameter_types,
                 prototyped,
                 return_type,
             });

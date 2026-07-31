@@ -443,6 +443,8 @@ pub enum RecoveredOutputKind {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RecoveredPrototype {
     parameters: Vec<RecoveredParameter>,
+    parameter_arity_locked: bool,
+    locked_parameters: HashSet<usize>,
     result: Option<RecoveredResult>,
     output_kind: RecoveredOutputKind,
     output_locked: bool,
@@ -469,6 +471,67 @@ impl RecoveredPrototype {
 
     pub(crate) fn output_is_locked(&self) -> bool {
         self.output_locked
+    }
+
+    pub(crate) fn parameter_arity_is_locked(&self) -> bool {
+        self.parameter_arity_locked
+    }
+
+    pub(crate) fn parameter_is_locked(&self, slot: usize) -> bool {
+        self.locked_parameters.contains(&slot)
+    }
+
+    /// Replace heuristic live-ins with an authoritative declared parameter list.
+    ///
+    /// Optimized code routinely reuses every argument register as scratch. The
+    /// source declaration owns arity and types when DWARF/PDB provides them;
+    /// machine-code recovery still supplies exact SSA identities where they
+    /// exist and ABI entry storage supplies missing integer-register values.
+    pub(crate) fn apply_locked_parameters(
+        &mut self,
+        cc: crate::ir::call_args::CallConv,
+        declared: &[Option<TypeHint>],
+    ) {
+        let prior = std::mem::take(&mut self.parameters)
+            .into_iter()
+            .map(|parameter| (parameter.slot, parameter))
+            .collect::<HashMap<_, _>>();
+        let abi_registers = crate::ir::abi::argument_registers(cc);
+        self.parameters = declared
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(slot, declared_hint)| {
+                if let Some(mut parameter) = prior.get(&slot).cloned() {
+                    if declared_hint.is_some() {
+                        parameter.hint = declared_hint;
+                    }
+                    return parameter;
+                }
+                let storage = abi_registers
+                    .get(slot)
+                    .map(|register| VReg::phys(*register))
+                    // Stack-passed parameters acquire this same canonical role
+                    // when stack promotion resolves their positive entry-frame
+                    // offset. Retain the declared slot now so the arity lock
+                    // does not suppress that later recovery.
+                    .unwrap_or_else(|| VReg::phys(format!("arg{slot}")));
+                RecoveredParameter {
+                    slot,
+                    value: SsaValue {
+                        base: storage,
+                        version: 0,
+                    },
+                    hint: declared_hint,
+                }
+            })
+            .collect();
+        self.parameter_arity_locked = true;
+        self.locked_parameters = declared
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, hint)| hint.map(|_| slot))
+            .collect();
     }
 
     /// Apply an authoritative source-level output contract.
@@ -514,7 +577,12 @@ impl RecoveredPrototype {
         let mut out = TypeMap::default();
         for parameter in &self.parameters {
             if let Some(hint) = parameter.hint {
-                out.upsert_public(VReg::phys(format!("arg{}", parameter.slot)), hint);
+                let role = VReg::phys(format!("arg{}", parameter.slot));
+                if self.parameter_is_locked(parameter.slot) {
+                    out.apply_locked_fact(role, hint);
+                } else {
+                    out.upsert_public(role, hint);
+                }
             }
         }
         out
@@ -1451,6 +1519,8 @@ pub fn recover_prototype_with_arm_vfp_args(
     parameters.sort_by_key(|parameter| parameter.slot);
     RecoveredPrototype {
         parameters,
+        parameter_arity_locked: false,
+        locked_parameters: HashSet::new(),
         result,
         output_kind,
         output_locked: false,
@@ -3006,6 +3076,32 @@ mod tests {
         assert_eq!(
             prototype.result().and_then(|result| result.hint),
             Some(hint)
+        );
+    }
+
+    #[test]
+    fn locked_declared_parameters_retain_stack_passed_slots() {
+        let hint = Some(TypeHint::Int {
+            signed: true,
+            width: 8,
+        });
+        let mut prototype = RecoveredPrototype::default();
+
+        prototype.apply_locked_parameters(crate::ir::call_args::CallConv::SysVAmd64, &[hint; 8]);
+
+        assert!(prototype.parameter_arity_is_locked());
+        assert_eq!(prototype.parameters().len(), 8);
+        assert_eq!(
+            prototype
+                .parameter(6)
+                .map(|parameter| &parameter.value.base),
+            Some(&VReg::phys("arg6"))
+        );
+        assert_eq!(
+            prototype
+                .parameter(7)
+                .map(|parameter| &parameter.value.base),
+            Some(&VReg::phys("arg7"))
         );
     }
 

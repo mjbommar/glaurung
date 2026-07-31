@@ -66,6 +66,10 @@ struct SlotVal {
 struct StackContext {
     cc: Option<CallConv>,
     rbp_repurposed: bool,
+    /// Exact source-level arity when debug/prototype evidence locks it.
+    /// Candidate stack arguments at or beyond this bound are frame storage,
+    /// never additional parameters invented from a recovered displacement.
+    parameter_count: Option<usize>,
 }
 
 fn is_active_stack_base(name: &str, ctx: StackContext) -> bool {
@@ -114,14 +118,30 @@ pub fn promote_stack_locals(f: &mut Function) {
 /// blanket `long`. When a name is defined at more than one width the widest is
 /// kept (the safest committed size).
 pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> HashMap<String, u8> {
+    promote_stack_locals_typed_with_parameter_count(f, cc, None)
+}
+
+/// Promote stack storage while respecting an optional authoritative parameter
+/// count. This matters for optimized non-leaf functions: control-flow joins can
+/// expose saved registers through a positive entry-stack displacement that has
+/// the same machine shape as a genuine stack-passed argument. DWARF or another
+/// locked prototype disambiguates the two without weakening stripped-binary
+/// inference.
+pub fn promote_stack_locals_typed_with_parameter_count(
+    f: &mut Function,
+    cc: Option<CallConv>,
+    parameter_count: Option<usize>,
+) -> HashMap<String, u8> {
     let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
     let mut stack_counter = 0usize;
     let mut local_counter = 0usize;
     let ctx = StackContext {
         cc,
         rbp_repurposed: rbp_is_repurposed(&f.body, cc),
+        parameter_count,
     };
     let address_defs = collect_stack_address_defs(&f.body, ctx);
+    let label_deltas = collect_label_stack_deltas(&f.body, ctx, &address_defs);
     let mut sp_delta = Some(0i64);
     rewrite_body(
         &mut f.body,
@@ -131,6 +151,7 @@ pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> Has
         ctx,
         &mut sp_delta,
         &address_defs,
+        &label_deltas,
     );
     // Several machine SlotKeys can intentionally collapse to one source-level
     // role (notably `entry_rsp+0` and `esp+0` both render as `stack_top`).  Join
@@ -167,6 +188,241 @@ fn stack_arg_layout(cc: CallConv) -> Option<(usize, i64, i64)> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StackFlow {
+    Unreachable,
+    Known(i64),
+    Unknown,
+}
+
+fn merge_stack_flows(left: StackFlow, right: StackFlow) -> StackFlow {
+    match (left, right) {
+        (StackFlow::Unreachable, other) | (other, StackFlow::Unreachable) => other,
+        (StackFlow::Known(a), StackFlow::Known(b)) if a == b => StackFlow::Known(a),
+        (StackFlow::Known(_), StackFlow::Known(_))
+        | (StackFlow::Unknown, _)
+        | (_, StackFlow::Unknown) => StackFlow::Unknown,
+    }
+}
+
+fn merge_stack_flow_entry(states: &mut HashMap<u64, StackFlow>, label: u64, incoming: StackFlow) {
+    if incoming == StackFlow::Unreachable {
+        return;
+    }
+    states
+        .entry(label)
+        .and_modify(|known| *known = merge_stack_flows(*known, incoming))
+        .or_insert(incoming);
+}
+
+/// Propagate entry-stack deltas over residual goto control flow before any
+/// memory expression is rewritten.
+///
+/// Structured AST order is usually execution order, but optimized functions
+/// retain labels after one or more textual epilogues. A branch into such a
+/// label still executes in the original frame. This bounded monotone analysis
+/// records goto edges and replays backward edges until each label is Known or
+/// conservatively Unknown; Unreachable never poisons a reachable predecessor.
+fn collect_label_stack_deltas(
+    body: &[Stmt],
+    ctx: StackContext,
+    address_defs: &HashMap<VReg, (String, i64)>,
+) -> HashMap<u64, Option<i64>> {
+    fn update_stack_assignment(
+        flow: StackFlow,
+        dst: &VReg,
+        src: &Expr,
+        ctx: StackContext,
+        address_defs: &HashMap<VReg, (String, i64)>,
+    ) -> StackFlow {
+        match flow {
+            StackFlow::Known(delta) => {
+                stack_delta_after_assignment(dst, src, Some(delta), ctx, address_defs)
+                    .map(StackFlow::Known)
+                    .unwrap_or(StackFlow::Unknown)
+            }
+            other => other,
+        }
+    }
+
+    fn walk(
+        body: &[Stmt],
+        mut flow: StackFlow,
+        target_states: &mut HashMap<u64, StackFlow>,
+        label_states: &mut HashMap<u64, StackFlow>,
+        ctx: StackContext,
+        address_defs: &HashMap<VReg, (String, i64)>,
+    ) -> StackFlow {
+        for statement in body {
+            match statement {
+                Stmt::Assign { dst, src } if is_stack_pointer_reg(dst, ctx) => {
+                    flow = update_stack_assignment(flow, dst, src, ctx, address_defs);
+                }
+                Stmt::Push { .. } => {
+                    if let StackFlow::Known(delta) = flow {
+                        flow = StackFlow::Known(delta - stack_word_size(ctx));
+                    }
+                }
+                Stmt::Pop { .. } => {
+                    if let StackFlow::Known(delta) = flow {
+                        flow = StackFlow::Known(delta + stack_word_size(ctx));
+                    }
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    let then_flow = walk(
+                        then_body,
+                        flow,
+                        target_states,
+                        label_states,
+                        ctx,
+                        address_defs,
+                    );
+                    let else_flow = else_body.as_deref().map_or(flow, |else_body| {
+                        walk(
+                            else_body,
+                            flow,
+                            target_states,
+                            label_states,
+                            ctx,
+                            address_defs,
+                        )
+                    });
+                    flow = merge_stack_flows(then_flow, else_flow);
+                }
+                Stmt::While { body, .. } => {
+                    let body_flow =
+                        walk(body, flow, target_states, label_states, ctx, address_defs);
+                    flow = merge_stack_flows(flow, body_flow);
+                }
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    flow = walk(
+                        std::slice::from_ref(init.as_ref()),
+                        flow,
+                        target_states,
+                        label_states,
+                        ctx,
+                        address_defs,
+                    );
+                    let loop_entry = flow;
+                    let body_flow = walk(
+                        body,
+                        loop_entry,
+                        target_states,
+                        label_states,
+                        ctx,
+                        address_defs,
+                    );
+                    let stepped = walk(
+                        std::slice::from_ref(step.as_ref()),
+                        body_flow,
+                        target_states,
+                        label_states,
+                        ctx,
+                        address_defs,
+                    );
+                    flow = merge_stack_flows(loop_entry, stepped);
+                }
+                Stmt::DoWhile { body, .. } => {
+                    let body_flow =
+                        walk(body, flow, target_states, label_states, ctx, address_defs);
+                    flow = merge_stack_flows(flow, body_flow);
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    let incoming = flow;
+                    let mut exits = StackFlow::Unreachable;
+                    for (_, case_body) in cases {
+                        exits = merge_stack_flows(
+                            exits,
+                            walk(
+                                case_body,
+                                incoming,
+                                target_states,
+                                label_states,
+                                ctx,
+                                address_defs,
+                            ),
+                        );
+                    }
+                    if let Some(default_body) = default {
+                        exits = merge_stack_flows(
+                            exits,
+                            walk(
+                                default_body,
+                                incoming,
+                                target_states,
+                                label_states,
+                                ctx,
+                                address_defs,
+                            ),
+                        );
+                    } else {
+                        exits = merge_stack_flows(exits, incoming);
+                    }
+                    flow = exits;
+                }
+                Stmt::Goto { target } => {
+                    merge_stack_flow_entry(target_states, *target, flow);
+                    flow = StackFlow::Unreachable;
+                }
+                Stmt::Label(label) => {
+                    let targeted = target_states
+                        .get(label)
+                        .copied()
+                        .unwrap_or(StackFlow::Unreachable);
+                    flow = merge_stack_flows(flow, targeted);
+                    merge_stack_flow_entry(label_states, *label, flow);
+                }
+                Stmt::Return { .. } | Stmt::IndirectGoto { .. } => {
+                    flow = StackFlow::Unreachable;
+                }
+                Stmt::Store { .. }
+                | Stmt::Call { .. }
+                | Stmt::Assign { .. }
+                | Stmt::Break
+                | Stmt::Nop
+                | Stmt::Unknown(_)
+                | Stmt::Comment(_) => {}
+            }
+        }
+        flow
+    }
+
+    let mut target_states = HashMap::new();
+    let mut label_states = HashMap::new();
+    for _ in 0..64 {
+        let before = target_states.clone();
+        label_states.clear();
+        let _ = walk(
+            body,
+            StackFlow::Known(0),
+            &mut target_states,
+            &mut label_states,
+            ctx,
+            address_defs,
+        );
+        if target_states == before {
+            break;
+        }
+    }
+
+    label_states
+        .into_iter()
+        .map(|(label, flow)| {
+            let delta = match flow {
+                StackFlow::Known(delta) => Some(delta),
+                StackFlow::Unreachable | StackFlow::Unknown => None,
+            };
+            (label, delta)
+        })
+        .collect()
+}
+
 fn rewrite_body(
     body: &mut [Stmt],
     map: &mut HashMap<SlotKey, SlotVal>,
@@ -175,18 +431,22 @@ fn rewrite_body(
     ctx: StackContext,
     sp_delta: &mut Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
+    label_deltas: &HashMap<u64, Option<i64>>,
 ) {
     for s in body.iter_mut() {
         match s {
-            Stmt::IndirectGoto { target } => rewrite_expr(
-                target,
-                map,
-                stack_counter,
-                local_counter,
-                ctx,
-                *sp_delta,
-                address_defs,
-            ),
+            Stmt::IndirectGoto { target } => {
+                rewrite_expr(
+                    target,
+                    map,
+                    stack_counter,
+                    local_counter,
+                    ctx,
+                    *sp_delta,
+                    address_defs,
+                );
+                *sp_delta = None;
+            }
             Stmt::Assign { dst, src } => {
                 rewrite_expr(
                     src,
@@ -268,6 +528,7 @@ fn rewrite_body(
                         address_defs,
                     );
                 }
+                *sp_delta = None;
             }
             Stmt::If {
                 cond,
@@ -293,6 +554,7 @@ fn rewrite_body(
                     ctx,
                     &mut then_delta,
                     address_defs,
+                    label_deltas,
                 );
                 let mut else_delta = incoming;
                 if let Some(eb) = else_body {
@@ -304,9 +566,17 @@ fn rewrite_body(
                         ctx,
                         &mut else_delta,
                         address_defs,
+                        label_deltas,
                     );
                 }
-                *sp_delta = merge_stack_deltas(then_delta, else_delta);
+                let then_falls_through = body_falls_through(then_body);
+                let else_falls_through = else_body.as_deref().is_none_or(body_falls_through);
+                *sp_delta = match (then_falls_through, else_falls_through) {
+                    (true, true) => merge_stack_deltas(then_delta, else_delta),
+                    (true, false) => then_delta,
+                    (false, true) => else_delta,
+                    (false, false) => None,
+                };
             }
             Stmt::While { cond, body } => {
                 rewrite_expr(
@@ -328,6 +598,7 @@ fn rewrite_body(
                     ctx,
                     &mut body_delta,
                     address_defs,
+                    label_deltas,
                 );
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
             }
@@ -345,6 +616,7 @@ fn rewrite_body(
                     ctx,
                     sp_delta,
                     address_defs,
+                    label_deltas,
                 );
                 rewrite_expr(
                     cond,
@@ -365,6 +637,7 @@ fn rewrite_body(
                     ctx,
                     &mut body_delta,
                     address_defs,
+                    label_deltas,
                 );
                 rewrite_body(
                     std::slice::from_mut(step.as_mut()),
@@ -374,6 +647,7 @@ fn rewrite_body(
                     ctx,
                     &mut body_delta,
                     address_defs,
+                    label_deltas,
                 );
                 *sp_delta = merge_stack_deltas(loop_entry, body_delta);
             }
@@ -388,6 +662,7 @@ fn rewrite_body(
                     ctx,
                     &mut body_delta,
                     address_defs,
+                    label_deltas,
                 );
                 rewrite_expr(
                     cond,
@@ -438,6 +713,7 @@ fn rewrite_body(
                         ctx,
                         &mut case_delta,
                         address_defs,
+                        label_deltas,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, case_delta),
@@ -454,6 +730,7 @@ fn rewrite_body(
                         ctx,
                         &mut default_delta,
                         address_defs,
+                        label_deltas,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, default_delta),
@@ -470,12 +747,15 @@ fn rewrite_body(
             Stmt::Pop { .. } => {
                 *sp_delta = sp_delta.map(|delta| delta + stack_word_size(ctx));
             }
-            Stmt::Label(_) => {
-                // A raw label may have incoming gotos from a different stack
-                // state; without CFG-aware propagation the safe answer is unknown.
-                *sp_delta = None;
+            // Labels have no machine effect, but textual order is not control-
+            // flow order. Restore the fixed-point state collected from every
+            // fallthrough and goto predecessor (including targets that appear
+            // after an epilogue in the rendered body).
+            Stmt::Label(label) => {
+                *sp_delta = label_deltas.get(label).copied().unwrap_or(None);
             }
-            Stmt::Goto { .. } | Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Goto { .. } => *sp_delta = None,
+            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
     }
 }
@@ -533,6 +813,21 @@ fn stack_delta_after_assignment(
 
 fn merge_stack_deltas(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     (a == b).then_some(a).flatten()
+}
+
+fn body_falls_through(body: &[Stmt]) -> bool {
+    let Some(last) = body.last() else {
+        return true;
+    };
+    match last {
+        Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => false,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => body_falls_through(then_body) || else_body.as_deref().is_none_or(body_falls_through),
+        _ => true,
+    }
 }
 
 /// Promote a `Deref { addr: Lea { base: stack_base, disp, .. } }` into a
@@ -803,7 +1098,14 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                     if let Some(body) = else_body {
                         walk_direct(body, out, ctx, &mut else_delta);
                     }
-                    *sp_delta = merge_stack_deltas(then_delta, else_delta);
+                    let then_falls_through = body_falls_through(then_body);
+                    let else_falls_through = else_body.as_deref().is_none_or(body_falls_through);
+                    *sp_delta = match (then_falls_through, else_falls_through) {
+                        (true, true) => merge_stack_deltas(then_delta, else_delta),
+                        (true, false) => then_delta,
+                        (false, true) => else_delta,
+                        (false, false) => None,
+                    };
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                     let incoming = *sp_delta;
@@ -858,7 +1160,7 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                 Stmt::Pop { .. } => {
                     *sp_delta = sp_delta.map(|delta| delta + stack_word_size(ctx));
                 }
-                Stmt::Label(_) => *sp_delta = None,
+                Stmt::Label(_) => {}
                 _ => {}
             }
         }
@@ -1078,7 +1380,10 @@ fn alloc_name(
     if is_frame_pointer(base) && disp > 0 {
         if let Some((reg_args, first, stride)) = ctx.cc.and_then(stack_arg_layout) {
             if disp >= first && (disp - first) % stride == 0 {
-                return format!("arg{}", reg_args + ((disp - first) / stride) as usize);
+                let candidate = reg_args + ((disp - first) / stride) as usize;
+                if ctx.parameter_count.is_none_or(|count| candidate < count) {
+                    return format!("arg{candidate}");
+                }
             }
         }
     }
@@ -1091,10 +1396,16 @@ fn alloc_name(
     if base == "entry_rsp" {
         match ctx.cc {
             Some(CallConv::SysVAmd64) if disp >= 8 && (disp - 8) % 8 == 0 => {
-                return format!("arg{}", 6 + ((disp - 8) / 8) as usize);
+                let candidate = 6 + ((disp - 8) / 8) as usize;
+                if ctx.parameter_count.is_none_or(|count| candidate < count) {
+                    return format!("arg{candidate}");
+                }
             }
             Some(CallConv::Cdecl32) if disp >= 4 && (disp - 4) % 4 == 0 => {
-                return format!("arg{}", ((disp - 4) / 4) as usize);
+                let candidate = ((disp - 4) / 4) as usize;
+                if ctx.parameter_count.is_none_or(|count| candidate < count) {
+                    return format!("arg{candidate}");
+                }
             }
             _ => {}
         }
@@ -1162,6 +1473,46 @@ mod tests {
         assert_eq!(promoted("rbp", 24, cc), "arg7");
         assert_eq!(promoted("rbp", 32, cc), "arg8");
         assert_eq!(promoted("rbp", 40, cc), "arg9");
+    }
+
+    #[test]
+    fn a_locked_two_parameter_prototype_rejects_spurious_stack_arguments() {
+        let mut f = Function {
+            name: "ackermann".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: deref_of("rbp", 40, 8),
+                },
+                Stmt::Assign {
+                    dst: reg("rdx"),
+                    src: deref_of("rsp", 8, 8),
+                },
+            ],
+        };
+
+        let sizes = promote_stack_locals_typed_with_parameter_count(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            Some(2),
+        );
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "stack_0"
+        ));
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "stack_1"
+        ));
+        assert!(!sizes.keys().any(|name| name.starts_with("arg")));
     }
 
     #[test]
@@ -1344,6 +1695,162 @@ mod tests {
 
         assert!(matches!(
             &f.body[1],
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "stack_0"
+        ));
+    }
+
+    #[test]
+    fn a_loop_label_preserves_a_consistent_stack_slot_identity() {
+        let mut f = Function {
+            name: "loop_frame".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("rsp", 8),
+                    src: Expr::Reg(reg("rdi")),
+                    size: 4,
+                },
+                Stmt::Label(0x1010),
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("rsp", 8, 4),
+                },
+                Stmt::Goto { target: 0x1010 },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Store {
+                addr: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "stack_0"
+        ));
+        assert!(matches!(
+            &f.body[3],
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "stack_0"
+        ));
+    }
+
+    #[test]
+    fn a_goto_after_an_epilogue_keeps_the_target_frame_depth() {
+        let adjust = |op| Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(40)),
+            },
+        };
+        let mut f = Function {
+            name: "optimized_recursive_frame".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Push {
+                    value: Expr::Reg(reg("rbx")),
+                },
+                adjust(crate::ir::types::BinOp::Sub),
+                Stmt::Store {
+                    addr: lea("rsp", 24),
+                    src: Expr::Reg(reg("rax")),
+                    size: 8,
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("zf")),
+                    then_body: vec![Stmt::Goto { target: 0x1680 }],
+                    else_body: None,
+                },
+                adjust(crate::ir::types::BinOp::Add),
+                Stmt::Pop { target: reg("rbx") },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+                Stmt::Label(0x1680),
+                Stmt::Store {
+                    addr: lea("rsp", 24),
+                    src: Expr::Reg(reg("rdi")),
+                    size: 8,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count(&mut f, Some(CallConv::SysVAmd64), Some(2));
+
+        let first = match &f.body[2] {
+            Stmt::Store {
+                addr: Expr::Reg(VReg::Phys(name)),
+                ..
+            } => name,
+            other => panic!("expected promoted first store, got {other:?}"),
+        };
+        let target = match &f.body[8] {
+            Stmt::Store {
+                addr: Expr::Reg(VReg::Phys(name)),
+                ..
+            } => name,
+            other => panic!("expected promoted target store, got {other:?}"),
+        };
+        assert_eq!(first, target);
+    }
+
+    #[test]
+    fn a_returning_if_arm_does_not_poison_the_fallthrough_stack_state() {
+        let adjust = |op| Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(32)),
+            },
+        };
+        let mut f = Function {
+            name: "early_return_frame".into(),
+            entry_va: 0,
+            body: vec![
+                adjust(crate::ir::types::BinOp::Sub),
+                Stmt::Store {
+                    addr: lea("rsp", 8),
+                    src: Expr::Reg(reg("rdi")),
+                    size: 4,
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("zf")),
+                    then_body: vec![
+                        adjust(crate::ir::types::BinOp::Add),
+                        Stmt::Return {
+                            value: Some(Expr::Const(0)),
+                        },
+                    ],
+                    else_body: None,
+                },
+                Stmt::Label(0x1010),
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("rsp", 8, 4),
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(matches!(
+            &f.body[4],
             Stmt::Assign {
                 src: Expr::Reg(VReg::Phys(name)),
                 ..

@@ -214,6 +214,27 @@ def _type_desc(type_attr, cu):
     return _die_desc(ref, cu)
 
 
+def _inherited_attr(die, name: str, cu):
+    """Resolve one attribute through a bounded abstract-origin/specification chain."""
+    seen: set[int] = set()
+    for _ in range(16):
+        if die.offset in seen:
+            return None
+        seen.add(die.offset)
+        if value := die.attributes.get(name):
+            return value
+        origin = die.attributes.get("DW_AT_abstract_origin") or die.attributes.get(
+            "DW_AT_specification"
+        )
+        if origin is None:
+            return None
+        try:
+            die = cu.get_DIE_from_refaddr(origin.value)
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
 def exported_functions(binary: str) -> dict[str, int]:
     """Dynamically-exported function symbols -> virtual address (what ctypes can
     load). This is the authoritative function list at ANY optimization level: at
@@ -275,25 +296,25 @@ def signatures(binary: str) -> list[dict]:
             for die in cu.iter_DIEs():
                 if die.tag != "DW_TAG_subprogram":
                     continue
-                if (
-                    "DW_AT_low_pc" not in die.attributes
-                    or "DW_AT_name" not in die.attributes
-                ):
+                if "DW_AT_low_pc" not in die.attributes:
                     continue
-                name = die.attributes["DW_AT_name"].value.decode()
+                name_attr = _inherited_attr(die, "DW_AT_name", cu)
+                if name_attr is None:
+                    continue
+                name = name_attr.value.decode()
                 va = die.attributes["DW_AT_low_pc"].value
                 params, ok = [], True
                 for c in die.iter_children():
                     if c.tag != "DW_TAG_formal_parameter":
                         continue
-                    d = _type_desc(c.attributes.get("DW_AT_type"), cu)
+                    d = _type_desc(_inherited_attr(c, "DW_AT_type", cu), cu)
                     if d is None or d.get("k") == "void":
                         ok = False
                         break
                     params.append(d)
                 if not ok:
                     continue
-                ret = _type_desc(die.attributes.get("DW_AT_type"), cu)
+                ret = _type_desc(_inherited_attr(die, "DW_AT_type", cu), cu)
                 if ret is None:
                     continue  # unsupported return type
                 out.append({"name": name, "va": va, "params": params, "ret": ret})
@@ -810,8 +831,14 @@ def worker(spec_path: str) -> int:
     orig = ctypes.CDLL(spec["orig_so"])
     dec = ctypes.CDLL(spec["dec_so"])
     fo, fd = _ctypes_fn(orig, sig, forced_u8), _ctypes_fn(dec, sig, forced_u8)
+    progress_path = Path(spec["progress_path"])
 
     for vec in spec["vectors"]:
+        # Persist the exact input before entering native code.  If either shared
+        # object crashes or the decompiled call is killed for non-termination,
+        # the parent can report a directly reproducible vector instead of an
+        # opaque worker exit.
+        progress_path.write_text(json.dumps(vec))
         oargs, dargs, obufs, dbufs = [], [], [], []
         for d, a in zip(params, vec):
             if d["k"] == "ptr":
@@ -935,12 +962,15 @@ def run_function(
         # An infra/manifest problem (no inputs generated), NOT a decompiler
         # result — a distinct status so --write-baseline can refuse it.
         return {"status": "nocases", "detail": "no executable cases"}
+    progress_path = workdir / f"progress_{name}.json"
+    progress_path.unlink(missing_ok=True)
     spec = {
         "sig": sig,
         "orig_so": binary,
         "dec_so": str(dec_so),
         "vectors": vectors,
         "ptr_elem": ov.get("ptr_elem", "int"),
+        "progress_path": str(progress_path),
     }
     spec_path = workdir / f"spec_{name}.json"
     spec_path.write_text(json.dumps(spec))
@@ -957,17 +987,24 @@ def run_function(
         # decompilation is wrong, and recording it as a semantic verdict bakes
         # machine speed into the baseline (see `timeout` in the fixture README).
         return {"status": "timeout", "detail": f"worker exceeded {WORKER_TIMEOUT_S}s"}
+    try:
+        last_input = json.loads(progress_path.read_text())
+        input_detail = f" on {last_input}"
+    except (OSError, json.JSONDecodeError):
+        input_detail = ""
     if r.returncode == -signal.SIGALRM:
         # See DECOMPILED_CALL_BUDGET_S: the original returned, ours did not.
         return {
             "status": "fail",
             "detail": f"decompiled function did not terminate within "
-            f"{DECOMPILED_CALL_BUDGET_S}s on an input the original returned on",
+            f"{DECOMPILED_CALL_BUDGET_S}s on an input the original returned on"
+            f"{input_detail}",
         }
     if r.returncode != 0:
         return {
             "status": "fail",
-            "detail": f"worker crashed (exit {r.returncode}; {r.stderr.strip()[-120:]})",
+            "detail": f"worker crashed{input_detail} "
+            f"(exit {r.returncode}; {r.stderr.strip()[-120:]})",
         }
     try:
         verdict = json.loads(r.stdout.strip().splitlines()[-1])

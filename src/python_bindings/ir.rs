@@ -310,6 +310,7 @@ fn run_ast_passes(
     cc: crate::ir::call_args::CallConv,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     param_slots: &mut std::collections::HashSet<usize>,
+    locked_parameter_count: Option<usize>,
     parameter_roles: &std::collections::HashMap<String, usize>,
     callee_facts: &DirectCalleeFacts,
     addr_map: &std::collections::HashMap<u64, String>,
@@ -373,7 +374,11 @@ fn run_ast_passes(
     // Stack-slot promotion runs before register renaming so the aliases (`stack_0`,
     // `local_0`, ...) it allocates cannot collide with the role names (`arg0`, `ret`,
     // `varN`) the naming pass introduces.
-    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed(f, Some(cc));
+    let slot_sizes = crate::ir::stack_locals::promote_stack_locals_typed_with_parameter_count(
+        f,
+        Some(cc),
+        locked_parameter_count,
+    );
     dp!("promote_stack_locals");
     // Frame-relative storage is source-level state; the push/mov/sub sequence
     // that establishes its machine frame is not.  Recognise the machine prologue
@@ -638,6 +643,7 @@ fn decompile_at_py(
                 .and_then(|outputs| outputs.get(&func_va)),
         )
     });
+    lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
     }
@@ -694,6 +700,7 @@ fn decompile_at_py(
             |prototype| prototype.output_kind(),
         ),
         &mut param_slots,
+        locked_parameter_count(prototype.as_ref()),
         &parameter_roles,
         &callee_facts,
         &addr_map,
@@ -875,6 +882,7 @@ fn decompile_range_at_py(
                 .and_then(|outputs| outputs.get(&func_va)),
         )
     });
+    lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
     let mut f = lower(&lf, &region, func.name.clone());
     // An explicit byte range has no discovered callee Function objects from
     // which to recover cross-function storage layouts.
@@ -903,6 +911,7 @@ fn decompile_range_at_py(
             |prototype| prototype.output_kind(),
         ),
         &mut param_slots,
+        locked_parameter_count(prototype.as_ref()),
         &parameter_roles,
         &callee_facts,
         &addr_map,
@@ -1218,17 +1227,29 @@ fn decbench_text(
     crate::ir::verify_defs::splice_verify_comments(&body, &violations)
 }
 
-/// Index authoritative DWARF output contracts once per binary analysis.
+/// Index authoritative DWARF prototype contracts once per binary analysis.
 ///
 /// Batch decompilation must not reparse debug sections for every function.
 /// The CFG analyser already consumes DWARF for boundaries and names; this
-/// compact companion map carries the output fact to typed prototype recovery.
-fn dwarf_output_contracts(
-    data: &[u8],
-) -> std::collections::HashMap<u64, crate::debug::dwarf::DwarfReturnType> {
+/// compact companion map carries parameter and output facts to typed recovery.
+#[derive(Debug, Clone)]
+struct DwarfPrototypeContract {
+    parameter_types: Vec<crate::debug::dwarf::DwarfParameterType>,
+    return_type: crate::debug::dwarf::DwarfReturnType,
+}
+
+fn dwarf_output_contracts(data: &[u8]) -> std::collections::HashMap<u64, DwarfPrototypeContract> {
     crate::debug::dwarf::extract_dwarf_functions(data)
         .into_iter()
-        .map(|function| (function.entry_va, function.return_type))
+        .map(|function| {
+            (
+                function.entry_va,
+                DwarfPrototypeContract {
+                    parameter_types: function.parameter_types,
+                    return_type: function.return_type,
+                },
+            )
+        })
         .collect()
 }
 
@@ -1317,9 +1338,9 @@ fn recover_decbench_prototype(
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
     arm_vfp_args: bool,
-    declared_return: Option<&crate::debug::dwarf::DwarfReturnType>,
+    declared: Option<&DwarfPrototypeContract>,
 ) -> crate::ir::types_recover::RecoveredPrototype {
-    use crate::debug::dwarf::DwarfReturnType;
+    use crate::debug::dwarf::{DwarfParameterType, DwarfReturnType};
     use crate::ir::types_recover::RecoveredOutputKind;
 
     let mut prototype = crate::ir::types_recover::recover_prototype_with_arm_vfp_args(
@@ -1329,7 +1350,18 @@ fn recover_decbench_prototype(
         param_slots,
         arm_vfp_args,
     );
-    match declared_return {
+    if let Some(declared) = declared {
+        let parameter_hints = declared
+            .parameter_types
+            .iter()
+            .map(|parameter| match parameter {
+                DwarfParameterType::Type(c_type) => dwarf_return_hint(c_type, cc),
+                DwarfParameterType::Unknown => None,
+            })
+            .collect::<Vec<_>>();
+        prototype.apply_locked_parameters(cc, &parameter_hints);
+    }
+    match declared.map(|contract| &contract.return_type) {
         Some(DwarfReturnType::Void) => {
             prototype.apply_locked_output(RecoveredOutputKind::Void, None);
         }
@@ -1340,6 +1372,31 @@ fn recover_decbench_prototype(
         Some(DwarfReturnType::Unknown) | None => {}
     }
     prototype
+}
+
+fn lock_parameter_slots_from_prototype(
+    prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
+    param_slots: &mut std::collections::HashSet<usize>,
+) {
+    let Some(prototype) = prototype.filter(|prototype| prototype.parameter_arity_is_locked())
+    else {
+        return;
+    };
+    param_slots.clear();
+    param_slots.extend(
+        prototype
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.slot),
+    );
+}
+
+fn locked_parameter_count(
+    prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
+) -> Option<usize> {
+    prototype
+        .filter(|prototype| prototype.parameter_arity_is_locked())
+        .map(|prototype| prototype.parameters().len())
 }
 
 #[derive(Debug, Default)]
@@ -1412,7 +1469,7 @@ fn recover_direct_callee_layouts(
     cc: crate::ir::call_args::CallConv,
     arm_vfp_args: bool,
     budgets: &crate::analysis::cfg::Budgets,
-    dwarf_outputs: Option<&std::collections::HashMap<u64, crate::debug::dwarf::DwarfReturnType>>,
+    dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
     address_names: &mut std::collections::HashMap<u64, String>,
     cache: &mut std::collections::HashMap<
         u64,
@@ -1679,7 +1736,11 @@ fn decbench_type_maps(
     for parameter in prototype.parameters() {
         let role = crate::ir::types::VReg::Phys(format!("arg{}", parameter.slot));
         if let Some(hint) = live_ins.get(&role) {
-            decl.refine_from_value(role, hint);
+            if prototype.parameter_is_locked(parameter.slot) {
+                decl.apply_locked_fact(role, hint);
+            } else {
+                decl.refine_from_value(role, hint);
+            }
         }
     }
     merge_slot_sizes(&mut decl, slot_sizes);
@@ -1697,7 +1758,11 @@ fn decbench_type_maps(
     for parameter in prototype.parameters() {
         let role = crate::ir::types::VReg::Phys(format!("arg{}", parameter.slot));
         if let Some(hint) = live_ins.get(&role) {
-            width.refine_from_value(role, hint);
+            if prototype.parameter_is_locked(parameter.slot) {
+                width.apply_locked_fact(role, hint);
+            } else {
+                width.refine_from_value(role, hint);
+            }
         }
     }
     merge_slot_sizes(&mut width, slot_sizes);
@@ -1789,6 +1854,7 @@ fn decompile_all_py(
                     .and_then(|outputs| outputs.get(&func.entry_point.value)),
             )
         });
+        lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
         // One pass list, shared with every other entry point — see `run_ast_passes`.
@@ -1820,6 +1886,7 @@ fn decompile_all_py(
                 |prototype| prototype.output_kind(),
             ),
             &mut param_slots,
+            locked_parameter_count(prototype.as_ref()),
             &parameter_roles,
             &callee_facts,
             &addr_map,
@@ -1972,6 +2039,7 @@ fn decompile_many_py(
                     .and_then(|outputs| outputs.get(&func_va)),
             )
         });
+        lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         let mut f = lower(&lf, &region, outer_name);
         // One pass list, shared with every other entry point — see `run_ast_passes`.
@@ -2010,6 +2078,7 @@ fn decompile_many_py(
                 |prototype| prototype.output_kind(),
             ),
             &mut param_slots,
+            locked_parameter_count(prototype.as_ref()),
             &parameter_roles,
             &callee_facts,
             &addr_map,
