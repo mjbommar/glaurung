@@ -153,7 +153,7 @@ fn structural_registers(lf: &LlirFunction) -> HashSet<String> {
         let mut saw_definition = false;
         for block in &lf.blocks {
             for instruction in &block.instrs {
-                let (definition, uses) = def_uses(&instruction.op);
+                let (definition, _) = def_uses(&instruction.op);
                 let Some(VReg::Phys(definition)) = definition else {
                     continue;
                 };
@@ -161,9 +161,23 @@ fn structural_registers(lf: &LlirFunction) -> HashSet<String> {
                     continue;
                 }
                 saw_definition = true;
-                if uses.iter().any(|value| {
-                    matches!(value, VReg::Phys(name) if stack_names.contains(&canonical_phys_name(name)))
-                }) {
+                let is_stack_register = |value: &Value| matches!(value, Value::Reg(VReg::Phys(name)) if stack_names.contains(&canonical_phys_name(name)));
+                let establishes_frame = match &instruction.op {
+                    Op::Assign { src, .. } => is_stack_register(src),
+                    Op::Bin { op, lhs, rhs, .. }
+                        if matches!(
+                            op,
+                            crate::ir::types::BinOp::Add | crate::ir::types::BinOp::Sub
+                        ) =>
+                    {
+                        (is_stack_register(lhs) && matches!(rhs, Value::Const(_)))
+                            || (matches!(op, crate::ir::types::BinOp::Add)
+                                && matches!(lhs, Value::Const(_))
+                                && is_stack_register(rhs))
+                    }
+                    _ => false,
+                };
+                if establishes_frame {
                     return true;
                 }
             }

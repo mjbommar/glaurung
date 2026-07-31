@@ -6966,8 +6966,17 @@ fn write_const_dec(c: i64, out: &mut String) {
         out.push_str("-1");
     } else if (-4096..=4096).contains(&c) {
         let _ = write!(out, "{}", c);
+    } else if c == i64::MIN {
+        // The magnitude of INT64_MIN is not representable as a signed literal.
+        // Building it from two representable signed terms avoids both Rust-side
+        // negation overflow and C's unsigned-hex unary-minus semantics.
+        out.push_str("(-0x7fffffffffffffffLL - 1LL)");
     } else if c < 0 {
-        let _ = write!(out, "-0x{:x}", c.unsigned_abs());
+        // Unsuffixed hex chooses the first fitting type.  Magnitudes above
+        // INT32_MAX therefore become `unsigned int`, so `-0x80000001` wraps to
+        // positive 0x7fffffff before a surrounding long expression sees it.
+        // Every remaining i64 magnitude fits signed long long exactly.
+        let _ = write!(out, "-0x{:x}LL", c.unsigned_abs());
     } else {
         let _ = write!(out, "0x{:x}", c);
     }
@@ -8812,6 +8821,37 @@ mod tests {
         // Neither call may panic; the i64::MIN magnitude must appear.
         assert!(render(&f).contains("0x8000000000000000"));
         assert!(render_c(&f).contains("0x8000000000000000"));
+    }
+
+    #[test]
+    fn decbench_negative_wide_constants_have_signed_c_semantics() {
+        let f = Function {
+            name: "signed_bounds".to_string(),
+            entry_va: 0x80,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Expr::Const(-0x8000_0001),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("rbx"),
+                    src: Expr::Const(i64::MIN),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("rax"))),
+                },
+            ],
+        };
+
+        let text = render_decbench(&f);
+        assert!(
+            text.contains("-0x80000001LL"),
+            "an unsuffixed wide hex literal is unsigned before unary minus: {text}"
+        );
+        assert!(
+            text.contains("(-0x7fffffffffffffffLL - 1LL)"),
+            "INT64_MIN needs a representable signed construction: {text}"
+        );
     }
 
     #[test]

@@ -11,11 +11,15 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURES = ROOT / "tests" / "decompiler_fixtures"
 sys.path.insert(0, str(FIXTURES))
+sys.path.insert(0, str(ROOT / "tools"))
 
 M = importlib.import_module("manifest")
+H = importlib.import_module("fixture_harness")
 
 
 EXPECTED_CURRICULUM = {
@@ -79,3 +83,18 @@ def test_curriculum_pointer_contracts_are_declared() -> None:
         contract = M.OVERRIDES.get(key)
         assert contract is not None, f"missing safe execution contract for {key}"
         assert contract.get("len_args") or contract.get("arg_values"), key
+
+
+@pytest.mark.slow
+def test_signed_q16_bounds_round_trip_in_every_lane() -> None:
+    """Wide negative saturation bounds must retain signed C semantics."""
+    lanes = [
+        ("28_euler_ode", compiler, optimization, ("euler_decay_q16",))
+        for compiler, optimization in H.REQUIRED_MATRIX
+    ]
+
+    observed = H.run_lanes(lanes, fuzz=M.FIXTURE_FUZZ, jobs=4)
+
+    for compiler, optimization in H.REQUIRED_MATRIX:
+        lane = observed[f"28_euler_ode:{compiler}:{optimization}"]
+        assert lane == {"euler_decay_q16": "pass"}, lane
