@@ -5201,7 +5201,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These eleven steps change *definitions, uses, value identities, or control-flow
+/// These twelve steps change *definitions, uses, value identities, or control-flow
 /// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
@@ -5219,23 +5219,26 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 4. `select_fold::collapse_assignment_diamonds` turns a proven two-arm,
 ///    same-destination diamond into one pure select expression, then the narrow
 ///    promoted-select propagator removes an adjacent one-use stack temporary.
-/// 5. `select_fold::fold_boolean_masks` renders an exact comparison-derived
+/// 5. `select_fold::recover_guarded_select_returns` turns an initialized result,
+///    one guarded select overwrite, and its joined return back into terminating
+///    nested returns when the initializer is a pure register view.
+/// 6. `select_fold::fold_boolean_masks` renders an exact comparison-derived
 ///    `0`/`-1` select as arithmetic negation, avoiding fake source-level control
 ///    flow without changing the mask value.
-/// 6. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
+/// 7. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
 ///    immediately adjacent, sole eager guard use without claiming that physical
 ///    role is globally SSA.
-/// 7. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+/// 8. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 8. `switch_ladder::recover_switches` converts proven comparison ladders into
+/// 9. `switch_ladder::recover_switches` converts proven comparison ladders into
 ///    `switch` nodes.
-/// 9. `guarded_switch::collapse_range_guards` removes a compiler range-check
+/// 10. `guarded_switch::collapse_range_guards` removes a compiler range-check
 ///    wrapper only when its unsigned domain and every switch label prove that
 ///    the wrapper cannot select a case the switch would not select itself.
-/// 10. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+/// 11. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
-/// 11. `fold_exhaustive_switch_returns` moves an immediately joined result return
+/// 12. `fold_exhaustive_switch_returns` moves an immediately joined result return
 ///    into every arm only when an explicit default makes the switch exhaustive.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
@@ -5290,6 +5293,7 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::dce::prune_overwritten_flags(&mut owned);
     crate::ir::dce::prune_dead_flags(&mut owned);
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
+    crate::ir::select_fold::recover_guarded_select_returns(&mut owned);
     crate::ir::select_fold::fold_boolean_masks(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);

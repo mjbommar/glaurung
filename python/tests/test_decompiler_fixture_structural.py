@@ -479,8 +479,8 @@ def test_signs_renders_lifted_select_as_pure_ternary(tmp_path: Path, opt: str) -
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
-def test_nested_select_under_existing_branch_retains_inner_else(tmp_path: Path) -> None:
-    """An optimized select inside source control flow must retain both arms."""
+def test_nested_conditional_result_recovers_direct_returns(tmp_path: Path) -> None:
+    """An optimized guarded select must recover the source's nested returns."""
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
@@ -511,9 +511,12 @@ def test_nested_select_under_existing_branch_retains_inner_else(tmp_path: Path) 
         env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
     )
 
-    assert result.stdout.count(" ? ") == 1, result.stdout
-    assert result.stdout.count("if (") == 1, result.stdout
-    assert "else" not in result.stdout, result.stdout
+    assert " ? " not in result.stdout, result.stdout
+    assert result.stdout.count("if (") == 2, result.stdout
+    assert result.stdout.count("return ") == 3, result.stdout
+    assert result.stdout.count("} else {") == 1, result.stdout
+    assert "return 0;" in result.stdout, result.stdout
+    assert "ret =" not in result.stdout, result.stdout
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 

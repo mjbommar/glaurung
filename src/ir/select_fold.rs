@@ -152,6 +152,201 @@ pub fn collapse_assignment_diamonds(function: &mut Function) {
     collapse_body(&mut function.body);
 }
 
+/// Recover direct returns from an initialized result guarded by a lazy select.
+///
+/// Optimized code commonly initializes the return register with the guard
+/// operand, conditionally overwrites it with a two-way selected value, and then
+/// returns the register:
+///
+/// ```text
+/// result = view(x);
+/// if (x != 0) result = y ? a : b;
+/// return result;
+/// ```
+///
+/// Leaving this as a C ternary adds a synthetic join to the recovered CFG.  When
+/// the initializer is a side-effect-free register view and the guarded select
+/// does not read the result being replaced, the source-level spelling is the
+/// exact terminating shape `if (x) { if (y) return a; else return b; } return
+/// view(x);`.  If the false edge of `x != 0` proves that view to be zero, emit
+/// the stronger `return 0`.
+pub fn recover_guarded_select_returns(function: &mut Function) {
+    recover_guarded_select_returns_body(&mut function.body);
+}
+
+fn recover_guarded_select_returns_body(body: &mut Vec<Stmt>) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_guarded_select_returns_body(then_body);
+                if let Some(else_body) = else_body {
+                    recover_guarded_select_returns_body(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                recover_guarded_select_returns_body(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    recover_guarded_select_returns_body(case);
+                }
+                if let Some(default) = default {
+                    recover_guarded_select_returns_body(default);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut index = 0;
+    while index + 2 < body.len() {
+        let candidate = match (&body[index], &body[index + 1], &body[index + 2]) {
+            (
+                Stmt::Assign {
+                    dst: result,
+                    src: default_value,
+                },
+                Stmt::If {
+                    cond: outer_condition,
+                    then_body,
+                    else_body: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(returned)),
+                },
+            ) if result == returned && movable_register_view(default_value) => {
+                let [Stmt::Assign {
+                    dst: selected_result,
+                    src:
+                        Expr::Select {
+                            cond: select_condition,
+                            if_true,
+                            if_false,
+                            ..
+                        },
+                }] = then_body.as_slice()
+                else {
+                    index += 1;
+                    continue;
+                };
+                if selected_result != result
+                    || expression_reads_register(default_value, result)
+                    || expression_reads_register(outer_condition, result)
+                    || expression_reads_register(select_condition, result)
+                    || expression_reads_register(if_true, result)
+                    || expression_reads_register(if_false, result)
+                {
+                    index += 1;
+                    continue;
+                }
+                Some((
+                    result.clone(),
+                    default_value.clone(),
+                    outer_condition.clone(),
+                    select_condition.as_ref().clone(),
+                    if_true.as_ref().clone(),
+                    if_false.as_ref().clone(),
+                ))
+            }
+            _ => None,
+        };
+        let Some((_result, default_value, outer_condition, select_condition, yes, no)) = candidate
+        else {
+            index += 1;
+            continue;
+        };
+
+        let trailing_value = false_edge_value(&outer_condition, &default_value);
+        body[index] = Stmt::If {
+            cond: outer_condition,
+            then_body: vec![Stmt::If {
+                cond: select_condition,
+                then_body: vec![Stmt::Return { value: Some(yes) }],
+                else_body: Some(vec![Stmt::Return { value: Some(no) }]),
+            }],
+            else_body: None,
+        };
+        body[index + 1] = Stmt::Return {
+            value: Some(trailing_value),
+        };
+        body.remove(index + 2);
+        index += 2;
+    }
+}
+
+fn movable_register_view(expression: &Expr) -> bool {
+    match expression {
+        Expr::Reg(_) | Expr::Const(_) => true,
+        Expr::Cast { expr, .. } => movable_register_view(expr),
+        _ => false,
+    }
+}
+
+fn strip_integer_views(expression: &Expr) -> &Expr {
+    match expression {
+        Expr::Cast { expr, .. } => strip_integer_views(expr),
+        _ => expression,
+    }
+}
+
+fn false_edge_value(condition: &Expr, default_value: &Expr) -> Expr {
+    let Expr::Cmp {
+        op: crate::ir::types::CmpOp::Ne,
+        lhs,
+        rhs,
+    } = condition
+    else {
+        return default_value.clone();
+    };
+    let tested = match (lhs.as_ref(), rhs.as_ref()) {
+        (tested, Expr::Const(0)) | (Expr::Const(0), tested) => tested,
+        _ => return default_value.clone(),
+    };
+    if strip_integer_views(default_value) == strip_integer_views(tested) {
+        Expr::Const(0)
+    } else {
+        default_value.clone()
+    }
+}
+
+fn expression_reads_register(expression: &Expr, target: &VReg) -> bool {
+    match expression {
+        Expr::Reg(reg) => reg == target,
+        Expr::StackAddr { object, .. } => object == target,
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => base
+            .iter()
+            .chain(index.iter())
+            .any(|register| register == target),
+        Expr::Deref { addr, .. }
+        | Expr::Un { src: addr, .. }
+        | Expr::Cast { expr: addr, .. }
+        | Expr::FunctionTableEntry { index: addr, .. } => expression_reads_register(addr, target),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expression_reads_register(lhs, target) || expression_reads_register(rhs, target)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expression_reads_register(cond, target)
+                || expression_reads_register(if_true, target)
+                || expression_reads_register(if_false, target)
+        }
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_) => false,
+    }
+}
+
 fn collapse_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
         match statement {
@@ -426,6 +621,149 @@ mod tests {
             "both return-value diamonds must collapse into the return: {:?}",
             f.body
         );
+    }
+
+    #[test]
+    fn guarded_return_select_recovers_nested_direct_returns() {
+        let arg0 = Expr::Reg(reg("arg0"));
+        let arg1 = Expr::Reg(reg("arg1"));
+        let result = reg("ret");
+        let mut f = function(vec![
+            Stmt::Assign {
+                dst: result.clone(),
+                src: Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(arg0.clone()),
+                    }),
+                },
+            },
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(arg0),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+                then_body: vec![Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Select {
+                        cond: Box::new(Expr::Cmp {
+                            op: CmpOp::Ne,
+                            lhs: Box::new(arg1),
+                            rhs: Box::new(Expr::Const(0)),
+                        }),
+                        if_true: Box::new(Expr::Reg(reg("yes"))),
+                        if_false: Box::new(Expr::Reg(reg("no"))),
+                        width: 4,
+                    },
+                }],
+                else_body: None,
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(result)),
+            },
+        ]);
+
+        recover_guarded_select_returns(&mut f);
+
+        assert!(matches!(
+            f.body.as_slice(),
+            [
+                Stmt::If {
+                    then_body,
+                    else_body: None,
+                    ..
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0))
+                }
+            ] if matches!(
+                then_body.as_slice(),
+                [Stmt::If {
+                    then_body: yes,
+                    else_body: Some(no),
+                    ..
+                }] if matches!(yes.as_slice(), [Stmt::Return { .. }])
+                    && matches!(no.as_slice(), [Stmt::Return { .. }])
+            )
+        ));
+    }
+
+    #[test]
+    fn guarded_return_select_does_not_move_a_memory_initializer() {
+        let result = reg("ret");
+        let original = vec![
+            Stmt::Assign {
+                dst: result.clone(),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Reg(reg("pointer"))),
+                    size: 4,
+                },
+            },
+            Stmt::If {
+                cond: Expr::Reg(reg("outer")),
+                then_body: vec![Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Select {
+                        cond: Box::new(Expr::Reg(reg("inner"))),
+                        if_true: Box::new(Expr::Const(1)),
+                        if_false: Box::new(Expr::Const(2)),
+                        width: 4,
+                    },
+                }],
+                else_body: None,
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(result)),
+            },
+        ];
+        let mut f = function(original.clone());
+
+        recover_guarded_select_returns(&mut f);
+
+        assert_eq!(
+            f.body, original,
+            "a memory read must keep its evaluation point"
+        );
+    }
+
+    #[test]
+    fn unrelated_guard_does_not_turn_the_default_value_into_zero() {
+        let result = reg("ret");
+        let default_value = Expr::Reg(reg("default_value"));
+        let mut f = function(vec![
+            assign("ret", default_value.clone()),
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(Expr::Reg(reg("guard"))),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+                then_body: vec![Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Select {
+                        cond: Box::new(Expr::Reg(reg("inner"))),
+                        if_true: Box::new(Expr::Const(1)),
+                        if_false: Box::new(Expr::Const(2)),
+                        width: 4,
+                    },
+                }],
+                else_body: None,
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(result)),
+            },
+        ]);
+
+        recover_guarded_select_returns(&mut f);
+
+        assert!(matches!(
+            f.body.last(),
+            Some(Stmt::Return { value: Some(value) }) if value == &default_value
+        ));
     }
 
     #[test]
