@@ -1235,7 +1235,10 @@ fn dwarf_output_contracts(
 /// Translate only DWARF scalar spellings that the current renderer can express
 /// exactly. An unrepresentable declared type still locks the output as non-void;
 /// it simply leaves machine-code recovery responsible for the concrete C type.
-fn dwarf_return_hint(c_type: &str) -> Option<crate::ir::types_recover::TypeHint> {
+fn dwarf_return_hint(
+    c_type: &str,
+    cc: crate::ir::call_args::CallConv,
+) -> Option<crate::ir::types_recover::TypeHint> {
     use crate::ir::types_recover::TypeHint;
 
     let normalized = c_type
@@ -1243,6 +1246,13 @@ fn dwarf_return_hint(c_type: &str) -> Option<crate::ir::types_recover::TypeHint>
         .filter(|word| !matches!(*word, "const" | "volatile" | "restrict"))
         .collect::<Vec<_>>()
         .join(" ");
+    let c_long_width = match cc {
+        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Aarch64 => 8,
+        crate::ir::call_args::CallConv::Win64
+        | crate::ir::call_args::CallConv::Cdecl32
+        | crate::ir::call_args::CallConv::Arm
+        | crate::ir::call_args::CallConv::ArmHardFloat => 4,
+    };
     match normalized.as_str() {
         "_Bool" | "bool" => Some(TypeHint::BoolLike),
         "char" | "signed char" => Some(TypeHint::Int {
@@ -1268,6 +1278,29 @@ fn dwarf_return_hint(c_type: &str) -> Option<crate::ir::types_recover::TypeHint>
         "unsigned" | "unsigned int" => Some(TypeHint::Int {
             signed: false,
             width: 4,
+        }),
+        "long" | "long int" | "signed long" | "signed long int" => Some(TypeHint::Int {
+            signed: true,
+            width: c_long_width,
+        }),
+        "unsigned long" | "unsigned long int" | "long unsigned" | "long unsigned int" => {
+            Some(TypeHint::Int {
+                signed: false,
+                width: c_long_width,
+            })
+        }
+        "long long" | "long long int" | "signed long long" | "signed long long int" => {
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        }
+        "unsigned long long"
+        | "unsigned long long int"
+        | "long long unsigned"
+        | "long long unsigned int" => Some(TypeHint::Int {
+            signed: false,
+            width: 8,
         }),
         "float" => Some(TypeHint::Float { width: 4 }),
         "double" => Some(TypeHint::Float { width: 8 }),
@@ -1301,7 +1334,8 @@ fn recover_decbench_prototype(
             prototype.apply_locked_output(RecoveredOutputKind::Void, None);
         }
         Some(DwarfReturnType::Type(c_type)) => {
-            prototype.apply_locked_output(RecoveredOutputKind::Direct, dwarf_return_hint(c_type));
+            prototype
+                .apply_locked_output(RecoveredOutputKind::Direct, dwarf_return_hint(c_type, cc));
         }
         Some(DwarfReturnType::Unknown) | None => {}
     }
@@ -1585,6 +1619,16 @@ fn merge_exact_definition_widths(
         let Some(role_name) = role_names.get(storage_name) else {
             continue;
         };
+        // A later use of an ABI argument register is a new value, not new
+        // evidence about the function's entry parameter.  In particular,
+        // `mov esi, 1` before a recursive call must not narrow an entry `%rsi`
+        // that was spilled, reloaded, and compared as a 64-bit parameter.
+        // Parameter widths come from `RecoveredPrototype`'s exact SSA live-in;
+        // this legacy storage-name projection is only valid for non-parameter
+        // roles whose definition identity the naming pass retained.
+        if crate::ir::ast::parse_arg_index(role_name).is_some() {
+            continue;
+        }
         let role = crate::ir::types::VReg::phys(role_name);
         let signed = match tm.get(&role) {
             Some(crate::ir::types_recover::TypeHint::Int { signed, .. }) => signed,
@@ -2035,4 +2079,63 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
     ir_mod.add_function(wrap_pyfunction!(decompile_many_py, &ir_mod)?)?;
     m.add_submodule(&ir_mod)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dwarf_return_hint, merge_exact_definition_widths};
+    use crate::ir::call_args::CallConv;
+    use crate::ir::types::VReg;
+    use crate::ir::types_recover::{TypeHint, TypeMap};
+    use std::collections::HashMap;
+
+    #[test]
+    fn later_subregister_definition_does_not_narrow_a_parameter_prototype() {
+        let argument = VReg::phys("arg1");
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            argument.clone(),
+            TypeHint::Int {
+                signed: true,
+                width: 8,
+            },
+        );
+        let definition_widths = HashMap::from([(VReg::phys("esi"), 4)]);
+        let role_names = HashMap::from([("esi".to_string(), "arg1".to_string())]);
+
+        merge_exact_definition_widths(&mut types, &definition_widths, &role_names);
+
+        assert_eq!(
+            types.get(&argument),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn dwarf_long_return_width_follows_the_platform_data_model() {
+        assert_eq!(
+            dwarf_return_hint("long", CallConv::SysVAmd64),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
+        assert_eq!(
+            dwarf_return_hint("long", CallConv::Win64),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+        assert_eq!(
+            dwarf_return_hint("unsigned long long", CallConv::Win64),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 8,
+            })
+        );
+    }
 }

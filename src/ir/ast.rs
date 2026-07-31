@@ -4831,6 +4831,10 @@ fn integer_ctype_width(ctype: &str) -> Option<u8> {
 /// silently defaulted to `long` whenever value renaming moved the return value
 /// off the `ret` name (e.g. a return computed as a promoted local `local_8`).
 fn infer_return_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> &'static str {
+    let ret = VReg::phys("ret");
+    if let Some(types) = tm.filter(|types| types.is_locked(&ret)) {
+        return types.get(&ret).map(hint_to_ctype).unwrap_or("long");
+    }
     first_return_value_ctype(body, tm).unwrap_or_else(|| ctype_for("ret", tm))
 }
 
@@ -10048,6 +10052,46 @@ function f @ 0x1000 {
             "return type should be `int` from the returned local, got:\n{}",
             text
         );
+    }
+
+    #[test]
+    fn locked_wide_return_contract_outranks_a_narrow_branch_expression() {
+        let f = Function {
+            name: "fib".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(VReg::phys("arg0")),
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("local_8"))),
+                }],
+                else_body: Some(vec![Stmt::Return {
+                    value: Some(Expr::Cast {
+                        signed: true,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    }),
+                }]),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("arg0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        tm.apply_locked_fact(
+            VReg::phys("ret"),
+            TypeHint::Int {
+                signed: true,
+                width: 8,
+            },
+        );
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+
+        assert!(text.contains("long fib(int arg0)"), "{text}");
     }
 
     #[test]

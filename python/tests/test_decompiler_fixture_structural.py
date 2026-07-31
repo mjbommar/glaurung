@@ -599,6 +599,29 @@ def test_recursion_clang_o0_recovers_exhaustive_direct_returns(tmp_path: Path) -
 
     assert outputs["fib"].count("return ") == 2, outputs["fib"]
     assert outputs["ackermann"].count("return ") == 3, outputs["ackermann"]
+    assert "long fib(int arg0)" in outputs["fib"], outputs["fib"]
+    assert "long ackermann(long arg0, long arg1)" in outputs["ackermann"], outputs[
+        "ackermann"
+    ]
+
+    differential = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "recursion",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    )
+    verdicts = json.loads(differential.stdout)
+    assert verdicts["fib"]["status"] == "pass", verdicts["fib"]
+    assert verdicts["ackermann"]["status"] == "pass", verdicts["ackermann"]
 
 
 def test_declared_structural_predicates_are_all_present(report):

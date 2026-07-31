@@ -96,6 +96,11 @@ impl TypeMap {
         self.inner.is_empty()
     }
 
+    /// Whether an authoritative external contract owns this rendered role.
+    pub(crate) fn is_locked(&self, reg: &VReg) -> bool {
+        self.locked.contains(reg)
+    }
+
     /// Public wrapper around [`Self::upsert`] so other modules (e.g. the
     /// Python binding's type-map remapper) can build a `TypeMap`
     /// incrementally from outside this crate's module.
@@ -1116,6 +1121,65 @@ pub fn recover_prototype(
     recover_prototype_with_arm_vfp_args(lf, ssa, cc, param_slots, false)
 }
 
+/// Recover storage width from the actual architectural views that read one
+/// version-zero parameter value.
+///
+/// SSA deliberately canonicalizes `rsi` and `esi` to the same storage identity,
+/// but their operand widths still carry source-prototype evidence.  Only uses of
+/// version zero participate here: a later `mov esi, 1` before a recursive call
+/// defines a new value and cannot narrow the incoming `%rsi` parameter.
+fn live_in_parameter_view_hint(
+    lf: &LlirFunction,
+    ssa: &SsaInfo,
+    value: &SsaValue,
+    raw: &TypeMap,
+) -> Option<TypeHint> {
+    let mut widest = 0;
+    let mut widest_hints = Vec::new();
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, instruction) in block.instrs.iter().enumerate() {
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
+            let (_, uses) = def_uses(&instruction.op);
+            for (use_index, register) in uses.iter().enumerate() {
+                if ssa.use_value(lf, addr, use_index).as_ref() != Some(value) {
+                    continue;
+                }
+                let width = reg_width_bytes(register);
+                if width < widest {
+                    continue;
+                }
+                if width > widest {
+                    widest = width;
+                    widest_hints.clear();
+                }
+                if let Some(hint) = raw.get(register) {
+                    widest_hints.push(hint);
+                }
+            }
+        }
+    }
+    if widest == 0 {
+        return None;
+    }
+    let hint = widest_hints
+        .into_iter()
+        .fold(None, |current, hint| Some(merge_type_hint(current, hint)))
+        .unwrap_or(TypeHint::Int {
+            signed: true,
+            width: widest,
+        });
+    Some(match hint {
+        TypeHint::Int { signed, .. } => TypeHint::Int {
+            signed,
+            width: widest,
+        },
+        other => other,
+    })
+}
+
 /// Recover a prototype with the binary-level ARM VFP argument contract.
 ///
 /// VFP and core-register allocation are independent, so stripped mixed-class
@@ -1328,6 +1392,7 @@ pub fn recover_prototype_with_arm_vfp_args(
             // into the source-level prototype.
             let hint = valued
                 .parameter_refinement(&value)
+                .or_else(|| live_in_parameter_view_hint(lf, ssa, &value, &raw))
                 .or(raw_hint)
                 .map(|hint| normalize_value_hint_for_abi(hint, cc));
             Some(RecoveredParameter { slot, value, hint })
@@ -4564,6 +4629,40 @@ int never_returns(void) { for (;;) {} }
             Some(TypeHint::Int {
                 signed: true,
                 width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn later_outgoing_subregister_value_does_not_narrow_live_in_parameter() {
+        use crate::ir::call_args::CallConv;
+
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 0,
+                    disp: -24,
+                    size: 8,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("rsi")),
+            },
+            Op::Assign {
+                dst: VReg::phys("esi"),
+                src: Value::Const(1),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(&lf, &ssa, CallConv::SysVAmd64, &HashSet::from([1]));
+
+        assert_eq!(
+            prototype.parameter(1).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
             })
         );
     }
