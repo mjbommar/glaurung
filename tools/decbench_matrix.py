@@ -28,14 +28,20 @@ import fnmatch
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+TOOLS = Path(__file__).resolve().parent
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+
+from build_guard import glaurung_bin
+
+ROOT = TOOLS.parent
 SRC = ROOT / "tests" / "decbench_corpus" / "src"
+FIXTURE_SRC = ROOT / "tests" / "decompiler_fixtures" / "src"
 BASELINE = ROOT / "tests" / "decbench_corpus" / "baseline.json"
 GLAURUNG_ADAPTER = ROOT / "tools" / "decbench_glaurung.py"
 TOOLCHAIN_KEY = "__toolchain__"
@@ -48,6 +54,56 @@ METRIC_RE = re.compile(r"^\s+(ged|type_match|byte_match):\s+([0-9.]+)\s+\(mean\)
 # when it moves by more than this. GED is a count, so it is compared exactly.
 TOLERANCE = {"ged": 0.0, "type_match": 0.005, "byte_match": 0.005}
 MAX_DEFAULT_JOBS = 4
+CURRICULUM_PROGRAMS = tuple(
+    f"{number:02d}_{name}"
+    for number, name in (
+        (15, "binary_search_tree"),
+        (16, "red_black_tree"),
+        (17, "hash_table"),
+        (18, "binary_heap"),
+        (19, "disjoint_set"),
+        (20, "graph_bfs"),
+        (21, "graph_dfs"),
+        (22, "dijkstra"),
+        (23, "topological_sort"),
+        (24, "merge_sort"),
+        (25, "kmp_search"),
+        (26, "sparse_matrix"),
+        (27, "newton_raphson"),
+        (28, "euler_ode"),
+        (29, "polynomial"),
+        (30, "finite_difference"),
+    )
+)
+
+
+def corpus_source(name: str) -> Path:
+    """Return the source directory for a named, reviewable corpus."""
+    if name == "decbench":
+        return SRC
+    if name == "curriculum":
+        return FIXTURE_SRC
+    raise ValueError(f"unknown corpus: {name}")
+
+
+def corpus_programs(name: str) -> list[str]:
+    """Return the exact programs in a named corpus.
+
+    The curriculum shares a directory with bug fixtures, so a broad ``*.c``
+    scan would silently turn a 16-project comparison into a different corpus.
+    Keep its membership explicit and fail if a committed member disappears.
+    """
+    source = corpus_source(name)
+    if name == "decbench":
+        programs = sorted(path.stem for path in source.glob("*.c"))
+    else:
+        programs = list(CURRICULUM_PROGRAMS)
+    missing = [
+        program for program in programs if not (source / f"{program}.c").is_file()
+    ]
+    if missing:
+        raise FileNotFoundError(f"{name} corpus is missing: {', '.join(missing)}")
+    return programs
 
 
 def default_jobs(cpu_count: int | None = None) -> int:
@@ -118,8 +174,14 @@ def toolchain_fingerprint() -> dict:
     }
 
 
-def compile_cell(program: str, compiler: str, opt: str, outdir: Path) -> Path | None:
-    src = SRC / f"{program}.c"
+def compile_cell(
+    program: str,
+    compiler: str,
+    opt: str,
+    outdir: Path,
+    source_dir: Path = SRC,
+) -> Path | None:
+    src = source_dir / f"{program}.c"
     out = outdir / f"{program}-{compiler}-{opt}.so"
     r = subprocess.run(
         [compiler, "-shared", "-fPIC", "-g", *OPTS[opt], "-o", str(out), str(src)],
@@ -139,8 +201,7 @@ def evaluate(
     from "gone". All three absent is not a valid evaluation, even when a broken
     backend exits zero.
     """
-    env = dict(os.environ, GLAURUNG_BIN=shutil.which("glaurung") or "", NO_COLOR="1")
-    env.pop("FORCE_COLOR", None)
+    env = evaluator_environment(backend)
     out: dict[str, float | None] = {"ged": None, "type_match": None, "byte_match": None}
     try:
         p = subprocess.run(
@@ -177,16 +238,36 @@ def evaluate(
     return out
 
 
-def all_cell_keys() -> list[str]:
+def evaluator_environment(backend: str) -> dict[str, str]:
+    """Return a deterministic subprocess environment for one backend."""
+    env = dict(os.environ, NO_COLOR="1")
+    if backend == "glaurung":
+        env["GLAURUNG_BIN"] = glaurung_bin()
+    env.pop("FORCE_COLOR", None)
+    return env
+
+
+def all_cell_keys(
+    source_dir: Path = SRC, programs: list[str] | tuple[str, ...] | None = None
+) -> list[str]:
+    selected = (
+        sorted(path.stem for path in source_dir.glob("*.c"))
+        if programs is None
+        else list(programs)
+    )
     return [
         f"{program}:{compiler}:{opt}"
-        for program in sorted(p.stem for p in SRC.glob("*.c"))
+        for program in selected
         for compiler in COMPILERS
         for opt in OPTS
     ]
 
 
-def select_cells(patterns=None) -> list[str]:
+def select_cells(
+    patterns=None,
+    source_dir: Path = SRC,
+    programs: list[str] | tuple[str, ...] | None = None,
+) -> list[str]:
     """Cell keys matching any `program:compiler:opt` glob.
 
     A full run is 56 cells, each spawning a Joern JVM to compute a graph edit
@@ -196,7 +277,7 @@ def select_cells(patterns=None) -> list[str]:
     `tools/dectest.py` is: a pattern matching nothing is an error, because
     "0 cells, no regressions" reads like success.
     """
-    keys = all_cell_keys()
+    keys = all_cell_keys(source_dir, programs)
     if not patterns:
         return keys
     chosen: list[str] = []
@@ -213,15 +294,17 @@ def select_cells(patterns=None) -> list[str]:
     return chosen
 
 
-def run_cell(key: str, backend: str, workdir: Path, cwd: Path) -> dict:
+def run_cell(
+    key: str, backend: str, workdir: Path, cwd: Path, source_dir: Path = SRC
+) -> dict:
     """Compile and evaluate one independent matrix cell."""
     program, compiler, opt = key.split(":")
     cell_dir = cell_workdir(workdir, key)
     cell_dir.mkdir(parents=True, exist_ok=True)
-    so = compile_cell(program, compiler, opt, cell_dir)
+    so = compile_cell(program, compiler, opt, cell_dir, source_dir)
     if so is None:
         return {"error": "build failed"}
-    return evaluate(so, SRC / f"{program}.c", backend, cell_dir / "results", cwd)
+    return evaluate(so, source_dir / f"{program}.c", backend, cell_dir / "results", cwd)
 
 
 def print_cell(key: str, cell: dict) -> None:
@@ -237,20 +320,27 @@ def print_cell(key: str, cell: dict) -> None:
 
 
 def run_matrix(
-    backend: str, workdir: Path, cwd: Path, only=None, jobs: int | None = None
+    backend: str,
+    workdir: Path,
+    cwd: Path,
+    only=None,
+    jobs: int | None = None,
+    source_dir: Path = SRC,
+    programs: list[str] | tuple[str, ...] | None = None,
 ) -> dict:
     result: dict = {TOOLCHAIN_KEY: toolchain_fingerprint()}
-    keys = select_cells(only)
+    keys = select_cells(only, source_dir, programs)
     worker_count = default_jobs() if jobs is None else jobs
     if worker_count == 1:
         for key in keys:
-            result[key] = run_cell(key, backend, workdir, cwd)
+            result[key] = run_cell(key, backend, workdir, cwd, source_dir)
             print_cell(key, result[key])
         return result
 
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
         futures = {
-            pool.submit(run_cell, key, backend, workdir, cwd): key for key in keys
+            pool.submit(run_cell, key, backend, workdir, cwd, source_dir): key
+            for key in keys
         }
         for future in as_completed(futures):
             key = futures[future]
@@ -316,6 +406,12 @@ def main() -> int:
     ap.add_argument("--check", action="store_true", help="compare against the baseline")
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--backend", default="glaurung", help="glaurung | angr | …")
+    ap.add_argument(
+        "--corpus",
+        choices=("decbench", "curriculum"),
+        default="decbench",
+        help="source corpus to compile and score (default: decbench)",
+    )
     ap.add_argument("--workdir", default=None)
     ap.add_argument(
         "--jobs",
@@ -338,16 +434,17 @@ def main() -> int:
         "--list", action="store_true", help="print the selected cells and exit"
     )
     args = ap.parse_args()
+    source_dir = corpus_source(args.corpus)
+    programs = corpus_programs(args.corpus)
 
     if args.list:
-        for key in select_cells(args.only):
+        for key in select_cells(args.only, source_dir, programs):
             print(key)
         return 0
-    if args.only and args.write_baseline:
+    if (args.only or args.corpus != "decbench") and args.write_baseline:
         print(
-            "REFUSING: --write-baseline with --only would record fresh metrics for "
-            "the selected cells and leave the rest of baseline.json describing an "
-            "older build. Baselines come from full runs.",
+            "REFUSING: the committed baseline belongs to a full decbench-corpus run; "
+            "a scoped or curriculum run cannot overwrite it.",
             file=sys.stderr,
         )
         return 1
@@ -364,7 +461,15 @@ def main() -> int:
     import tempfile
 
     with tempfile.TemporaryDirectory(dir=args.workdir) as td:
-        report = run_matrix(args.backend, Path(td), cwd, only=args.only, jobs=args.jobs)
+        report = run_matrix(
+            args.backend,
+            Path(td),
+            cwd,
+            only=args.only,
+            jobs=args.jobs,
+            source_dir=source_dir,
+            programs=programs,
+        )
 
     if args.write_baseline:
         failures = cell_errors(report)
@@ -388,6 +493,13 @@ def main() -> int:
         return 1
 
     if args.check:
+        if args.corpus != "decbench":
+            print(
+                "--check currently compares only the committed decbench baseline; "
+                "use --json for a curriculum comparison.",
+                file=sys.stderr,
+            )
+            return 2
         if not BASELINE.exists():
             print(f"no baseline at {BASELINE}", file=sys.stderr)
             return 1
@@ -399,7 +511,7 @@ def main() -> int:
             for p in problems:
                 print(f"  {p}", file=sys.stderr)
             return 1
-        n, total = len(cells(report)), len(all_cell_keys())
+        n, total = len(cells(report)), len(all_cell_keys(source_dir, programs))
         scope = "SCOPED" if args.only else "FULL MATRIX"
         print(f"\n{scope}: no per-cell regressions across {n} of {total} cells")
     return 0

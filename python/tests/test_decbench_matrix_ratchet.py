@@ -143,6 +143,36 @@ def test_the_corpus_is_committed_and_matches_the_matrix_size(dm):
     assert expected_cells == 56, expected_cells
 
 
+def test_curriculum_corpus_selects_only_the_sixteen_textbook_projects(dm):
+    src = dm.corpus_source("curriculum")
+    projects = dm.corpus_programs("curriculum")
+
+    assert projects == [
+        "15_binary_search_tree",
+        "16_red_black_tree",
+        "17_hash_table",
+        "18_binary_heap",
+        "19_disjoint_set",
+        "20_graph_bfs",
+        "21_graph_dfs",
+        "22_dijkstra",
+        "23_topological_sort",
+        "24_merge_sort",
+        "25_kmp_search",
+        "26_sparse_matrix",
+        "27_newton_raphson",
+        "28_euler_ode",
+        "29_polynomial",
+        "30_finite_difference",
+    ]
+    assert len(dm.all_cell_keys(src, projects)) == 64
+
+
+def test_unknown_corpus_is_rejected_instead_of_falling_back(dm):
+    with pytest.raises(ValueError, match="unknown corpus"):
+        dm.corpus_source("typo")
+
+
 # --- scoped runs (--only) --------------------------------------------------
 #
 # The full matrix is 56 cells, each spawning a Joern JVM. It historically took
@@ -158,6 +188,21 @@ def test_a_bare_program_name_selects_all_four_of_its_cells(dm):
         "statemachine:clang:O0",
         "statemachine:clang:O2",
     ]
+
+
+def test_curriculum_selection_never_leaks_non_curriculum_fixtures(dm):
+    src = dm.corpus_source("curriculum")
+    projects = dm.corpus_programs("curriculum")
+    keys = dm.select_cells(["20_graph_bfs"], src, projects)
+    assert keys == [
+        "20_graph_bfs:gcc:O0",
+        "20_graph_bfs:gcc:O2",
+        "20_graph_bfs:clang:O0",
+        "20_graph_bfs:clang:O2",
+    ]
+    assert all(
+        not key.startswith("01_") for key in dm.select_cells(None, src, projects)
+    )
 
 
 def test_a_lane_glob_selects_that_lane_across_programs(dm):
@@ -234,6 +279,20 @@ def test_glaurung_cells_use_the_in_tree_decbench_adapter(dm, tmp_path, monkeypat
         str(ROOT / "tools" / "decbench_glaurung.py"),
     ]
     assert dm.decbench_command(tmp_path, "angr") == ["decbench"]
+
+
+def test_glaurung_evaluator_uses_the_repo_cli_without_an_activated_venv(
+    dm, tmp_path, monkeypatch
+):
+    local = tmp_path / "glaurung"
+    local.touch()
+    monkeypatch.setattr(dm, "glaurung_bin", lambda: str(local))
+    monkeypatch.delenv("GLAURUNG_BIN", raising=False)
+
+    env = dm.evaluator_environment("glaurung")
+
+    assert env["GLAURUNG_BIN"] == str(local)
+    assert env["NO_COLOR"] == "1"
 
 
 def _install_decbench_process(tmp_path: Path, body: str) -> Path:
