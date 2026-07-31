@@ -30,6 +30,10 @@ pub struct PdbFieldHint {
     pub field_name: String,
     pub field_type: Option<String>,
     pub offset: u64,
+    /// Integer view applied to a recovered aggregate subscript, when the
+    /// machine address narrowed or sign-extended the index before scaling.
+    pub index_signed: Option<bool>,
+    pub index_width: Option<u8>,
     /// True only when the defining aggregate will be emitted with the C body.
     pub renderable: bool,
 }
@@ -5922,6 +5926,21 @@ fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
     ) || (allow_void && base == "void")
 }
 
+fn dwarf_prototype_type_is_renderable(
+    c_type: &str,
+    allow_void: bool,
+    dwarf_types: &[crate::debug::dwarf::DwarfType],
+) -> bool {
+    source_prototype_type_is_renderable(c_type, allow_void)
+        || pointed_struct_name(c_type).is_some_and(|name| {
+            dwarf_types.iter().any(|layout| {
+                layout.kind == crate::debug::dwarf::DwarfTypeKind::Struct
+                    && layout.name == name
+                    && !layout.fields.is_empty()
+            })
+        })
+}
+
 fn source_prototype_forward_declarations(
     prototype: &CallPrototype,
     complete_structs: &std::collections::BTreeSet<String>,
@@ -5960,10 +5979,13 @@ fn dwarf_scalar_width(c_type: &str, pointer_width: u8) -> Option<u64> {
         return Some(u64::from(pointer_width));
     }
     match normalized.as_str() {
-        "char" | "signed char" | "unsigned char" | "_Bool" | "bool" => Some(1),
+        "char" | "signed char" | "unsigned char" | "_Bool" | "bool" | "int8_t" | "uint8_t" => {
+            Some(1)
+        }
         "short" | "short int" | "signed short" | "signed short int" | "unsigned short"
-        | "unsigned short int" => Some(2),
-        "int" | "signed" | "signed int" | "unsigned" | "unsigned int" | "float" => Some(4),
+        | "unsigned short int" | "int16_t" | "uint16_t" => Some(2),
+        "int" | "signed" | "signed int" | "unsigned" | "unsigned int" | "float" | "int32_t"
+        | "uint32_t" => Some(4),
         "long long"
         | "long long int"
         | "signed long long"
@@ -5972,7 +5994,9 @@ fn dwarf_scalar_width(c_type: &str, pointer_width: u8) -> Option<u64> {
         | "unsigned long long int"
         | "long long unsigned"
         | "long long unsigned int"
-        | "double" => Some(8),
+        | "double"
+        | "int64_t"
+        | "uint64_t" => Some(8),
         // `long` is ABI-dependent (notably 4 bytes on Win64), and the AST
         // renderer deliberately does not guess the object format here.
         _ => None,
@@ -5987,7 +6011,12 @@ fn pointed_struct_name(c_type: &str) -> Option<&str> {
         .or_else(|| pointee.strip_prefix("volatile "))
         .unwrap_or(pointee)
         .trim();
-    pointee.strip_prefix("struct ").map(str::trim)
+    let name = pointee
+        .strip_prefix("struct ")
+        .or_else(|| pointee.strip_prefix("union "))
+        .unwrap_or(pointee)
+        .trim();
+    valid_c_identifier(name).then_some(name)
 }
 
 fn align_up(value: u64, alignment: u64) -> Option<u64> {
@@ -6076,13 +6105,12 @@ fn source_type_with_complete_struct_alias(
     if !complete_structs.contains(name) {
         return c_type.to_string();
     }
-    let qualifiers = c_type
-        .trim()
-        .strip_suffix('*')
-        .unwrap_or(c_type)
-        .trim()
-        .strip_suffix(&format!("struct {name}"))
-        .unwrap_or("")
+    let pointee = c_type.trim().strip_suffix('*').unwrap_or(c_type).trim();
+    let prefix = pointee.strip_suffix(name).unwrap_or("").trim();
+    let qualifiers = prefix
+        .strip_suffix("struct")
+        .or_else(|| prefix.strip_suffix("union"))
+        .unwrap_or(prefix)
         .trim();
     if qualifiers.is_empty() {
         format!("{name} *")
@@ -6165,11 +6193,11 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     }
     let declared_prototype = declared_prototype.filter(|prototype| {
         prototype.parameter_types.len() == arg_count
-            && source_prototype_type_is_renderable(&prototype.return_type, true)
+            && dwarf_prototype_type_is_renderable(&prototype.return_type, true, dwarf_types)
             && prototype
                 .parameter_types
                 .iter()
-                .all(|c_type| source_prototype_type_is_renderable(c_type, false))
+                .all(|c_type| dwarf_prototype_type_is_renderable(c_type, false, dwarf_types))
             && ((output_kind == crate::ir::types_recover::RecoveredOutputKind::Void
                 && prototype.return_type == "void")
                 || (output_kind != crate::ir::types_recover::RecoveredOutputKind::Void
@@ -7613,8 +7641,8 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             ..
         } => write_addr_arith_dec(base, index, *scale, *disp, out),
         Expr::Deref { addr, size } => {
-            if let Some((base, hint)) = renderable_field_access(addr) {
-                write_field_access_dec(base, hint, out);
+            if let Some((base, index, hint)) = renderable_field_access(addr) {
+                write_field_access_dec(base, index, hint, out);
                 return;
             }
             // Array-index idiom: a `T`-sized read through `base + i*sizeof(T)`
@@ -7743,11 +7771,11 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
     }
 }
 
-fn renderable_field_access(addr: &Expr) -> Option<(&VReg, &PdbFieldHint)> {
+fn renderable_field_access(addr: &Expr) -> Option<(&VReg, Option<&VReg>, &PdbFieldHint)> {
     let Expr::PdbFieldAddr {
         base: Some(base),
-        index: None,
-        scale: 1,
+        index,
+        scale,
         hints,
         ..
     } = addr
@@ -7758,16 +7786,51 @@ fn renderable_field_access(addr: &Expr) -> Option<(&VReg, &PdbFieldHint)> {
         return None;
     };
     (hint.renderable
+        && ((*scale == 1 && index.is_none()) || (*scale > 0 && index.is_some()))
         && valid_c_identifier(&hint.type_name)
         && valid_c_identifier(&hint.field_name)
         && DEC_RENDERABLE_STRUCTS.with(|selected| selected.borrow().contains(&hint.type_name)))
-    .then_some((base, hint))
+    .then_some((base, index.as_ref(), hint))
 }
 
-fn write_field_access_dec(base: &VReg, hint: &PdbFieldHint, out: &mut String) {
-    let _ = write!(out, "((struct {} *)", hint.type_name);
-    write_reg_lvalue_dec(base, out);
-    let _ = write!(out, ")->{}", hint.field_name);
+fn write_field_access_dec(
+    base: &VReg,
+    index: Option<&VReg>,
+    hint: &PdbFieldHint,
+    out: &mut String,
+) {
+    let base_is_declared = matches!(base, VReg::Phys(name) if dec_struct_ptr_type(name)
+        .as_deref()
+        .and_then(pointed_struct_name)
+        == Some(hint.type_name.as_str()));
+    if base_is_declared {
+        write_reg_lvalue_dec(base, out);
+    } else {
+        let _ = write!(out, "((struct {} *)", hint.type_name);
+        write_reg_lvalue_dec(base, out);
+    }
+    if let Some(index) = index {
+        if base_is_declared {
+            out.push('[');
+        } else {
+            out.push_str(")[");
+        }
+        if let (Some(signed), Some(width)) = (hint.index_signed, hint.index_width) {
+            let _ = write!(out, "({})(", int_ctype(signed, width));
+            write_reg_dec(index, out);
+            out.push(')');
+        } else {
+            write_reg_dec(index, out);
+        }
+        let _ = write!(out, "].{}", hint.field_name);
+    } else {
+        let _ = write!(
+            out,
+            "{}{}",
+            if base_is_declared { "->" } else { ")->" },
+            hint.field_name
+        );
+    }
 }
 
 fn redundant_declared_integer_cast(expr: &Expr) -> Option<&VReg> {
@@ -8196,7 +8259,7 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
             expression_has_pointer_representation(lhs)
                 && !expression_has_pointer_representation(rhs)
         }
-        Expr::Deref { addr, .. } => renderable_field_access(addr).is_some_and(|(_, hint)| {
+        Expr::Deref { addr, .. } => renderable_field_access(addr).is_some_and(|(_, _, hint)| {
             hint.field_type
                 .as_deref()
                 .is_some_and(|field_type| field_type.trim_end().ends_with('*'))
@@ -8277,7 +8340,7 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
                 }
             }
             Expr::Deref { addr, .. }
-                if renderable_field_access(addr).is_some_and(|(_, hint)| {
+                if renderable_field_access(addr).is_some_and(|(_, _, hint)| {
                     hint.field_type
                         .as_deref()
                         .is_some_and(|field_type| field_type.trim_end().ends_with('*'))
@@ -8434,8 +8497,8 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
                     return;
                 }
             }
-            if let Some((base, hint)) = renderable_field_access(addr) {
-                write_field_access_dec(base, hint, out);
+            if let Some((base, index, hint)) = renderable_field_access(addr) {
+                write_field_access_dec(base, index, hint, out);
                 out.push_str(" = ");
                 write_store_value_dec(src, *size, out);
                 out.push_str(";\n");

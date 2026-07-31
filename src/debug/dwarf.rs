@@ -717,6 +717,7 @@ pub fn extract_dwarf_types(data: &[u8]) -> Vec<DwarfType> {
         while let Some((t, _)) = open.pop() {
             emitted.push(t);
         }
+        materialize_anonymous_aggregate_typedefs(&mut emitted);
         out.extend(emitted);
     }
 
@@ -727,6 +728,50 @@ pub fn extract_dwarf_types(data: &[u8]) -> Vec<DwarfType> {
         std::collections::HashSet::new();
     out.retain(|t| seen.insert((t.kind, t.name.clone())));
     out
+}
+
+/// Give an anonymous aggregate the public name of a direct typedef alias.
+///
+/// Clang represents `typedef struct { ... } Name;` as two DIEs: an unnamed
+/// structure and a typedef that references it.  Keeping only the synthetic
+/// `anon_<offset>` layout loses the identity used by function prototypes.
+/// Retain that diagnostic layout and add an equivalent named layout so typed
+/// consumers can join `Name *` back to its authoritative fields.
+fn materialize_anonymous_aggregate_typedefs(types: &mut Vec<DwarfType>) {
+    let aliases = types
+        .iter()
+        .filter(|candidate| candidate.kind == DwarfTypeKind::Typedef)
+        .filter_map(|candidate| {
+            let target = candidate.typedef_target.as_deref()?;
+            let (kind, name) = target
+                .strip_prefix("struct ")
+                .map(|name| (DwarfTypeKind::Struct, name))
+                .or_else(|| {
+                    target
+                        .strip_prefix("union ")
+                        .map(|name| (DwarfTypeKind::Union, name))
+                })?;
+            name.starts_with("anon_")
+                .then_some((kind, name.to_string(), candidate.name.clone()))
+        })
+        .collect::<Vec<_>>();
+    for (kind, target, alias) in aliases {
+        if types
+            .iter()
+            .any(|candidate| candidate.kind == kind && candidate.name == alias)
+        {
+            continue;
+        }
+        let Some(mut layout) = types
+            .iter()
+            .find(|candidate| candidate.kind == kind && candidate.name == target)
+            .cloned()
+        else {
+            continue;
+        };
+        layout.name = alias;
+        types.push(layout);
+    }
 }
 
 fn _name_of(
@@ -892,12 +937,14 @@ fn _resolve_type_string(
         gimli::DW_TAG_base_type | gimli::DW_TAG_typedef => {
             Some(_name_of(dwarf, unit, &entry).unwrap_or_else(|| "/* unknown */".to_string()))
         }
-        gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => _name_of(dwarf, unit, &entry)
-            .map(|name| format!("struct {name}"))
-            .or_else(|| Some("/* unknown */".to_string())),
-        gimli::DW_TAG_union_type => _name_of(dwarf, unit, &entry)
-            .map(|name| format!("union {name}"))
-            .or_else(|| Some("/* unknown */".to_string())),
+        gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => Some(format!(
+            "struct {}",
+            _name_of(dwarf, unit, &entry).unwrap_or_else(|| format!("anon_{:x}", off.0))
+        )),
+        gimli::DW_TAG_union_type => Some(format!(
+            "union {}",
+            _name_of(dwarf, unit, &entry).unwrap_or_else(|| format!("anon_{:x}", off.0))
+        )),
         gimli::DW_TAG_enumeration_type => _name_of(dwarf, unit, &entry)
             .map(|name| format!("enum {name}"))
             .or_else(|| Some("/* unknown */".to_string())),
@@ -960,6 +1007,46 @@ mod tests {
     #[test]
     fn empty_buffer_has_no_types() {
         assert!(extract_dwarf_types(&[]).is_empty());
+    }
+
+    #[test]
+    fn direct_typedef_materializes_anonymous_struct_layout() {
+        let mut types = vec![
+            DwarfType {
+                kind: DwarfTypeKind::Typedef,
+                name: "BstNode".to_string(),
+                byte_size: 0,
+                fields: Vec::new(),
+                variants: Vec::new(),
+                typedef_target: Some("struct anon_107".to_string()),
+                source_file: Some("bst.c".to_string()),
+            },
+            DwarfType {
+                kind: DwarfTypeKind::Struct,
+                name: "anon_107".to_string(),
+                byte_size: 12,
+                fields: vec![DwarfField {
+                    offset: 0,
+                    name: "key".to_string(),
+                    c_type: "int32_t".to_string(),
+                    size: 0,
+                }],
+                variants: Vec::new(),
+                typedef_target: None,
+                source_file: Some("bst.c".to_string()),
+            },
+        ];
+
+        materialize_anonymous_aggregate_typedefs(&mut types);
+
+        let alias = types
+            .iter()
+            .find(|candidate| {
+                candidate.kind == DwarfTypeKind::Struct && candidate.name == "BstNode"
+            })
+            .expect("typedef alias should own an equivalent struct layout");
+        assert_eq!(alias.byte_size, 12);
+        assert_eq!(alias.fields[0].name, "key");
     }
 
     #[test]

@@ -101,6 +101,8 @@ pub fn collect_pdb_field_map(path: &str, cache_dir: &Path) -> PdbFieldMap {
                 field_name: field.name,
                 field_type: field.type_name,
                 offset: field.byte_offset,
+                index_signed: None,
+                index_width: None,
                 renderable: false,
             });
         }
@@ -274,6 +276,8 @@ mod tests {
             field_name: "TrapFrame".to_string(),
             field_type: Some("_KTRAP_FRAME *".to_string()),
             offset: 0x90,
+            index_signed: None,
+            index_width: None,
             renderable: false,
         });
         let mut function = Function {

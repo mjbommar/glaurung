@@ -75,7 +75,13 @@ pub fn annotate_function_fields(
             pointer_types.remove(&register);
         }
     }
-    annotate_body(&mut function.body, &layouts, pointer_width, &pointer_types);
+    annotate_body(
+        &mut function.body,
+        &layouts,
+        pointer_width,
+        &pointer_types,
+        &mut HashMap::new(),
+    );
     pointer_types
 }
 
@@ -184,7 +190,12 @@ fn pointed_struct_name(c_type: &str) -> Option<&str> {
         .or_else(|| pointee.strip_prefix("volatile "))
         .unwrap_or(pointee)
         .trim();
-    pointee.strip_prefix("struct ").map(str::trim)
+    let name = pointee
+        .strip_prefix("struct ")
+        .or_else(|| pointee.strip_prefix("union "))
+        .unwrap_or(pointee)
+        .trim();
+    (!name.is_empty()).then_some(name)
 }
 
 fn infer_body(
@@ -325,10 +336,13 @@ fn c_type_width(c_type: &str, pointer_width: u8) -> Option<u8> {
         return Some(pointer_width);
     }
     match normalized.as_str() {
-        "char" | "signed char" | "unsigned char" | "_Bool" | "bool" => Some(1),
+        "char" | "signed char" | "unsigned char" | "_Bool" | "bool" | "int8_t" | "uint8_t" => {
+            Some(1)
+        }
         "short" | "short int" | "signed short" | "signed short int" | "unsigned short"
-        | "unsigned short int" => Some(2),
-        "int" | "signed" | "signed int" | "unsigned" | "unsigned int" | "float" => Some(4),
+        | "unsigned short int" | "int16_t" | "uint16_t" => Some(2),
+        "int" | "signed" | "signed int" | "unsigned" | "unsigned int" | "float" | "int32_t"
+        | "uint32_t" => Some(4),
         "long long"
         | "long long int"
         | "signed long long"
@@ -337,7 +351,9 @@ fn c_type_width(c_type: &str, pointer_width: u8) -> Option<u8> {
         | "unsigned long long int"
         | "long long unsigned"
         | "long long unsigned int"
-        | "double" => Some(8),
+        | "double"
+        | "int64_t"
+        | "uint64_t" => Some(8),
         // `long` varies between LP64 and LLP64. This pass has the pointer
         // width but not enough object-format context to choose safely.
         _ => None,
@@ -349,23 +365,43 @@ fn annotate_body(
     layouts: &HashMap<String, &DwarfType>,
     pointer_width: u8,
     pointer_types: &HashMap<VReg, String>,
+    definitions: &mut HashMap<VReg, Expr>,
 ) {
     for statement in body {
         match statement {
-            Stmt::Assign { src, .. } => annotate_expr(src, layouts, pointer_width, pointer_types),
-            Stmt::Store { addr, src, size } => {
-                annotate_expr(src, layouts, pointer_width, pointer_types);
-                annotate_address(addr, *size, layouts, pointer_width, pointer_types);
+            Stmt::Assign { dst, src } => {
+                annotate_expr(src, layouts, pointer_width, pointer_types, definitions);
+                if expression_reads(src, dst) {
+                    definitions.remove(dst);
+                } else {
+                    definitions.insert(dst.clone(), src.clone());
+                }
             }
-            Stmt::Call { target, args, .. } => {
-                annotate_expr(target, layouts, pointer_width, pointer_types);
+            Stmt::Store { addr, src, size } => {
+                annotate_expr(src, layouts, pointer_width, pointer_types, definitions);
+                annotate_address(
+                    addr,
+                    *size,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    definitions,
+                );
+            }
+            Stmt::Call {
+                dst, target, args, ..
+            } => {
+                annotate_expr(target, layouts, pointer_width, pointer_types, definitions);
                 for argument in args {
-                    annotate_expr(argument, layouts, pointer_width, pointer_types);
+                    annotate_expr(argument, layouts, pointer_width, pointer_types, definitions);
+                }
+                if let Some(dst) = dst {
+                    definitions.remove(dst);
                 }
             }
             Stmt::Return { value } => {
                 if let Some(value) = value {
-                    annotate_expr(value, layouts, pointer_width, pointer_types);
+                    annotate_expr(value, layouts, pointer_width, pointer_types, definitions);
                 }
             }
             Stmt::If {
@@ -373,15 +409,43 @@ fn annotate_body(
                 then_body,
                 else_body,
             } => {
-                annotate_expr(cond, layouts, pointer_width, pointer_types);
-                annotate_body(then_body, layouts, pointer_width, pointer_types);
+                annotate_expr(cond, layouts, pointer_width, pointer_types, definitions);
+                let mut then_definitions = definitions.clone();
+                annotate_body(
+                    then_body,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    &mut then_definitions,
+                );
                 if let Some(else_body) = else_body {
-                    annotate_body(else_body, layouts, pointer_width, pointer_types);
+                    let mut else_definitions = definitions.clone();
+                    annotate_body(
+                        else_body,
+                        layouts,
+                        pointer_width,
+                        pointer_types,
+                        &mut else_definitions,
+                    );
                 }
+                invalidate_written_definitions(statement, definitions);
             }
             Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
-                annotate_expr(cond, layouts, pointer_width, pointer_types);
-                annotate_body(body, layouts, pointer_width, pointer_types);
+                let mut written = Vec::new();
+                for nested in body.iter() {
+                    collect_written_registers(nested, &mut written);
+                }
+                annotate_expr(cond, layouts, pointer_width, pointer_types, definitions);
+                let mut loop_definitions = definitions.clone();
+                invalidate_registers(&written, &mut loop_definitions);
+                annotate_body(
+                    body,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    &mut loop_definitions,
+                );
+                invalidate_registers(&written, definitions);
             }
             Stmt::For {
                 init,
@@ -389,47 +453,105 @@ fn annotate_body(
                 step,
                 body,
             } => {
+                let mut written = Vec::new();
+                collect_written_registers(init, &mut written);
+                for nested in body.iter() {
+                    collect_written_registers(nested, &mut written);
+                }
+                collect_written_registers(step, &mut written);
                 annotate_body(
                     std::slice::from_mut(init.as_mut()),
                     layouts,
                     pointer_width,
                     pointer_types,
+                    definitions,
                 );
-                annotate_expr(cond, layouts, pointer_width, pointer_types);
-                annotate_body(body, layouts, pointer_width, pointer_types);
+                annotate_expr(cond, layouts, pointer_width, pointer_types, definitions);
+                let mut loop_definitions = definitions.clone();
+                invalidate_registers(&written, &mut loop_definitions);
+                annotate_body(
+                    body,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    &mut loop_definitions,
+                );
                 annotate_body(
                     std::slice::from_mut(step.as_mut()),
                     layouts,
                     pointer_width,
                     pointer_types,
+                    &mut loop_definitions,
                 );
+                invalidate_registers(&written, definitions);
             }
             Stmt::Switch {
                 discriminant,
                 cases,
                 default,
             } => {
-                annotate_expr(discriminant, layouts, pointer_width, pointer_types);
+                annotate_expr(
+                    discriminant,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    definitions,
+                );
                 for (_, body) in cases {
-                    annotate_body(body, layouts, pointer_width, pointer_types);
+                    annotate_body(
+                        body,
+                        layouts,
+                        pointer_width,
+                        pointer_types,
+                        &mut definitions.clone(),
+                    );
                 }
                 if let Some(default) = default {
-                    annotate_body(default, layouts, pointer_width, pointer_types);
+                    annotate_body(
+                        default,
+                        layouts,
+                        pointer_width,
+                        pointer_types,
+                        &mut definitions.clone(),
+                    );
                 }
+                invalidate_written_definitions(statement, definitions);
             }
-            Stmt::Push { value } => annotate_expr(value, layouts, pointer_width, pointer_types),
+            Stmt::Push { value } => {
+                annotate_expr(value, layouts, pointer_width, pointer_types, definitions)
+            }
             Stmt::IndirectGoto { target } => {
-                annotate_expr(target, layouts, pointer_width, pointer_types)
+                annotate_expr(target, layouts, pointer_width, pointer_types, definitions)
             }
-            Stmt::Pop { .. }
-            | Stmt::Goto { .. }
+            Stmt::TryCatch { try_body, catches } => {
+                annotate_body(
+                    try_body,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    &mut definitions.clone(),
+                );
+                for catch in catches {
+                    annotate_body(
+                        &mut catch.body,
+                        layouts,
+                        pointer_width,
+                        pointer_types,
+                        &mut definitions.clone(),
+                    );
+                }
+                invalidate_written_definitions(statement, definitions);
+            }
+            Stmt::Pop { target } => {
+                definitions.remove(target);
+            }
+            Stmt::Goto { .. }
             | Stmt::Label(_)
             | Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_)
-            | Stmt::Throw { .. }
-            | Stmt::TryCatch { .. } => {}
+            | Stmt::Throw { .. } => {}
         }
     }
 }
@@ -439,15 +561,23 @@ fn annotate_expr(
     layouts: &HashMap<String, &DwarfType>,
     pointer_width: u8,
     pointer_types: &HashMap<VReg, String>,
+    definitions: &HashMap<VReg, Expr>,
 ) {
     match expression {
         Expr::Deref { addr, size } => {
-            annotate_expr(addr, layouts, pointer_width, pointer_types);
-            annotate_address(addr, *size, layouts, pointer_width, pointer_types);
+            annotate_expr(addr, layouts, pointer_width, pointer_types, definitions);
+            annotate_address(
+                addr,
+                *size,
+                layouts,
+                pointer_width,
+                pointer_types,
+                definitions,
+            );
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            annotate_expr(lhs, layouts, pointer_width, pointer_types);
-            annotate_expr(rhs, layouts, pointer_width, pointer_types);
+            annotate_expr(lhs, layouts, pointer_width, pointer_types, definitions);
+            annotate_expr(rhs, layouts, pointer_width, pointer_types, definitions);
         }
         Expr::Select {
             cond,
@@ -455,19 +585,19 @@ fn annotate_expr(
             if_false,
             ..
         } => {
-            annotate_expr(cond, layouts, pointer_width, pointer_types);
-            annotate_expr(if_true, layouts, pointer_width, pointer_types);
-            annotate_expr(if_false, layouts, pointer_width, pointer_types);
+            annotate_expr(cond, layouts, pointer_width, pointer_types, definitions);
+            annotate_expr(if_true, layouts, pointer_width, pointer_types, definitions);
+            annotate_expr(if_false, layouts, pointer_width, pointer_types, definitions);
         }
         Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
-            annotate_expr(src, layouts, pointer_width, pointer_types)
+            annotate_expr(src, layouts, pointer_width, pointer_types, definitions)
         }
         Expr::FunctionTableEntry { index, .. } => {
-            annotate_expr(index, layouts, pointer_width, pointer_types)
+            annotate_expr(index, layouts, pointer_width, pointer_types, definitions)
         }
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
-                annotate_expr(argument, layouts, pointer_width, pointer_types);
+                annotate_expr(argument, layouts, pointer_width, pointer_types, definitions);
             }
         }
         Expr::Reg(_)
@@ -489,8 +619,11 @@ fn annotate_address(
     layouts: &HashMap<String, &DwarfType>,
     pointer_width: u8,
     pointer_types: &HashMap<VReg, String>,
+    definitions: &HashMap<VReg, Expr>,
 ) {
-    let Some((base, offset_i64)) = address_base_offset(address) else {
+    let Some((base, index, scale, offset_i64, index_view)) =
+        affine_struct_address(address, layouts, pointer_width, pointer_types, definitions)
+    else {
         return;
     };
     let Ok(offset) = u64::try_from(offset_i64) else {
@@ -510,8 +643,8 @@ fn annotate_address(
     };
     *address = Expr::PdbFieldAddr {
         base: Some(base),
-        index: None,
-        scale: 1,
+        index,
+        scale,
         disp: offset_i64,
         segment: None,
         hints: vec![PdbFieldHint {
@@ -519,9 +652,297 @@ fn annotate_address(
             field_name: field.name.clone(),
             field_type: Some(field.c_type.clone()),
             offset: field.offset,
+            index_signed: index_view.map(|view| view.0),
+            index_width: index_view.map(|view| view.1),
             renderable: true,
         }],
     };
+}
+
+#[derive(Default)]
+struct AffineForm {
+    terms: HashMap<VReg, i64>,
+    views: HashMap<VReg, (bool, u8)>,
+    constant: i64,
+}
+
+fn affine_struct_address(
+    expression: &Expr,
+    layouts: &HashMap<String, &DwarfType>,
+    pointer_width: u8,
+    pointer_types: &HashMap<VReg, String>,
+    definitions: &HashMap<VReg, Expr>,
+) -> Option<(VReg, Option<VReg>, u8, i64, Option<(bool, u8)>)> {
+    let form = affine_form(expression, definitions, &mut Vec::new())?;
+    let mut bases = form
+        .terms
+        .iter()
+        .filter(|(register, coefficient)| {
+            **coefficient == 1 && pointer_types.contains_key(*register)
+        })
+        .map(|(register, _)| register.clone())
+        .collect::<Vec<_>>();
+    if bases.len() != 1 {
+        return None;
+    }
+    let base = bases.pop()?;
+    if form
+        .views
+        .get(&base)
+        .is_some_and(|(_, width)| *width != pointer_width)
+    {
+        return None;
+    }
+    let type_name = pointer_types.get(&base)?;
+    let layout = layouts.get(type_name)?;
+    let scale = u8::try_from(layout.byte_size)
+        .ok()
+        .filter(|scale| *scale > 0)?;
+    let mut remaining = form
+        .terms
+        .into_iter()
+        .filter(|(register, _)| register != &base)
+        .collect::<Vec<_>>();
+    let index = match remaining.as_slice() {
+        [] => None,
+        [(register, coefficient)] if *coefficient == i64::from(scale) => Some(register.clone()),
+        _ => return None,
+    };
+    remaining.clear();
+    let address_scale = if index.is_some() { scale } else { 1 };
+    let index_view = index
+        .as_ref()
+        .and_then(|register| form.views.get(register).copied());
+    Some((base, index, address_scale, form.constant, index_view))
+}
+
+fn affine_form(
+    expression: &Expr,
+    definitions: &HashMap<VReg, Expr>,
+    expanding: &mut Vec<VReg>,
+) -> Option<AffineForm> {
+    match expression {
+        Expr::Const(value) => Some(AffineForm {
+            terms: HashMap::new(),
+            views: HashMap::new(),
+            constant: *value,
+        }),
+        Expr::Reg(register) => {
+            if let Some(definition) = definitions.get(register) {
+                if !expanding.contains(register) {
+                    expanding.push(register.clone());
+                    let expanded = affine_form(definition, definitions, expanding);
+                    expanding.pop();
+                    if expanded.is_some() {
+                        return expanded;
+                    }
+                }
+            }
+            Some(AffineForm {
+                terms: HashMap::from([(register.clone(), 1)]),
+                views: HashMap::new(),
+                constant: 0,
+            })
+        }
+        cast @ Expr::Cast { .. } => {
+            let (register, signed, width) = casted_register_view(cast)?;
+            Some(AffineForm {
+                terms: HashMap::from([(register.clone(), 1)]),
+                views: HashMap::from([(register.clone(), (signed, width))]),
+                constant: 0,
+            })
+        }
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => combine_affine(
+            affine_form(lhs, definitions, expanding)?,
+            affine_form(rhs, definitions, expanding)?,
+            1,
+        ),
+        Expr::Bin {
+            op: BinOp::Sub,
+            lhs,
+            rhs,
+        } => combine_affine(
+            affine_form(lhs, definitions, expanding)?,
+            affine_form(rhs, definitions, expanding)?,
+            -1,
+        ),
+        Expr::Bin {
+            op: BinOp::Mul,
+            lhs,
+            rhs,
+        } => match (lhs.as_ref(), rhs.as_ref()) {
+            (Expr::Const(factor), value) | (value, Expr::Const(factor)) => {
+                scale_affine(affine_form(value, definitions, expanding)?, *factor)
+            }
+            _ => None,
+        },
+        Expr::Lea {
+            base,
+            index,
+            scale,
+            disp,
+            ..
+        }
+        | Expr::PdbFieldAddr {
+            base,
+            index,
+            scale,
+            disp,
+            ..
+        } => {
+            let mut form = AffineForm {
+                terms: HashMap::new(),
+                views: HashMap::new(),
+                constant: *disp,
+            };
+            if let Some(base) = base {
+                form = combine_affine(
+                    form,
+                    affine_form(&Expr::Reg(base.clone()), definitions, expanding)?,
+                    1,
+                )?;
+            }
+            if let Some(index) = index {
+                let index = affine_form(&Expr::Reg(index.clone()), definitions, expanding)?;
+                form = combine_affine(form, scale_affine(index, i64::from(*scale))?, 1)?;
+            }
+            Some(form)
+        }
+        _ => None,
+    }
+}
+
+fn casted_register_view(expression: &Expr) -> Option<(&VReg, bool, u8)> {
+    let mut current = expression;
+    let mut selected = None::<(bool, u8)>;
+    while let Expr::Cast {
+        signed,
+        width,
+        expr,
+    } = current
+    {
+        if selected.is_none_or(|(_, selected_width)| *width < selected_width) {
+            selected = Some((*signed, *width));
+        }
+        current = expr;
+    }
+    let Expr::Reg(register) = current else {
+        return None;
+    };
+    selected.map(|(signed, width)| (register, signed, width))
+}
+
+fn combine_affine(mut lhs: AffineForm, rhs: AffineForm, sign: i64) -> Option<AffineForm> {
+    lhs.constant = lhs.constant.checked_add(rhs.constant.checked_mul(sign)?)?;
+    for (register, coefficient) in rhs.terms {
+        if lhs.terms.contains_key(&register) {
+            match (lhs.views.get(&register), rhs.views.get(&register)) {
+                (Some(lhs_view), Some(rhs_view)) if lhs_view == rhs_view => {}
+                (None, None) => {}
+                _ => return None,
+            }
+        }
+        let contribution = coefficient.checked_mul(sign)?;
+        let slot = lhs.terms.entry(register).or_insert(0);
+        *slot = slot.checked_add(contribution)?;
+    }
+    lhs.views.extend(rhs.views);
+    lhs.terms.retain(|_, coefficient| *coefficient != 0);
+    lhs.views
+        .retain(|register, _| lhs.terms.contains_key(register));
+    Some(lhs)
+}
+
+fn scale_affine(mut form: AffineForm, factor: i64) -> Option<AffineForm> {
+    form.constant = form.constant.checked_mul(factor)?;
+    for coefficient in form.terms.values_mut() {
+        *coefficient = coefficient.checked_mul(factor)?;
+    }
+    form.terms.retain(|_, coefficient| *coefficient != 0);
+    form.views
+        .retain(|register, _| form.terms.contains_key(register));
+    Some(form)
+}
+
+fn expression_reads(expression: &Expr, target: &VReg) -> bool {
+    affine_form(expression, &HashMap::new(), &mut Vec::new())
+        .is_some_and(|form| form.terms.contains_key(target))
+}
+
+fn invalidate_written_definitions(statement: &Stmt, definitions: &mut HashMap<VReg, Expr>) {
+    let mut written = Vec::new();
+    collect_written_registers(statement, &mut written);
+    for register in written {
+        definitions.remove(&register);
+    }
+}
+
+fn invalidate_registers(written: &[VReg], definitions: &mut HashMap<VReg, Expr>) {
+    for register in written {
+        definitions.remove(register);
+    }
+}
+
+fn collect_written_registers(statement: &Stmt, written: &mut Vec<VReg>) {
+    match statement {
+        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => written.push(dst.clone()),
+        Stmt::Call { dst: Some(dst), .. } => written.push(dst.clone()),
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for statement in then_body {
+                collect_written_registers(statement, written);
+            }
+            if let Some(else_body) = else_body {
+                for statement in else_body {
+                    collect_written_registers(statement, written);
+                }
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            for statement in body {
+                collect_written_registers(statement, written);
+            }
+        }
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            collect_written_registers(init, written);
+            for statement in body {
+                collect_written_registers(statement, written);
+            }
+            collect_written_registers(step, written);
+        }
+        Stmt::Switch { cases, default, .. } => {
+            for (_, body) in cases {
+                for statement in body {
+                    collect_written_registers(statement, written);
+                }
+            }
+            if let Some(default) = default {
+                for statement in default {
+                    collect_written_registers(statement, written);
+                }
+            }
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            for statement in try_body {
+                collect_written_registers(statement, written);
+            }
+            for catch in catches {
+                for statement in &catch.body {
+                    collect_written_registers(statement, written);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -657,7 +1078,111 @@ mod tests {
     }
 
     #[test]
-    fn mixed_integer_and_pointer_definitions_reject_struct_identity() {
+    fn narrowed_pointer_base_stays_raw() {
+        let mut function = Function {
+            name: "narrow_base".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("value"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        }),
+                        rhs: Box::new(Expr::Const(8)),
+                    }),
+                    size: 4,
+                },
+            }],
+        };
+
+        annotate_function_fields(&mut function, Some(&node_prototype()), &[node_layout()], 8);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment");
+        };
+        assert!(
+            field_hint(src).is_none(),
+            "a 32-bit base cast cannot become a 64-bit pointer access"
+        );
+    }
+
+    #[test]
+    fn affine_index_through_reaching_temporary_annotates_member() {
+        let mut function = Function {
+            name: "indexed_value".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("stride"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 8,
+                            expr: Box::new(Expr::Cast {
+                                signed: false,
+                                width: 4,
+                                expr: Box::new(Expr::Reg(VReg::phys("index"))),
+                            }),
+                        }),
+                        rhs: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 8,
+                            expr: Box::new(Expr::Cast {
+                                signed: false,
+                                width: 4,
+                                expr: Box::new(Expr::Reg(VReg::phys("index"))),
+                            }),
+                        }),
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("value"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(VReg::phys("arg0")),
+                            index: Some(VReg::phys("stride")),
+                            scale: 8,
+                            disp: 8,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                },
+            ],
+        };
+
+        annotate_function_fields(&mut function, Some(&node_prototype()), &[node_layout()], 8);
+
+        let Stmt::Assign { src, .. } = &function.body[1] else {
+            panic!("expected indexed load");
+        };
+        assert_eq!(
+            field_hint(src).map(|hint| hint.field_name.as_str()),
+            Some("val"),
+            "{src:#?}"
+        );
+        let Expr::Deref { addr, .. } = src else {
+            panic!("expected indexed load");
+        };
+        assert!(matches!(
+            addr.as_ref(),
+            Expr::PdbFieldAddr {
+                base: Some(base),
+                index: Some(index),
+                scale: 16,
+                disp: 8,
+                ..
+            } if base == &VReg::phys("arg0") && index == &VReg::phys("index")
+        ));
+    }
+
+    #[test]
+    fn mixed_reuse_rejects_declaration_but_keeps_reaching_field_identity() {
         let mut function = Function {
             name: "mixed_reuse".to_string(),
             entry_va: 0x1000,
@@ -691,6 +1216,19 @@ mod tests {
         let Stmt::Assign { src, .. } = &function.body[1] else {
             panic!("expected field load");
         };
-        assert!(field_hint(src).is_none());
+        assert_eq!(
+            field_hint(src).map(|hint| hint.field_name.as_str()),
+            Some("val")
+        );
+        let Expr::Deref { addr, .. } = src else {
+            panic!("expected field load");
+        };
+        assert!(matches!(
+            addr.as_ref(),
+            Expr::PdbFieldAddr {
+                base: Some(base),
+                ..
+            } if base == &VReg::phys("arg0")
+        ));
     }
 }

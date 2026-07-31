@@ -741,6 +741,72 @@ def test_recursion_gcc_o2_inherits_declared_parameter_types(tmp_path: Path) -> N
     assert verdicts["ackermann"]["status"] == "pass", verdicts["ackermann"]
 
 
+def test_bst_clang_o2_recovers_anonymous_struct_typedef(tmp_path: Path) -> None:
+    """A typedef to an anonymous DWARF struct must retain its named identity."""
+    import subprocess
+
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / "15_binary_search_tree.c"
+    binary = tmp_path / "15_binary_search_tree-clang-O2.so"
+    compiled = S.TC.run(
+        ["clang", "-shared", "-fPIC", "-g", "-O2", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    outputs = {}
+    for function in ("bst_search", "bst_inorder_checksum"):
+        outputs[function] = subprocess.run(
+            [
+                "glaurung",
+                "decompile",
+                binary,
+                "--func",
+                function,
+                "--style",
+                "decbench",
+                "--no-color",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+        ).stdout
+        assert "BstNode * arg0" in outputs[function], outputs[function]
+        assert "((struct BstNode *)arg0)" not in outputs[function], outputs[function]
+        assert ".key" in outputs[function], outputs[function]
+    assert ".left" in outputs["bst_inorder_checksum"], outputs[
+        "bst_inorder_checksum"
+    ]
+    assert ".right" in outputs["bst_inorder_checksum"], outputs[
+        "bst_inorder_checksum"
+    ]
+
+    differential = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "15_binary_search_tree",
+            "--seed",
+            "20260731",
+            "--fuzz",
+            "256",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=900,
+        check=True,
+    )
+    verdicts = json.loads(differential.stdout)
+    assert verdicts["bst_search"]["status"] == "pass", verdicts["bst_search"]
+    assert verdicts["bst_inorder_checksum"]["status"] == "pass", verdicts[
+        "bst_inorder_checksum"
+    ]
+
+
 def test_declared_structural_predicates_are_all_present(report):
     # A declared predicate must actually be evaluated (True/False), never absent —
     # a structural assertion that silently does not run is a fail-open gap.
