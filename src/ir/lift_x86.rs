@@ -1759,6 +1759,42 @@ fn packed_dword_binary_ops(instr: &iced_x86::Instruction, op: BinOp) -> Vec<Op> 
     ops
 }
 
+/// Lift PSLLD's immediate form as four independent 32-bit lane shifts.
+///
+/// Intel specifies a zero result, rather than a masked shift count, when the
+/// immediate is greater than 31. Register/memory count operands remain
+/// unsupported until the low-64-bit count extraction is represented exactly.
+fn packed_dword_immediate_shift_left_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Immediate8
+        || !is_xmm_register(instr.op_register(0))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "pslld".into(),
+        }];
+    }
+    let count = instr.immediate8();
+    (0..4)
+        .map(|lane| {
+            let dst = packed_dword_lane(instr.op_register(0), lane);
+            if count > 31 {
+                Op::Assign {
+                    dst,
+                    src: Value::Const(0),
+                }
+            } else {
+                Op::Bin {
+                    dst: dst.clone(),
+                    op: BinOp::Shl,
+                    lhs: Value::Reg(dst),
+                    rhs: Value::Const(i64::from(count)),
+                }
+            }
+        })
+        .collect()
+}
+
 /// Snapshot the four dword lanes of a packed instruction's second operand.
 /// Register operands already have independent lane names; memory operands need
 /// explicit scalar loads so the ordinary readonly-data pass can materialise
@@ -3203,6 +3239,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Pandn => packed_dword_and_not_ops(instr),
         Mnemonic::Por => packed_dword_binary_ops(instr, BinOp::Or),
         Mnemonic::Paddd => packed_dword_binary_ops(instr, BinOp::Add),
+        Mnemonic::Psubd => packed_dword_binary_ops(instr, BinOp::Sub),
+        Mnemonic::Pslld => packed_dword_immediate_shift_left_ops(instr),
         Mnemonic::Pcmpeqd => packed_dword_compare_equal_ops(instr),
         Mnemonic::Pcmpgtd => packed_dword_compare_greater_ops(instr),
         Mnemonic::Pshufd => packed_dword_shuffle_ops(instr),
@@ -5529,6 +5567,69 @@ mod tests {
             4,
             "PCMPGTD must produce four all-ones/zero masks: {ops:#?}"
         );
+    }
+
+    #[test]
+    fn packed_dword_scale_by_thirty_one_has_explicit_lane_semantics() {
+        // The exact SSE2 pair emitted by clang -O2 for
+        // `11_call_shapes:call_accumulate_bytes`: each dword lane computes
+        // `(seed << 5) - seed`, i.e. seed * 31. Dropping either operation
+        // changes the round-trip result for every non-zero seed.
+        let ops = lift64(&[
+            0x66, 0x0f, 0x72, 0xf2, 0x05, // pslld xmm2,5
+            0x66, 0x0f, 0xfa, 0xd1, // psubd xmm2,xmm1
+        ]);
+
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "packed scale dataflow must be explicit: {ops:#?}"
+        );
+        for lane in 0..4 {
+            let lane_name = format!("xmm2_d{lane}");
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Bin {
+                    dst: VReg::Phys(dst),
+                    op: BinOp::Shl,
+                    lhs: Value::Reg(VReg::Phys(lhs)),
+                    rhs: Value::Const(5),
+                } if dst == &lane_name && lhs == dst
+            )));
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Bin {
+                    dst: VReg::Phys(dst),
+                    op: BinOp::Sub,
+                    lhs: Value::Reg(VReg::Phys(lhs)),
+                    rhs: Value::Reg(VReg::Phys(rhs)),
+                } if dst == &lane_name && lhs == dst && rhs == &format!("xmm1_d{lane}")
+            )));
+        }
+    }
+
+    #[test]
+    fn packed_dword_immediate_shift_obeys_large_count_zeroing_and_rejects_mmx() {
+        let xmm_ops = lift64(&[0x66, 0x0f, 0x72, 0xf2, 0x20]); // pslld xmm2,32
+        assert_eq!(xmm_ops.len(), 4, "got: {xmm_ops:#?}");
+        for (lane, instruction) in xmm_ops.iter().enumerate() {
+            assert!(matches!(
+                &instruction.op,
+                Op::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Value::Const(0),
+                } if dst == &format!("xmm2_d{lane}")
+            ));
+        }
+
+        let mmx_ops = lift64(&[0x0f, 0x72, 0xf2, 0x05]); // pslld mm2,5
+        assert_eq!(mmx_ops.len(), 1, "got: {mmx_ops:#?}");
+        assert!(matches!(
+            &mmx_ops[0].op,
+            Op::Unknown { mnemonic } if mnemonic == "pslld"
+        ));
     }
 
     #[test]
