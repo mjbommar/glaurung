@@ -132,15 +132,56 @@ type TempRemap = std::collections::HashMap<(u32, u32), u32>;
 struct VnCtx {
     keep: KeepBare,
     temps: TempRemap,
+    structural: HashSet<String>,
 }
 
-/// Stack/frame base registers must keep their bare names so stack-slot
-/// promotion (which pattern-matches `rbp`/`rsp`-relative addresses) still fires.
-fn is_structural_reg(n: &str) -> bool {
-    matches!(
-        n,
-        "rsp" | "esp" | "sp" | "rbp" | "ebp" | "bp" | "x29" | "w29" | "fp"
-    )
+fn canonical_phys_name(name: &str) -> &str {
+    crate::ir::ssa::parent64(name).unwrap_or(name)
+}
+
+/// Registers that genuinely establish this function's machine frame must keep
+/// bare names so stack-slot promotion can recognise them.  A callee-saved frame
+/// register is not automatically a frame pointer: optimized code may use `rbp`
+/// as an ordinary loop value after saving it in the prologue.  In that case its
+/// distinct writes need SSA names like every other data register.
+fn structural_registers(lf: &LlirFunction) -> HashSet<String> {
+    fn frame_family_is_structural(
+        lf: &LlirFunction,
+        frame_names: &[&str],
+        stack_names: &[&str],
+    ) -> bool {
+        let mut saw_definition = false;
+        for block in &lf.blocks {
+            for instruction in &block.instrs {
+                let (definition, uses) = def_uses(&instruction.op);
+                let Some(VReg::Phys(definition)) = definition else {
+                    continue;
+                };
+                if !frame_names.contains(&canonical_phys_name(&definition)) {
+                    continue;
+                }
+                saw_definition = true;
+                if uses.iter().any(|value| {
+                    matches!(value, VReg::Phys(name) if stack_names.contains(&canonical_phys_name(name)))
+                }) {
+                    return true;
+                }
+            }
+        }
+        // A live-in frame base has no local definition. Preserve the historical
+        // spelling so callers that lift a range inside a function still recover
+        // its frame-relative storage.
+        !saw_definition
+    }
+
+    let mut structural = HashSet::from(["rsp".to_string(), "esp".to_string(), "sp".to_string()]);
+    if frame_family_is_structural(lf, &["rbp", "ebp", "bp"], &["rsp", "esp", "sp"]) {
+        structural.extend(["rbp", "ebp", "bp"].map(str::to_string));
+    }
+    if frame_family_is_structural(lf, &["x29", "w29", "fp"], &["sp"]) {
+        structural.extend(["x29", "w29", "fp"].map(str::to_string));
+    }
+    structural
 }
 
 /// The value-tagged name of a register at a given SSA version. Physical
@@ -160,7 +201,7 @@ fn tag_phys(v: &mut VReg, version: u32, ctx: &VnCtx) {
                 *n = canon; // entry-def / live-in — bare (canonical) register
                 return;
             }
-            if is_structural_reg(&canon) || ctx.keep.contains(&(canon.clone(), version)) {
+            if ctx.structural.contains(&canon) || ctx.keep.contains(&(canon.clone(), version)) {
                 *n = canon;
                 return;
             }
@@ -506,7 +547,12 @@ pub fn value_number_with_definition_widths(
         }
     }
     let temps = build_temp_remap(lf, ssa);
-    let ctx = VnCtx { keep, temps };
+    let structural = structural_registers(lf);
+    let ctx = VnCtx {
+        keep,
+        temps,
+        structural,
+    };
 
     let mut out = lf.clone();
     let mut definition_widths = HashMap::new();
@@ -921,6 +967,84 @@ mod tests {
                 succs: vec![],
             }],
         }
+    }
+
+    #[test]
+    fn callee_saved_rbp_reused_as_data_keeps_instruction_order() {
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("ebp"),
+                src: Value::Const(7),
+            },
+            Op::Assign {
+                dst: VReg::phys("edx"),
+                src: Value::Reg(VReg::phys("ebp")),
+            },
+            Op::Assign {
+                dst: VReg::phys("rbp"),
+                src: Value::Reg(VReg::phys("r11")),
+            },
+            Op::Call {
+                target: crate::ir::types::CallTarget::Direct(0x2000),
+                effects: Some(crate::ir::types::CallEffects {
+                    args: vec![VReg::phys("rdx")],
+                    result: None,
+                }),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+
+        let numbered = value_number(&lf, &ssa, CallConv::SysVAmd64);
+
+        assert_eq!(
+            def_uses(&numbered.blocks[0].instrs[0].op).0,
+            Some(VReg::phys("rbp#1"))
+        );
+        assert!(matches!(
+            &numbered.blocks[0].instrs[1].op,
+            Op::Assign {
+                src: Value::Reg(source),
+                ..
+            } if source == &VReg::phys("rbp#1")
+        ));
+        assert_eq!(
+            def_uses(&numbered.blocks[0].instrs[2].op).0,
+            Some(VReg::phys("rbp#2")),
+            "the later rbp value must not overwrite an earlier call-input dependency"
+        );
+    }
+
+    #[test]
+    fn established_rbp_frame_base_remains_structural() {
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("rbp"),
+                src: Value::Reg(VReg::phys("rsp")),
+            },
+            Op::Load {
+                dst: VReg::phys("eax"),
+                addr: crate::ir::types::MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    index: None,
+                    scale: 1,
+                    disp: -4,
+                    size: 4,
+                    ..Default::default()
+                },
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+
+        let numbered = value_number(&lf, &ssa, CallConv::SysVAmd64);
+
+        assert!(matches!(
+            &numbered.blocks[0].instrs[0].op,
+            Op::Assign { dst, .. } if dst == &VReg::phys("rbp")
+        ));
+        assert!(matches!(
+            &numbered.blocks[0].instrs[1].op,
+            Op::Load { addr, .. } if addr.base.as_ref() == Some(&VReg::phys("rbp"))
+        ));
     }
 
     /// A diamond: both arms write `rbx`, the join reads it.
