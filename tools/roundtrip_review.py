@@ -21,13 +21,16 @@ is the only one of the three that knows whether the code is right.
 parameters, complex/multi-eightbyte aggregates, pointer returns, and fragmented O2
 DWARF can still prevent a safe execution differential.
 """
+
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,8 +48,12 @@ VERDICT_MARK = {
 
 
 def exported_functions(so: Path) -> list[str]:
-    r = subprocess.run(["nm", "-D", "--defined-only", str(so)],
-                       capture_output=True, text=True)
+    r = subprocess.run(
+        ["nm", "-D", "--defined-only", str(so)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     out = []
     for line in r.stdout.splitlines():
         parts = line.split()
@@ -86,7 +93,10 @@ def source_of(src: Path, name: str) -> str | None:
 
 def decompiled(so: Path, name: str) -> str | None:
     r = subprocess.run(
-        ["nm", "-D", "--defined-only", str(so)], capture_output=True, text=True
+        ["nm", "-D", "--defined-only", str(so)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     va = None
     for line in r.stdout.splitlines():
@@ -97,32 +107,50 @@ def decompiled(so: Path, name: str) -> str | None:
         return None
     r = subprocess.run(
         ["glaurung", "decompile", str(so), "--vas", hex(va), "--style", "decbench"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return r.stdout.strip() or None
 
 
 def verdicts(so: Path, src: Path, fixture: str) -> dict:
     r = subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "diff_decompile.py"), str(so), str(src),
-         "--fixture", fixture, "--json"],
-        capture_output=True, text=True, timeout=1800,
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(so),
+            str(src),
+            "--fixture",
+            fixture,
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=1800,
+        check=False,
     )
     try:
         return json.loads(r.stdout)
-    except Exception:
+    except json.JSONDecodeError:
         return {}
 
 
-def review(program: str, src: Path, compiler: str, opt: str, only_broken: bool,
-           workdir: Path) -> tuple[str, dict]:
+def review(
+    program: str, src: Path, compiler: str, opt: str, only_broken: bool, workdir: Path
+) -> tuple[str, dict]:
     so = workdir / f"rt-{program}-{compiler}-{opt}.so"
     build = subprocess.run(
         [compiler, "-shared", "-fPIC", "-g", f"-{opt}", "-o", str(so), str(src)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if build.returncode != 0:
-        return f"## {program}\n\nDID NOT BUILD:\n\n```\n{build.stderr.strip()}\n```\n", {}
+        return (
+            f"## {program}\n\nDID NOT BUILD:\n\n```\n{build.stderr.strip()}\n```\n",
+            {},
+        )
 
     v = verdicts(so, src, program)
     lines = [f"## {program}  ({compiler} -{opt})", ""]
@@ -154,17 +182,60 @@ def review(program: str, src: Path, compiler: str, opt: str, only_broken: bool,
     return "\n".join(lines), counts
 
 
+def review_many(
+    srcs: list[Path],
+    compiler: str,
+    opt: str,
+    only_broken: bool,
+    workdir: Path,
+    jobs: int,
+) -> tuple[list[str], dict[str, int]]:
+    """Review independent programs concurrently while retaining source order."""
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        results = list(
+            pool.map(
+                lambda src: review(src.stem, src, compiler, opt, only_broken, workdir),
+                srcs,
+            )
+        )
+    body: list[str] = []
+    totals: dict[str, int] = {}
+    for text, counts in results:
+        body.append(text)
+        for status, count in counts.items():
+            totals[status] = totals.get(status, 0) + count
+    return body, totals
+
+
+def positive_int(value: str) -> int:
+    """Parse a strictly positive worker count."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("programs", nargs="*", help="default: the whole DecBench corpus")
     ap.add_argument("--compiler", default="gcc")
     ap.add_argument("--opt", default="O0")
-    ap.add_argument("--only-broken", action="store_true",
-                    help="skip functions whose behaviour already matches")
-    ap.add_argument("--fixtures", action="store_true",
-                    help="review the fixture corpus instead")
+    ap.add_argument(
+        "--only-broken",
+        action="store_true",
+        help="skip functions whose behaviour already matches",
+    )
+    ap.add_argument(
+        "--fixtures", action="store_true", help="review the fixture corpus instead"
+    )
     ap.add_argument("--out", default=None, help="write here instead of stdout")
     ap.add_argument("--workdir", default="/tmp")
+    ap.add_argument(
+        "--jobs",
+        type=positive_int,
+        default=max(1, min(4, os.cpu_count() or 1)),
+        help="number of independent source programs to review concurrently",
+    )
     args = ap.parse_args()
 
     src_dir = FIXTURES if args.fixtures else CORPUS
@@ -177,13 +248,14 @@ def main() -> int:
             return 2
 
     workdir = Path(args.workdir)
-    body, totals = [], {}
-    for src in srcs:
-        text, counts = review(src.stem, src, args.compiler, args.opt,
-                              args.only_broken, workdir)
-        body.append(text)
-        for k, n in counts.items():
-            totals[k] = totals.get(k, 0) + n
+    body, totals = review_many(
+        srcs,
+        args.compiler,
+        args.opt,
+        args.only_broken,
+        workdir,
+        args.jobs,
+    )
 
     executed = totals.get("pass", 0) + totals.get("fail", 0)
     rate = f"{100 * totals.get('pass', 0) // executed}%" if executed else "n/a"
