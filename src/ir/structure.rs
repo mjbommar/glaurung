@@ -597,12 +597,12 @@ pub fn verify_structure(lf: &LlirFunction, ssa: &SsaInfo) -> Vec<StructError> {
 }
 
 /// [`recover`] plus a structural self-check. A region which drops a real block or
-/// edge, invents an edge, leaves a goto dangling, or moves a switch arm outside
-/// its loop is not safe to render: production recovery falls back to the complete
-/// labelled CFG. Weaker quality findings (an explicit goto, an unowned back-edge,
-/// or deliberate cloning of a shared terminal block) remain diagnostics because
-/// they still express executable control flow. This is the single production
-/// entry the decompile paths should call.
+/// edge, invents an edge, leaves a back-edge without a loop owner, leaves a goto
+/// dangling, or moves a switch arm outside its loop is not safe to render:
+/// production recovery falls back to the complete labelled CFG. Weaker quality
+/// findings (an explicit goto or deliberate cloning of a shared terminal block)
+/// remain diagnostics because they still express executable control flow. This is
+/// the single production entry the decompile paths should call.
 pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
     let cfg = Cfg::from(lf, ssa);
     let region = build_full(lf, &cfg);
@@ -628,6 +628,7 @@ pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
             error,
             AccountError::BlockDropped { .. }
                 | AccountError::EdgeUnaccounted { .. }
+                | AccountError::BackEdgeUnowned { .. }
                 | AccountError::ImpliedEdgeAbsent { .. }
                 | AccountError::GotoTargetMissing { .. }
                 | AccountError::SwitchArmOutsideLoop { .. }
@@ -3142,6 +3143,59 @@ mod tests {
             region,
             Region::Unstructured((0..32).collect()),
             "an unfaithful nested loop must retain its complete labelled CFG: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn unowned_backedge_falls_back_to_the_complete_cfg() {
+        // Reduced from the real Clang 21 -O2 `fixedpoint:isqrt` CFG. The
+        // compiler splits signed division into fast and slow paths (B2/B5),
+        // joins them at B3, and then either exits or re-enters through B4:
+        //
+        //   B0 -> B1 (return n) | B4
+        //   B4 -> B2 (signed divide) | B5 (unsigned fast path)
+        //   B2/B5 -> B3
+        //   B3 -> B4 (back edge) | B6 (return x)
+        //
+        // The speculative tree owned every block but did not own B3 -> B4 as
+        // a loop edge. Lowering consequently emitted one iteration and then
+        // fell off the function: isqrt(100) returned 50 instead of 10. An
+        // unowned backedge is therefore a correctness defect unless an
+        // explicit labelled-CFG fallback preserves it.
+        let cond = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1140, cond(0x117d), vec![0x1157, 0x117d]),
+            (0x1157, vec![Op::Return], vec![]),
+            (0x1160, vec![Op::Nop], vec![0x1168]),
+            (0x1168, cond(0x1194), vec![0x117d, 0x1194]),
+            (0x117d, cond(0x1160), vec![0x1160, 0x118c]),
+            (0x118c, vec![Op::Jump { target: 0x1168 }], vec![0x1168]),
+            (0x1194, vec![Op::Return], vec![]),
+        ]);
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        let speculative = build_full(&lf, &cfg);
+        let accounting =
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &speculative);
+        assert!(
+            accounting.iter().any(|error| matches!(
+                error,
+                crate::ir::structure_accounting::AccountError::BackEdgeUnowned { from: 3, to: 4 }
+            )),
+            "the reduced real CFG must exercise the unowned-backedge defect: {accounting:?}"
+        );
+
+        let region = recover_verified(&lf, &ssa);
+        assert_eq!(
+            region,
+            Region::Unstructured((0..7).collect()),
+            "an unowned backedge must retain the complete labelled CFG: {region:#?}"
         );
     }
 
