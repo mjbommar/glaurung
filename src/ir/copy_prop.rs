@@ -605,6 +605,13 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                     let record = is_pure_copyable(src)
                         || (is_scratch_reg(dst)
                             && reads.get(dst).copied().unwrap_or(0) == 1
+                            // A 128-bit load cannot be represented by the
+                            // scalar expression that would replace this use.
+                            // Keep its value identity so the C backend can
+                            // materialize a full-width temporary and preserve
+                            // load-before-store ordering across sibling XMM
+                            // moves.
+                            && !matches!(src, Expr::Deref { size: 16, .. })
                             && !matches!(src, Expr::Unknown(_)));
                     if record {
                         copies.insert(dst.clone(), src.clone());

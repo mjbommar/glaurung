@@ -5842,6 +5842,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     }
     DEC_GLOBAL_ADDRS
         .with(|addresses| *addresses.borrow_mut() = ids.global_addresses.keys().copied().collect());
+    DEC_WIDE_LOCALS.with(|locals| *locals.borrow_mut() = ids.wide_locals.iter().cloned().collect());
 
     let name = sanitize_c_ident(&f.name);
     // Signature arity: the highest `argN` referenced in the body, *or* recovered
@@ -6125,6 +6126,14 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
             let _ = writeln!(out, "    unsigned char {}[{}];", local, size);
             continue;
         }
+        if ids.wide_locals.contains(local) {
+            let _ = writeln!(
+                out,
+                "    unsigned char {}[16] __attribute__((aligned(16)));",
+                local
+            );
+            continue;
+        }
         let ty = dec_struct_ptr_type(local).unwrap_or_else(|| {
             if is_promoted_local(local) || is_high_variable(local) {
                 ctype_for(local, tm).to_string()
@@ -6155,6 +6164,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     DEC_RENDERABLE_STRUCTS.with(|selected| selected.borrow_mut().clear());
     DEC_STRUCT_PTR_TYPES.with(|selected| selected.borrow_mut().clear());
     DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow_mut().clear());
+    DEC_WIDE_LOCALS.with(|locals| locals.borrow_mut().clear());
     out
 }
 
@@ -6188,6 +6198,9 @@ struct DecIdents {
     /// folding. These need portable C objects rather than original-image
     /// process addresses.
     global_addresses: std::collections::BTreeMap<u64, u8>,
+    /// Scalar names whose value is actually a complete 128-bit machine load.
+    /// These render as byte arrays so no high half is discarded.
+    wide_locals: std::collections::BTreeSet<String>,
 }
 
 /// If `name` is exactly `arg` followed by decimal digits, return that index.
@@ -6349,6 +6362,20 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
     match s {
         Stmt::Assign { dst, src } => {
             collect_reg(dst, ids);
+            if matches!(src, Expr::Deref { size: 16, .. }) {
+                let spelling = match dst {
+                    VReg::Phys(name) if parse_arg_index(name).is_none() => {
+                        Some(sanitize_c_ident(name))
+                    }
+                    VReg::Temp(index) => Some(format!("t{index}")),
+                    VReg::Flag(flag) => Some(flag_ident(flag).to_string()),
+                    VReg::FlagValue { .. } => dst.predicate_ident(),
+                    VReg::Phys(_) => None,
+                };
+                if let Some(spelling) = spelling {
+                    ids.wide_locals.insert(spelling);
+                }
+            }
             collect_idents_expr(src, ids);
         }
         Stmt::Store { addr, src, size } => {
@@ -6754,6 +6781,11 @@ thread_local! {
     /// emitted above the function definition.
     static DEC_GLOBAL_ADDRS: std::cell::RefCell<std::collections::BTreeSet<u64>> =
         std::cell::RefCell::new(std::collections::BTreeSet::new());
+
+    /// C identifiers whose recovered value occupies all 16 bytes of a vector
+    /// register. They render as byte-array temporaries, never scalar `long`s.
+    static DEC_WIDE_LOCALS: std::cell::RefCell<std::collections::BTreeSet<String>> =
+        std::cell::RefCell::new(std::collections::BTreeSet::new());
 }
 
 fn dec_global_name(address: u64) -> String {
@@ -6776,6 +6808,18 @@ fn direct_global_address(expr: &Expr) -> Option<u64> {
 
 fn dec_is_global_addr(address: u64) -> bool {
     DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow().contains(&address))
+}
+
+fn dec_is_wide_local(register: &VReg) -> bool {
+    let spelling = match register {
+        VReg::Phys(name) => sanitize_c_ident(name),
+        VReg::Temp(index) => format!("t{index}"),
+        VReg::Flag(flag) => flag_ident(flag).to_string(),
+        VReg::FlagValue { .. } => register
+            .predicate_ident()
+            .expect("FlagValue always has a predicate identifier"),
+    };
+    DEC_WIDE_LOCALS.with(|locals| locals.borrow().contains(&spelling))
 }
 
 fn selected_named_call_prototype(name: &str) -> Option<CallPrototype> {
@@ -7945,6 +7989,21 @@ fn float_store_pointee_ctype(src: &Expr, size: u8) -> Option<&'static str> {
 fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
     match s {
         Stmt::Assign { dst, src } => {
+            if dec_is_wide_local(dst) {
+                if let Expr::Deref {
+                    addr: source,
+                    size: 16,
+                } = src
+                {
+                    indent(out, level);
+                    out.push_str("__builtin_memcpy(");
+                    write_reg_lvalue_dec(dst, out);
+                    out.push_str(", ");
+                    write_expr_dec(source, out);
+                    out.push_str(", 16);\n");
+                    return;
+                }
+            }
             // `Expr::Select` is already the side-effect-free value semantics
             // (`cond ? true : false`). Keep that typed middle-layer node visible
             // in benchmark C instead of inventing statement-level CFG and an
@@ -7955,6 +8014,29 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
         }
         Stmt::Store { addr, src, size } => {
             indent(out, level);
+            // A 128-bit machine move is a complete load followed by a complete
+            // store. The scalar AST cannot name that value without narrowing it
+            // to `long`, so preserve the memory-to-memory form with an
+            // overlap-safe builtin. Unlike `memcpy`, `memmove` also matches a
+            // load-before-store instruction pair when the ranges overlap.
+            if *size == 16 {
+                let source = match src {
+                    Expr::Deref {
+                        addr: source,
+                        size: 16,
+                    } => Some(source.as_ref()),
+                    Expr::Reg(register) if dec_is_wide_local(register) => Some(src),
+                    _ => None,
+                };
+                if let Some(source) = source {
+                    out.push_str("__builtin_memmove(");
+                    write_expr_dec(addr, out);
+                    out.push_str(", ");
+                    write_expr_dec(source, out);
+                    out.push_str(", 16);\n");
+                    return;
+                }
+            }
             // The integer C backend has no scalar 128-bit lvalue. A proven
             // zero vector still has exact byte semantics, so preserve the full
             // machine write instead of silently narrowing it to one `long`.
@@ -11385,6 +11467,98 @@ function f @ 0x1000 {
         assert!(
             text.contains("__builtin_memset(&local_10[0], 0, 16);"),
             "a 128-bit zero store must not degrade to one machine word: {text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_adjacent_sixteen_byte_load_store_keeps_every_byte() {
+        let loaded = VReg::phys("var0");
+        let f = Function {
+            name: "copy_vector".to_string(),
+            entry_va: 0x20,
+            body: vec![
+                Stmt::Assign {
+                    dst: loaded.clone(),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                        size: 16,
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("arg0")),
+                    src: Expr::Reg(loaded),
+                    size: 16,
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+        assert_eq!(prepared.body.len(), 2, "{prepared:#?}");
+        let text = render_decbench(&prepared);
+        assert!(
+            text.contains("unsigned char var0[16] __attribute__((aligned(16)));")
+                && text.contains("__builtin_memcpy(var0, arg1, 16);")
+                && text.contains("__builtin_memmove(arg0, var0, 16);"),
+            "a 128-bit copy must not degrade to two 64-bit expressions: {text}"
+        );
+        assert!(!text.contains("long var0;"), "{text}");
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_vector_load_batch_preserves_load_before_store_order() {
+        let first = VReg::phys("var0");
+        let second = VReg::phys("var1");
+        let plus_sixteen = |argument: &str| Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(VReg::phys(argument))),
+            rhs: Box::new(Expr::Const(16)),
+        };
+        let f = Function {
+            name: "copy_two_vectors".to_string(),
+            entry_va: 0x20,
+            body: vec![
+                Stmt::Assign {
+                    dst: first.clone(),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                        size: 16,
+                    },
+                },
+                Stmt::Assign {
+                    dst: second.clone(),
+                    src: Expr::Deref {
+                        addr: Box::new(plus_sixteen("arg1")),
+                        size: 16,
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("arg0")),
+                    src: Expr::Reg(first),
+                    size: 16,
+                },
+                Stmt::Store {
+                    addr: plus_sixteen("arg0"),
+                    src: Expr::Reg(second),
+                    size: 16,
+                },
+            ],
+        };
+
+        let text = dec_pipeline(&f);
+        assert!(
+            text.contains("unsigned char var0[16] __attribute__((aligned(16)));")
+                && text.contains("unsigned char var1[16] __attribute__((aligned(16)));"),
+            "both complete vector values need storage: {text}"
+        );
+        assert_eq!(text.matches("__builtin_memcpy(").count(), 2, "{text}");
+        assert_eq!(text.matches("__builtin_memmove(").count(), 2, "{text}");
+        let second_load = text.find("__builtin_memcpy(var1").expect("second load");
+        let first_store = text.find("__builtin_memmove(arg0").expect("first store");
+        assert!(
+            second_load < first_store,
+            "all machine loads must precede the first store: {text}"
         );
         assert_looks_like_c(&text);
     }
