@@ -33,6 +33,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import build_guard as BG
+
 ROOT = Path(__file__).resolve().parent.parent
 CORPUS = ROOT / "tests" / "decbench_corpus" / "src"
 FIXTURES = ROOT / "tests" / "decompiler_fixtures" / "src"
@@ -106,7 +108,15 @@ def decompiled(so: Path, name: str) -> str | None:
     if va is None:
         return None
     r = subprocess.run(
-        ["glaurung", "decompile", str(so), "--vas", hex(va), "--style", "decbench"],
+        [
+            BG.glaurung_bin(),
+            "decompile",
+            str(so),
+            "--vas",
+            hex(va),
+            "--style",
+            "decbench",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -117,7 +127,7 @@ def decompiled(so: Path, name: str) -> str | None:
 def verdicts(so: Path, src: Path, fixture: str) -> dict:
     r = subprocess.run(
         [
-            sys.executable,
+            BG.python_bin(),
             str(ROOT / "tools" / "diff_decompile.py"),
             str(so),
             str(src),
@@ -130,10 +140,19 @@ def verdicts(so: Path, src: Path, fixture: str) -> dict:
         timeout=1800,
         check=False,
     )
+    if r.returncode != 0:
+        diagnostic = (r.stderr or r.stdout or "no diagnostic output").strip()
+        raise RuntimeError(
+            f"round-trip differential failed for {fixture} (exit {r.returncode}): "
+            f"{diagnostic}"
+        )
     try:
         return json.loads(r.stdout)
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as error:
+        diagnostic = (r.stderr or r.stdout or "empty output").strip()
+        raise RuntimeError(
+            f"round-trip differential returned invalid JSON for {fixture}: {diagnostic}"
+        ) from error
 
 
 def review(
