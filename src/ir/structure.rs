@@ -596,13 +596,13 @@ pub fn verify_structure(lf: &LlirFunction, ssa: &SsaInfo) -> Vec<StructError> {
     verify_region(&cfg.succs, 0, &region)
 }
 
-/// [`recover`] plus a non-fatal structural self-check: any invariant violation
-/// (dropped block / uncovered conditional edge — e.g. the short-circuit empty-arm
-/// bug) is emitted as a `tracing` diagnostic rather than reaching the rendered
-/// output silently. Non-fatal by design while the known structurer defects are
-/// burned down (see docs/design/semantics-preserving-structuring.md); the total
-/// structurer will make these hard failures. This is the single production entry
-/// the decompile paths should call.
+/// [`recover`] plus a structural self-check. A region which drops a real block or
+/// edge, invents an edge, leaves a goto dangling, or moves a switch arm outside
+/// its loop is not safe to render: production recovery falls back to the complete
+/// labelled CFG. Weaker quality findings (an explicit goto, an unowned back-edge,
+/// or deliberate cloning of a shared terminal block) remain diagnostics because
+/// they still express executable control flow. This is the single production
+/// entry the decompile paths should call.
 pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
     let cfg = Cfg::from(lf, ssa);
     let region = build_full(lf, &cfg);
@@ -616,25 +616,36 @@ pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
             errors
         );
     }
-    // Full structural accounting, SHADOW ONLY: every block and every typed edge, in
-    // both directions (a CFG edge the tree does not express, and an edge the tree
-    // claims that does not exist). It reports strictly more than the check above —
-    // on the clang -O0 `statemachine` shape that one is silent — so it runs behind
-    // an env var until a region analysis can act on it. Nothing here changes
-    // `region`.
-    if std::env::var_os("GLAURUNG_ACCOUNT_STRUCTURE").is_some() {
-        let acct = crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
-        if !acct.is_empty() {
-            // stderr, not `tracing`: no subscriber is installed on the CLI or PyO3
-            // paths, so a `tracing::warn!` here reached nobody — a diagnostic that
-            // cannot be read is not a diagnostic. Matches `GLAURUNG_DUMP_PASSES`.
-            eprintln!(
-                "[account] {:#x}: {} finding(s): {:?}",
-                lf.entry_va,
-                acct.len(),
-                acct
-            );
-        }
+    // Account every typed edge in both directions. The older block/arm verifier
+    // is silent on conditional latches whose taken edge repeats the loop while
+    // the fallthrough exits: lowering strips the back-edge and used to leave an
+    // empty `if`, making the loop unconditional. A labelled CFG is less pretty
+    // than a speculative While, but it is the only semantics-preserving result.
+    let acct = crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
+    let is_unsound = acct.iter().any(|error| {
+        use crate::ir::structure_accounting::AccountError;
+        matches!(
+            error,
+            AccountError::BlockDropped { .. }
+                | AccountError::EdgeUnaccounted { .. }
+                | AccountError::ImpliedEdgeAbsent { .. }
+                | AccountError::GotoTargetMissing { .. }
+                | AccountError::SwitchArmOutsideLoop { .. }
+        )
+    });
+    if std::env::var_os("GLAURUNG_ACCOUNT_STRUCTURE").is_some() && !acct.is_empty() {
+        // stderr, not `tracing`: no subscriber is installed on the CLI or PyO3
+        // paths, so a `tracing::warn!` here reached nobody — a diagnostic that
+        // cannot be read is not a diagnostic. Matches `GLAURUNG_DUMP_PASSES`.
+        eprintln!(
+            "[account] {:#x}: {} finding(s): {:?}",
+            lf.entry_va,
+            acct.len(),
+            acct
+        );
+    }
+    if is_unsound {
+        return Region::Unstructured((0..lf.blocks.len()).collect());
     }
     region
 }
@@ -3059,6 +3070,78 @@ mod tests {
         assert!(
             !contains_do_while(&r),
             "rotated while became DoWhile: {r:#?}"
+        );
+    }
+
+    #[test]
+    fn a_nested_conditional_latch_exit_is_not_silently_dropped() {
+        // Reduced only at the instruction level from the real GCC 15 -O2 CFG
+        // for recursive Fibonacci. GCC expands most recursion into nested
+        // loops, with one cold bridge (B31) re-entering B23. The speculative
+        // region tree duplicated the epilogue and claimed B19->B15 and
+        // B21->B23 edges which do not exist. AST lowering then erased six
+        // conditional latches as empty `if`s; fib(20) never terminated.
+        let cj = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let j = |target| vec![Op::Jump { target }];
+        let lf = mk_cfg(vec![
+            (0x1100, cj(0x13cf), vec![0x13cf, 0x111e]),
+            (0x111e, j(0x1132), vec![0x1132]),
+            (0x1132, cj(0x13c8), vec![0x13c8, 0x113b]),
+            (0x113b, j(0x115e), vec![0x115e]),
+            (0x115e, cj(0x13b0), vec![0x13b0, 0x1168]),
+            (0x1168, j(0x1188), vec![0x1188]),
+            (0x1188, cj(0x1393), vec![0x1393, 0x1192]),
+            (0x1192, j(0x11b6), vec![0x11b6]),
+            (0x11b6, cj(0x1373), vec![0x1373, 0x11c0]),
+            (0x11c0, j(0x11ea), vec![0x11ea]),
+            (0x11ea, cj(0x134f), vec![0x134f, 0x11f3]),
+            (0x11f3, j(0x1209), vec![0x1209]),
+            (0x1209, cj(0x133f), vec![0x133f, 0x1213]),
+            (0x1213, cj(0x1322), vec![0x1322, 0x124b]),
+            (0x124b, j(0x1265), vec![0x1265]),
+            (0x1265, cj(0x12f0), vec![0x12f0, 0x1270]),
+            (0x1270, j(0x1272), vec![0x1272]),
+            (0x1272, cj(0x1272), vec![0x1272, 0x12c5]),
+            (0x12c5, cj(0x1265), vec![0x1265, 0x12e5]),
+            (0x12e5, j(0x12f0), vec![0x12f0]),
+            (0x12f0, cj(0x13e1), vec![0x13e1, 0x1316]),
+            (0x1316, cj(0x124b), vec![0x124b, 0x1322]),
+            (0x1322, j(0x132f), vec![0x132f]),
+            (0x132f, cj(0x1209), vec![0x1209, 0x133f]),
+            (0x133f, cj(0x11ea), vec![0x11ea, 0x134f]),
+            (0x134f, cj(0x11b6), vec![0x11b6, 0x1373]),
+            (0x1373, cj(0x1188), vec![0x1188, 0x1393]),
+            (0x1393, cj(0x115e), vec![0x115e, 0x13b0]),
+            (0x13b0, cj(0x1132), vec![0x1132, 0x13c8]),
+            (0x13c8, j(0x13cf), vec![0x13cf]),
+            (0x13cf, vec![Op::Return], vec![]),
+            (0x13e1, j(0x132f), vec![0x132f]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        let speculative = build_full(&lf, &cfg);
+        let accounting =
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &speculative);
+        assert!(
+            accounting.iter().any(|error| matches!(
+                error,
+                crate::ir::structure_accounting::AccountError::ImpliedEdgeAbsent { .. }
+            )),
+            "the reduced real CFG must exercise the invented-edge defect: {accounting:?}"
+        );
+
+        let region = recover_verified(&lf, &ssa);
+        assert_eq!(
+            region,
+            Region::Unstructured((0..32).collect()),
+            "an unfaithful nested loop must retain its complete labelled CFG: {region:#?}"
         );
     }
 

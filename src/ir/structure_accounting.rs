@@ -18,8 +18,9 @@
 //!
 //! A verifier that is quiet about that cannot be used to judge a new structurer, so
 //! this module accounts for every block and every edge instead of a chosen subset.
-//! It is DIAGNOSTIC ONLY: nothing here changes a region, and callers log what it
-//! reports.
+//! Production recovery uses the hard findings to reject an unfaithful region and
+//! render the complete labelled CFG instead. Quality-only findings such as an
+//! explicit goto remain diagnostic.
 //!
 //! The accounting is by IMPLICATION. Each region node declares the edges it means:
 //! a `Seq` means its parts run in order, an `IfThenElse` means the condition reaches
@@ -257,8 +258,27 @@ fn goto_edges(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>
                 goto_edges(default, edges, out);
             }
         }
-        Region::Block(_) | Region::Goto(_) | Region::RawLoop { .. } | Region::Unstructured(_) => {}
+        Region::Block(block) => {
+            // An explicit machine jump lowers to a C goto. If structure did not
+            // consume it as a loop/arm/sequence edge, retain it as the weaker
+            // goto-quality finding rather than reporting missing control flow.
+            for edge in edges.get(*block).into_iter().flatten() {
+                if edge.kind == EdgeKind::Jump {
+                    out.insert((*block, edge.to));
+                }
+            }
+        }
+        Region::Goto(_) | Region::RawLoop { .. } | Region::Unstructured(_) => {}
     }
+}
+
+/// Whether the exact `from -> target` edge is an explicit region or machine
+/// goto. Destination-only matching is unsound: one goto to a shared target must
+/// not excuse a different block's edge to that target.
+fn has_explicit_goto(r: &Region, from: usize, target: usize, edges: &[Vec<Edge>]) -> bool {
+    let mut gotos = HashSet::new();
+    goto_edges(r, edges, &mut gotos);
+    gotos.contains(&(from, target))
 }
 
 /// Every edge the tree declares.
@@ -301,8 +321,10 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             }
             if let Some(j) = *join {
                 out.insert((*cond, j));
-                for (from, _) in escaping(then_r, edges) {
-                    out.insert((from, j));
+                for (from, target) in escaping(then_r, edges) {
+                    if !has_explicit_goto(then_r, from, target, edges) {
+                        out.insert((from, j));
+                    }
                 }
             }
             implied(then_r, edges, out);
@@ -322,8 +344,10 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             }
             if let Some(j) = *join {
                 for arm in [then_r.as_ref(), else_r.as_ref()] {
-                    for (from, _) in escaping(arm, edges) {
-                        out.insert((from, j));
+                    for (from, target) in escaping(arm, edges) {
+                        if !has_explicit_goto(arm, from, target, edges) {
+                            out.insert((from, j));
+                        }
                     }
                 }
             }
@@ -383,9 +407,19 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
                 }
             }
             if let Some(j) = *join {
+                let arm_entries: HashSet<usize> =
+                    arms.iter().filter_map(structural_entry).collect();
                 for a in arms {
-                    for (from, _) in escaping(a, edges) {
-                        out.insert((from, j));
+                    for (from, target) in escaping(a, edges) {
+                        // A source-level fallthrough case exits its own arm by
+                        // entering the next case arm, not by jumping directly
+                        // to the switch join. Preserve that actual edge; only
+                        // an escape outside every case implies the join.
+                        if arm_entries.contains(&target) {
+                            out.insert((from, target));
+                        } else if !has_explicit_goto(a, from, target, edges) {
+                            out.insert((from, j));
+                        }
                     }
                 }
                 if guard.is_some() {
@@ -857,6 +891,183 @@ mod tests {
         ]);
         let errs = account_recovered(&lf);
         assert_eq!(errs, vec![], "a sparse guarded switch must be clean");
+    }
+
+    #[test]
+    fn switch_case_fallthrough_does_not_invent_direct_join_edges() {
+        // Clang -O0 lowers `case 0: ...; fallthrough; case 1: ...` as a
+        // dispatch into successive suffixes of one linear chain. The earlier
+        // accountant claimed every case jumped directly to the final join,
+        // even though B1/B2/B3 really fall through to the next case entry.
+        let switch_case = |to| Edge {
+            to,
+            kind: EdgeKind::SwitchCase,
+            back: false,
+        };
+        let linear = |to| Edge {
+            to,
+            kind: EdgeKind::Linear,
+            back: false,
+        };
+        let edges = vec![
+            vec![
+                switch_case(1),
+                switch_case(2),
+                switch_case(3),
+                switch_case(4),
+            ],
+            vec![linear(2)],
+            vec![linear(3)],
+            vec![linear(4)],
+            vec![linear(5)],
+            vec![],
+        ];
+        let preds = vec![vec![], vec![0], vec![0, 1], vec![0, 2], vec![0, 3], vec![4]];
+        let region = Region::Seq(vec![
+            Region::Switch {
+                guard: None,
+                dispatch: 0,
+                case_labels: vec![vec![0], vec![1], vec![2], vec![3]],
+                arms: vec![
+                    Region::Block(1),
+                    Region::Block(2),
+                    Region::Block(3),
+                    Region::Block(4),
+                ],
+                formal_default: None,
+                join: Some(5),
+            },
+            Region::Block(5),
+        ]);
+
+        let errs = account(&edges, &preds, 0, &region);
+        assert!(
+            !errs
+                .iter()
+                .any(|error| matches!(error, AccountError::ImpliedEdgeAbsent { .. })),
+            "case fallthrough must not be misreported as an invented join edge: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_arm_goto_does_not_also_imply_the_enclosing_join() {
+        let edges = vec![
+            vec![],
+            vec![Edge {
+                to: 3,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        ];
+        let arm = Region::Seq(vec![Region::Block(1), Region::Goto(3)]);
+        let region = Region::IfThen {
+            cond: 0,
+            then_r: Box::new(arm),
+            join: Some(4),
+            invert: false,
+        };
+        let mut declared = HashSet::new();
+        implied(&region, &edges, &mut declared);
+        assert!(
+            !declared.contains(&(1, 4)),
+            "the goto to B3 must not be restated as an absent B1->B4 join edge: {declared:?}"
+        );
+    }
+
+    #[test]
+    fn a_machine_jump_inside_a_block_is_recorded_as_an_explicit_goto() {
+        let edges = vec![
+            vec![Edge {
+                to: 2,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
+            vec![],
+            vec![],
+        ];
+        let mut gotos = HashSet::new();
+        goto_edges(&Region::Block(0), &edges, &mut gotos);
+        assert_eq!(gotos, HashSet::from([(0, 2)]));
+    }
+
+    #[test]
+    fn a_machine_jump_arm_does_not_also_imply_the_enclosing_join() {
+        let edges = vec![
+            vec![],
+            vec![Edge {
+                to: 3,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        ];
+        let region = Region::IfThen {
+            cond: 0,
+            then_r: Box::new(Region::Block(1)),
+            join: Some(4),
+            invert: false,
+        };
+        let mut declared = HashSet::new();
+        implied(&region, &edges, &mut declared);
+        assert!(
+            !declared.contains(&(1, 4)),
+            "the machine goto to B3 must not become an absent B1->B4 join edge: {declared:?}"
+        );
+    }
+
+    #[test]
+    fn a_goto_from_one_arm_exit_does_not_excuse_another_exit() {
+        let edges = vec![
+            vec![],
+            vec![
+                Edge {
+                    to: 3,
+                    kind: EdgeKind::Taken,
+                    back: false,
+                },
+                Edge {
+                    to: 2,
+                    kind: EdgeKind::Fallthrough,
+                    back: false,
+                },
+            ],
+            vec![Edge {
+                to: 3,
+                kind: EdgeKind::Linear,
+                back: false,
+            }],
+            vec![],
+            vec![],
+        ];
+        let arm = Region::IfThenElse {
+            cond: 1,
+            then_r: Box::new(Region::Goto(3)),
+            else_r: Box::new(Region::Block(2)),
+            join: None,
+            invert: false,
+        };
+        let region = Region::IfThen {
+            cond: 0,
+            then_r: Box::new(arm),
+            join: Some(4),
+            invert: false,
+        };
+
+        let mut declared = HashSet::new();
+        implied(&region, &edges, &mut declared);
+        assert!(
+            !declared.contains(&(1, 4)),
+            "the explicit B1->B3 goto must not be restated as B1->B4: {declared:?}"
+        );
+        assert!(
+            declared.contains(&(2, 4)),
+            "the unrelated B2->B3 escape must still imply its enclosing join: {declared:?}"
+        );
     }
 
     /// An edge a `Goto` expresses is a WEAKER finding, not no finding. Treating a

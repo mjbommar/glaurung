@@ -148,7 +148,7 @@
     "rt_u16": "pass",
     "rt_u32": "pass",
     "rt_u64": "pass",
-    "rt_u8": "structural",
+    "rt_u8": "pass",
     "sar_signed": "pass",
     "sext_i16": "pass",
     "sext_i8": "pass",
@@ -220,16 +220,16 @@
     "while_reload_header": "pass"
   },
   "03_loop_shapes:gcc:O2": {
-    "cond_reload_and_transform": "fail",
+    "cond_reload_and_transform": "pass",
     "cond_side_effect": "pass",
     "dowhile_atleastonce": "pass",
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
     "for_stride2": "pass",
     "for_sum": "pass",
-    "loop_break": "fail",
+    "loop_break": "pass",
     "loop_continue": "pass",
-    "loop_early_return": "fail",
+    "loop_early_return": "pass",
     "loop_return_on_neg": "pass",
     "mutate_prefix": "pass",
     "mutate_reverse": "pass",
@@ -313,15 +313,15 @@
   },
   "05_cleanup_and_state_machine:clang:O0": {
     "fsm": "pass",
-    "process": "fail"
+    "process": "pass"
   },
   "05_cleanup_and_state_machine:clang:O2": {
-    "fsm": "fail",
+    "fsm": "pass",
     "process": "pass"
   },
   "05_cleanup_and_state_machine:gcc:O0": {
     "fsm": "pass",
-    "process": "fail"
+    "process": "pass"
   },
   "05_cleanup_and_state_machine:gcc:O2": {
     "fsm": "pass",
@@ -348,7 +348,7 @@
   },
   "06_calling_conventions:clang:O2": {
     "fact_mod": "fail",
-    "fib": "fail",
+    "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
     "sum_arg0": "pass",
@@ -356,9 +356,9 @@
     "sum_arg10": "pass",
     "sum_arg2": "pass",
     "sum_arg3": "pass",
-    "sum_arg4": "structural",
+    "sum_arg4": "pass",
     "sum_arg5": "pass",
-    "sum_arg6": "structural",
+    "sum_arg6": "pass",
     "sum_arg7": "pass",
     "sum_arg8": "pass",
     "sum_arg9": "pass",
@@ -385,8 +385,8 @@
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:gcc:O2": {
-    "fact_mod": "structural",
-    "fib": "structural",
+    "fact_mod": "fail",
+    "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
     "sum_arg0": "pass",
@@ -409,7 +409,7 @@
   },
   "07_packet_parser:clang:O2": {
     "parse_packet": "pass",
-    "validate_header": "structural"
+    "validate_header": "fail"
   },
   "07_packet_parser:gcc:O0": {
     "parse_packet": "fail",
@@ -439,7 +439,7 @@
   },
   "08_indirect_dispatch:gcc:O2": {
     "apply": "structural",
-    "dispatch": "structural",
+    "dispatch": "pass",
     "dispatch_switch": "structural",
     "tail_dispatch": "structural"
   },
@@ -591,10 +591,10 @@
     "call_result_drives_branch": "pass",
     "call_result_unused": "pass",
     "call_twice_and_combine": "pass",
-    "signed_step": "structural",
-    "spill_combine": "structural",
-    "widen_mul": "structural",
-    "wrap_byte": "structural"
+    "signed_step": "pass",
+    "spill_combine": "pass",
+    "widen_mul": "pass",
+    "wrap_byte": "pass"
   },
   "11_call_shapes:gcc:O0": {
     "call_accumulate_bytes": "pass",
