@@ -77,6 +77,18 @@ def test_indexed_stack_arrays_round_trip() -> None:
     assert len(re.findall(r"unsigned char local_[0-9a-f]+\[\d+\];", code)) >= 2, code
 
 
+def test_moved_cpp_stack_object_keeps_readable_storage() -> None:
+    """A moved-from object must still be read through its materialized bytes."""
+    observed = H.run_lanes(
+        [("10_cpp_runtime_shapes", "clang", "O0", ("cpp_move",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["10_cpp_runtime_shapes:clang:O0"]
+    assert lane == {"cpp_move": "pass"}, lane
+
+
 def test_simd_zeroed_indexed_stack_array_round_trip() -> None:
     """An optimized vector zero initializer must define every indexed byte."""
     observed = H.run_lanes(

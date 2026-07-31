@@ -1187,6 +1187,19 @@ fn rewrite_expr(
                     disp: key_disp,
                 };
                 if let Some(entry) = map.get_mut(&key) {
+                    // A narrower load at the same starting address is a view
+                    // into a previously wider scalar spill, not evidence that
+                    // the parent object itself is narrow.  Preserve the full
+                    // declaration and materialise the little-endian view
+                    // explicitly; otherwise a dword call result followed by a
+                    // byte union-field read becomes a one-byte C local and its
+                    // upper bytes are irretrievably lost.
+                    if size_val < entry.span_size && entry.span_size <= 8 {
+                        entry.declared_size = entry.declared_size.max(entry.span_size);
+                        let alias = entry.name.clone();
+                        *e = extract_little_endian_subvalue(alias, 0, size_val);
+                        return;
+                    }
                     // A load reports the true access width — let it win for
                     // the declaration while preserving the widest owned span.
                     entry.declared_size = entry.declared_size.min(size_val);
@@ -1390,6 +1403,13 @@ fn promote_address_taken_stack_object(
         base: key_base.clone(),
         disp: key_disp,
     };
+    let next_slot_extent = map
+        .keys()
+        .filter(|candidate| candidate.base == key_base && candidate.disp > key_disp)
+        .map(|candidate| candidate.disp - key_disp)
+        .min()
+        .and_then(|extent| u16::try_from(extent).ok())
+        .filter(|extent| *extent > 0);
     let pointer_size = match ctx.cc {
         Some(CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat) => 4,
         Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64) | None => 8,
@@ -1408,13 +1428,23 @@ fn promote_address_taken_stack_object(
     // a constructor whose recovered source type is not yet known. Cap at the C
     // representation's bounded u16 extent so hostile displacements cannot make
     // the renderer request an unbounded object.
-    let size = if key_disp < 0 {
+    let conservative_size = if key_disp < 0 {
         u16::try_from(key_disp.unsigned_abs())
             .unwrap_or(u16::MAX)
             .max(u16::from(pointer_size))
     } else {
         u16::from(pointer_size)
     };
+    // A separately observed slot closer to the frame base is a hard object
+    // boundary.  Without it, an address-taken struct at rbp-0x20 absorbs an
+    // independent argument at rbp-0x14 merely because its source type is not
+    // yet known.
+    let size = next_slot_extent.unwrap_or(conservative_size);
+    // Persist the storage identity in the slot map, not only in this call
+    // argument.  Later loads/stores must remain dereferences of the same byte
+    // array; rewriting them as scalar `Reg(local)` values would make C decay
+    // the array to its address and use pointer bits as object contents.
+    entry.object_size = Some(entry.object_size.unwrap_or(0).max(size));
     *expr = Expr::StackAddr { object, size };
 }
 
@@ -2986,7 +3016,72 @@ mod tests {
             _ => panic!("expected assign"),
         };
         assert_eq!(store_name, Expr::Reg(reg("local_c")));
-        assert_eq!(load_name, Expr::Reg(reg("local_c")));
+        assert!(matches!(
+            load_name,
+            Expr::Cast {
+                signed: false,
+                width: 4,
+                expr,
+            } if matches!(expr.as_ref(), Expr::Bin { lhs, .. }
+                if matches!(lhs.as_ref(), Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr,
+                } if expr.as_ref() == &Expr::Reg(reg("local_c"))))
+        ));
+    }
+
+    #[test]
+    fn narrow_reads_of_a_wide_spill_keep_the_parent_storage_width() {
+        // Both Clang and GCC spill a uint32_t call result and then read its
+        // low word and low byte through a union.  Shrinking the declaration to
+        // the narrowest read discards the other three bytes before those views
+        // are evaluated.
+        let mut f = Function {
+            name: "payload_head".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -0x40),
+                    src: Expr::Reg(reg("eax")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("ecx"),
+                    src: deref_of("rbp", -0x40, 2),
+                },
+                Stmt::Assign {
+                    dst: reg("edx"),
+                    src: deref_of("rbp", -0x40, 1),
+                },
+            ],
+        };
+
+        let sizes = promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert_eq!(sizes.get("local_40"), Some(&4), "{f:#?}");
+        for (statement, width) in f.body[1..].iter().zip([2, 1]) {
+            assert!(
+                matches!(
+                    statement,
+                    Stmt::Assign {
+                        src: Expr::Cast {
+                            signed: false,
+                            width: got,
+                            expr,
+                        },
+                        ..
+                    } if *got == width
+                        && matches!(expr.as_ref(), Expr::Bin { lhs, .. }
+                            if matches!(lhs.as_ref(), Expr::Cast {
+                                signed: false,
+                                width: 8,
+                                expr,
+                            } if matches!(expr.as_ref(), Expr::Reg(name) if name == &reg("local_40"))))
+                ),
+                "missing {width}-byte view: {statement:#?}"
+            );
+        }
     }
 
     #[test]
@@ -3026,11 +3121,84 @@ mod tests {
         assert!(matches!(
             &f.body[1],
             Stmt::Assign {
-                src: Expr::Reg(VReg::Phys(name)),
+                src: Expr::Deref { addr, size: 4 },
                 ..
-            } if name == "local_20"
+            } if matches!(addr.as_ref(), Expr::StackAddr {
+                object,
+                size: 32,
+            } if object == &reg("local_20"))
         ));
-        assert_eq!(sizes.get("local_20"), Some(&4));
+        assert_eq!(sizes.get("local_20"), Some(&8));
+    }
+
+    #[test]
+    fn address_taken_object_stops_at_the_next_known_frame_slot() {
+        // Clang -O0 places an eight-byte decoded header at rbp-0x20, while
+        // the original length argument starts at rbp-0x14.  Reserving all the
+        // way to rbp would absorb that argument (and the saved input pointer)
+        // into the output object, turning later reads into uninitialised field
+        // accesses.  A preceding observed slot is a hard upper boundary.
+        let mut f = Function {
+            name: "decode".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -0x14),
+                    src: Expr::Reg(reg("esi")),
+                    size: 4,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "decode_header".into(),
+                    },
+                    args: vec![lea("rbp", -0x20)],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("rbp", -0x14, 4),
+                },
+                Stmt::Assign {
+                    dst: reg("ecx"),
+                    src: deref_of("rbp", -0x1a, 2),
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Call { args, .. } = &f.body[1] else {
+            panic!("expected call");
+        };
+        assert!(
+            matches!(args.as_slice(), [Expr::StackAddr {
+            object,
+            size: 12,
+        }] if object == &reg("local_20")),
+            "{f:#?}"
+        );
+        assert!(
+            matches!(
+                &f.body[2],
+                Stmt::Assign { src: Expr::Reg(name), .. } if name == &reg("local_14")
+            ),
+            "the adjacent argument was absorbed into the object: {f:#?}"
+        );
+        assert!(
+            matches!(
+                &f.body[3],
+                Stmt::Assign {
+                    src: Expr::Deref { addr, size: 2 },
+                    ..
+                } if matches!(addr.as_ref(), Expr::Bin { lhs, rhs, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 12 }
+                        if object == &reg("local_20"))
+                        && matches!(rhs.as_ref(), Expr::Const(6)))
+            ),
+            "the decoded-header field lost object identity: {f:#?}"
+        );
     }
 
     #[test]

@@ -17,6 +17,18 @@ import manifest as M  # ty: ignore[unresolved-import]  # added above
 pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
 
 
+def test_clang_union_views_of_call_result_round_trip() -> None:
+    """Narrow union views must not shrink a spilled 32-bit call result."""
+    observed = H.run_lanes(
+        [("07_packet_parser", "clang", "O0", ("parse_packet",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["07_packet_parser:clang:O0"]
+    assert lane == {"parse_packet": "pass"}, lane
+
+
 def test_clang_bswap_header_validation_round_trips() -> None:
     """BSWAP must preserve the big-endian payload-length comparison."""
     observed = H.run_lanes(
