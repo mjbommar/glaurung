@@ -1240,6 +1240,22 @@ fn fold_one_call(
     let mut i = call_idx;
     while i > 0 {
         i -= 1;
+        // A label is a potential multi-predecessor join, and an explicit
+        // transfer has no fall-through into the call.  Consuming assignments
+        // across either boundary steals state from an unrelated predecessor
+        // (notably the stack-pop edge immediately before a labelled canary
+        // failure block). Reaching definitions across CFG edges require dataflow
+        // proof; this local backward fold deliberately stops here.
+        if matches!(
+            &body[i],
+            Stmt::Label(_)
+                | Stmt::Goto { .. }
+                | Stmt::IndirectGoto { .. }
+                | Stmt::Return { .. }
+                | Stmt::Break
+        ) {
+            break;
+        }
         if arch == CallConv::SysVAmd64 && preallocated_stack.is_none() {
             if let Some((value, width)) = outgoing_sysv_stack_push(body, i) {
                 stack_args.push(value.clone());
@@ -2691,6 +2707,44 @@ mod tests {
             assert_eq!(args[1], Expr::Const(2));
             assert_eq!(args[2], Expr::Const(3));
         }
+    }
+
+    #[test]
+    fn call_argument_scan_stops_at_a_labelled_control_flow_edge() {
+        let mut f = Function {
+            name: "stack_check_join".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi#1", 1),
+                assign("rsi#1", 2),
+                Stmt::Goto { target: 0x1204 },
+                Stmt::Label(0x125a),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1050,
+                        name: "__stack_chk_fail".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(
+            matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("rdi#1")),
+            "an assignment on the goto predecessor was consumed: {f:#?}"
+        );
+        assert!(
+            matches!(&f.body[1], Stmt::Assign { dst, .. } if dst == &reg("rsi#1")),
+            "an assignment on the goto predecessor was consumed: {f:#?}"
+        );
+        assert!(matches!(
+            f.body.last(),
+            Some(Stmt::Call { args, .. }) if args.is_empty()
+        ));
     }
 
     #[test]

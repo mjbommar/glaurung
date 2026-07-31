@@ -98,3 +98,25 @@ def test_signed_q16_bounds_round_trip_in_every_lane() -> None:
     for compiler, optimization in H.REQUIRED_MATRIX:
         lane = observed[f"28_euler_ode:{compiler}:{optimization}"]
         assert lane == {"euler_decay_q16": "pass"}, lane
+
+
+@pytest.mark.slow
+def test_every_curriculum_function_round_trips_in_every_lane() -> None:
+    """The curriculum is a fail-closed behavioral ratchet, not a score snapshot."""
+    lanes = [
+        (fixture, compiler, optimization, tuple(functions))
+        for fixture, functions in M.CURRICULUM_PROJECTS.items()
+        for compiler, optimization in H.REQUIRED_MATRIX
+    ]
+
+    observed = H.run_lanes(lanes, fuzz=M.FIXTURE_FUZZ, jobs=8)
+
+    for fixture, functions in M.CURRICULUM_PROJECTS.items():
+        expected = dict.fromkeys(functions, "pass")
+        for compiler, optimization in H.REQUIRED_MATRIX:
+            lane = observed[f"{fixture}:{compiler}:{optimization}"]
+            assert lane == expected, {
+                function: status
+                for function, status in lane.items()
+                if status != "pass"
+            }
