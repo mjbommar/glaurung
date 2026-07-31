@@ -630,13 +630,16 @@ def test_gcc_o2_packed_bubble_swap_round_trips(tmp_path: Path) -> None:
     assert results["bubble"]["status"] == "pass", results
 
 
-def test_gcc_o2_pointer_return_keeps_declared_dwarf_kind(tmp_path: Path) -> None:
+@pytest.mark.parametrize("compiler", ["gcc", "clang"])  # ty: ignore[unresolved-attribute]
+def test_o2_pointer_return_keeps_declared_dwarf_kind(
+    tmp_path: Path, compiler: str
+) -> None:
     """A named-struct pointer return must not be rendered as an integer."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "linkedlist.c"
-    binary = tmp_path / "linkedlist-gcc-O2.so"
+    binary = tmp_path / f"linkedlist-{compiler}-O2.so"
     compiled = subprocess.run(
         [
-            "gcc",
+            compiler,
             "-shared",
             "-fPIC",
             "-g",
@@ -653,12 +656,30 @@ def test_gcc_o2_pointer_return_keeps_declared_dwarf_kind(tmp_path: Path) -> None
 
     functions = D.exported_functions(str(binary))
     code = D.decompiled_c(str(binary), functions["list_find"])
+    sum_code = D.decompiled_c(str(binary), functions["list_sum"])
     assert code is not None
-    assert "struct node;" in code, code
+    assert sum_code is not None
+    assert "typedef struct node" in code, code
+    assert "struct node * next;" in code, code
+    assert "int val;" in code, code
+    assert re.search(r"node \* list_find\(node \* arg0, int arg1\)", code), code
+    assert "->val" in code, code
+    assert "->next" in code, code
+    assert "+ 0x8" not in code, code
+    assert re.search(r"node \* var\d+;", code), code
+    assert re.search(r"(?:var\d+|ret) = \(\(struct node \*\)var\d+\)->next;", code), (
+        code
+    )
+    assert sum_code.count("node * var") >= 2, sum_code
     assert re.search(
-        r"struct node \* list_find\(struct node \* arg0, int arg1\)", code
-    ), code
-    rebuilt = D.build_so(code, tmp_path, "dec_list_find_gcc_o2")
+        r"(?:var\d+|ret) = \(\(struct node \*\)var\d+\)->next;", sum_code
+    ), sum_code
+    # DecBench recompiles all functions from one binary as one translation
+    # unit. Shared aggregate declarations therefore need an idempotent prelude,
+    # not one unguarded definition per independently rendered function.
+    rebuilt = D.build_so(
+        f"{sum_code}\n{code}", tmp_path, f"dec_linkedlist_{compiler}_o2"
+    )
     assert rebuilt is not None
 
     class Node(ctypes.Structure):

@@ -30,6 +30,8 @@ pub struct PdbFieldHint {
     pub field_name: String,
     pub field_type: Option<String>,
     pub offset: u64,
+    /// True only when the defining aggregate will be emitted with the C body.
+    pub renderable: bool,
 }
 
 /// A C-level expression. v1 is deliberately shallow: we carry raw VReg
@@ -5569,7 +5571,13 @@ fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
         .collect::<Vec<_>>()
         .join(" ");
     if base.starts_with("struct ") || base.starts_with("union ") {
-        return pointer;
+        let mut words = base.split_whitespace();
+        let tag = words.next();
+        let name = words.next();
+        return pointer
+            && matches!(tag, Some("struct" | "union"))
+            && name.is_some_and(valid_c_identifier)
+            && words.next().is_none();
     }
     matches!(
         base.as_str(),
@@ -5612,6 +5620,7 @@ fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
 
 fn source_prototype_forward_declarations(
     prototype: &CallPrototype,
+    complete_structs: &std::collections::BTreeSet<String>,
 ) -> std::collections::BTreeSet<String> {
     let mut declarations = std::collections::BTreeSet::new();
     for c_type in std::iter::once(&prototype.return_type).chain(&prototype.parameter_types) {
@@ -5619,7 +5628,8 @@ fn source_prototype_forward_declarations(
         for pair in words.windows(2) {
             if matches!(pair[0], "struct" | "union") {
                 let name = pair[1].trim_end_matches('*');
-                if !name.is_empty()
+                if !complete_structs.contains(name)
+                    && !name.is_empty()
                     && name
                         .chars()
                         .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
@@ -5630,6 +5640,151 @@ fn source_prototype_forward_declarations(
         }
     }
     declarations
+}
+
+fn valid_c_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn dwarf_scalar_width(c_type: &str, pointer_width: u8) -> Option<u64> {
+    let normalized = c_type.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.ends_with('*') {
+        return Some(u64::from(pointer_width));
+    }
+    match normalized.as_str() {
+        "char" | "signed char" | "unsigned char" | "_Bool" | "bool" => Some(1),
+        "short" | "short int" | "signed short" | "signed short int" | "unsigned short"
+        | "unsigned short int" => Some(2),
+        "int" | "signed" | "signed int" | "unsigned" | "unsigned int" | "float" => Some(4),
+        "long long"
+        | "long long int"
+        | "signed long long"
+        | "signed long long int"
+        | "unsigned long long"
+        | "unsigned long long int"
+        | "long long unsigned"
+        | "long long unsigned int"
+        | "double" => Some(8),
+        // `long` is ABI-dependent (notably 4 bytes on Win64), and the AST
+        // renderer deliberately does not guess the object format here.
+        _ => None,
+    }
+}
+
+fn pointed_struct_name(c_type: &str) -> Option<&str> {
+    let normalized = c_type.trim();
+    let pointee = normalized.strip_suffix('*')?.trim();
+    let pointee = pointee
+        .strip_prefix("const ")
+        .or_else(|| pointee.strip_prefix("volatile "))
+        .unwrap_or(pointee)
+        .trim();
+    pointee.strip_prefix("struct ").map(str::trim)
+}
+
+fn align_up(value: u64, alignment: u64) -> Option<u64> {
+    let mask = alignment.checked_sub(1)?;
+    value.checked_add(mask).map(|value| value & !mask)
+}
+
+/// Select only complete, ordinary-layout structures that the emitted source
+/// prototype actually references. This is intentionally fail-closed: bitfields,
+/// packed layouts, ABI-dependent `long`, arrays, unions, and conflicting DWARF
+/// definitions stay as raw offset accesses until the middle IR can represent
+/// them exactly.
+fn renderable_dwarf_structs<'a>(
+    prototype: Option<&CallPrototype>,
+    dwarf_types: &'a [crate::debug::dwarf::DwarfType],
+    pointer_width: u8,
+) -> std::collections::BTreeMap<String, &'a crate::debug::dwarf::DwarfType> {
+    let Some(prototype) = prototype else {
+        return std::collections::BTreeMap::new();
+    };
+    let referenced = std::iter::once(&prototype.return_type)
+        .chain(&prototype.parameter_types)
+        .filter_map(|c_type| pointed_struct_name(c_type))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut selected =
+        std::collections::BTreeMap::<String, &'a crate::debug::dwarf::DwarfType>::new();
+    let mut conflicts = std::collections::BTreeSet::new();
+    for layout in dwarf_types.iter().filter(|layout| {
+        layout.kind == crate::debug::dwarf::DwarfTypeKind::Struct
+            && referenced.contains(layout.name.as_str())
+    }) {
+        if !valid_c_identifier(&layout.name) || layout.byte_size == 0 || layout.fields.is_empty() {
+            continue;
+        }
+        let mut cursor = 0_u64;
+        let mut max_alignment = 1_u64;
+        let mut valid = true;
+        for field in &layout.fields {
+            let Some(width) = dwarf_scalar_width(&field.c_type, pointer_width) else {
+                valid = false;
+                break;
+            };
+            let alignment = width.min(u64::from(pointer_width)).max(1);
+            max_alignment = max_alignment.max(alignment);
+            if !valid_c_identifier(&field.name)
+                || !source_prototype_type_is_renderable(&field.c_type, false)
+                || align_up(cursor, alignment) != Some(field.offset)
+            {
+                valid = false;
+                break;
+            }
+            cursor = match field.offset.checked_add(width) {
+                Some(end) => end,
+                None => {
+                    valid = false;
+                    break;
+                }
+            };
+        }
+        if !valid || align_up(cursor, max_alignment) != Some(layout.byte_size) {
+            continue;
+        }
+        match selected.get(&layout.name) {
+            Some(previous) if **previous != *layout => {
+                conflicts.insert(layout.name.clone());
+            }
+            Some(_) => {}
+            None => {
+                selected.insert(layout.name.clone(), layout);
+            }
+        }
+    }
+    for conflict in conflicts {
+        selected.remove(&conflict);
+    }
+    selected
+}
+
+fn source_type_with_complete_struct_alias(
+    c_type: &str,
+    complete_structs: &std::collections::BTreeSet<String>,
+) -> String {
+    let Some(name) = pointed_struct_name(c_type) else {
+        return c_type.to_string();
+    };
+    if !complete_structs.contains(name) {
+        return c_type.to_string();
+    }
+    let qualifiers = c_type
+        .trim()
+        .strip_suffix('*')
+        .unwrap_or(c_type)
+        .trim()
+        .strip_suffix(&format!("struct {name}"))
+        .unwrap_or("")
+        .trim();
+    if qualifiers.is_empty() {
+        format!("{name} *")
+    } else {
+        format!("{qualifiers} {name} *")
+    }
 }
 
 /// Typed DecBench renderer with an explicit recovered output contract.
@@ -5655,6 +5810,29 @@ pub fn render_decbench_typed_with_output_and_prototype(
     width_tm: Option<&TypeMap>,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     declared_prototype: Option<&CallPrototype>,
+) -> String {
+    render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+        f,
+        tm,
+        width_tm,
+        output_kind,
+        declared_prototype,
+        &[],
+        8,
+        &std::collections::HashMap::new(),
+    )
+}
+
+/// Typed DecBench renderer with optional authoritative source aggregates.
+pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+    f: &Function,
+    tm: Option<&TypeMap>,
+    width_tm: Option<&TypeMap>,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    declared_prototype: Option<&CallPrototype>,
+    dwarf_types: &[crate::debug::dwarf::DwarfType],
+    pointer_width: u8,
+    dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
 ) -> String {
     let mut ids = DecIdents::default();
     for s in &f.body {
@@ -5691,13 +5869,47 @@ pub fn render_decbench_typed_with_output_and_prototype(
                     && prototype.return_type != "void"))
     });
 
+    let aggregate_layouts =
+        renderable_dwarf_structs(declared_prototype, dwarf_types, pointer_width);
+    let complete_structs = aggregate_layouts
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    DEC_RENDERABLE_STRUCTS.with(|selected| *selected.borrow_mut() = complete_structs.clone());
+    DEC_STRUCT_PTR_TYPES.with(|selected| {
+        let mut exact = std::collections::HashMap::new();
+        for (register, type_name) in dwarf_pointer_types {
+            if !complete_structs.contains(type_name) {
+                continue;
+            }
+            if let VReg::Phys(name) = register {
+                let c_type = format!("{type_name} *");
+                exact.insert(name.clone(), c_type.clone());
+                exact.insert(sanitize_c_ident(name), c_type);
+            }
+        }
+        *selected.borrow_mut() = exact;
+    });
+
     let mut out = String::new();
     // Provenance as a C comment (valid, and the harness maps by address anyway).
     let _ = writeln!(out, "// glaurung: {} @ 0x{:x}", f.name, f.entry_va);
     if let Some(prototype) = declared_prototype {
-        for declaration in source_prototype_forward_declarations(prototype) {
+        for declaration in source_prototype_forward_declarations(prototype, &complete_structs) {
             let _ = writeln!(out, "{declaration}");
         }
+    }
+    for (name, layout) in &aggregate_layouts {
+        let guard = format!("GLAURUNG_STRUCT_{name}_DEFINED");
+        let _ = writeln!(out, "#ifndef {guard}");
+        let _ = writeln!(out, "#define {guard}");
+        let _ = writeln!(out, "typedef struct {name} {name};");
+        let _ = writeln!(out, "struct {name} {{");
+        for field in &layout.fields {
+            let _ = writeln!(out, "    {} {};", field.c_type, field.name);
+        }
+        out.push_str("};\n");
+        out.push_str("#endif\n");
     }
 
     // Record every name declared as a pointer with its pointee width, so the
@@ -5754,7 +5966,9 @@ pub fn render_decbench_typed_with_output_and_prototype(
                 infer_return_ctype(&f.body, tm).to_string()
             }
         },
-        |prototype| prototype.return_type.clone(),
+        |prototype| {
+            source_type_with_complete_struct_alias(&prototype.return_type, &complete_structs)
+        },
     );
     DEC_RETURN_CTYPE.with(|selected| *selected.borrow_mut() = return_type.clone());
     // GCC 15 can ICE in its final RTL pass at `-O2` on exceptionally large,
@@ -5782,7 +5996,12 @@ pub fn render_decbench_typed_with_output_and_prototype(
             let aname = format!("arg{}", i);
             let aty = declared_prototype.map_or_else(
                 || ctype_for(&aname, tm).to_string(),
-                |prototype| prototype.parameter_types[i].clone(),
+                |prototype| {
+                    source_type_with_complete_struct_alias(
+                        &prototype.parameter_types[i],
+                        &complete_structs,
+                    )
+                },
             );
             if aty.ends_with('*') {
                 DEC_PTR_ARGS.with(|m| m.borrow_mut().insert(aname.clone(), aty.clone()));
@@ -5889,13 +6108,15 @@ pub fn render_decbench_typed_with_output_and_prototype(
             let _ = writeln!(out, "    unsigned char {}[{}];", local, size);
             continue;
         }
-        let ty = if is_promoted_local(local) || is_high_variable(local) {
-            ctype_for(local, tm)
-        } else {
-            "long"
-        };
+        let ty = dec_struct_ptr_type(local).unwrap_or_else(|| {
+            if is_promoted_local(local) || is_high_variable(local) {
+                ctype_for(local, tm).to_string()
+            } else {
+                "long".to_string()
+            }
+        });
         DEC_DECLARED_CTYPES.with(|types| {
-            types.borrow_mut().insert(local.clone(), ty.to_string());
+            types.borrow_mut().insert(local.clone(), ty.clone());
         });
         let _ = writeln!(out, "    {} {};", ty, local);
     }
@@ -5914,6 +6135,8 @@ pub fn render_decbench_typed_with_output_and_prototype(
 
     out.push_str("}\n");
     DEC_NAMED_CALL_PROTOTYPES.with(|selected| selected.borrow_mut().clear());
+    DEC_RENDERABLE_STRUCTS.with(|selected| selected.borrow_mut().clear());
+    DEC_STRUCT_PTR_TYPES.with(|selected| selected.borrow_mut().clear());
     out
 }
 
@@ -6478,6 +6701,17 @@ thread_local! {
     static DEC_NAMED_CALL_PROTOTYPES: std::cell::RefCell<
         std::collections::BTreeMap<String, CallPrototype>
     > = std::cell::RefCell::new(std::collections::BTreeMap::new());
+
+    /// Aggregate names whose complete, ABI-compatible DWARF definitions were
+    /// emitted for the current function. A field hint is printable only when
+    /// its defining C type is present in this set.
+    static DEC_RENDERABLE_STRUCTS: std::cell::RefCell<std::collections::BTreeSet<String>> =
+        std::cell::RefCell::new(std::collections::BTreeSet::new());
+
+    /// Exact source aggregate pointer types propagated from authoritative
+    /// DWARF (`var0` -> `node *`) for the current render.
+    static DEC_STRUCT_PTR_TYPES: std::cell::RefCell<std::collections::HashMap<String, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 fn selected_named_call_prototype(name: &str) -> Option<CallPrototype> {
@@ -6487,6 +6721,10 @@ fn selected_named_call_prototype(name: &str) -> Option<CallPrototype> {
 
 fn dec_ptr_arg_type(name: &str) -> Option<String> {
     DEC_PTR_ARGS.with(|m| m.borrow().get(name).cloned())
+}
+
+fn dec_struct_ptr_type(name: &str) -> Option<String> {
+    DEC_STRUCT_PTR_TYPES.with(|m| m.borrow().get(name).cloned())
 }
 
 /// The pointee width of `name` if it is declared as a pointer in this render.
@@ -6683,7 +6921,10 @@ fn strip_implicit_pointer_index_extension(expr: &Expr) -> &Expr {
 /// `&`/`*`/`-`/pointer±pointer.
 fn write_reg_dec(v: &VReg, out: &mut String) {
     if let VReg::Phys(n) = v {
-        if dec_ptr_arg_type(n).is_some() || dec_is_stack_object(n) {
+        if dec_ptr_arg_type(n).is_some()
+            || dec_struct_ptr_type(n).is_some()
+            || dec_is_stack_object(n)
+        {
             out.push_str("(long)");
             write_reg_lvalue_dec(v, out);
             return;
@@ -6879,6 +7120,10 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             ..
         } => write_addr_arith_dec(base, index, *scale, *disp, out),
         Expr::Deref { addr, size } => {
+            if let Some((base, hint)) = renderable_field_access(addr) {
+                write_field_access_dec(base, hint, out);
+                return;
+            }
             // Array-index idiom: a `T`-sized read through `base + i*sizeof(T)`
             // where `base` is a declared `T *` renders as `base[i]`. This drops
             // the `(long)` cast + explicit scale, so the compiler re-emits its own
@@ -6994,6 +7239,33 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
     }
 }
 
+fn renderable_field_access(addr: &Expr) -> Option<(&VReg, &PdbFieldHint)> {
+    let Expr::PdbFieldAddr {
+        base: Some(base),
+        index: None,
+        scale: 1,
+        hints,
+        ..
+    } = addr
+    else {
+        return None;
+    };
+    let [hint] = hints.as_slice() else {
+        return None;
+    };
+    (hint.renderable
+        && valid_c_identifier(&hint.type_name)
+        && valid_c_identifier(&hint.field_name)
+        && DEC_RENDERABLE_STRUCTS.with(|selected| selected.borrow().contains(&hint.type_name)))
+    .then_some((base, hint))
+}
+
+fn write_field_access_dec(base: &VReg, hint: &PdbFieldHint, out: &mut String) {
+    let _ = write!(out, "((struct {} *)", hint.type_name);
+    write_reg_lvalue_dec(base, out);
+    let _ = write!(out, ")->{}", hint.field_name);
+}
+
 fn redundant_declared_integer_cast(expr: &Expr) -> Option<&VReg> {
     let Expr::Cast {
         signed,
@@ -7101,6 +7373,7 @@ fn call_argument_renders_as_pointer(arg: &Expr) -> bool {
     match arg {
         Expr::Reg(VReg::Phys(name)) => {
             dec_ptr_arg_type(name).is_some()
+                || dec_struct_ptr_type(name).is_some()
                 || dec_ptr_width(name).is_some()
                 || dec_is_stack_object(name)
         }
@@ -7419,16 +7692,26 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
             expression_has_pointer_representation(lhs)
                 && !expression_has_pointer_representation(rhs)
         }
-        cast @ Expr::Cast { .. } => redundant_declared_integer_cast(cast).is_some_and(|reg| {
-            matches!(reg, VReg::Phys(name) if dec_ptr_arg_type(name).is_some()
-                || dec_ptr_width(name).is_some()
-                || dec_is_stack_object(name))
+        Expr::Deref { addr, .. } => renderable_field_access(addr).is_some_and(|(_, hint)| {
+            hint.field_type
+                .as_deref()
+                .is_some_and(|field_type| field_type.trim_end().ends_with('*'))
         }),
+        cast @ Expr::Cast { expr, .. } => {
+            let direct_pointer = matches!(expr.as_ref(), Expr::Reg(VReg::Phys(name))
+                if dec_ptr_arg_type(name).is_some() || dec_struct_ptr_type(name).is_some());
+            direct_pointer
+                || redundant_declared_integer_cast(cast).is_some_and(|reg| {
+                    matches!(reg, VReg::Phys(name) if dec_ptr_arg_type(name).is_some()
+                        || dec_struct_ptr_type(name).is_some()
+                        || dec_ptr_width(name).is_some()
+                        || dec_is_stack_object(name))
+                })
+        }
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
-        | Expr::Deref { .. }
         | Expr::Bin { .. }
         | Expr::Un { .. }
         | Expr::Cmp { .. }
@@ -7478,6 +7761,26 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
             // arithmetic remains valid.  At a pointer boundary, use the
             // declared pointer lvalue directly when no arithmetic is present.
             Expr::Reg(reg @ VReg::Phys(_)) => write_reg_lvalue_dec(reg, out),
+            Expr::Cast { expr, .. }
+                if matches!(expr.as_ref(), Expr::Reg(VReg::Phys(name))
+                    if dec_ptr_arg_type(name).is_some()
+                        || dec_struct_ptr_type(name).is_some()) =>
+            {
+                if let Expr::Reg(reg) = expr.as_ref() {
+                    write_reg_lvalue_dec(reg, out);
+                } else {
+                    write_expr_dec(src, out);
+                }
+            }
+            Expr::Deref { addr, .. }
+                if renderable_field_access(addr).is_some_and(|(_, hint)| {
+                    hint.field_type
+                        .as_deref()
+                        .is_some_and(|field_type| field_type.trim_end().ends_with('*'))
+                }) =>
+            {
+                write_expr_dec(src, out);
+            }
             // These expressions already have a pointer type in C.
             Expr::StringLit { .. } | Expr::StackAddr { .. } => write_expr_dec(src, out),
             // Address arithmetic, named addresses, and LEA nodes retain a
@@ -7579,6 +7882,13 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
                     out.push_str(";\n");
                     return;
                 }
+            }
+            if let Some((base, hint)) = renderable_field_access(addr) {
+                write_field_access_dec(base, hint, out);
+                out.push_str(" = ");
+                write_store_value_dec(src, *size, out);
+                out.push_str(";\n");
+                return;
             }
             // Use the access width so a 4-byte store emits `*(int *)`, not a
             // blanket `*(long *)` that would clobber the adjacent element.

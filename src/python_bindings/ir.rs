@@ -584,6 +584,8 @@ fn decompile_at_py(
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
+    let dwarf_types =
+        (style == "decbench" && types).then(|| crate::debug::dwarf::extract_dwarf_types(&data));
     let budgets = Budgets {
         max_functions,
         max_blocks,
@@ -758,6 +760,8 @@ fn decompile_at_py(
                 |p| p.output_kind(),
             ),
             declared_render.as_ref(),
+            dwarf_types.as_deref().unwrap_or(&[]),
+            cc,
         )
     } else if style == "c" {
         let body = crate::ir::ast::render_c(&f);
@@ -821,6 +825,8 @@ fn decompile_range_at_py(
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
+    let dwarf_types =
+        (style == "decbench" && types).then(|| crate::debug::dwarf::extract_dwarf_types(&data));
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let arm_vfp_args = arm_uses_vfp_arguments(&data);
     let bits = match arch {
@@ -958,6 +964,8 @@ fn decompile_range_at_py(
                 |p| p.output_kind(),
             ),
             declared_render.as_ref(),
+            dwarf_types.as_deref().unwrap_or(&[]),
+            cc,
         )
     } else if style == "c" {
         crate::ir::ast::render_c(&f)
@@ -1159,6 +1167,8 @@ fn decbench_text(
     readonly_data: &crate::ir::readonly_fold::ReadonlyData,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
+    dwarf_types: &[crate::debug::dwarf::DwarfType],
+    cc: crate::ir::call_args::CallConv,
 ) -> String {
     let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
@@ -1215,13 +1225,22 @@ fn decbench_text(
     // string folding, promoted objects, and pointer facts are represented on
     // the exact call boundary the verifier and C renderer consume.
     crate::ir::call_contracts::refine_call_site_specs(&mut prepared, decl);
+    let dwarf_pointer_types = crate::ir::dwarf_fields::annotate_function_fields(
+        &mut prepared,
+        declared_prototype,
+        dwarf_types,
+        calling_convention_pointer_width(cc),
+    );
     let violations = crate::ir::verify_defs::check(&prepared);
-    let body = crate::ir::ast::render_decbench_typed_with_output_and_prototype(
+    let body = crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types(
         &prepared,
         decl,
         width,
         output_kind,
         declared_prototype,
+        dwarf_types,
+        calling_convention_pointer_width(cc),
+        &dwarf_pointer_types,
     );
     if violations.is_empty() {
         return body;
@@ -1267,6 +1286,14 @@ fn dwarf_output_contracts(data: &[u8]) -> std::collections::HashMap<u64, DwarfPr
             )
         })
         .collect()
+}
+
+fn calling_convention_pointer_width(cc: crate::ir::call_args::CallConv) -> u8 {
+    use crate::ir::call_args::CallConv;
+    match cc {
+        CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => 4,
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => 8,
+    }
 }
 
 /// Translate only DWARF scalar spellings that the current renderer can express
@@ -1856,6 +1883,8 @@ fn decompile_all_py(
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
+    let dwarf_types =
+        (style == "decbench").then(|| crate::debug::dwarf::extract_dwarf_types(&data));
     let budgets = Budgets {
         max_functions: limit.max(1),
         max_blocks,
@@ -1974,6 +2003,8 @@ fn decompile_all_py(
                     .expect("DecBench prototype")
                     .output_kind(),
                 declared_render.as_ref(),
+                dwarf_types.as_deref().unwrap_or(&[]),
+                cc,
             )
         } else {
             render(&f)
@@ -2019,6 +2050,8 @@ fn decompile_many_py(
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
+    let dwarf_types =
+        (style == "decbench").then(|| crate::debug::dwarf::extract_dwarf_types(&data));
     // Zero is the public address-scoped default: process exactly the unique
     // requested entries. Direct-callee prototype evidence is recovered lazily
     // by `recover_direct_callee_layouts`, so unrelated automatic seeds never
@@ -2175,6 +2208,8 @@ fn decompile_many_py(
                     .expect("DecBench prototype")
                     .output_kind(),
                 declared_render.as_ref(),
+                dwarf_types.as_deref().unwrap_or(&[]),
+                cc,
             )
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);
