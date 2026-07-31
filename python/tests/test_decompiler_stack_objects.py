@@ -55,3 +55,23 @@ def test_address_taken_cpp_stack_objects_round_trip(compiler: str) -> None:
     storage = re.search(r"unsigned char local_20\[(\d+)\];", code)
     assert storage is not None, code
     assert int(storage.group(1)) >= 16, code
+
+
+def test_indexed_stack_arrays_round_trip() -> None:
+    """Indexed frame accesses must become real C stack objects, not raw rbp math."""
+    observed = H.run_lanes(
+        [("20_graph_bfs", "gcc", "O0", ("graph_bfs",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["20_graph_bfs:gcc:O0"]
+    assert lane == {"graph_bfs": "pass"}, lane
+
+    binary = H.BUILD / "20_graph_bfs-gcc-O0.so"
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["graph_bfs"])
+    assert code is not None
+    assert "long rbp;" not in code, code
+    assert "(rbp +" not in code, code
+    assert len(re.findall(r"unsigned char local_[0-9a-f]+\[\d+\];", code)) >= 2, code

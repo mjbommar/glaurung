@@ -751,15 +751,15 @@
     "sub_then_sign": "pass"
   },
   "15_binary_search_tree:clang:O0": {
-    "bst_inorder_checksum": "fail",
+    "bst_inorder_checksum": "pass",
     "bst_search": "pass"
   },
   "15_binary_search_tree:clang:O2": {
-    "bst_inorder_checksum": "fail",
+    "bst_inorder_checksum": "pass",
     "bst_search": "pass"
   },
   "15_binary_search_tree:gcc:O0": {
-    "bst_inorder_checksum": "fail",
+    "bst_inorder_checksum": "pass",
     "bst_search": "pass"
   },
   "15_binary_search_tree:gcc:O2": {
@@ -767,13 +767,13 @@
     "bst_search": "pass"
   },
   "16_red_black_tree:clang:O0": {
-    "rb_validate": "fail"
+    "rb_validate": "pass"
   },
   "16_red_black_tree:clang:O2": {
     "rb_validate": "fail"
   },
   "16_red_black_tree:gcc:O0": {
-    "rb_validate": "fail"
+    "rb_validate": "pass"
   },
   "16_red_black_tree:gcc:O2": {
     "rb_validate": "fail"
@@ -827,76 +827,76 @@
     "dsu_union": "pass"
   },
   "20_graph_bfs:clang:O0": {
-    "graph_bfs": "fail"
+    "graph_bfs": "pass"
   },
   "20_graph_bfs:clang:O2": {
-    "graph_bfs": "fail"
+    "graph_bfs": "pass"
   },
   "20_graph_bfs:gcc:O0": {
-    "graph_bfs": "fail"
+    "graph_bfs": "pass"
   },
   "20_graph_bfs:gcc:O2": {
     "graph_bfs": "fail"
   },
   "21_graph_dfs:clang:O0": {
-    "graph_dfs": "fail"
+    "graph_dfs": "pass"
   },
   "21_graph_dfs:clang:O2": {
-    "graph_dfs": "fail"
+    "graph_dfs": "pass"
   },
   "21_graph_dfs:gcc:O0": {
-    "graph_dfs": "fail"
+    "graph_dfs": "pass"
   },
   "21_graph_dfs:gcc:O2": {
     "graph_dfs": "fail"
   },
   "22_dijkstra:clang:O0": {
-    "dijkstra_dense": "fail"
+    "dijkstra_dense": "pass"
   },
   "22_dijkstra:clang:O2": {
-    "dijkstra_dense": "fail"
+    "dijkstra_dense": "pass"
   },
   "22_dijkstra:gcc:O0": {
-    "dijkstra_dense": "fail"
+    "dijkstra_dense": "pass"
   },
   "22_dijkstra:gcc:O2": {
     "dijkstra_dense": "fail"
   },
   "23_topological_sort:clang:O0": {
-    "topological_sort": "fail"
+    "topological_sort": "pass"
   },
   "23_topological_sort:clang:O2": {
     "topological_sort": "fail"
   },
   "23_topological_sort:gcc:O0": {
-    "topological_sort": "fail"
+    "topological_sort": "pass"
   },
   "23_topological_sort:gcc:O2": {
     "topological_sort": "fail"
   },
   "24_merge_sort:clang:O0": {
-    "merge_sort_i32": "fail"
+    "merge_sort_i32": "pass"
   },
   "24_merge_sort:clang:O2": {
     "merge_sort_i32": "fail"
   },
   "24_merge_sort:gcc:O0": {
-    "merge_sort_i32": "fail"
+    "merge_sort_i32": "pass"
   },
   "24_merge_sort:gcc:O2": {
     "merge_sort_i32": "fail"
   },
   "25_kmp_search:clang:O0": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:clang:O2": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:gcc:O0": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:gcc:O2": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "26_sparse_matrix:clang:O0": {
     "csr_matvec": "pass"

@@ -60,6 +60,11 @@ struct SlotVal {
     name: String,
     declared_size: u8,
     span_size: u8,
+    /// A bounded stack object recovered from indexed frame accesses.  Every
+    /// constant and indexed access inside this interval must be rendered
+    /// through the same byte-array identity; otherwise an earlier zeroing
+    /// store and a later indexed load become unrelated C locals.
+    object_size: Option<u16>,
 }
 
 #[derive(Clone, Copy)]
@@ -142,6 +147,15 @@ pub fn promote_stack_locals_typed_with_parameter_count(
     };
     let address_defs = collect_stack_address_defs(&f.body, ctx);
     let label_deltas = collect_label_stack_deltas(&f.body, ctx, &address_defs);
+    seed_indexed_stack_objects(
+        &f.body,
+        &mut map,
+        &mut stack_counter,
+        &mut local_counter,
+        ctx,
+        &address_defs,
+        &label_deltas,
+    );
     let mut sp_delta = Some(0i64);
     rewrite_body(
         &mut f.body,
@@ -421,6 +435,256 @@ fn collect_label_stack_deltas(
             (label, delta)
         })
         .collect()
+}
+
+/// Discover the starts of bounded indexed frame regions before rewriting any
+/// statement.  Adjacent starts partition the compiler frame and the frame base
+/// closes the final region.  This intentionally recovers storage, not an
+/// element type: byte-array identity is enough for C pointer arithmetic to
+/// preserve aliases between wide zeroing stores and later byte/int indexing.
+fn seed_indexed_stack_objects(
+    body: &[Stmt],
+    map: &mut HashMap<SlotKey, SlotVal>,
+    stack_counter: &mut usize,
+    local_counter: &mut usize,
+    ctx: StackContext,
+    address_defs: &HashMap<VReg, (String, i64)>,
+    label_deltas: &HashMap<u64, Option<i64>>,
+) {
+    fn collect_expr(
+        expr: &Expr,
+        sp_delta: Option<i64>,
+        ctx: StackContext,
+        address_defs: &HashMap<VReg, (String, i64)>,
+        starts: &mut Vec<(String, i64)>,
+    ) {
+        if let Some((base, disp, Some(_), scale)) =
+            resolved_memory_address(expr, sp_delta, ctx, address_defs)
+        {
+            if scale != 0 && disp < 0 {
+                starts.push((base, disp));
+            }
+        }
+        match expr {
+            Expr::Deref { addr, .. } => collect_expr(addr, sp_delta, ctx, address_defs, starts),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                collect_expr(lhs, sp_delta, ctx, address_defs, starts);
+                collect_expr(rhs, sp_delta, ctx, address_defs, starts);
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                collect_expr(cond, sp_delta, ctx, address_defs, starts);
+                collect_expr(if_true, sp_delta, ctx, address_defs, starts);
+                collect_expr(if_false, sp_delta, ctx, address_defs, starts);
+            }
+            Expr::Un { src, .. } => collect_expr(src, sp_delta, ctx, address_defs, starts),
+            Expr::Cast { expr, .. } => collect_expr(expr, sp_delta, ctx, address_defs, starts),
+            Expr::FunctionTableEntry { index, .. } => {
+                collect_expr(index, sp_delta, ctx, address_defs, starts)
+            }
+            Expr::WideArithmetic { args, .. } => {
+                for arg in args {
+                    collect_expr(arg, sp_delta, ctx, address_defs, starts);
+                }
+            }
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => {}
+        }
+    }
+
+    fn walk(
+        body: &[Stmt],
+        ctx: StackContext,
+        mut sp_delta: Option<i64>,
+        address_defs: &HashMap<VReg, (String, i64)>,
+        label_deltas: &HashMap<u64, Option<i64>>,
+        starts: &mut Vec<(String, i64)>,
+    ) -> Option<i64> {
+        for stmt in body {
+            match stmt {
+                Stmt::Assign { dst, src } => {
+                    collect_expr(src, sp_delta, ctx, address_defs, starts);
+                    if is_stack_pointer_reg(dst, ctx) {
+                        sp_delta =
+                            stack_delta_after_assignment(dst, src, sp_delta, ctx, address_defs);
+                    }
+                }
+                Stmt::Store { addr, src, .. } => {
+                    collect_expr(addr, sp_delta, ctx, address_defs, starts);
+                    collect_expr(src, sp_delta, ctx, address_defs, starts);
+                }
+                Stmt::Call { target, args, .. } => {
+                    collect_expr(target, sp_delta, ctx, address_defs, starts);
+                    for arg in args {
+                        collect_expr(arg, sp_delta, ctx, address_defs, starts);
+                    }
+                }
+                Stmt::Return { value } => {
+                    if let Some(value) = value {
+                        collect_expr(value, sp_delta, ctx, address_defs, starts);
+                    }
+                    sp_delta = None;
+                }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    collect_expr(cond, sp_delta, ctx, address_defs, starts);
+                    let then_delta =
+                        walk(then_body, ctx, sp_delta, address_defs, label_deltas, starts);
+                    let else_delta = else_body.as_deref().map_or(sp_delta, |branch| {
+                        walk(branch, ctx, sp_delta, address_defs, label_deltas, starts)
+                    });
+                    let then_falls = body_falls_through(then_body);
+                    let else_falls = else_body.as_deref().is_none_or(body_falls_through);
+                    sp_delta = match (then_falls, else_falls) {
+                        (true, true) => merge_stack_deltas(then_delta, else_delta),
+                        (true, false) => then_delta,
+                        (false, true) => else_delta,
+                        (false, false) => None,
+                    };
+                }
+                Stmt::While { cond, body } => {
+                    collect_expr(cond, sp_delta, ctx, address_defs, starts);
+                    let body_delta = walk(body, ctx, sp_delta, address_defs, label_deltas, starts);
+                    sp_delta = merge_stack_deltas(sp_delta, body_delta);
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    sp_delta = walk(
+                        std::slice::from_ref(init.as_ref()),
+                        ctx,
+                        sp_delta,
+                        address_defs,
+                        label_deltas,
+                        starts,
+                    );
+                    collect_expr(cond, sp_delta, ctx, address_defs, starts);
+                    let loop_entry = sp_delta;
+                    let mut body_delta =
+                        walk(body, ctx, loop_entry, address_defs, label_deltas, starts);
+                    body_delta = walk(
+                        std::slice::from_ref(step.as_ref()),
+                        ctx,
+                        body_delta,
+                        address_defs,
+                        label_deltas,
+                        starts,
+                    );
+                    sp_delta = merge_stack_deltas(loop_entry, body_delta);
+                }
+                Stmt::DoWhile { body, cond } => {
+                    let body_delta = walk(body, ctx, sp_delta, address_defs, label_deltas, starts);
+                    collect_expr(cond, body_delta, ctx, address_defs, starts);
+                    sp_delta = merge_stack_deltas(sp_delta, body_delta);
+                }
+                Stmt::Push { value } => {
+                    collect_expr(value, sp_delta, ctx, address_defs, starts);
+                    sp_delta = sp_delta.map(|delta| delta - stack_word_size(ctx));
+                }
+                Stmt::Pop { .. } => {
+                    sp_delta = sp_delta.map(|delta| delta + stack_word_size(ctx));
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    collect_expr(discriminant, sp_delta, ctx, address_defs, starts);
+                    let incoming = sp_delta;
+                    let mut exits = Vec::new();
+                    for (_, branch) in cases {
+                        exits.push(walk(
+                            branch,
+                            ctx,
+                            incoming,
+                            address_defs,
+                            label_deltas,
+                            starts,
+                        ));
+                    }
+                    if let Some(branch) = default {
+                        exits.push(walk(
+                            branch,
+                            ctx,
+                            incoming,
+                            address_defs,
+                            label_deltas,
+                            starts,
+                        ));
+                    } else {
+                        exits.push(incoming);
+                    }
+                    sp_delta = exits
+                        .into_iter()
+                        .reduce(merge_stack_deltas)
+                        .unwrap_or(incoming);
+                }
+                Stmt::IndirectGoto { target } => {
+                    collect_expr(target, sp_delta, ctx, address_defs, starts);
+                    sp_delta = None;
+                }
+                Stmt::Label(label) => {
+                    sp_delta = label_deltas.get(label).copied().unwrap_or(None);
+                }
+                Stmt::Goto { .. } => sp_delta = None,
+                Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            }
+        }
+        sp_delta
+    }
+
+    let mut starts = Vec::new();
+    let _ = walk(body, ctx, Some(0), address_defs, label_deltas, &mut starts);
+    starts.sort();
+    starts.dedup();
+    for index in 0..starts.len() {
+        let (base, start) = &starts[index];
+        let end = starts
+            .get(index + 1)
+            .filter(|(next_base, _)| next_base == base)
+            .map_or(0, |(_, next_start)| *next_start);
+        let Some(extent) = end.checked_sub(*start) else {
+            continue;
+        };
+        let Ok(size) = u16::try_from(extent) else {
+            continue;
+        };
+        if size == 0 {
+            continue;
+        }
+        let key = SlotKey {
+            base: base.clone(),
+            disp: *start,
+        };
+        let name = alloc_name(base, *start, stack_counter, local_counter, ctx);
+        map.insert(
+            key,
+            SlotVal {
+                name,
+                declared_size: 1,
+                span_size: 1,
+                object_size: Some(size),
+            },
+        );
+    }
 }
 
 fn rewrite_body(
@@ -853,6 +1117,12 @@ fn rewrite_expr(
                 sp_delta,
                 address_defs,
             );
+            if let Some(object_addr) =
+                stack_object_address(addr.as_ref(), size_val, map, sp_delta, ctx, address_defs)
+            {
+                **addr = object_addr;
+                return;
+            }
             // After recursion, see whether the addr is a bare Lea of a
             // stack slot; if so, collapse the whole deref into a Reg ref.
             if let Some((key_base, key_disp)) =
@@ -900,6 +1170,7 @@ fn rewrite_expr(
                         name: alias.clone(),
                         declared_size: size_val,
                         span_size: size_val,
+                        object_size: None,
                     },
                 );
                 *e = Expr::Reg(VReg::phys(alias));
@@ -1036,6 +1307,22 @@ fn promote_address_taken_stack_object(
         return;
     };
     let (key_base, key_disp) = normalized_stack_slot(&base, disp, sp_delta, ctx);
+    if let Some((_, slot)) = map
+        .iter()
+        .filter(|(key, slot)| {
+            slot.object_size.is_some()
+                && key.base == key_base
+                && key.disp <= key_disp
+                && key_disp < key.disp + i64::from(slot.object_size.unwrap_or(0))
+        })
+        .max_by_key(|(key, _)| key.disp)
+    {
+        *expr = Expr::StackAddr {
+            object: VReg::phys(slot.name.clone()),
+            size: slot.object_size.unwrap_or(1),
+        };
+        return;
+    }
     let key = SlotKey {
         base: key_base.clone(),
         disp: key_disp,
@@ -1048,6 +1335,7 @@ fn promote_address_taken_stack_object(
         name: alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx),
         declared_size: pointer_size,
         span_size: pointer_size,
+        object_size: None,
     });
     let object = VReg::phys(entry.name.clone());
     // A frame-local object starts at a negative offset and grows toward the
@@ -1251,23 +1539,104 @@ fn resolved_memory_slot(
     ctx: StackContext,
     address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<(String, i64)> {
+    let (base, disp, index, _) = resolved_memory_address(expr, sp_delta, ctx, address_defs)?;
+    index.is_none().then_some((base, disp))
+}
+
+/// Resolve a stack memory operand while retaining its optional dynamic index.
+/// The constant part is normalized to entry-SP coordinates exactly like scalar
+/// slots, so frame-pointer omission does not create a second storage identity.
+fn resolved_memory_address(
+    expr: &Expr,
+    sp_delta: Option<i64>,
+    ctx: StackContext,
+    address_defs: &HashMap<VReg, (String, i64)>,
+) -> Option<(String, i64, Option<VReg>, u8)> {
     let Expr::Lea {
         base: Some(base),
-        index: None,
+        index,
+        scale,
         disp,
         segment: None,
-        ..
     } = expr
     else {
         return None;
     };
     if let VReg::Phys(name) = base {
         if is_active_stack_base(name, ctx) {
-            return Some(normalized_stack_slot(name, *disp, sp_delta, ctx));
+            let (base, disp) = normalized_stack_slot(name, *disp, sp_delta, ctx);
+            return Some((base, disp, index.clone(), *scale));
         }
     }
-    let (base, base_disp) = address_defs.get(base)?.clone();
-    Some((base, base_disp.checked_add(*disp)?))
+    let (resolved_base, base_disp) = address_defs.get(base)?.clone();
+    Some((
+        resolved_base,
+        base_disp.checked_add(*disp)?,
+        index.clone(),
+        *scale,
+    ))
+}
+
+/// Materialise an access inside a seeded stack region as byte-pointer
+/// arithmetic rooted at one [`Expr::StackAddr`].
+fn stack_object_address(
+    expr: &Expr,
+    access_size: u8,
+    map: &HashMap<SlotKey, SlotVal>,
+    sp_delta: Option<i64>,
+    ctx: StackContext,
+    address_defs: &HashMap<VReg, (String, i64)>,
+) -> Option<Expr> {
+    let (base, disp, index, scale) = resolved_memory_address(expr, sp_delta, ctx, address_defs)?;
+    if index.is_some() && scale == 0 {
+        return None;
+    }
+    let access_end = disp.checked_add(i64::from(access_size))?;
+    let (start, slot, object_size) = map
+        .iter()
+        .filter_map(|(key, slot)| {
+            let size = slot.object_size?;
+            let end = key.disp.checked_add(i64::from(size))?;
+            (key.base == base && key.disp <= disp && (index.is_some() || access_end <= end))
+                .then_some((key.disp, slot, size))
+        })
+        .max_by_key(|(start, _, _)| *start)?;
+
+    let mut offset = index.map(|index| {
+        let index = Expr::Reg(index);
+        if scale == 1 {
+            index
+        } else {
+            Expr::Bin {
+                op: crate::ir::types::BinOp::Mul,
+                lhs: Box::new(index),
+                rhs: Box::new(Expr::Const(i64::from(scale))),
+            }
+        }
+    });
+    let relative = disp.checked_sub(start)?;
+    if relative != 0 {
+        offset = Some(match offset {
+            Some(index) => Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(index),
+                rhs: Box::new(Expr::Const(relative)),
+            },
+            None => Expr::Const(relative),
+        });
+    }
+    let object = Expr::StackAddr {
+        object: VReg::phys(slot.name.clone()),
+        size: object_size,
+    };
+    Some(match offset {
+        Some(offset) => Expr::Bin {
+            op: crate::ir::types::BinOp::Add,
+            lhs: Box::new(object),
+            rhs: Box::new(offset),
+        },
+        None => object,
+    })
 }
 
 fn constant_stack_address(expr: &Expr, ctx: StackContext) -> Option<(String, i64)> {
@@ -1329,6 +1698,10 @@ fn try_promote_lea_to_local(
     sp_delta: Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
 ) {
+    if let Some(object_addr) = stack_object_address(addr, size, map, sp_delta, ctx, address_defs) {
+        *addr = object_addr;
+        return;
+    }
     // A later narrower read at the exact same address can narrow the declaration,
     // while `span_size` retains the bytes this store defined for overlap recovery.
     let Some((key_base, key_disp)) = resolved_memory_slot(addr, sp_delta, ctx, address_defs) else {
@@ -1342,6 +1715,7 @@ fn try_promote_lea_to_local(
         name: alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx),
         declared_size: size,
         span_size: size,
+        object_size: None,
     });
     entry.declared_size = entry.declared_size.min(size);
     entry.span_size = entry.span_size.max(size);
@@ -1452,6 +1826,18 @@ mod tests {
     fn deref_of(base: &str, disp: i64, size: u8) -> Expr {
         Expr::Deref {
             addr: Box::new(lea(base, disp)),
+            size,
+        }
+    }
+    fn indexed_deref(base: &str, index: &str, scale: u8, disp: i64, size: u8) -> Expr {
+        Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                base: Some(reg(base)),
+                index: Some(reg(index)),
+                scale,
+                disp,
+                segment: None,
+            }),
             size,
         }
     }
@@ -2047,6 +2433,72 @@ mod tests {
         if let Stmt::Assign { src, .. } = &f.body[0] {
             assert_eq!(*src, Expr::Reg(reg("stack_0")));
         }
+    }
+
+    #[test]
+    fn indexed_frame_arrays_share_storage_with_constant_initializers() {
+        let mut f = Function {
+            name: "bfs_shape".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -32),
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: lea("rbp", -24),
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: indexed_deref("rbp", "head", 4, -96, 4),
+                },
+                Stmt::Assign {
+                    dst: reg("ecx"),
+                    src: indexed_deref("rbp", "next", 1, -32, 1),
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Store { addr: zero0, .. } = &f.body[0] else {
+            panic!("expected first initializer");
+        };
+        let Stmt::Store { addr: zero8, .. } = &f.body[1] else {
+            panic!("expected second initializer");
+        };
+        assert_eq!(
+            zero0,
+            &Expr::StackAddr {
+                object: reg("local_20"),
+                size: 32,
+            }
+        );
+        assert!(matches!(
+            zero8,
+            Expr::Bin { lhs, rhs, .. }
+                if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 } if object == &reg("local_20"))
+                    && rhs.as_ref() == &Expr::Const(8)
+        ));
+        assert!(matches!(
+            &f.body[2],
+            Stmt::Assign {
+                src: Expr::Deref { addr, size: 4 },
+                ..
+            } if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
+                if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 64 } if object == &reg("local_60")))
+        ));
+        assert!(matches!(
+            &f.body[3],
+            Stmt::Assign {
+                src: Expr::Deref { addr, size: 1 },
+                ..
+            } if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
+                if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 } if object == &reg("local_20")))
+        ));
     }
 
     #[test]
