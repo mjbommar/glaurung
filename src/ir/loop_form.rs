@@ -9,8 +9,196 @@
 //! no induction-variable guess: the guard is already the literal first statement
 //! and its arm is exactly one `break`, so no work is moved or discarded.
 
+use std::collections::HashMap;
+
 use crate::ir::ast::{negate_cmp_expr, Expr, Function, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
+
+/// Recover a linearised tail-tested loop from its exact label/backedge form.
+///
+/// Conservative structuring can leave a natural loop as
+/// `label: body; if (condition) goto label;`.  This is precisely a `do-while`
+/// when the label and backedge are uniquely owned, the latch is the only goto
+/// to the label, and no label occurs in the body being moved.  Those ownership
+/// checks exclude secondary entries and make the rewrite a representation
+/// change only: every body statement and the original latch condition remain
+/// in their original execution order.
+pub fn recover_linear_latched_do_whiles(function: &mut Function) {
+    loop {
+        let mut labels = HashMap::new();
+        let mut gotos = HashMap::new();
+        count_control_targets(&function.body, &mut labels, &mut gotos);
+        if !recover_one_linear_latch(&mut function.body, &labels, &gotos) {
+            break;
+        }
+    }
+}
+
+fn recover_one_linear_latch(
+    body: &mut Vec<Stmt>,
+    labels: &HashMap<u64, usize>,
+    gotos: &HashMap<u64, usize>,
+) -> bool {
+    for start in 0..body.len() {
+        let Stmt::Label(target) = body[start] else {
+            continue;
+        };
+        if labels.get(&target).copied() != Some(1) || gotos.get(&target).copied() != Some(1) {
+            continue;
+        }
+
+        for latch in start + 1..body.len() {
+            if let Some(condition) = tail_latch_condition(&body[latch], target) {
+                let loop_body = body[start + 1..latch].to_vec();
+                body.splice(
+                    start..=latch,
+                    [Stmt::DoWhile {
+                        body: loop_body,
+                        cond: condition,
+                    }],
+                );
+                return true;
+            }
+            if statement_contains_label(&body[latch])
+                || matches!(
+                    body[latch],
+                    Stmt::Return { .. }
+                        | Stmt::Goto { .. }
+                        | Stmt::IndirectGoto { .. }
+                        | Stmt::Break
+                        | Stmt::Throw { .. }
+                )
+            {
+                break;
+            }
+        }
+    }
+
+    for statement in body {
+        let changed = match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_one_linear_latch(then_body, labels, gotos)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(|body| recover_one_linear_latch(body, labels, gotos))
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                recover_one_linear_latch(body, labels, gotos)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| recover_one_linear_latch(body, labels, gotos))
+                    || default
+                        .as_mut()
+                        .is_some_and(|body| recover_one_linear_latch(body, labels, gotos))
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                recover_one_linear_latch(try_body, labels, gotos)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| recover_one_linear_latch(&mut catch.body, labels, gotos))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn tail_latch_condition(statement: &Stmt, target: u64) -> Option<Expr> {
+    let Stmt::If {
+        cond,
+        then_body,
+        else_body: None,
+    } = statement
+    else {
+        return None;
+    };
+    matches!(then_body.as_slice(), [Stmt::Goto { target: seen }] if *seen == target)
+        .then(|| cond.clone())
+}
+
+fn statement_contains_label(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Label(_) => true,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body.iter().any(statement_contains_label)
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(statement_contains_label))
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            body.iter().any(statement_contains_label)
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| body.iter().any(statement_contains_label))
+                || default
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(statement_contains_label))
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            try_body.iter().any(statement_contains_label)
+                || catches
+                    .iter()
+                    .any(|catch| catch.body.iter().any(statement_contains_label))
+        }
+        _ => false,
+    }
+}
+
+fn count_control_targets(
+    body: &[Stmt],
+    labels: &mut HashMap<u64, usize>,
+    gotos: &mut HashMap<u64, usize>,
+) {
+    for statement in body {
+        match statement {
+            Stmt::Label(target) => *labels.entry(*target).or_default() += 1,
+            Stmt::Goto { target } => *gotos.entry(*target).or_default() += 1,
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                count_control_targets(then_body, labels, gotos);
+                if let Some(else_body) = else_body {
+                    count_control_targets(else_body, labels, gotos);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                count_control_targets(body, labels, gotos)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    count_control_targets(case_body, labels, gotos);
+                }
+                if let Some(default_body) = default {
+                    count_control_targets(default_body, labels, gotos);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                count_control_targets(try_body, labels, gotos);
+                for catch in catches {
+                    count_control_targets(&catch.body, labels, gotos);
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Recover exact head-tested loops from their conservative guarded form.
 ///
@@ -988,6 +1176,115 @@ mod tests {
 
     fn reg(name: &str) -> VReg {
         VReg::phys(name)
+    }
+
+    #[test]
+    fn unique_linear_tail_latch_becomes_a_do_while() {
+        let condition = Expr::Cmp {
+            op: CmpOp::Ult,
+            lhs: Box::new(Expr::Reg(reg("current"))),
+            rhs: Box::new(Expr::Reg(reg("limit"))),
+        };
+        let loop_statement = Stmt::Assign {
+            dst: reg("current"),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(reg("current"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        };
+        let mut function = Function {
+            name: "linear_tail_latch".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("current"),
+                    src: Expr::Const(0),
+                },
+                Stmt::Label(0x1010),
+                loop_statement.clone(),
+                Stmt::If {
+                    cond: condition.clone(),
+                    then_body: vec![Stmt::Goto { target: 0x1010 }],
+                    else_body: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("current"))),
+                },
+            ],
+        };
+
+        recover_linear_latched_do_whiles(&mut function);
+
+        assert_eq!(
+            function.body,
+            vec![
+                Stmt::Assign {
+                    dst: reg("current"),
+                    src: Expr::Const(0),
+                },
+                Stmt::DoWhile {
+                    body: vec![loop_statement],
+                    cond: condition,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("current"))),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_second_entry_to_a_linear_tail_latch_blocks_recovery() {
+        let original = vec![
+            Stmt::If {
+                cond: Expr::Reg(reg("enter_again")),
+                then_body: vec![Stmt::Goto { target: 0x1010 }],
+                else_body: None,
+            },
+            Stmt::Label(0x1010),
+            Stmt::Nop,
+            Stmt::If {
+                cond: Expr::Reg(reg("continue_loop")),
+                then_body: vec![Stmt::Goto { target: 0x1010 }],
+                else_body: None,
+            },
+        ];
+        let mut function = Function {
+            name: "multiple_entries".into(),
+            entry_va: 0,
+            body: original.clone(),
+        };
+
+        recover_linear_latched_do_whiles(&mut function);
+
+        assert_eq!(function.body, original);
+    }
+
+    #[test]
+    fn an_internal_label_blocks_linear_tail_latch_recovery() {
+        let original = vec![
+            Stmt::Label(0x1010),
+            Stmt::Assign {
+                dst: reg("current"),
+                src: Expr::Const(1),
+            },
+            Stmt::Label(0x1020),
+            Stmt::If {
+                cond: Expr::Reg(reg("continue_loop")),
+                then_body: vec![Stmt::Goto { target: 0x1010 }],
+                else_body: None,
+            },
+        ];
+        let mut function = Function {
+            name: "internal_entry".into(),
+            entry_va: 0,
+            body: original.clone(),
+        };
+
+        recover_linear_latched_do_whiles(&mut function);
+
+        assert_eq!(function.body, original);
     }
 
     fn sentinel_search_fixture() -> Function {

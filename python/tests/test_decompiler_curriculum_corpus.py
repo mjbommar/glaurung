@@ -135,6 +135,38 @@ def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
         assert dead_copy not in code, code
 
 
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_optimized_bst_search_recovers_latch_and_terminal_returns(
+    tmp_path: Path,
+) -> None:
+    """Clang's linear latch and shared epilogues must not survive as gotos."""
+    source = FIXTURES / "src" / "15_binary_search_tree.c"
+    binary = tmp_path / "15_binary_search_tree-clang-O2.so"
+    compiled = subprocess.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["bst_search"])
+    assert code is not None
+    assert code.count("do {") == 1, code
+    assert code.count("return ") >= 4, code
+    assert "goto " not in code, code
+
+
 @pytest.mark.slow
 def test_sparse_validation_guards_recover_as_ordered_early_returns(
     tmp_path: Path,

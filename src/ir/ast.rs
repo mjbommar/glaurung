@@ -5671,7 +5671,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These twelve steps change *definitions, uses, value identities, or control-flow
+/// These fourteen steps change *definitions, uses, value identities, or control-flow
 /// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
@@ -5698,18 +5698,24 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 7. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
 ///    immediately adjacent, sole eager guard use without claiming that physical
 ///    role is globally SSA.
-/// 8. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+/// 8. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
+///    `label; body; if (condition) goto label` into the exact source-level
+///    `do { body } while (condition)` form.
+/// 9. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 9. `switch_ladder::recover_switches` runs before select formation and again
+/// 10. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
+///    uniquely labelled return tails at their goto sites, recovering ordinary
+///    early returns without inventing or reordering an effect.
+/// 11. `switch_ladder::recover_switches` runs before select formation and again
 ///    after loop/copy recovery, converting proven comparison ladders into
 ///    `switch` nodes without losing a two-case tail to a ternary expression.
-/// 10. `guarded_switch::collapse_range_guards` removes a compiler range-check
+/// 12. `guarded_switch::collapse_range_guards` removes a compiler range-check
 ///    wrapper only when its unsigned domain and every switch label prove that
 ///    the wrapper cannot select a case the switch would not select itself.
-/// 11. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+/// 13. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
-/// 12. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
+/// 14. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
 ///    immediately joined result return into every arm only when both `if` arms,
 ///    or an explicit switch default, make the control flow exhaustive.
 ///
@@ -5779,9 +5785,11 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::select_fold::fold_boolean_masks(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
+    crate::ir::loop_form::recover_linear_latched_do_whiles(&mut owned);
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
     crate::ir::loop_form::recover_sentinel_search_loops(&mut owned);
+    crate::ir::label_prune::inline_terminal_goto_tails(&mut owned);
     crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
@@ -10269,7 +10277,7 @@ function f @ 0x1000 {
     // the renderer alone does not make it (so the renderer is formatting-only).
 
     #[test]
-    fn prepare_gives_a_bare_return_the_abi_return_register() {
+    fn prepare_folds_a_uniquely_shared_bare_return_to_its_value() {
         let f = Function {
             name: "f".to_string(),
             entry_va: 0x10,
@@ -10285,11 +10293,11 @@ function f @ 0x1000 {
         };
         let prepared = prepare_for_decbench(&f);
         assert_eq!(
-            prepared.body.last(),
-            Some(&Stmt::Return {
-                value: Some(Expr::Reg(VReg::phys("ret")))
-            }),
-            "prepare must materialise the ABI return value in the AST"
+            prepared.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(7))
+            }],
+            "prepare must preserve and directly return the computed ABI value"
         );
         // The renderer must not do it on its own.
         assert!(
@@ -11762,10 +11770,11 @@ function f @ 0x1000 {
     }
 
     #[test]
-    fn decbench_bare_return_uses_return_register_not_zero() {
+    fn decbench_shared_bare_return_preserves_the_computed_value() {
         // The value is computed into `ret` in one block, then returned from
-        // another (goto-separated) — the adjacent fold can't reach it. The
-        // decbench renderer must emit `return ret;`, never the value-losing
+        // another (goto-separated). Terminal-tail recovery makes that exact
+        // return local, after which the adjacent fold may emit the expression
+        // directly. Either way, it must never become the value-losing
         // `return 0;`.
         let f = Function {
             name: "f".to_string(),
@@ -11786,8 +11795,8 @@ function f @ 0x1000 {
         };
         let text = dec_pipeline(&f);
         assert!(
-            text.contains("return ret;"),
-            "bare return should use the return register:\n{}",
+            text.contains("return (arg0 + 1);"),
+            "shared bare return should preserve its computed value:\n{}",
             text
         );
         assert!(
