@@ -792,14 +792,35 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             }],
             else_body: None,
         }],
-        Op::Bin { dst, op, lhs, rhs } => vec![Stmt::Assign {
-            dst: dst.clone(),
-            src: Expr::Bin {
-                op: *op,
-                lhs: Box::new(lower_value(lhs)),
-                rhs: Box::new(lower_value(rhs)),
-            },
-        }],
+        Op::Bin { dst, op, lhs, rhs } => {
+            let mut lhs = lower_value(lhs);
+            // Arithmetic right shift is signed at the machine operand width.
+            // State that width in the expression itself: copy propagation may
+            // replace a 32-bit register with a wider zero-extended producer,
+            // and plain C `>>` would then fill with zeros before a later cast.
+            if *op == BinOp::Sar {
+                let width = match &lhs {
+                    Expr::Reg(register) => register.width().or_else(|| dst.width()),
+                    _ => dst.width(),
+                };
+                if let Some(width) = width.filter(|width| matches!(width.bits(), 8 | 16 | 32 | 64))
+                {
+                    lhs = Expr::Cast {
+                        signed: true,
+                        width: (width.bits() / 8) as u8,
+                        expr: Box::new(lhs),
+                    };
+                }
+            }
+            vec![Stmt::Assign {
+                dst: dst.clone(),
+                src: Expr::Bin {
+                    op: *op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(lower_value(rhs)),
+                },
+            }]
+        }
         Op::Un { dst, op, src } => vec![Stmt::Assign {
             dst: dst.clone(),
             src: Expr::Un {
@@ -6882,6 +6903,37 @@ fn shift_operand_ctype(lhs: &Expr, rhs: &Expr) -> &'static str {
     "unsigned long"
 }
 
+fn signed_shift_operand<'a>(lhs: &'a Expr, rhs: &Expr) -> (&'static str, &'a Expr) {
+    if let Expr::Const(count) = rhs {
+        if *count >= 0 {
+            let mut current = lhs;
+            let mut selected: Option<(u8, &Expr)> = None;
+            while let Expr::Cast {
+                signed,
+                width,
+                expr,
+            } = current
+            {
+                if *signed
+                    && (*count as u64) < u64::from(*width) * 8
+                    && selected.is_none_or(|(selected_width, _)| *width < selected_width)
+                {
+                    selected = Some((*width, expr.as_ref()));
+                }
+                current = expr;
+            }
+            if let Some((width, operand)) = selected {
+                return (int_ctype(true, width), operand);
+            }
+        }
+    }
+    let ctype = expr_machine_width(lhs)
+        .filter(|width| matches!(width, 1 | 2 | 4 | 8))
+        .map(|width| int_ctype(true, width))
+        .unwrap_or("long");
+    (ctype, lhs)
+}
+
 /// The machine byte-width of an integer expression, when it can be established
 /// from narrow-typed identifiers. Single identifiers read their declared width
 /// from `DEC_INT_WIDTHS`; width-preserving arithmetic (`a - b`, `a & b`, ...)
@@ -7289,6 +7341,17 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                     out.push(')');
                 }
                 out.push_str(" >> ");
+                write_expr_dec(rhs, out);
+                out.push(')');
+            } else if matches!(op, BinOp::Sar) {
+                // Preserve both signedness and machine width at the point of
+                // the shift. The explicit AST cast may otherwise be elided as
+                // declaration-redundant even when copy propagation has replaced
+                // the register with a wider unsigned producer.
+                let (ctype, operand) = signed_shift_operand(lhs, rhs);
+                let _ = write!(out, "(({ctype})(");
+                write_expr_dec(operand, out);
+                out.push_str(") >> ");
                 write_expr_dec(rhs, out);
                 out.push(')');
             } else {
@@ -11811,6 +11874,52 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn arithmetic_right_shift_keeps_its_signed_machine_width() {
+        let statements = lower_op(
+            &Op::Bin {
+                dst: VReg::phys("edx"),
+                op: BinOp::Sar,
+                lhs: Value::Reg(VReg::phys("eax")),
+                rhs: Value::Const(31),
+            },
+            false,
+        );
+        assert!(matches!(
+            statements.as_slice(),
+            [Stmt::Assign {
+                src: Expr::Bin {
+                    op: BinOp::Sar,
+                    lhs,
+                    rhs,
+                },
+                ..
+            }] if matches!(
+                lhs.as_ref(),
+                Expr::Cast {
+                    signed: true,
+                    width: 4,
+                    expr,
+                } if matches!(expr.as_ref(), Expr::Reg(reg) if reg == &VReg::phys("eax"))
+            ) && matches!(rhs.as_ref(), Expr::Const(31))
+        ));
+
+        let nested = Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(VReg::phys("var0"))),
+            }),
+        };
+        let (ctype32, operand32) = signed_shift_operand(&nested, &Expr::Const(31));
+        assert_eq!(ctype32, "int");
+        assert_eq!(operand32, &Expr::Reg(VReg::phys("var0")));
+        let (ctype64, _) = signed_shift_operand(&nested, &Expr::Const(63));
+        assert_eq!(ctype64, "long");
+    }
+
+    #[test]
     fn decbench_undefined_goto_target_gets_trailing_label() {
         let f = Function {
             name: "g".to_string(),
@@ -11937,7 +12046,11 @@ function f @ 0x1000 {
         let text = render_decbench(&f);
         assert!(!text.contains(">>>"), "arithmetic shift not C:\n{}", text);
         assert!(!text.contains("u<"), "unsigned cmp not C:\n{}", text);
-        assert!(text.contains("var0 = (arg0 >> 3);"), "sar:\n{}", text);
+        assert!(
+            text.contains("var0 = ((long)(arg0) >> 3);"),
+            "sar must state its signed machine width:\n{}",
+            text
+        );
         assert!(
             text.contains("(unsigned long)(arg0) >> 1"),
             "logical shift cast:\n{}",

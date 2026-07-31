@@ -2604,10 +2604,26 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // high half undefined. That is not harmless even though our `idiv` lift only
         // models the quotient: `rdx` is also the third SysV argument register, so an
         // undefined value there can be picked up as a call argument.
-        Mnemonic::Cwd | Mnemonic::Cdq | Mnemonic::Cqo => {
+        // Preserve CDQ's 32-bit signedness through SSA renaming by making the
+        // doubled-width value explicit, then taking its high dword. A bare SAR
+        // loses its source width once `eax` becomes an untyped SSA name.
+        Mnemonic::Cdq => vec![
+            Op::SExt {
+                dst: VReg::Temp(5),
+                src: Value::Reg(VReg::phys("eax")),
+                from: Width::W32,
+                to: Width::W64,
+            },
+            Op::Extract {
+                dst: VReg::phys("edx"),
+                src: Value::Reg(VReg::Temp(5)),
+                hi: 64,
+                lo: 32,
+            },
+        ],
+        Mnemonic::Cwd | Mnemonic::Cqo => {
             let (hi, lo, shift) = match mnem {
                 Mnemonic::Cwd => ("dx", "ax", 15),
-                Mnemonic::Cdq => ("edx", "eax", 31),
                 _ => ("rdx", "rax", 63),
             };
             let ops = vec![Op::Bin {
@@ -5409,6 +5425,30 @@ mod tests {
             "got: {:?}",
             ops[0].op
         );
+    }
+
+    #[test]
+    fn cdq_materializes_the_high_dword_from_an_explicit_signed_doubleword() {
+        let ops = lift64(&[0x99]); // cdq
+        assert_eq!(ops.len(), 2, "got: {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::SExt {
+                dst: VReg::Temp(5),
+                src: Value::Reg(VReg::Phys(src)),
+                from: Width::W32,
+                to: Width::W64,
+            } if src == "eax"
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Extract {
+                dst: VReg::Phys(dst),
+                src: Value::Reg(VReg::Temp(5)),
+                hi: 64,
+                lo: 32,
+            } if dst == "edx"
+        ));
     }
 
     #[test]
