@@ -113,6 +113,26 @@ def test_stack_array_base_copied_to_callee_saved_register_round_trip() -> None:
     assert lane == {"graph_dfs": "pass"}, lane
 
 
+def test_omit_frame_pointer_callee_saves_do_not_become_source_state() -> None:
+    """Balanced x86 save/restore slots must not leak ``rsp``/``rbp`` into C."""
+    observed = H.run_lanes(
+        [("23_topological_sort", "clang", "O2", ("topological_sort",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["23_topological_sort:clang:O2"]
+    assert lane == {"topological_sort": "pass"}, lane
+
+    binary = H.BUILD / "23_topological_sort-clang-O2.so"
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["topological_sort"])
+    assert code is not None
+    assert "long rsp;" not in code, code
+    assert "long rbp;" not in code, code
+    assert "rsp =" not in code, code
+
+
 @pytest.mark.parametrize("compiler", ["gcc", "clang"])
 def test_dynamic_stack_buffer_passed_to_memcpy_round_trip(compiler: str) -> None:
     """A stack array slice passed to ``memcpy`` must retain object identity."""

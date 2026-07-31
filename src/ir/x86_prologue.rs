@@ -32,8 +32,471 @@ use crate::ir::types::{BinOp, CmpOp, VReg};
 
 /// Run the pass over `f`'s body.
 pub fn recognise_x86_prologue(f: &mut Function) {
+    collapse_omit_frame_pointer_frame(&mut f.body);
     collapse_prologue(&mut f.body);
     collapse_epilogue(&mut f.body);
+}
+
+#[derive(Clone)]
+struct SavedSlot {
+    object: VReg,
+    object_size: u16,
+    offset: i64,
+    width: u8,
+    value: VReg,
+}
+
+/// Collapse an omit-frame-pointer frame only when entry saves and every exit
+/// prove one balanced transaction.
+///
+/// Optimised x86 commonly uses a final `push rax` purely for alignment, after
+/// saving the non-volatile registers. Stack promotion turns those pushes into
+/// stores at the contiguous high end of one recovered object, while each pop
+/// becomes the reverse fixed-slot load plus `rsp += 8`. Keeping that lowering
+/// in source C invents an uninitialised `rsp` variable and exposes ABI state
+/// that Ghidra/angr correctly hide. This recogniser deliberately fails closed:
+/// the save area must be contiguous, every return must restore it exactly, and
+/// the fixed save slots may have no reads beyond those restores.
+fn collapse_omit_frame_pointer_frame(body: &mut Vec<Stmt>) {
+    let mut start = 0usize;
+    while start < body.len() && is_leading_frame_metadata(&body[start]) {
+        start += 1;
+    }
+
+    let mut cursor = start;
+    let mut saves = Vec::new();
+    while cursor + 1 < body.len() {
+        let Some(width) = rsp_sub_width(&body[cursor]).and_then(|n| u8::try_from(n).ok()) else {
+            break;
+        };
+        let Stmt::Store {
+            addr,
+            src: Expr::Reg(value),
+            size,
+        } = &body[cursor + 1]
+        else {
+            break;
+        };
+        let Some((object, offset, object_size)) = fixed_promoted_stack_address(addr) else {
+            break;
+        };
+        if *size != width || width == 0 {
+            break;
+        }
+        saves.push(SavedSlot {
+            object,
+            object_size,
+            offset,
+            width,
+            value: value.clone(),
+        });
+        cursor += 2;
+    }
+    if saves.is_empty() {
+        return;
+    }
+
+    // A canonical `push rbp; mov rbp, rsp` frame belongs to the stricter
+    // recogniser below, not this omit-frame-pointer path.
+    if cursor < body.len()
+        && matches!(
+            &body[cursor],
+            Stmt::Assign { dst, src: Expr::Reg(source) }
+                if is_rbp(dst) && is_rsp(source)
+        )
+    {
+        return;
+    }
+
+    let first = &saves[0];
+    if first.offset < 0 || first.offset + i64::from(first.width) != i64::from(first.object_size) {
+        return;
+    }
+    for pair in saves.windows(2) {
+        if pair[1].object != first.object
+            || pair[1].object_size != first.object_size
+            || pair[1].width != first.width
+            || pair[1].offset != pair[0].offset - i64::from(first.width)
+        {
+            return;
+        }
+    }
+
+    // All saves except an optional final volatile alignment word must be
+    // ABI-preserved registers. A volatile value in the middle is not a frame
+    // signature and therefore blocks the transformation.
+    if saves[..saves.len().saturating_sub(1)]
+        .iter()
+        .any(|save| !is_sysv_callee_saved(&save.value))
+    {
+        return;
+    }
+    if !is_sysv_callee_saved(&saves.last().expect("non-empty").value)
+        && !matches!(&saves.last().expect("non-empty").value, VReg::Phys(name) if base_name(name) != "rsp")
+    {
+        return;
+    }
+
+    let mut candidate = body.clone();
+    let Some((return_count, padding_restore_count)) =
+        collapse_balanced_exit_bodies(&mut candidate, &saves)
+    else {
+        return;
+    };
+    if return_count == 0 {
+        return;
+    }
+
+    // The only fixed reads of a non-volatile save slot must be its one restore
+    // at each return. Alignment padding has no restore load at all.
+    for save in &saves {
+        let expected = if is_sysv_callee_saved(&save.value) {
+            return_count
+        } else {
+            padding_restore_count
+        };
+        if count_fixed_slot_reads(body, save) != expected {
+            return;
+        }
+    }
+
+    candidate.drain(start..cursor);
+    let frame_size: u64 = saves.iter().map(|save| u64::from(save.width)).sum();
+    candidate.insert(
+        start,
+        Stmt::Comment(format!(
+            "x86-64 prologue: save callee registers, frame {frame_size} bytes"
+        )),
+    );
+    *body = candidate;
+}
+
+fn is_leading_frame_metadata(statement: &Stmt) -> bool {
+    matches!(statement, Stmt::Nop | Stmt::Label(_))
+        || matches!(statement, Stmt::Comment(text) if text.starts_with("frame:"))
+}
+
+fn base_name(name: &str) -> &str {
+    name.split_once('#').map_or(name, |(base, _)| base)
+}
+
+fn is_sysv_callee_saved(register: &VReg) -> bool {
+    matches!(
+        register,
+        VReg::Phys(name)
+            if matches!(base_name(name), "rbp" | "rbx" | "r12" | "r13" | "r14" | "r15")
+    )
+}
+
+fn fixed_promoted_stack_address(expression: &Expr) -> Option<(VReg, i64, u16)> {
+    match expression {
+        Expr::StackAddr { object, size } if is_promoted_stack_slot(object) => {
+            Some((object.clone(), 0, *size))
+        }
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => match (lhs.as_ref(), rhs.as_ref()) {
+            (Expr::StackAddr { object, size }, Expr::Const(offset))
+                if is_promoted_stack_slot(object) =>
+            {
+                Some((object.clone(), *offset, *size))
+            }
+            (Expr::Const(offset), Expr::StackAddr { object, size })
+                if is_promoted_stack_slot(object) =>
+            {
+                Some((object.clone(), *offset, *size))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn is_rsp_add_width(statement: &Stmt, width: u8) -> bool {
+    matches!(
+        statement,
+        Stmt::Assign {
+            dst,
+            src: Expr::Bin { op: BinOp::Add, lhs, rhs },
+        } if is_rsp(dst)
+            && matches!(lhs.as_ref(), Expr::Reg(register) if register == dst)
+            && matches!(rhs.as_ref(), Expr::Const(amount) if *amount == i64::from(width))
+    )
+}
+
+fn is_restore_load(statement: &Stmt, save: &SavedSlot) -> bool {
+    let Stmt::Assign {
+        dst: VReg::Phys(destination),
+        src: Expr::Deref { addr, size },
+    } = statement
+    else {
+        return false;
+    };
+    let VReg::Phys(saved_name) = &save.value else {
+        return false;
+    };
+    if base_name(destination) != base_name(saved_name) || *size != save.width {
+        return false;
+    }
+    fixed_promoted_stack_address(addr).is_some_and(|(object, offset, object_size)| {
+        object == save.object && offset == save.offset && object_size == save.object_size
+    })
+}
+
+fn is_padding_restore_load(statement: &Stmt, save: &SavedSlot) -> bool {
+    let Stmt::Assign {
+        dst: VReg::Phys(destination),
+        src: Expr::Deref { addr, size },
+    } = statement
+    else {
+        return false;
+    };
+    if base_name(destination) == "rsp" || *size != save.width {
+        return false;
+    }
+    fixed_promoted_stack_address(addr).is_some_and(|(object, offset, object_size)| {
+        object == save.object && offset == save.offset && object_size == save.object_size
+    })
+}
+
+fn contains_deref(expression: &Expr) -> bool {
+    match expression {
+        Expr::Deref { .. } => true,
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            contains_deref(lhs) || contains_deref(rhs)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => contains_deref(cond) || contains_deref(if_true) || contains_deref(if_false),
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => contains_deref(src),
+        Expr::FunctionTableEntry { index, .. } => contains_deref(index),
+        Expr::WideArithmetic { args, .. } => args.iter().any(contains_deref),
+        _ => false,
+    }
+}
+
+fn is_dead_machine_temporary(statement: &Stmt) -> bool {
+    matches!(
+        statement,
+        Stmt::Assign {
+            dst: VReg::Temp(_) | VReg::Flag(_) | VReg::FlagValue { .. },
+            src,
+        } if !contains_deref(src)
+    )
+}
+
+fn balanced_exit_start(
+    body: &[Stmt],
+    return_index: usize,
+    saves: &[SavedSlot],
+) -> Option<(usize, usize)> {
+    let mut cursor = return_index;
+    let mut padding_restores = 0usize;
+    for save in saves {
+        while cursor > 0 && is_dead_machine_temporary(&body[cursor - 1]) {
+            cursor -= 1;
+        }
+        if cursor == 0 || !is_rsp_add_width(&body[cursor - 1], save.width) {
+            return None;
+        }
+        cursor -= 1;
+        if is_sysv_callee_saved(&save.value) {
+            if cursor == 0 || !is_restore_load(&body[cursor - 1], save) {
+                return None;
+            }
+            cursor -= 1;
+        } else if cursor > 0 && is_padding_restore_load(&body[cursor - 1], save) {
+            cursor -= 1;
+            padding_restores += 1;
+        }
+    }
+    while cursor > 0 && is_dead_machine_temporary(&body[cursor - 1]) {
+        cursor -= 1;
+    }
+    Some((cursor, padding_restores))
+}
+
+fn collapse_balanced_exit_bodies(
+    body: &mut Vec<Stmt>,
+    saves: &[SavedSlot],
+) -> Option<(usize, usize)> {
+    let mut count = 0usize;
+    let mut padding_restores = 0usize;
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                let nested = collapse_balanced_exit_bodies(then_body, saves)?;
+                count += nested.0;
+                padding_restores += nested.1;
+                if let Some(else_body) = else_body {
+                    let nested = collapse_balanced_exit_bodies(else_body, saves)?;
+                    count += nested.0;
+                    padding_restores += nested.1;
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                let nested = collapse_balanced_exit_bodies(body, saves)?;
+                count += nested.0;
+                padding_restores += nested.1;
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    let nested = collapse_balanced_exit_bodies(case_body, saves)?;
+                    count += nested.0;
+                    padding_restores += nested.1;
+                }
+                if let Some(default_body) = default {
+                    let nested = collapse_balanced_exit_bodies(default_body, saves)?;
+                    count += nested.0;
+                    padding_restores += nested.1;
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                let nested = collapse_balanced_exit_bodies(try_body, saves)?;
+                count += nested.0;
+                padding_restores += nested.1;
+                for catch in catches {
+                    let nested = collapse_balanced_exit_bodies(&mut catch.body, saves)?;
+                    count += nested.0;
+                    padding_restores += nested.1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let returns: Vec<usize> = body
+        .iter()
+        .enumerate()
+        .filter_map(|(index, statement)| matches!(statement, Stmt::Return { .. }).then_some(index))
+        .collect();
+    for return_index in returns.into_iter().rev() {
+        let (start, restored_padding) = balanced_exit_start(body, return_index, saves)?;
+        body.drain(start..return_index);
+        body.insert(
+            start,
+            Stmt::Comment("x86-64 epilogue: restore callee registers".to_string()),
+        );
+        count += 1;
+        padding_restores += restored_padding;
+    }
+    Some((count, padding_restores))
+}
+
+fn count_fixed_slot_reads(body: &[Stmt], save: &SavedSlot) -> usize {
+    fn expression_reads(expression: &Expr, save: &SavedSlot) -> usize {
+        match expression {
+            Expr::Deref { addr, .. } => {
+                usize::from(fixed_promoted_stack_address(addr).is_some_and(
+                    |(object, offset, object_size)| {
+                        object == save.object
+                            && offset == save.offset
+                            && object_size == save.object_size
+                    },
+                )) + expression_reads(addr, save)
+            }
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                expression_reads(lhs, save) + expression_reads(rhs, save)
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                expression_reads(cond, save)
+                    + expression_reads(if_true, save)
+                    + expression_reads(if_false, save)
+            }
+            Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => expression_reads(src, save),
+            Expr::FunctionTableEntry { index, .. } => expression_reads(index, save),
+            Expr::WideArithmetic { args, .. } => args
+                .iter()
+                .map(|argument| expression_reads(argument, save))
+                .sum(),
+            _ => 0,
+        }
+    }
+    fn statement_reads(statement: &Stmt, save: &SavedSlot) -> usize {
+        match statement {
+            Stmt::Assign { src, .. } => expression_reads(src, save),
+            Stmt::Store { addr, src, .. } => {
+                expression_reads(addr, save) + expression_reads(src, save)
+            }
+            Stmt::Call { target, args, .. } => {
+                expression_reads(target, save)
+                    + args
+                        .iter()
+                        .map(|argument| expression_reads(argument, save))
+                        .sum::<usize>()
+            }
+            Stmt::Return { value } => value
+                .as_ref()
+                .map_or(0, |expression| expression_reads(expression, save)),
+            Stmt::Throw { value } => expression_reads(value, save),
+            Stmt::IndirectGoto { target } => expression_reads(target, save),
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                expression_reads(cond, save)
+                    + count_fixed_slot_reads(then_body, save)
+                    + else_body
+                        .as_ref()
+                        .map_or(0, |body| count_fixed_slot_reads(body, save))
+            }
+            Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+                expression_reads(cond, save) + count_fixed_slot_reads(body, save)
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                statement_reads(init, save)
+                    + expression_reads(cond, save)
+                    + statement_reads(step, save)
+                    + count_fixed_slot_reads(body, save)
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                count_fixed_slot_reads(try_body, save)
+                    + catches
+                        .iter()
+                        .map(|catch| count_fixed_slot_reads(&catch.body, save))
+                        .sum::<usize>()
+            }
+            Stmt::Push { value } => expression_reads(value, save),
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                expression_reads(discriminant, save)
+                    + cases
+                        .iter()
+                        .map(|(_, body)| count_fixed_slot_reads(body, save))
+                        .sum::<usize>()
+                    + default
+                        .as_ref()
+                        .map_or(0, |body| count_fixed_slot_reads(body, save))
+            }
+            _ => 0,
+        }
+    }
+    body.iter()
+        .map(|statement| statement_reads(statement, save))
+        .sum()
 }
 
 fn is_rbp(v: &VReg) -> bool {
@@ -572,6 +1035,106 @@ mod tests {
             Stmt::Comment(text) if text == "x86-64 epilogue: restore rbp"
         ));
         assert!(matches!(&f.body[2], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn balanced_omit_frame_pointer_save_area_collapses_at_every_return() {
+        fn slot(offset: i64) -> Expr {
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::StackAddr {
+                    object: reg("stack_1"),
+                    size: 24,
+                }),
+                rhs: Box::new(Expr::Const(offset)),
+            }
+        }
+        fn save(offset: i64, value: &str) -> Stmt {
+            Stmt::Store {
+                addr: slot(offset),
+                src: Expr::Reg(reg(value)),
+                size: 8,
+            }
+        }
+        fn restore(offset: i64, value: &str) -> Stmt {
+            Stmt::Assign {
+                dst: VReg::phys(format!("{value}#9")),
+                src: Expr::Deref {
+                    addr: Box::new(slot(offset)),
+                    size: 8,
+                },
+            }
+        }
+        fn epilogue() -> Vec<Stmt> {
+            vec![
+                // The final volatile push is alignment padding: it has an
+                // adjustment but deliberately no restore load.
+                Stmt::Assign {
+                    dst: VReg::Temp(40),
+                    src: Expr::Const(0),
+                },
+                rsp_add(8),
+                restore(8, "rbx"),
+                rsp_add(8),
+                restore(16, "rbp"),
+                rsp_add(8),
+                Stmt::Return { value: None },
+            ]
+        }
+
+        let mut then_body = epilogue();
+        let mut final_epilogue = epilogue();
+        // Newer Clang spells the alignment pop as `pop rcx`, while older
+        // Clang uses `add rsp, 8`. Both are balanced machine bookkeeping.
+        final_epilogue.insert(1, restore(0, "rcx"));
+        let mut body = vec![
+            Stmt::Comment("frame: 24 bytes".into()),
+            sub_rsp(8),
+            save(16, "rbp"),
+            sub_rsp(8),
+            save(8, "rbx"),
+            sub_rsp(8),
+            save(0, "rax"),
+            Stmt::If {
+                cond: Expr::Reg(reg("cond")),
+                then_body: std::mem::take(&mut then_body),
+                else_body: None,
+            },
+        ];
+        body.extend(final_epilogue);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body,
+        };
+
+        let mut unbalanced = f.clone();
+        let Stmt::If { then_body, .. } = &mut unbalanced.body[7] else {
+            panic!("expected guarded early return");
+        };
+        then_body.remove(5); // omit rbp's final stack-pointer restore
+        recognise_x86_prologue(&mut unbalanced);
+        assert!(
+            matches!(&unbalanced.body[1], Stmt::Assign { dst, .. } if is_rsp(dst)),
+            "one malformed exit must preserve the entry save transaction"
+        );
+        assert!(!unbalanced.body.iter().any(
+            |statement| matches!(statement, Stmt::Comment(text) if text.contains("save callee registers"))
+        ));
+
+        recognise_x86_prologue(&mut f);
+
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Comment(text) if text == "x86-64 prologue: save callee registers, frame 24 bytes"
+        ));
+        assert!(matches!(
+            &f.body[2],
+            Stmt::If { then_body, .. }
+                if matches!(then_body.as_slice(), [Stmt::Comment(_), Stmt::Return { .. }])
+        ));
+        assert!(matches!(&f.body[3], Stmt::Comment(text) if text.contains("epilogue")));
+        assert!(matches!(&f.body[4], Stmt::Return { .. }));
     }
 
     #[test]

@@ -63,12 +63,12 @@ fn drop_epilogue_rsp_adjust(body: &mut Vec<Stmt>) {
     // Walk backwards and drop qualifying `rsp += N;` stmts that sit
     // immediately before a Return.
     let mut i = body.len();
-    while i >= 2 {
+    while i > 0 {
         i -= 1;
         if matches!(&body[i], Stmt::Return { .. }) {
-            if i >= 1 && is_rsp_add_width(&body[i - 1]) {
+            while i > 0 && is_rsp_add_width(&body[i - 1]) {
                 body.remove(i - 1);
-                i = i.saturating_sub(1);
+                i -= 1;
             }
         }
     }
@@ -312,6 +312,30 @@ mod tests {
         rematerialise_stack_ops(&mut f);
         assert_eq!(f.body.len(), 1);
         assert!(matches!(&f.body[0], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn complete_trailing_rsp_adjust_run_before_return_is_dropped() {
+        // Omit-frame-pointer functions can restore several callee-saved
+        // registers with adjacent pops.  Once dead restore loads have been
+        // removed, each pop leaves one machine-only `rsp += 8` spelling.  The
+        // complete adjacent run, not merely its final member, belongs to the
+        // epilogue and must disappear from source-level C.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                rsp_add(8),
+                rsp_add(8),
+                rsp_add(8),
+                rsp_add(8),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        rematerialise_stack_ops(&mut f);
+
+        assert_eq!(f.body, vec![Stmt::Return { value: None }]);
     }
 
     #[test]
