@@ -721,6 +721,13 @@ fn rewrite_body(
                     *sp_delta,
                     address_defs,
                 );
+                if !is_stack_pointer_reg(dst, ctx) {
+                    if let Some(object_addr) =
+                        stack_object_constant_address(src, map, *sp_delta, ctx, address_defs)
+                    {
+                        *src = object_addr;
+                    }
+                }
                 if is_stack_pointer_reg(dst, ctx) {
                     *sp_delta =
                         stack_delta_after_assignment(dst, src, *sp_delta, ctx, address_defs);
@@ -1659,6 +1666,46 @@ fn stack_object_address(
     })
 }
 
+/// Recover a value-producing copy of the current frame/stack address. This is
+/// distinct from a memory operand: optimized code often moves `rsp` into a
+/// callee-saved register and then advances that register as an array cursor.
+fn stack_object_constant_address(
+    expr: &Expr,
+    map: &HashMap<SlotKey, SlotVal>,
+    sp_delta: Option<i64>,
+    ctx: StackContext,
+    address_defs: &HashMap<VReg, (String, i64)>,
+) -> Option<Expr> {
+    let recovered = match expr {
+        Expr::Reg(VReg::Phys(name)) if is_active_stack_base(name, ctx) => Some((name.clone(), 0)),
+        Expr::Reg(reg) => address_defs.get(reg).cloned(),
+        _ => constant_stack_address(expr, ctx),
+    }?;
+    let (base, disp) = normalized_stack_slot(&recovered.0, recovered.1, sp_delta, ctx);
+    let (start, slot, size) = map
+        .iter()
+        .filter_map(|(key, slot)| {
+            let size = slot.object_size?;
+            let end = key.disp.checked_add(i64::from(size))?;
+            (key.base == base && key.disp <= disp && disp < end).then_some((key.disp, slot, size))
+        })
+        .max_by_key(|(start, _, _)| *start)?;
+    let object = Expr::StackAddr {
+        object: VReg::phys(slot.name.clone()),
+        size,
+    };
+    let relative = disp.checked_sub(start)?;
+    Some(if relative != 0 {
+        Expr::Bin {
+            op: crate::ir::types::BinOp::Add,
+            lhs: Box::new(object),
+            rhs: Box::new(Expr::Const(relative)),
+        }
+    } else {
+        object
+    })
+}
+
 fn constant_stack_address(expr: &Expr, ctx: StackContext) -> Option<(String, i64)> {
     match expr {
         Expr::Lea {
@@ -2562,6 +2609,13 @@ mod tests {
 
         promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
 
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Assign {
+                src: Expr::StackAddr { size: 40, .. },
+                ..
+            }
+        ));
         assert!(matches!(
             &f.body[2],
             Stmt::Assign {

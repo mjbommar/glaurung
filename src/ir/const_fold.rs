@@ -27,7 +27,7 @@
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, CmpOp};
-use crate::ir::types_recover::{TypeHint, TypeMap};
+use crate::ir::types_recover::TypeMap;
 
 /// Rewrite `f`'s body in place, folding the patterns above.
 pub fn fold_constants(f: &mut Function) {
@@ -43,8 +43,8 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
     fn declared_source_type(expr: &Expr, signed: bool, width: u8, tm: &TypeMap) -> bool {
         matches!(
             expr,
-            Expr::Reg(reg)
-                if tm.get(reg) == Some(TypeHint::Int { signed, width })
+            Expr::Reg(crate::ir::types::VReg::Phys(name))
+                if crate::ir::ast::declared_int_type(name, Some(tm)) == Some((signed, width))
         )
     }
 
@@ -100,8 +100,8 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
             && declared_source_type(left.3, left.0, left.2, tm)
             && declared_source_type(right.3, right.0, right.2, tm)
         {
-            *lhs = Box::new(left.3.clone());
-            *rhs = Box::new(right.3.clone());
+            **lhs = left.3.clone();
+            **rhs = right.3.clone();
         }
     }
 
@@ -245,12 +245,9 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
                     expr: source,
                 } if inner_width < outer_width && !*outer_signed && !*inner_signed => {
                     match source.as_ref() {
-                        Expr::Reg(reg)
-                            if tm.get(reg)
-                                == Some(TypeHint::Int {
-                                    signed: *inner_signed,
-                                    width: *inner_width,
-                                }) =>
+                        Expr::Reg(crate::ir::types::VReg::Phys(name))
+                            if crate::ir::ast::declared_int_type(name, Some(tm))
+                                == Some((*inner_signed, *inner_width)) =>
                         {
                             Some(source.as_ref().clone())
                         }
@@ -1422,6 +1419,52 @@ mod tests {
     }
 
     #[test]
+    fn narrow_fact_does_not_erase_a_machine_word_locals_comparison_view() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        // The DecBench renderer deliberately keeps raw machine roles such as
+        // `ret` declared as `long`: one physical return register can carry a
+        // canary, loop counter, and final ABI result in the same function.  A
+        // value-specific 32-bit fact therefore cannot make the C declaration
+        // narrow, and must not erase this zero-extension before a comparison.
+        let view = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg("ret"))),
+            }),
+        };
+        let mut f = one_stmt(Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(view.clone()),
+            rhs: Box::new(Expr::Const(0xffff_ffff)),
+        });
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            reg("ret"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        fold_typed_declared_views(&mut f, &tm);
+
+        assert!(
+            matches!(
+                &f.body[0],
+                Stmt::Assign {
+                    src: Expr::Cmp { lhs, .. },
+                    ..
+                } if lhs.as_ref() == &view
+            ),
+            "machine-word local lost its narrowing view: {f:#?}"
+        );
+    }
+
+    #[test]
     fn typed_register_view_with_different_signedness_is_preserved() {
         use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -1504,8 +1547,8 @@ mod tests {
         };
         let mut f = one_stmt(Expr::Cmp {
             op: CmpOp::Slt,
-            lhs: Box::new(extended("lhs")),
-            rhs: Box::new(extended("rhs")),
+            lhs: Box::new(extended("arg0")),
+            rhs: Box::new(extended("arg1")),
         });
 
         fold_constants(&mut f);
@@ -1523,7 +1566,7 @@ mod tests {
         );
 
         let mut tm = TypeMap::default();
-        for name in ["lhs", "rhs"] {
+        for name in ["arg0", "arg1"] {
             tm.upsert_public(
                 reg(name),
                 TypeHint::Int {
@@ -1543,8 +1586,8 @@ mod tests {
                     rhs,
                 },
                 ..
-            } if matches!(lhs.as_ref(), Expr::Reg(r) if r == &reg("lhs"))
-                && matches!(rhs.as_ref(), Expr::Reg(r) if r == &reg("rhs"))
+            } if matches!(lhs.as_ref(), Expr::Reg(r) if r == &reg("arg0"))
+                    && matches!(rhs.as_ref(), Expr::Reg(r) if r == &reg("arg1"))
         ));
     }
 

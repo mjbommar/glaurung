@@ -87,3 +87,15 @@ def test_simd_zeroed_indexed_stack_array_round_trip() -> None:
 
     lane = observed["20_graph_bfs:gcc:O2"]
     assert lane == {"graph_bfs": "pass"}, lane
+
+
+def test_stack_array_base_copied_to_callee_saved_register_round_trip() -> None:
+    """A late ``rbp = rsp`` array cursor must copy a real object address."""
+    observed = H.run_lanes(
+        [("21_graph_dfs", "gcc", "O2", ("graph_dfs",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["21_graph_dfs:gcc:O2"]
+    assert lane == {"graph_dfs": "pass"}, lane

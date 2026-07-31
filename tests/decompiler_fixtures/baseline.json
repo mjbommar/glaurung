@@ -848,7 +848,7 @@
     "graph_dfs": "pass"
   },
   "21_graph_dfs:gcc:O2": {
-    "graph_dfs": "fail"
+    "graph_dfs": "pass"
   },
   "22_dijkstra:clang:O0": {
     "dijkstra_dense": "pass"
