@@ -5688,8 +5688,9 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 8. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 9. `switch_ladder::recover_switches` converts proven comparison ladders into
-///    `switch` nodes.
+/// 9. `switch_ladder::recover_switches` runs before select formation and again
+///    after loop/copy recovery, converting proven comparison ladders into
+///    `switch` nodes without losing a two-case tail to a ternary expression.
 /// 10. `guarded_switch::collapse_range_guards` removes a compiler range-check
 ///    wrapper only when its unsigned domain and every switch label prove that
 ///    the wrapper cannot select a case the switch would not select itself.
@@ -5750,6 +5751,14 @@ pub fn prepare_for_decbench_with_output(
     // an exit guard and blocks exact while/for/select recognition.
     crate::ir::dce::prune_overwritten_flags(&mut owned);
     crate::ir::dce::prune_dead_flags(&mut owned);
+    crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
+    crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
+    // Region recovery may clone a comparison tree's shared default into
+    // sequential terminal guards. Recover that switch before two-case tails
+    // become `Select` expressions and erase the final equality arms. The
+    // second invocation below remains necessary because select/copy folding can
+    // expose ladders whose discriminant was not yet syntactically uniform.
+    crate::ir::switch_ladder::recover_switches(&mut owned);
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
     crate::ir::select_fold::recover_guarded_select_returns(&mut owned);
     crate::ir::select_fold::fold_boolean_masks(&mut owned);

@@ -316,11 +316,15 @@ fn drop_renderer_supplied_break(body: &mut Vec<Stmt>) {
 /// first takes the longest chain; the arms are then rewritten in turn, so a
 /// genuinely nested ladder inside a case body is still found.
 fn rewrite_body(body: &mut [Stmt]) {
-    for s in body.iter_mut() {
-        if let Some(sw) = try_ladder(s) {
-            *s = sw;
+    for index in 0..body.len() {
+        let replacement = {
+            let (prefix, suffix) = body.split_at(index + 1);
+            try_ladder(&prefix[index], suffix)
+        };
+        if let Some(sw) = replacement {
+            body[index] = sw;
         }
-        rewrite_stmt(s);
+        rewrite_stmt(&mut body[index]);
     }
 }
 
@@ -606,7 +610,59 @@ struct Ladder {
     default: Vec<Stmt>,
 }
 
-fn try_ladder(s: &Stmt) -> Option<Stmt> {
+/// Speculatively express a sequential terminal guard as the equivalent nested
+/// `else` continuation expected by the ladder walker.
+///
+/// Region recovery emits both spellings below, depending on whether a shared
+/// return was cloned before or after the surrounding conditional was built:
+///
+/// ```text
+/// if (v > k) return default;
+/// if (v == next) ...
+/// ```
+///
+/// and `if (v > k) return default; else if (v == next) ...` have identical
+/// control flow only when the taken body is proven terminal.  This helper works
+/// on a clone used solely for exact switch matching; a failed match leaves the
+/// original AST untouched.
+fn nest_terminal_guard_continuations(statement: &Stmt) -> Stmt {
+    let Stmt::If {
+        cond,
+        then_body,
+        else_body,
+    } = statement
+    else {
+        return statement.clone();
+    };
+    Stmt::If {
+        cond: cond.clone(),
+        then_body: then_body.clone(),
+        else_body: else_body.as_deref().map(nest_terminal_guard_sequence),
+    }
+}
+
+fn nest_terminal_guard_sequence(body: &[Stmt]) -> Vec<Stmt> {
+    if body.len() > 1 {
+        if let Stmt::If {
+            cond,
+            then_body,
+            else_body: None,
+        } = &body[0]
+        {
+            if ends_in_unconditional_transfer(then_body) {
+                return vec![Stmt::If {
+                    cond: cond.clone(),
+                    then_body: then_body.clone(),
+                    else_body: Some(nest_terminal_guard_sequence(&body[1..])),
+                }];
+            }
+        }
+    }
+    body.iter().map(nest_terminal_guard_continuations).collect()
+}
+
+fn try_ladder(s: &Stmt, common_suffix: &[Stmt]) -> Option<Stmt> {
+    let normalized = nest_terminal_guard_continuations(s);
     let mut disc = None;
     let mut cases: Vec<(i64, Vec<Stmt>)> = Vec::new();
     // Bodies reached by a prune arm, keyed by the label they jump to. The first
@@ -615,7 +671,7 @@ fn try_ladder(s: &Stmt) -> Option<Stmt> {
     let mut default_label: Option<u64> = None;
 
     let mut reachable = Range::full();
-    let mut cur = s;
+    let mut cur = &normalized;
     loop {
         let Stmt::If {
             cond,
@@ -629,7 +685,7 @@ fn try_ladder(s: &Stmt) -> Option<Stmt> {
             match (&default, sole_goto(tail)) {
                 (Some(_), Some(l)) if Some(l) == default_label => {}
                 (None, None) => default = Some(tail.to_vec()),
-                (Some(d), None) if d == tail => {}
+                (Some(d), None) if default_bodies_equivalent(d, tail, common_suffix) => {}
                 _ => return None,
             }
             break;
@@ -657,7 +713,10 @@ fn try_ladder(s: &Stmt) -> Option<Stmt> {
                         Some(_) => return None,
                         None => return None, // a jump to a label we have not seen
                     }
-                } else if default.as_ref().is_some_and(|seen| seen == then_body) {
+                } else if default
+                    .as_ref()
+                    .is_some_and(|seen| default_bodies_equivalent(seen, then_body, common_suffix))
+                {
                     // Region recovery may clone a shared terminating default
                     // epilogue into every range-prune arm.  Exact AST equality
                     // proves these are still one semantic default; retain the
@@ -682,7 +741,7 @@ fn try_ladder(s: &Stmt) -> Option<Stmt> {
             // The tail is a sequence, not another test: it is the default.
             match &default {
                 None => default = Some(e.clone()),
-                Some(d) if d == e => {}
+                Some(d) if default_bodies_equivalent(d, e, common_suffix) => {}
                 _ => return None,
             }
             break;
@@ -706,6 +765,85 @@ fn try_ladder(s: &Stmt) -> Option<Stmt> {
         cases: l.cases.into_iter().map(|(k, b)| (Some(k), b)).collect(),
         default: Some(l.default),
     })
+}
+
+/// Compare two spellings of one switch default under a proven common return.
+///
+/// Shared-return cloning can produce `ret = -1; return ret;` in range-prune
+/// arms while the final default is `ret = -1;` followed by the ladder's common
+/// `return ret`.  They are equivalent only when the lexical suffix proves that
+/// exact common return; without it this deliberately falls back to exact AST
+/// equality.
+fn default_bodies_equivalent(a: &[Stmt], b: &[Stmt], common_suffix: &[Stmt]) -> bool {
+    if a == b {
+        return true;
+    }
+    let a_canonical = default_before_common_return(a, common_suffix);
+    let b_canonical = default_before_common_return(b, common_suffix);
+    a_canonical
+        .as_deref()
+        .is_some_and(|canonical| canonical == b)
+        || b_canonical
+            .as_deref()
+            .is_some_and(|canonical| canonical == a)
+        || matches!((a_canonical, b_canonical), (Some(a), Some(b)) if a == b)
+}
+
+fn default_before_common_return(body: &[Stmt], common_suffix: &[Stmt]) -> Option<Vec<Stmt>> {
+    let common_result = sole_common_return_reg(common_suffix)?;
+    let return_index = body
+        .iter()
+        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))?;
+    let Stmt::Return {
+        value: Some(returned),
+    } = &body[return_index]
+    else {
+        return None;
+    };
+    let assignment_index = body[..return_index]
+        .iter()
+        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))?;
+    if body[assignment_index + 1..return_index]
+        .iter()
+        .any(|statement| !is_epilogue_residue(statement))
+    {
+        return None;
+    }
+    let Stmt::Assign { dst, src } = &body[assignment_index] else {
+        return None;
+    };
+    if dst != common_result
+        || (returned != src && expression_root_reg(returned).is_none_or(|reg| reg != dst))
+    {
+        return None;
+    }
+    Some(body[..=assignment_index].to_vec())
+}
+
+fn sole_common_return_reg(body: &[Stmt]) -> Option<&VReg> {
+    let meaningful: Vec<&Stmt> = body
+        .iter()
+        .filter(|statement| !is_epilogue_residue(statement))
+        .collect();
+    let [Stmt::Return { value: Some(value) }] = meaningful.as_slice() else {
+        return None;
+    };
+    expression_root_reg(value)
+}
+
+fn is_epilogue_residue(statement: &Stmt) -> bool {
+    matches!(statement, Stmt::Nop)
+        || matches!(statement, Stmt::Comment(text) if text.contains("epilogue"))
+}
+
+fn expression_root_reg(mut expression: &Expr) -> Option<&VReg> {
+    loop {
+        match expression {
+            Expr::Reg(register) => return Some(register),
+            Expr::Cast { expr, .. } => expression = expr,
+            _ => return None,
+        }
+    }
 }
 
 fn leading_label(body: &[Stmt]) -> Option<u64> {
@@ -950,6 +1088,34 @@ mod tests {
         inner.pop().expect("one ladder root")
     }
 
+    /// Region recovery can also spell each cloned range-prune default as a
+    /// terminal guard followed by the next equality test in the same lexical
+    /// body.  This is control-equivalent to the nested-else form above.
+    fn real_lifted_gcc_ladder_with_linear_cloned_defaults(n: i64) -> Stmt {
+        let default = vec![
+            assign("ret", -1),
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            },
+        ];
+        let mut inner = vec![assign("ret", -1)];
+        for k in 0..n {
+            let prune = Stmt::If {
+                cond: lifted_signed_greater("arg0", k),
+                then_body: default.clone(),
+                else_body: None,
+            };
+            let mut otherwise = vec![prune];
+            otherwise.extend(inner);
+            inner = vec![Stmt::If {
+                cond: cmp(CmpOp::Eq, unsigned_i32("arg0"), Expr::Const(k)),
+                then_body: vec![assign("ret", 100 + k)],
+                else_body: Some(otherwise),
+            }];
+        }
+        inner.pop().expect("one ladder root")
+    }
+
     fn goto_case(value: i64, label: u64) -> Stmt {
         Stmt::If {
             cond: cmp(CmpOp::Eq, unsigned_i32("state"), Expr::Const(value)),
@@ -1109,6 +1275,60 @@ mod tests {
         };
         assert_eq!(cases.len(), 8);
         assert_eq!(default.as_ref(), Some(&expected_default));
+    }
+
+    #[test]
+    fn linear_terminal_cloned_defaults_are_recovered() {
+        let expected_default = vec![
+            assign("ret", -1),
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            },
+        ];
+        let mut f = Function {
+            name: "dispatch".into(),
+            entry_va: 0x1000,
+            body: vec![
+                real_lifted_gcc_ladder_with_linear_cloned_defaults(8),
+                Stmt::Return {
+                    value: Some(reg("ret")),
+                },
+            ],
+        };
+
+        recover_switches(&mut f);
+
+        let Stmt::Switch { cases, default, .. } = &f.body[0] else {
+            panic!(
+                "expected linear cloned defaults to remain one switch default:\n{:#?}",
+                f.body[0]
+            );
+        };
+        assert_eq!(cases.len(), 8);
+        assert_eq!(default.as_ref(), Some(&expected_default));
+    }
+
+    #[test]
+    fn linear_terminal_defaults_with_a_nontrivial_suffix_are_not_rewritten() {
+        let mut f = Function {
+            name: "dispatch".into(),
+            entry_va: 0x1000,
+            body: vec![
+                real_lifted_gcc_ladder_with_linear_cloned_defaults(8),
+                assign("observable_after_tree", 1),
+                Stmt::Return {
+                    value: Some(reg("ret")),
+                },
+            ],
+        };
+
+        recover_switches(&mut f);
+
+        assert!(
+            !matches!(f.body[0], Stmt::Switch { .. }),
+            "an early-return default cannot be merged with a path that still has work: {:#?}",
+            f.body
+        );
     }
 
     #[test]

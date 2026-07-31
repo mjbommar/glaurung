@@ -1623,22 +1623,9 @@ fn detect_if_shape(
             if chain.contains(&cont) {
                 continue;
             }
-            // Four or more shared conditional predecessors are a strong
-            // comparison-tree signature (and already above the ladder
-            // matcher's minimum useful size).  Cloning their shared default
-            // return makes every range prune look like an unrelated early
-            // return and destroys the single default identity needed for
-            // source-level switch recovery.  Preserve explicit shared edges;
-            // the AST ladder pass proves and consumes them later.
-            let conditional_predecessor_count = cfg.preds[body]
-                .iter()
-                .filter(|predecessor| cfg.succs[**predecessor].len() == 2)
-                .count();
-            if conditional_predecessor_count >= 4
-                && !shared_exit_predecessors_form_guard_chain(body, cfg)
-            {
-                continue;
-            }
+            // Clone every proven return edge. The AST switch-ladder pass can
+            // reunify exact cloned defaults, while a predecessor count alone
+            // cannot distinguish a switch tree from validation or loop exits.
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
             let prefix_is_owned_by_guards = cfg.preds[body]
@@ -1862,61 +1849,6 @@ fn shared_return_chain(entry: usize, cfg: &Cfg) -> Option<Vec<usize>> {
         }
     }
     None
-}
-
-/// Whether every conditional predecessor of `exit` belongs to one ordered
-/// short-circuit guard chain.
-///
-/// A large number of incoming conditional edges is not, by itself, evidence of
-/// a comparison tree.  Compound validation such as `p == NULL || n < 0 || ...`
-/// has exactly the same shared-exit fan-in.  In that source shape each guard's
-/// non-exit successor is the next guard, producing one linear chain.  A GCC
-/// switch tree interposes equality/case arms between its range-prune edges, so
-/// its predecessors of the shared default do not form this chain.
-fn shared_exit_predecessors_form_guard_chain(exit: usize, cfg: &Cfg) -> bool {
-    let guards: HashSet<usize> = cfg.preds[exit]
-        .iter()
-        .copied()
-        .filter(|&predecessor| {
-            cfg.succs[predecessor].len() == 2 && cfg.succs[predecessor].contains(&exit)
-        })
-        .collect();
-    if guards.len() < 2 {
-        return false;
-    }
-
-    let heads: Vec<usize> = guards
-        .iter()
-        .copied()
-        .filter(|candidate| {
-            !guards.iter().any(|predecessor| {
-                cfg.succs[*predecessor]
-                    .iter()
-                    .copied()
-                    .any(|successor| successor != exit && successor == *candidate)
-            })
-        })
-        .collect();
-    let [head] = heads.as_slice() else {
-        return false;
-    };
-    let mut current = *head;
-
-    let mut seen = HashSet::new();
-    loop {
-        if !seen.insert(current) {
-            return false;
-        }
-        let continuation = cfg.succs[current]
-            .iter()
-            .copied()
-            .find(|&successor| successor != exit);
-        match continuation {
-            Some(next) if guards.contains(&next) => current = next,
-            _ => break,
-        }
-    }
-    seen == guards
 }
 
 /// Whether `entry` is the distinguished exit successor of a natural loop's
