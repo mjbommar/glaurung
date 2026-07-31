@@ -5524,6 +5524,11 @@ pub fn prepare_for_decbench_with_output(
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
     crate::ir::switch_ladder::recover_switches(&mut owned);
     crate::ir::guarded_switch::collapse_range_guards(&mut owned);
+    // Removing a proven range guard can make a prefix copy dominate the switch
+    // directly. Carry only those aliases into the switch arms. A general late
+    // copy-propagation rerun is unsound here: loops have already been recovered,
+    // and a pre-loop snapshot may depend on a value changed by the loop body.
+    crate::ir::copy_prop::propagate_switch_entry_copies(&mut owned);
     fold_exhaustive_if_returns(&mut owned);
     fold_exhaustive_switch_returns(&mut owned);
     crate::ir::loop_form::promote_for_loops(&mut owned);

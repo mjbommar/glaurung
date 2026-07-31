@@ -843,6 +843,9 @@ def test_optimized_early_default_recovers_one_exhaustive_switch(
     assert "default:" in switch_body, code
     assert switch_body.count("return ") >= 9, code
     assert "if (" not in code[:switch_at], code
+    if compiler == "gcc":
+        assert "long var0;" not in code, code
+        assert "var0 =" not in code, code
 
     rebuilt = D.build_so(
         code,
