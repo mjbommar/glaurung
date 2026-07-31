@@ -758,6 +758,26 @@ struct DiscoveryFacts<'a> {
     tables: &'a std::collections::BTreeMap<u64, Vec<u64>>,
     // Resolved import/thunk addresses whose contracts prohibit fallthrough.
     noreturn_targets: &'a std::collections::HashSet<u64>,
+    // Optional authoritative ranges for a continuation/landing-pad walk. A
+    // direct jump that stays inside these ranges is intra-function even when
+    // its target bytes resemble a standalone prologue.
+    owned_ranges: Option<&'a [AddressRange]>,
+    // Existing basic-block starts in the owning function. A landing-pad walk
+    // must treat these as leaders even when it reaches one by linear flow.
+    owned_leaders: Option<&'a [u64]>,
+}
+
+impl DiscoveryFacts<'_> {
+    fn owns(&self, va: u64) -> bool {
+        self.owned_ranges.is_some_and(|ranges| {
+            ranges.iter().any(|range| {
+                let start = range.start.value;
+                start
+                    .checked_add(range.size)
+                    .is_some_and(|end| va >= start && va < end)
+            })
+        })
+    }
 }
 
 fn resolve_dispatch(
@@ -827,6 +847,16 @@ fn discover_function(
     }
     queue.push_back(entry.value);
     seen.insert(entry.value);
+    if let Some(leaders) = facts.owned_leaders {
+        for leader in leaders {
+            if *leader != entry.value
+                && in_exec_regions(regions, *leader).is_some()
+                && seen.insert(*leader)
+            {
+                queue.push_back(*leader);
+            }
+        }
+    }
 
     let mut decoded_instructions = 0usize;
 
@@ -938,11 +968,13 @@ fn discover_function(
                 if let Some(tgt) = immediate_target(&ins) {
                     let is_exec_target = in_exec_regions(regions, tgt).is_some();
                     let is_pe_tail_target = unconditional
+                        && !facts.owns(tgt)
                         && data.len() >= 2
                         && &data[..2] == b"MZ"
                         && is_exec_target
                         && pe_tail_target_looks_like_function_start(data, tgt);
                     let is_elf_x86_tail_target = unconditional
+                        && !facts.owns(tgt)
                         && tgt != entry.value
                         && is_exec_target
                         && elf_x86_tail_target_looks_like_function_start(data, tgt, arch);
@@ -2937,6 +2969,226 @@ fn apply_dwarf_overrides(data: &[u8], functions: &mut [Function]) -> usize {
     applied
 }
 
+/// Attach LSDA-only landing-pad blocks to their authoritative parent function.
+///
+/// These blocks have no ordinary predecessor: the unwinder transfers to them
+/// after a protected call throws. They therefore cannot be found by the normal
+/// entry-rooted CFG walk. We discover from each metadata-proven landing pad,
+/// retain only blocks inside the parent's authoritative ranges, and merge their
+/// ordinary handler-internal edges. The exceptional edge itself intentionally
+/// remains typed metadata in [`crate::analysis::exception`]; presenting it as a
+/// normal branch would confuse dominance and structuring.
+fn attach_exception_landing_pads(
+    data: &[u8],
+    arch: BArch,
+    end: Endianness,
+    regions: &[ExecRegion],
+    budgets: &Budgets,
+    facts: &DiscoveryFacts<'_>,
+    functions: &mut [Function],
+) -> Vec<(u64, FunctionXref)> {
+    let sites = crate::analysis::exception::extract_exception_call_sites(data);
+    if sites.is_empty() {
+        return Vec::new();
+    }
+    let parent_by_entry: std::collections::HashMap<u64, usize> = functions
+        .iter()
+        .enumerate()
+        .map(|(index, function)| (function.entry_point.value, index))
+        .collect();
+    let mut call_edges = Vec::new();
+    let mut touched = std::collections::BTreeSet::new();
+
+    for site in sites {
+        let Some(&parent_index) = parent_by_entry.get(&site.function_start) else {
+            continue;
+        };
+        let ranges = functions[parent_index].all_ranges();
+        let owns = |start: u64, end: u64| {
+            ranges.iter().any(|range| {
+                let range_start = range.start.value;
+                range_start
+                    .checked_add(range.size)
+                    .is_some_and(|range_end| start >= range_start && end <= range_end)
+            })
+        };
+        if !owns(site.landing_pad, site.landing_pad.saturating_add(1)) {
+            continue;
+        }
+        if functions[parent_index]
+            .basic_blocks
+            .iter()
+            .any(|block| block.start_address.value == site.landing_pad)
+        {
+            functions[parent_index].add_flag(FunctionFlags::HAS_EH);
+            touched.insert(parent_index);
+            continue;
+        }
+        let bits = functions[parent_index].entry_point.bits;
+        let leaders: Vec<u64> = functions[parent_index]
+            .basic_blocks
+            .iter()
+            .map(|block| block.start_address.value)
+            .collect();
+        let Ok(entry) = Address::new(AddressKind::VA, site.landing_pad, bits, None, None) else {
+            continue;
+        };
+        let Some((mut handler, handler_calls, _stats)) = discover_function(
+            data,
+            arch,
+            end,
+            entry,
+            regions,
+            budgets,
+            &DiscoveryFacts {
+                tables: facts.tables,
+                noreturn_targets: facts.noreturn_targets,
+                owned_ranges: Some(&ranges),
+                owned_leaders: Some(&leaders),
+            },
+        ) else {
+            continue;
+        };
+        handler
+            .basic_blocks
+            .retain(|block| owns(block.start_address.value, block.end_address.value));
+        let retained_starts: std::collections::HashSet<u64> = handler
+            .basic_blocks
+            .iter()
+            .map(|block| block.start_address.value)
+            .collect();
+        handler.edges.retain(|(source, target)| {
+            retained_starts.contains(&source.value) && retained_starts.contains(&target.value)
+        });
+        if handler.basic_blocks.is_empty() {
+            continue;
+        }
+
+        let parent = &mut functions[parent_index];
+        split_parent_blocks_at_handler_leaders(parent, &handler.basic_blocks);
+        for block in handler.basic_blocks {
+            if !parent
+                .basic_blocks
+                .iter()
+                .any(|existing| existing.start_address.value == block.start_address.value)
+            {
+                parent.basic_blocks.push(block);
+            }
+        }
+        for edge in handler.edges {
+            if !parent.edges.contains(&edge) {
+                parent.edges.push(edge);
+            }
+        }
+        parent.callees.extend(handler.callees);
+        parent.add_flag(FunctionFlags::HAS_EH);
+        touched.insert(parent_index);
+        call_edges.extend(
+            handler_calls
+                .into_iter()
+                .filter(|xref| {
+                    parent.basic_blocks.iter().any(|block| {
+                        xref.callsite_va >= block.start_address.value
+                            && xref.callsite_va < block.end_address.value
+                    })
+                })
+                .map(|xref| (site.function_start, xref)),
+        );
+    }
+
+    for index in touched {
+        rebuild_block_relationships(&mut functions[index]);
+    }
+    call_edges
+}
+
+/// Split an existing normal-flow block when an EH subgraph branches into its
+/// interior. GCC commonly rejoins a catch path at the final `mov` immediately
+/// before the normal epilogue jump, which is a new leader even though normal
+/// entry-rooted discovery originally swept across it.
+fn split_parent_blocks_at_handler_leaders(parent: &mut Function, handler: &[BasicBlock]) {
+    let mut leaders: Vec<u64> = handler
+        .iter()
+        .map(|block| block.start_address.value)
+        .collect();
+    leaders.sort_unstable();
+    leaders.dedup();
+    for leader in leaders {
+        let Some(index) = parent.basic_blocks.iter().position(|block| {
+            block.start_address.value < leader && leader < block.end_address.value
+        }) else {
+            continue;
+        };
+        let new_id = format!("bb_{leader:x}");
+        let source_start = parent.basic_blocks[index].start_address.clone();
+        let new_start = match Address::new(
+            AddressKind::VA,
+            leader,
+            source_start.bits,
+            source_start.space.clone(),
+            None,
+        ) {
+            Ok(address) => address,
+            Err(_) => continue,
+        };
+        let tail_instruction_count = handler
+            .iter()
+            .find(|block| block.start_address.value == leader)
+            .map_or(0, |block| block.instruction_count);
+        let block = &mut parent.basic_blocks[index];
+        block.end_address = new_start.clone();
+        block.instruction_count = block
+            .instruction_count
+            .saturating_sub(tail_instruction_count);
+        block.successor_ids.clear();
+        block.successor_ids.push(new_id);
+        parent
+            .edges
+            .retain(|(source, _target)| source.value != source_start.value);
+        parent.add_edge(source_start, new_start);
+    }
+}
+
+/// Recompute predecessor lists after merging an independently discovered
+/// landing-pad subgraph. Successors are the authoritative direction.
+fn rebuild_block_relationships(function: &mut Function) {
+    let ids: std::collections::HashSet<String> = function
+        .basic_blocks
+        .iter()
+        .map(|block| block.id.clone())
+        .collect();
+    for block in &mut function.basic_blocks {
+        block
+            .successor_ids
+            .retain(|successor| ids.contains(successor));
+        block.successor_ids.sort();
+        block.successor_ids.dedup();
+        block.predecessor_ids.clear();
+        block.relationships_known = true;
+    }
+    let mut predecessors: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for block in &function.basic_blocks {
+        for successor in &block.successor_ids {
+            predecessors
+                .entry(successor.clone())
+                .or_default()
+                .push(block.id.clone());
+        }
+    }
+    for block in &mut function.basic_blocks {
+        block.predecessor_ids = predecessors.remove(&block.id).unwrap_or_default();
+        block.predecessor_ids.sort();
+        block.predecessor_ids.dedup();
+    }
+    function.basic_blocks.sort_by_key(|block| {
+        (
+            block.start_address.value != function.entry_point.value,
+            block.start_address.value,
+        )
+    });
+}
+
 /// Compiler-emitted suffixes that mark a separate symbol as belonging to
 /// the same logical function as `<base>`. The first match wins per child;
 /// `<base>` is everything before the suffix in the raw symbol name.
@@ -3110,6 +3362,8 @@ pub(crate) fn discover_function_bytes_at(
     let facts = DiscoveryFacts {
         tables: &tables,
         noreturn_targets: &noreturn_targets,
+        owned_ranges: None,
+        owned_leaders: None,
     };
     let (mut function, _calls, _stats) =
         discover_function(data, arch, end, entry, &regions, budgets, &facts)?;
@@ -3616,6 +3870,8 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     let discovery_facts = DiscoveryFacts {
         tables: &jump_table_index,
         noreturn_targets: &noreturn_targets,
+        owned_ranges: None,
+        owned_leaders: None,
     };
     let mut calls_all: Vec<(u64, FunctionXref)> = Vec::new(); // (caller_entry_va, xref)
     let mut worklist: std::collections::VecDeque<(Address, DiscoverySeedKind)> =
@@ -3781,6 +4037,19 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     // *override* fields that DWARF has hard answers for; heuristic
     // basic-block CFG and edges remain.
     apply_dwarf_overrides(data, &mut functions);
+
+    // C++/Itanium handlers are reached through LSDA metadata rather than a
+    // branch instruction. Merge their blocks only after DWARF establishes the
+    // authoritative function ranges used to reject cross-function walks.
+    calls_all.extend(attach_exception_landing_pads(
+        data,
+        arch,
+        end,
+        &regions,
+        budgets,
+        &discovery_facts,
+        &mut functions,
+    ));
 
     // FLIRT-style signature matching. Runs *after* DWARF / symbol-rename
     // so it only touches functions still named `sub_*` — we never
@@ -5082,6 +5351,8 @@ mod degenerate_block_tests {
         let facts = DiscoveryFacts {
             tables: &tables,
             noreturn_targets: &noreturn_targets,
+            owned_ranges: None,
+            owned_leaders: None,
         };
         let out = discover_function(
             code,

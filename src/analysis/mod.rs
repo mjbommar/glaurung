@@ -14,6 +14,7 @@ pub mod dispatch;
 pub mod elf_got;
 pub mod elf_plt;
 pub mod entry;
+pub mod exception;
 pub mod gopclntab;
 pub mod ioctl_surface;
 pub mod ioctl_taint;

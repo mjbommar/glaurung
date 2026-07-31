@@ -12,6 +12,7 @@ import ctypes
 import subprocess
 import sys
 import tempfile
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -283,6 +284,38 @@ def test_recompiled_cpp_abi_callee_loads_its_runtime(tmp_path: Path) -> None:
 
     assert rebuilt is not None
     ctypes.CDLL(str(rebuilt))
+
+
+def test_cfg_owns_lsda_only_cpp_landing_pad_blocks() -> None:
+    """A C++ catch handler is function code even without a normal branch to it."""
+    binary = _compile_cpp_so(
+        "static __attribute__((noinline)) int may_throw(int x) {\n"
+        "    if (x < 0) throw -x;\n"
+        "    return x + 5;\n"
+        "}\n"
+        'extern "C" int catches_int(int x) {\n'
+        "    try { return may_throw(x) + 30; }\n"
+        "    catch (int e) { return 90 - e; }\n"
+        "}",
+        "cpp_landing_pad_cfg",
+    )
+
+    functions, _callgraph = D.g.analysis.analyze_functions_path(binary)
+    function = next(fn for fn in functions if fn.name == "catches_int")
+    owned_end = max(
+        chunk.start.value + chunk.size for chunk in function.all_ranges()
+    )
+    recovered_end = max(block.end_address.value for block in function.basic_blocks)
+    ordered_blocks = sorted(
+        function.basic_blocks, key=lambda block: block.start_address.value
+    )
+
+    assert function.has_flag(0x4), "LSDA-owned handlers must set HAS_EH"
+    assert recovered_end == owned_end, "the handler tail must not be omitted from the CFG"
+    assert all(
+        left.end_address.value <= right.start_address.value
+        for left, right in pairwise(ordered_blocks)
+    ), "landing-pad discovery must not create overlapping basic blocks"
 
 
 def test_round_trip_rebinds_a_demangled_local_cpp_callee() -> None:
