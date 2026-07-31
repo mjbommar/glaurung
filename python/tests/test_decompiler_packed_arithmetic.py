@@ -27,3 +27,15 @@ def test_clang_vectorized_byte_accumulator_round_trips() -> None:
 
     lane = observed["11_call_shapes:clang:O2"]
     assert lane == {"call_accumulate_bytes": "pass"}, lane
+
+
+def test_clang_qword_horizontal_sum_round_trips() -> None:
+    """Packed qword reduction must retain both partial sums and every carry."""
+    observed = H.run_lanes(
+        [("12_loop_rotation", "clang", "O2", ("skip_odd_sum",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["12_loop_rotation:clang:O2"]
+    assert lane == {"skip_odd_sum": "pass"}, lane

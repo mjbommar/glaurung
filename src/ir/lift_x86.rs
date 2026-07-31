@@ -1721,6 +1721,17 @@ fn packed_qword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
             }));
             ops
         }
+        (OpKind::Register, OpKind::Register)
+            if !is_xmm_register(instr.op_register(0))
+                && is_xmm_register(instr.op_register(1))
+                && phys_reg_width(&reg_name(instr.op_register(0))) == Some(Width::W64) =>
+        {
+            vec![Op::Concat {
+                dst: VReg::phys(reg_name(instr.op_register(0))),
+                hi: Value::Reg(packed_dword_lane(instr.op_register(1), 1)),
+                lo: Value::Reg(packed_dword_lane(instr.op_register(1), 0)),
+            }]
+        }
         _ => vec![Op::Unknown {
             mnemonic: "movq".into(),
         }],
@@ -1793,6 +1804,101 @@ fn packed_dword_immediate_shift_left_ops(instr: &iced_x86::Instruction) -> Vec<O
             }
         })
         .collect()
+}
+
+/// Interleave the low two dwords of the destination and source.
+///
+/// All four input lanes are snapshotted before the destination is overwritten,
+/// which preserves the in-place form (`punpckldq xmm0,xmm0`) exactly.
+fn packed_dword_unpack_low_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "punpckldq".into(),
+        }];
+    }
+    let Some((mut ops, sources)) = packed_dword_sources(instr, 92) else {
+        return vec![Op::Unknown {
+            mnemonic: "punpckldq".into(),
+        }];
+    };
+    let dst = instr.op_register(0);
+    for (temporary, source) in [
+        (104, Value::Reg(packed_dword_lane(dst, 0))),
+        (105, Value::Reg(packed_dword_lane(dst, 1))),
+        (106, sources[0].clone()),
+        (107, sources[1].clone()),
+    ] {
+        ops.push(Op::Assign {
+            dst: VReg::Temp(temporary),
+            src: source,
+        });
+    }
+    for (lane, temporary) in [104_u32, 106, 105, 107].into_iter().enumerate() {
+        ops.push(Op::Assign {
+            dst: packed_dword_lane(dst, lane),
+            src: Value::Reg(VReg::Temp(temporary)),
+        });
+    }
+    ops
+}
+
+/// Add two packed 64-bit lanes while retaining carry between their dword views.
+fn packed_qword_add_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || !is_xmm_register(instr.op_register(0))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "paddq".into(),
+        }];
+    }
+    let Some((mut ops, sources)) = packed_dword_sources(instr, 92) else {
+        return vec![Op::Unknown {
+            mnemonic: "paddq".into(),
+        }];
+    };
+    let dst = instr.op_register(0);
+    for qword in 0..2 {
+        let low_lane = qword * 2;
+        let high_lane = low_lane + 1;
+        let lhs = VReg::Temp(108 + qword as u32 * 3);
+        let rhs = VReg::Temp(109 + qword as u32 * 3);
+        let sum = VReg::Temp(110 + qword as u32 * 3);
+        ops.extend([
+            Op::Concat {
+                dst: lhs.clone(),
+                hi: Value::Reg(packed_dword_lane(dst, high_lane)),
+                lo: Value::Reg(packed_dword_lane(dst, low_lane)),
+            },
+            Op::Concat {
+                dst: rhs.clone(),
+                hi: sources[high_lane].clone(),
+                lo: sources[low_lane].clone(),
+            },
+            Op::Bin {
+                dst: sum.clone(),
+                op: BinOp::Add,
+                lhs: Value::Reg(lhs),
+                rhs: Value::Reg(rhs),
+            },
+            Op::Trunc {
+                dst: packed_dword_lane(dst, low_lane),
+                src: Value::Reg(sum.clone()),
+                from: Width::W64,
+                to: Width::W32,
+            },
+            Op::Extract {
+                dst: packed_dword_lane(dst, high_lane),
+                src: Value::Reg(sum),
+                hi: 64,
+                lo: 32,
+            },
+        ]);
+    }
+    ops
 }
 
 /// Snapshot the four dword lanes of a packed instruction's second operand.
@@ -3241,6 +3347,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Paddd => packed_dword_binary_ops(instr, BinOp::Add),
         Mnemonic::Psubd => packed_dword_binary_ops(instr, BinOp::Sub),
         Mnemonic::Pslld => packed_dword_immediate_shift_left_ops(instr),
+        Mnemonic::Punpckldq => packed_dword_unpack_low_ops(instr),
+        Mnemonic::Paddq => packed_qword_add_ops(instr),
         Mnemonic::Pcmpeqd => packed_dword_compare_equal_ops(instr),
         Mnemonic::Pcmpgtd => packed_dword_compare_greater_ops(instr),
         Mnemonic::Pshufd => packed_dword_shuffle_ops(instr),
@@ -5796,6 +5904,63 @@ mod tests {
                 } if dst == &format!("xmm1_d{lane}") && *src == 84 + selected
             )));
         }
+    }
+
+    #[test]
+    fn unpack_and_qword_reduction_preserve_full_width_lane_semantics() {
+        // The exact reduction tail emitted by clang -O2 for
+        // `12_loop_rotation:skip_odd_sum`. PUNPCKLDQ constructs two 64-bit
+        // masks, PADDQ horizontally adds the two qwords, and MOVQ exposes the
+        // complete low qword as the function result.
+        let ops = lift64(&[
+            0x66, 0x0f, 0x62, 0xd8, // punpckldq xmm3,xmm0
+            0x66, 0x0f, 0xd4, 0xc3, // paddq xmm0,xmm3
+            0x66, 0x48, 0x0f, 0x7e, 0xc0, // movq rax,xmm0
+        ]);
+
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "qword reduction dataflow must be explicit: {ops:#?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Bin { op: BinOp::Add, .. }))
+                .count(),
+            2,
+            "PADDQ must add both complete qword lanes: {ops:#?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(
+                    instruction.op,
+                    Op::Trunc {
+                        from: Width::W64,
+                        to: Width::W32,
+                        ..
+                    }
+                ))
+                .count(),
+            2,
+            "both low dwords must come from the complete qword sums: {ops:#?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Extract { hi: 64, lo: 32, .. }))
+                .count(),
+            2,
+            "both high dwords must retain carry from the complete qword sums: {ops:#?}"
+        );
+        assert!(ops.iter().any(|instruction| matches!(
+            &instruction.op,
+            Op::Concat {
+                dst: VReg::Phys(dst),
+                hi: Value::Reg(VReg::Phys(hi)),
+                lo: Value::Reg(VReg::Phys(lo)),
+            } if dst == "rax" && hi == "xmm0_d1" && lo == "xmm0_d0"
+        )));
     }
 
     #[test]
