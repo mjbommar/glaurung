@@ -17,7 +17,7 @@ use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteS
 use crate::ir::structure::Region;
 use crate::ir::types::{
     BinOp, CallTarget, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, UnOp, VReg,
-    Value,
+    Value, Width,
 };
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -618,6 +618,65 @@ fn wide_integer_intrinsic(
     Some((op, (bits / 8) as u8))
 }
 
+/// Lower x86 BSWAP to an exact unsigned expression instead of an opaque asm
+/// comment.  The explicit machine-width casts keep every shift defined and
+/// prevent a 32-bit source with its sign bit set from being promoted to a
+/// signed C value before the byte shuffle is complete.
+fn byte_swap_intrinsic(name: &str, ins: &[Value], outs: &[(VReg, Width)]) -> Option<Expr> {
+    let ([src], [(_, output_width)]) = (ins, outs) else {
+        return None;
+    };
+    if name != "bswap" || !matches!(*output_width, Width::W32 | Width::W64) {
+        return None;
+    }
+
+    let bytes = u8::try_from(output_width.bytes()).ok()?;
+    let input = Expr::Cast {
+        signed: false,
+        width: bytes,
+        expr: Box::new(lower_value(src)),
+    };
+    let mut parts = Vec::with_capacity(bytes as usize);
+    for source_byte in 0..bytes {
+        let source_shift = i64::from(source_byte) * 8;
+        let destination_shift = i64::from(bytes - 1 - source_byte) * 8;
+        let shifted_down = if source_shift == 0 {
+            input.clone()
+        } else {
+            Expr::Bin {
+                op: BinOp::Shr,
+                lhs: Box::new(input.clone()),
+                rhs: Box::new(Expr::Const(source_shift)),
+            }
+        };
+        let byte = Expr::Bin {
+            op: BinOp::And,
+            lhs: Box::new(shifted_down),
+            rhs: Box::new(Expr::Const(0xff)),
+        };
+        parts.push(if destination_shift == 0 {
+            byte
+        } else {
+            Expr::Bin {
+                op: BinOp::Shl,
+                lhs: Box::new(byte),
+                rhs: Box::new(Expr::Const(destination_shift)),
+            }
+        });
+    }
+
+    let combined = parts.into_iter().reduce(|lhs, rhs| Expr::Bin {
+        op: BinOp::Or,
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+    })?;
+    Some(Expr::Cast {
+        signed: false,
+        width: bytes,
+        expr: Box::new(combined),
+    })
+}
+
 /// Whether every VFP value used by the scalar arithmetic subset has a modeled
 /// producer in this function.
 ///
@@ -1000,6 +1059,14 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         Op::Intrinsic {
             name, ins, outs, ..
         } => {
+            if let (Some(src), Some((dst, _))) =
+                (byte_swap_intrinsic(name, ins, outs), outs.first())
+            {
+                return vec![Stmt::Assign {
+                    dst: dst.clone(),
+                    src,
+                }];
+            }
             if let (Some((op, width)), Some((dst, _))) =
                 (wide_integer_intrinsic(name, ins, outs), outs.first())
             {
@@ -11869,6 +11936,48 @@ function f @ 0x1000 {
                 text.contains(expected),
                 "{name} did not retain exact wide semantics:\n{text}"
             );
+            assert_looks_like_c(&text);
+        }
+    }
+
+    #[test]
+    fn x86_bswap_intrinsics_lower_to_executable_byte_reversal() {
+        for (width, ctype, highest_shift) in [
+            (Width::W32, "unsigned int", 24),
+            (Width::W64, "unsigned long", 56),
+        ] {
+            let statements = lower_op(
+                &Op::Intrinsic {
+                    name: "bswap".to_string(),
+                    ins: vec![Value::Reg(VReg::phys("arg0"))],
+                    outs: vec![(VReg::phys("ret"), width)],
+                    reads_mem: false,
+                    writes_mem: false,
+                },
+                false,
+            );
+            assert!(matches!(
+                statements.as_slice(),
+                [Stmt::Assign {
+                    dst,
+                    src: Expr::Cast { signed: false, width: got_width, .. },
+                }] if dst == &VReg::phys("ret") && *got_width == width.bytes() as u8
+            ));
+            let function = Function {
+                name: "swap".to_string(),
+                entry_va: 0x10,
+                body: statements,
+            };
+            let text = render_decbench(&function);
+            assert!(
+                text.contains(ctype),
+                "{width:?} lost its unsigned width:\n{text}"
+            );
+            assert!(
+                text.contains(&format!("<< {highest_shift}")),
+                "{width:?} did not reverse the low byte into the high byte:\n{text}"
+            );
+            assert!(!text.contains("asm: bswap"), "{text}");
             assert_looks_like_c(&text);
         }
     }
