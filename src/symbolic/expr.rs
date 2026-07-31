@@ -647,7 +647,10 @@ mod tests {
             "(distinct (_ bv7 32) (_ bv0 32))) (_ bv1 32) (_ bv0 32))"
         );
         assert_eq!(p.render_smtlib(either), expected);
-        assert_eq!(p.render_smtlib_shared(either), expected);
+        assert_eq!(
+            p.render_smtlib_shared(either),
+            format!("(let ((g!0 {expected})) g!0)")
+        );
     }
 
     #[test]

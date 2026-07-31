@@ -163,9 +163,11 @@ fn references_free(lf: &LlirFunction, free_slots: &BTreeSet<u64>) -> bool {
             Op::Load { addr, .. } => free_slots.contains(&(addr.disp as u64)),
             Op::Call {
                 target: CallTarget::Indirect(Value::Addr(va)),
+                ..
             }
             | Op::Call {
                 target: CallTarget::Direct(va),
+                ..
             } => free_slots.contains(va),
             _ => false,
         })
@@ -191,6 +193,7 @@ fn wdf_input_buffer_calls(lf: &LlirFunction) -> BTreeMap<u64, ApiSummary> {
                 }
                 Op::Call {
                     target: CallTarget::Indirect(_),
+                    ..
                 } if pending => {
                     out.insert(ins.va, ApiSummary::RetrieveBuffer { out_ptr_arg: 3 });
                     pending = false;

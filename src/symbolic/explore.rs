@@ -119,6 +119,8 @@ pub struct ExecutionPathStats {
     pub unsupported_intrinsics: BTreeMap<String, u64>,
     /// Residual unknown operations reached by execution.
     pub residual_unknowns: BTreeMap<String, u64>,
+    /// Explicitly undefined or unmodelled values demanded by execution.
+    pub undefined_values: BTreeMap<String, u64>,
     /// Paths that unexpectedly requested an interpreter fork.
     pub unexpected_fork: u64,
     /// Paths stopped by an interpreter instruction budget.
@@ -147,6 +149,7 @@ impl ExecutionPathStats {
             + self.unresolved_symbolic_memory
             + self.unsupported_intrinsics.values().sum::<u64>()
             + self.residual_unknowns.values().sum::<u64>()
+            + self.undefined_values.values().sum::<u64>()
             + self.unexpected_fork
             + self.budget_exhausted
             + self.unexpected_flow
@@ -280,6 +283,10 @@ fn record_execution_halt(va: u64, halt: &Halt) {
         Halt::ResidualUnknown(mnemonic) => {
             record_named(&mut stats.residual_unknowns, mnemonic);
             record_stop_site(stats, va, format!("residual-unknown:{mnemonic}"));
+        }
+        Halt::UndefinedValue(reason) => {
+            record_named(&mut stats.undefined_values, reason);
+            record_stop_site(stats, va, format!("undefined-value:{reason}"));
         }
         Halt::UnexpectedFork => {
             stats.unexpected_fork += 1;
@@ -3213,6 +3220,28 @@ mod tests {
             }
         );
         assert_eq!(execution_path_stats().incomplete_stops(), 1);
+    }
+
+    #[test]
+    fn undefined_value_is_an_explicit_incomplete_semantic_stop() {
+        reset_execution_path_stats();
+
+        record_execution_halt(0x1234, &Halt::UndefinedValue("unmodelled-predicate".into()));
+
+        let stats = execution_path_stats();
+        assert_eq!(
+            stats.undefined_values,
+            BTreeMap::from([("unmodelled-predicate".to_string(), 1)])
+        );
+        assert_eq!(
+            stats.stop_sites,
+            BTreeMap::from([(
+                0x1234,
+                BTreeMap::from([("undefined-value:unmodelled-predicate".to_string(), 1)]),
+            )])
+        );
+        assert_eq!(stats.incomplete_stops(), 1);
+        assert_eq!(stats.modeled_terminal_paths(), 0);
     }
 
     #[test]
