@@ -770,7 +770,7 @@
     "rb_validate": "pass"
   },
   "16_red_black_tree:clang:O2": {
-    "rb_validate": "fail"
+    "rb_validate": "pass"
   },
   "16_red_black_tree:gcc:O0": {
     "rb_validate": "pass"
@@ -836,7 +836,7 @@
     "graph_bfs": "pass"
   },
   "20_graph_bfs:gcc:O2": {
-    "graph_bfs": "fail"
+    "graph_bfs": "pass"
   },
   "21_graph_dfs:clang:O0": {
     "graph_dfs": "pass"
@@ -860,19 +860,19 @@
     "dijkstra_dense": "pass"
   },
   "22_dijkstra:gcc:O2": {
-    "dijkstra_dense": "fail"
+    "dijkstra_dense": "pass"
   },
   "23_topological_sort:clang:O0": {
     "topological_sort": "pass"
   },
   "23_topological_sort:clang:O2": {
-    "topological_sort": "fail"
+    "topological_sort": "pass"
   },
   "23_topological_sort:gcc:O0": {
     "topological_sort": "pass"
   },
   "23_topological_sort:gcc:O2": {
-    "topological_sort": "fail"
+    "topological_sort": "pass"
   },
   "24_merge_sort:clang:O0": {
     "merge_sort_i32": "pass"

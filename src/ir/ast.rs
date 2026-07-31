@@ -7873,6 +7873,15 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
         }
         Stmt::Store { addr, src, size } => {
             indent(out, level);
+            // The integer C backend has no scalar 128-bit lvalue. A proven
+            // zero vector still has exact byte semantics, so preserve the full
+            // machine write instead of silently narrowing it to one `long`.
+            if *size == 16 && matches!(src, Expr::Const(0)) {
+                out.push_str("__builtin_memset(");
+                write_expr_dec(addr, out);
+                out.push_str(", 0, 16);\n");
+                return;
+            }
             // A store whose address is a bare promoted stack local (`local_0`,
             // `stack_1`, …) is a plain variable assignment, not a pointer
             // write: emit `local_0 = src` rather than `*(long *)(local_0) = src`.
@@ -11206,6 +11215,30 @@ function f @ 0x1000 {
             "address-taken storage must not be a pointer-sized scalar: {text}"
         );
         assert!(text.contains("Widget_ctor(&local_20[0])"), "got: {text}");
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_sixteen_byte_zero_store_initializes_the_full_region() {
+        let f = Function {
+            name: "zero_vector".to_string(),
+            entry_va: 0x20,
+            body: vec![Stmt::Store {
+                addr: Expr::StackAddr {
+                    object: VReg::phys("local_10"),
+                    size: 16,
+                },
+                src: Expr::Const(0),
+                size: 16,
+            }],
+        };
+
+        let text = render_decbench(&f);
+        assert!(text.contains("unsigned char local_10[16];"), "{text}");
+        assert!(
+            text.contains("__builtin_memset(&local_10[0], 0, 16);"),
+            "a 128-bit zero store must not degrade to one machine word: {text}"
+        );
         assert_looks_like_c(&text);
     }
 

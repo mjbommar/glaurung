@@ -1568,13 +1568,33 @@ fn resolved_memory_address(
             return Some((base, disp, index.clone(), *scale));
         }
     }
-    let (resolved_base, base_disp) = address_defs.get(base)?.clone();
-    Some((
-        resolved_base,
-        base_disp.checked_add(*disp)?,
-        index.clone(),
-        *scale,
-    ))
+    if let Some((resolved_base, base_disp)) = address_defs.get(base) {
+        return Some((
+            resolved_base.clone(),
+            base_disp.checked_add(*disp)?,
+            index.clone(),
+            *scale,
+        ));
+    }
+
+    // Addition is commutative when the SIB scale is one. Encoders freely put
+    // the stack-derived alias in the index field (`[rax+r8]`) and the logical
+    // subscript in the base field. Recover the same object while retaining the
+    // non-stack base as the dynamic byte offset.
+    let stack_index = index.as_ref()?;
+    if *scale != 1 {
+        return None;
+    }
+    let (resolved_base, resolved_disp) = match stack_index {
+        VReg::Phys(name) if is_active_stack_base(name, ctx) => {
+            normalized_stack_slot(name, *disp, sp_delta, ctx)
+        }
+        _ => {
+            let (resolved_base, base_disp) = address_defs.get(stack_index)?.clone();
+            (resolved_base, base_disp.checked_add(*disp)?)
+        }
+    };
+    Some((resolved_base, resolved_disp, Some(base.clone()), 1))
 }
 
 /// Materialise an access inside a seeded stack region as byte-pointer
@@ -2498,6 +2518,57 @@ mod tests {
                 ..
             } if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
                 if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 } if object == &reg("local_20")))
+        ));
+    }
+
+    #[test]
+    fn stack_address_alias_in_sib_index_position_is_still_an_object() {
+        let holder = reg("r8#1");
+        let mut f = Function {
+            name: "commuted_address".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(104)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: holder.clone(),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(64)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("next")),
+                            index: Some(holder),
+                            scale: 1,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 1,
+                    },
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(matches!(
+            &f.body[2],
+            Stmt::Assign {
+                src: Expr::Deref { addr, size: 1 },
+                ..
+            } if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
+                if matches!(lhs.as_ref(), Expr::StackAddr { size: 40, .. }))
         ));
     }
 

@@ -1298,6 +1298,7 @@ pub fn recover_prototype_with_arm_vfp_args(
     let mut direct_facts = Vec::new();
     let mut direct_storage_classes = HashSet::new();
     let mut has_unsupported_output_trial = false;
+    let mut has_packed_zero_bridge_trial = false;
     // Ghidra's ParamEntry model and Kuna's port allocate general-purpose and
     // floating-point results from distinct resource sections. Scan them
     // independently as well: a write to `rax` must not kill a reaching `xmm0`
@@ -1342,7 +1343,34 @@ pub fn recover_prototype_with_arm_vfp_args(
                             })
                     });
                 if storage_class == ResultHintClass::Float && hint.is_none() {
-                    has_unsupported_output_trial = true;
+                    // PXOR self-zeroing defines both the whole XMM name and
+                    // its four scalar-LLIR lanes at one machine VA. The whole
+                    // definition is a representation bridge for MOVAPS stores,
+                    // not a competing floating result when a qualified integer
+                    // return also exists (e.g. clang's vectorized int sum).
+                    let packed_zero_bridge = matches!(
+                        &ins.op,
+                        Op::Assign {
+                            dst: VReg::Phys(name),
+                            src: Value::Const(0),
+                        } if name.starts_with("xmm")
+                            && !name.contains("_d")
+                            && (0..4).all(|lane| block.instrs.iter().any(|candidate| {
+                                candidate.va == ins.va
+                                    && matches!(
+                                        &candidate.op,
+                                        Op::Assign {
+                                            dst: VReg::Phys(lane_name),
+                                            src: Value::Const(0),
+                                        } if lane_name == &format!("{name}_d{lane}")
+                                    )
+                            }))
+                    );
+                    if packed_zero_bridge {
+                        has_packed_zero_bridge_trial = true;
+                    } else {
+                        has_unsupported_output_trial = true;
+                    }
                 }
                 if let Some(hint) = hint {
                     let is_literal_null = matches!(
@@ -1410,6 +1438,8 @@ pub fn recover_prototype_with_arm_vfp_args(
     } else {
         qualified_values
     };
+    has_unsupported_output_trial |=
+        has_packed_zero_bridge_trial && !direct_storage_classes.contains(&ResultHintClass::Integer);
     let output_kind = match (
         has_machine_return,
         result_values.is_empty(),

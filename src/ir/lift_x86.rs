@@ -1599,6 +1599,21 @@ fn is_xmm_register(register: Register) -> bool {
         .is_some_and(|index| index.parse::<u8>().is_ok())
 }
 
+/// Define both scalar-LLIR views of a zeroed XMM register. Scalar floating
+/// moves consume the whole-register name while packed operations consume four
+/// dword lanes; a self-XOR proves all five values simultaneously.
+fn xmm_zero_ops(register: Register) -> Vec<Op> {
+    let mut ops = vec![Op::Assign {
+        dst: VReg::phys(reg_name(register)),
+        src: Value::Const(0),
+    }];
+    ops.extend((0..4).map(|lane| Op::Assign {
+        dst: packed_dword_lane(register, lane),
+        src: Value::Const(0),
+    }));
+    ops
+}
+
 fn packed_dword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
     if instr.op_count() != 2 {
         return vec![Op::Unknown {
@@ -1720,6 +1735,12 @@ fn packed_dword_binary_ops(instr: &iced_x86::Instruction, op: BinOp) -> Vec<Op> 
         return vec![Op::Unknown {
             mnemonic: format!("{:?}", instr.mnemonic()).to_ascii_lowercase(),
         }];
+    }
+    if op == BinOp::Xor
+        && instr.op_kind(1) == OpKind::Register
+        && instr.op_register(1) == instr.op_register(0)
+    {
+        return xmm_zero_ops(instr.op_register(0));
     }
     let Some((mut ops, sources)) = packed_dword_sources(instr, 92) else {
         return vec![Op::Unknown {
@@ -5508,6 +5529,28 @@ mod tests {
             4,
             "PCMPGTD must produce four all-ones/zero masks: {ops:#?}"
         );
+    }
+
+    #[test]
+    fn pxor_self_defines_whole_register_and_every_dword_lane_as_zero() {
+        let ops = lift64(&[0x66, 0x0f, 0xef, 0xc0]); // pxor xmm0,xmm0
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign {
+                dst,
+                src: Value::Const(0)
+            } if *dst == VReg::phys("xmm0")
+        ));
+        for lane in 0..4 {
+            let name = format!("xmm0_d{lane}");
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Assign { dst: VReg::Phys(dst), src: Value::Const(0) } if dst == &name
+                )),
+                "missing zero definition for {name}: {ops:#?}"
+            );
+        }
     }
 
     #[test]

@@ -75,3 +75,15 @@ def test_indexed_stack_arrays_round_trip() -> None:
     assert "long rbp;" not in code, code
     assert "(rbp +" not in code, code
     assert len(re.findall(r"unsigned char local_[0-9a-f]+\[\d+\];", code)) >= 2, code
+
+
+def test_simd_zeroed_indexed_stack_array_round_trip() -> None:
+    """An optimized vector zero initializer must define every indexed byte."""
+    observed = H.run_lanes(
+        [("20_graph_bfs", "gcc", "O2", ("graph_bfs",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["20_graph_bfs:gcc:O2"]
+    assert lane == {"graph_bfs": "pass"}, lane
