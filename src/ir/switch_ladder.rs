@@ -657,6 +657,11 @@ fn try_ladder(s: &Stmt) -> Option<Stmt> {
                         Some(_) => return None,
                         None => return None, // a jump to a label we have not seen
                     }
+                } else if default.as_ref().is_some_and(|seen| seen == then_body) {
+                    // Region recovery may clone a shared terminating default
+                    // epilogue into every range-prune arm.  Exact AST equality
+                    // proves these are still one semantic default; retain the
+                    // first copy and consume the duplicates with the ladder.
                 } else if default.is_none() {
                     // The label STAYS in the body. Stripping it here would dangle
                     // any `goto` from outside the tree — the renderer would pin the
@@ -920,6 +925,31 @@ mod tests {
         inner
     }
 
+    /// The same comparison tree after region recovery has cloned the shared
+    /// default return into every range-prune arm.
+    fn real_lifted_gcc_ladder_with_cloned_defaults(n: i64) -> Stmt {
+        let default = vec![
+            assign("ret", -1),
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            },
+        ];
+        let mut inner = default.clone();
+        for k in 0..n {
+            let prune = Stmt::If {
+                cond: lifted_signed_greater("arg0", k),
+                then_body: default.clone(),
+                else_body: Some(inner),
+            };
+            inner = vec![Stmt::If {
+                cond: cmp(CmpOp::Eq, unsigned_i32("arg0"), Expr::Const(k)),
+                then_body: vec![assign("ret", 100 + k)],
+                else_body: Some(vec![prune]),
+            }];
+        }
+        inner.pop().expect("one ladder root")
+    }
+
     fn goto_case(value: i64, label: u64) -> Stmt {
         Stmt::If {
             cond: cmp(CmpOp::Eq, unsigned_i32("state"), Expr::Const(value)),
@@ -1053,6 +1083,32 @@ mod tests {
         assert_eq!(cases.len(), 8);
         assert_eq!(default.as_ref().unwrap(), &vec![assign("ret", -1)]);
         assert!(goto_targets(&f.body).is_empty());
+    }
+
+    #[test]
+    fn identical_cloned_default_returns_are_recovered() {
+        let expected_default = vec![
+            assign("ret", -1),
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            },
+        ];
+        let mut f = Function {
+            name: "dispatch".into(),
+            entry_va: 0x1000,
+            body: vec![real_lifted_gcc_ladder_with_cloned_defaults(8)],
+        };
+
+        recover_switches(&mut f);
+
+        let Stmt::Switch { cases, default, .. } = &f.body[0] else {
+            panic!(
+                "expected cloned defaults to remain one switch default:\n{:#?}",
+                f.body[0]
+            );
+        };
+        assert_eq!(cases.len(), 8);
+        assert_eq!(default.as_ref(), Some(&expected_default));
     }
 
     #[test]

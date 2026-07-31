@@ -1245,16 +1245,27 @@ fn detect_bottom_tested_loop(
     }) {
         return None;
     }
-    // A second exit from the body (break/early return) needs nested region
-    // ownership that this bounded A1 detector does not yet model. Promoting
-    // such a loop pulled its exit block into the `do` body and changed both
-    // return values and termination in the O2 loop canaries. The conditional
-    // latch is the only block allowed to leave this natural loop.
-    if body_set
+    // A general second exit from the body still needs nested break/return
+    // ownership that this bounded detector does not model.  A proven switch
+    // arm is narrower: switch recovery already builds terminal arms with
+    // borrowed epilogue ownership, so an acyclic arm that returns without
+    // re-entering the loop can remain inside the DoWhile safely.
+    let side_exits: Vec<(usize, usize)> = body_set
         .iter()
         .copied()
-        .any(|block| block != cond && cfg.succs[block].iter().any(|succ| !body_set.contains(succ)))
-    {
+        .filter(|block| *block != cond)
+        .flat_map(|block| {
+            cfg.succs[block]
+                .iter()
+                .copied()
+                .filter(|successor| !body_set.contains(successor))
+                .map(move |successor| (block, successor))
+        })
+        .collect();
+    if side_exits.iter().any(|(block, successor)| {
+        !cfg.is_switch_dispatch(*block)
+            || !terminal_path_stays_outside_loop(*successor, &body_set, cfg)
+    }) {
         return None;
     }
     let exit = cfg.succs[cond]
@@ -1281,6 +1292,53 @@ fn detect_bottom_tested_loop(
         },
         exit: Some(exit),
     })
+}
+
+/// Prove that a switch's loop-exiting arm is a finite return path.
+///
+/// Sharing the final return block with the loop's ordinary exit is allowed;
+/// entering any loop block, cycling outside it, or ending without an explicit
+/// machine return is not.  This is the ownership proof used by the narrow
+/// bottom-tested-loop switch exception above.
+fn terminal_path_stays_outside_loop(start: usize, loop_body: &HashSet<usize>, cfg: &Cfg) -> bool {
+    fn visit(
+        block: usize,
+        loop_body: &HashSet<usize>,
+        cfg: &Cfg,
+        visiting: &mut HashSet<usize>,
+        proven: &mut HashSet<usize>,
+    ) -> bool {
+        if loop_body.contains(&block) {
+            return false;
+        }
+        if proven.contains(&block) {
+            return true;
+        }
+        if !visiting.insert(block) {
+            return false;
+        }
+        let valid = if cfg.succs[block].is_empty() {
+            cfg.ends_in_return[block]
+        } else {
+            cfg.succs[block]
+                .iter()
+                .copied()
+                .all(|successor| visit(successor, loop_body, cfg, visiting, proven))
+        };
+        visiting.remove(&block);
+        if valid {
+            proven.insert(block);
+        }
+        valid
+    }
+
+    visit(
+        start,
+        loop_body,
+        cfg,
+        &mut HashSet::new(),
+        &mut HashSet::new(),
+    )
 }
 
 /// The blocks of the natural loop with the given `header` and back-edge `tail`:
@@ -1468,6 +1526,21 @@ fn detect_if_shape(
         }
         if let Some(chain) = shared_return_chain(body, cfg) {
             if chain.contains(&cont) {
+                continue;
+            }
+            // Four or more shared conditional predecessors are a strong
+            // comparison-tree signature (and already above the ladder
+            // matcher's minimum useful size).  Cloning their shared default
+            // return makes every range prune look like an unrelated early
+            // return and destroys the single default identity needed for
+            // source-level switch recovery.  Preserve explicit shared edges;
+            // the AST ladder pass proves and consumes them later.
+            if cfg.preds[body]
+                .iter()
+                .filter(|predecessor| cfg.succs[**predecessor].len() == 2)
+                .count()
+                >= 4
+            {
                 continue;
             }
             let invert = invert_for(cfg, cond, body);

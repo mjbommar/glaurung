@@ -4873,6 +4873,63 @@ mod gcc_dispatch_corpus_tests {
     }
 
     #[test]
+    fn clang_o2_statemachine_retains_cross_block_dispatch_edges() {
+        let tmp = tempfile::tempdir().expect("temporary Clang state-machine build directory");
+        let source = tmp.path().join("statemachine.c");
+        let binary = tmp.path().join("statemachine.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decbench_corpus/src/statemachine.c"
+                ))
+            })
+            .expect("write the real state-machine fixture source");
+        let build = match Command::new("clang")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch Clang: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile statemachine.c with Clang -O2: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read Clang output");
+        let (functions, _callgraph, stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let function = functions
+            .iter()
+            .find(|function| function.name == "fsm")
+            .expect("discover fsm");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift the real fsm CFG");
+        assert!(
+            lifted.blocks.iter().any(|block| block.succs.len() == 4),
+            "four-way state dispatch missing; resolved={:?}, unresolved={:?}, blocks={:#?}",
+            stats.resolved_dispatches,
+            stats.unresolved_indirect,
+            lifted.blocks
+        );
+        let ssa = crate::ir::ssa::compute_ssa(&lifted);
+        let region = crate::ir::structure::recover_verified(&lifted, &ssa);
+        assert_eq!(
+            switch_case_labels(&region),
+            Some([vec![0], vec![1], vec![2], vec![3]].as_slice()),
+            "the validated four-way CFG must remain a switch region: {region:#?}"
+        );
+    }
+
+    #[test]
     fn gcc_o2_real_corpus_dispatch_keeps_one_function_and_eight_cfg_arms() {
         let tmp = tempfile::tempdir().expect("temporary GCC dispatch build directory");
         let source = tmp.path().join("switch_jt.c");
