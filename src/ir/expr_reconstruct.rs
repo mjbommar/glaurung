@@ -179,6 +179,9 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
         Expr::Un { src, .. } => contains_reg(src, target),
         Expr::Cast { expr, .. } => contains_reg(expr, target),
         Expr::FunctionTableEntry { index, .. } => contains_reg(index, target),
+        Expr::WideArithmetic { args, .. } => {
+            args.iter().any(|argument| contains_reg(argument, target))
+        }
     }
 }
 
@@ -219,6 +222,10 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
         Expr::Un { src, .. } => count_reg_uses(src, target),
         Expr::Cast { expr, .. } => count_reg_uses(expr, target),
         Expr::FunctionTableEntry { index, .. } => count_reg_uses(index, target),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .map(|argument| count_reg_uses(argument, target))
+            .sum(),
     }
 }
 
@@ -377,6 +384,16 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
                 if_false,
                 width,
             }
+        }
+        Expr::WideArithmetic {
+            op,
+            mut args,
+            width,
+        } => {
+            for argument in &mut args {
+                substitute_in_expr(argument, target, with);
+            }
+            Expr::WideArithmetic { op, args, width }
         }
     };
 }

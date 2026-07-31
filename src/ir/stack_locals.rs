@@ -987,6 +987,19 @@ fn rewrite_expr(
             sp_delta,
             address_defs,
         ),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                rewrite_expr(
+                    argument,
+                    map,
+                    stack_counter,
+                    local_counter,
+                    ctx,
+                    sp_delta,
+                    address_defs,
+                );
+            }
+        }
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }

@@ -220,6 +220,11 @@ fn annotate_expr(expr: &mut Expr, field_map: &PdbFieldMap) {
         Expr::Un { src, .. } => annotate_expr(src, field_map),
         Expr::Cast { expr, .. } => annotate_expr(expr, field_map),
         Expr::FunctionTableEntry { index, .. } => annotate_expr(index, field_map),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                annotate_expr(argument, field_map);
+            }
+        }
         Expr::Lea {
             base,
             index,

@@ -147,6 +147,15 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
 }
 
 OVERRIDES: dict[tuple[str, str], dict] = {
+    # x86 DIV/IDIV trap on zero; IDIV also traps on INT64_MIN / -1 because the
+    # quotient is not representable. Pin nonzero divisors while retaining signs,
+    # large magnitudes, and high-word coverage in the dividend.
+    ("02_integer_widths", "urem64"): {
+        "arg_values": {1: [1, 2, 3, 7, 10, 100, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF]},
+    },
+    ("02_integer_widths", "srem64"): {
+        "arg_values": {1: [1, 2, 3, 7, 10, 100, 2147483647, -(2**63)]},
+    },
     # 14_flag_effects: all scalar, but three take a loop-trip-count parameter that
     # must be bounded or the verdict measures machine speed instead of the flag
     # modelling. `dec_preserves_carry` is unbounded on purpose — it has no loop.
@@ -198,6 +207,15 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # the machine's speed. Negatives still exercise the `n < 0` guard.
     ("06_calling_conventions", "fib"): {
         "arg_values": {0: [-1, 0, 1, 2, 3, 7, 12, 20]},
+    },
+    # Linear recursion: the generic signed-int boundary sweep includes INT_MAX,
+    # which makes the ORIGINAL require roughly 2.1 billion frames and crash before
+    # the differential can call our version. Retain negative/base cases, every GCC
+    # unrolled prefix, and values large enough to exercise repeated modulo lowering.
+    ("06_calling_conventions", "fact_mod"): {
+        "arg_values": {
+            0: [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 10, 20, 50, 100, 500, 1000]
+        },
     },
     # 12: drive each trip count across its masked range, including the zero-trip
     # case a wrongly-polarised loop condition turns into a full run (and back).
@@ -354,7 +372,8 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     ],
     "02_integer_widths": [
         "rt_u8", "rt_u16", "rt_u32", "rt_u64", "sext_i8", "zext_u32_to_u64",
-        "trunc_u8", "sar_signed", "shr_unsigned",
+        "trunc_u8", "sar_signed", "shr_unsigned", "umul_high64", "smul_high64",
+        "urem64", "srem64",
     ],
     "03_loop_shapes": [
         "for_sum", "dowhile_atleastonce", "while_reload_header", "loop_break",

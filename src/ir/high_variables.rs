@@ -304,7 +304,8 @@ fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
         | Expr::Bin { .. }
         | Expr::Un { .. }
         | Expr::Cmp { .. }
-        | Expr::Cast { .. } => ValueClass::Scalar,
+        | Expr::Cast { .. }
+        | Expr::WideArithmetic { .. } => ValueClass::Scalar,
         Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::Lea { .. }
@@ -500,6 +501,11 @@ fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashS
         }
         Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => collect_unsafe_expr(src, true, out),
         Expr::FunctionTableEntry { index, .. } => collect_unsafe_expr(index, true, out),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                collect_unsafe_expr(argument, true, out);
+            }
+        }
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             for reg in base.iter().chain(index.iter()) {
                 if let VReg::Phys(name) = reg {

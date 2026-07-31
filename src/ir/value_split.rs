@@ -139,6 +139,11 @@ impl Splitter {
             Expr::Un { src, .. } => self.rename_expr(src),
             Expr::Cast { expr, .. } => self.rename_expr(expr),
             Expr::FunctionTableEntry { index, .. } => self.rename_expr(index),
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    self.rename_expr(argument);
+                }
+            }
         }
     }
 

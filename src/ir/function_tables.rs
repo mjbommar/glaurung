@@ -312,6 +312,11 @@ fn resolve_expr(
             resolve_expr(src, tables, definitions)
         }
         Expr::FunctionTableEntry { index, .. } => resolve_expr(index, tables, definitions),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                resolve_expr(argument, tables, definitions);
+            }
+        }
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }

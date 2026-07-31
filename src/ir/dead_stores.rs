@@ -368,6 +368,7 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
         Expr::Un { src, .. } => expr_reads(src, dst),
         Expr::Cast { expr, .. } => expr_reads(expr, dst),
         Expr::FunctionTableEntry { index, .. } => expr_reads(index, dst),
+        Expr::WideArithmetic { args, .. } => args.iter().any(|argument| expr_reads(argument, dst)),
     }
 }
 

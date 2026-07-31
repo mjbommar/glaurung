@@ -351,6 +351,7 @@ fn expr_mentions_sp(expression: &Expr) -> bool {
         Expr::Un { src, .. } => expr_mentions_sp(src),
         Expr::Cast { expr, .. } => expr_mentions_sp(expr),
         Expr::FunctionTableEntry { index, .. } => expr_mentions_sp(index),
+        Expr::WideArithmetic { args, .. } => args.iter().any(expr_mentions_sp),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -507,6 +508,7 @@ mod tests {
                 Expr::Un { src, .. } => expr_mentions_sp(src),
                 Expr::Cast { expr, .. } => expr_mentions_sp(expr),
                 Expr::FunctionTableEntry { index, .. } => expr_mentions_sp(index),
+                Expr::WideArithmetic { args, .. } => args.iter().any(expr_mentions_sp),
                 Expr::StackAddr { .. }
                 | Expr::Const(_)
                 | Expr::FloatConst { .. }

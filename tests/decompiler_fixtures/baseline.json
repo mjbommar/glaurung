@@ -76,8 +76,12 @@
     "sext_i8": "pass",
     "shr_unsigned": "pass",
     "shr_via_cast": "pass",
+    "smul_high64": "pass",
+    "srem64": "pass",
     "trunc_u16_after_mul": "pass",
     "trunc_u8": "pass",
+    "umul_high64": "pass",
+    "urem64": "pass",
     "wrap_sub_u32": "pass",
     "zext_u32_to_u64": "pass"
   },
@@ -102,8 +106,12 @@
     "sext_i8": "pass",
     "shr_unsigned": "pass",
     "shr_via_cast": "pass",
+    "smul_high64": "pass",
+    "srem64": "pass",
     "trunc_u16_after_mul": "pass",
     "trunc_u8": "pass",
+    "umul_high64": "pass",
+    "urem64": "pass",
     "wrap_sub_u32": "pass",
     "zext_u32_to_u64": "pass"
   },
@@ -128,8 +136,12 @@
     "sext_i8": "pass",
     "shr_unsigned": "pass",
     "shr_via_cast": "pass",
+    "smul_high64": "pass",
+    "srem64": "pass",
     "trunc_u16_after_mul": "pass",
     "trunc_u8": "pass",
+    "umul_high64": "pass",
+    "urem64": "pass",
     "wrap_sub_u32": "pass",
     "zext_u32_to_u64": "pass"
   },
@@ -154,8 +166,12 @@
     "sext_i8": "pass",
     "shr_unsigned": "pass",
     "shr_via_cast": "pass",
+    "smul_high64": "pass",
+    "srem64": "pass",
     "trunc_u16_after_mul": "pass",
     "trunc_u8": "structural",
+    "umul_high64": "pass",
+    "urem64": "pass",
     "wrap_sub_u32": "pass",
     "zext_u32_to_u64": "pass"
   },
@@ -328,7 +344,7 @@
     "process": "pass"
   },
   "06_calling_conventions:clang:O0": {
-    "fact_mod": "fail",
+    "fact_mod": "pass",
     "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
@@ -347,7 +363,7 @@
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:clang:O2": {
-    "fact_mod": "fail",
+    "fact_mod": "pass",
     "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
@@ -366,7 +382,7 @@
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:gcc:O0": {
-    "fact_mod": "fail",
+    "fact_mod": "pass",
     "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
@@ -385,7 +401,7 @@
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:gcc:O2": {
-    "fact_mod": "fail",
+    "fact_mod": "pass",
     "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",

@@ -727,6 +727,7 @@ fn contains_deref(e: &Expr) -> bool {
         } => contains_deref(cond) || contains_deref(if_true) || contains_deref(if_false),
         Expr::Un { src, .. } => contains_deref(src),
         Expr::Cast { expr, .. } => contains_deref(expr),
+        Expr::WideArithmetic { args, .. } => args.iter().any(contains_deref),
     }
 }
 
@@ -755,6 +756,7 @@ fn contains_unknown(e: &Expr) -> bool {
         Expr::Un { src, .. } => contains_unknown(src),
         Expr::Cast { expr, .. } => contains_unknown(expr),
         Expr::FunctionTableEntry { index, .. } => contains_unknown(index),
+        Expr::WideArithmetic { args, .. } => args.iter().any(contains_unknown),
     }
 }
 
@@ -768,6 +770,7 @@ fn contains_select(e: &Expr) -> bool {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_select(lhs) || contains_select(rhs)
         }
+        Expr::WideArithmetic { args, .. } => args.iter().any(contains_select),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -817,6 +820,10 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
         Expr::Un { src, .. } => count_reg_uses(src, target),
         Expr::Cast { expr, .. } => count_reg_uses(expr, target),
         Expr::FunctionTableEntry { index, .. } => count_reg_uses(index, target),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .map(|argument| count_reg_uses(argument, target))
+            .sum(),
     }
 }
 
@@ -856,6 +863,11 @@ fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
         Expr::Un { src, .. } => count_reads_expr(src, reads),
         Expr::Cast { expr, .. } => count_reads_expr(expr, reads),
         Expr::FunctionTableEntry { index, .. } => count_reads_expr(index, reads),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                count_reads_expr(argument, reads);
+            }
+        }
     }
 }
 
@@ -1026,6 +1038,11 @@ fn subst(e: &mut Expr, copies: &Copies) {
         Expr::Un { src, .. } => subst(src, copies),
         Expr::Cast { expr, .. } => subst(expr, copies),
         Expr::FunctionTableEntry { index, .. } => subst(index, copies),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                subst(argument, copies);
+            }
+        }
     }
 }
 

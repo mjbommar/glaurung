@@ -532,6 +532,10 @@ fn count_reads_in_expr(expr: &Expr, target: &VReg) -> usize {
                 + count_reads_in_expr(if_true, target)
                 + count_reads_in_expr(if_false, target)
         }
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .map(|argument| count_reads_in_expr(argument, target))
+            .sum(),
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             usize::from(base.as_ref() == Some(target)) + usize::from(index.as_ref() == Some(target))
         }

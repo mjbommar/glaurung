@@ -184,6 +184,13 @@ fn stable_value_expr(expr: &Expr) -> bool {
         } => stable_value_expr(cond) && stable_value_expr(if_true) && stable_value_expr(if_false),
         Expr::Un { src, .. } => stable_value_expr(src),
         Expr::Cast { expr, .. } => stable_value_expr(expr),
+        Expr::WideArithmetic { op, args, .. } => {
+            matches!(
+                op,
+                crate::ir::ast::WideArithmetic::UnsignedMulHigh
+                    | crate::ir::ast::WideArithmetic::SignedMulHigh
+            ) && args.iter().all(stable_value_expr)
+        }
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -217,6 +224,11 @@ fn collect_expr_regs(expr: &Expr, out: &mut Vec<VReg>) {
         Expr::Un { src, .. } => collect_expr_regs(src, out),
         Expr::Cast { expr, .. } => collect_expr_regs(expr, out),
         Expr::FunctionTableEntry { index, .. } => collect_expr_regs(index, out),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                collect_expr_regs(argument, out);
+            }
+        }
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             out.extend(base.iter().cloned());
             out.extend(index.iter().cloned());
@@ -540,6 +552,9 @@ fn contains_reg(expr: &Expr, target: &VReg) -> bool {
         Expr::Un { src, .. } => contains_reg(src, target),
         Expr::Cast { expr, .. } => contains_reg(expr, target),
         Expr::FunctionTableEntry { index, .. } => contains_reg(index, target),
+        Expr::WideArithmetic { args, .. } => {
+            args.iter().any(|argument| contains_reg(argument, target))
+        }
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             base.as_ref() == Some(target) || index.as_ref() == Some(target)
         }

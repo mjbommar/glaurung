@@ -108,6 +108,7 @@ fn fold_masks_in_expr(expr: &mut Expr) {
             fold_masks_in_expr(if_false);
         }
         Expr::Cast { expr, .. } => fold_masks_in_expr(expr),
+        Expr::WideArithmetic { args, .. } => args.iter_mut().for_each(fold_masks_in_expr),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -338,6 +339,9 @@ fn expression_reads_register(expression: &Expr, target: &VReg) -> bool {
                 || expression_reads_register(if_true, target)
                 || expression_reads_register(if_false, target)
         }
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .any(|argument| expression_reads_register(argument, target)),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -495,7 +499,9 @@ fn select_width(if_true: &Expr, if_false: &Expr) -> u8 {
 
 fn expression_width(expr: &Expr) -> Option<u8> {
     match expr {
-        Expr::Deref { size, .. } | Expr::Select { width: size, .. } => Some(*size),
+        Expr::Deref { size, .. }
+        | Expr::Select { width: size, .. }
+        | Expr::WideArithmetic { width: size, .. } => Some(*size),
         Expr::Cast { width, .. } => Some(*width),
         Expr::FloatConst { width, .. } => Some(*width),
         Expr::FunctionTableEntry { pointer_size, .. } => Some(*pointer_size),

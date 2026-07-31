@@ -1070,22 +1070,6 @@ fn cmovcc_condition_for(mnem: Mnemonic) -> Option<Condition> {
     condition_suffix(mnem, "cmov").and_then(|suffix| condition_for_suffix(&suffix))
 }
 
-fn div_accumulator_name(instr: &iced_x86::Instruction, bits: u32) -> &'static str {
-    let width = match instr.op_kind(0) {
-        OpKind::Register => reg_size(instr.op_register(0)),
-        OpKind::Memory => instr.memory_size().size() as u8,
-        _ => 0,
-    };
-    match width {
-        1 => "al",
-        2 => "ax",
-        4 => "eax",
-        8 => "rax",
-        _ if bits == 64 => "rax",
-        _ => "eax",
-    }
-}
-
 fn accumulator_name_for_width(width: u8, bits: u32) -> &'static str {
     match width {
         1 => "al",
@@ -1773,6 +1757,128 @@ fn packed_dword_shuffle_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
     ops
 }
 
+/// Exact one-operand x86 multiply: `hi:lo = accumulator * source`.
+///
+/// Snapshot both inputs before defining either architectural output. Express the
+/// low half with the ordinary width-truncated multiply and the high half as a
+/// typed, single-output intrinsic. A multi-output intrinsic cannot currently be
+/// renamed by the SSA/value-numbering layer, which is precisely how the magic
+/// constant remainder sequences emitted by GCC and Clang lost `rdx`.
+fn wide_mul_ops(instr: &iced_x86::Instruction, signed: bool) -> Option<Vec<Op>> {
+    if instr.op_count() != 1 {
+        return None;
+    }
+    let width = operand_width(instr, 0);
+    let (lo_name, hi_name) = match width.bits() {
+        64 => ("rax", "rdx"),
+        32 => ("eax", "edx"),
+        16 => ("ax", "dx"),
+        _ => return None,
+    };
+    let mut ops = Vec::new();
+    let source = cmp_operand_as_value(instr, 0, VReg::Temp(59), &mut ops)?;
+    ops.extend([
+        Op::Assign {
+            dst: VReg::Temp(60),
+            src: Value::Reg(VReg::phys(lo_name)),
+        },
+        Op::Assign {
+            dst: VReg::Temp(61),
+            src: source,
+        },
+        Op::Bin {
+            dst: VReg::phys(lo_name),
+            op: BinOp::Mul,
+            lhs: Value::Reg(VReg::Temp(60)),
+            rhs: Value::Reg(VReg::Temp(61)),
+        },
+        Op::Intrinsic {
+            name: format!(
+                "x86.{}mul_hi.{}",
+                if signed { "s" } else { "u" },
+                width.bits()
+            ),
+            ins: vec![Value::Reg(VReg::Temp(60)), Value::Reg(VReg::Temp(61))],
+            outs: vec![(VReg::phys(hi_name), width)],
+            reads_mem: false,
+            writes_mem: false,
+        },
+    ]);
+    append_undef_flags(
+        &mut ops,
+        &[Flag::C, Flag::O],
+        "x86 wide multiply defines CF/OF from whether the high half extends the low half",
+    );
+    append_undef_flags(
+        &mut ops,
+        &[Flag::Z, Flag::S, Flag::P, Flag::A],
+        "x86 wide multiply leaves ZF/SF/PF/AF architecturally undefined",
+    );
+    Some(ops)
+}
+
+/// Exact x86 wide division with independently renameable quotient/remainder.
+fn wide_div_ops(instr: &iced_x86::Instruction, signed: bool) -> Option<Vec<Op>> {
+    if instr.op_count() != 1 {
+        return None;
+    }
+    let width = operand_width(instr, 0);
+    let (lo_name, hi_name) = match width.bits() {
+        64 => ("rax", "rdx"),
+        32 => ("eax", "edx"),
+        16 => ("ax", "dx"),
+        _ => return None,
+    };
+    let mut ops = Vec::new();
+    let divisor = cmp_operand_as_value(instr, 0, VReg::Temp(69), &mut ops)?;
+    ops.extend([
+        Op::Assign {
+            dst: VReg::Temp(70),
+            src: Value::Reg(VReg::phys(hi_name)),
+        },
+        Op::Assign {
+            dst: VReg::Temp(71),
+            src: Value::Reg(VReg::phys(lo_name)),
+        },
+        Op::Assign {
+            dst: VReg::Temp(72),
+            src: divisor,
+        },
+    ]);
+    let kind = if signed { "sdiv" } else { "udiv" };
+    let inputs = vec![
+        Value::Reg(VReg::Temp(70)),
+        Value::Reg(VReg::Temp(71)),
+        Value::Reg(VReg::Temp(72)),
+    ];
+    ops.extend([
+        Op::Intrinsic {
+            name: format!("x86.{kind}_quot.{}", width.bits()),
+            ins: inputs.clone(),
+            outs: vec![(VReg::phys(lo_name), width)],
+            reads_mem: false,
+            writes_mem: false,
+        },
+        Op::Intrinsic {
+            name: format!("x86.{kind}_rem.{}", width.bits()),
+            ins: inputs,
+            outs: vec![(VReg::phys(hi_name), width)],
+            reads_mem: false,
+            writes_mem: false,
+        },
+    ]);
+    append_undef_flags(
+        &mut ops,
+        &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
+        if signed {
+            "x86 IDIV leaves arithmetic flags architecturally undefined"
+        } else {
+            "x86 DIV leaves arithmetic flags architecturally undefined"
+        },
+    );
+    Some(ops)
+}
+
 fn movd_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     if instr.op_count() != 2 {
         return vec![Op::Unknown {
@@ -2170,6 +2276,13 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // 3-operand imul: `imul dst, src, imm` → dst = src * imm. (The 2-operand
         // form is handled by the binary-op path above.)
         Mnemonic::Imul => {
+            if instr.op_count() == 1 {
+                return wide_mul_ops(instr, true).unwrap_or_else(|| {
+                    vec![Op::Unknown {
+                        mnemonic: "imul".into(),
+                    }]
+                });
+            }
             if instr.op_count() == 3 && instr.op_kind(0) == OpKind::Register {
                 let dst_name = reg_name(instr.op_register(0));
                 let dst = VReg::phys(&dst_name);
@@ -2375,43 +2488,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
             }]
         }
-        // mul reg: unsigned multiply, hi:lo = accumulator * src. Typed intrinsic
-        // executed by a two-output helper. (8-bit and memory forms deferred.)
-        Mnemonic::Mul => {
-            if instr.op_count() == 1 && instr.op_kind(0) == OpKind::Register {
-                let src_name = reg_name(instr.op_register(0));
-                let w = phys_reg_width(&src_name).unwrap_or(Width::W64);
-                let acc = match w.bits() {
-                    64 => Some(("rax", "rdx")),
-                    32 => Some(("eax", "edx")),
-                    16 => Some(("ax", "dx")),
-                    _ => None,
-                };
-                if let Some((lo, hi)) = acc {
-                    let mut ops = vec![Op::Intrinsic {
-                        name: "mul".into(),
-                        ins: vec![Value::Reg(VReg::phys(lo)), Value::Reg(VReg::phys(src_name))],
-                        outs: vec![(VReg::phys(lo), w), (VReg::phys(hi), w)],
-                        reads_mem: false,
-                        writes_mem: false,
-                    }];
-                    append_undef_flags(
-                        &mut ops,
-                        &[Flag::C, Flag::O],
-                        "x86 MUL defines CF/OF, but high-half overflow is not yet modelled",
-                    );
-                    append_undef_flags(
-                        &mut ops,
-                        &[Flag::Z, Flag::S, Flag::P, Flag::A],
-                        "x86 MUL leaves ZF/SF/PF/AF architecturally undefined",
-                    );
-                    return ops;
-                }
-            }
+        // mul source: unsigned hi:lo = accumulator * source.
+        Mnemonic::Mul => wide_mul_ops(instr, false).unwrap_or_else(|| {
             vec![Op::Unknown {
                 mnemonic: "mul".into(),
             }]
-        }
+        }),
         // bt reg, imm/reg: CF = (reg >> (offset & (w-1))) & 1. (bts/btr/btc,
         // which also modify the bit, and memory forms are not modelled yet.)
         Mnemonic::Bt => {
@@ -2933,72 +3015,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 mnemonic: "neg".into(),
             }]
         }
-        Mnemonic::Div | Mnemonic::Idiv => {
-            if instr.op_count() == 1 {
-                let lo_name = div_accumulator_name(instr, bits);
-                let acc = VReg::phys(lo_name);
-                let mut ops = Vec::new();
-                let divisor = match instr.op_kind(0) {
-                    OpKind::Register => Value::Reg(VReg::phys(reg_name(instr.op_register(0)))),
-                    OpKind::Memory => {
-                        let tmp = VReg::Temp(0);
-                        ops.push(Op::Load {
-                            dst: tmp.clone(),
-                            addr: mem_op_of(instr),
-                        });
-                        Value::Reg(tmp)
-                    }
-                    _ => {
-                        return vec![Op::Unknown {
-                            mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
-                        }];
-                    }
-                };
-                let w = phys_reg_width(lo_name).unwrap_or(Width::W64);
-                // High-half register for the dividend / remainder.
-                let hi_name = match (lo_name, w.bits()) {
-                    ("rax", _) => Some("rdx"),
-                    ("eax", _) => Some("edx"),
-                    ("ax", _) => Some("dx"),
-                    _ => None, // 8-bit div uses ah:al — not modelled yet
-                };
-                if let (Mnemonic::Div, Some(hi)) = (mnem, hi_name) {
-                    // Unsigned div: full rdx:rax / divisor → rax=quotient,
-                    // rdx=remainder, via a two-output helper.
-                    ops.push(Op::Intrinsic {
-                        name: "div".into(),
-                        ins: vec![Value::Reg(VReg::phys(hi)), Value::Reg(acc.clone()), divisor],
-                        outs: vec![(acc, w), (VReg::phys(hi), w)],
-                        reads_mem: false,
-                        writes_mem: false,
-                    });
-                    append_undef_flags(
-                        &mut ops,
-                        &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
-                        "x86 DIV leaves arithmetic flags architecturally undefined",
-                    );
-                    return ops;
-                }
-                // idiv (signed) / 8-bit: approximate quotient lift (acc = acc /
-                // divisor) — signed divide and the remainder need a signed-div
-                // domain primitive (TODO). Preserves quotient dataflow for now.
-                ops.push(Op::Bin {
-                    dst: acc.clone(),
-                    op: BinOp::Div,
-                    lhs: Value::Reg(acc),
-                    rhs: divisor,
-                });
-                append_undef_flags(
-                    &mut ops,
-                    &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
-                    "x86 IDIV leaves arithmetic flags architecturally undefined",
-                );
-                return ops;
-            }
-            vec![Op::Unknown {
-                mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
-            }]
-        }
+        Mnemonic::Div | Mnemonic::Idiv => wide_div_ops(instr, mnem == Mnemonic::Idiv)
+            .unwrap_or_else(|| {
+                vec![Op::Unknown {
+                    mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
+                }]
+            }),
         Mnemonic::Adc => adc_ops(instr),
         Mnemonic::Sbb => sbb_ops(instr),
         Mnemonic::Pxor => packed_dword_binary_ops(instr, BinOp::Xor),
@@ -4880,32 +4902,105 @@ mod tests {
     }
 
     #[test]
-    fn div_reg_lifts_to_full_div_intrinsic() {
+    fn div_reg_snapshots_inputs_and_lifts_both_outputs_independently() {
         // div rcx  (48 f7 f1) → unsigned rdx:rax / rcx, quotient→rax,
-        // remainder→rdx (a two-output intrinsic, executed by a helper).
+        // remainder→rdx. Each semantic output has one SSA definition; both
+        // consume snapshots taken before either architectural output changes.
         let ops = lift64(&[0x48, 0xf7, 0xf1]);
-        match &ops[0].op {
-            Op::Intrinsic {
-                name, ins, outs, ..
-            } => {
-                assert_eq!(name, "div");
-                assert_eq!(
-                    *ins,
-                    vec![
-                        Value::Reg(VReg::phys("rdx")),
-                        Value::Reg(VReg::phys("rax")),
-                        Value::Reg(VReg::phys("rcx")),
-                    ]
-                );
-                assert_eq!(
-                    *outs,
-                    vec![
-                        (VReg::phys("rax"), Width::W64),
-                        (VReg::phys("rdx"), Width::W64),
-                    ]
-                );
-            }
-            other => panic!("expected div intrinsic, got {:?}", other),
+        let arithmetic: Vec<&Op> = ops
+            .iter()
+            .map(|instruction| &instruction.op)
+            .filter(|op| !matches!(op, Op::Undef { .. }))
+            .collect();
+        assert_eq!(arithmetic.len(), 5, "got: {arithmetic:#?}");
+        assert!(matches!(
+            arithmetic[0],
+            Op::Assign { dst: VReg::Temp(70), src: Value::Reg(src) }
+                if *src == VReg::phys("rdx")
+        ));
+        assert!(matches!(
+            arithmetic[1],
+            Op::Assign { dst: VReg::Temp(71), src: Value::Reg(src) }
+                if *src == VReg::phys("rax")
+        ));
+        assert!(matches!(
+            arithmetic[2],
+            Op::Assign { dst: VReg::Temp(72), src: Value::Reg(src) }
+                if *src == VReg::phys("rcx")
+        ));
+        for (op, name, output) in [
+            (arithmetic[3], "x86.udiv_quot.64", "rax"),
+            (arithmetic[4], "x86.udiv_rem.64", "rdx"),
+        ] {
+            assert!(
+                matches!(
+                    op,
+                    Op::Intrinsic { name: got, ins, outs, .. }
+                        if got == name
+                            && *ins == vec![
+                                Value::Reg(VReg::Temp(70)),
+                                Value::Reg(VReg::Temp(71)),
+                                Value::Reg(VReg::Temp(72)),
+                            ]
+                            && *outs == vec![(VReg::phys(output), Width::W64)]
+                ),
+                "got: {op:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn idiv_reg_lifts_exact_signed_quotient_and_remainder_outputs() {
+        // idiv rcx  (48 f7 f9)
+        let ops = lift64(&[0x48, 0xf7, 0xf9]);
+        let names: Vec<(&str, &[(VReg, Width)])> = ops
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Intrinsic { name, outs, .. } => Some((name.as_str(), outs.as_slice())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("x86.sdiv_quot.64", &[(VReg::phys("rax"), Width::W64)][..]),
+                ("x86.sdiv_rem.64", &[(VReg::phys("rdx"), Width::W64)][..]),
+            ]
+        );
+    }
+
+    #[test]
+    fn one_operand_mul_and_imul_define_low_and_high_halves() {
+        for (bytes, high_name) in [
+            (&[0x48, 0xf7, 0xe2][..], "x86.umul_hi.64"), // mul rdx
+            (&[0x48, 0xf7, 0xea][..], "x86.smul_hi.64"), // imul rdx
+        ] {
+            let ops = lift64(bytes);
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Bin {
+                        dst,
+                        op: BinOp::Mul,
+                        lhs: Value::Reg(VReg::Temp(60)),
+                        rhs: Value::Reg(VReg::Temp(61)),
+                    } if *dst == VReg::phys("rax")
+                )),
+                "missing low product for {high_name}: {ops:#?}"
+            );
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Intrinsic { name, ins, outs, .. }
+                        if name == high_name
+                            && *ins == vec![
+                                Value::Reg(VReg::Temp(60)),
+                                Value::Reg(VReg::Temp(61)),
+                            ]
+                            && *outs == vec![(VReg::phys("rdx"), Width::W64)]
+                )),
+                "missing high product for {high_name}: {ops:#?}"
+            );
         }
     }
 

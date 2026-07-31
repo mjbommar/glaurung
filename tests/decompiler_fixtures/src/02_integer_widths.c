@@ -172,6 +172,25 @@ int mul_widen(uint32_t a, uint32_t b) {
     return (int)((r >> 32) ^ (r & 0xFFFFFFFFu));
 }
 
+/* Full-width x86 multiply and divide have TWO architectural outputs. These
+ * functions force both signed and unsigned high-product/remainder paths and
+ * return the complete 64-bit result so dropping either half is observable. */
+uint64_t umul_high64(uint64_t a, uint64_t b) {
+    return (uint64_t)(((unsigned __int128)a * (unsigned __int128)b) >> 64);
+}
+
+int64_t smul_high64(int64_t a, int64_t b) {
+    return (int64_t)(((__int128)a * (__int128)b) >> 64);
+}
+
+uint64_t urem64(uint64_t a, uint64_t b) {
+    return a % b;
+}
+
+int64_t srem64(int64_t a, int64_t b) {
+    return a % b;
+}
+
 /* --- rotates written in portable C ------------------------------------- */
 
 /* Rotate-left by a fixed amount, 32-bit. The (x >> (32-n)) half must use

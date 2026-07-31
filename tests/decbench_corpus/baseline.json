@@ -64,7 +64,7 @@
     "type_match": 1.0
   },
   "checksum:clang:O0": {
-    "byte_match": 0.05,
+    "byte_match": 0.04,
     "ged": 0.0,
     "type_match": 1.0
   },
@@ -84,7 +84,7 @@
     "type_match": 0.53
   },
   "fixedpoint:clang:O0": {
-    "byte_match": 0.39,
+    "byte_match": 0.22,
     "ged": 0.0,
     "type_match": 1.0
   },
@@ -94,12 +94,12 @@
     "type_match": 1.0
   },
   "fixedpoint:gcc:O0": {
-    "byte_match": 0.68,
+    "byte_match": 0.37,
     "ged": 0.0,
     "type_match": 1.0
   },
   "fixedpoint:gcc:O2": {
-    "byte_match": 0.75,
+    "byte_match": 0.43,
     "ged": 2.33,
     "type_match": 0.78
   },
@@ -184,7 +184,7 @@
     "type_match": null
   },
   "sort:clang:O0": {
-    "byte_match": 0.04,
+    "byte_match": 0.03,
     "ged": 4.0,
     "type_match": 0.75
   },

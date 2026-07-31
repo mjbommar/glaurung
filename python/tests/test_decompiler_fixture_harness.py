@@ -1452,6 +1452,23 @@ def test_a_pinned_argument_never_takes_another_value():
     assert len({v[1] for v in vecs}) > 3
 
 
+def test_fact_mod_contract_exercises_remainder_without_unbounded_recursion():
+    sig = {"name": "fact_mod", "va": 0, "params": ["int"], "ret": "int"}
+    ov = D.M.override("06_calling_conventions", "fact_mod")
+    allowed = ov.get("arg_values", {}).get(0, [])
+    assert {0, 1, 2, 3, 5, 10, 100, 1000} <= set(allowed), (
+        "fact_mod must exercise base cases, recursive unrolling, and many modular "
+        "reductions"
+    )
+    assert max(allowed) <= 1000, (
+        "the source is linearly recursive; an INT_MAX boundary measures stack "
+        "exhaustion rather than decompiler semantics"
+    )
+    vectors = D.make_vectors(sig, ov, seed=1234, fuzz=12)
+    assert vectors
+    assert {vector[0] for vector in vectors} <= set(allowed)
+
+
 def test_pinned_arguments_are_reproducible():
     sig = {"name": "f", "va": 0, "params": ["int"], "ret": "int"}
     ov = {"arg_values": {0: [3, 4]}}

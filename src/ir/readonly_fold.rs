@@ -360,6 +360,11 @@ fn fold_expr(
         Expr::FunctionTableEntry { index, .. } => {
             fold_expr(index, data, aliases, bounds, active_guard)
         }
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                fold_expr(argument, data, aliases, bounds, active_guard);
+            }
+        }
         Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }

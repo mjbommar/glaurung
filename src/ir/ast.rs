@@ -46,6 +46,32 @@ pub struct FunctionTableTarget {
     pub name: String,
 }
 
+/// Exact integer operations whose machine result is wider than an ordinary C
+/// scalar. Keeping them typed prevents x86's implicit high-half registers from
+/// disappearing at the LLIR-to-AST boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WideArithmetic {
+    UnsignedMulHigh,
+    SignedMulHigh,
+    UnsignedDivQuotient,
+    UnsignedDivRemainder,
+    SignedDivQuotient,
+    SignedDivRemainder,
+}
+
+impl WideArithmetic {
+    fn name(self) -> &'static str {
+        match self {
+            Self::UnsignedMulHigh => "umul_high",
+            Self::SignedMulHigh => "smul_high",
+            Self::UnsignedDivQuotient => "udiv_wide_quotient",
+            Self::UnsignedDivRemainder => "udiv_wide_remainder",
+            Self::SignedDivQuotient => "sdiv_wide_quotient",
+            Self::SignedDivRemainder => "sdiv_wide_remainder",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Reg(VReg),
@@ -147,6 +173,13 @@ pub enum Expr {
         if_true: Box<Expr>,
         if_false: Box<Expr>,
         /// Width of the selected value in bytes.
+        width: u8,
+    },
+    /// An exact multiply-high or double-width divide result.
+    WideArithmetic {
+        op: WideArithmetic,
+        args: Vec<Expr>,
+        /// Machine operand width in bytes (2, 4, or 8).
         width: u8,
     },
     /// A width/sign-changing cast: `(<ctype>)(expr)`. Carries the *target* integer
@@ -558,6 +591,31 @@ fn scalar_float_intrinsic(
     Some((operation, width))
 }
 
+fn wide_integer_intrinsic(
+    name: &str,
+    ins: &[Value],
+    outs: &[(VReg, crate::ir::types::Width)],
+) -> Option<(WideArithmetic, u8)> {
+    let [(_, output_width)] = outs else {
+        return None;
+    };
+    let (stem, bits) = name.strip_prefix("x86.")?.rsplit_once('.')?;
+    let bits: u16 = bits.parse().ok()?;
+    if output_width.bits() != bits || !matches!(bits, 16 | 32 | 64) {
+        return None;
+    }
+    let op = match stem {
+        "umul_hi" if ins.len() == 2 => WideArithmetic::UnsignedMulHigh,
+        "smul_hi" if ins.len() == 2 => WideArithmetic::SignedMulHigh,
+        "udiv_quot" if ins.len() == 3 => WideArithmetic::UnsignedDivQuotient,
+        "udiv_rem" if ins.len() == 3 => WideArithmetic::UnsignedDivRemainder,
+        "sdiv_quot" if ins.len() == 3 => WideArithmetic::SignedDivQuotient,
+        "sdiv_rem" if ins.len() == 3 => WideArithmetic::SignedDivRemainder,
+        _ => return None,
+    };
+    Some((op, (bits / 8) as u8))
+}
+
 /// Whether every VFP value used by the scalar arithmetic subset has a modeled
 /// producer in this function.
 ///
@@ -919,6 +977,18 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         Op::Intrinsic {
             name, ins, outs, ..
         } => {
+            if let (Some((op, width)), Some((dst, _))) =
+                (wide_integer_intrinsic(name, ins, outs), outs.first())
+            {
+                return vec![Stmt::Assign {
+                    dst: dst.clone(),
+                    src: Expr::WideArithmetic {
+                        op,
+                        args: ins.iter().map(lower_value).collect(),
+                        width,
+                    },
+                }];
+            }
             if let (Some((operation, width)), Some((dst, _))) =
                 (scalar_float_intrinsic(name, ins, outs), outs.first())
             {
@@ -1364,6 +1434,10 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
         Expr::Un { src, .. } => count_reg_uses_in_expr(src, target),
         Expr::Cast { expr, .. } => count_reg_uses_in_expr(expr, target),
         Expr::FunctionTableEntry { index, .. } => count_reg_uses_in_expr(index, target),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .map(|argument| count_reg_uses_in_expr(argument, target))
+            .sum(),
     }
 }
 
@@ -1394,6 +1468,7 @@ fn expr_reads_memory(expr: &Expr) -> bool {
             ..
         } => expr_reads_memory(cond) || expr_reads_memory(if_true) || expr_reads_memory(if_false),
         Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => expr_reads_memory(src),
+        Expr::WideArithmetic { args, .. } => args.iter().any(expr_reads_memory),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -1475,6 +1550,15 @@ fn can_eagerly_evaluate(expr: &Expr) -> bool {
     match expr {
         Expr::Deref { .. } | Expr::FunctionTableEntry { .. } | Expr::Unknown(_) => false,
         Expr::Bin { op: BinOp::Div, .. } => false,
+        Expr::WideArithmetic {
+            op:
+                WideArithmetic::UnsignedDivQuotient
+                | WideArithmetic::UnsignedDivRemainder
+                | WideArithmetic::SignedDivQuotient
+                | WideArithmetic::SignedDivRemainder,
+            ..
+        } => false,
+        Expr::WideArithmetic { args, .. } => args.iter().all(can_eagerly_evaluate),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             can_eagerly_evaluate(lhs) && can_eagerly_evaluate(rhs)
         }
@@ -2958,6 +3042,16 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
             write_expr_ctx(if_false, tm, out);
             out.push(')');
         }
+        Expr::WideArithmetic { op, args, width } => {
+            let _ = write!(out, "{}{}(", op.name(), width * 8);
+            for (index, argument) in args.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_expr_ctx(argument, tm, out);
+            }
+            out.push(')');
+        }
         Expr::Unknown(s) => {
             let _ = write!(out, "<{}>", s);
         }
@@ -3569,6 +3663,16 @@ fn write_expr_c(e: &Expr, out: &mut String) {
             write_expr_c(if_false, out);
             out.push(')');
         }
+        Expr::WideArithmetic { op, args, width } => {
+            let _ = write!(out, "{}{}(", op.name(), width * 8);
+            for (index, argument) in args.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_expr_c(argument, out);
+            }
+            out.push(')');
+        }
         Expr::Unknown(s) => {
             let _ = write!(out, "<{}>", s);
         }
@@ -4048,6 +4152,11 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
             }
             Expr::Cast { expr, .. } => expression(expr, tm),
             Expr::FunctionTableEntry { index, .. } => expression(index, tm),
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    expression(argument, tm);
+                }
+            }
             Expr::Reg(_)
             | Expr::Const(_)
             | Expr::FloatConst { .. }
@@ -4217,6 +4326,7 @@ fn expression_proven_scalar(expr: &Expr, tm: &TypeMap) -> bool {
         Expr::Select {
             if_true, if_false, ..
         } => expression_proven_scalar(if_true, tm) && expression_proven_scalar(if_false, tm),
+        Expr::WideArithmetic { .. } => true,
         Expr::Unknown(_)
         | Expr::Reg(_)
         | Expr::Addr(_)
@@ -4622,6 +4732,7 @@ fn expression_value_width(
         Expr::Un { src, .. } => expression_value_width(src, tm, defs),
         Expr::Cmp { .. } => Some(4),
         Expr::Select { width, .. } => Some(*width),
+        Expr::WideArithmetic { width, .. } => Some(*width),
         Expr::Unknown(_) | Expr::Reg(_) => None,
     }
 }
@@ -5171,6 +5282,11 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
             Expr::Un { src, .. } => re(src, map),
             Expr::Cast { expr, .. } => re(expr, map),
             Expr::FunctionTableEntry { index, .. } => re(index, map),
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    re(argument, map);
+                }
+            }
             Expr::Const(_)
             | Expr::FloatConst { .. }
             | Expr::Addr(_)
@@ -5837,6 +5953,11 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
         }
         Expr::Un { src, .. } => collect_idents_expr(src, ids),
         Expr::Cast { expr, .. } => collect_idents_expr(expr, ids),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                collect_idents_expr(argument, ids);
+            }
+        }
     }
 }
 
@@ -6520,6 +6641,67 @@ fn write_addr_arith_dec(
     out.push(')');
 }
 
+fn write_wide_arithmetic_dec(op: WideArithmetic, args: &[Expr], width: u8, out: &mut String) {
+    let signed = int_ctype(true, width);
+    let unsigned = int_ctype(false, width);
+    let bits = u16::from(width) * 8;
+    match (op, args) {
+        (WideArithmetic::UnsignedMulHigh, [lhs, rhs]) => {
+            let _ = write!(out, "(({unsigned})(((unsigned __int128)({unsigned})(");
+            write_expr_dec(lhs, out);
+            let _ = write!(out, ") * (unsigned __int128)({unsigned})(");
+            write_expr_dec(rhs, out);
+            let _ = write!(out, ")) >> {bits}))");
+        }
+        (WideArithmetic::SignedMulHigh, [lhs, rhs]) => {
+            let _ = write!(
+                out,
+                "(({signed})(((unsigned __int128)((__int128)({signed})("
+            );
+            write_expr_dec(lhs, out);
+            let _ = write!(out, ") * (__int128)({signed})(");
+            write_expr_dec(rhs, out);
+            let _ = write!(out, "))) >> {bits}))");
+        }
+        (
+            operation
+            @ (WideArithmetic::UnsignedDivQuotient | WideArithmetic::UnsignedDivRemainder),
+            [hi, lo, divisor],
+        ) => {
+            let symbol = if matches!(operation, WideArithmetic::UnsignedDivQuotient) {
+                "/"
+            } else {
+                "%"
+            };
+            let _ = write!(out, "(({unsigned})(((((unsigned __int128)({unsigned})(");
+            write_expr_dec(hi, out);
+            let _ = write!(out, ") << {bits}) | ({unsigned})(");
+            write_expr_dec(lo, out);
+            let _ = write!(out, ")) {symbol} ({unsigned})(");
+            write_expr_dec(divisor, out);
+            out.push_str("))))");
+        }
+        (
+            operation @ (WideArithmetic::SignedDivQuotient | WideArithmetic::SignedDivRemainder),
+            [hi, lo, divisor],
+        ) => {
+            let symbol = if matches!(operation, WideArithmetic::SignedDivQuotient) {
+                "/"
+            } else {
+                "%"
+            };
+            let _ = write!(out, "(({signed})((((__int128)({signed})(");
+            write_expr_dec(hi, out);
+            let _ = write!(out, ") * (((__int128)1) << {bits})) + ({unsigned})(");
+            write_expr_dec(lo, out);
+            let _ = write!(out, ")) {symbol} ({signed})(");
+            write_expr_dec(divisor, out);
+            out.push_str(")))");
+        }
+        _ => out.push_str("__unknown(0)"),
+    }
+}
+
 fn write_expr_dec(e: &Expr, out: &mut String) {
     match e {
         Expr::Reg(v) => write_reg_dec(v, out),
@@ -6673,6 +6855,9 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             out.push_str(" : ");
             write_expr_dec(if_false, out);
             out.push(')');
+        }
+        Expr::WideArithmetic { op, args, width } => {
+            write_wide_arithmetic_dec(*op, args, *width, out);
         }
         // An unmodelled/indirect value: a call to an undeclared `__unknown`
         // (implicit-declaration warning only) keeps it a valid `long` rvalue.
@@ -7118,6 +7303,7 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
         | Expr::Bin { .. }
         | Expr::Un { .. }
         | Expr::Cmp { .. }
+        | Expr::WideArithmetic { .. }
         | Expr::Unknown(_) => false,
     }
 }
@@ -9357,9 +9543,32 @@ function f @ 0x1000 {
     /// register `%` sigils, no `&[...]` address forms, no `<...>` unknowns, a
     /// real `long` signature, and a balanced brace at the end.
     fn assert_looks_like_c(text: &str) {
-        assert!(
-            !text.contains('%'),
-            "decbench output still has % sigils:\n{}",
+        let mut paren_depth = 0_i32;
+        for (index, byte) in text.bytes().enumerate() {
+            match byte {
+                b'(' => paren_depth += 1,
+                b')' => {
+                    paren_depth -= 1;
+                    assert!(
+                        paren_depth >= 0,
+                        "decbench output has an unmatched closing parenthesis:\n{}",
+                        text
+                    );
+                }
+                _ => {}
+            }
+            if byte == b'%' {
+                let next = text.as_bytes().get(index + 1).copied();
+                assert!(
+                    !next.is_some_and(|next| next.is_ascii_alphabetic() || next == b'_'),
+                    "decbench output still has a %register sigil:\n{}",
+                    text
+                );
+            }
+        }
+        assert_eq!(
+            paren_depth, 0,
+            "decbench output has unmatched opening parentheses:\n{}",
             text
         );
         assert!(
@@ -10740,6 +10949,68 @@ function f @ 0x1000 {
             text
         );
         assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn x86_wide_arithmetic_intrinsics_lower_to_executable_int128_c() {
+        let cases = [
+            (
+                "x86.smul_hi.64",
+                vec![
+                    Value::Reg(VReg::phys("arg0")),
+                    Value::Reg(VReg::phys("arg1")),
+                ],
+                "unsigned __int128",
+            ),
+            (
+                "x86.sdiv_rem.64",
+                vec![
+                    Value::Reg(VReg::phys("arg0")),
+                    Value::Reg(VReg::phys("arg1")),
+                    Value::Reg(VReg::phys("arg2")),
+                ],
+                "%",
+            ),
+            (
+                "x86.udiv_rem.64",
+                vec![
+                    Value::Reg(VReg::phys("arg0")),
+                    Value::Reg(VReg::phys("arg1")),
+                    Value::Reg(VReg::phys("arg2")),
+                ],
+                "unsigned __int128",
+            ),
+        ];
+        for (name, ins, expected) in cases {
+            let statements = lower_op(
+                &Op::Intrinsic {
+                    name: name.to_string(),
+                    ins,
+                    outs: vec![(VReg::phys("ret"), crate::ir::types::Width::W64)],
+                    reads_mem: false,
+                    writes_mem: false,
+                },
+                false,
+            );
+            assert!(matches!(
+                statements.as_slice(),
+                [Stmt::Assign {
+                    src: Expr::WideArithmetic { width: 8, .. },
+                    ..
+                }]
+            ));
+            let function = Function {
+                name: "wide".to_string(),
+                entry_va: 0x10,
+                body: statements,
+            };
+            let text = render_decbench(&function);
+            assert!(
+                text.contains(expected),
+                "{name} did not retain exact wide semantics:\n{text}"
+            );
+            assert_looks_like_c(&text);
+        }
     }
 
     #[test]

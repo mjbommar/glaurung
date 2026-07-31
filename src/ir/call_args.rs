@@ -597,6 +597,9 @@ fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
         Expr::Un { src, .. } => expr_reads_storage(src, storage),
         Expr::Cast { expr, .. } => expr_reads_storage(expr, storage),
         Expr::FunctionTableEntry { index, .. } => expr_reads_storage(index, storage),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .any(|argument| expr_reads_storage(argument, storage)),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -1700,6 +1703,9 @@ fn collect_fixed_frame_reads(expr: &Expr, reads: &mut Vec<(String, i64, u8)>) ->
         }
         Expr::Un { src, .. } => collect_fixed_frame_reads(src, reads),
         Expr::Cast { expr, .. } => collect_fixed_frame_reads(expr, reads),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .all(|argument| collect_fixed_frame_reads(argument, reads)),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -1778,6 +1784,13 @@ fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> b
         Expr::Un { src, .. } => substitute_exact_reg(src, target, replacement),
         Expr::Cast { expr, .. } => substitute_exact_reg(expr, target, replacement),
         Expr::FunctionTableEntry { index, .. } => substitute_exact_reg(index, target, replacement),
+        Expr::WideArithmetic { args, .. } => {
+            let mut changed = false;
+            for argument in args {
+                changed |= substitute_exact_reg(argument, target, replacement);
+            }
+            changed
+        }
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -1805,6 +1818,13 @@ fn is_pure_arg_normalisation(expr: &Expr) -> bool {
         }
         Expr::Un { src, .. } => is_pure_arg_normalisation(src),
         Expr::Cast { expr, .. } => is_pure_arg_normalisation(expr),
+        Expr::WideArithmetic { op, args, .. } => {
+            matches!(
+                op,
+                crate::ir::ast::WideArithmetic::UnsignedMulHigh
+                    | crate::ir::ast::WideArithmetic::SignedMulHigh
+            ) && args.iter().all(is_pure_arg_normalisation)
+        }
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -2204,6 +2224,11 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
         Expr::Un { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
         Expr::Cast { expr, .. } => mark_arg_reads_in_expr(expr, arch, read_between),
         Expr::FunctionTableEntry { index, .. } => mark_arg_reads_in_expr(index, arch, read_between),
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                mark_arg_reads_in_expr(argument, arch, read_between);
+            }
+        }
     }
 }
 
@@ -2384,6 +2409,9 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
         Expr::Un { src, .. } => reads_reg_in_expr(src, target),
         Expr::Cast { expr, .. } => reads_reg_in_expr(expr, target),
         Expr::FunctionTableEntry { index, .. } => reads_reg_in_expr(index, target),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .any(|argument| reads_reg_in_expr(argument, target)),
     }
 }
 
