@@ -525,6 +525,35 @@ def include_referenced_local_callees(binary: str, root_c: str) -> str:
     return "\n".join(ordered)
 
 
+def _inherited_cxx_runtime_args(binary: str) -> list[str]:
+    """Link flags for a C++ runtime already required by ``binary``.
+
+    Decompiled output is emitted as C, so the C compiler driver does not add a
+    C++ runtime automatically.  Included local C++ callees can nevertheless
+    retain direct Itanium ABI calls such as ``__cxa_throw``.  Preserve only a
+    runtime dependency proven by the original ELF instead of guessing from a
+    symbol spelling or linking every fixture against libstdc++.
+    """
+    with open(binary, "rb") as fh:
+        dynamic = ELFFile(fh).get_section_by_name(".dynamic")
+        if dynamic is None:
+            return []
+        needed = {
+            tag.needed
+            for tag in dynamic.iter_tags("DT_NEEDED")
+            if hasattr(tag, "needed")
+        }
+
+    args: list[str] = []
+    if any(name.startswith("libstdc++.") for name in needed):
+        args.append("-lstdc++")
+    if any(name.startswith("libc++.") for name in needed):
+        args.append("-lc++")
+    if any(name.startswith("libc++abi.") for name in needed):
+        args.append("-lc++abi")
+    return args
+
+
 def build_so(
     c_src: str, workdir: Path, tag: str, link_against: str | None = None
 ) -> Path | None:
@@ -541,6 +570,10 @@ def build_so(
     Linking against the original supplies the callee's real behaviour, which is what
     a differential test of THIS function wants.
 
+    The original ELF's C++ runtime dependency is also preserved explicitly. The
+    rebuilt source is C, so the C compiler driver will not add libstdc++/libc++
+    even when an included local callee still calls the Itanium ABI directly.
+
     A self-recursive call still binds locally: `dlopen` searches the object itself
     before its dependencies, so the decompiled `fib` recurses into itself rather
     than delegating to the original — otherwise the recursion would go untested."""
@@ -548,9 +581,14 @@ def build_so(
     src.write_text(PRELUDE + "\n" + c_src + "\n")
     so = workdir / f"{tag}.so"
     base = ["gcc", "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)]
+    runtime_args = (
+        _inherited_cxx_runtime_args(link_against)
+        if link_against and Path(link_against).is_file()
+        else []
+    )
     if link_against and Path(link_against).is_file():
         orig = Path(link_against).resolve()
-        r = TC.run(base + [str(orig), f"-Wl,-rpath,{orig.parent}"])
+        r = TC.run(base + [str(orig), f"-Wl,-rpath,{orig.parent}", *runtime_args])
         if r.returncode == 0:
             return so
         # Linking is an ENHANCEMENT, so its failure must not be reported as
@@ -558,7 +596,7 @@ def build_so(
         # decompiler. Retry without: a function that calls no sibling links fine,
         # and one that does will say `undefined symbol` at load time, which is a
         # different and accurate message.
-    r = TC.run(base)
+    r = TC.run(base + runtime_args)
     return so if r.returncode == 0 else None
 
 

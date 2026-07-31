@@ -8,6 +8,7 @@ worse than no harness — it hides regressions.
 """
 from __future__ import annotations
 
+import ctypes
 import subprocess
 import sys
 import tempfile
@@ -245,6 +246,43 @@ def test_round_trip_resolves_a_sanitized_clang_lambda_symbol() -> None:
             fuzz=24,
         )
     assert result["status"] == "pass", result
+
+
+def test_recompiled_cpp_abi_callee_loads_its_runtime(tmp_path: Path) -> None:
+    """Included local C++ callees must retain their ABI runtime dependency.
+
+    The decompiled source is C, but a recovered throwing helper still calls
+    ``__cxa_allocate_exception`` and ``__cxa_throw``.  Linking only against the
+    original fixture can be discarded by ``--as-needed`` once all local callees
+    are included, leaving a shared object that compiles but fails at ``dlopen``.
+    This exercises the real C++ compiler, ELF dependency discovery, decompiler,
+    local-callee closure, C rebuild, and dynamic loader.
+    """
+    binary = _compile_cpp_so(
+        "static __attribute__((noinline)) int may_throw(int x) {\n"
+        "    if (x < 0) throw -x;\n"
+        "    return x + 5;\n"
+        "}\n"
+        'extern "C" int calls_throwing_helper(int x) { return may_throw(x); }',
+        "cpp_abi_runtime",
+    )
+    signature = next(
+        sig for sig in D.signatures(binary) if sig["name"] == "calls_throwing_helper"
+    )
+    caller = D.decompiled_c(binary, signature["va"])
+    assert caller is not None
+    closed = D.include_referenced_local_callees(binary, caller)
+    assert "__cxa_throw" in closed
+
+    rebuilt = D.build_so(
+        closed,
+        tmp_path,
+        "cpp_abi_runtime",
+        link_against=binary,
+    )
+
+    assert rebuilt is not None
+    ctypes.CDLL(str(rebuilt))
 
 
 def test_round_trip_rebinds_a_demangled_local_cpp_callee() -> None:
