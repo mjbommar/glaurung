@@ -309,7 +309,7 @@ fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
     cc: crate::ir::call_args::CallConv,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
-    param_slots: &std::collections::HashSet<usize>,
+    param_slots: &mut std::collections::HashSet<usize>,
     parameter_roles: &std::collections::HashMap<String, usize>,
     callee_facts: &DirectCalleeFacts,
     addr_map: &std::collections::HashMap<u64, String>,
@@ -320,6 +320,11 @@ fn run_ast_passes(
     std::collections::HashMap<String, String>,
 ) {
     let dump = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
+    if dump {
+        eprintln!(
+            "\n===== parameter evidence =====\nslots={param_slots:?}\nroles={parameter_roles:?}"
+        );
+    }
     macro_rules! dp {
         ($n:expr) => {
             if dump {
@@ -617,7 +622,7 @@ fn decompile_at_py(
     };
     // Live-in argument slots (authoritative parameter set) for the type-map
     // remap, so scratch reuse of an arg register never becomes a spurious `argN`.
-    let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
+    let mut param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
     // Recover the semantic prototype while SSA value IDs are still available.
     // It survives the AST pipeline as an immutable companion object; naming is
     // now only a final projection (`value -> argN`), never a type-analysis key.
@@ -688,7 +693,7 @@ fn decompile_at_py(
             crate::ir::types_recover::RecoveredOutputKind::Unknown,
             |prototype| prototype.output_kind(),
         ),
-        &param_slots,
+        &mut param_slots,
         &parameter_roles,
         &callee_facts,
         &addr_map,
@@ -857,7 +862,7 @@ fn decompile_range_at_py(
     } else {
         (lf_raw.clone(), std::collections::HashMap::new())
     };
-    let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
+    let mut param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
     let prototype = (style == "decbench" && types).then(|| {
         recover_decbench_prototype(
             &lf_raw,
@@ -897,7 +902,7 @@ fn decompile_range_at_py(
             crate::ir::types_recover::RecoveredOutputKind::Unknown,
             |prototype| prototype.output_kind(),
         ),
-        &param_slots,
+        &mut param_slots,
         &parameter_roles,
         &callee_facts,
         &addr_map,
@@ -1727,7 +1732,7 @@ fn decompile_all_py(
         } else {
             (lf_raw.clone(), std::collections::HashMap::new())
         };
-        let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
+        let mut param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let prototype = (style == "decbench").then(|| {
             recover_decbench_prototype(
                 &lf_raw,
@@ -1770,7 +1775,7 @@ fn decompile_all_py(
                 crate::ir::types_recover::RecoveredOutputKind::Unknown,
                 |prototype| prototype.output_kind(),
             ),
-            &param_slots,
+            &mut param_slots,
             &parameter_roles,
             &callee_facts,
             &addr_map,
@@ -1910,7 +1915,7 @@ fn decompile_many_py(
         } else {
             (lf_raw.clone(), std::collections::HashMap::new())
         };
-        let param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
+        let mut param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let prototype = (style == "decbench").then(|| {
             recover_decbench_prototype(
                 &lf_raw,
@@ -1960,7 +1965,7 @@ fn decompile_many_py(
                 crate::ir::types_recover::RecoveredOutputKind::Unknown,
                 |prototype| prototype.output_kind(),
             ),
-            &param_slots,
+            &mut param_slots,
             &parameter_roles,
             &callee_facts,
             &addr_map,

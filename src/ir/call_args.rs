@@ -21,6 +21,12 @@
 //! corresponding 64-bit arg register because on x86-64 the upper 32 bits of
 //! every GPR are zeroed by a 32-bit write.
 //!
+//! SysV integer arguments beyond the six-register prefix are recovered from
+//! exact lowered `push` pairs or a contiguous preallocated outgoing area only
+//! when the matching post-call cleanup balances the complete allocation. This
+//! prevents callee-save pushes or local frame storage from becoming invented
+//! call arguments.
+//!
 //! After running, `call foo` becomes `call foo(arg0, arg1, …)` with args
 //! populated in calling-convention order.
 
@@ -510,10 +516,11 @@ pub fn reconstruct_args_with_params(
     arch: CallConv,
     param_slots: &std::collections::HashSet<usize>,
 ) {
+    let mut effective_param_slots = param_slots.clone();
     reconstruct_args_with_params_and_callee_layouts(
         f,
         arch,
-        param_slots,
+        &mut effective_param_slots,
         &std::collections::HashMap::new(),
     );
 }
@@ -527,7 +534,7 @@ pub fn reconstruct_args_with_params(
 pub fn reconstruct_args_with_params_and_callee_layouts(
     f: &mut Function,
     arch: CallConv,
-    param_slots: &std::collections::HashSet<usize>,
+    param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
 ) {
     fold_body(&mut f.body, arch, param_slots, callee_layouts);
@@ -778,7 +785,7 @@ fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
 fn fold_body(
     body: &mut Vec<Stmt>,
     arch: CallConv,
-    param_slots: &std::collections::HashSet<usize>,
+    param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
 ) {
     // Recurse into nested bodies first so we don't miss calls inside arms.
@@ -1086,7 +1093,7 @@ fn fold_one_call(
     body: &mut Vec<Stmt>,
     call_idx: usize,
     arch: CallConv,
-    param_slots: &std::collections::HashSet<usize>,
+    param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
 ) {
     if arch == CallConv::Cdecl32 {
@@ -1123,11 +1130,57 @@ fn fold_one_call(
     let mut found: Vec<Option<(usize, Expr)>> = vec![None; arg_slots(arch).len()];
     let mut read_between: Vec<bool> = vec![false; arg_slots(arch).len()];
     let mut blocked_incoming: Vec<bool> = vec![false; arg_slots(arch).len()];
+    let preallocated_stack = (arch == CallConv::SysVAmd64)
+        .then(|| outgoing_sysv_stack_area(body, call_idx))
+        .flatten();
+    let (mut stack_args, mut stack_setup_indices) = preallocated_stack
+        .clone()
+        .unwrap_or_else(|| (Vec::new(), Vec::new()));
+    let mut stack_arg_bytes = i64::try_from(stack_args.len()).unwrap_or(0) * 8;
+    let mut stack_padding = None;
+    // An argument that reaches an impure definition must remain rooted at that
+    // statement. Continue scanning for other slots, but never bind its same
+    // unversioned register use to an older definition beyond this root.
+    let mut opaque_reaching_defs = std::collections::HashSet::new();
 
     // Walk backwards from the call.
     let mut i = call_idx;
     while i > 0 {
         i -= 1;
+        if arch == CallConv::SysVAmd64 && preallocated_stack.is_none() {
+            if let Some((value, width)) = outgoing_sysv_stack_push(body, i) {
+                stack_args.push(value.clone());
+                stack_arg_bytes += width;
+                stack_setup_indices.extend([i, i - 1]);
+                mark_arg_reads_in_expr(value, arch, &mut read_between);
+                i -= 1;
+                continue;
+            }
+            // An odd number of eight-byte stack arguments needs one alignment
+            // word. It is call setup only when the matching post-call cleanup
+            // proves the complete outgoing allocation; otherwise leave it and
+            // every candidate push untouched.
+            if !stack_args.is_empty()
+                && stack_padding.is_none()
+                && stack_pointer_sub_width(&body[i]) == Some(8)
+            {
+                stack_padding = Some(i);
+                continue;
+            }
+            // Never scan from a call setup into the function's own frame-save
+            // sequence. Without this boundary a first call with six register
+            // arguments could mistake `push rbp` for a seventh argument.
+            if matches!(
+                &body[i],
+                Stmt::Assign {
+                    dst: VReg::Phys(frame),
+                    src: Expr::Reg(VReg::Phys(stack)),
+                } if matches!(ssa_base(frame), "ebp" | "rbp")
+                    && matches!(ssa_base(stack), "esp" | "rsp")
+            ) {
+                break;
+            }
+        }
         let stop = matches!(&body[i], Stmt::Call { .. });
         if let Stmt::Assign { dst, src } = &body[i] {
             if let VReg::Phys(name) = dst {
@@ -1137,11 +1190,39 @@ fn fold_one_call(
                         // captured arg expression reads this register. If
                         // one does, folding this assignment would leave a
                         // dangling reference in the higher slot's expr.
-                        let would_dangle = found
+                        let substitutable = is_pure_arg_normalisation(src)
+                            || is_stable_frame_arg_definition(src, body, i, call_idx);
+                        let feeds_captured_register_argument = found
                             .iter()
                             .any(|f| f.as_ref().is_some_and(|(_, e)| reads_reg_in_expr(e, dst)));
-                        if !would_dangle && !read_between[slot] {
+                        let feeds_balanced_stack_argument = stack_args
+                            .iter()
+                            .any(|argument| reads_reg_in_expr(argument, dst))
+                            && substitutable
+                            && outgoing_stack_cleanup(
+                                body,
+                                call_idx,
+                                stack_arg_bytes + stack_padding.map_or(0, |_| 8),
+                            )
+                            .is_some();
+                        // Preserve the existing statement-rooted dependency
+                        // policy unless the same definition also feeds stack
+                        // setup that is proven removable. In that one case all
+                        // dependent call arguments must move together.
+                        if feeds_captured_register_argument && feeds_balanced_stack_argument {
+                            for (_, argument) in found.iter_mut().flatten() {
+                                let _ = substitute_exact_reg(argument, dst, src);
+                            }
+                        }
+                        let would_dangle =
+                            feeds_captured_register_argument && !feeds_balanced_stack_argument;
+                        if !would_dangle && (!read_between[slot] || feeds_balanced_stack_argument) {
                             found[slot] = Some((i, src.clone()));
+                            if feeds_balanced_stack_argument {
+                                for argument in &mut stack_args {
+                                    let _ = substitute_exact_reg(argument, dst, src);
+                                }
+                            }
                         } else {
                             blocked_incoming[slot] = true;
                         }
@@ -1155,27 +1236,22 @@ fn fold_one_call(
                     // Follow that exact definition edge instead of treating the
                     // SSA values as unrelated clobbers and abandoning every
                     // earlier argument slot.
-                    let mut feeds_captured_argument = false;
-                    for (_, captured) in found.iter_mut().flatten() {
-                        if reads_reg_in_expr(captured, dst) {
-                            feeds_captured_argument = true;
-                            // Pure normalisation can be stated directly in the
-                            // call argument. Memory reads stay statement-rooted:
-                            // moving a load across an intervening store would
-                            // change its value, so the argument keeps referring
-                            // to that SSA definition instead.
-                            if is_pure_arg_normalisation(src) {
-                                // `reads_reg_in_expr` also sees VReg-only address
-                                // components (`Lea`, `PdbFieldAddr`, `StackAddr`).
-                                // A non-register source cannot be substituted into
-                                // those fields, by design. In that case the older
-                                // definition remains in the body and the captured
-                                // argument keeps its exact reaching reference.
-                                let _ = substitute_exact_reg(captured, dst, src);
-                            }
-                        }
+                    if opaque_reaching_defs.contains(dst) {
+                        continue;
                     }
+                    let substitutable = is_pure_arg_normalisation(src)
+                        || is_stable_frame_arg_definition(src, body, i, call_idx);
+                    let feeds_captured_argument = resolve_captured_definition(
+                        &mut found,
+                        &mut stack_args,
+                        dst,
+                        src,
+                        substitutable,
+                    );
                     if feeds_captured_argument {
+                        if !substitutable {
+                            opaque_reaching_defs.insert(dst.clone());
+                        }
                         mark_arg_reads_in_expr(src, arch, &mut read_between);
                         continue;
                     }
@@ -1188,6 +1264,36 @@ fn fold_one_call(
                     // copies and width normalisation.
                     break;
                 }
+                // Register setup commonly reuses a scratch GPR between ABI
+                // slots (`rax = a1; rcx = rax + 2; rax = r; rdx = rax + 1`).
+                // Resolve each captured expression at its own nearest reaching
+                // definition while walking backward. Leaving all of them as
+                // bare `rax` reads makes later DSE bind every slot to whichever
+                // scratch assignment happens to survive last.
+                // SSA-versioned scratch values already have distinct
+                // identities and should remain statement-rooted. This repair
+                // is specifically for unversioned lifter output where several
+                // reaching definitions otherwise collapse to one register.
+                if !name.contains('#') {
+                    if opaque_reaching_defs.contains(dst) {
+                        continue;
+                    }
+                    let substitutable = is_pure_arg_normalisation(src)
+                        || is_stable_frame_arg_definition(src, body, i, call_idx);
+                    if resolve_captured_definition(
+                        &mut found,
+                        &mut stack_args,
+                        dst,
+                        src,
+                        substitutable,
+                    ) {
+                        if !substitutable {
+                            opaque_reaching_defs.insert(dst.clone());
+                        }
+                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        continue;
+                    }
+                }
             }
             mark_arg_reads_in_expr(src, arch, &mut read_between);
         } else {
@@ -1195,6 +1301,45 @@ fn fold_one_call(
             mark_arg_writes_in_stmt(&body[i], arch, &mut blocked_incoming);
         }
         if stop {
+            // A preceding call defines the ABI return register. Captured
+            // arguments may still read that value even when later setup reuses
+            // the same unversioned scratch register. Give the call result its
+            // own identity before deleting the register-move setup; otherwise
+            // a later `rax = ...` silently becomes the argument's definition.
+            let return_register = VReg::phys(return_reg(arch));
+            let consumes_return = found
+                .iter()
+                .flatten()
+                .any(|(_, argument)| reads_reg_in_expr(argument, &return_register))
+                || stack_args
+                    .iter()
+                    .any(|argument| reads_reg_in_expr(argument, &return_register));
+            if consumes_return {
+                let existing_result = match &body[i] {
+                    Stmt::Call { dst, .. } => dst.clone(),
+                    _ => None,
+                }
+                .filter(|result| {
+                    !matches!(
+                        result,
+                        VReg::Phys(name)
+                            if crate::ir::abi::is_return_register(arch, name)
+                                && !name.contains('#')
+                    )
+                });
+                let result = existing_result
+                    .unwrap_or_else(|| VReg::phys(format!("{}#call_result_{i}", return_reg(arch))));
+                let replacement = Expr::Reg(result.clone());
+                for (_, argument) in found.iter_mut().flatten() {
+                    let _ = substitute_exact_reg(argument, &return_register, &replacement);
+                }
+                for argument in &mut stack_args {
+                    let _ = substitute_exact_reg(argument, &return_register, &replacement);
+                }
+                if let Stmt::Call { dst, .. } = &mut body[i] {
+                    *dst = Some(result);
+                }
+            }
             // ABI argument registers are caller-clobbered.  Explicit
             // assignments found after this call remain valid, but an unwritten
             // prefix can no longer be justified from this function's entry
@@ -1211,6 +1356,56 @@ fn fold_one_call(
     let mut args_out: Vec<Expr> = Vec::new();
     let mut used_stmt_indices: Vec<usize> = Vec::new();
     let Some(last_filled_slot) = found.iter().rposition(Option::is_some) else {
+        // Optimized forwarding can pass this function's untouched first
+        // parameter straight into its first call with no setup instruction.
+        // Admit that one implicit slot only when the value-numbering analysis
+        // proves slot zero is a real parameter, no earlier statement read or
+        // wrote it, no prior call could clobber it, and the direct call's result
+        // is consumed. The read-before-call exclusion preserves the deliberate
+        // nonterminal fail-closed case where a parameter is used for unrelated
+        // work before a zero-setup call.
+        let contiguous_leading_parameter = param_slots.contains(&0) || param_slots.contains(&1);
+        let first_direct_value_call = arch == CallConv::SysVAmd64
+            && contiguous_leading_parameter
+            && !read_between[0]
+            && !blocked_incoming[0]
+            && !body[..call_idx]
+                .iter()
+                .any(|statement| matches!(statement, Stmt::Call { .. }))
+            && matches!(
+                &body[call_idx],
+                Stmt::Call {
+                    target: Expr::Named { .. },
+                    args,
+                    dst,
+                    ..
+                } if args.is_empty()
+                    && (dst.is_some()
+                        || return_value_is_read(body, call_idx, return_reg(arch)))
+            );
+        if first_direct_value_call {
+            // SysV integer parameter slots are contiguous. A proven slot one
+            // means slot zero exists even when its only machine use was the
+            // implicit call input that liveness could not see before argument
+            // reconstruction made it explicit.
+            param_slots.insert(0);
+            // This special case exists precisely because the forwarded slot
+            // has no explicit body use for value numbering to witness. The
+            // proven parameter slot therefore authorizes its canonical ABI
+            // spelling when `incoming_arg_expr` cannot find a versioned name.
+            let incoming = incoming_arg_expr(arch, 0, body).unwrap_or_else(|| {
+                Expr::Reg(VReg::phys(
+                    arg_slots(arch)
+                        .first()
+                        .and_then(|aliases| aliases.first())
+                        .copied()
+                        .unwrap_or("rdi"),
+                ))
+            });
+            if let Stmt::Call { args, .. } = &mut body[call_idx] {
+                *args = vec![incoming];
+            }
+        }
         return;
     };
     for slot_idx in 0..=last_filled_slot {
@@ -1242,6 +1437,34 @@ fn fold_one_call(
         return;
     }
 
+    // SysV places every integer argument after slot five on the caller's
+    // stack. Exact `rsp -= 8; [rsp] = value` pairs are encountered in source
+    // order while walking backward (arg6, arg7, ...). Absorb them only when all
+    // six register slots are present and an exact post-call cleanup balances
+    // the complete allocation. That balance distinguishes outgoing arguments
+    // from callee-save pushes and local frame storage.
+    if arch == CallConv::SysVAmd64
+        && args_out.len() == arg_slots(arch).len()
+        && !stack_args.is_empty()
+    {
+        if preallocated_stack.is_some() {
+            args_out.extend(stack_args);
+            used_stmt_indices.extend(stack_setup_indices);
+        } else {
+            let padding_bytes = stack_padding.map_or(0, |_| 8);
+            let expected_cleanup = stack_arg_bytes + padding_bytes;
+            if let Some(cleanup_indices) = outgoing_stack_cleanup(body, call_idx, expected_cleanup)
+            {
+                args_out.extend(stack_args);
+                used_stmt_indices.extend(stack_setup_indices);
+                if let Some(padding_index) = stack_padding {
+                    used_stmt_indices.push(padding_index);
+                }
+                used_stmt_indices.extend(cleanup_indices);
+            }
+        }
+    }
+
     // Splice the args in.
     if let Stmt::Call { args, .. } = &mut body[call_idx] {
         *args = args_out;
@@ -1252,6 +1475,162 @@ fn fold_one_call(
     for idx in used_stmt_indices {
         body.remove(idx);
     }
+}
+
+/// Resolve one reaching register definition in every argument captured so far.
+///
+/// The backward scan reaches the nearest definition first, so substitution is
+/// specific to the call-site use even when an unversioned scratch register is
+/// reused for several arguments. Memory reads remain statement-rooted: moving a
+/// load across an intervening store could change its value, so an impure source
+/// keeps the register definition and the call keeps referring to it.
+fn resolve_captured_definition(
+    found: &mut [Option<(usize, Expr)>],
+    stack_args: &mut [Expr],
+    dst: &VReg,
+    src: &Expr,
+    substitutable: bool,
+) -> bool {
+    let feeds = found
+        .iter()
+        .flatten()
+        .any(|(_, captured)| reads_reg_in_expr(captured, dst))
+        || stack_args
+            .iter()
+            .any(|captured| reads_reg_in_expr(captured, dst));
+    if !feeds || !substitutable {
+        return feeds;
+    }
+    for (_, captured) in found.iter_mut().flatten() {
+        let _ = substitute_exact_reg(captured, dst, src);
+    }
+    for captured in stack_args {
+        let _ = substitute_exact_reg(captured, dst, src);
+    }
+    true
+}
+
+/// Whether an impure definition is a fixed frame read that remains unchanged
+/// until the call.
+///
+/// This is deliberately narrower than generic alias analysis. Only constant
+/// `rbp`/`ebp` slots qualify. Intervening stores must either target a disjoint
+/// fixed frame slot or be an exact lowered outgoing push below the frame; an
+/// unknown pointer store, overlapping slot, frame-base write, call, or control
+/// boundary rejects substitution.
+fn is_stable_frame_arg_definition(
+    expr: &Expr,
+    body: &[Stmt],
+    definition_index: usize,
+    call_index: usize,
+) -> bool {
+    let mut reads = Vec::new();
+    if !collect_fixed_frame_reads(expr, &mut reads) || reads.is_empty() {
+        return false;
+    }
+    for (index, statement) in body
+        .iter()
+        .enumerate()
+        .take(call_index)
+        .skip(definition_index + 1)
+    {
+        match statement {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                ..
+            } if matches!(ssa_base(name), "ebp" | "rbp") => return false,
+            Stmt::Store {
+                addr,
+                size: store_size,
+                ..
+            } => {
+                if outgoing_sysv_stack_push(body, index).is_some() {
+                    continue;
+                }
+                let Some((base, store_disp)) = fixed_frame_address(addr) else {
+                    return false;
+                };
+                if reads.iter().any(|(read_base, read_disp, read_size)| {
+                    base == *read_base
+                        && byte_ranges_overlap(
+                            store_disp,
+                            i64::from(*store_size),
+                            *read_disp,
+                            i64::from(*read_size),
+                        )
+                }) {
+                    return false;
+                }
+            }
+            Stmt::Call { .. }
+            | Stmt::Label(_)
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Return { .. }
+            | Stmt::If { .. }
+            | Stmt::While { .. }
+            | Stmt::DoWhile { .. }
+            | Stmt::For { .. }
+            | Stmt::Switch { .. } => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+fn collect_fixed_frame_reads(expr: &Expr, reads: &mut Vec<(String, i64, u8)>) -> bool {
+    match expr {
+        Expr::Deref { addr, size } => {
+            let Some((base, disp)) = fixed_frame_address(addr) else {
+                return false;
+            };
+            reads.push((base, disp, *size));
+            true
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            collect_fixed_frame_reads(lhs, reads) && collect_fixed_frame_reads(rhs, reads)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            collect_fixed_frame_reads(cond, reads)
+                && collect_fixed_frame_reads(if_true, reads)
+                && collect_fixed_frame_reads(if_false, reads)
+        }
+        Expr::Un { src, .. } => collect_fixed_frame_reads(src, reads),
+        Expr::Cast { expr, .. } => collect_fixed_frame_reads(expr, reads),
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. } => true,
+        Expr::Reg(_)
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
+        | Expr::FunctionTableEntry { .. }
+        | Expr::Unknown(_) => false,
+    }
+}
+
+fn fixed_frame_address(expr: &Expr) -> Option<(String, i64)> {
+    let Expr::Lea {
+        base: Some(VReg::Phys(base)),
+        index: None,
+        disp,
+        ..
+    } = expr
+    else {
+        return None;
+    };
+    matches!(ssa_base(base), "ebp" | "rbp").then(|| (ssa_base(base).to_string(), *disp))
+}
+
+fn byte_ranges_overlap(left: i64, left_size: i64, right: i64, right_size: i64) -> bool {
+    left < right.saturating_add(right_size) && right < left.saturating_add(left_size)
 }
 
 /// Replace an exact SSA register use inside an ordinary value expression.
@@ -1483,6 +1862,190 @@ fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
         Expr::Const(width) if *width > 0 => Some(*width),
         _ => None,
     }
+}
+
+/// One exact SysV `push value` after lowering to stack arithmetic.
+fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Option<(&Expr, i64)> {
+    if store_index == 0 {
+        return None;
+    }
+    let Stmt::Store {
+        addr:
+            Expr::Lea {
+                base: Some(VReg::Phys(base)),
+                index: None,
+                disp: 0,
+                ..
+            },
+        src,
+        size: 8,
+    } = &body[store_index]
+    else {
+        return None;
+    };
+    if ssa_base(base) != "rsp" || stack_pointer_sub_width(&body[store_index - 1]) != Some(8) {
+        return None;
+    }
+    Some((src, 8))
+}
+
+/// A contiguous preallocated SysV outgoing area immediately before a call.
+///
+/// Clang commonly reserves its whole frame once, then writes argument six to
+/// `[rsp]` and argument seven to `[rsp+8]`. Integer values may be written as
+/// four bytes into those eight-byte ABI slots. Requiring an uninterrupted,
+/// zero-based slot layout distinguishes that call area from ordinary frame
+/// locals and preserves ABI argument order independent of store order.
+fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Expr>, Vec<usize>)> {
+    let mut by_offset = std::collections::BTreeMap::new();
+    let mut cursor = call_index;
+    while cursor > 0 {
+        let index = cursor - 1;
+        match &body[index] {
+            Stmt::Store {
+                addr:
+                    Expr::Lea {
+                        base: Some(VReg::Phys(base)),
+                        index: None,
+                        disp,
+                        ..
+                    },
+                src,
+                size,
+            } if ssa_base(base) == "rsp"
+                && *disp >= 0
+                && *disp % 8 == 0
+                && matches!(*size, 4 | 8) =>
+            {
+                // A `[rsp]` store paired with the immediately preceding
+                // `rsp -= 8` is the push-form handled by the balanced-cleanup
+                // path, not a preallocated outgoing area.
+                if outgoing_sysv_stack_push(body, index).is_some() {
+                    return None;
+                }
+                if by_offset.insert(*disp, (index, src.clone())).is_some() {
+                    return None;
+                }
+            }
+            Stmt::Comment(_) | Stmt::Nop => {}
+            _ => break,
+        }
+        cursor = index;
+    }
+    if by_offset.is_empty() {
+        return None;
+    }
+    let mut args = Vec::new();
+    let mut indices = Vec::new();
+    for (slot, (offset, (index, value))) in by_offset.into_iter().enumerate() {
+        if offset != i64::try_from(slot).ok()?.saturating_mul(8) {
+            return None;
+        }
+        args.push(value);
+        indices.push(index);
+    }
+    Some((args, indices))
+}
+
+/// Width of `rsp = rsp + N`, if this is exactly caller stack cleanup.
+fn stack_pointer_add_width(stmt: &Stmt) -> Option<i64> {
+    let Stmt::Assign {
+        dst: VReg::Phys(dst),
+        src: Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        },
+    } = stmt
+    else {
+        return None;
+    };
+    if ssa_base(dst) != "rsp"
+        || !matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(src)) if ssa_base(src) == "rsp")
+    {
+        return None;
+    }
+    match rhs.as_ref() {
+        Expr::Const(width) if *width > 0 => Some(*width),
+        _ => None,
+    }
+}
+
+/// Prove an exact post-call cleanup, including lowered `pop` pairs.
+///
+/// GCC may consume outgoing slots as `tmp = [rsp]; rsp += 8` instead of one
+/// `rsp += N`. The caller supplies the exact byte count implied by the pushes,
+/// so this stops as soon as that amount is balanced and never consumes the
+/// following callee-save pop.
+fn outgoing_stack_cleanup(
+    body: &[Stmt],
+    call_index: usize,
+    expected_bytes: i64,
+) -> Option<Vec<usize>> {
+    if expected_bytes <= 0 {
+        return None;
+    }
+    let mut cursor = call_index + 1;
+    let mut cleaned = 0i64;
+    let mut used = Vec::new();
+    while cursor < body.len() {
+        if cleaned == expected_bytes {
+            return Some(used);
+        }
+        if let Some(width) = lowered_stack_pop_width(body, cursor) {
+            if cleaned.saturating_add(width) > expected_bytes {
+                return None;
+            }
+            used.extend([cursor, cursor + 1]);
+            cleaned += width;
+            cursor += 2;
+            continue;
+        }
+        if let Some(width) = stack_pointer_add_width(&body[cursor]) {
+            if cleaned.saturating_add(width) != expected_bytes {
+                return None;
+            }
+            used.push(cursor);
+            cleaned += width;
+            cursor += 1;
+            continue;
+        }
+        match &body[cursor] {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                ..
+            } if ssa_base(name) == "rsp" => return None,
+            Stmt::Assign { .. } | Stmt::Comment(_) | Stmt::Nop if cleaned == 0 => {
+                cursor += 1;
+            }
+            _ => return None,
+        }
+    }
+    (cleaned == expected_bytes).then_some(used)
+}
+
+fn lowered_stack_pop_width(body: &[Stmt], load_index: usize) -> Option<i64> {
+    let Stmt::Assign {
+        dst: VReg::Phys(dst),
+        src: Expr::Deref { addr, size },
+    } = body.get(load_index)?
+    else {
+        return None;
+    };
+    let Expr::Lea {
+        base: Some(VReg::Phys(base)),
+        index: None,
+        disp: 0,
+        ..
+    } = addr.as_ref()
+    else {
+        return None;
+    };
+    let width = i64::from(*size);
+    (ssa_base(dst) != "rsp"
+        && ssa_base(base) == "rsp"
+        && stack_pointer_add_width(body.get(load_index + 1)?) == Some(width))
+    .then_some(width)
 }
 
 fn mark_slot_write(reg: &VReg, arch: CallConv, blocked_incoming: &mut [bool]) {
@@ -2005,6 +2568,212 @@ mod tests {
     }
 
     #[test]
+    fn consumed_prior_call_result_gets_a_distinct_value_before_scratch_reuse() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "producer".into(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("rdi"),
+                    src: Expr::Reg(reg("rax")),
+                },
+                assign("rax", 99),
+                assign("rsi", 2),
+                call_to("consumer"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        let producer_result = f.body.iter().find_map(|statement| match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                dst: Some(result),
+                ..
+            } if name == "producer" => Some(result.clone()),
+            _ => None,
+        });
+        let consumer_first = f.body.iter().find_map(|statement| match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                args,
+                ..
+            } if name == "consumer" => args.first().cloned(),
+            _ => None,
+        });
+        let Some(result) = producer_result else {
+            panic!("producer result was not attributed: {f:#?}");
+        };
+        assert_ne!(
+            result,
+            reg("rax"),
+            "the result needs its own value identity"
+        );
+        assert_eq!(consumer_first, Some(Expr::Reg(result)));
+    }
+
+    #[test]
+    fn pushed_arguments_keep_the_prior_call_result_distinct_from_rax_setup() {
+        let adjust_rsp = |op, width| Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(width)),
+            },
+        };
+        let push_rax = || Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg("rsp")),
+                index: None,
+                scale: 1,
+                disp: 0,
+                segment: None,
+            },
+            src: Expr::Reg(reg("rax")),
+            size: 8,
+        };
+        let pop_pair = |dst| {
+            [
+                Stmt::Assign {
+                    dst: reg(dst),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("rsp")),
+                            index: None,
+                            scale: 1,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 8,
+                    },
+                },
+                adjust_rsp(BinOp::Add, 8),
+            ]
+        };
+        let from = |name, addend| Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(reg(name))),
+            rhs: Box::new(Expr::Const(addend)),
+        };
+        let mut body = vec![
+            call_to("producer"),
+            Stmt::Assign {
+                dst: reg("rcx"),
+                src: Expr::Const(3),
+            },
+            assign("r9", 5),
+            assign("rsi", 1),
+            Stmt::Assign {
+                dst: reg("rdi#1"),
+                src: Expr::Reg(reg("rax")),
+            },
+            Stmt::Assign {
+                dst: reg("rdx"),
+                src: from("rax", 1),
+            },
+            assign("rax", 7),
+            adjust_rsp(BinOp::Sub, 8),
+            push_rax(),
+            Stmt::Assign {
+                dst: reg("rax"),
+                src: from("rdi#1", 5),
+            },
+            Stmt::Assign {
+                dst: reg("r8"),
+                src: from("rdi#1", 3),
+            },
+            adjust_rsp(BinOp::Sub, 8),
+            push_rax(),
+            call_to("consumer"),
+        ];
+        body.extend(pop_pair("rdx"));
+        body.extend(pop_pair("rcx"));
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body,
+        };
+        let mut slots = [1].into_iter().collect();
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::SysVAmd64,
+            &mut slots,
+            &Default::default(),
+        );
+
+        let result = f.body.iter().find_map(|statement| match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                dst: Some(result),
+                ..
+            } if name == "producer" => Some(result.clone()),
+            _ => None,
+        });
+        let consumer_args = f.body.iter().find_map(|statement| match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                args,
+                ..
+            } if name == "consumer" => Some(args),
+            _ => None,
+        });
+        let Some(result) = result else {
+            panic!("producer result was not attributed: {f:#?}");
+        };
+        let args = consumer_args.expect("consumer call must survive");
+        assert_eq!(args.len(), 8, "stack suffix did not fold: {f:#?}");
+        assert!(args
+            .iter()
+            .any(|argument| reads_reg_in_expr(argument, &result)));
+        assert!(slots.contains(&0), "implicit parameter was not fed back");
+    }
+
+    #[test]
+    fn first_value_producing_call_forwards_an_untouched_leading_parameter() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rbp#1"),
+                    src: Expr::Reg(reg("rsi#1")),
+                },
+                call_to("signed_step"),
+                Stmt::Assign {
+                    dst: reg("rbx"),
+                    src: Expr::Reg(reg("rax")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rbx"))),
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0, 1].into_iter().collect());
+
+        let args = f.body.iter().find_map(|statement| match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                args,
+                ..
+            } if name == "signed_step" => Some(args),
+            _ => None,
+        });
+        assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi"))]));
+    }
+
+    #[test]
     fn cdecl32_folds_contiguous_outgoing_stack_stores() {
         let stack_store = |disp, value| Stmt::Store {
             addr: Expr::Lea {
@@ -2048,6 +2817,586 @@ mod tests {
             &f.body[0],
             Stmt::Call { args, .. }
                 if args == &vec![Expr::Const(10), Expr::Const(20), Expr::Const(30)]
+        ));
+    }
+
+    #[test]
+    fn sysv_resolves_reused_scratch_registers_in_captured_arguments() {
+        let from_rax = |addend| Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(reg("rax"))),
+            rhs: Box::new(Expr::Const(addend)),
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                assign("rax", 10),
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: from_rax(3),
+                },
+                assign("rax", 20),
+                Stmt::Assign {
+                    dst: reg("r8"),
+                    src: from_rax(4),
+                },
+                assign("rax", 30),
+                Stmt::Assign {
+                    dst: reg("r9"),
+                    src: from_rax(5),
+                },
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {f:#?}");
+        };
+        assert_eq!(
+            args,
+            &vec![
+                Expr::Const(0),
+                Expr::Const(1),
+                Expr::Const(2),
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Const(10)),
+                    rhs: Box::new(Expr::Const(3)),
+                },
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Const(20)),
+                    rhs: Box::new(Expr::Const(4)),
+                },
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Const(30)),
+                    rhs: Box::new(Expr::Const(5)),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn sysv_resolves_distinct_stable_frame_loads_from_one_scratch_register() {
+        let frame_load = |disp| Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                base: Some(reg("rbp")),
+                index: None,
+                scale: 1,
+                disp,
+                segment: None,
+            }),
+            size: 4,
+        };
+        let from_rax = |addend| Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(reg("rax"))),
+            rhs: Box::new(Expr::Const(addend)),
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: frame_load(-8),
+                },
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: from_rax(3),
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: frame_load(-16),
+                },
+                Stmt::Assign {
+                    dst: reg("r8"),
+                    src: from_rax(4),
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: frame_load(-24),
+                },
+                Stmt::Assign {
+                    dst: reg("r9"),
+                    src: from_rax(5),
+                },
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {f:#?}");
+        };
+        for (slot, (disp, addend)) in [(3, (-8, 3)), (4, (-16, 4)), (5, (-24, 5))] {
+            assert!(
+                matches!(
+                    &args[slot],
+                    Expr::Bin { lhs, rhs, .. }
+                        if matches!(lhs.as_ref(), Expr::Deref { addr, size: 4 }
+                            if matches!(addr.as_ref(), Expr::Lea { disp: actual, .. } if *actual == disp))
+                            && rhs.as_ref() == &Expr::Const(addend)
+                ),
+                "slot {slot} did not retain its own frame snapshot: {args:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sysv_keeps_frame_load_statement_when_an_aliasing_store_intervenes() {
+        let frame_addr = || Expr::Lea {
+            base: Some(reg("rbp")),
+            index: None,
+            scale: 1,
+            disp: -8,
+            segment: None,
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Deref {
+                        addr: Box::new(frame_addr()),
+                        size: 4,
+                    },
+                },
+                Stmt::Store {
+                    addr: frame_addr(),
+                    src: Expr::Const(99),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rax"))),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                },
+                assign("r8", 4),
+                assign("r9", 5),
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(f.body.iter().any(|statement| matches!(
+            statement,
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src: Expr::Deref { .. },
+            } if name == "rax"
+        )));
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {f:#?}");
+        };
+        assert!(matches!(
+            &args[3],
+            Expr::Bin { lhs, .. }
+                if lhs.as_ref() == &Expr::Reg(reg("rax"))
+        ));
+    }
+
+    #[test]
+    fn sysv_does_not_cross_an_opaque_scratch_definition() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                assign("rax", 99),
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Reg(reg("rbx"))),
+                        size: 4,
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rax"))),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                },
+                assign("r8", 4),
+                assign("r9", 5),
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {f:#?}");
+        };
+        assert!(matches!(
+            &args[3],
+            Expr::Bin { lhs, .. }
+                if lhs.as_ref() == &Expr::Reg(reg("rax"))
+        ));
+        assert!(f.body.iter().any(|statement| matches!(
+            statement,
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src: Expr::Deref { .. },
+            } if name == "rax"
+        )));
+    }
+
+    #[test]
+    fn sysv_folds_contiguous_preallocated_outgoing_stack_arguments() {
+        let stack_store = |disp, value| Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg("rsp")),
+                index: None,
+                scale: 1,
+                disp,
+                segment: None,
+            },
+            src: Expr::Const(value),
+            size: 4,
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                assign("rcx", 3),
+                assign("r8", 4),
+                assign("r9", 5),
+                stack_store(0, 6),
+                stack_store(8, 7),
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(
+            matches!(
+                f.body.as_slice(),
+                [Stmt::Call { args, .. }]
+                    if args == &(0..8).map(Expr::Const).collect::<Vec<_>>()
+            ),
+            "preallocated outgoing area was not absorbed: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn sysv_rejects_nonzero_based_preallocated_stack_stores() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                assign("rcx", 3),
+                assign("r8", 4),
+                assign("r9", 5),
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 8,
+                        segment: None,
+                    },
+                    src: Expr::Const(7),
+                    size: 8,
+                },
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(f.body.iter().any(|statement| matches!(
+            statement,
+            Stmt::Store {
+                addr: Expr::Lea { disp: 8, .. },
+                ..
+            }
+        )));
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {f:#?}");
+        };
+        assert_eq!(args, &(0..6).map(Expr::Const).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn sysv_folds_stack_arguments_after_the_six_register_arguments() {
+        let push_pair = |value| {
+            [
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(value),
+                    size: 8,
+                },
+            ]
+        };
+        let mut body = vec![
+            assign("rsi", 1),
+            assign("rdx", 2),
+            assign("rcx", 3),
+            assign("r9", 5),
+        ];
+        // SysV places stack arguments right-to-left. Walking backward from the
+        // call therefore encounters arg6 first and arg7 second.
+        body.extend(push_pair(7));
+        body.extend(push_pair(6));
+        // GCC may finish register setup after pushing the stack suffix.
+        body.push(assign("r8", 4));
+        body.push(assign("rdi", 0));
+        body.push(call_to("callee"));
+        body.push(Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(16)),
+            },
+        });
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body,
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(
+            f.body.len(),
+            1,
+            "all outgoing setup must be absorbed: {f:#?}"
+        );
+        assert!(matches!(
+            f.body.as_slice(),
+            [Stmt::Call { args, .. }]
+                if args == &(0..8).map(Expr::Const).collect::<Vec<_>>()
+        ));
+    }
+
+    #[test]
+    fn sysv_balances_stack_arguments_consumed_by_lowered_pop_pairs() {
+        let push_pair = |value| {
+            [
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(value),
+                    size: 8,
+                },
+            ]
+        };
+        let pop_pair = |dst| {
+            [
+                Stmt::Assign {
+                    dst: reg(dst),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("rsp")),
+                            index: None,
+                            scale: 1,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 8,
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+            ]
+        };
+        let mut body = vec![
+            assign("rdi", 0),
+            assign("rsi", 1),
+            assign("rdx", 2),
+            assign("rcx", 3),
+            assign("r8", 4),
+            assign("r9", 5),
+        ];
+        body.extend(push_pair(7));
+        body.extend(push_pair(6));
+        body.push(call_to("callee"));
+        body.extend(pop_pair("rdx"));
+        body.extend(pop_pair("rcx"));
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body,
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(
+            matches!(
+                f.body.as_slice(),
+                [Stmt::Call { args, .. }]
+                    if args == &(0..8).map(Expr::Const).collect::<Vec<_>>()
+            ),
+            "lowered pop cleanup was not absorbed: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn sysv_does_not_consume_stack_saves_without_matching_call_cleanup() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Reg(reg("rbx")),
+                    size: 8,
+                },
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                assign("rcx", 3),
+                assign("r8", 4),
+                assign("r9", 5),
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(f.body.iter().any(|statement| matches!(
+            statement,
+            Stmt::Store {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } if name == "rbx"
+        )));
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {f:#?}");
+        };
+        assert_eq!(args, &(0..6).map(Expr::Const).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn sysv_absorbs_one_alignment_word_with_an_odd_stack_suffix() {
+        let stack_sub = || Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(8)),
+            },
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                assign("rcx", 3),
+                assign("r8", 4),
+                assign("r9", 5),
+                stack_sub(),
+                stack_sub(),
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(6),
+                    size: 8,
+                },
+                call_to("callee"),
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(16)),
+                    },
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(matches!(
+            f.body.as_slice(),
+            [Stmt::Call { args, .. }]
+                if args == &(0..7).map(Expr::Const).collect::<Vec<_>>()
         ));
     }
 
@@ -2799,11 +4148,12 @@ mod tests {
         };
         let layouts =
             std::collections::HashMap::from([(0x2000, vec![reg("r0"), reg("s0"), reg("r1")])]);
+        let mut parameter_slots = Default::default();
 
         reconstruct_args_with_params_and_callee_layouts(
             &mut f,
             CallConv::ArmHardFloat,
-            &Default::default(),
+            &mut parameter_slots,
             &layouts,
         );
 

@@ -65,6 +65,41 @@ struct SlotVal {
 #[derive(Clone, Copy)]
 struct StackContext {
     cc: Option<CallConv>,
+    rbp_repurposed: bool,
+}
+
+fn is_active_stack_base(name: &str, ctx: StackContext) -> bool {
+    is_stack_base(name)
+        && !(ctx.rbp_repurposed && matches!(crate::ir::abi::ssa_base(name), "rbp" | "ebp" | "bp"))
+}
+
+/// Whether the function's first assignment to x86's nominal frame register
+/// makes it an ordinary callee-saved value instead of establishing a frame.
+fn rbp_is_repurposed(body: &[Stmt], cc: Option<CallConv>) -> bool {
+    if !matches!(
+        cc,
+        Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32)
+    ) {
+        return false;
+    }
+    for statement in body {
+        let Stmt::Assign {
+            dst: VReg::Phys(dst),
+            src,
+        } = statement
+        else {
+            continue;
+        };
+        if !matches!(crate::ir::abi::ssa_base(dst), "rbp" | "ebp" | "bp") {
+            continue;
+        }
+        return !matches!(
+            src,
+            Expr::Reg(VReg::Phys(stack))
+                if matches!(crate::ir::abi::ssa_base(stack), "rsp" | "esp" | "sp")
+        );
+    }
+    false
 }
 
 /// Rewrite stack-relative memory accesses to named locals.
@@ -82,7 +117,10 @@ pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> Has
     let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
     let mut stack_counter = 0usize;
     let mut local_counter = 0usize;
-    let ctx = StackContext { cc };
+    let ctx = StackContext {
+        cc,
+        rbp_repurposed: rbp_is_repurposed(&f.body, cc),
+    };
     let address_defs = collect_stack_address_defs(&f.body, ctx);
     let mut sp_delta = Some(0i64);
     rewrite_body(
@@ -682,7 +720,7 @@ fn promote_address_taken_stack_object(
     sp_delta: Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
 ) {
-    let recovered = constant_stack_address(expr).or_else(|| match expr {
+    let recovered = constant_stack_address(expr, ctx).or_else(|| match expr {
         Expr::Reg(reg) => address_defs.get(reg).cloned(),
         _ => None,
     });
@@ -743,7 +781,7 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                         *sp_delta = address.and_then(|(base, disp)| {
                             (base == entry_stack_base(ctx)).then_some(disp)
                         });
-                    } else if matches!(dst, VReg::Phys(name) if is_stack_base(name)) {
+                    } else if matches!(dst, VReg::Phys(name) if is_active_stack_base(name, ctx)) {
                         // Architectural frame bases define the coordinate
                         // system used by DWARF and local naming. In particular,
                         // `rbp = rsp` is a frame establishment, not an immutable
@@ -855,7 +893,7 @@ fn resolve_stack_address(
             return Some(address.clone());
         }
         match reg {
-            VReg::Phys(name) if is_stack_base(name) => Some((name.clone(), 0)),
+            VReg::Phys(name) if is_active_stack_base(name, ctx) => Some((name.clone(), 0)),
             _ => None,
         }
     }
@@ -909,7 +947,7 @@ fn resolved_memory_slot(
         return None;
     };
     if let VReg::Phys(name) = base {
-        if is_stack_base(name) {
+        if is_active_stack_base(name, ctx) {
             return Some(normalized_stack_slot(name, *disp, sp_delta, ctx));
         }
     }
@@ -917,7 +955,7 @@ fn resolved_memory_slot(
     Some((base, base_disp.checked_add(*disp)?))
 }
 
-fn constant_stack_address(expr: &Expr) -> Option<(String, i64)> {
+fn constant_stack_address(expr: &Expr, ctx: StackContext) -> Option<(String, i64)> {
     match expr {
         Expr::Lea {
             base: Some(VReg::Phys(base)),
@@ -925,7 +963,7 @@ fn constant_stack_address(expr: &Expr) -> Option<(String, i64)> {
             disp,
             segment: None,
             ..
-        } if is_stack_base(base) => Some((base.clone(), *disp)),
+        } if is_active_stack_base(base, ctx) => Some((base.clone(), *disp)),
         Expr::Bin { op, lhs, rhs } => {
             let Expr::Reg(VReg::Phys(base)) = lhs.as_ref() else {
                 return None;
@@ -933,7 +971,7 @@ fn constant_stack_address(expr: &Expr) -> Option<(String, i64)> {
             let Expr::Const(amount) = rhs.as_ref() else {
                 return None;
             };
-            if !is_stack_base(base) {
+            if !is_active_stack_base(base, ctx) {
                 return None;
             }
             let disp = match op {
@@ -1694,6 +1732,49 @@ mod tests {
             }]
         );
         assert_eq!(sizes.get("local_20"), Some(&8));
+    }
+
+    #[test]
+    fn repurposed_rbp_value_is_not_promoted_as_a_stack_object_address() {
+        let value = Expr::Bin {
+            op: crate::ir::types::BinOp::Add,
+            lhs: Box::new(Expr::Reg(reg("rbp"))),
+            rhs: Box::new(Expr::Const(2)),
+        };
+        let mut f = Function {
+            name: "optimized_caller".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(reg("rsi"))),
+                    },
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "callee".into(),
+                    },
+                    args: vec![value.clone()],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        let sizes = promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Call { args, .. } = &f.body[1] else {
+            panic!("expected call: {f:#?}");
+        };
+        assert_eq!(args, &[value]);
+        assert!(
+            sizes.is_empty(),
+            "repurposed rbp invented locals: {sizes:?}"
+        );
     }
 
     #[test]
