@@ -788,29 +788,69 @@ fn fold_body(
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
 ) {
+    let incoming_overrides = vec![None; arg_slots(arch).len()];
+    fold_body_with_context(body, arch, param_slots, callee_layouts, &incoming_overrides);
+}
+
+fn fold_body_with_context(
+    body: &mut Vec<Stmt>,
+    arch: CallConv,
+    param_slots: &mut std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    incoming_overrides: &[Option<Expr>],
+) {
     // Recurse into nested bodies first so we don't miss calls inside arms.
-    for s in body.iter_mut() {
+    for index in 0..body.len() {
+        let (prefix, suffix) = body.split_at_mut(index);
+        let s = &mut suffix[0];
         match s {
             Stmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                fold_body(then_body, arch, param_slots, callee_layouts);
+                fold_body_with_context(
+                    then_body,
+                    arch,
+                    param_slots,
+                    callee_layouts,
+                    incoming_overrides,
+                );
                 if let Some(eb) = else_body {
-                    fold_body(eb, arch, param_slots, callee_layouts);
+                    fold_body_with_context(
+                        eb,
+                        arch,
+                        param_slots,
+                        callee_layouts,
+                        incoming_overrides,
+                    );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                fold_body(body, arch, param_slots, callee_layouts)
+                let loop_inputs = loop_carried_arg_inputs(prefix, body, arch, incoming_overrides);
+                fold_body_with_context(body, arch, param_slots, callee_layouts, &loop_inputs)
             }
-            Stmt::For { body, .. } => fold_body(body, arch, param_slots, callee_layouts),
+            Stmt::For { body, .. } => {
+                fold_body_with_context(body, arch, param_slots, callee_layouts, incoming_overrides)
+            }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    fold_body(case, arch, param_slots, callee_layouts);
+                    fold_body_with_context(
+                        case,
+                        arch,
+                        param_slots,
+                        callee_layouts,
+                        incoming_overrides,
+                    );
                 }
                 if let Some(default) = default {
-                    fold_body(default, arch, param_slots, callee_layouts);
+                    fold_body_with_context(
+                        default,
+                        arch,
+                        param_slots,
+                        callee_layouts,
+                        incoming_overrides,
+                    );
                 }
             }
             _ => {}
@@ -834,8 +874,57 @@ fn fold_body(
     // preceding arg assignments for a later call first.
     call_positions.reverse();
     for call_idx in call_positions {
-        fold_one_call(body, call_idx, arch, param_slots, callee_layouts);
+        fold_one_call(
+            body,
+            call_idx,
+            arch,
+            param_slots,
+            callee_layouts,
+            incoming_overrides,
+        );
     }
+}
+
+/// Recover the value entering an ABI slot at the top of a structured loop.
+///
+/// SSA destruction leaves an explicit initialization before the loop and a
+/// same-slot copy at the back edge (`rdi#1 = rdi` ... `rdi#1 = rdi#2`). A call
+/// before that back-edge copy consumes `rdi#1`, not the function-entry `rdi`.
+/// Requiring the exact initialized SSA destination, a same-slot update, and a
+/// preceding call keeps this narrower than generic phi reconstruction.
+fn loop_carried_arg_inputs(
+    prefix: &[Stmt],
+    loop_body: &[Stmt],
+    arch: CallConv,
+    inherited: &[Option<Expr>],
+) -> Vec<Option<Expr>> {
+    let mut inputs = inherited.to_vec();
+    inputs.resize(arg_slots(arch).len(), None);
+    for (update_index, statement) in loop_body.iter().enumerate() {
+        let Stmt::Assign {
+            dst: VReg::Phys(dst),
+            src: Expr::Reg(VReg::Phys(src)),
+        } = statement
+        else {
+            continue;
+        };
+        let Some(slot) = slot_of(arch, dst) else {
+            continue;
+        };
+        if !dst.contains('#')
+            || slot_of(arch, src) != Some(slot)
+            || !loop_body[..update_index]
+                .iter()
+                .any(|candidate| matches!(candidate, Stmt::Call { .. }))
+            || !prefix.iter().rev().any(|candidate| {
+                matches!(candidate, Stmt::Assign { dst: VReg::Phys(prior), .. } if prior == dst)
+            })
+        {
+            continue;
+        }
+        inputs[slot] = Some(Expr::Reg(VReg::Phys(dst.clone())));
+    }
+    inputs
 }
 
 fn direct_call_target_va(statement: &Stmt) -> Option<u64> {
@@ -1095,6 +1184,7 @@ fn fold_one_call(
     arch: CallConv,
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    incoming_overrides: &[Option<Expr>],
 ) {
     if arch == CallConv::Cdecl32 {
         fold_one_cdecl32_call(body, call_idx);
@@ -1393,15 +1483,19 @@ fn fold_one_call(
             // has no explicit body use for value numbering to witness. The
             // proven parameter slot therefore authorizes its canonical ABI
             // spelling when `incoming_arg_expr` cannot find a versioned name.
-            let incoming = incoming_arg_expr(arch, 0, body).unwrap_or_else(|| {
-                Expr::Reg(VReg::phys(
-                    arg_slots(arch)
-                        .first()
-                        .and_then(|aliases| aliases.first())
-                        .copied()
-                        .unwrap_or("rdi"),
-                ))
-            });
+            let incoming = incoming_overrides
+                .first()
+                .and_then(Clone::clone)
+                .or_else(|| incoming_arg_expr(arch, 0, body))
+                .unwrap_or_else(|| {
+                    Expr::Reg(VReg::phys(
+                        arg_slots(arch)
+                            .first()
+                            .and_then(|aliases| aliases.first())
+                            .copied()
+                            .unwrap_or("rdi"),
+                    ))
+                });
             if let Stmt::Call { args, .. } = &mut body[call_idx] {
                 *args = vec![incoming];
             }
@@ -1424,7 +1518,11 @@ fn fold_one_call(
                 && !blocked_incoming[slot_idx]
                 && param_slots.contains(&slot_idx) =>
             {
-                let Some(expr) = incoming_arg_expr(arch, slot_idx, body) else {
+                let Some(expr) = incoming_overrides
+                    .get(slot_idx)
+                    .and_then(Clone::clone)
+                    .or_else(|| incoming_arg_expr(arch, slot_idx, body))
+                else {
                     break;
                 };
                 args_out.push(expr);
@@ -2768,6 +2866,78 @@ mod tests {
                 args,
                 ..
             } if name == "signed_step" => Some(args),
+            _ => None,
+        });
+        assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi"))]));
+    }
+
+    #[test]
+    fn call_inside_loop_uses_the_loop_carried_argument_value() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Reg(reg("rdi")),
+                },
+                Stmt::DoWhile {
+                    body: vec![
+                        call_to("signed_step"),
+                        Stmt::Assign {
+                            dst: reg("rdi#2"),
+                            src: Expr::Reg(reg("rax")),
+                        },
+                        Stmt::Assign {
+                            dst: reg("rdi#1"),
+                            src: Expr::Reg(reg("rdi#2")),
+                        },
+                    ],
+                    cond: Expr::Const(1),
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0].into_iter().collect());
+
+        let Stmt::DoWhile { body, .. } = &f.body[1] else {
+            panic!("expected loop: {f:#?}");
+        };
+        let args = body.iter().find_map(|statement| match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                args,
+                ..
+            } if name == "signed_step" => Some(args),
+            _ => None,
+        });
+        assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi#1"))]));
+    }
+
+    #[test]
+    fn loop_back_edge_without_an_initializer_does_not_invent_an_input() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![Stmt::DoWhile {
+                body: vec![
+                    call_to("signed_step"),
+                    Stmt::Assign {
+                        dst: reg("rdi#1"),
+                        src: Expr::Reg(reg("rdi#2")),
+                    },
+                ],
+                cond: Expr::Const(1),
+            }],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0].into_iter().collect());
+
+        let Stmt::DoWhile { body, .. } = &f.body[0] else {
+            panic!("expected loop: {f:#?}");
+        };
+        let args = body.iter().find_map(|statement| match statement {
+            Stmt::Call { args, .. } => Some(args),
             _ => None,
         });
         assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi"))]));

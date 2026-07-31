@@ -613,7 +613,7 @@
   },
   "11_call_shapes:gcc:O2": {
     "call_accumulate_bytes": "pass",
-    "call_chain_in_loop": "fail",
+    "call_chain_in_loop": "pass",
     "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "pass",
