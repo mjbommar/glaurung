@@ -7,7 +7,7 @@
 //! arbitrary unreachable bytes as code.
 
 use gimli::{BaseAddresses, CieOrFde, EhFrame, Pointer, UnwindSection};
-use object::{Object, ObjectSection};
+use object::{Object, ObjectSection, ObjectSymbol, ObjectSymbolTable, RelocationTarget};
 
 /// Semantic class of the first action attached to a landing pad.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +20,13 @@ pub enum ExceptionAction {
     ExceptionSpec,
     /// The action bytes were malformed or used an unsupported encoding.
     Unknown,
+}
+
+/// Source-level C++ type proven by an LSDA type-table relocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatchType {
+    /// Itanium ABI fundamental typeinfo symbol `_ZTIi`.
+    Int,
 }
 
 /// One LSDA-proven exceptional transfer.
@@ -35,6 +42,10 @@ pub struct ExceptionCallSite {
     pub landing_pad: u64,
     /// First action attached to the landing pad.
     pub action: ExceptionAction,
+    /// Typed catch operand, when its typeinfo relocation is unambiguous.
+    pub catch_type: Option<CatchType>,
+    /// Address of the indirect typeinfo slot named by the LSDA.
+    pub type_info_location: Option<u64>,
 }
 
 /// Recover every ELF/Itanium exception call site with a concrete landing pad.
@@ -95,17 +106,72 @@ pub fn extract_exception_call_sites(data: &[u8]) -> Vec<ExceptionCallSite> {
         let Some(lsda) = section_data.get(offset..) else {
             continue;
         };
-        out.extend(parse_lsda(
-            lsda,
-            lsda_va,
-            fde.initial_address(),
-            address_size,
-            endian,
-        ));
+        let mut sites = parse_lsda(lsda, lsda_va, fde.initial_address(), address_size, endian);
+        for site in &mut sites {
+            site.catch_type = site
+                .type_info_location
+                .and_then(|location| catch_type_at_relocation(&object, location));
+        }
+        out.extend(sites);
     }
     out.sort_by_key(|site| (site.function_start, site.protected_start, site.landing_pad));
     out.dedup();
+    if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() && !out.is_empty() {
+        eprintln!("[exception-sites] {out:#?}");
+    }
     out
+}
+
+fn catch_type_at_relocation(object: &object::read::File<'_>, location: u64) -> Option<CatchType> {
+    let relocations = object.dynamic_relocations()?;
+    for (place, relocation) in relocations {
+        if place != location {
+            continue;
+        }
+        let RelocationTarget::Symbol(index) = relocation.target() else {
+            continue;
+        };
+        let symbol = object.dynamic_symbol_table()?.symbol_by_index(index).ok()?;
+        return match symbol.name().ok()?.split('@').next()? {
+            "_ZTIi" => Some(CatchType::Int),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// Clone an LLIR graph and add only its LSDA-proven exceptional successors.
+///
+/// The normal graph remains the input to region structuring. This augmented
+/// view is for SSA/dataflow so catch definitions can reach shared joins without
+/// teaching every normal CFG consumer that a throw is an ordinary branch.
+pub fn with_exceptional_successors(
+    function: &crate::ir::types::LlirFunction,
+    sites: &[ExceptionCallSite],
+) -> crate::ir::types::LlirFunction {
+    let mut augmented = function.clone();
+    let starts: std::collections::HashSet<u64> = augmented
+        .blocks
+        .iter()
+        .map(|block| block.start_va)
+        .collect();
+    for site in sites
+        .iter()
+        .filter(|site| site.function_start == augmented.entry_va)
+    {
+        if !starts.contains(&site.landing_pad) {
+            continue;
+        }
+        let Some(source) = augmented.blocks.iter_mut().find(|block| {
+            site.protected_start >= block.start_va && site.protected_end == block.end_va
+        }) else {
+            continue;
+        };
+        if !source.succs.contains(&site.landing_pad) {
+            source.succs.push(site.landing_pad);
+        }
+    }
+    augmented
 }
 
 fn direct_pointer(pointer: Pointer) -> Option<u64> {
@@ -154,9 +220,17 @@ fn parse_lsda(
     let Some(ttype_encoding) = reader.read_u8() else {
         return Vec::new();
     };
-    if ttype_encoding != 0xff && reader.read_uleb128().is_none() {
-        return Vec::new();
-    }
+    let type_table_base = if ttype_encoding == 0xff {
+        None
+    } else {
+        let Some(offset) = reader.read_uleb128() else {
+            return Vec::new();
+        };
+        let Ok(offset) = usize::try_from(offset) else {
+            return Vec::new();
+        };
+        reader.pos.checked_add(offset)
+    };
     let Some(call_site_encoding) = reader.read_u8() else {
         return Vec::new();
     };
@@ -202,40 +276,82 @@ fn parse_lsda(
         let Some(landing_pad) = lpstart.checked_add(landing) else {
             continue;
         };
+        let (action, type_filter) = parse_action(data, action_table, action_offset);
+        let type_info_location = type_filter.and_then(|filter| {
+            read_type_info_location(
+                data,
+                lsda_va,
+                type_table_base?,
+                ttype_encoding,
+                filter,
+                address_size,
+                endian,
+            )
+        });
         out.push(ExceptionCallSite {
             function_start,
             protected_start,
             protected_end,
             landing_pad,
-            action: parse_action(data, action_table, action_offset),
+            action,
+            catch_type: None,
+            type_info_location,
         });
     }
     out
 }
 
-fn parse_action(data: &[u8], action_table: usize, offset: u64) -> ExceptionAction {
+fn parse_action(data: &[u8], action_table: usize, offset: u64) -> (ExceptionAction, Option<u64>) {
     if offset == 0 {
-        return ExceptionAction::Cleanup;
+        return (ExceptionAction::Cleanup, None);
     }
     let Ok(offset) = usize::try_from(offset) else {
-        return ExceptionAction::Unknown;
+        return (ExceptionAction::Unknown, None);
     };
     let Some(relative) = offset.checked_sub(1) else {
-        return ExceptionAction::Unknown;
+        return (ExceptionAction::Unknown, None);
     };
     let Some(pos) = action_table.checked_add(relative) else {
-        return ExceptionAction::Unknown;
+        return (ExceptionAction::Unknown, None);
     };
     let Some(rest) = data.get(pos..) else {
-        return ExceptionAction::Unknown;
+        return (ExceptionAction::Unknown, None);
     };
     let mut reader = LsdaReader::new(rest, 0, 8, gimli::RunTimeEndian::Little);
     match reader.read_sleb128() {
-        Some(value) if value > 0 => ExceptionAction::Catch,
-        Some(0) => ExceptionAction::Cleanup,
-        Some(_) => ExceptionAction::ExceptionSpec,
-        None => ExceptionAction::Unknown,
+        Some(value) if value > 0 => (ExceptionAction::Catch, u64::try_from(value).ok()),
+        Some(0) => (ExceptionAction::Cleanup, None),
+        Some(_) => (ExceptionAction::ExceptionSpec, None),
+        None => (ExceptionAction::Unknown, None),
     }
+}
+
+fn read_type_info_location(
+    data: &[u8],
+    lsda_va: u64,
+    table_base: usize,
+    encoding: u8,
+    filter: u64,
+    address_size: u8,
+    endian: gimli::RunTimeEndian,
+) -> Option<u64> {
+    let width = match encoding & 0x0f {
+        0x00 => usize::from(address_size),
+        0x02 | 0x0a => 2,
+        0x03 | 0x0b => 4,
+        0x04 | 0x0c => 8,
+        _ => return None,
+    };
+    let distance = usize::try_from(filter).ok()?.checked_mul(width)?;
+    let entry = table_base.checked_sub(distance)?;
+    let rest = data.get(entry..)?;
+    let mut reader = LsdaReader::new(
+        rest,
+        lsda_va.checked_add(entry as u64)?,
+        address_size,
+        endian,
+    );
+    reader.read_encoded_pointer_location(encoding)
 }
 
 struct LsdaReader<'data> {
@@ -373,11 +489,27 @@ impl<'data> LsdaReader<'data> {
         };
         u64::try_from(base.checked_add(raw)?).ok()
     }
+
+    fn read_encoded_pointer_location(&mut self, encoding: u8) -> Option<u64> {
+        let encoding = encoding & !0x80;
+        if encoding == 0xff {
+            return None;
+        }
+        let field_va = self.base_va.checked_add(self.pos as u64)?;
+        let raw = self.read_encoded_scalar(encoding)?;
+        let base = match encoding & 0x70 {
+            0x00 | 0x50 => 0_i128,
+            0x10 => i128::from(field_va),
+            _ => return None,
+        };
+        u64::try_from(base.checked_add(raw)?).ok()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_lsda, ExceptionAction, ExceptionCallSite};
+    use super::{parse_lsda, with_exceptional_successors, ExceptionAction, ExceptionCallSite};
+    use crate::ir::types::{LlirBlock, LlirFunction};
 
     #[test]
     fn clang_o0_typed_catch_call_site_is_recovered() {
@@ -396,6 +528,8 @@ mod tests {
                 protected_end: 0x1373,
                 landing_pad: 0x138b,
                 action: ExceptionAction::Catch,
+                catch_type: None,
+                type_info_location: Some(0x40a0),
             }]
         );
     }
@@ -423,5 +557,48 @@ mod tests {
         assert!(
             parse_lsda(&truncated, 0x1000, 0x2000, 8, gimli::RunTimeEndian::Little,).is_empty()
         );
+    }
+
+    #[test]
+    fn exceptional_successor_augments_only_the_protected_call_block() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1010,
+                    instrs: Vec::new(),
+                    succs: vec![0x1010],
+                },
+                LlirBlock {
+                    start_va: 0x1010,
+                    end_va: 0x1020,
+                    instrs: Vec::new(),
+                    succs: Vec::new(),
+                },
+                LlirBlock {
+                    start_va: 0x1030,
+                    end_va: 0x1040,
+                    instrs: Vec::new(),
+                    succs: Vec::new(),
+                },
+            ],
+        };
+        let sites = [ExceptionCallSite {
+            function_start: 0x1000,
+            protected_start: 0x100b,
+            protected_end: 0x1010,
+            landing_pad: 0x1030,
+            action: ExceptionAction::Catch,
+            catch_type: None,
+            type_info_location: None,
+        }];
+
+        let augmented = with_exceptional_successors(&function, &sites);
+
+        assert_eq!(function.blocks[0].succs, vec![0x1010]);
+        assert_eq!(augmented.blocks[0].succs, vec![0x1010, 0x1030]);
+        assert!(augmented.blocks[1].succs.is_empty());
+        assert!(augmented.blocks[2].succs.is_empty());
     }
 }

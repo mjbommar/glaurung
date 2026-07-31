@@ -249,15 +249,11 @@ def test_round_trip_resolves_a_sanitized_clang_lambda_symbol() -> None:
     assert result["status"] == "pass", result
 
 
-def test_recompiled_cpp_abi_callee_loads_its_runtime(tmp_path: Path) -> None:
-    """Included local C++ callees must retain their ABI runtime dependency.
+def test_recompiled_cpp_throwing_callee_loads_its_runtime(tmp_path: Path) -> None:
+    """Included local C++ callees retain source exception semantics and runtime.
 
-    The decompiled source is C, but a recovered throwing helper still calls
-    ``__cxa_allocate_exception`` and ``__cxa_throw``.  Linking only against the
-    original fixture can be discarded by ``--as-needed`` once all local callees
-    are included, leaving a shared object that compiles but fails at ``dlopen``.
-    This exercises the real C++ compiler, ELF dependency discovery, decompiler,
-    local-callee closure, C rebuild, and dynamic loader.
+    This exercises the real C++ compiler, ELF typeinfo relocation, decompiler,
+    local-callee closure, source-level ``throw``, C++ rebuild, and dynamic loader.
     """
     binary = _compile_cpp_so(
         "static __attribute__((noinline)) int may_throw(int x) {\n"
@@ -273,7 +269,8 @@ def test_recompiled_cpp_abi_callee_loads_its_runtime(tmp_path: Path) -> None:
     caller = D.decompiled_c(binary, signature["va"])
     assert caller is not None
     closed = D.include_referenced_local_callees(binary, caller)
-    assert "__cxa_throw" in closed
+    assert "throw (int)" in closed
+    assert "__cxa_throw" not in closed
 
     rebuilt = D.build_so(
         closed,
@@ -284,6 +281,28 @@ def test_recompiled_cpp_abi_callee_loads_its_runtime(tmp_path: Path) -> None:
 
     assert rebuilt is not None
     ctypes.CDLL(str(rebuilt))
+
+
+def test_recompiled_typed_try_catch_uses_cpp_and_preserves_c_abi(
+    tmp_path: Path,
+) -> None:
+    """Recovered C++ syntax must execute through the ordinary round-trip gate."""
+    rebuilt = D.build_so(
+        "int recovered_try(int x) {\n"
+        "    try { if (x < 0) throw -x; return x + 7; }\n"
+        "    catch (int e) { return 90 - e; }\n"
+        "}",
+        tmp_path,
+        "typed_try_catch",
+    )
+
+    assert rebuilt is not None
+    library = ctypes.CDLL(str(rebuilt))
+    function = library.recovered_try
+    function.argtypes = [ctypes.c_int]
+    function.restype = ctypes.c_int
+    assert function(5) == 12
+    assert function(-8) == 82
 
 
 def test_cfg_owns_lsda_only_cpp_landing_pad_blocks() -> None:
@@ -1044,7 +1063,10 @@ def test_real_pointer_word_select_converts_each_conditional_arm():
     assert decompiled is not None
     assert '"glaurung-select-word"' in decompiled, decompiled
     assert " ? " in decompiled, decompiled
-    assert '(long)("glaurung-select-word")' in decompiled, decompiled
+    assert (
+        '(long)("glaurung-select-word")' in decompiled
+        or '(long int)("glaurung-select-word")' in decompiled
+    ), decompiled
 
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         source_path = Path(td) / "pointer_word_select.c"

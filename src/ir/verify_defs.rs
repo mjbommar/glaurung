@@ -435,6 +435,21 @@ fn walk(body: &[Stmt], defined: &mut BTreeSet<String>, found: &mut BTreeSet<Stri
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
+            Stmt::Throw { value } => undefined_reads(value, defined, found),
+            Stmt::TryCatch { try_body, catches } => {
+                let incoming = defined.clone();
+                let mut joined = defined.clone();
+                let mut try_defs = incoming.clone();
+                walk(try_body, &mut try_defs, found);
+                joined.extend(try_defs);
+                for catch in catches {
+                    let mut catch_defs = incoming.clone();
+                    catch_defs.extend(checked_name(&catch.binding));
+                    walk(&catch.body, &mut catch_defs, found);
+                    joined.extend(catch_defs);
+                }
+                *defined = joined;
+            }
         }
     }
 }

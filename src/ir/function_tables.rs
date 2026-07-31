@@ -274,7 +274,9 @@ fn resolve_body(
             | Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_) => {}
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
 
         if let Stmt::Assign { dst, src } = statement {

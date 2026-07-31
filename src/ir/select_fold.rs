@@ -84,7 +84,9 @@ fn fold_masks_in_stmt(statement: &mut Stmt) {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => {}
     }
 }
 

@@ -177,7 +177,9 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
                 | Stmt::Break
                 | Stmt::Nop
                 | Stmt::Unknown(_)
-                | Stmt::Comment(_) => {}
+                | Stmt::Comment(_)
+                | Stmt::Throw { .. }
+                | Stmt::TryCatch { .. } => {}
             }
         }
     }
@@ -337,7 +339,9 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
                 | Stmt::Break
                 | Stmt::Nop
                 | Stmt::Unknown(_)
-                | Stmt::Comment(_) => {}
+                | Stmt::Comment(_)
+                | Stmt::Throw { .. }
+                | Stmt::TryCatch { .. } => {}
             }
         }
     }
@@ -416,7 +420,9 @@ fn fold_body(body: &mut [Stmt]) {
             | Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_) => {}
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
     }
 }

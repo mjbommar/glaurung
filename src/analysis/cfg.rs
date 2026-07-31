@@ -3015,6 +3015,18 @@ fn attach_exception_landing_pads(
         if !owns(site.landing_pad, site.landing_pad.saturating_add(1)) {
             continue;
         }
+        // Normal discovery does not split at calls. Exceptional dataflow does:
+        // the protected call must terminate its own block so its normal and
+        // landing-pad successors describe the two possible continuations.
+        if split_parent_block_at(
+            data,
+            arch,
+            end,
+            &mut functions[parent_index],
+            site.protected_end,
+        ) {
+            touched.insert(parent_index);
+        }
         if functions[parent_index]
             .basic_blocks
             .iter()
@@ -3065,7 +3077,7 @@ fn attach_exception_landing_pads(
         }
 
         let parent = &mut functions[parent_index];
-        split_parent_blocks_at_handler_leaders(parent, &handler.basic_blocks);
+        split_parent_blocks_at_handler_leaders(data, arch, end, parent, &handler.basic_blocks);
         for block in handler.basic_blocks {
             if !parent
                 .basic_blocks
@@ -3106,7 +3118,13 @@ fn attach_exception_landing_pads(
 /// interior. GCC commonly rejoins a catch path at the final `mov` immediately
 /// before the normal epilogue jump, which is a new leader even though normal
 /// entry-rooted discovery originally swept across it.
-fn split_parent_blocks_at_handler_leaders(parent: &mut Function, handler: &[BasicBlock]) {
+fn split_parent_blocks_at_handler_leaders(
+    data: &[u8],
+    arch: BArch,
+    endianness: Endianness,
+    parent: &mut Function,
+    handler: &[BasicBlock],
+) {
     let mut leaders: Vec<u64> = handler
         .iter()
         .map(|block| block.start_address.value)
@@ -3114,39 +3132,113 @@ fn split_parent_blocks_at_handler_leaders(parent: &mut Function, handler: &[Basi
     leaders.sort_unstable();
     leaders.dedup();
     for leader in leaders {
-        let Some(index) = parent.basic_blocks.iter().position(|block| {
-            block.start_address.value < leader && leader < block.end_address.value
-        }) else {
-            continue;
-        };
-        let new_id = format!("bb_{leader:x}");
-        let source_start = parent.basic_blocks[index].start_address.clone();
-        let new_start = match Address::new(
-            AddressKind::VA,
-            leader,
-            source_start.bits,
-            source_start.space.clone(),
-            None,
-        ) {
-            Ok(address) => address,
-            Err(_) => continue,
-        };
-        let tail_instruction_count = handler
-            .iter()
-            .find(|block| block.start_address.value == leader)
-            .map_or(0, |block| block.instruction_count);
-        let block = &mut parent.basic_blocks[index];
-        block.end_address = new_start.clone();
-        block.instruction_count = block
-            .instruction_count
-            .saturating_sub(tail_instruction_count);
-        block.successor_ids.clear();
-        block.successor_ids.push(new_id);
-        parent
-            .edges
-            .retain(|(source, _target)| source.value != source_start.value);
-        parent.add_edge(source_start, new_start);
+        split_parent_block_at(data, arch, endianness, parent, leader);
     }
+}
+
+fn split_parent_block_at(
+    data: &[u8],
+    arch: BArch,
+    endianness: Endianness,
+    parent: &mut Function,
+    leader: u64,
+) -> bool {
+    let Some(index) = parent
+        .basic_blocks
+        .iter()
+        .position(|block| block.start_address.value < leader && leader < block.end_address.value)
+    else {
+        return false;
+    };
+    let source_start = parent.basic_blocks[index].start_address.clone();
+    let old_end = parent.basic_blocks[index].end_address.clone();
+    let old_successors = parent.basic_blocks[index].successor_ids.clone();
+    let Some(head_count) =
+        count_machine_instructions(data, arch, endianness, source_start.value, leader)
+    else {
+        return false;
+    };
+    let Some(tail_count) =
+        count_machine_instructions(data, arch, endianness, leader, old_end.value)
+    else {
+        return false;
+    };
+    let Ok(new_start) = Address::new(
+        AddressKind::VA,
+        leader,
+        source_start.bits,
+        source_start.space.clone(),
+        None,
+    ) else {
+        return false;
+    };
+    let source_id = parent.basic_blocks[index].id.clone();
+    let new_id = format!("bb_{leader:x}");
+    let tail = BasicBlock::new(
+        new_id.clone(),
+        new_start.clone(),
+        old_end,
+        tail_count,
+        Some(old_successors),
+        Some(vec![source_id]),
+    );
+    let block = &mut parent.basic_blocks[index];
+    block.end_address = new_start.clone();
+    block.instruction_count = head_count;
+    block.successor_ids = vec![new_id];
+
+    let mut moved_targets = Vec::new();
+    parent.edges.retain(|(source, target)| {
+        if source.value == source_start.value {
+            moved_targets.push(target.clone());
+            false
+        } else {
+            true
+        }
+    });
+    parent.add_edge(source_start, new_start.clone());
+    for target in moved_targets {
+        parent.add_edge(new_start.clone(), target);
+    }
+    parent.basic_blocks.push(tail);
+    true
+}
+
+fn count_machine_instructions(
+    data: &[u8],
+    arch: BArch,
+    endianness: Endianness,
+    start: u64,
+    end: u64,
+) -> Option<u32> {
+    if end <= start {
+        return None;
+    }
+    let darch: crate::core::disassembler::Architecture = arch.into();
+    let mut backend = registry::for_arch(darch, endianness)?;
+    if matches!(arch, BArch::ARM) {
+        let mode = crate::analysis::arm32_mode::mode_at(data, start, endianness);
+        let _ = backend.set_thumb_mode(matches!(
+            mode,
+            crate::analysis::arm32_mode::Arm32Mode::Thumb
+        ));
+    }
+    let bits = darch.address_bits();
+    let mut cursor = start;
+    let mut count = 0_u32;
+    while cursor < end {
+        let offset = crate::analysis::entry::va_to_code_file_offset(data, cursor)?;
+        let bytes = data.get(offset..)?;
+        let address = Address::new(AddressKind::VA, cursor, bits, None, None).ok()?;
+        let instruction = backend.disassemble_instruction(&address, bytes).ok()?;
+        let next = cursor.checked_add(u64::from(instruction.length))?;
+        if next <= cursor || next > end {
+            return None;
+        }
+        cursor = next;
+        count = count.checked_add(1)?;
+    }
+    (cursor == end).then_some(count)
 }
 
 /// Recompute predecessor lists after merging an independently discovered

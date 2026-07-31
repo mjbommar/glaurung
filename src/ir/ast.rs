@@ -237,6 +237,16 @@ pub enum Stmt {
     Return {
         value: Option<Expr>,
     },
+    /// Source-level C++ throw recovered from the exact Itanium ABI
+    /// allocate/store/`__cxa_throw` sequence.
+    Throw {
+        value: Expr,
+    },
+    /// Source-level C++ exception region backed by an LSDA-proven landing pad.
+    TryCatch {
+        try_body: Vec<Stmt>,
+        catches: Vec<CatchClause>,
+    },
     /// Labelled position (used for unstructured fallbacks and goto targets).
     Label(u64),
     Goto {
@@ -312,6 +322,14 @@ pub enum Stmt {
         /// Optional default arm body, executed when no case matches.
         default: Option<Vec<Stmt>>,
     },
+}
+
+/// One typed handler owned by [`Stmt::TryCatch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatchClause {
+    pub type_name: String,
+    pub binding: VReg,
+    pub body: Vec<Stmt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1627,7 +1645,19 @@ fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
         | Stmt::Label(_)
         | Stmt::Break
         | Stmt::Nop
-        | Stmt::Comment(_) => false,
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. } => false,
+        Stmt::TryCatch { try_body, catches } => {
+            try_body
+                .iter()
+                .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                || catches.iter().any(|catch| {
+                    catch
+                        .body
+                        .iter()
+                        .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                })
+        }
     }
 }
 
@@ -1746,6 +1776,18 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         | Stmt::Unknown(_)
         | Stmt::Comment(_) => 0,
         Stmt::Switch { discriminant, .. } => count_reg_uses_in_expr(discriminant, target),
+        Stmt::Throw { value } => count_reg_uses_in_expr(value, target),
+        Stmt::TryCatch { try_body, catches } => {
+            try_body
+                .iter()
+                .map(|stmt| count_reg_uses_in_stmt(stmt, target))
+                .sum::<usize>()
+                + catches
+                    .iter()
+                    .flat_map(|catch| &catch.body)
+                    .map(|stmt| count_reg_uses_in_stmt(stmt, target))
+                    .sum::<usize>()
+        }
     }
 }
 
@@ -2354,6 +2396,12 @@ fn clear_return_values(body: &mut [Stmt]) {
                 }
                 if let Some(body) = default {
                     clear_return_values(body);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                clear_return_values(try_body);
+                for catch in catches {
+                    clear_return_values(&mut catch.body);
                 }
             }
             _ => {}
@@ -3445,6 +3493,34 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
             indent(out, level);
             out.push_str("}\n");
         }
+        Stmt::Throw { value } => {
+            indent(out, level);
+            out.push_str("throw ");
+            write_expr_ctx(value, tm, out);
+            out.push_str(";\n");
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            indent(out, level);
+            out.push_str("try {\n");
+            for statement in try_body {
+                write_stmt_ctx(statement, tm, out, level + 1);
+            }
+            indent(out, level);
+            out.push('}');
+            for catch in catches {
+                out.push_str(" catch (");
+                out.push_str(&catch.type_name);
+                out.push(' ');
+                write_reg_with_type(&catch.binding, tm, out);
+                out.push_str(") {\n");
+                for statement in &catch.body {
+                    write_stmt_ctx(statement, tm, out, level + 1);
+                }
+                indent(out, level);
+                out.push('}');
+            }
+            out.push('\n');
+        }
     }
 }
 
@@ -3542,7 +3618,9 @@ pub fn compute_frame_size(body: &[Stmt]) -> Option<i64> {
             | Stmt::While { .. }
             | Stmt::For { .. }
             | Stmt::DoWhile { .. }
-            | Stmt::Switch { .. } => break,
+            | Stmt::Switch { .. }
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => break,
             // Register-save stores (e.g. `store %stack_top = %var0`) and
             // unrelated register assigns are part of the prologue and
             // don't change the running frame size — continue walking.
@@ -4012,6 +4090,34 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
             indent(out, level);
             out.push_str("}\n");
         }
+        Stmt::Throw { value } => {
+            indent(out, level);
+            out.push_str("throw ");
+            write_expr_c(value, out);
+            out.push_str(";\n");
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            indent(out, level);
+            out.push_str("try {\n");
+            for statement in try_body {
+                write_stmt_c(statement, out, level + 1);
+            }
+            indent(out, level);
+            out.push('}');
+            for catch in catches {
+                out.push_str(" catch (");
+                out.push_str(&catch.type_name);
+                out.push(' ');
+                write_reg_c(&catch.binding, out);
+                out.push_str(") {\n");
+                for statement in &catch.body {
+                    write_stmt_c(statement, out, level + 1);
+                }
+                indent(out, level);
+                out.push('}');
+            }
+            out.push('\n');
+        }
     }
 }
 
@@ -4324,6 +4430,13 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
                 | Stmt::Unknown(_)
                 | Stmt::Comment(_)
                 | Stmt::Pop { .. } => {}
+                Stmt::Throw { value } => expression(value, tm),
+                Stmt::TryCatch { try_body, catches } => {
+                    statements(try_body, tm);
+                    for catch in catches {
+                        statements(&catch.body, tm);
+                    }
+                }
             }
         }
     }
@@ -5458,6 +5571,14 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
+            Stmt::Throw { value } => re(value, map),
+            Stmt::TryCatch { try_body, catches } => {
+                rename_phys_in_body(try_body, map);
+                for catch in catches {
+                    rn(&mut catch.binding, map);
+                    rename_phys_in_body(&mut catch.body, map);
+                }
+            }
         }
     }
 }
@@ -6561,6 +6682,20 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             ids.gotos.insert(*target);
         }
         Stmt::IndirectGoto { target } => collect_idents_expr(target, ids),
+        Stmt::Throw { value } => collect_idents_expr(value, ids),
+        Stmt::TryCatch { try_body, catches } => {
+            for statement in try_body {
+                collect_idents_stmt(statement, ids);
+            }
+            for catch in catches {
+                for statement in &catch.body {
+                    collect_idents_stmt(statement, ids);
+                }
+                if let VReg::Phys(name) = &catch.binding {
+                    ids.locals.remove(&sanitize_c_ident(name));
+                }
+            }
+        }
         // Push/Pop/Nop are elided by the renderer; Unknown/Comment become
         // comments; none introduce a declared identifier.
         Stmt::Push { .. }
@@ -6684,6 +6819,24 @@ fn collect_named_call_observations(
                 if let Some(default) = default {
                     collect_named_call_observations(
                         default,
+                        current_name,
+                        observations,
+                        authoritative,
+                        conflicts,
+                    );
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collect_named_call_observations(
+                    try_body,
+                    current_name,
+                    observations,
+                    authoritative,
+                    conflicts,
+                );
+                for catch in catches {
+                    collect_named_call_observations(
+                        &catch.body,
                         current_name,
                         observations,
                         authoritative,
@@ -8310,6 +8463,37 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             }
             indent(out, level);
             out.push_str("}\n");
+        }
+        Stmt::Throw { value } => {
+            indent(out, level);
+            out.push_str("throw ");
+            write_expr_dec(value, out);
+            out.push_str(";\n");
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            indent(out, level);
+            out.push_str("try {\n");
+            for statement in try_body {
+                write_stmt_dec(statement, out, level + 1);
+            }
+            indent(out, level);
+            out.push('}');
+            for catch in catches {
+                out.push_str(" catch (");
+                out.push_str(&catch.type_name);
+                out.push(' ');
+                match &catch.binding {
+                    VReg::Phys(name) => out.push_str(&sanitize_c_ident(name)),
+                    other => out.push_str(&sanitize_c_ident(&other.to_string())),
+                }
+                out.push_str(") {\n");
+                for statement in &catch.body {
+                    write_stmt_dec(statement, out, level + 1);
+                }
+                indent(out, level);
+                out.push('}');
+            }
+            out.push('\n');
         }
         Stmt::For {
             init,

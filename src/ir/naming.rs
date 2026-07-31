@@ -302,7 +302,9 @@ fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => {}
     }
 }
 
@@ -416,7 +418,9 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => {}
     }
 }
 
@@ -603,7 +607,9 @@ fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
             | Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_) => {}
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
     }
 }

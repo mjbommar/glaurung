@@ -209,7 +209,9 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
             | Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_) => {}
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
     }
 }

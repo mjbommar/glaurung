@@ -586,6 +586,7 @@ fn decompile_at_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let dwarf_types =
         (style == "decbench" && types).then(|| crate::debug::dwarf::extract_dwarf_types(&data));
@@ -616,7 +617,9 @@ fn decompile_at_py(
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
     crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-    let ssa = compute_ssa(&lf_raw);
+    let ssa_graph =
+        crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
+    let ssa = compute_ssa(&ssa_graph);
     let region = recover_verified(&lf_raw, &ssa);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
@@ -678,6 +681,7 @@ fn decompile_at_py(
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
     let mut f = lower(&lf, &region, outer_name);
+    crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
     // Pass-by-pass AST dump for debugging the decbench lowering pipeline. Set
     // GLAURUNG_DUMP_PASSES=1 to print the rendered body after each pass to stderr
     // (bisect which pass corrupts a function). No-op otherwise.
@@ -719,6 +723,10 @@ fn decompile_at_py(
         &function_tables,
         &stack_object_hints,
     );
+    if style == "decbench" {
+        crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
+        crate::ir::exception_recover::mark_int_throws(&mut f);
+    }
     recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
@@ -762,6 +770,7 @@ fn decompile_at_py(
             .and_then(dwarf_render_prototype);
         decbench_text(
             &f,
+            &exception_sites,
             decl,
             width,
             &readonly_data,
@@ -834,6 +843,7 @@ fn decompile_range_at_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let dwarf_types =
         (style == "decbench" && types).then(|| crate::debug::dwarf::extract_dwarf_types(&data));
@@ -876,7 +886,9 @@ fn decompile_range_at_py(
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
     crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-    let ssa = compute_ssa(&lf_raw);
+    let ssa_graph =
+        crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
+    let ssa = compute_ssa(&ssa_graph);
     let region = recover_verified(&lf_raw, &ssa);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
@@ -905,6 +917,7 @@ fn decompile_range_at_py(
     });
     lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
     let mut f = lower(&lf, &region, func.name.clone());
+    crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
     // An explicit byte range has no discovered callee Function objects from
     // which to recover cross-function storage layouts.
     let callee_facts = DirectCalleeFacts::default();
@@ -946,6 +959,10 @@ fn decompile_range_at_py(
         &function_tables,
         &stack_object_hints,
     );
+    if style == "decbench" {
+        crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
+        crate::ir::exception_recover::mark_int_throws(&mut f);
+    }
     recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
@@ -973,6 +990,7 @@ fn decompile_range_at_py(
             .and_then(dwarf_render_prototype);
         decbench_text(
             &f,
+            &exception_sites,
             decl,
             width,
             &readonly_data,
@@ -1179,6 +1197,7 @@ fn remap_type_map_impl(
 /// names the recovered `TypeMap` keys were remapped against.
 fn decbench_text(
     f: &crate::ir::ast::Function,
+    exception_sites: &[crate::analysis::exception::ExceptionCallSite],
     decl: Option<&crate::ir::types_recover::TypeMap>,
     width: Option<&crate::ir::types_recover::TypeMap>,
     readonly_data: &crate::ir::readonly_fold::ReadonlyData,
@@ -1248,6 +1267,8 @@ fn decbench_text(
         dwarf_types,
         calling_convention_pointer_width(cc),
     );
+    crate::ir::exception_recover::recover_typed_handlers(&mut prepared, exception_sites);
+    crate::ir::exception_recover::recover_throws(&mut prepared);
     let violations = crate::ir::verify_defs::check(&prepared);
     let body = crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types(
         &prepared,
@@ -1938,6 +1959,7 @@ fn decompile_all_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
     let dwarf_types =
         (style == "decbench").then(|| crate::debug::dwarf::extract_dwarf_types(&data));
@@ -1969,7 +1991,9 @@ fn decompile_all_py(
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
         let mut lf_raw = lf_raw;
         crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-        let ssa = compute_ssa(&lf_raw);
+        let ssa_graph =
+            crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
+        let ssa = compute_ssa(&ssa_graph);
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
@@ -1994,6 +2018,7 @@ fn decompile_all_py(
         lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
+        crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
         // One pass list, shared with every other entry point — see `run_ast_passes`.
         // This site used to run dead-flag pruning before constant folding and never
         // pruned unreferenced labels, so `--all` produced different output from `--vas`
@@ -2037,6 +2062,10 @@ fn decompile_all_py(
             &function_tables,
             &stack_object_hints,
         );
+        if style == "decbench" {
+            crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
+            crate::ir::exception_recover::mark_int_throws(&mut f);
+        }
         recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
@@ -2058,6 +2087,7 @@ fn decompile_all_py(
                 .and_then(dwarf_render_prototype);
             decbench_text(
                 &f,
+                &exception_sites,
                 Some(&decl),
                 Some(&width),
                 &readonly_data,
@@ -2112,6 +2142,7 @@ fn decompile_many_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
     let dwarf_types =
         (style == "decbench").then(|| crate::debug::dwarf::extract_dwarf_types(&data));
@@ -2170,7 +2201,9 @@ fn decompile_many_py(
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
         let mut lf_raw = lf_raw;
         crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-        let ssa = compute_ssa(&lf_raw);
+        let ssa_graph =
+            crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
+        let ssa = compute_ssa(&ssa_graph);
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
@@ -2195,6 +2228,7 @@ fn decompile_many_py(
         lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         let mut f = lower(&lf, &region, outer_name);
+        crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
         // One pass list, shared with every other entry point — see `run_ast_passes`.
         // This site used to run dead-flag pruning before constant folding and never
         // pruned unreferenced labels, so `--all` produced different output from `--vas`
@@ -2245,6 +2279,10 @@ fn decompile_many_py(
             &function_tables,
             &stack_object_hints,
         );
+        if style == "decbench" {
+            crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
+            crate::ir::exception_recover::mark_int_throws(&mut f);
+        }
         recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
@@ -2270,6 +2308,7 @@ fn decompile_many_py(
                 .and_then(dwarf_render_prototype);
             decbench_text(
                 &f,
+                &exception_sites,
                 Some(&decl),
                 Some(&width),
                 &readonly_data,

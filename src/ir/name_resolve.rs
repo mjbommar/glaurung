@@ -95,7 +95,9 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
             | Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_) => {}
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
     }
 }

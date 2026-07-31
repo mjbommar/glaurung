@@ -446,7 +446,9 @@ fn collect_label_stack_deltas(
                 | Stmt::Break
                 | Stmt::Nop
                 | Stmt::Unknown(_)
-                | Stmt::Comment(_) => {}
+                | Stmt::Comment(_)
+                | Stmt::Throw { .. }
+                | Stmt::TryCatch { .. } => {}
             }
         }
         flow
@@ -693,7 +695,12 @@ fn seed_indexed_stack_objects(
                     sp_delta = label_deltas.get(label).copied().unwrap_or(None);
                 }
                 Stmt::Goto { .. } => sp_delta = None,
-                Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+                Stmt::Break
+                | Stmt::Nop
+                | Stmt::Unknown(_)
+                | Stmt::Comment(_)
+                | Stmt::Throw { .. }
+                | Stmt::TryCatch { .. } => {}
             }
         }
         sp_delta
@@ -1132,7 +1139,12 @@ fn rewrite_body(
                 *sp_delta = label_deltas.get(label).copied().unwrap_or(None);
             }
             Stmt::Goto { .. } => *sp_delta = None,
-            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
     }
 }
@@ -1576,7 +1588,9 @@ fn reconcile_late_address_taken_objects(body: &mut [Stmt], map: &HashMap<SlotKey
                 | Stmt::Break
                 | Stmt::Nop
                 | Stmt::Unknown(_)
-                | Stmt::Comment(_) => {}
+                | Stmt::Comment(_)
+                | Stmt::Throw { .. }
+                | Stmt::TryCatch { .. } => {}
             }
         }
     }
@@ -1608,6 +1622,15 @@ fn promote_address_taken_stack_object(
         *expr = object_addr;
         return;
     }
+    // An address definition may point inside an object that an earlier call,
+    // store, or debug hint already seeded. Preserve that interior byte offset:
+    // collapsing `&local[0] + 1` to `&local[0]` changes the stored value even
+    // though both addresses identify the same underlying stack object.
+    if let Some(object_addr) = stack_object_constant_address(expr, map, sp_delta, ctx, address_defs)
+    {
+        *expr = object_addr;
+        return;
+    }
     let recovered = constant_stack_address(expr, ctx).or_else(|| match expr {
         Expr::Reg(reg) => address_defs.get(reg).cloned(),
         _ => None,
@@ -1616,22 +1639,6 @@ fn promote_address_taken_stack_object(
         return;
     };
     let (key_base, key_disp) = normalized_stack_slot(&base, disp, sp_delta, ctx);
-    if let Some((_, slot)) = map
-        .iter()
-        .filter(|(key, slot)| {
-            slot.object_size.is_some()
-                && key.base == key_base
-                && key.disp <= key_disp
-                && key_disp < key.disp + i64::from(slot.object_size.unwrap_or(0))
-        })
-        .max_by_key(|(key, _)| key.disp)
-    {
-        *expr = Expr::StackAddr {
-            object: VReg::phys(slot.name.clone()),
-            size: slot.object_size.unwrap_or(1),
-        };
-        return;
-    }
     let key = SlotKey {
         base: key_base.clone(),
         disp: key_disp,
@@ -3626,6 +3633,69 @@ mod tests {
                     if object == &reg("local_28"))
             ),
             "post-call read lost the captured object's identity: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn interior_stack_address_stored_as_a_value_keeps_its_byte_offset() {
+        // GCC -O0 materialises `(long)(local + 1)` through two SSA values:
+        //   rax#6 = rbp - 12; rax#7 = rax#6 + 1; [rbp-12] = rax#7
+        // The store proves that the source is an escaped stack address, but it
+        // must not collapse the interior pointer back to the object's base.
+        let base = reg("rax#6");
+        let advanced = reg("rax#7");
+        let mut f = Function {
+            name: "store_advanced_stack_address".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -8),
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: base.clone(),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rbp"))),
+                        rhs: Box::new(Expr::Const(12)),
+                    },
+                },
+                Stmt::Call {
+                    target: Expr::Addr(0x1000),
+                    args: vec![Expr::Reg(base.clone())],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: advanced.clone(),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(base)),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("rbp", -12),
+                    src: Expr::Reg(advanced),
+                    size: 4,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(
+            matches!(
+                &f.body[4],
+                Stmt::Store {
+                    src: Expr::Bin { op: crate::ir::types::BinOp::Add, lhs, rhs },
+                    ..
+                } if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 4 }
+                    if object == &reg("local_c"))
+                    && rhs.as_ref() == &Expr::Const(1)
+            ),
+            "escaped interior address lost its byte offset: {f:#?}"
         );
     }
 

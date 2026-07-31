@@ -2331,7 +2331,9 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => {}
     }
 }
 
@@ -2391,7 +2393,9 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => {}
     }
 }
 

@@ -440,7 +440,12 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 copies.clear();
             }
             Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
-            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
     }
     copies
@@ -503,6 +508,7 @@ fn propagate_switch_entries_in_body(body: &mut [Stmt]) -> bool {
             | Stmt::Goto { .. }
             | Stmt::Break
             | Stmt::Unknown(_) => copies.clear(),
+            Stmt::Throw { .. } | Stmt::TryCatch { .. } => copies.clear(),
         }
     }
     changed
@@ -581,7 +587,12 @@ fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies) {
                 copies.clear();
             }
             Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
-            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
     }
 }
@@ -700,7 +711,12 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 copies.clear();
             }
             Stmt::Label(_) | Stmt::Goto { .. } => copies.clear(),
-            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
+            Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
     }
     copies
@@ -1104,7 +1120,9 @@ fn count_reads_stmt(s: &Stmt, reads: &mut HashMap<VReg, usize>) {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => {}
     }
 }
 

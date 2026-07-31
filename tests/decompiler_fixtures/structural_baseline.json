@@ -610,9 +610,7 @@
     "09_memory_effects:vec_sum": [],
     "09_memory_effects:vec_transform": [],
     "10_cpp_runtime_shapes:cpp_ctor_dtor": [],
-    "10_cpp_runtime_shapes:cpp_exception": [
-      "var0 is read but never defined"
-    ],
+    "10_cpp_runtime_shapes:cpp_exception": [],
     "10_cpp_runtime_shapes:cpp_lambda_capture": [],
     "10_cpp_runtime_shapes:cpp_move": [],
     "10_cpp_runtime_shapes:cpp_raii_guard": [],

@@ -235,7 +235,9 @@ impl Splitter {
                 | Stmt::Break
                 | Stmt::Nop
                 | Stmt::Unknown(_)
-                | Stmt::Comment(_) => {}
+                | Stmt::Comment(_)
+                | Stmt::Throw { .. }
+                | Stmt::TryCatch { .. } => {}
             }
 
             if let Some(slot) = spill {

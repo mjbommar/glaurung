@@ -577,10 +577,18 @@ def build_so(
     A self-recursive call still binds locally: `dlopen` searches the object itself
     before its dependencies, so the decompiled `fib` recurses into itself rather
     than delegating to the original — otherwise the recursion would go untested."""
-    src = workdir / f"{tag}.c"
-    src.write_text(PRELUDE + "\n" + c_src + "\n")
+    uses_cpp_exceptions = bool(re.search(r"\b(?:try\s*\{|catch\s*\(|throw\b)", c_src))
+    src = workdir / f"{tag}.{'cpp' if uses_cpp_exceptions else 'c'}"
+    translation_unit = PRELUDE + "\n" + c_src + "\n"
+    if uses_cpp_exceptions:
+        # DecBench functions are loaded by their DWARF/export spelling through
+        # ctypes.  C++ is required for the recovered exception semantics, while
+        # an outer language-linkage block keeps those exact C identifiers.
+        translation_unit = 'extern "C" {\n' + translation_unit + "}\n"
+    src.write_text(translation_unit)
     so = workdir / f"{tag}.so"
-    base = ["gcc", "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)]
+    compiler = "g++" if uses_cpp_exceptions else "gcc"
+    base = [compiler, "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)]
     runtime_args = (
         _inherited_cxx_runtime_args(link_against)
         if link_against and Path(link_against).is_file()

@@ -419,7 +419,9 @@ fn stmt_mentions_sp(statement: &Stmt) -> bool {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => false,
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => false,
     }
 }
 
@@ -573,7 +575,9 @@ mod tests {
             | Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_) => false,
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => false,
         }
     }
 

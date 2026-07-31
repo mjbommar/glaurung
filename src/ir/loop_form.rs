@@ -692,7 +692,9 @@ fn bypasses_loop_tail(stmt: &Stmt) -> bool {
         | Stmt::Label(_)
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => false,
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => false,
     }
 }
 
@@ -936,7 +938,9 @@ fn recover_body(stmts: &mut [Stmt]) {
             | Stmt::Comment(_)
             | Stmt::Label(_)
             | Stmt::IndirectGoto { .. }
-            | Stmt::Goto { .. } => {}
+            | Stmt::Goto { .. }
+            | Stmt::Throw { .. }
+            | Stmt::TryCatch { .. } => {}
         }
     }
 }

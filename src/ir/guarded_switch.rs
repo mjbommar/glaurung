@@ -508,7 +508,9 @@ fn count_reads_in_statement(statement: &Stmt, target: &VReg) -> usize {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => 0,
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => 0,
     }
 }
 

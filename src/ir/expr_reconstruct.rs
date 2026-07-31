@@ -265,7 +265,9 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => 0,
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => 0,
     }
 }
 
@@ -437,7 +439,9 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => {}
     }
 }
 

@@ -260,7 +260,9 @@ pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => false,
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => false,
     }
 }
 

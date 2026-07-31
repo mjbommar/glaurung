@@ -197,7 +197,9 @@ fn annotate_stmt(stmt: &mut Stmt, field_map: &PdbFieldMap) {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. }
+        | Stmt::TryCatch { .. } => {}
     }
 }
 
