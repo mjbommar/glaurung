@@ -1274,6 +1274,15 @@ fn dwarf_return_hint(
         | crate::ir::call_args::CallConv::Arm
         | crate::ir::call_args::CallConv::ArmHardFloat => 4,
     };
+    if let Some(pointee) = normalized.strip_suffix('*').map(str::trim) {
+        let pointee_width = match dwarf_return_hint(pointee, cc) {
+            Some(TypeHint::Int { width, .. } | TypeHint::Float { width }) => width,
+            Some(TypeHint::BoolLike) => 1,
+            Some(TypeHint::Pointer { .. } | TypeHint::CodePointer) => c_long_width,
+            None => 1,
+        };
+        return Some(TypeHint::Pointer { pointee_width });
+    }
     match normalized.as_str() {
         "_Bool" | "bool" => Some(TypeHint::BoolLike),
         "char" | "signed char" => Some(TypeHint::Int {
@@ -2205,6 +2214,18 @@ mod tests {
                 signed: false,
                 width: 8,
             })
+        );
+    }
+
+    #[test]
+    fn dwarf_named_pointer_return_is_locked_as_a_pointer() {
+        assert_eq!(
+            dwarf_return_hint("struct node *", CallConv::SysVAmd64),
+            Some(TypeHint::Pointer { pointee_width: 1 })
+        );
+        assert_eq!(
+            dwarf_return_hint("const unsigned int *", CallConv::SysVAmd64),
+            Some(TypeHint::Pointer { pointee_width: 4 })
         );
     }
 }

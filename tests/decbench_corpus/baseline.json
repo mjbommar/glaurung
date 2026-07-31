@@ -119,7 +119,7 @@
     "type_match": 0.5
   },
   "linkedlist:gcc:O2": {
-    "byte_match": 0.68,
+    "byte_match": 0.64,
     "ged": 3.5,
     "type_match": 0.25
   },

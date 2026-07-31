@@ -630,6 +630,56 @@ def test_gcc_o2_packed_bubble_swap_round_trips(tmp_path: Path) -> None:
     assert results["bubble"]["status"] == "pass", results
 
 
+def test_gcc_o2_pointer_return_keeps_declared_dwarf_kind(tmp_path: Path) -> None:
+    """A named-struct pointer return must not be rendered as an integer."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "linkedlist.c"
+    binary = tmp_path / "linkedlist-gcc-O2.so"
+    compiled = subprocess.run(
+        [
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["list_find"])
+    assert code is not None
+    assert re.match(r"(?:char|void) \* list_find\(", code), code
+    rebuilt = D.build_so(code, tmp_path, "dec_list_find_gcc_o2")
+    assert rebuilt is not None
+
+    class Node(ctypes.Structure):
+        pass
+
+    node_pointer = ctypes.POINTER(Node)
+    Node._fields_ = [("next", node_pointer), ("value", ctypes.c_int)]
+    nodes = (Node * 4)()
+    for index, value in enumerate((7, -3, 11, 5)):
+        nodes[index].value = value
+        nodes[index].next = (
+            ctypes.pointer(nodes[index + 1]) if index < 3 else node_pointer()
+        )
+    head = ctypes.pointer(nodes[0])
+
+    original = ctypes.CDLL(str(binary), mode=ctypes.RTLD_LOCAL)
+    decompiled = ctypes.CDLL(str(rebuilt), mode=ctypes.RTLD_LOCAL)
+    for library in (original, decompiled):
+        library.list_find.argtypes = [node_pointer, ctypes.c_int]
+        library.list_find.restype = ctypes.c_void_p
+    for value in (7, -3, 11, 5, 99):
+        assert original.list_find(head, value) == decompiled.list_find(head, value)
+
+
 def test_gcc_o0_comparison_tree_recovers_switch_and_round_trips(tmp_path: Path) -> None:
     """The reconstructed x86 signed-greater condition must remain switch-shaped."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "switch_jt.c"
