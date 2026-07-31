@@ -117,6 +117,38 @@ def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+def test_sparse_validation_guards_recover_as_ordered_early_returns(
+    tmp_path: Path,
+) -> None:
+    """A long compound guard must not be mistaken for a switch tree."""
+    source = FIXTURES / "src" / "26_sparse_matrix.c"
+    binary = tmp_path / "26_sparse_matrix-gcc-O0.so"
+    compiled = subprocess.run(
+        [
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["csr_matvec"])
+    assert code is not None
+    validation_prefix = code.split("while (", maxsplit=1)[0]
+    assert "goto " not in validation_prefix, code
+    assert validation_prefix.count("return 0;") >= 10, code
+
+
+@pytest.mark.slow
 def test_signed_q16_bounds_round_trip_in_every_lane() -> None:
     """Wide negative saturation bounds must retain signed C semantics."""
     lanes = [

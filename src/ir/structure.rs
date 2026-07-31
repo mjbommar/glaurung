@@ -1630,11 +1630,12 @@ fn detect_if_shape(
             // return and destroys the single default identity needed for
             // source-level switch recovery.  Preserve explicit shared edges;
             // the AST ladder pass proves and consumes them later.
-            if cfg.preds[body]
+            let conditional_predecessor_count = cfg.preds[body]
                 .iter()
                 .filter(|predecessor| cfg.succs[**predecessor].len() == 2)
-                .count()
-                >= 4
+                .count();
+            if conditional_predecessor_count >= 4
+                && !shared_exit_predecessors_form_guard_chain(body, cfg)
             {
                 continue;
             }
@@ -1861,6 +1862,61 @@ fn shared_return_chain(entry: usize, cfg: &Cfg) -> Option<Vec<usize>> {
         }
     }
     None
+}
+
+/// Whether every conditional predecessor of `exit` belongs to one ordered
+/// short-circuit guard chain.
+///
+/// A large number of incoming conditional edges is not, by itself, evidence of
+/// a comparison tree.  Compound validation such as `p == NULL || n < 0 || ...`
+/// has exactly the same shared-exit fan-in.  In that source shape each guard's
+/// non-exit successor is the next guard, producing one linear chain.  A GCC
+/// switch tree interposes equality/case arms between its range-prune edges, so
+/// its predecessors of the shared default do not form this chain.
+fn shared_exit_predecessors_form_guard_chain(exit: usize, cfg: &Cfg) -> bool {
+    let guards: HashSet<usize> = cfg.preds[exit]
+        .iter()
+        .copied()
+        .filter(|&predecessor| {
+            cfg.succs[predecessor].len() == 2 && cfg.succs[predecessor].contains(&exit)
+        })
+        .collect();
+    if guards.len() < 2 {
+        return false;
+    }
+
+    let heads: Vec<usize> = guards
+        .iter()
+        .copied()
+        .filter(|candidate| {
+            !guards.iter().any(|predecessor| {
+                cfg.succs[*predecessor]
+                    .iter()
+                    .copied()
+                    .any(|successor| successor != exit && successor == *candidate)
+            })
+        })
+        .collect();
+    let [head] = heads.as_slice() else {
+        return false;
+    };
+    let mut current = *head;
+
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(current) {
+            return false;
+        }
+        let continuation = cfg.succs[current]
+            .iter()
+            .copied()
+            .find(|&successor| successor != exit);
+        match continuation {
+            Some(next) if guards.contains(&next) => current = next,
+            _ => break,
+        }
+    }
+    seen == guards
 }
 
 /// Whether `entry` is the distinguished exit successor of a natural loop's
@@ -4307,6 +4363,48 @@ mod tests {
         assert!(
             region.blocks().iter().filter(|&&block| block == 3).count() >= 2,
             "both false guards must retain the shared result block: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn long_short_circuit_guard_chain_is_not_mistaken_for_a_switch_tree() {
+        // Source-level validation commonly lowers to a long ordered chain:
+        //
+        //   if (p == NULL || q == NULL || rows < 0 || rows > limit || ...) {
+        //       return 0;
+        //   }
+        //
+        // Every guard jumps to the same return block and otherwise advances to
+        // the next guard.  Four guards used to trigger a count-only heuristic
+        // intended for GCC comparison trees, leaving this faithful
+        // short-circuit shape as nested if/else plus gotos.  The continuation
+        // chain is the distinguishing fact: unlike a switch tree, every
+        // conditional in this chain has the same exit successor.
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1010, 0x1060]),
+            (0x1010, vec![Op::Nop], vec![0x1020, 0x1060]),
+            (0x1020, vec![Op::Nop], vec![0x1030, 0x1060]),
+            (0x1030, vec![Op::Nop], vec![0x1040, 0x1060]),
+            (0x1040, vec![Op::Nop], vec![0x1050, 0x1060]),
+            (0x1050, vec![Op::Return], vec![]),
+            (0x1060, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let region = recover(&lf, &ssa);
+        let rendered = format!("{region:#?}");
+        assert!(
+            !rendered.contains("Goto(6)"),
+            "ordered guards should clone the shared return, not jump across regions: {rendered}"
+        );
+        assert!(
+            region.blocks().iter().filter(|&&block| block == 6).count() >= 5,
+            "every ordered guard must retain its short-circuit return: {rendered}"
+        );
+        assert!(
+            verify_structure(&lf, &ssa).is_empty(),
+            "guard-chain recovery must retain every CFG edge: {:?}",
+            verify_structure(&lf, &ssa)
         );
     }
 
