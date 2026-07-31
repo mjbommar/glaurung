@@ -1171,9 +1171,11 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
     else {
         return None;
     };
-    if !same_equality_bit_view(equality_lhs, less_lhs)
-        || !same_equality_bit_view(equality_rhs, less_rhs)
-    {
+    // Keep cast signedness as comparison provenance.  Treating equal-width
+    // signed and unsigned views as interchangeable here is value-correct for
+    // the equality alone, but prematurely rewrites GCC switch range flags into
+    // inequalities and destroys the comparison ladder before switch recovery.
+    if equality_lhs != less_lhs || equality_rhs != less_rhs {
         return None;
     }
     let op = match op {
@@ -1183,39 +1185,9 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
     };
     Some(Expr::Cmp {
         op,
-        // Keep the strict comparison's view: unlike equality, its signedness
-        // determines the inclusive relation we are recovering.
-        lhs: less_lhs.clone(),
-        rhs: less_rhs.clone(),
+        lhs: equality_lhs.clone(),
+        rhs: equality_rhs.clone(),
     })
-}
-
-/// Whether two integer views preserve the same bit identity for equality.
-///
-/// Signed and unsigned casts of the same width are both injective mappings of
-/// that width's bit patterns. Consequently they may render different numeric
-/// values after widening, but equality between two operands is unchanged as
-/// long as both sides use the same cast-width chain and the same underlying
-/// expression. This deliberately rejects differing widths or unmatched casts.
-fn same_equality_bit_view(lhs: &Expr, rhs: &Expr) -> bool {
-    if lhs == rhs {
-        return true;
-    }
-    match (lhs, rhs) {
-        (
-            Expr::Cast {
-                width: lhs_width,
-                expr: lhs_inner,
-                ..
-            },
-            Expr::Cast {
-                width: rhs_width,
-                expr: rhs_inner,
-                ..
-            },
-        ) if lhs_width == rhs_width => same_equality_bit_view(lhs_inner, rhs_inner),
-        _ => false,
-    }
 }
 
 fn invert_comparison(op: CmpOp, lhs: &Expr, rhs: &Expr) -> Expr {
@@ -1420,7 +1392,7 @@ mod tests {
     }
 
     #[test]
-    fn equality_view_signedness_does_not_block_inclusive_comparison() {
+    fn equality_view_signedness_blocks_premature_inclusive_comparison() {
         fn view(expr: Expr, signed: bool) -> Expr {
             Expr::Cast {
                 signed,
@@ -1435,7 +1407,7 @@ mod tests {
 
         let lhs = Expr::Reg(reg("lhs"));
         let rhs = Expr::Reg(reg("rhs"));
-        let mut function = one_stmt(bin(
+        let expression = bin(
             BinOp::Or,
             Expr::Cmp {
                 op: CmpOp::Eq,
@@ -1447,22 +1419,15 @@ mod tests {
                 lhs: Box::new(view(lhs.clone(), true)),
                 rhs: Box::new(view(rhs.clone(), true)),
             },
-        ));
+        );
+        let mut function = one_stmt(expression.clone());
 
         fold_constants(&mut function);
 
         let Stmt::Assign { src, .. } = &function.body[0] else {
             panic!("fixture assignment disappeared: {:#?}", function.body);
         };
-        assert!(matches!(
-            src,
-            Expr::Cmp {
-                op: CmpOp::Sle,
-                lhs: folded_lhs,
-                rhs: folded_rhs,
-            } if folded_lhs.as_ref() == &view(lhs, true)
-                && folded_rhs.as_ref() == &view(rhs, true)
-        ));
+        assert_eq!(src, &expression);
     }
 
     #[test]

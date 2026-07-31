@@ -2580,9 +2580,9 @@ fn width_ctype(size: u8) -> &'static str {
 /// Collapse `return_reg = E; [comments]; return [return_reg];` into a direct
 /// `return E`, retaining provenance comments in place.
 ///
-/// Recurses into nested If / While bodies. Conservative — only fires on the
-/// Only comments/Nops may intervene, so the expression stays at the same
-/// observable point and no state-changing operation is crossed.
+/// Recurses into nested If / While bodies. Only comments/Nops may intervene, so
+/// the expression stays at the same observable point and no state-changing
+/// operation is crossed.
 fn fold_returns(body: &mut Vec<Stmt>) {
     // Recurse first so inner bodies are folded before we inspect an outer
     // fall-through return.
@@ -2640,6 +2640,69 @@ fn fold_returns(body: &mut Vec<Stmt>) {
             continue;
         }
         i += 1;
+    }
+}
+
+/// Remove an ABI return-register assignment immediately before an identical
+/// constant return. This deliberately runs after structural recovery: the
+/// assignment may still identify a shared switch destination while the CFG is
+/// being reconstructed, but it is redundant in the final source AST.
+fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>) {
+    for stmt in body.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                remove_redundant_return_constant_assignments(then_body);
+                if let Some(else_body) = else_body {
+                    remove_redundant_return_constant_assignments(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                remove_redundant_return_constant_assignments(body);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    remove_redundant_return_constant_assignments(case_body);
+                }
+                if let Some(default_body) = default {
+                    remove_redundant_return_constant_assignments(default_body);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut index = 0;
+    while index < body.len() {
+        let assigned = match &body[index] {
+            Stmt::Assign {
+                dst,
+                src: Expr::Const(value),
+            } if is_return_reg(dst) => Some(*value),
+            _ => None,
+        };
+        let Some(assigned) = assigned else {
+            index += 1;
+            continue;
+        };
+        let mut return_index = index + 1;
+        while matches!(body.get(return_index), Some(Stmt::Comment(_) | Stmt::Nop)) {
+            return_index += 1;
+        }
+        let identical_return = matches!(
+            body.get(return_index),
+            Some(Stmt::Return {
+                value: Some(Expr::Const(returned)),
+            }) if *returned == assigned
+        );
+        if identical_return {
+            body.remove(index);
+            continue;
+        }
+        index += 1;
     }
 }
 
@@ -5755,12 +5818,6 @@ pub fn prepare_for_decbench_with_output(
     }
     coalesce_param_spills(&mut owned.body);
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);
-    // Shared return labels are already exact at this point. Inline them before
-    // copy/fold so a predicate definition that precedes `if (...) return` can
-    // remain available on the nonjoining guard's fallthrough. A later
-    // idempotent invocation still catches tails exposed by intervening folds.
-    crate::ir::label_prune::inline_terminal_goto_tails(&mut owned);
-    fold_returns(&mut owned.body);
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
     // monotone pair to a small bounded fixpoint: x86 partial-register returns
@@ -5839,6 +5896,7 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
     crate::ir::guard_chain::collapse_redundant_copy_nested_guards(&mut owned);
     crate::ir::guard_chain::collapse_matching_terminal_return_guard(&mut owned);
+    remove_redundant_return_constant_assignments(&mut owned.body);
     owned
 }
 
@@ -9824,6 +9882,46 @@ function f @ 0x1000 {
         );
         assert!(text.contains("return;"), "return line missing: {}", text);
         assert!(!text.contains("return 1"), "folded wrong reg: {}", text);
+    }
+
+    #[test]
+    fn late_return_cleanup_removes_redundant_identical_constant_assignment() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            },
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            },
+        ];
+
+        remove_redundant_return_constant_assignments(&mut body);
+
+        assert_eq!(
+            body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            }]
+        );
+    }
+
+    #[test]
+    fn late_return_cleanup_preserves_mismatched_constant_assignment() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            },
+            Stmt::Return {
+                value: Some(Expr::Const(0)),
+            },
+        ];
+        let expected = body.clone();
+
+        remove_redundant_return_constant_assignments(&mut body);
+
+        assert_eq!(body, expected);
     }
 
     #[test]
