@@ -322,6 +322,40 @@ fn is_pure_copyable(e: &Expr) -> bool {
     }
 }
 
+/// Whether a value-numbered predicate definition is safe to repeat at each use.
+///
+/// Arithmetic expressions are not general-purpose copies: carrying one after an
+/// operand write would use a new value. The propagation environment already
+/// invalidates aliases on every operand write and clears them at control-flow
+/// boundaries, so a side-effect-free *SSA predicate* can be repeated safely.
+/// This narrow exception exposes flag algebra such as
+/// `SF ^ (signed_less ^ SF)` even when a CMOV sequence consumes it twice.
+fn is_repeatable_versioned_flag_expr(dst: &VReg, expression: &Expr) -> bool {
+    if !matches!(dst, VReg::FlagValue { version, .. } if *version > 0) {
+        return false;
+    }
+    fn pure(expression: &Expr) -> bool {
+        match expression {
+            Expr::Reg(_) | Expr::Const(_) => true,
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => pure(lhs) && pure(rhs),
+            Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => pure(src),
+            Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Deref { .. }
+            | Expr::Select { .. }
+            | Expr::Unknown(_)
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::FunctionTableEntry { .. }
+            | Expr::WideArithmetic { .. } => false,
+        }
+    }
+    pure(expression)
+}
+
 /// A promoted stack slot is represented as a store whose bare-register address
 /// is the source variable itself (`Store local_x = value`). It is assignment
 /// semantics, not an indirect write through a pointer named `local_x`.
@@ -352,7 +386,9 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
             Stmt::Assign { dst, src } => {
                 subst(src, &copies);
                 invalidate(&mut copies, dst);
-                if is_pure_copyable(src) && !is_self_ref(dst, src) {
+                if (is_pure_copyable(src) || is_repeatable_versioned_flag_expr(dst, src))
+                    && !is_self_ref(dst, src)
+                {
                     copies.insert(dst.clone(), src.clone());
                 }
             }
@@ -614,6 +650,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 invalidate(&mut copies, dst);
                 if !is_self_ref(dst, src) {
                     let record = is_pure_copyable(src)
+                        || is_repeatable_versioned_flag_expr(dst, src)
                         || (is_scratch_reg(dst)
                             && reads.get(dst).copied().unwrap_or(0) == 1
                             // A 128-bit load cannot be represented by the
@@ -1607,6 +1644,79 @@ mod tests {
             );
         }
         assert!(dump.contains("Deref") && dump.contains("Mul"), "{dump}");
+    }
+
+    #[test]
+    fn repeated_versioned_flag_expressions_expose_signed_relation() {
+        // x86 signed conditions consume SF ^ OF.  SUB/CMP defines
+        // OF = signed_less ^ SF, so substituting the pure versioned flag
+        // definitions must expose SF ^ (signed_less ^ SF) for algebraic
+        // folding even when a CMOV-style select reads the predicate twice.
+        let sf = VReg::FlagValue {
+            flag: crate::ir::types::Flag::S,
+            version: 1,
+        };
+        let of = VReg::FlagValue {
+            flag: crate::ir::types::Flag::O,
+            version: 1,
+        };
+        let less = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("arg0"))),
+            rhs: Box::new(Expr::Reg(reg("arg1"))),
+        };
+        let raw_sign = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("result"))),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let predicate = || Expr::Bin {
+            op: BinOp::Xor,
+            lhs: Box::new(Expr::Reg(sf.clone())),
+            rhs: Box::new(Expr::Reg(of.clone())),
+        };
+        let mut f = Function {
+            name: "classify_shape".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: sf.clone(),
+                    src: raw_sign,
+                },
+                Stmt::Assign {
+                    dst: of.clone(),
+                    src: Expr::Bin {
+                        op: BinOp::Xor,
+                        lhs: Box::new(less.clone()),
+                        rhs: Box::new(Expr::Reg(sf.clone())),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Select {
+                        cond: Box::new(predicate()),
+                        if_true: Box::new(Expr::Const(1)),
+                        if_false: Box::new(Expr::Select {
+                            cond: Box::new(predicate()),
+                            if_true: Box::new(Expr::Const(2)),
+                            if_false: Box::new(Expr::Const(3)),
+                            width: 4,
+                        }),
+                        width: 4,
+                    }),
+                },
+            ],
+        };
+
+        propagate_copies(&mut f);
+        crate::ir::const_fold::fold_constants(&mut f);
+        propagate_copies(&mut f);
+
+        let dump = format!("{:#?}", f.body);
+        assert!(
+            !dump.contains("FlagValue"),
+            "flag algebra stayed opaque:\n{dump}"
+        );
+        assert_eq!(dump.matches("op: Slt").count(), 2, "{dump}");
     }
 
     #[test]

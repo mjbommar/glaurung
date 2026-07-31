@@ -558,6 +558,46 @@ def test_classify_collapses_same_destination_diamonds(tmp_path: Path) -> None:
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
+def test_classify_clang_o2_recovers_signed_relations_without_flag_locals(
+    tmp_path: Path,
+) -> None:
+    """Repeated CMOV predicates must not strand their SF/OF implementation."""
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "branches.c"
+    binary = tmp_path / "branches-clang-O2.so"
+    compiled = TC.run(
+        ["clang", "-shared", "-fPIC", "-g", "-O2", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            binary,
+            "--func",
+            "classify",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+        env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
+    )
+
+    assert "sf_" not in result.stdout, result.stdout
+    assert "of_" not in result.stdout, result.stdout
+    assert "arg0 < arg1" in result.stdout, result.stdout
+    assert "glaurung-verify" not in result.stdout, result.stdout
+
+
 def test_recursion_clang_o0_recovers_exhaustive_direct_returns(tmp_path: Path) -> None:
     """Recursive result joins must become source-level returns, without frame residue."""
     import subprocess
