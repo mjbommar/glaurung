@@ -139,7 +139,7 @@ def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
 def test_optimized_bst_search_recovers_latch_and_terminal_returns(
     tmp_path: Path,
 ) -> None:
-    """Clang's linear latch and shared epilogues must not survive as gotos."""
+    """Clang's latch and shared epilogue must recover without duplicate exits."""
     source = FIXTURES / "src" / "15_binary_search_tree.c"
     binary = tmp_path / "15_binary_search_tree-clang-O2.so"
     compiled = subprocess.run(
@@ -163,7 +163,9 @@ def test_optimized_bst_search_recovers_latch_and_terminal_returns(
     code = D.decompiled_c(str(binary), functions["bst_search"])
     assert code is not None
     assert code.count("do {") == 1, code
-    assert code.count("return ") >= 4, code
+    assert code.count("return ") == 3, code
+    validation_prefix = code.split("do {", maxsplit=1)[0]
+    assert validation_prefix.count(" && ") == 2, code
     assert "goto " not in code, code
 
     inorder = D.decompiled_c(str(binary), functions["bst_inorder_checksum"])

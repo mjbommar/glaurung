@@ -5790,6 +5790,8 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
     crate::ir::guard_chain::collapse_shared_exit_guard_ladders(&mut owned);
     crate::ir::guard_chain::collapse_shared_assignment_guards(&mut owned);
+    crate::ir::guard_chain::collapse_redundant_copy_nested_guards(&mut owned);
+    crate::ir::guard_chain::collapse_nested_terminal_return_guards(&mut owned);
     // Region recovery may clone a comparison tree's shared default into
     // sequential terminal guards. Recover that switch before two-case tails
     // become `Select` expressions and erase the final equality arms. The
@@ -5818,6 +5820,7 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
     crate::ir::loop_form::recover_sentinel_search_loops(&mut owned);
     crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
+    crate::ir::guard_chain::collapse_nested_terminal_return_guards(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
     crate::ir::switch_ladder::recover_switches(&mut owned);
@@ -5834,6 +5837,8 @@ pub fn prepare_for_decbench_with_output(
     // the recovered CFG during the earlier pass. Fuse that final exact shape
     // as well; the transformation is adjacency-checked and idempotent.
     crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
+    crate::ir::guard_chain::collapse_redundant_copy_nested_guards(&mut owned);
+    crate::ir::guard_chain::collapse_matching_terminal_return_guard(&mut owned);
     owned
 }
 

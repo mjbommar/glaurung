@@ -58,6 +58,249 @@ pub fn collapse_adjacent_break_guards(function: &mut Function) {
     while collapse_break_one(&mut function.body) {}
 }
 
+/// Fuse an exact nested terminal-return guard into one conjunction.
+///
+/// `if (a) { if (b) { return x; } }` and
+/// `if (a && b) { return x; }` have identical left-to-right evaluation: `b`
+/// runs only when `a` succeeds. Requiring each body to contain exactly the next
+/// guard/return rejects intervening effects and requiring absent `else` arms
+/// rejects shapes whose false paths perform work.
+pub fn collapse_nested_terminal_return_guards(function: &mut Function) {
+    while collapse_nested_return_one(&mut function.body) {}
+}
+
+/// Keep one shared terminal return when an early guard returns the exact same
+/// value as the function's final statement.
+///
+/// `if (bad) return x; work; return x;` is exactly
+/// `if (!bad) { work; } return x;`. This is useful after a compiler has routed
+/// both the validation failure and ordinary function fallthrough to one return
+/// instruction. The pass requires an exactly negatable predicate, identical
+/// return ASTs, a non-empty structured continuation, and no labels/gotos whose
+/// scope would change when wrapped.
+pub fn collapse_matching_terminal_return_guard(function: &mut Function) {
+    let body = &mut function.body;
+    if body.len() < 3 {
+        return;
+    }
+    let Some(final_return @ Stmt::Return { .. }) = body.last().cloned() else {
+        return;
+    };
+    for index in 0..body.len() - 2 {
+        let Stmt::If {
+            cond,
+            then_body,
+            else_body: None,
+        } = &body[index]
+        else {
+            continue;
+        };
+        if then_body.as_slice() != std::slice::from_ref(&final_return) {
+            continue;
+        }
+        let Some(continuation_condition) = negate_exact_condition(cond.clone()) else {
+            continue;
+        };
+        let continuation = body[index + 1..body.len() - 1].to_vec();
+        if continuation.is_empty() || contains_unstructured_transfer(&continuation) {
+            continue;
+        }
+        body.splice(
+            index..,
+            [
+                Stmt::If {
+                    cond: continuation_condition,
+                    then_body: continuation,
+                    else_body: None,
+                },
+                final_return,
+            ],
+        );
+        return;
+    }
+}
+
+/// Remove a repeated reaching copy that is the only statement separating two
+/// nested guards, then recover their short-circuit conjunction.
+///
+/// The copy immediately before the outer guard and the copy at the start of its
+/// true arm must be structurally identical, and its source must be a register or
+/// constant. Since condition expressions cannot assign registers, the second
+/// copy writes the value already present and is redundant. Restricting the
+/// source rejects memory-backed values that could change between reads.
+pub fn collapse_redundant_copy_nested_guards(function: &mut Function) {
+    while collapse_redundant_copy_nested_one(&mut function.body) {}
+}
+
+fn collapse_redundant_copy_nested_one(body: &mut Vec<Stmt>) -> bool {
+    for index in 0..body.len() {
+        if index + 1 < body.len() {
+            let replacement = match (&body[index], &body[index + 1]) {
+                (
+                    previous @ Stmt::Assign { src, .. },
+                    Stmt::If {
+                        cond: outer_condition,
+                        then_body,
+                        else_body: None,
+                    },
+                ) if matches!(src, Expr::Reg(_) | Expr::Const(_)) => match then_body.as_slice() {
+                    [duplicate, Stmt::If {
+                        cond: inner_condition,
+                        then_body: inner_body,
+                        else_body: None,
+                    }] if duplicate == previous => Some(Stmt::If {
+                        cond: Expr::Bin {
+                            op: BinOp::LogicalAnd,
+                            lhs: Box::new(outer_condition.clone()),
+                            rhs: Box::new(inner_condition.clone()),
+                        },
+                        then_body: inner_body.clone(),
+                        else_body: None,
+                    }),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(replacement) = replacement {
+                body[index + 1] = replacement;
+                return true;
+            }
+        }
+
+        let changed = match &mut body[index] {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collapse_redundant_copy_nested_one(then_body)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(collapse_redundant_copy_nested_one)
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collapse_redundant_copy_nested_one(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| collapse_redundant_copy_nested_one(body))
+                    || default
+                        .as_mut()
+                        .is_some_and(collapse_redundant_copy_nested_one)
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collapse_redundant_copy_nested_one(try_body)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| collapse_redundant_copy_nested_one(&mut catch.body))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn contains_unstructured_transfer(body: &[Stmt]) -> bool {
+    body.iter().any(|statement| match statement {
+        Stmt::Label(_) | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => true,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            contains_unstructured_transfer(then_body)
+                || else_body
+                    .as_deref()
+                    .is_some_and(contains_unstructured_transfer)
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            contains_unstructured_transfer(body)
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| contains_unstructured_transfer(body))
+                || default
+                    .as_deref()
+                    .is_some_and(contains_unstructured_transfer)
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            contains_unstructured_transfer(try_body)
+                || catches
+                    .iter()
+                    .any(|catch| contains_unstructured_transfer(&catch.body))
+        }
+        _ => false,
+    })
+}
+
+fn collapse_nested_return_one(body: &mut Vec<Stmt>) -> bool {
+    for index in 0..body.len() {
+        let replacement = match &body[index] {
+            Stmt::If {
+                cond: outer_condition,
+                then_body,
+                else_body: None,
+            } => match then_body.as_slice() {
+                [Stmt::If {
+                    cond: inner_condition,
+                    then_body: return_body,
+                    else_body: None,
+                }] if matches!(return_body.as_slice(), [Stmt::Return { .. }]) => Some(Stmt::If {
+                    cond: Expr::Bin {
+                        op: BinOp::LogicalAnd,
+                        lhs: Box::new(outer_condition.clone()),
+                        rhs: Box::new(inner_condition.clone()),
+                    },
+                    then_body: return_body.clone(),
+                    else_body: None,
+                }),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            body[index] = replacement;
+            return true;
+        }
+
+        let changed = match &mut body[index] {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collapse_nested_return_one(then_body)
+                    || else_body.as_mut().is_some_and(collapse_nested_return_one)
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collapse_nested_return_one(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| collapse_nested_return_one(body))
+                    || default.as_mut().is_some_and(collapse_nested_return_one)
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collapse_nested_return_one(try_body)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| collapse_nested_return_one(&mut catch.body))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
 fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
     for index in 0..body.len() {
         if index + 1 < body.len() {
@@ -422,20 +665,37 @@ fn is_only_goto(body: &[Stmt], target: u64) -> bool {
 /// `UnOp::Not` is machine bitwise NOT, not C logical `!`, so a bare scalar must
 /// make recovery fail closed rather than turning both zero and one into true.
 fn negate_exact_condition(condition: Expr) -> Option<Expr> {
-    matches!(
-        condition,
-        Expr::Cmp {
+    match condition {
+        comparison @ Expr::Cmp {
             op: CmpOp::Eq | CmpOp::Ne | CmpOp::Ult | CmpOp::Ule | CmpOp::Slt | CmpOp::Sle,
             ..
-        }
-    )
-    .then(|| negate_cmp_expr(condition))
+        } => Some(negate_cmp_expr(comparison)),
+        Expr::Bin {
+            op: BinOp::LogicalAnd,
+            lhs,
+            rhs,
+        } => Some(Expr::Bin {
+            op: BinOp::LogicalOr,
+            lhs: Box::new(negate_exact_condition(*lhs)?),
+            rhs: Box::new(negate_exact_condition(*rhs)?),
+        }),
+        Expr::Bin {
+            op: BinOp::LogicalOr,
+            lhs,
+            rhs,
+        } => Some(Expr::Bin {
+            op: BinOp::LogicalAnd,
+            lhs: Box::new(negate_exact_condition(*lhs)?),
+            rhs: Box::new(negate_exact_condition(*rhs)?),
+        }),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::ir::ast::{render_decbench, Expr, Function, Stmt};
-    use crate::ir::types::VReg;
+    use crate::ir::types::{BinOp, CmpOp, VReg};
 
     fn reg(name: &str) -> VReg {
         VReg::phys(name)
@@ -628,6 +888,230 @@ mod tests {
         assert_eq!(rendered.matches(" || ").count(), 1, "{rendered}");
         assert_eq!(rendered.matches("break;").count(), 1, "{rendered}");
         assert!(rendered.contains("iteration = 1;"), "{rendered}");
+    }
+
+    #[test]
+    fn nested_terminal_return_guards_become_one_conjunction() {
+        let mut function = Function {
+            name: "bounded_return".into(),
+            entry_va: 0x1350,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(reg("outer")),
+                then_body: vec![Stmt::If {
+                    cond: Expr::Reg(reg("inner")),
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Reg(reg("result"))),
+                    }],
+                    else_body: None,
+                }],
+                else_body: None,
+            }],
+        };
+
+        super::collapse_nested_terminal_return_guards(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches(" && ").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("return result;").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn nested_guard_with_else_or_intervening_effect_stays_nested() {
+        let nested = |inner_else| Stmt::If {
+            cond: Expr::Reg(reg("outer")),
+            then_body: vec![Stmt::If {
+                cond: Expr::Reg(reg("inner")),
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(1)),
+                }],
+                else_body: inner_else,
+            }],
+            else_body: None,
+        };
+        let mut function = Function {
+            name: "ordered_guards".into(),
+            entry_va: 0x1360,
+            body: vec![
+                nested(Some(vec![Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                }])),
+                Stmt::If {
+                    cond: Expr::Reg(reg("outer2")),
+                    then_body: vec![
+                        Stmt::Assign {
+                            dst: reg("effect"),
+                            src: Expr::Const(1),
+                        },
+                        Stmt::If {
+                            cond: Expr::Reg(reg("inner2")),
+                            then_body: vec![Stmt::Return {
+                                value: Some(Expr::Const(2)),
+                            }],
+                            else_body: None,
+                        },
+                    ],
+                    else_body: None,
+                },
+            ],
+        };
+
+        super::collapse_nested_terminal_return_guards(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(rendered.matches("if (").count(), 4, "{rendered}");
+        assert!(!rendered.contains(" && "), "{rendered}");
+        assert!(rendered.contains("effect = 1;"), "{rendered}");
+    }
+
+    #[test]
+    fn matching_early_and_final_return_wraps_the_continuation() {
+        let result = Expr::Reg(reg("result"));
+        let mut function = Function {
+            name: "shared_terminal".into(),
+            entry_va: 0x1370,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Bin {
+                        op: BinOp::LogicalOr,
+                        lhs: Box::new(Expr::Cmp {
+                            op: CmpOp::Eq,
+                            lhs: Box::new(Expr::Reg(reg("pointer"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        }),
+                        rhs: Box::new(Expr::Cmp {
+                            op: CmpOp::Ule,
+                            lhs: Box::new(Expr::Const(16)),
+                            rhs: Box::new(Expr::Reg(reg("count"))),
+                        }),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(result.clone()),
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: reg("work"),
+                    src: Expr::Const(1),
+                },
+                Stmt::Return {
+                    value: Some(result),
+                },
+            ],
+        };
+
+        super::collapse_matching_terminal_return_guard(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(rendered.matches("return result;").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches(" && ").count(), 1, "{rendered}");
+        assert!(rendered.contains("work = 1;"), "{rendered}");
+    }
+
+    #[test]
+    fn mismatched_or_unnegatable_terminal_guard_stays_early() {
+        let mut mismatched = Function {
+            name: "mismatched".into(),
+            entry_va: 0x1380,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(reg("condition")),
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Const(1)),
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: reg("work"),
+                    src: Expr::Const(1),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(2)),
+                },
+            ],
+        };
+        let original = mismatched.clone();
+
+        super::collapse_matching_terminal_return_guard(&mut mismatched);
+
+        assert_eq!(mismatched, original);
+    }
+
+    #[test]
+    fn duplicate_reaching_copy_exposes_nested_conjunction() {
+        let copy = Stmt::Assign {
+            dst: reg("top"),
+            src: Expr::Reg(reg("previous_top")),
+        };
+        let mut function = Function {
+            name: "bounded_descent".into(),
+            entry_va: 0x1390,
+            body: vec![
+                copy.clone(),
+                Stmt::If {
+                    cond: Expr::Reg(reg("valid_node")),
+                    then_body: vec![
+                        copy,
+                        Stmt::If {
+                            cond: Expr::Reg(reg("stack_has_room")),
+                            then_body: vec![Stmt::Assign {
+                                dst: reg("descended"),
+                                src: Expr::Const(1),
+                            }],
+                            else_body: None,
+                        },
+                    ],
+                    else_body: None,
+                },
+            ],
+        };
+
+        super::collapse_redundant_copy_nested_guards(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(
+            rendered.matches("top = previous_top;").count(),
+            1,
+            "{rendered}"
+        );
+        assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches(" && ").count(), 1, "{rendered}");
+        assert!(rendered.contains("descended = 1;"), "{rendered}");
+    }
+
+    #[test]
+    fn changed_or_memory_backed_copy_blocks_nested_conjunction() {
+        let mut function = Function {
+            name: "mutable_copy".into(),
+            entry_va: 0x13a0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("top"),
+                    src: Expr::Reg(reg("before")),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("valid")),
+                    then_body: vec![
+                        Stmt::Assign {
+                            dst: reg("top"),
+                            src: Expr::Reg(reg("after")),
+                        },
+                        Stmt::If {
+                            cond: Expr::Reg(reg("room")),
+                            then_body: vec![Stmt::Return { value: None }],
+                            else_body: None,
+                        },
+                    ],
+                    else_body: None,
+                },
+            ],
+        };
+        let original = function.clone();
+
+        super::collapse_redundant_copy_nested_guards(&mut function);
+
+        assert_eq!(function, original);
     }
 
     #[test]

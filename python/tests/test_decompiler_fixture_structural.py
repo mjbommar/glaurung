@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -695,9 +696,7 @@ def test_recursion_gcc_o2_inherits_declared_parameter_types(tmp_path: Path) -> N
         timeout=300,
         check=True,
     ).stdout
-    assert (
-        "long fib(int arg0)" in fib or "long int fib(int arg0)" in fib
-    ), fib
+    assert "long fib(int arg0)" in fib or "long int fib(int arg0)" in fib, fib
 
     ackermann = subprocess.run(
         [
@@ -774,12 +773,90 @@ def test_bst_clang_o2_recovers_anonymous_struct_typedef(tmp_path: Path) -> None:
         assert "BstNode * arg0" in outputs[function], outputs[function]
         assert "((struct BstNode *)arg0)" not in outputs[function], outputs[function]
         assert ".key" in outputs[function], outputs[function]
-    assert ".left" in outputs["bst_inorder_checksum"], outputs[
+    assert ".left" in outputs["bst_inorder_checksum"], outputs["bst_inorder_checksum"]
+    assert ".right" in outputs["bst_inorder_checksum"], outputs["bst_inorder_checksum"]
+
+    differential = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "15_binary_search_tree",
+            "--seed",
+            "20260731",
+            "--fuzz",
+            "256",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=900,
+        check=True,
+    )
+    verdicts = json.loads(differential.stdout)
+    assert verdicts["bst_search"]["status"] == "pass", verdicts["bst_search"]
+    assert verdicts["bst_inorder_checksum"]["status"] == "pass", verdicts[
         "bst_inorder_checksum"
     ]
-    assert ".right" in outputs["bst_inorder_checksum"], outputs[
+
+
+def test_bst_eager_setcc_guard_recovers_logical_predicates(tmp_path: Path) -> None:
+    """A real SETcc/OR lowering must recover pure source-level predicates."""
+    import subprocess
+
+    clang = shutil.which("clang")
+    objdump = shutil.which("objdump")
+    if clang is None or objdump is None:
+        pytest.skip("host clang and objdump are required")
+
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / "15_binary_search_tree.c"
+    binary = tmp_path / "15_binary_search_tree-host-clang-O2.so"
+    compiled = subprocess.run(
+        [clang, "-shared", "-fPIC", "-g", "-O2", "-o", str(binary), str(source)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    machine = subprocess.run(
+        [objdump, "-d", "--disassemble=bst_search", str(binary)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    ).stdout
+    setcc_count = sum("\tset" in line for line in machine.splitlines())
+    byte_or_count = sum("\tor" in line and "%" in line for line in machine.splitlines())
+    if setcc_count < 2 or byte_or_count < 2:
+        pytest.skip("host clang did not select the eager SETcc/OR lowering")
+
+    outputs = {}
+    for function in ("bst_search", "bst_inorder_checksum"):
+        outputs[function] = subprocess.run(
+            [
+                "glaurung",
+                "decompile",
+                binary,
+                "--func",
+                function,
+                "--style",
+                "decbench",
+                "--no-color",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+        ).stdout
+    assert outputs["bst_search"].count(" && ") >= 2, outputs["bst_search"]
+    assert outputs["bst_inorder_checksum"].count(" && ") >= 3, outputs[
         "bst_inorder_checksum"
     ]
+    assert " || " not in outputs["bst_search"], outputs["bst_search"]
 
     differential = subprocess.run(
         [

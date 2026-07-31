@@ -589,9 +589,11 @@ fn fold_expr(e: &mut Expr) {
             Expr::Const(value) if cast_preserves_constant(*value, *signed, *width) => {
                 Some(Expr::Const(*value))
             }
-            // Comparisons are exactly zero or one, so every supported integer
-            // cast preserves their complete value and signedness is irrelevant.
-            predicate @ Expr::Cmp { .. } if *width > 0 => Some(predicate.clone()),
+            // Boolean expressions are exactly zero or one, so every supported
+            // integer cast preserves their complete value and signedness is
+            // irrelevant. This includes logical trees recovered below, not
+            // only a single comparison leaf.
+            boolean if *width > 0 && is_exact_boolean(boolean) => Some(boolean.clone()),
             _ => None,
         };
         if let Some(replacement) = replacement {
@@ -715,6 +717,11 @@ fn fold_expr(e: &mut Expr) {
                     *e = Expr::Const(0);
                     return;
                 }
+                BinOp::LogicalOr if is_exact_boolean(lhs) => {
+                    let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
+                    *e = x;
+                    return;
+                }
                 _ => {}
             }
         }
@@ -728,6 +735,11 @@ fn fold_expr(e: &mut Expr) {
                 *e = Expr::Const(0);
                 return;
             }
+            if op == BinOp::LogicalOr && is_exact_boolean(rhs) {
+                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
+                *e = x;
+                return;
+            }
         }
         if let Expr::Const(1) = **rhs {
             if matches!(op, BinOp::Mul) {
@@ -735,9 +747,19 @@ fn fold_expr(e: &mut Expr) {
                 *e = x;
                 return;
             }
+            if op == BinOp::LogicalAnd && is_exact_boolean(lhs) {
+                let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
+                *e = x;
+                return;
+            }
         }
         if let Expr::Const(1) = **lhs {
             if matches!(op, BinOp::Mul) {
+                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
+                *e = x;
+                return;
+            }
+            if op == BinOp::LogicalAnd && is_exact_boolean(rhs) {
                 let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
                 *e = x;
                 return;
@@ -841,24 +863,44 @@ fn fold_expr(e: &mut Expr) {
             return;
         }
 
+        // Clang sometimes lowers a source-level short-circuit guard into a
+        // byte-valued SETcc tree, combines it eagerly, then widens and tests the
+        // result. The byte view is the crucial provenance: a bare `cmp | cmp`
+        // can just as legitimately be source-level bitwise C, and changing it
+        // globally damages CFG fidelity. Recover only the complete terminal
+        // test, and only when every leaf is side-effect-free.
+        if *op == CmpOp::Ne {
+            let candidate = match (lhs.as_ref(), rhs.as_ref()) {
+                (candidate, Expr::Const(0)) | (Expr::Const(0), candidate) => {
+                    recover_eager_boolean_guard(candidate)
+                }
+                _ => None,
+            };
+            if let Some((logical, leaves, saw_byte_view)) = candidate {
+                if leaves >= 2 && saw_byte_view {
+                    *e = logical;
+                    return;
+                }
+            }
+        }
+
         let inner = match (lhs.as_ref(), rhs.as_ref()) {
-            (inner @ Expr::Cmp { .. }, Expr::Const(0))
-            | (Expr::Const(0), inner @ Expr::Cmp { .. }) => Some(inner),
+            (inner, Expr::Const(0)) | (Expr::Const(0), inner) if is_exact_boolean(inner) => {
+                Some(inner)
+            }
             _ => None,
         };
-        if let Some(Expr::Cmp {
-            op: inner_op,
-            lhs: inner_lhs,
-            rhs: inner_rhs,
-        }) = inner
-        {
-            let replacement = match op {
-                CmpOp::Ne => Some(Expr::Cmp {
-                    op: *inner_op,
-                    lhs: inner_lhs.clone(),
-                    rhs: inner_rhs.clone(),
-                }),
-                CmpOp::Eq => Some(invert_comparison(*inner_op, inner_lhs, inner_rhs)),
+        if let Some(inner) = inner {
+            let replacement = match (op, inner) {
+                (CmpOp::Ne, boolean) => Some(boolean.clone()),
+                (
+                    CmpOp::Eq,
+                    Expr::Cmp {
+                        op: inner_op,
+                        lhs: inner_lhs,
+                        rhs: inner_rhs,
+                    },
+                ) => Some(invert_comparison(*inner_op, inner_lhs, inner_rhs)),
                 _ => None,
             };
             if let Some(replacement) = replacement {
@@ -885,6 +927,129 @@ fn cast_preserves_constant(value: i64, signed: bool, width: u8) -> bool {
     } else {
         value >= 0 && (value as u64) < (1u64 << bits)
     }
+}
+
+/// Whether an expression's complete integer value is provably either zero or
+/// one. This is a value fact only; callers that change evaluation order must
+/// additionally use [`is_short_circuit_safe_boolean`].
+fn is_exact_boolean(expr: &Expr) -> bool {
+    match expr {
+        Expr::Cmp { .. } => true,
+        Expr::Const(value) => matches!(value, 0 | 1),
+        Expr::Cast { width, expr, .. } => *width > 0 && is_exact_boolean(expr),
+        Expr::Bin {
+            op: BinOp::LogicalAnd | BinOp::LogicalOr,
+            lhs,
+            rhs,
+        } => is_exact_boolean(lhs) && is_exact_boolean(rhs),
+        _ => false,
+    }
+}
+
+/// A boolean whose evaluation is free of memory reads and machine operations
+/// that can trap. Such an expression may safely move from eager bitwise
+/// evaluation to C short-circuit evaluation without changing observable
+/// behavior.
+fn is_short_circuit_safe_boolean(expr: &Expr) -> bool {
+    match expr {
+        Expr::Cmp { lhs, rhs, .. } => {
+            is_short_circuit_safe_value(lhs) && is_short_circuit_safe_value(rhs)
+        }
+        Expr::Const(value) => matches!(value, 0 | 1),
+        Expr::Cast { width, expr, .. } => *width > 0 && is_short_circuit_safe_boolean(expr),
+        Expr::Bin {
+            op: BinOp::LogicalAnd | BinOp::LogicalOr,
+            lhs,
+            rhs,
+        } => is_short_circuit_safe_boolean(lhs) && is_short_circuit_safe_boolean(rhs),
+        _ => false,
+    }
+}
+
+fn is_short_circuit_safe_value(expr: &Expr) -> bool {
+    match expr {
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => true,
+        Expr::Cast { expr, .. } | Expr::Un { src: expr, .. } => is_short_circuit_safe_value(expr),
+        Expr::Bin { op, lhs, rhs } => {
+            *op != BinOp::Div
+                && is_short_circuit_safe_value(lhs)
+                && is_short_circuit_safe_value(rhs)
+        }
+        Expr::Cmp { lhs, rhs, .. } => {
+            is_short_circuit_safe_value(lhs) && is_short_circuit_safe_value(rhs)
+        }
+        Expr::Deref { .. }
+        | Expr::FunctionTableEntry { .. }
+        | Expr::Select { .. }
+        | Expr::WideArithmetic { .. }
+        | Expr::Unknown(_) => false,
+    }
+}
+
+/// Recover a complete eager boolean tree that feeds an explicit `!= 0` test.
+/// The tuple carries the logical expression, predicate-leaf count, and whether
+/// the machine tree included a byte cast/mask characteristic of SETcc output.
+fn recover_eager_boolean_guard(expr: &Expr) -> Option<(Expr, usize, bool)> {
+    match expr {
+        comparison @ Expr::Cmp { .. } if is_short_circuit_safe_boolean(comparison) => {
+            Some((comparison.clone(), 1, false))
+        }
+        Expr::Cast {
+            width, expr: inner, ..
+        } => {
+            let (logical, leaves, saw_byte_view) = recover_eager_boolean_guard(inner)?;
+            Some((logical, leaves, saw_byte_view || *width == 1))
+        }
+        Expr::Bin {
+            op: BinOp::And,
+            lhs,
+            rhs,
+        } => {
+            let masked = match (lhs.as_ref(), rhs.as_ref()) {
+                (inner, Expr::Const(mask)) | (Expr::Const(mask), inner) if mask & 1 == 1 => {
+                    Some((inner, *mask))
+                }
+                _ => None,
+            };
+            if let Some((inner, mask)) = masked {
+                let (logical, leaves, saw_byte_view) = recover_eager_boolean_guard(inner)?;
+                return Some((logical, leaves, saw_byte_view || mask == 255));
+            }
+            recover_eager_boolean_pair(BinOp::LogicalAnd, lhs, rhs)
+        }
+        Expr::Bin {
+            op: BinOp::Or,
+            lhs,
+            rhs,
+        } => recover_eager_boolean_pair(BinOp::LogicalOr, lhs, rhs),
+        _ => None,
+    }
+}
+
+fn recover_eager_boolean_pair(
+    logical_op: BinOp,
+    lhs: &Expr,
+    rhs: &Expr,
+) -> Option<(Expr, usize, bool)> {
+    let (lhs, lhs_leaves, lhs_byte_view) = recover_eager_boolean_guard(lhs)?;
+    let (rhs, rhs_leaves, rhs_byte_view) = recover_eager_boolean_guard(rhs)?;
+    Some((
+        Expr::Bin {
+            op: logical_op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        },
+        lhs_leaves + rhs_leaves,
+        lhs_byte_view || rhs_byte_view,
+    ))
 }
 
 /// `(outer)(inner)x` when both casts have the signedness required by `op` and
@@ -924,8 +1089,9 @@ fn common_extended_operand(expr: &Expr, op: CmpOp) -> Option<(bool, u8, u8, &Exp
 }
 
 fn fold_observed_mask(value: &Expr, observed_mask: i64) -> Option<Expr> {
-    // Comparisons are exactly 0 or 1. Only the low bit of the mask matters.
-    if matches!(value, Expr::Cmp { .. }) {
+    // Boolean expressions are exactly 0 or 1. Only the low bit of the mask
+    // matters, including for a recovered logical predicate tree.
+    if is_exact_boolean(value) {
         return Some(if observed_mask & 1 == 1 {
             value.clone()
         } else {
@@ -1765,6 +1931,102 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn pure_boolean_bitwise_tree_recovers_logical_disjunction() {
+        let cmp = |name: &str, value: i64| Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg(name))),
+            rhs: Box::new(Expr::Const(value)),
+        };
+        let first = cmp("arg0", 0);
+        let second = cmp("arg1", 1);
+        let third = cmp("arg2", 2);
+        let masked_pair = bin(
+            BinOp::And,
+            Expr::Cast {
+                signed: false,
+                width: 1,
+                expr: Box::new(bin(BinOp::Or, first.clone(), second.clone())),
+            },
+            Expr::Const(255),
+        );
+        let mut f = one_stmt(Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(bin(BinOp::Or, masked_pair, third.clone())),
+            }),
+            rhs: Box::new(Expr::Const(0)),
+        });
+
+        fold_constants(&mut f);
+
+        assert_eq!(
+            f.body[0],
+            Stmt::Assign {
+                dst: reg("rax"),
+                src: bin(
+                    BinOp::LogicalOr,
+                    bin(BinOp::LogicalOr, first, second),
+                    third,
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn boolean_bitwise_tree_with_memory_read_stays_eager() {
+        let load_comparison = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Deref {
+                addr: Box::new(Expr::Reg(reg("arg0"))),
+                size: 4,
+            }),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let register_comparison = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg("arg1"))),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let original = bin(BinOp::Or, register_comparison, load_comparison);
+        let mut f = one_stmt(original.clone());
+
+        fold_constants(&mut f);
+
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Assign {
+                src: Expr::Bin { op: BinOp::Or, .. },
+                ..
+            }
+        ));
+        assert_eq!(f.body[0], one_stmt(original).body[0]);
+    }
+
+    #[test]
+    fn unobserved_pure_boolean_bitwise_tree_stays_eager() {
+        let original = bin(
+            BinOp::Or,
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Reg(reg("arg0"))),
+                rhs: Box::new(Expr::Const(0)),
+            },
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(Expr::Reg(reg("arg1"))),
+                rhs: Box::new(Expr::Const(0)),
+            },
+        );
+        let mut f = one_stmt(original.clone());
+
+        fold_constants(&mut f);
+
+        assert_eq!(f.body[0], one_stmt(original).body[0]);
     }
 
     #[test]
