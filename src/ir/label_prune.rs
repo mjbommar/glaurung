@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{negate_cmp_expr, Expr, Function, Stmt};
 
 /// Remove labels whose VA is never referenced by a `goto` within `f`.
 pub fn prune_unreferenced_labels(f: &mut Function) {
@@ -70,6 +70,246 @@ pub fn inline_terminal_goto_tails(function: &mut Function) {
         // can see an immediately preceding shared-return label.
         prune_unreachable_tails(function);
     }
+}
+
+/// Recover a forward-goto region whose exits all join at the adjacent label.
+///
+/// A sequence such as `if (stop) goto join; work; join:` is exactly
+/// `if (!stop) { work; }`. Multiple such guards become nested continuations.
+/// If the final statement in that continuation is a loop, a goto from that
+/// loop to the immediately following join is exactly `break`. The pass requires
+/// one globally unique label, accounts for every goto to it, rejects any other
+/// label in the moved region, and refuses to turn a non-tail loop exit into a
+/// break (because that would execute statements the goto skipped).
+pub fn recover_forward_exit_regions(function: &mut Function) {
+    loop {
+        let mut labels = HashMap::new();
+        let mut gotos = HashMap::new();
+        count_labels_and_gotos(&function.body, &mut labels, &mut gotos);
+        if !recover_one_forward_exit(&mut function.body, &labels, &gotos) {
+            break;
+        }
+    }
+}
+
+fn recover_one_forward_exit(
+    body: &mut Vec<Stmt>,
+    labels: &HashMap<u64, usize>,
+    gotos: &HashMap<u64, usize>,
+) -> bool {
+    for label_index in 0..body.len() {
+        let Stmt::Label(target) = body[label_index] else {
+            continue;
+        };
+        let expected_gotos = gotos.get(&target).copied().unwrap_or_default();
+        if labels.get(&target).copied() != Some(1) || expected_gotos == 0 {
+            continue;
+        }
+        let Some(start) = body[..label_index]
+            .iter()
+            .position(|statement| direct_exit_guard(statement, target).is_some())
+        else {
+            continue;
+        };
+        let segment = &body[start..label_index];
+        if body_contains_label(segment) || count_target_gotos(segment, target) != expected_gotos {
+            continue;
+        }
+        let Some(replacement) = structure_forward_segment(segment.to_vec(), target) else {
+            continue;
+        };
+        body.splice(start..=label_index, replacement);
+        return true;
+    }
+
+    for statement in body {
+        let changed = match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_one_forward_exit(then_body, labels, gotos)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(|body| recover_one_forward_exit(body, labels, gotos))
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                recover_one_forward_exit(body, labels, gotos)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| recover_one_forward_exit(body, labels, gotos))
+                    || default
+                        .as_mut()
+                        .is_some_and(|body| recover_one_forward_exit(body, labels, gotos))
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                recover_one_forward_exit(try_body, labels, gotos)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| recover_one_forward_exit(&mut catch.body, labels, gotos))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn structure_forward_segment(mut segment: Vec<Stmt>, target: u64) -> Option<Vec<Stmt>> {
+    let tail_index = segment
+        .iter()
+        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))?;
+    if statement_contains_target_goto(&segment[tail_index], target) {
+        match &mut segment[tail_index] {
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                replace_one_loop_exit_gotos(body, target)?;
+            }
+            _ => return None,
+        }
+    }
+
+    let mut guard_indices = Vec::new();
+    for (index, statement) in segment.iter().enumerate() {
+        if direct_exit_guard(statement, target).is_some() {
+            guard_indices.push(index);
+        } else if statement_contains_target_goto(statement, target) {
+            return None;
+        }
+    }
+    if guard_indices.is_empty() {
+        return None;
+    }
+
+    for index in guard_indices.into_iter().rev() {
+        let condition = direct_exit_guard(&segment[index], target)?;
+        let continuation = segment.split_off(index + 1);
+        segment[index] = Stmt::If {
+            cond: negate_cmp_expr(condition),
+            then_body: continuation,
+            else_body: None,
+        };
+    }
+    Some(segment)
+}
+
+fn replace_one_loop_exit_gotos(body: &mut Vec<Stmt>, target: u64) -> Option<usize> {
+    let mut replaced = 0;
+    for statement in body {
+        match statement {
+            Stmt::Goto { target: seen } if *seen == target => {
+                *statement = Stmt::Break;
+                replaced += 1;
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                replaced += replace_one_loop_exit_gotos(then_body, target)?;
+                if let Some(else_body) = else_body {
+                    replaced += replace_one_loop_exit_gotos(else_body, target)?;
+                }
+            }
+            _ if statement_contains_target_goto(statement, target) => return None,
+            _ => {}
+        }
+    }
+    Some(replaced)
+}
+
+fn direct_exit_guard(statement: &Stmt, target: u64) -> Option<Expr> {
+    let Stmt::If {
+        cond,
+        then_body,
+        else_body: None,
+    } = statement
+    else {
+        return None;
+    };
+    matches!(then_body.as_slice(), [Stmt::Goto { target: seen }] if *seen == target)
+        .then(|| cond.clone())
+}
+
+fn body_contains_label(body: &[Stmt]) -> bool {
+    body.iter().any(statement_contains_any_label)
+}
+
+fn statement_contains_any_label(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Label(_) => true,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            body_contains_label(then_body) || else_body.as_deref().is_some_and(body_contains_label)
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            body_contains_label(body)
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases.iter().any(|(_, body)| body_contains_label(body))
+                || default.as_deref().is_some_and(body_contains_label)
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            body_contains_label(try_body)
+                || catches.iter().any(|catch| body_contains_label(&catch.body))
+        }
+        _ => false,
+    }
+}
+
+fn count_target_gotos(body: &[Stmt], target: u64) -> usize {
+    body.iter()
+        .map(|statement| count_target_gotos_in_statement(statement, target))
+        .sum()
+}
+
+fn count_target_gotos_in_statement(statement: &Stmt, target: u64) -> usize {
+    match statement {
+        Stmt::Goto { target: seen } => usize::from(*seen == target),
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            count_target_gotos(then_body, target)
+                + else_body
+                    .as_deref()
+                    .map(|body| count_target_gotos(body, target))
+                    .unwrap_or_default()
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            count_target_gotos(body, target)
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .map(|(_, body)| count_target_gotos(body, target))
+                .sum::<usize>()
+                + default
+                    .as_deref()
+                    .map(|body| count_target_gotos(body, target))
+                    .unwrap_or_default()
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            count_target_gotos(try_body, target)
+                + catches
+                    .iter()
+                    .map(|catch| count_target_gotos(&catch.body, target))
+                    .sum::<usize>()
+        }
+        _ => 0,
+    }
+}
+
+fn statement_contains_target_goto(statement: &Stmt, target: u64) -> bool {
+    count_target_gotos_in_statement(statement, target) > 0
 }
 
 fn find_terminal_tail(
@@ -445,7 +685,157 @@ fn drop_unreferenced(body: &mut Vec<Stmt>, referenced: &HashSet<u64>) {
 mod tests {
     use super::*;
     use crate::ir::ast::{Expr, Function, Stmt};
-    use crate::ir::types::VReg;
+    use crate::ir::types::{CmpOp, VReg};
+
+    #[test]
+    fn forward_skip_to_an_adjacent_label_becomes_a_guarded_region() {
+        let work = Stmt::Assign {
+            dst: VReg::phys("value"),
+            src: Expr::Const(1),
+        };
+        let mut function = Function {
+            name: "forward_skip".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(VReg::phys("skip"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                    then_body: vec![Stmt::Goto { target: 0x1200 }],
+                    else_body: None,
+                },
+                work.clone(),
+                Stmt::Label(0x1200),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recover_forward_exit_regions(&mut function);
+
+        assert!(matches!(
+            function.body.as_slice(),
+            [
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs,
+                        rhs,
+                    },
+                    then_body,
+                    else_body: None,
+                },
+                Stmt::Return { value: None },
+            ] if lhs.as_ref() == &Expr::Reg(VReg::phys("skip"))
+                && rhs.as_ref() == &Expr::Const(1)
+                && then_body == &[work]
+        ));
+    }
+
+    #[test]
+    fn shared_forward_exits_guard_a_tail_loop_and_become_breaks() {
+        let first_work = Stmt::Assign {
+            dst: VReg::phys("a"),
+            src: Expr::Const(1),
+        };
+        let second_work = Stmt::Assign {
+            dst: VReg::phys("b"),
+            src: Expr::Const(2),
+        };
+        let mut function = Function {
+            name: "shared_forward_exit".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("skip_first")),
+                    then_body: vec![Stmt::Goto { target: 0x1200 }],
+                    else_body: None,
+                },
+                first_work.clone(),
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("skip_second")),
+                    then_body: vec![Stmt::Goto { target: 0x1200 }],
+                    else_body: None,
+                },
+                second_work.clone(),
+                Stmt::DoWhile {
+                    body: vec![
+                        Stmt::If {
+                            cond: Expr::Reg(VReg::phys("leave_loop")),
+                            then_body: vec![Stmt::Goto { target: 0x1200 }],
+                            else_body: None,
+                        },
+                        Stmt::Nop,
+                    ],
+                    cond: Expr::Reg(VReg::phys("latch")),
+                },
+                Stmt::Label(0x1200),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recover_forward_exit_regions(&mut function);
+
+        let Stmt::If {
+            then_body: first_body,
+            else_body: None,
+            ..
+        } = &function.body[0]
+        else {
+            panic!("first exit was not recovered: {:#?}", function.body);
+        };
+        assert_eq!(first_body[0], first_work);
+        let Stmt::If {
+            then_body: second_body,
+            else_body: None,
+            ..
+        } = &first_body[1]
+        else {
+            panic!("second exit was not recovered: {first_body:#?}");
+        };
+        assert_eq!(second_body[0], second_work);
+        let Stmt::DoWhile { body, .. } = &second_body[1] else {
+            panic!("tail loop was lost: {second_body:#?}");
+        };
+        assert!(matches!(
+            body.first(),
+            Some(Stmt::If { then_body, .. }) if then_body == &[Stmt::Break]
+        ));
+        assert!(matches!(function.body.last(), Some(Stmt::Return { .. })));
+        assert!(!format!("{:#?}", function.body).contains("Goto"));
+        assert!(!format!("{:#?}", function.body).contains("Label"));
+    }
+
+    #[test]
+    fn a_forward_exit_from_a_non_tail_loop_is_not_rewritten_as_break() {
+        let original = vec![
+            Stmt::If {
+                cond: Expr::Reg(VReg::phys("skip")),
+                then_body: vec![Stmt::Goto { target: 0x1200 }],
+                else_body: None,
+            },
+            Stmt::While {
+                cond: Expr::Reg(VReg::phys("running")),
+                body: vec![Stmt::Goto { target: 0x1200 }],
+            },
+            Stmt::Assign {
+                dst: VReg::phys("after_loop"),
+                src: Expr::Const(1),
+            },
+            Stmt::Label(0x1200),
+            Stmt::Return { value: None },
+        ];
+        let mut function = Function {
+            name: "non_tail_loop_exit".into(),
+            entry_va: 0,
+            body: original.clone(),
+        };
+
+        recover_forward_exit_regions(&mut function);
+
+        assert_eq!(function.body, original);
+    }
 
     #[test]
     fn shared_straight_line_return_tail_is_inlined_at_each_goto() {

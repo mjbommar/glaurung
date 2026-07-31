@@ -166,6 +166,12 @@ def test_optimized_bst_search_recovers_latch_and_terminal_returns(
     assert code.count("return ") >= 4, code
     assert "goto " not in code, code
 
+    inorder = D.decompiled_c(str(binary), functions["bst_inorder_checksum"])
+    assert inorder is not None
+    assert inorder.count("do {") == 2, inorder
+    assert inorder.count("break;") == 1, inorder
+    assert "goto " not in inorder, inorder
+
 
 @pytest.mark.slow
 def test_sparse_validation_guards_recover_as_ordered_early_returns(

@@ -5671,7 +5671,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These fourteen steps change *definitions, uses, value identities, or control-flow
+/// These fifteen steps change *definitions, uses, value identities, or control-flow
 /// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
@@ -5698,24 +5698,27 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 7. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
 ///    immediately adjacent, sole eager guard use without claiming that physical
 ///    role is globally SSA.
-/// 8. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
+/// 8. `label_prune::recover_forward_exit_regions` turns exact forward skips to
+///    an adjacent join into guarded continuations, including a tail loop exit
+///    that is provably the source-level `break`.
+/// 9. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
 ///    `label; body; if (condition) goto label` into the exact source-level
 ///    `do { body } while (condition)` form.
-/// 9. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+/// 10. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 10. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
+/// 11. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
 ///    uniquely labelled return tails at their goto sites, recovering ordinary
 ///    early returns without inventing or reordering an effect.
-/// 11. `switch_ladder::recover_switches` runs before select formation and again
+/// 12. `switch_ladder::recover_switches` runs before select formation and again
 ///    after loop/copy recovery, converting proven comparison ladders into
 ///    `switch` nodes without losing a two-case tail to a ternary expression.
-/// 12. `guarded_switch::collapse_range_guards` removes a compiler range-check
+/// 13. `guarded_switch::collapse_range_guards` removes a compiler range-check
 ///    wrapper only when its unsigned domain and every switch label prove that
 ///    the wrapper cannot select a case the switch would not select itself.
-/// 13. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+/// 14. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
-/// 14. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
+/// 15. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
 ///    immediately joined result return into every arm only when both `if` arms,
 ///    or an explicit switch default, make the control flow exhaustive.
 ///
@@ -5785,11 +5788,21 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::select_fold::fold_boolean_masks(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
-    crate::ir::loop_form::recover_linear_latched_do_whiles(&mut owned);
+    // Recover shared return epilogues before general forward joins. Otherwise a
+    // goto from a loop to `return -1` is faithfully but less clearly rendered
+    // as `break; ... return -1` instead of the exact early return.
+    crate::ir::label_prune::inline_terminal_goto_tails(&mut owned);
+    // A forward join may contain a still-linearised inner loop, while removing
+    // that join can in turn expose the enclosing linear latch. Two bounded
+    // rounds recover inner loop -> forward join -> outer loop without relaxing
+    // either pass's internal-label rejection.
+    for _ in 0..2 {
+        crate::ir::label_prune::recover_forward_exit_regions(&mut owned);
+        crate::ir::loop_form::recover_linear_latched_do_whiles(&mut owned);
+    }
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
     crate::ir::loop_form::recover_sentinel_search_loops(&mut owned);
-    crate::ir::label_prune::inline_terminal_goto_tails(&mut owned);
     crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
