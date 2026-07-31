@@ -744,6 +744,10 @@ fn decompile_at_py(
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
         };
+        let declared_render = dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&func_va))
+            .and_then(dwarf_render_prototype);
         decbench_text(
             &f,
             decl,
@@ -753,6 +757,7 @@ fn decompile_at_py(
                 crate::ir::types_recover::RecoveredOutputKind::Unknown,
                 |p| p.output_kind(),
             ),
+            declared_render.as_ref(),
         )
     } else if style == "c" {
         let body = crate::ir::ast::render_c(&f);
@@ -939,6 +944,10 @@ fn decompile_range_at_py(
             Some((d, w)) => (Some(d), Some(w)),
             None => (None, None),
         };
+        let declared_render = dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&func_va))
+            .and_then(dwarf_render_prototype);
         decbench_text(
             &f,
             decl,
@@ -948,6 +957,7 @@ fn decompile_range_at_py(
                 crate::ir::types_recover::RecoveredOutputKind::Unknown,
                 |p| p.output_kind(),
             ),
+            declared_render.as_ref(),
         )
     } else if style == "c" {
         crate::ir::ast::render_c(&f)
@@ -1148,6 +1158,7 @@ fn decbench_text(
     width: Option<&crate::ir::types_recover::TypeMap>,
     readonly_data: &crate::ir::readonly_fold::ReadonlyData,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
 ) -> String {
     let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
@@ -1205,8 +1216,13 @@ fn decbench_text(
     // the exact call boundary the verifier and C renderer consume.
     crate::ir::call_contracts::refine_call_site_specs(&mut prepared, decl);
     let violations = crate::ir::verify_defs::check(&prepared);
-    let body =
-        crate::ir::ast::render_decbench_typed_with_output(&prepared, decl, width, output_kind);
+    let body = crate::ir::ast::render_decbench_typed_with_output_and_prototype(
+        &prepared,
+        decl,
+        width,
+        output_kind,
+        declared_prototype,
+    );
     if violations.is_empty() {
         return body;
     }
@@ -1336,6 +1352,33 @@ fn dwarf_return_hint(
         "double" => Some(TypeHint::Float { width: 8 }),
         _ => None,
     }
+}
+
+fn dwarf_render_prototype(
+    declared: &DwarfPrototypeContract,
+) -> Option<crate::ir::call_contracts::CallPrototype> {
+    use crate::debug::dwarf::{DwarfParameterType, DwarfReturnType};
+    use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
+
+    let return_type = match &declared.return_type {
+        DwarfReturnType::Void => "void".to_string(),
+        DwarfReturnType::Type(c_type) => c_type.clone(),
+        DwarfReturnType::Unknown => return None,
+    };
+    let parameter_types = declared
+        .parameter_types
+        .iter()
+        .map(|parameter| match parameter {
+            DwarfParameterType::Type(c_type) => Some(c_type.clone()),
+            DwarfParameterType::Unknown => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(CallPrototype {
+        return_type,
+        parameter_types,
+        variadic: false,
+        authority: CallPrototypeAuthority::Authoritative,
+    })
 }
 
 /// Recover machine-code prototype facts, then apply a stronger declared output
@@ -1917,6 +1960,10 @@ fn decompile_all_py(
                 &role_names,
                 &definition_widths,
             );
+            let declared_render = dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func.entry_point.value))
+                .and_then(dwarf_render_prototype);
             decbench_text(
                 &f,
                 Some(&decl),
@@ -1926,6 +1973,7 @@ fn decompile_all_py(
                     .as_ref()
                     .expect("DecBench prototype")
                     .output_kind(),
+                declared_render.as_ref(),
             )
         } else {
             render(&f)
@@ -2113,6 +2161,10 @@ fn decompile_many_py(
                 &role_names,
                 &definition_widths,
             );
+            let declared_render = dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func_va))
+                .and_then(dwarf_render_prototype);
             decbench_text(
                 &f,
                 Some(&decl),
@@ -2122,6 +2174,7 @@ fn decompile_many_py(
                     .as_ref()
                     .expect("DecBench prototype")
                     .output_kind(),
+                declared_render.as_ref(),
             )
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);

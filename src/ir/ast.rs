@@ -5546,12 +5546,110 @@ pub fn render_decbench_typed(
     )
 }
 
+fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
+    let normalized = c_type.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty()
+        || normalized.contains("/*")
+        || normalized
+            .chars()
+            .any(|ch| matches!(ch, '&' | '[' | ']' | '(' | ')' | ';' | '{' | '}'))
+    {
+        return false;
+    }
+    let pointer = normalized.ends_with('*');
+    let base = normalized
+        .trim_end_matches('*')
+        .split_whitespace()
+        .filter(|word| !matches!(*word, "const" | "volatile" | "restrict"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if base.starts_with("struct ") || base.starts_with("union ") {
+        return pointer;
+    }
+    matches!(
+        base.as_str(),
+        "_Bool"
+            | "bool"
+            | "char"
+            | "signed char"
+            | "unsigned char"
+            | "short"
+            | "short int"
+            | "signed short"
+            | "signed short int"
+            | "unsigned short"
+            | "unsigned short int"
+            | "int"
+            | "signed"
+            | "signed int"
+            | "unsigned"
+            | "unsigned int"
+            | "long"
+            | "long int"
+            | "signed long"
+            | "signed long int"
+            | "unsigned long"
+            | "unsigned long int"
+            | "long unsigned"
+            | "long unsigned int"
+            | "long long"
+            | "long long int"
+            | "signed long long"
+            | "signed long long int"
+            | "unsigned long long"
+            | "unsigned long long int"
+            | "long long unsigned"
+            | "long long unsigned int"
+            | "float"
+            | "double"
+    ) || (allow_void && base == "void")
+}
+
+fn source_prototype_forward_declarations(
+    prototype: &CallPrototype,
+) -> std::collections::BTreeSet<String> {
+    let mut declarations = std::collections::BTreeSet::new();
+    for c_type in std::iter::once(&prototype.return_type).chain(&prototype.parameter_types) {
+        let words = c_type.split_whitespace().collect::<Vec<_>>();
+        for pair in words.windows(2) {
+            if matches!(pair[0], "struct" | "union") {
+                let name = pair[1].trim_end_matches('*');
+                if !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+                {
+                    declarations.insert(format!("{} {};", pair[0], name));
+                }
+            }
+        }
+    }
+    declarations
+}
+
 /// Typed DecBench renderer with an explicit recovered output contract.
 pub fn render_decbench_typed_with_output(
     f: &Function,
     tm: Option<&TypeMap>,
     width_tm: Option<&TypeMap>,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
+) -> String {
+    render_decbench_typed_with_output_and_prototype(f, tm, width_tm, output_kind, None)
+}
+
+/// Typed DecBench renderer with an optional authoritative source prototype.
+///
+/// Machine-code inference remains responsible for the body and storage model.
+/// When DWARF supplies an exactly arity-compatible scalar/pointer prototype,
+/// retain its named C types at the function boundary. By-value aggregates are
+/// deliberately rejected until their multi-eightbyte ABI reconstruction is
+/// represented in the middle IR.
+pub fn render_decbench_typed_with_output_and_prototype(
+    f: &Function,
+    tm: Option<&TypeMap>,
+    width_tm: Option<&TypeMap>,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    declared_prototype: Option<&CallPrototype>,
 ) -> String {
     let mut ids = DecIdents::default();
     for s in &f.body {
@@ -5575,10 +5673,27 @@ pub fn render_decbench_typed_with_output(
             }
         }
     }
+    let declared_prototype = declared_prototype.filter(|prototype| {
+        prototype.parameter_types.len() == arg_count
+            && source_prototype_type_is_renderable(&prototype.return_type, true)
+            && prototype
+                .parameter_types
+                .iter()
+                .all(|c_type| source_prototype_type_is_renderable(c_type, false))
+            && ((output_kind == crate::ir::types_recover::RecoveredOutputKind::Void
+                && prototype.return_type == "void")
+                || (output_kind != crate::ir::types_recover::RecoveredOutputKind::Void
+                    && prototype.return_type != "void"))
+    });
 
     let mut out = String::new();
     // Provenance as a C comment (valid, and the harness maps by address anyway).
     let _ = writeln!(out, "// glaurung: {} @ 0x{:x}", f.name, f.entry_va);
+    if let Some(prototype) = declared_prototype {
+        for declaration in source_prototype_forward_declarations(prototype) {
+            let _ = writeln!(out, "{declaration}");
+        }
+    }
 
     // Record every name declared as a pointer with its pointee width, so the
     // array-index render can rewrite
@@ -5626,12 +5741,17 @@ pub fn render_decbench_typed_with_output(
     // Signature: recovered return + argument types. Record which arguments are
     // pointers so the body can cast their int↔pointer reuse (see DEC_PTR_ARGS).
     DEC_PTR_ARGS.with(|m| m.borrow_mut().clear());
-    let return_type = if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
-        "void"
-    } else {
-        infer_return_ctype(&f.body, tm)
-    };
-    DEC_RETURN_CTYPE.with(|selected| selected.set(return_type));
+    let return_type = declared_prototype.map_or_else(
+        || {
+            if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
+                "void".to_string()
+            } else {
+                infer_return_ctype(&f.body, tm).to_string()
+            }
+        },
+        |prototype| prototype.return_type.clone(),
+    );
+    DEC_RETURN_CTYPE.with(|selected| *selected.borrow_mut() = return_type.clone());
     // GCC 15 can ICE in its final RTL pass at `-O2` on exceptionally large,
     // goto-heavy generated functions even after the C front end accepts them.
     // Keep the source semantics and all producer flags, but lower only that
@@ -5642,7 +5762,7 @@ pub fn render_decbench_typed_with_output(
     if ids.statement_count >= 2_000 {
         out.push_str("__attribute__((optimize(\"O1\"))) ");
     }
-    out.push_str(return_type);
+    out.push_str(&return_type);
     out.push(' ');
     out.push_str(&name);
     out.push('(');
@@ -5655,14 +5775,17 @@ pub fn render_decbench_typed_with_output(
                 out.push_str(", ");
             }
             let aname = format!("arg{}", i);
-            let aty = ctype_for(&aname, tm);
+            let aty = declared_prototype.map_or_else(
+                || ctype_for(&aname, tm).to_string(),
+                |prototype| prototype.parameter_types[i].clone(),
+            );
             if aty.ends_with('*') {
-                DEC_PTR_ARGS.with(|m| m.borrow_mut().insert(aname.clone(), aty));
+                DEC_PTR_ARGS.with(|m| m.borrow_mut().insert(aname.clone(), aty.clone()));
             }
             DEC_DECLARED_CTYPES.with(|types| {
-                types.borrow_mut().insert(aname.clone(), aty);
+                types.borrow_mut().insert(aname.clone(), aty.clone());
             });
-            parameter_types.push(aty.to_string());
+            parameter_types.push(aty.clone());
             let _ = write!(out, "{} arg{}", aty, i);
         }
     }
@@ -5676,10 +5799,12 @@ pub fn render_decbench_typed_with_output(
     selected_call_prototypes.insert(
         name.clone(),
         CallPrototype {
-            return_type: return_type.to_string(),
+            return_type: return_type.clone(),
             parameter_types,
             variadic: false,
-            authority: CallPrototypeAuthority::Recovered,
+            authority: declared_prototype.map_or(CallPrototypeAuthority::Recovered, |_| {
+                CallPrototypeAuthority::Authoritative
+            }),
         },
     );
     DEC_NAMED_CALL_PROTOTYPES.with(|selected| {
@@ -5765,7 +5890,7 @@ pub fn render_decbench_typed_with_output(
             "long"
         };
         DEC_DECLARED_CTYPES.with(|types| {
-            types.borrow_mut().insert(local.clone(), ty);
+            types.borrow_mut().insert(local.clone(), ty.to_string());
         });
         let _ = writeln!(out, "    {} {};", ty, local);
     }
@@ -6291,7 +6416,7 @@ thread_local! {
     /// it at render time with casts (see `write_reg_dec` / the Assign arm), so
     /// the emitted C compiles (the gate for byte_match) without changing the
     /// recovered signature. Scoped per render; renders are single-threaded.
-    static DEC_PTR_ARGS: std::cell::RefCell<std::collections::HashMap<String, &'static str>> =
+    static DEC_PTR_ARGS: std::cell::RefCell<std::collections::HashMap<String, String>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 
     /// Names that are *declared as pointers* in the current render (arguments and
@@ -6305,9 +6430,8 @@ thread_local! {
     /// Type recovery can contain competing facts from different machine-value
     /// lifetimes that later share one rendered name; assignment conversion must
     /// consume the selected declaration, not rescan those candidates.
-    static DEC_DECLARED_CTYPES: std::cell::RefCell<
-        std::collections::HashMap<String, &'static str>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    static DEC_DECLARED_CTYPES: std::cell::RefCell<std::collections::HashMap<String, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 
     /// Names declared as complete byte arrays because their addresses escape.
     /// These are C lvalues but not assignable scalars: a machine store whose
@@ -6340,7 +6464,7 @@ thread_local! {
     /// statements need the same representation-boundary conversion as local
     /// assignments; keeping this beside `DEC_VOID_OUTPUT` prevents the body
     /// printer from independently guessing the function signature.
-    static DEC_RETURN_CTYPE: std::cell::Cell<&'static str> = const { std::cell::Cell::new("long") };
+    static DEC_RETURN_CTYPE: std::cell::RefCell<String> = std::cell::RefCell::new("long".to_string());
 
     /// The single declaration table selected for named calls in this render.
     /// Argument conversions and result representation conversions must consume
@@ -6356,8 +6480,8 @@ fn selected_named_call_prototype(name: &str) -> Option<CallPrototype> {
     DEC_NAMED_CALL_PROTOTYPES.with(|selected| selected.borrow().get(&displayed).cloned())
 }
 
-fn dec_ptr_arg_type(name: &str) -> Option<&'static str> {
-    DEC_PTR_ARGS.with(|m| m.borrow().get(name).copied())
+fn dec_ptr_arg_type(name: &str) -> Option<String> {
+    DEC_PTR_ARGS.with(|m| m.borrow().get(name).cloned())
 }
 
 /// The pointee width of `name` if it is declared as a pointer in this render.
@@ -6933,23 +7057,23 @@ fn callee_display_name(name: &str) -> &str {
     name.split_once('@').map_or(name, |(base, _)| base)
 }
 
-fn declared_reg_ctype(reg: &VReg) -> &'static str {
+fn declared_reg_ctype(reg: &VReg) -> String {
     let VReg::Phys(name) = reg else {
-        return "long";
+        return "long".to_string();
     };
     let displayed = sanitize_c_ident(name);
     if let Some(selected) =
-        DEC_DECLARED_CTYPES.with(|types| types.borrow().get(&displayed).copied())
+        DEC_DECLARED_CTYPES.with(|types| types.borrow().get(&displayed).cloned())
     {
         return selected;
     }
     dec_ptr_arg_type(name)
         .or_else(|| {
             dec_ptr_width(name)
-                .map(|pointee_width| hint_to_ctype(TypeHint::Pointer { pointee_width }))
+                .map(|pointee_width| hint_to_ctype(TypeHint::Pointer { pointee_width }).to_string())
         })
-        .or_else(|| dec_int_type(name).map(|(signed, width)| int_ctype(signed, width)))
-        .unwrap_or("long")
+        .or_else(|| dec_int_type(name).map(|(signed, width)| int_ctype(signed, width).to_string()))
+        .unwrap_or_else(|| "long".to_string())
 }
 
 fn write_call_arg_dec(arg: &Expr, out: &mut String) {
@@ -7253,7 +7377,7 @@ fn write_assign_dec(dst: &VReg, src: &Expr, out: &mut String) {
 /// high variable into a destination that remains a machine word needs the
 /// explicit integer cast the old all-`long` renderer got implicitly.
 fn write_assignment_value_dec(dst: &VReg, src: &Expr, out: &mut String) {
-    write_representation_value_dec(declared_reg_ctype(dst), src, out);
+    write_representation_value_dec(&declared_reg_ctype(dst), src, out);
 }
 
 fn expression_has_pointer_representation(expr: &Expr) -> bool {
@@ -7413,11 +7537,13 @@ fn write_store_value_dec(src: &Expr, size: u8, out: &mut String) {
 /// an integer conversion while leaving untyped four-byte stores unchanged.
 fn float_store_pointee_ctype(src: &Expr, size: u8) -> Option<&'static str> {
     match src {
-        Expr::Reg(register @ VReg::Phys(_)) => match (declared_reg_ctype(register), size) {
-            ("float", 4) => Some("float"),
-            ("double", 8) => Some("double"),
-            _ => None,
-        },
+        Expr::Reg(register @ VReg::Phys(_)) => {
+            match (declared_reg_ctype(register).as_str(), size) {
+                ("float", 4) => Some("float"),
+                ("double", 8) => Some("double"),
+                _ => None,
+            }
+        }
         Expr::FloatConst { width: 4, .. } if size == 4 => Some("float"),
         Expr::FloatConst { width: 8, .. } if size == 8 => Some("double"),
         _ => None,
@@ -7483,7 +7609,7 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
                 Some(e) => {
                     out.push_str("return ");
                     DEC_RETURN_CTYPE.with(|return_type| {
-                        write_representation_value_dec(return_type.get(), e, out)
+                        write_representation_value_dec(return_type.borrow().as_str(), e, out)
                     });
                     out.push_str(";\n");
                 }

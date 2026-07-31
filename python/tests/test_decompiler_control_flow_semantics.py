@@ -654,7 +654,10 @@ def test_gcc_o2_pointer_return_keeps_declared_dwarf_kind(tmp_path: Path) -> None
     functions = D.exported_functions(str(binary))
     code = D.decompiled_c(str(binary), functions["list_find"])
     assert code is not None
-    assert re.match(r"(?:char|void) \* list_find\(", code), code
+    assert "struct node;" in code, code
+    assert re.search(
+        r"struct node \* list_find\(struct node \* arg0, int arg1\)", code
+    ), code
     rebuilt = D.build_so(code, tmp_path, "dec_list_find_gcc_o2")
     assert rebuilt is not None
 

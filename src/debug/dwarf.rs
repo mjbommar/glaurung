@@ -770,14 +770,18 @@ fn _resolve_type_string(
     let entry = unit.entry(off).ok()?;
     let kind = entry.tag();
     match kind {
-        gimli::DW_TAG_base_type
-        | gimli::DW_TAG_structure_type
-        | gimli::DW_TAG_union_type
-        | gimli::DW_TAG_class_type
-        | gimli::DW_TAG_enumeration_type
-        | gimli::DW_TAG_typedef => {
+        gimli::DW_TAG_base_type | gimli::DW_TAG_typedef => {
             Some(_name_of(dwarf, unit, &entry).unwrap_or_else(|| "/* unknown */".to_string()))
         }
+        gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => _name_of(dwarf, unit, &entry)
+            .map(|name| format!("struct {name}"))
+            .or_else(|| Some("/* unknown */".to_string())),
+        gimli::DW_TAG_union_type => _name_of(dwarf, unit, &entry)
+            .map(|name| format!("union {name}"))
+            .or_else(|| Some("/* unknown */".to_string())),
+        gimli::DW_TAG_enumeration_type => _name_of(dwarf, unit, &entry)
+            .map(|name| format!("enum {name}"))
+            .or_else(|| Some("/* unknown */".to_string())),
         gimli::DW_TAG_pointer_type => {
             let inner = entry
                 .attr_value(gimli::DW_AT_type)
