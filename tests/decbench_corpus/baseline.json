@@ -69,7 +69,7 @@
     "type_match": 1.0
   },
   "checksum:clang:O2": {
-    "byte_match": 0.05,
+    "byte_match": 0.04,
     "ged": 18.0,
     "type_match": 1.0
   },

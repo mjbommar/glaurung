@@ -472,6 +472,60 @@ def test_clang_o2_vectorized_max_round_trips(tmp_path: Path) -> None:
     assert results["max_array"]["status"] == "pass", results
 
 
+def test_clang_o2_vectorized_crc32_round_trips(tmp_path: Path) -> None:
+    """Packed equality and read-only masks must remain executable C."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "checksum.c"
+    binary = tmp_path / "checksum-clang-O2.so"
+    compiled = subprocess.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O2",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(binary))
+    code = D.decompiled_c(str(binary), functions["crc32_step"])
+    assert code is not None
+    for mnemonic in ("pcmpeqd", "pand", "pshufd", "pxor", "movd"):
+        assert f"asm: {mnemonic}" not in code, code
+    assert "*(int *)(0x20" not in code, code
+    assert D.build_so(code, tmp_path, "dec_crc32_clang_o2", link_against=str(binary))
+
+    compared = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "diff_decompile.py"),
+            str(binary),
+            str(source),
+            "--fixture",
+            "checksum",
+            "--function",
+            "crc32_step",
+            "--seed",
+            "1234",
+            "--fuzz",
+            "64",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    results = json.loads(compared.stdout)
+    assert compared.returncode == 0, results
+    assert results["crc32_step"]["status"] == "pass", results
+
+
 def test_gcc_o0_comparison_tree_recovers_switch_and_round_trips(tmp_path: Path) -> None:
     """The reconstructed x86 signed-greater condition must remain switch-shaped."""
     source = ROOT / "tests" / "decbench_corpus" / "src" / "switch_jt.c"

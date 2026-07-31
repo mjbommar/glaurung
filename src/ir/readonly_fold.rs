@@ -298,6 +298,12 @@ fn fold_expr(
     match expression {
         Expr::Deref { addr, size } => {
             fold_expr(addr, data, aliases, bounds, active_guard);
+            if let Some(value) =
+                constant_u64(addr).and_then(|address| data.read_integer(address, *size))
+            {
+                *expression = Expr::Const(value);
+                return;
+            }
             let Some((base, index)) = indexed_address(addr, *size) else {
                 return;
             };
@@ -535,6 +541,38 @@ fn constant_usize(expression: &Expr) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_readonly_scalar_load_becomes_a_portable_constant() {
+        let mut bytes = vec![0u8; 16];
+        bytes[12..16].copy_from_slice(&32u32.to_le_bytes());
+        let data = ReadonlyData {
+            regions: vec![ReadonlyRegion {
+                base: 0x2000,
+                bytes,
+            }],
+            little_endian: true,
+        };
+        let mut function = Function {
+            name: "constant_lane".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Deref {
+                    addr: Box::new(Expr::Addr(0x200c)),
+                    size: 4,
+                }),
+            }],
+        };
+
+        fold_guarded_readonly_lookups(&mut function, &data);
+        assert_eq!(
+            function.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(32)),
+            }],
+            "a direct .rodata load must not survive as an absolute process address"
+        );
+    }
 
     #[test]
     fn collects_pinned_switch_result_table_from_real_elf() {

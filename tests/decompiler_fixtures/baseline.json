@@ -479,7 +479,7 @@
     "tick": "structural",
     "tick_n": "structural",
     "vec_sum": "pass",
-    "vec_transform": "fail"
+    "vec_transform": "pass"
   },
   "09_memory_effects:gcc:O0": {
     "cas_update": "pass",
