@@ -1,6 +1,6 @@
 # Named, reproducible slices of the fixture corpus.
 #
-# The full matrix is 14 fixtures x 4 lanes and takes minutes. That is the right
+# The full matrix is every declared fixture x 4 lanes and takes minutes. That is the right
 # cost for a gate and the wrong cost for iterating on one defect. These sets name
 # the slices worth re-running constantly, so an iteration loop is
 # `tools/dectest.py @loops` rather than a remembered selector string.
@@ -12,9 +12,8 @@
 # A set that rots — naming a renamed fixture or a deleted function — fails the
 # fast suite rather than silently shrinking someone's loop.
 #
-# Failure counts below are from the committed baseline.json (488 pass / 53 fail
-# / 82 structural) and are a snapshot, not a contract; re-read them with
-# `tools/dectest.py --list @<set>`.
+# Status counts live in the committed baseline rather than these descriptions;
+# hard-coded prose counts go stale whenever the corpus or decompiler improves.
 
 [smoke]
 description = "Six passing canaries across four shape families, ~8s. Run this constantly."
@@ -32,7 +31,7 @@ selectors = [
 ]
 
 [region]
-description = "The Phase 4 region-ownership set — 185 pass / 7 fail in the current baseline."
+description = "The Phase 4 region-ownership set: loops, switches, rotation, and early exits."
 selectors = [
     "03_loop_shapes",
     "04_switch_shapes",
@@ -41,15 +40,15 @@ selectors = [
 ]
 
 [switch]
-description = "Switch and ladder recovery (04) — all 64 cells pass in the current baseline."
+description = "Switch and ladder recovery (04)."
 selectors = ["04_switch_shapes"]
 
 [loops]
-description = "Every loop shape: plain (03), rotated (12), early-exit (13) — 121 pass / 7 fail."
+description = "Every loop shape: plain (03), rotated (12), and early-exit (13)."
 selectors = ["03_loop_shapes", "12_loop_rotation", "13_loop_early_exit"]
 
 [early-exit]
-description = "13 alone — all 24 break/continue/early-return cells currently pass."
+description = "Break, continue, and early-return loops from fixture 13."
 selectors = ["13_loop_early_exit"]
 
 [flags]
@@ -69,7 +68,7 @@ description = "Integer widths and sub-register views (02). The Phase 2 value-mod
 selectors = ["02_integer_widths"]
 
 [structs]
-description = "Aggregates/memory (09) plus C++ shapes (10) — 30 pass / 13 fail / 64 structural."
+description = "Aggregates/memory (09) plus C++ runtime shapes (10)."
 selectors = ["09_memory_effects", "10_cpp_runtime_shapes"]
 
 [o0]
@@ -81,5 +80,24 @@ description = "Every fixture at -O2, both compilers. Where cmov, merged values a
 selectors = ["*:gcc:O2", "*:clang:O2"]
 
 [clang-o0]
-description = "Every Clang -O0 fixture — 128 pass / 11 fail / 19 structural behavior cells."
+description = "Every Clang -O0 fixture, where unoptimised structuring bugs are most legible."
 selectors = ["*:clang:O0"]
+
+[curriculum]
+description = "Sixteen undergraduate data-structure, graph, string, and numerical projects in all four lanes."
+selectors = [
+    "15_*", "16_*", "17_*", "18_*", "19_*", "20_*", "21_*", "22_*",
+    "23_*", "24_*", "25_*", "26_*", "27_*", "28_*", "29_*", "30_*",
+]
+
+[curriculum-data-structures]
+description = "BST, red-black invariants, open-address hashing, binary heap, and disjoint-set."
+selectors = ["15_*", "16_*", "17_*", "18_*", "19_*"]
+
+[curriculum-graphs]
+description = "BFS, DFS, dense Dijkstra, and Kahn topological sort."
+selectors = ["20_*", "21_*", "22_*", "23_*"]
+
+[curriculum-sequences]
+description = "Merge sort, KMP, CSR mat-vec, Newton, Euler, polynomial, and stencil kernels."
+selectors = ["24_*", "25_*", "26_*", "27_*", "28_*", "29_*", "30_*"]

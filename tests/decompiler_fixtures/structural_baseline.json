@@ -51,9 +51,21 @@
     "02_integer_widths:shr_unsigned:c": "closed",
     "02_integer_widths:shr_unsigned:decbench": "closed",
     "02_integer_widths:shr_unsigned:plain": "closed",
+    "02_integer_widths:smul_high64:c": "closed",
+    "02_integer_widths:smul_high64:decbench": "closed",
+    "02_integer_widths:smul_high64:plain": "closed",
+    "02_integer_widths:srem64:c": "closed",
+    "02_integer_widths:srem64:decbench": "closed",
+    "02_integer_widths:srem64:plain": "closed",
     "02_integer_widths:trunc_u8:c": "closed",
     "02_integer_widths:trunc_u8:decbench": "closed",
     "02_integer_widths:trunc_u8:plain": "closed",
+    "02_integer_widths:umul_high64:c": "closed",
+    "02_integer_widths:umul_high64:decbench": "closed",
+    "02_integer_widths:umul_high64:plain": "closed",
+    "02_integer_widths:urem64:c": "closed",
+    "02_integer_widths:urem64:decbench": "closed",
+    "02_integer_widths:urem64:plain": "closed",
     "02_integer_widths:zext_u32_to_u64:c": "closed",
     "02_integer_widths:zext_u32_to_u64:decbench": "closed",
     "02_integer_widths:zext_u32_to_u64:plain": "closed",
@@ -153,9 +165,15 @@
     "09_memory_effects:read_counter:c": "closed",
     "09_memory_effects:read_counter:decbench": "closed",
     "09_memory_effects:read_counter:plain": "closed",
+    "09_memory_effects:reset_counter:c": "closed",
+    "09_memory_effects:reset_counter:decbench": "closed",
+    "09_memory_effects:reset_counter:plain": "closed",
     "09_memory_effects:tick:c": "closed",
     "09_memory_effects:tick:decbench": "closed",
     "09_memory_effects:tick:plain": "closed",
+    "09_memory_effects:tick_n:c": "closed",
+    "09_memory_effects:tick_n:decbench": "closed",
+    "09_memory_effects:tick_n:plain": "closed",
     "09_memory_effects:vec_sum:c": "closed",
     "09_memory_effects:vec_sum:decbench": "closed",
     "09_memory_effects:vec_sum:plain": "closed",
@@ -281,7 +299,70 @@
     "14_flag_effects:shift_until_zero:plain": "closed",
     "14_flag_effects:sub_then_sign:c": "closed",
     "14_flag_effects:sub_then_sign:decbench": "closed",
-    "14_flag_effects:sub_then_sign:plain": "closed"
+    "14_flag_effects:sub_then_sign:plain": "closed",
+    "15_binary_search_tree:bst_inorder_checksum:c": "closed",
+    "15_binary_search_tree:bst_inorder_checksum:decbench": "closed",
+    "15_binary_search_tree:bst_inorder_checksum:plain": "closed",
+    "15_binary_search_tree:bst_search:c": "closed",
+    "15_binary_search_tree:bst_search:decbench": "closed",
+    "15_binary_search_tree:bst_search:plain": "closed",
+    "16_red_black_tree:rb_validate:c": "closed",
+    "16_red_black_tree:rb_validate:decbench": "closed",
+    "16_red_black_tree:rb_validate:plain": "closed",
+    "17_hash_table:hash_insert:c": "closed",
+    "17_hash_table:hash_insert:decbench": "closed",
+    "17_hash_table:hash_insert:plain": "closed",
+    "17_hash_table:hash_lookup:c": "closed",
+    "17_hash_table:hash_lookup:decbench": "closed",
+    "17_hash_table:hash_lookup:plain": "closed",
+    "18_binary_heap:heap_pop:c": "closed",
+    "18_binary_heap:heap_pop:decbench": "closed",
+    "18_binary_heap:heap_pop:plain": "closed",
+    "18_binary_heap:heap_push:c": "closed",
+    "18_binary_heap:heap_push:decbench": "closed",
+    "18_binary_heap:heap_push:plain": "closed",
+    "19_disjoint_set:dsu_find:c": "closed",
+    "19_disjoint_set:dsu_find:decbench": "closed",
+    "19_disjoint_set:dsu_find:plain": "closed",
+    "19_disjoint_set:dsu_union:c": "closed",
+    "19_disjoint_set:dsu_union:decbench": "closed",
+    "19_disjoint_set:dsu_union:plain": "closed",
+    "20_graph_bfs:graph_bfs:c": "closed",
+    "20_graph_bfs:graph_bfs:decbench": "closed",
+    "20_graph_bfs:graph_bfs:plain": "closed",
+    "21_graph_dfs:graph_dfs:c": "closed",
+    "21_graph_dfs:graph_dfs:decbench": "closed",
+    "21_graph_dfs:graph_dfs:plain": "closed",
+    "22_dijkstra:dijkstra_dense:c": "closed",
+    "22_dijkstra:dijkstra_dense:decbench": "closed",
+    "22_dijkstra:dijkstra_dense:plain": "closed",
+    "23_topological_sort:topological_sort:c": "closed",
+    "23_topological_sort:topological_sort:decbench": "closed",
+    "23_topological_sort:topological_sort:plain": "closed",
+    "24_merge_sort:merge_sort_i32:c": "closed",
+    "24_merge_sort:merge_sort_i32:decbench": "closed",
+    "24_merge_sort:merge_sort_i32:plain": "closed",
+    "25_kmp_search:kmp_search:c": "closed",
+    "25_kmp_search:kmp_search:decbench": "closed",
+    "25_kmp_search:kmp_search:plain": "closed",
+    "26_sparse_matrix:csr_matvec:c": "closed",
+    "26_sparse_matrix:csr_matvec:decbench": "closed",
+    "26_sparse_matrix:csr_matvec:plain": "closed",
+    "27_newton_raphson:newton_isqrt:c": "closed",
+    "27_newton_raphson:newton_isqrt:decbench": "closed",
+    "27_newton_raphson:newton_isqrt:plain": "closed",
+    "28_euler_ode:euler_decay_q16:c": "closed",
+    "28_euler_ode:euler_decay_q16:decbench": "closed",
+    "28_euler_ode:euler_decay_q16:plain": "closed",
+    "29_polynomial:polynomial_derivative_mod32:c": "closed",
+    "29_polynomial:polynomial_derivative_mod32:decbench": "closed",
+    "29_polynomial:polynomial_derivative_mod32:plain": "closed",
+    "29_polynomial:polynomial_eval_mod32:c": "closed",
+    "29_polynomial:polynomial_eval_mod32:decbench": "closed",
+    "29_polynomial:polynomial_eval_mod32:plain": "closed",
+    "30_finite_difference:heat_step_1d:c": "closed",
+    "30_finite_difference:heat_step_1d:decbench": "closed",
+    "30_finite_difference:heat_step_1d:plain": "closed"
   },
   "effects": {
     "08_indirect_dispatch:apply": {
@@ -297,13 +378,24 @@
       "memory_store": true
     },
     "09_memory_effects:mem_copy": {
-      "memory_store": true
+      "memory_store": true,
+      "void_signature": true
     },
     "09_memory_effects:mem_set": {
-      "memory_store": true
+      "memory_store": true,
+      "void_signature": true
+    },
+    "09_memory_effects:reset_counter": {
+      "memory_store": true,
+      "void_signature": true
     },
     "09_memory_effects:tick": {
-      "memory_store": true
+      "memory_store": true,
+      "void_signature": true
+    },
+    "09_memory_effects:tick_n": {
+      "memory_store": true,
+      "void_signature": true
     },
     "09_memory_effects:vec_transform": {
       "memory_store": true
@@ -343,7 +435,11 @@
     "02_integer_widths:sar_signed": false,
     "02_integer_widths:sext_i8": false,
     "02_integer_widths:shr_unsigned": false,
+    "02_integer_widths:smul_high64": false,
+    "02_integer_widths:srem64": false,
     "02_integer_widths:trunc_u8": false,
+    "02_integer_widths:umul_high64": false,
+    "02_integer_widths:urem64": false,
     "02_integer_widths:zext_u32_to_u64": false,
     "03_loop_shapes:dowhile_atleastonce": false,
     "03_loop_shapes:for_sum": false,
@@ -377,7 +473,9 @@
     "09_memory_effects:mem_copy": false,
     "09_memory_effects:mem_set": false,
     "09_memory_effects:read_counter": false,
+    "09_memory_effects:reset_counter": false,
     "09_memory_effects:tick": false,
+    "09_memory_effects:tick_n": false,
     "09_memory_effects:vec_sum": false,
     "09_memory_effects:vec_transform": false,
     "10_cpp_runtime_shapes:cpp_ctor_dtor": false,
@@ -419,7 +517,28 @@
     "14_flag_effects:dec_loop": false,
     "14_flag_effects:dec_preserves_carry": false,
     "14_flag_effects:shift_until_zero": false,
-    "14_flag_effects:sub_then_sign": false
+    "14_flag_effects:sub_then_sign": false,
+    "15_binary_search_tree:bst_inorder_checksum": false,
+    "15_binary_search_tree:bst_search": false,
+    "16_red_black_tree:rb_validate": false,
+    "17_hash_table:hash_insert": false,
+    "17_hash_table:hash_lookup": false,
+    "18_binary_heap:heap_pop": false,
+    "18_binary_heap:heap_push": false,
+    "19_disjoint_set:dsu_find": false,
+    "19_disjoint_set:dsu_union": false,
+    "20_graph_bfs:graph_bfs": false,
+    "21_graph_dfs:graph_dfs": false,
+    "22_dijkstra:dijkstra_dense": false,
+    "23_topological_sort:topological_sort": false,
+    "24_merge_sort:merge_sort_i32": false,
+    "25_kmp_search:kmp_search": false,
+    "26_sparse_matrix:csr_matvec": false,
+    "27_newton_raphson:newton_isqrt": false,
+    "28_euler_ode:euler_decay_q16": false,
+    "29_polynomial:polynomial_derivative_mod32": false,
+    "29_polynomial:polynomial_eval_mod32": false,
+    "30_finite_difference:heat_step_1d": false
   },
   "verify": {
     "01_conditional_polarity:classify": [],
@@ -439,7 +558,15 @@
     "02_integer_widths:sar_signed": [],
     "02_integer_widths:sext_i8": [],
     "02_integer_widths:shr_unsigned": [],
+    "02_integer_widths:smul_high64": [
+      "var0 is read but never defined"
+    ],
+    "02_integer_widths:srem64": [],
     "02_integer_widths:trunc_u8": [],
+    "02_integer_widths:umul_high64": [
+      "var0 is read but never defined"
+    ],
+    "02_integer_widths:urem64": [],
     "02_integer_widths:zext_u32_to_u64": [],
     "03_loop_shapes:dowhile_atleastonce": [],
     "03_loop_shapes:for_sum": [],
@@ -479,7 +606,9 @@
     "09_memory_effects:mem_copy": [],
     "09_memory_effects:mem_set": [],
     "09_memory_effects:read_counter": [],
+    "09_memory_effects:reset_counter": [],
     "09_memory_effects:tick": [],
+    "09_memory_effects:tick_n": [],
     "09_memory_effects:vec_sum": [],
     "09_memory_effects:vec_transform": [],
     "10_cpp_runtime_shapes:cpp_ctor_dtor": [],
@@ -529,6 +658,45 @@
     "14_flag_effects:dec_loop": [],
     "14_flag_effects:dec_preserves_carry": [],
     "14_flag_effects:shift_until_zero": [],
-    "14_flag_effects:sub_then_sign": []
+    "14_flag_effects:sub_then_sign": [],
+    "15_binary_search_tree:bst_inorder_checksum": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
+    ],
+    "15_binary_search_tree:bst_search": [],
+    "16_red_black_tree:rb_validate": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
+      "var4 is read but never defined"
+    ],
+    "17_hash_table:hash_insert": [],
+    "17_hash_table:hash_lookup": [],
+    "18_binary_heap:heap_pop": [],
+    "18_binary_heap:heap_push": [],
+    "19_disjoint_set:dsu_find": [],
+    "19_disjoint_set:dsu_union": [],
+    "20_graph_bfs:graph_bfs": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
+    ],
+    "21_graph_dfs:graph_dfs": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
+    ],
+    "22_dijkstra:dijkstra_dense": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
+    ],
+    "23_topological_sort:topological_sort": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
+    ],
+    "24_merge_sort:merge_sort_i32": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read",
+      "var3 is read but never defined"
+    ],
+    "25_kmp_search:kmp_search": [
+      "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
+    ],
+    "26_sparse_matrix:csr_matvec": [],
+    "27_newton_raphson:newton_isqrt": [],
+    "28_euler_ode:euler_decay_q16": [],
+    "29_polynomial:polynomial_derivative_mod32": [],
+    "29_polynomial:polynomial_eval_mod32": [],
+    "30_finite_difference:heat_step_1d": []
   }
 }

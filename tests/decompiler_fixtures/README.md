@@ -10,8 +10,9 @@ does, and that structural facts an analyst relies on survive lowering.
 
 | path | role |
 |------|------|
-| `src/NN_*.c`, `src/10_*.cpp` | 10 fixtures, each targeting one bug class (conditional polarity, integer widths, loops, switches, cleanup/FSM, calling conventions, packet parsing, indirect dispatch, memory effects, C++ runtime shapes) |
+| `src/NN_*.c`, `src/10_*.cpp` | focused bug-class fixtures plus a 16-project undergraduate algorithms curriculum |
 | `manifest.py` | declarative oracle: required (exported) functions, pointer buffer sizes, length-arg clamping, exact boundary/switch/packet vectors, `skip_exec`, and per-function `STRUCTURAL` assertions |
+| `curriculum_oracle.c` | independently checks that the curriculum sources implement their advertised textbook examples before they serve as differential references |
 | `baseline.json` | committed per-function status for every `{fixture}:{cc}:{opt}` lane, plus the `__toolchain__` fingerprint that produced it |
 | `structural_baseline.json` | committed structural map (closure per style, effect predicates, fabricated-name flags, def-before-use violations) |
 | `toolchain/Dockerfile` | the fingerprinted compile toolchain (see below) |
@@ -25,7 +26,11 @@ does, and that structural facts an analyst relies on survive lowering.
 - `python/tests/test_decompiler_fixture_harness.py` — fail-closed **unit** tests
   (portability, determinism, exact ABI, infra-status handling). Fast; every PR.
 - `python/tests/test_decompiler_fixture_compile.py` — strict compile gate
-  (`-Wall -Wextra -Werror`, all 10 × gcc/clang × O0/O2). Fast; every PR.
+  (`-Wall -Wextra -Werror`, every fixture × gcc/clang × O0/O2). Fast; every PR.
+- `python/tests/test_decompiler_curriculum_corpus.py` — exact curriculum catalog
+  and fail-closed safe-execution-contract coverage.
+- `python/tests/test_decompiler_curriculum_reference.py` — compiles and executes
+  independent known-answer checks for all 16 curriculum projects.
 - `python/tests/test_decompiler_fixture_matrix.py` — the execution-differential
   **matrix** vs. `baseline.json`. Marked `slow`.
 - `python/tests/test_decompiler_fixture_structural.py` — the **structural lane**

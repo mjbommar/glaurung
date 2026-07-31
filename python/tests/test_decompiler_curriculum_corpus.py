@@ -1,0 +1,81 @@
+"""Fail-closed catalog checks for the undergraduate algorithms corpus.
+
+These are not text snapshots.  Each catalog entry names a real C translation
+unit whose exported functions are compiled, decompiled, rebuilt, and executed by
+the fixture differential in all four compiler/optimization lanes.
+"""
+
+from __future__ import annotations
+
+import importlib
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+FIXTURES = ROOT / "tests" / "decompiler_fixtures"
+sys.path.insert(0, str(FIXTURES))
+
+M = importlib.import_module("manifest")
+
+
+EXPECTED_CURRICULUM = {
+    "15_binary_search_tree": ["bst_search", "bst_inorder_checksum"],
+    "16_red_black_tree": ["rb_validate"],
+    "17_hash_table": ["hash_lookup", "hash_insert"],
+    "18_binary_heap": ["heap_push", "heap_pop"],
+    "19_disjoint_set": ["dsu_find", "dsu_union"],
+    "20_graph_bfs": ["graph_bfs"],
+    "21_graph_dfs": ["graph_dfs"],
+    "22_dijkstra": ["dijkstra_dense"],
+    "23_topological_sort": ["topological_sort"],
+    "24_merge_sort": ["merge_sort_i32"],
+    "25_kmp_search": ["kmp_search"],
+    "26_sparse_matrix": ["csr_matvec"],
+    "27_newton_raphson": ["newton_isqrt"],
+    "28_euler_ode": ["euler_decay_q16"],
+    "29_polynomial": ["polynomial_eval_mod32", "polynomial_derivative_mod32"],
+    "30_finite_difference": ["heat_step_1d"],
+}
+
+
+def test_curriculum_catalog_is_complete_and_exact() -> None:
+    assert M.CURRICULUM_PROJECTS == EXPECTED_CURRICULUM
+
+    sources = {
+        path.stem
+        for path in (FIXTURES / "src").glob("*.c")
+        if path.stem[:2].isdigit() and 15 <= int(path.stem[:2]) <= 30
+    }
+    assert sources == set(EXPECTED_CURRICULUM)
+
+    for fixture, functions in EXPECTED_CURRICULUM.items():
+        assert M.REQUIRED_FUNCTIONS[fixture] == functions
+
+
+def test_curriculum_pointer_contracts_are_declared() -> None:
+    """Every buffer-indexing function must declare its safe execution domain."""
+    expected_contract_keys = {
+        ("15_binary_search_tree", "bst_search"),
+        ("15_binary_search_tree", "bst_inorder_checksum"),
+        ("16_red_black_tree", "rb_validate"),
+        ("17_hash_table", "hash_lookup"),
+        ("17_hash_table", "hash_insert"),
+        ("18_binary_heap", "heap_push"),
+        ("18_binary_heap", "heap_pop"),
+        ("19_disjoint_set", "dsu_find"),
+        ("19_disjoint_set", "dsu_union"),
+        ("20_graph_bfs", "graph_bfs"),
+        ("21_graph_dfs", "graph_dfs"),
+        ("22_dijkstra", "dijkstra_dense"),
+        ("23_topological_sort", "topological_sort"),
+        ("24_merge_sort", "merge_sort_i32"),
+        ("25_kmp_search", "kmp_search"),
+        ("26_sparse_matrix", "csr_matvec"),
+        ("29_polynomial", "polynomial_eval_mod32"),
+        ("29_polynomial", "polynomial_derivative_mod32"),
+        ("30_finite_difference", "heat_step_1d"),
+    }
+    for key in expected_contract_keys:
+        contract = M.OVERRIDES.get(key)
+        assert contract is not None, f"missing safe execution contract for {key}"
+        assert contract.get("len_args") or contract.get("arg_values"), key

@@ -331,6 +331,134 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # CI runner, i.e. a flaky gate. The loop still has to be STRUCTURED correctly;
     # that is what the structural lane checks.
     ("06_calling_conventions", "guarded_spin"): {"arg_values": {0: [0]}},
+    # 15-30: undergraduate algorithms curriculum.  Every bound below is part of
+    # the executable contract, not a convenience: all pointer buffers contain 16
+    # elements, graph matrices are at most 4x4, and algorithms with user-supplied
+    # indices validate both canonical and adversarial inputs without reading out
+    # of bounds.  `extra_vectors` provide at least one recognizable textbook
+    # example alongside the deterministic boundary sweep and seeded fuzz.
+    ("15_binary_search_tree", "bst_search"): {
+        "arg_values": {1: [0, 1, 4, 7, 16], 2: [-1, 0, 1, 6, 15, 16]},
+        "extra_vectors": [[
+            [[8, 1, 2], [4, 3, 4], [12, 5, 6], [2, -1, -1],
+             [6, -1, -1], [10, -1, -1], [14, -1, -1]],
+            7, 0, 10,
+        ]],
+    },
+    ("15_binary_search_tree", "bst_inorder_checksum"): {
+        "arg_values": {1: [0, 1, 4, 7, 16], 2: [-1, 0, 1, 6, 15, 16]},
+        "extra_vectors": [[
+            [[8, 1, 2], [4, 3, 4], [12, 5, 6], [2, -1, -1],
+             [6, -1, -1], [10, -1, -1], [14, -1, -1]],
+            7, 0,
+        ]],
+    },
+    ("16_red_black_tree", "rb_validate"): {
+        "arg_values": {1: [0, 1, 3, 7, 16], 2: [-1, 0, 1, 6, 15, 16]},
+        "extra_vectors": [[
+            [[8, 1, 2, 0], [4, 3, 4, 1], [12, 5, 6, 1],
+             [2, -1, -1, 0], [6, -1, -1, 0], [10, -1, -1, 0],
+             [14, -1, -1, 0]],
+            7, 0,
+        ]],
+    },
+    ("17_hash_table", "hash_lookup"): {
+        "len_args": [2],
+        "extra_vectors": [[
+            [INT_MIN, 9, 17, 1, INT_MIN, INT_MIN, INT_MIN, INT_MIN],
+            [0, 90, 170, 10, 0, 0, 0, 0], 8, 17,
+        ]],
+    },
+    ("17_hash_table", "hash_insert"): {
+        "len_args": [2],
+        "extra_vectors": [[
+            [INT_MIN, 9, 17, 1, INT_MIN, INT_MIN, INT_MIN, INT_MIN],
+            [0, 90, 170, 10, 0, 0, 0, 0], 8, 25, 250,
+        ]],
+    },
+    ("18_binary_heap", "heap_push"): {
+        "len_args": [1, 2],
+        "extra_vectors": [[[2, 5, 7, 12, 9, 11], 6, 16, 3]],
+    },
+    ("18_binary_heap", "heap_pop"): {
+        "len_args": [1],
+        "extra_vectors": [[[2, 5, 7, 12, 9, 11], 6, [0]]],
+    },
+    ("19_disjoint_set", "dsu_find"): {
+        "len_args": [1],
+        "extra_vectors": [[[0, 0, 1, 3, 3, 4], 6, 5]],
+    },
+    ("19_disjoint_set", "dsu_union"): {
+        "len_args": [2],
+        "extra_vectors": [[[0, 0, 2, 2, 4, 4], [1, 0, 1, 0, 1, 0], 6, 1, 5]],
+    },
+    ("20_graph_bfs", "graph_bfs"): {
+        "arg_values": {1: [0, 1, 2, 3, 4], 2: [-1, 0, 1, 3, 4]},
+        "extra_vectors": [[
+            [0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0],
+            4, 0, [0],
+        ]],
+    },
+    ("21_graph_dfs", "graph_dfs"): {
+        "arg_values": {1: [0, 1, 2, 3, 4], 2: [-1, 0, 1, 3, 4]},
+        "extra_vectors": [[
+            [0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0],
+            4, 0, [0],
+        ]],
+    },
+    ("22_dijkstra", "dijkstra_dense"): {
+        "arg_values": {1: [0, 1, 2, 3, 4], 2: [-1, 0, 1, 3, 4]},
+        "extra_vectors": [[
+            [0, 4, 1, 0, 4, 0, 2, 5, 1, 2, 0, 8, 0, 5, 8, 0],
+            4, 0, [0],
+        ]],
+    },
+    ("23_topological_sort", "topological_sort"): {
+        "arg_values": {1: [0, 1, 2, 3, 4]},
+        "extra_vectors": [[
+            [0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0],
+            4, [0],
+        ]],
+    },
+    ("24_merge_sort", "merge_sort_i32"): {
+        "len_args": [1],
+        "extra_vectors": [[[9, -3, 7, 7, 0, 12, -8, 1], 8]],
+    },
+    ("25_kmp_search", "kmp_search"): {
+        "ptr_elem": "u8",
+        "len_args": [1, 3],
+        "extra_vectors": [[[1, 2, 1, 2, 1, 3], 6, [1, 2, 1, 3], 4]],
+    },
+    ("26_sparse_matrix", "csr_matvec"): {
+        "arg_values": {
+            5: [0, 1, 2, 4],
+            6: [0, 1, 2, 4, 16],
+            7: [0, 1, 4, 7, 16],
+        },
+        "extra_vectors": [[
+            [0, 2, 3, 5, 7], [0, 3, 1, 0, 2, 1, 3],
+            [10, 2, 3, 4, 5, 6, 7], [1, 2, 3, 4], [0], 4, 4, 7,
+        ]],
+    },
+    ("28_euler_ode", "euler_decay_q16"): {
+        "arg_values": {
+            0: [-65536, -32768, 0, 32768, 65536, 131072],
+            1: [-65536, -16384, 0, 16384, 32768, 65536],
+            2: [-1, 0, 1, 2, 8, 16, 32, 33],
+        },
+    },
+    ("29_polynomial", "polynomial_eval_mod32"): {
+        "len_args": [1],
+        "extra_vectors": [[[1, 2, 3, 4], 4, 5]],
+    },
+    ("29_polynomial", "polynomial_derivative_mod32"): {
+        "len_args": [1],
+        "extra_vectors": [[[1, 2, 3, 4], 4, 5]],
+    },
+    ("30_finite_difference", "heat_step_1d"): {
+        "len_args": [2],
+        "extra_vectors": [[[0], [0, 0, 100, 0, 0], 5]],
+    },
 }
 
 # Structural expectations for the structural lane (checked on decompiled text, not
@@ -362,6 +490,30 @@ STRUCTURAL: dict[tuple[str, str], dict] = {
 
 def structural_spec(fixture: str, func: str) -> dict:
     return STRUCTURAL.get((fixture, func), {})
+
+
+# A deliberately recognizable undergraduate curriculum.  Keeping this catalog
+# separate makes corpus growth reviewable: every project must name its exported
+# semantic units, exist on disk, and receive a safe execution contract where it
+# indexes caller-owned memory.
+CURRICULUM_PROJECTS: dict[str, list[str]] = {
+    "15_binary_search_tree": ["bst_search", "bst_inorder_checksum"],
+    "16_red_black_tree": ["rb_validate"],
+    "17_hash_table": ["hash_lookup", "hash_insert"],
+    "18_binary_heap": ["heap_push", "heap_pop"],
+    "19_disjoint_set": ["dsu_find", "dsu_union"],
+    "20_graph_bfs": ["graph_bfs"],
+    "21_graph_dfs": ["graph_dfs"],
+    "22_dijkstra": ["dijkstra_dense"],
+    "23_topological_sort": ["topological_sort"],
+    "24_merge_sort": ["merge_sort_i32"],
+    "25_kmp_search": ["kmp_search"],
+    "26_sparse_matrix": ["csr_matvec"],
+    "27_newton_raphson": ["newton_isqrt"],
+    "28_euler_ode": ["euler_decay_q16"],
+    "29_polynomial": ["polynomial_eval_mod32", "polynomial_derivative_mod32"],
+    "30_finite_difference": ["heat_step_1d"],
+}
 
 # Functions that MUST be present in each fixture (real names; a missing one fails
 # the gate). Not exhaustive — enough to catch a dropped/renamed symbol.
@@ -424,6 +576,7 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "call_nested", "call_twice_and_combine", "call_into_spill",
         "call_chain_in_loop", "call_forward_result", "call_result_unused",
     ],
+    **CURRICULUM_PROJECTS,
 }
 
 
