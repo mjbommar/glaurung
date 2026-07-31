@@ -5840,6 +5840,8 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     for s in &f.body {
         collect_idents_stmt(s, &mut ids);
     }
+    DEC_GLOBAL_ADDRS
+        .with(|addresses| *addresses.borrow_mut() = ids.global_addresses.keys().copied().collect());
 
     let name = sanitize_c_ident(&f.name);
     // Signature arity: the highest `argN` referenced in the body, *or* recovered
@@ -5912,6 +5914,19 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
         }
         out.push_str("};\n");
         out.push_str("#endif\n");
+    }
+    // A direct load/store whose image VA survived readonly-data folding refers
+    // to writable static storage. The original VA is meaningless after this C
+    // fragment is linked into a new shared object, so give it a portable,
+    // zero-initialized identity. Repeated tentative declarations of the same
+    // internal-linkage object in a combined helper/root translation unit denote
+    // one object, preserving sharing between decompiled sibling functions.
+    for address in ids.global_addresses.keys() {
+        let _ = writeln!(
+            out,
+            "static unsigned char {}[16] __attribute__((aligned(16)));",
+            dec_global_name(*address)
+        );
     }
 
     // Record every name declared as a pointer with its pointee width, so the
@@ -6139,6 +6154,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     DEC_NAMED_CALL_PROTOTYPES.with(|selected| selected.borrow_mut().clear());
     DEC_RENDERABLE_STRUCTS.with(|selected| selected.borrow_mut().clear());
     DEC_STRUCT_PTR_TYPES.with(|selected| selected.borrow_mut().clear());
+    DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow_mut().clear());
     out
 }
 
@@ -6168,6 +6184,10 @@ struct DecIdents {
     /// Relocation-proven function tables referenced by the body, keyed by
     /// original VA so repeated call sites emit one stable local definition.
     function_tables: std::collections::BTreeMap<u64, (String, Vec<FunctionTableTarget>)>,
+    /// Direct absolute storage VAs still read or written after readonly-data
+    /// folding. These need portable C objects rather than original-image
+    /// process addresses.
+    global_addresses: std::collections::BTreeMap<u64, u8>,
 }
 
 /// If `name` is exactly `arg` followed by decimal digits, return that index.
@@ -6291,7 +6311,15 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
                 collect_reg(i, ids);
             }
         }
-        Expr::Deref { addr, .. } => collect_idents_expr(addr, ids),
+        Expr::Deref { addr, size } => {
+            if let Some(address) = direct_global_address(addr) {
+                ids.global_addresses
+                    .entry(address)
+                    .and_modify(|known| *known = (*known).max(*size))
+                    .or_insert(*size);
+            }
+            collect_idents_expr(addr, ids);
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             collect_idents_expr(lhs, ids);
             collect_idents_expr(rhs, ids);
@@ -6323,7 +6351,13 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             collect_reg(dst, ids);
             collect_idents_expr(src, ids);
         }
-        Stmt::Store { addr, src, .. } => {
+        Stmt::Store { addr, src, size } => {
+            if let Some(address) = direct_global_address(addr) {
+                ids.global_addresses
+                    .entry(address)
+                    .and_modify(|known| *known = (*known).max(*size))
+                    .or_insert(*size);
+            }
             collect_idents_expr(addr, ids);
             collect_idents_expr(src, ids);
         }
@@ -6714,6 +6748,34 @@ thread_local! {
     /// DWARF (`var0` -> `node *`) for the current render.
     static DEC_STRUCT_PTR_TYPES: std::cell::RefCell<std::collections::HashMap<String, String>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// Original-image VAs that denote writable static storage in this render.
+    /// The body printer spells these through the portable tentative objects
+    /// emitted above the function definition.
+    static DEC_GLOBAL_ADDRS: std::cell::RefCell<std::collections::BTreeSet<u64>> =
+        std::cell::RefCell::new(std::collections::BTreeSet::new());
+}
+
+fn dec_global_name(address: u64) -> String {
+    format!("glaurung_global_{address:x}")
+}
+
+/// The original-image identity of a direct static-storage access.
+///
+/// Symbol resolution represents the same operand in two legitimate ways:
+/// stripped binaries retain `Addr`, while a binary with symbols upgrades it to
+/// `Named`.  A dereference/store establishes that the value is data storage,
+/// not a callable symbol, so both forms must receive the same portable backing
+/// object in generated C.
+fn direct_global_address(expr: &Expr) -> Option<u64> {
+    match expr {
+        Expr::Addr(address) | Expr::Named { va: address, .. } => Some(*address),
+        _ => None,
+    }
+}
+
+fn dec_is_global_addr(address: u64) -> bool {
+    DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow().contains(&address))
 }
 
 fn selected_named_call_prototype(name: &str) -> Option<CallPrototype> {
@@ -7100,12 +7162,23 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         Expr::Const(c) => write_const_dec(*c, out),
         Expr::FloatConst { bits, width } => write_float_literal(*bits, *width, out),
         Expr::Addr(a) => {
-            let _ = write!(out, "0x{:x}", a);
+            if dec_is_global_addr(*a) {
+                let _ = write!(out, "&{}[0]", dec_global_name(*a));
+            } else {
+                let _ = write!(out, "0x{:x}", a);
+            }
         }
-        // In a value position a resolved symbol becomes its address constant;
-        // the readable name is kept only where it is *called* (see write_call_dec).
+        // In a value position a resolved symbol normally becomes its address
+        // constant; the readable name is kept only where it is *called* (see
+        // write_call_dec). A direct data dereference/store is the exception:
+        // the collector marks its VA so the recompiled function addresses the
+        // portable backing object rather than the old image mapping.
         Expr::Named { va, .. } => {
-            let _ = write!(out, "0x{:x}", va);
+            if dec_is_global_addr(*va) {
+                let _ = write!(out, "&{}[0]", dec_global_name(*va));
+            } else {
+                let _ = write!(out, "0x{:x}", va);
+            }
         }
         Expr::FunctionTableEntry {
             table_name, index, ..
@@ -9630,6 +9703,40 @@ function f @ 0x1000 {
     /// through it — `render_decbench` alone is formatting-only by design.
     fn dec_pipeline(f: &Function) -> String {
         render_decbench(&prepare_for_decbench(f))
+    }
+
+    #[test]
+    fn decbench_direct_named_data_uses_portable_static_storage() {
+        let function = Function {
+            name: "read_counter".to_string(),
+            entry_va: 0x1150,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Deref {
+                    addr: Box::new(Expr::Named {
+                        va: 0x4024,
+                        name: "g_counter".to_string(),
+                    }),
+                    size: 4,
+                }),
+            }],
+        };
+
+        let rendered = render_decbench(&function);
+
+        assert!(
+            rendered.contains(
+                "static unsigned char glaurung_global_4024[16] __attribute__((aligned(16)));"
+            ),
+            "direct data storage needs a portable object:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("*(int *)(&glaurung_global_4024[0])"),
+            "the load must address the portable object:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("*(int *)(0x4024)"),
+            "the original image VA cannot survive recompilation:\n{rendered}"
+        );
     }
 
     // -- the prepare/render boundary -------------------------------------------
