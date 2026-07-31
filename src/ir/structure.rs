@@ -622,18 +622,7 @@ pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
     // empty `if`, making the loop unconditional. A labelled CFG is less pretty
     // than a speculative While, but it is the only semantics-preserving result.
     let acct = crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
-    let is_unsound = acct.iter().any(|error| {
-        use crate::ir::structure_accounting::AccountError;
-        matches!(
-            error,
-            AccountError::BlockDropped { .. }
-                | AccountError::EdgeUnaccounted { .. }
-                | AccountError::BackEdgeUnowned { .. }
-                | AccountError::ImpliedEdgeAbsent { .. }
-                | AccountError::GotoTargetMissing { .. }
-                | AccountError::SwitchArmOutsideLoop { .. }
-        )
-    });
+    let is_unsound = structure_accounting_is_unsound(&acct);
     if std::env::var_os("GLAURUNG_ACCOUNT_STRUCTURE").is_some() && !acct.is_empty() {
         // stderr, not `tracing`: no subscriber is installed on the CLI or PyO3
         // paths, so a `tracing::warn!` here reached nobody — a diagnostic that
@@ -649,6 +638,30 @@ pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
         return Region::Unstructured((0..lf.blocks.len()).collect());
     }
     region
+}
+
+/// Whether accounting found a semantic control-flow defect rather than a
+/// retained quality diagnostic.
+///
+/// Shared terminal cloning and explicit gotos can duplicate a block reference
+/// while preserving every executable edge. Both the early verified fallback
+/// and the late leftover guard must classify those findings identically; using
+/// `!account(...).is_empty()` in only one place erased otherwise verified loops.
+fn structure_accounting_is_unsound(
+    accounting: &[crate::ir::structure_accounting::AccountError],
+) -> bool {
+    accounting.iter().any(|error| {
+        use crate::ir::structure_accounting::AccountError;
+        matches!(
+            error,
+            AccountError::BlockDropped { .. }
+                | AccountError::EdgeUnaccounted { .. }
+                | AccountError::BackEdgeUnowned { .. }
+                | AccountError::ImpliedEdgeAbsent { .. }
+                | AccountError::GotoTargetMissing { .. }
+                | AccountError::SwitchArmOutsideLoop { .. }
+        )
+    })
 }
 
 /// The block-losing-leftover-aware region build shared by [`recover`] and
@@ -683,7 +696,6 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
         parts.push(Region::Unstructured(leftover));
         Region::Seq(parts)
     };
-
     // A structured loop followed by leftovers is only safe when every loop
     // edge is still represented.  In an unrolled early-return ladder the body
     // builder can stop at an internal conditional, leave the latch in the
@@ -691,11 +703,13 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
     // typed-edge accountant detects both the missing fallthrough/back-edge and
     // the invented loop exits.  Fall back to the complete labelled CFG rather
     // than emitting a partial While followed by unreachable blocks.
-    if has_leftover
+    let leftover_accounting_is_unsound = has_leftover
         && contains_structured_loop(&region)
         && !contains_switch(&region)
-        && !crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region).is_empty()
-    {
+        && structure_accounting_is_unsound(&crate::ir::structure_accounting::account(
+            &cfg.edges, &cfg.preds, 0, &region,
+        ));
+    if leftover_accounting_is_unsound {
         Region::Unstructured((0..lf.blocks.len()).collect())
     } else {
         region
@@ -1331,13 +1345,35 @@ fn detect_bottom_tested_loop(
     }
     let body_set = natural_loop_body(header, cond, cfg);
     // Loop rotation puts an initial top-test in a predecessor outside the
-    // natural loop, then uses a bottom latch for subsequent iterations. That
-    // CFG is not a source-level do-while: the predecessor can bypass the body
-    // entirely. Only promote when every outside entry falls unconditionally
-    // into the header, which proves the body executes at least once.
-    if cfg.preds[header].iter().copied().any(|pred| {
-        !body_set.contains(&pred) && (cfg.succs[pred].len() != 1 || cfg.succs[pred][0] != header)
-    }) {
+    // natural loop, then uses a bottom latch for subsequent iterations. It is
+    // a source-level do-while only *after* that zero-iteration test has been
+    // retained as an explicit guard in the preceding region. `visited` proves
+    // both the conditional and its non-loop sibling were already emitted; the
+    // sibling's inability to re-enter proves it is the bypass path rather than
+    // another loop entry. This admits `if (empty) return; do { ... } while
+    // (more)` without admitting a bare rotated latch whose initial test could
+    // otherwise be skipped.
+    let outside_entries: Vec<usize> = cfg.preds[header]
+        .iter()
+        .copied()
+        .filter(|pred| !body_set.contains(pred))
+        .collect();
+    let entries_are_unconditional = outside_entries
+        .iter()
+        .all(|&pred| cfg.succs[pred].len() == 1 && cfg.succs[pred][0] == header);
+    let entry_guard_is_owned = if let [pred] = outside_entries.as_slice() {
+        let bypasses: Vec<usize> = cfg.succs[*pred]
+            .iter()
+            .copied()
+            .filter(|&successor| successor != header)
+            .collect();
+        matches!(bypasses.as_slice(), [bypass]
+            if visited.contains(pred)
+                && terminal_path_stays_outside_loop(*bypass, &body_set, cfg))
+    } else {
+        false
+    };
+    if !entries_are_unconditional && !entry_guard_is_owned {
         return None;
     }
     // A general second exit from the body still needs nested break/return
@@ -1512,8 +1548,9 @@ fn detect_if_shape(
     // loop and eventually renders them after the function return.
     for &(body, join) in &[(t, e), (e, t)] {
         let simple_body = cfg.succs[body] == vec![join];
-        let proven_complex_body =
-            !cfg.succs[join].is_empty() && every_path_reaches_join(body, join, cfg);
+        let proven_complex_body = !cfg.succs[join].is_empty()
+            && (every_path_reaches_join(body, join, cfg)
+                || cyclic_body_exits_only_to_join(body, join, cond, cfg));
         let body_rejoins = cfg.preds[body] == vec![cond] && (simple_body || proven_complex_body);
         if body_rejoins && cfg.preds[join].contains(&cond) {
             let invert = invert_for(cfg, cond, body);
@@ -1631,7 +1668,7 @@ fn detect_if_shape(
             let prefix_is_owned_by_guards = cfg.preds[body]
                 .iter()
                 .all(|predecessor| cfg.succs[*predecessor].len() == 2);
-            if prefix_is_owned_by_guards && !is_natural_loop_header_exit(body, cfg) {
+            if prefix_is_owned_by_guards && !is_natural_loop_distinguished_exit(body, cfg) {
                 visited.extend(chain[..chain.len() - 1].iter().copied());
             }
             let then_r = if let [only] = chain.as_slice() {
@@ -1851,10 +1888,13 @@ fn shared_return_chain(entry: usize, cfg: &Cfg) -> Option<Vec<usize>> {
     None
 }
 
-/// Whether `entry` is the distinguished exit successor of a natural loop's
-/// header.  Such a block is an enclosing continuation, even when another guard
-/// also branches to it, and therefore cannot be owned solely by a cloned arm.
-fn is_natural_loop_header_exit(entry: usize, cfg: &Cfg) -> bool {
+/// Whether `entry` is a natural loop's distinguished continuation.
+///
+/// A pre-tested loop leaves through its header; a rotated/bottom-tested loop
+/// leaves through its conditional latch. Either block is an enclosing
+/// continuation, even when another guard also branches to it, and therefore
+/// cannot be globally consumed solely by a cloned return arm.
+fn is_natural_loop_distinguished_exit(entry: usize, cfg: &Cfg) -> bool {
     (0..cfg.succs.len()).any(|header| {
         cfg.preds[header]
             .iter()
@@ -1862,7 +1902,12 @@ fn is_natural_loop_header_exit(entry: usize, cfg: &Cfg) -> bool {
             .filter(|&tail| cfg.dominates(header, tail))
             .any(|tail| {
                 let loop_body = natural_loop_body(header, tail, cfg);
-                cfg.succs[header].contains(&entry) && !loop_body.contains(&entry)
+                let header_exit = cfg.succs[header].contains(&entry) && !loop_body.contains(&entry);
+                let bottom_latch_exit = cfg.succs[tail].len() == 2
+                    && cfg.succs[tail].contains(&header)
+                    && cfg.succs[tail].contains(&entry)
+                    && !loop_body.contains(&entry);
+                header_exit || bottom_latch_exit
             })
     })
 }
@@ -1934,6 +1979,44 @@ fn every_path_reaches_join(start: usize, join: usize, cfg: &Cfg) -> bool {
     }
 
     visit(start, join, cfg, &mut HashSet::new(), &mut HashMap::new())
+}
+
+/// Prove a cyclic one-armed conditional whose loop exits only through `join`.
+///
+/// The ordinary [`every_path_reaches_join`] proof rejects every cycle. That is
+/// right for acyclic setup arms but too strong for `if (n != 0) { for (...) }
+/// when the compiler rotates the nested loop: every loop node can still reach
+/// the direct sibling join, and there is no terminal or edge back through the
+/// owning condition. Requiring an actual typed back-edge keeps this exception
+/// specific to cyclic arms rather than weakening the ordinary diamond rule.
+fn cyclic_body_exits_only_to_join(start: usize, join: usize, owner: usize, cfg: &Cfg) -> bool {
+    let mut reachable = HashSet::new();
+    let mut stack = vec![start];
+    while let Some(block) = stack.pop() {
+        if block == join {
+            continue;
+        }
+        if block == owner || !reachable.insert(block) {
+            if block == owner {
+                return false;
+            }
+            continue;
+        }
+        if cfg.succs[block].is_empty() {
+            return false;
+        }
+        stack.extend(cfg.succs[block].iter().copied());
+    }
+    let has_back_edge = reachable.iter().copied().any(|block| {
+        cfg.edges[block]
+            .iter()
+            .any(|edge| edge.back && reachable.contains(&edge.to))
+    });
+    has_back_edge
+        && reachable
+            .iter()
+            .copied()
+            .all(|block| can_reach(block, join, cfg))
 }
 
 fn can_reach(start: usize, target: usize, cfg: &Cfg) -> bool {
@@ -3352,10 +3435,16 @@ mod tests {
     }
 
     #[test]
-    fn rotated_top_test_does_not_turn_the_latch_into_do_while() {
-        // B0 can bypass the body before its first iteration. B2 is a bottom
-        // latch only for subsequent iterations, so emitting `do` for B1..B2
-        // would execute the body once when B0's condition is false.
+    fn a_structured_top_guard_can_own_the_zero_iteration_case_of_a_rotated_loop() {
+        // B0 can bypass the body before its first iteration, while B2 is the
+        // bottom latch for subsequent iterations. Once B0 has been retained as
+        // an explicit terminal guard, the continuation is exactly a do-while:
+        //
+        //     if (empty) return;
+        //     do { body; } while (more);
+        //
+        // Rejecting the latch after proving that guard strands the natural
+        // cycle and forces an otherwise reducible function to labelled CFG.
         let lf = mk_cfg(vec![
             (
                 0x1000,
@@ -3379,25 +3468,136 @@ mod tests {
             (0x1300, vec![Op::Return], vec![]),
         ]);
         let r = recover_for(&lf);
-        fn contains_do_while(region: &Region) -> bool {
-            match region {
-                Region::DoWhile { .. } => true,
-                Region::Seq(parts) => parts.iter().any(contains_do_while),
-                Region::IfThen { then_r, .. } => contains_do_while(then_r),
-                Region::IfThenElse { then_r, else_r, .. } => {
-                    contains_do_while(then_r) || contains_do_while(else_r)
-                }
-                Region::While { body, .. } => contains_do_while(body),
-                Region::Switch { arms, .. } => arms.iter().any(contains_do_while),
-                Region::Block(_)
-                | Region::Goto(_)
-                | Region::RawLoop { .. }
-                | Region::Unstructured(_) => false,
-            }
-        }
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        let accounting = crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &r);
+        let rendered = format!("{r:#?}");
         assert!(
-            !contains_do_while(&r),
-            "rotated while became DoWhile: {r:#?}"
+            rendered.contains("DoWhile"),
+            "the guarded rotated loop was not owned: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Unstructured"),
+            "the guarded rotated loop escaped to leftovers: {rendered}"
+        );
+        assert!(
+            accounting.iter().all(|error| !matches!(
+                error,
+                crate::ir::structure_accounting::AccountError::BlockDropped { .. }
+                    | crate::ir::structure_accounting::AccountError::EdgeUnaccounted { .. }
+                    | crate::ir::structure_accounting::AccountError::BackEdgeUnowned { .. }
+                    | crate::ir::structure_accounting::AccountError::ImpliedEdgeAbsent { .. }
+                    | crate::ir::structure_accounting::AccountError::GotoTargetMissing { .. }
+                    | crate::ir::structure_accounting::AccountError::SwitchArmOutsideLoop { .. }
+            )),
+            "the guarded rotated loop must account for every edge: {accounting:#?}\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn an_if_arm_can_be_a_loop_whose_only_exit_is_the_join() {
+        // Clang's bounded inner loops often use a direct skip edge from the
+        // surrounding condition and place the real test in a bottom latch:
+        //
+        //        B0
+        //      /    \
+        //    B1      B5(join)
+        //     |       ^
+        //    B2 -> B4 |
+        //     ^    |  |
+        //     |    v  |
+        //     +--- B3-+
+        //
+        // The arm is cyclic, so the acyclic `every_path_reaches_join` proof
+        // declines it even though every loop block can reach the sole join.
+        let conditional = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, conditional(0x1700), vec![0x1100, 0x1700]), // initial outer guard
+            (0x1100, conditional(0x1600), vec![0x1200, 0x1600]), // skip inner loop
+            (0x1200, vec![Op::Jump { target: 0x1300 }], vec![0x1300]),
+            (0x1300, conditional(0x1400), vec![0x1400, 0x1500]), // inner body
+            (0x1400, conditional(0x1300), vec![0x1300, 0x1600]), // inner latch
+            (0x1500, vec![Op::Jump { target: 0x1400 }], vec![0x1400]),
+            (0x1600, conditional(0x1100), vec![0x1100, 0x1700]), // outer latch
+            (0x1700, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        let region = recover(&lf, &ssa);
+        let rendered = format!("{region:#?}");
+        let accounting =
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
+        assert!(
+            rendered.contains("DoWhile"),
+            "inner loop was lost: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Unstructured"),
+            "cyclic if arm escaped to leftovers: {rendered}"
+        );
+        assert!(
+            accounting.iter().all(|error| !matches!(
+                error,
+                crate::ir::structure_accounting::AccountError::BlockDropped { .. }
+                    | crate::ir::structure_accounting::AccountError::EdgeUnaccounted { .. }
+                    | crate::ir::structure_accounting::AccountError::BackEdgeUnowned { .. }
+                    | crate::ir::structure_accounting::AccountError::ImpliedEdgeAbsent { .. }
+                    | crate::ir::structure_accounting::AccountError::GotoTargetMissing { .. }
+                    | crate::ir::structure_accounting::AccountError::SwitchArmOutsideLoop { .. }
+            )),
+            "{accounting:#?}\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_cloned_shared_epilogue_does_not_erase_an_accounted_loop() {
+        // Both the initial zero-iteration guard and the bottom latch leave
+        // through B3 -> B4. Shared-return recovery deliberately clones B4 in
+        // the guard but retains one canonical B4 as a leftover label. That is
+        // a quality diagnostic (BlockDuplicated), not a reason to replace the
+        // fully accounted loop with whole-function Unstructured fallback.
+        let conditional = |target| {
+            vec![Op::CondJump {
+                cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        let lf = mk_cfg(vec![
+            (0x1000, conditional(0x1400), vec![0x1100, 0x1400]), // direct shared epilogue
+            (0x1100, conditional(0x1300), vec![0x1200, 0x1300]), // initial loop guard
+            (0x1200, conditional(0x1200), vec![0x1200, 0x1300]), // bottom latch
+            (0x1300, vec![Op::Jump { target: 0x1400 }], vec![0x1400]),
+            (0x1400, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        let region = recover(&lf, &ssa);
+        let accounting =
+            crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
+        let rendered = format!("{region:#?}");
+        assert!(
+            rendered.contains("DoWhile"),
+            "accounted loop was erased: {rendered}"
+        );
+        assert!(
+            accounting.iter().any(|error| matches!(
+                error,
+                crate::ir::structure_accounting::AccountError::BlockDuplicated { block: 4, .. }
+            )),
+            "the fixture must exercise deliberate epilogue cloning: {accounting:#?}"
+        );
+        assert!(
+            !structure_accounting_is_unsound(&accounting),
+            "the cloned epilogue must not hide a real edge defect: {accounting:#?}"
         );
     }
 
@@ -3476,7 +3676,7 @@ mod tests {
     }
 
     #[test]
-    fn unowned_backedge_falls_back_to_the_complete_cfg() {
+    fn a_guarded_rotated_division_loop_owns_its_backedge() {
         // Reduced from the real Clang 21 -O2 `fixedpoint:isqrt` CFG. The
         // compiler splits signed division into fast and slow paths (B2/B5),
         // joins them at B3, and then either exits or re-enters through B4:
@@ -3486,11 +3686,10 @@ mod tests {
         //   B2/B5 -> B3
         //   B3 -> B4 (back edge) | B6 (return x)
         //
-        // The speculative tree owned every block but did not own B3 -> B4 as
-        // a loop edge. Lowering consequently emitted one iteration and then
-        // fell off the function: isqrt(100) returned 50 instead of 10. An
-        // unowned backedge is therefore a correctness defect unless an
-        // explicit labelled-CFG fallback preserves it.
+        // This was the original unowned-backedge canary: lowering emitted one
+        // iteration and isqrt(100) returned 50 instead of 10. Once B0's
+        // zero-iteration return is retained as a guard, B4..B3 are an exact
+        // bottom-tested loop and both division arms belong inside it.
         let cond = |target| {
             vec![Op::CondJump {
                 cond: crate::ir::types::VReg::Flag(crate::ir::types::Flag::Z),
@@ -3512,19 +3711,16 @@ mod tests {
         let speculative = build_full(&lf, &cfg);
         let accounting =
             crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &speculative);
+        assert!(accounting.is_empty(), "{accounting:#?}\n{speculative:#?}");
         assert!(
-            accounting.iter().any(|error| matches!(
-                error,
-                crate::ir::structure_accounting::AccountError::BackEdgeUnowned { from: 3, to: 4 }
-            )),
-            "the reduced real CFG must exercise the unowned-backedge defect: {accounting:?}"
+            format!("{speculative:#?}").contains("DoWhile"),
+            "the guarded rotated cycle was not recovered: {speculative:#?}"
         );
 
         let region = recover_verified(&lf, &ssa);
-        assert_eq!(
-            region,
-            Region::Unstructured((0..7).collect()),
-            "an unowned backedge must retain the complete labelled CFG: {region:#?}"
+        assert!(
+            !format!("{region:#?}").contains("Unstructured"),
+            "a fully accounted loop must survive verification: {region:#?}"
         );
     }
 
@@ -3905,6 +4101,88 @@ mod tests {
             "the shared result prefix must serve both entry and loop exits: {region:#?}"
         );
         assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+
+        // The same ownership rule applies when loop rotation places the
+        // distinguished exit on a bottom latch rather than the header. This is
+        // the Clang O2 topological-sort shape: consuming B3 into the entry
+        // guard removes the post-loop result calculation from the normal path.
+        let bottom_tested = mk_cfg(vec![
+            (0x2000, branch(0x2500), vec![0x2100, 0x2500]),
+            (0x2100, branch(0x2400), vec![0x2200, 0x2400]), // internal skip to latch
+            (0x2200, vec![Op::Jump { target: 0x2300 }], vec![0x2300]),
+            (0x2300, vec![Op::Jump { target: 0x2400 }], vec![0x2400]),
+            (0x2400, branch(0x2100), vec![0x2100, 0x2500]), // bottom latch / exit
+            (0x2500, vec![Op::Nop], vec![0x2600]),          // required result prefix
+            (0x2600, vec![Op::Return], vec![]),
+        ]);
+        let bottom_region = recover_for(&bottom_tested);
+        fn owns_block(region: &Region, target: usize) -> bool {
+            match region {
+                Region::Block(block) => *block == target,
+                Region::Seq(parts) => parts.iter().any(|part| owns_block(part, target)),
+                Region::IfThen { then_r, .. }
+                | Region::While { body: then_r, .. }
+                | Region::DoWhile { body: then_r, .. } => owns_block(then_r, target),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    owns_block(then_r, target) || owns_block(else_r, target)
+                }
+                Region::Switch {
+                    arms,
+                    formal_default,
+                    ..
+                } => {
+                    arms.iter().any(|arm| owns_block(arm, target))
+                        || formal_default
+                            .as_deref()
+                            .is_some_and(|default| owns_block(default, target))
+                }
+                Region::RawLoop { blocks, .. } | Region::Unstructured(blocks) => {
+                    blocks.contains(&target)
+                }
+                Region::Goto(_) => false,
+            }
+        }
+        fn loop_is_followed_by_block(region: &Region, target: usize) -> bool {
+            match region {
+                Region::Seq(parts) => {
+                    (0..parts.len()).any(|index| {
+                        contains_structured_loop(&parts[index])
+                            && parts[index + 1..]
+                                .iter()
+                                .any(|later| owns_block(later, target))
+                    }) || parts
+                        .iter()
+                        .any(|part| loop_is_followed_by_block(part, target))
+                }
+                Region::IfThen { then_r, .. }
+                | Region::While { body: then_r, .. }
+                | Region::DoWhile { body: then_r, .. } => loop_is_followed_by_block(then_r, target),
+                Region::IfThenElse { then_r, else_r, .. } => {
+                    loop_is_followed_by_block(then_r, target)
+                        || loop_is_followed_by_block(else_r, target)
+                }
+                Region::Switch {
+                    arms,
+                    formal_default,
+                    ..
+                } => {
+                    arms.iter()
+                        .any(|arm| loop_is_followed_by_block(arm, target))
+                        || formal_default
+                            .as_deref()
+                            .is_some_and(|default| loop_is_followed_by_block(default, target))
+                }
+                Region::Block(_)
+                | Region::Goto(_)
+                | Region::RawLoop { .. }
+                | Region::Unstructured(_) => false,
+            }
+        }
+        assert!(
+            loop_is_followed_by_block(&bottom_region, 5),
+            "the bottom-tested loop exit lost its result prefix: {bottom_region:#?}"
+        );
+        assert!(verify_structure(&bottom_tested, &compute_ssa(&bottom_tested)).is_empty());
     }
 
     #[test]
