@@ -5522,6 +5522,8 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
+    crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
+    crate::ir::loop_form::recover_sentinel_search_loops(&mut owned);
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
     crate::ir::switch_ladder::recover_switches(&mut owned);

@@ -10,7 +10,7 @@
 //! and its arm is exactly one `break`, so no work is moved or discarded.
 
 use crate::ir::ast::{negate_cmp_expr, Expr, Function, Stmt};
-use crate::ir::types::{BinOp, VReg};
+use crate::ir::types::{BinOp, CmpOp, VReg};
 
 /// Recover exact head-tested loops from their conservative guarded form.
 ///
@@ -20,6 +20,416 @@ use crate::ir::types::{BinOp, VReg};
 pub fn recover_head_tested_whiles(f: &mut Function) {
     seed_exit_value_copies(&mut f.body);
     recover_body(&mut f.body);
+}
+
+/// Rotate an exact sentinel-terminated search into its source-level loop.
+///
+/// Optimised code often shares a null return between an entry guard and the
+/// post-advance loop exit, leaving this faithful but inside-out AST:
+///
+/// ```text
+/// if (initial == sentinel) return sentinel;
+/// result = initial; current = initial;
+/// while (!match(current)) {
+///     result = advance(current); current = result;
+///     if (result == sentinel) return sentinel;
+/// }
+/// return result;
+/// ```
+///
+/// The two exact alias assignments prove `result == current` at every loop
+/// test.  Moving the sentinel check to the loop head therefore recovers the
+/// ordinary `while (current != sentinel) { if (match) return current; ... }`
+/// without moving a dereference above its null guard or guessing an induction
+/// variable.  Every statement in the matched window is required; any extra
+/// effect, different value, casted sentinel, or additional continuation makes
+/// the pass fail closed.
+pub fn recover_sentinel_search_loops(f: &mut Function) {
+    recover_sentinel_search_body(&mut f.body);
+}
+
+/// Recover a pre-tested loop after compiler loop rotation.
+///
+/// `if (initial == sentinel) return result; seeds; do { body; current = latch; }
+/// while (latch != sentinel); return result;` is exactly `seeds; while (current
+/// != sentinel) { body; } return result` when `current` is seeded from
+/// `initial`.  The matched returns must be identical and the latch-to-current
+/// copy must be the final loop statement, so the rewrite neither changes the
+/// zero-iteration result nor evaluates the body for a sentinel input.
+pub fn recover_guarded_do_whiles(f: &mut Function) {
+    recover_guarded_do_while_body(&mut f.body);
+}
+
+fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_guarded_do_while_body(then_body);
+                if let Some(else_body) = else_body {
+                    recover_guarded_do_while_body(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                recover_guarded_do_while_body(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    recover_guarded_do_while_body(case_body);
+                }
+                if let Some(default_body) = default {
+                    recover_guarded_do_while_body(default_body);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut start = 0;
+    while start < body.len() {
+        let Some((do_index, current, sentinel)) = guarded_do_while_candidate(body, start) else {
+            start += 1;
+            continue;
+        };
+        let Stmt::DoWhile {
+            body: loop_body, ..
+        } = body.remove(do_index)
+        else {
+            unreachable!("guarded do-while candidate points at a do-while")
+        };
+        body.remove(start);
+        body.insert(
+            do_index - 1,
+            Stmt::While {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(Expr::Reg(current)),
+                    rhs: Box::new(sentinel),
+                },
+                body: loop_body,
+            },
+        );
+        start = do_index;
+    }
+}
+
+fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VReg, Expr)> {
+    let Stmt::If {
+        cond: entry_guard,
+        then_body,
+        else_body: None,
+    } = body.get(start)?
+    else {
+        return None;
+    };
+    let [Stmt::Return {
+        value: guard_result,
+    }] = then_body.as_slice()
+    else {
+        return None;
+    };
+    let (initial, sentinel) = match entry_guard {
+        Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs,
+            rhs,
+        } if matches!(rhs.as_ref(), Expr::Const(_)) => (lhs.as_ref(), rhs.as_ref()),
+        Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs,
+            rhs,
+        } if matches!(lhs.as_ref(), Expr::Const(_)) => (rhs.as_ref(), lhs.as_ref()),
+        _ => return None,
+    };
+
+    let mut cursor = start + 1;
+    while let Some(statement) = body.get(cursor) {
+        match statement {
+            Stmt::Nop => cursor += 1,
+            Stmt::Assign { src, .. } if stable_value_expr(src) => cursor += 1,
+            Stmt::Assign { .. } => return None,
+            _ => break,
+        }
+    }
+    let Stmt::DoWhile {
+        body: loop_body,
+        cond: latch_guard,
+    } = body.get(cursor)?
+    else {
+        return None;
+    };
+    let latch = not_equal_other_side(latch_guard, sentinel).and_then(reg_through_casts)?;
+    let Stmt::Assign {
+        dst: current,
+        src: carried_latch,
+    } = loop_body.last()?
+    else {
+        return None;
+    };
+    let pre_loop = &body[start + 1..cursor];
+    let current_seed = pre_loop.iter().rev().find_map(|statement| match statement {
+        Stmt::Assign { dst, src } if dst == current => Some(src),
+        _ => None,
+    });
+    let mut result_inputs = Vec::new();
+    if let Some(result) = guard_result {
+        collect_expr_regs(result, &mut result_inputs);
+    }
+    if reg_through_casts(carried_latch) != Some(latch)
+        || current_seed != Some(initial)
+        || pre_loop.iter().any(|statement| {
+            result_inputs
+                .iter()
+                .any(|result_input| writes_reg(statement, result_input))
+        })
+    {
+        return None;
+    }
+
+    let return_index = cursor + 1;
+    let Stmt::Return {
+        value: final_result,
+    } = body.get(return_index)?
+    else {
+        return None;
+    };
+    if guard_result != final_result
+        || body[return_index + 1..]
+            .iter()
+            .any(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+    {
+        return None;
+    }
+    Some((cursor, current.clone(), sentinel.clone()))
+}
+
+fn not_equal_other_side<'a>(expr: &'a Expr, expected: &Expr) -> Option<&'a Expr> {
+    let Expr::Cmp {
+        op: CmpOp::Ne,
+        lhs,
+        rhs,
+    } = expr
+    else {
+        return None;
+    };
+    if lhs.as_ref() == expected {
+        Some(rhs)
+    } else if rhs.as_ref() == expected {
+        Some(lhs)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug)]
+struct SentinelSearch {
+    end: usize,
+    current: VReg,
+    initial: Expr,
+    sentinel: Expr,
+    match_continue: Expr,
+    advance: Expr,
+}
+
+fn recover_sentinel_search_body(body: &mut Vec<Stmt>) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                recover_sentinel_search_body(then_body);
+                if let Some(else_body) = else_body {
+                    recover_sentinel_search_body(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                recover_sentinel_search_body(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    recover_sentinel_search_body(case_body);
+                }
+                if let Some(default_body) = default {
+                    recover_sentinel_search_body(default_body);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut index = 0;
+    while index < body.len() {
+        let Some(candidate) = sentinel_search_candidate(body, index) else {
+            index += 1;
+            continue;
+        };
+        let match_cond = negate_cmp_expr(candidate.match_continue);
+        let replacement = vec![
+            Stmt::Assign {
+                dst: candidate.current.clone(),
+                src: candidate.initial,
+            },
+            Stmt::While {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(Expr::Reg(candidate.current.clone())),
+                    rhs: Box::new(candidate.sentinel.clone()),
+                },
+                body: vec![
+                    Stmt::If {
+                        cond: match_cond,
+                        then_body: vec![Stmt::Return {
+                            value: Some(Expr::Reg(candidate.current.clone())),
+                        }],
+                        else_body: None,
+                    },
+                    Stmt::Assign {
+                        dst: candidate.current,
+                        src: candidate.advance,
+                    },
+                ],
+            },
+            Stmt::Return {
+                value: Some(candidate.sentinel),
+            },
+        ];
+        body.splice(index..=candidate.end, replacement);
+        index += 3;
+    }
+}
+
+fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSearch> {
+    let Stmt::If {
+        cond: initial_guard,
+        then_body,
+        else_body: None,
+    } = body.get(start)?
+    else {
+        return None;
+    };
+    let [Stmt::Return {
+        value: Some(sentinel),
+    }] = then_body.as_slice()
+    else {
+        return None;
+    };
+    if !matches!(sentinel, Expr::Const(_)) {
+        return None;
+    }
+    let initial = equality_other_side(initial_guard, sentinel)?.clone();
+    if !stable_value_expr(&initial) {
+        return None;
+    }
+
+    let mut cursor = start + 1;
+    let mut seeds: Vec<(&VReg, &Expr)> = Vec::new();
+    while let Some(statement) = body.get(cursor) {
+        match statement {
+            Stmt::Assign { dst, src } if src == &initial => seeds.push((dst, src)),
+            Stmt::Nop => {}
+            Stmt::While { .. } => break,
+            _ => return None,
+        }
+        cursor += 1;
+    }
+    if seeds.len() != 2 || seeds[0].0 == seeds[1].0 {
+        return None;
+    }
+
+    let Stmt::While {
+        cond: match_continue,
+        body: loop_body,
+    } = body.get(cursor)?
+    else {
+        return None;
+    };
+    let [Stmt::Assign {
+        dst: result,
+        src: advance,
+    }, Stmt::Assign {
+        dst: current,
+        src: carried_result,
+    }, Stmt::If {
+        cond: exit_guard,
+        then_body: exit_body,
+        else_body: None,
+    }] = loop_body.as_slice()
+    else {
+        return None;
+    };
+    if result == current
+        || reg_through_casts(carried_result) != Some(result)
+        || equality_other_side(exit_guard, sentinel).and_then(reg_through_casts) != Some(result)
+        || exit_body.as_slice()
+            != [Stmt::Return {
+                value: Some(sentinel.clone()),
+            }]
+        || !seeds.iter().any(|(seed, _)| *seed == result)
+        || !seeds.iter().any(|(seed, _)| *seed == current)
+        || !contains_reg(match_continue, current)
+        || contains_reg(match_continue, result)
+        || !contains_reg(advance, current)
+        || contains_reg(advance, result)
+    {
+        return None;
+    }
+
+    let return_index = cursor + 1;
+    let Stmt::Return {
+        value: Some(returned),
+    } = body.get(return_index)?
+    else {
+        return None;
+    };
+    if reg_through_casts(returned) != Some(result)
+        || body[return_index + 1..]
+            .iter()
+            .any(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+    {
+        return None;
+    }
+
+    Some(SentinelSearch {
+        end: return_index,
+        current: current.clone(),
+        initial,
+        sentinel: sentinel.clone(),
+        match_continue: match_continue.clone(),
+        advance: advance.clone(),
+    })
+}
+
+fn equality_other_side<'a>(expr: &'a Expr, expected: &Expr) -> Option<&'a Expr> {
+    let Expr::Cmp {
+        op: CmpOp::Eq,
+        lhs,
+        rhs,
+    } = expr
+    else {
+        return None;
+    };
+    if lhs.as_ref() == expected {
+        Some(rhs)
+    } else if rhs.as_ref() == expected {
+        Some(lhs)
+    } else {
+        None
+    }
+}
+
+fn reg_through_casts(mut expr: &Expr) -> Option<&VReg> {
+    while let Expr::Cast { expr: inner, .. } = expr {
+        expr = inner;
+    }
+    match expr {
+        Expr::Reg(reg) => Some(reg),
+        _ => None,
+    }
 }
 
 /// Move an exact loop-exit value seed before a guarded infinite loop.
@@ -574,6 +984,316 @@ mod tests {
 
     fn reg(name: &str) -> VReg {
         VReg::phys(name)
+    }
+
+    fn sentinel_search_fixture() -> Function {
+        let current = reg("current");
+        let result = reg("result");
+        let initial = Expr::Reg(reg("arg0"));
+        let sentinel = Expr::Const(0);
+        let match_continue = Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Deref {
+                addr: Box::new(Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(current.clone())),
+                    rhs: Box::new(Expr::Const(8)),
+                }),
+                size: 4,
+            }),
+            rhs: Box::new(Expr::Reg(reg("needle"))),
+        };
+        let advance = Expr::Deref {
+            addr: Box::new(Expr::Reg(current.clone())),
+            size: 8,
+        };
+        Function {
+            name: "find".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(initial.clone()),
+                        rhs: Box::new(sentinel.clone()),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(sentinel.clone()),
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: initial.clone(),
+                },
+                Stmt::Nop,
+                Stmt::Assign {
+                    dst: current.clone(),
+                    src: initial,
+                },
+                Stmt::While {
+                    cond: match_continue,
+                    body: vec![
+                        Stmt::Assign {
+                            dst: result.clone(),
+                            src: advance,
+                        },
+                        Stmt::Assign {
+                            dst: current,
+                            src: Expr::Reg(result.clone()),
+                        },
+                        Stmt::If {
+                            cond: Expr::Cmp {
+                                op: CmpOp::Eq,
+                                lhs: Box::new(Expr::Reg(result.clone())),
+                                rhs: Box::new(sentinel.clone()),
+                            },
+                            then_body: vec![Stmt::Return {
+                                value: Some(sentinel),
+                            }],
+                            else_body: None,
+                        },
+                    ],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result)),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn exact_sentinel_search_rotates_to_a_null_guarded_loop() {
+        let mut function = sentinel_search_fixture();
+
+        recover_sentinel_search_loops(&mut function);
+
+        assert_eq!(function.body.len(), 3, "{:#?}", function.body);
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { dst, src: Expr::Reg(initial) }
+                if dst == &reg("current") && initial == &reg("arg0")
+        ));
+        let Stmt::While { cond, body } = &function.body[1] else {
+            panic!(
+                "sentinel scan did not recover a while: {:#?}",
+                function.body
+            );
+        };
+        assert!(matches!(
+            cond,
+            Expr::Cmp { op: CmpOp::Ne, lhs, rhs }
+                if lhs.as_ref() == &Expr::Reg(reg("current"))
+                    && rhs.as_ref() == &Expr::Const(0)
+        ));
+        assert!(matches!(
+            body.as_slice(),
+            [
+                Stmt::If {
+                    then_body,
+                    else_body: None,
+                    ..
+                },
+                Stmt::Assign { dst, .. }
+            ] if then_body == &[Stmt::Return {
+                value: Some(Expr::Reg(reg("current")))
+            }] && dst == &reg("current")
+        ));
+        assert_eq!(
+            function.body[2],
+            Stmt::Return {
+                value: Some(Expr::Const(0))
+            }
+        );
+    }
+
+    #[test]
+    fn extra_effect_in_sentinel_loop_blocks_rotation() {
+        let mut function = sentinel_search_fixture();
+        let original = function.clone();
+        let Stmt::While { body, .. } = &mut function.body[4] else {
+            unreachable!()
+        };
+        body.insert(
+            1,
+            Stmt::Assign {
+                dst: reg("observable"),
+                src: Expr::Const(7),
+            },
+        );
+
+        recover_sentinel_search_loops(&mut function);
+
+        let mut expected = original;
+        let Stmt::While { body, .. } = &mut expected.body[4] else {
+            unreachable!()
+        };
+        body.insert(
+            1,
+            Stmt::Assign {
+                dst: reg("observable"),
+                src: Expr::Const(7),
+            },
+        );
+        assert_eq!(function, expected);
+    }
+
+    fn guarded_do_while_fixture() -> Function {
+        Function {
+            name: "sum".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("result"),
+                    src: Expr::Const(0),
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(reg("arg0"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Reg(reg("result"))),
+                    }],
+                    else_body: None,
+                },
+                Stmt::Nop,
+                Stmt::Assign {
+                    dst: reg("current"),
+                    src: Expr::Reg(reg("arg0")),
+                },
+                Stmt::DoWhile {
+                    body: vec![
+                        Stmt::Assign {
+                            dst: reg("result"),
+                            src: Expr::Bin {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Reg(reg("result"))),
+                                rhs: Box::new(Expr::Const(1)),
+                            },
+                        },
+                        Stmt::Assign {
+                            dst: reg("latch"),
+                            src: Expr::Deref {
+                                addr: Box::new(Expr::Reg(reg("current"))),
+                                size: 8,
+                            },
+                        },
+                        Stmt::Assign {
+                            dst: reg("current"),
+                            src: Expr::Reg(reg("latch")),
+                        },
+                    ],
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Reg(reg("latch"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("result"))),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn guarded_do_while_rotates_back_to_pre_tested_while() {
+        let mut function = guarded_do_while_fixture();
+
+        recover_guarded_do_whiles(&mut function);
+
+        assert_eq!(function.body.len(), 5, "{:#?}", function.body);
+        assert!(!function
+            .body
+            .iter()
+            .any(|statement| matches!(statement, Stmt::If { .. } | Stmt::DoWhile { .. })));
+        assert!(matches!(
+            &function.body[3],
+            Stmt::While {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs,
+                    rhs,
+                },
+                ..
+            } if lhs.as_ref() == &Expr::Reg(reg("current"))
+                && rhs.as_ref() == &Expr::Const(0)
+        ));
+    }
+
+    #[test]
+    fn guarded_do_while_with_different_zero_iteration_result_stays_rotated() {
+        let mut function = guarded_do_while_fixture();
+        let original = function.clone();
+        let Stmt::Return { value } = &mut function.body[5] else {
+            unreachable!()
+        };
+        *value = Some(Expr::Const(9));
+
+        recover_guarded_do_whiles(&mut function);
+
+        let mut expected = original;
+        let Stmt::Return { value } = &mut expected.body[5] else {
+            unreachable!()
+        };
+        *value = Some(Expr::Const(9));
+        assert_eq!(function, expected);
+    }
+
+    #[test]
+    fn potentially_trapping_seed_keeps_the_entry_guard() {
+        let mut function = guarded_do_while_fixture();
+        function.body.insert(
+            4,
+            Stmt::Assign {
+                dst: reg("loaded"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Reg(reg("arg0"))),
+                    size: 8,
+                },
+            },
+        );
+        let expected = function.clone();
+
+        recover_guarded_do_whiles(&mut function);
+
+        assert_eq!(function, expected);
+    }
+
+    #[test]
+    fn later_current_overwrite_keeps_the_entry_guard() {
+        let mut function = guarded_do_while_fixture();
+        function.body.insert(
+            4,
+            Stmt::Assign {
+                dst: reg("current"),
+                src: Expr::Reg(reg("different")),
+            },
+        );
+        let expected = function.clone();
+
+        recover_guarded_do_whiles(&mut function);
+
+        assert_eq!(function, expected);
+    }
+
+    #[test]
+    fn zero_iteration_result_overwrite_keeps_the_entry_guard() {
+        let mut function = guarded_do_while_fixture();
+        function.body.insert(
+            4,
+            Stmt::Assign {
+                dst: reg("result"),
+                src: Expr::Const(9),
+            },
+        );
+        let expected = function.clone();
+
+        recover_guarded_do_whiles(&mut function);
+
+        assert_eq!(function, expected);
     }
 
     #[test]

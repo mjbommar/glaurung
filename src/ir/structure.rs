@@ -1439,30 +1439,54 @@ fn detect_if_shape(
         }
     }
 
-    // --- if-then with shared-exit goto (#192) ------------------------------
-    // The richer shape: one arm is a terminating block that is reached from
-    // multiple sites (e.g. `L_end: return;` shared by every `if (cond) goto
-    // L_end;` in the function). We clone-inline the terminating block into
-    // this if-then's body but DO NOT mark it visited, so other branches in
-    // the same function can also fold their gotos away — and so the outer
-    // build will still emit the block as the function's tail.
+    // --- if-then with shared return epilogue (#192) -------------------------
+    // The richer shape: one arm reaches a return epilogue shared by multiple
+    // sites (e.g. `L_zero: xor eax,eax; L_ret: ret`).  Optimised Clang commonly
+    // splits the returned-value setup from the bare return, so requiring the
+    // direct successor itself to be terminal leaves a cross-region goto even
+    // though the entire successor chain is a source-level early return.
     //
-    // The block-index reference inside `IfThen { then_r: Region::Block(b) }`
-    // causes the AST lowerer to render the terminating statements twice
-    // (once per if-goto site, once at the tail), which is the right
-    // semantics: each if statement is conceptually `if (cond) { return; }`.
+    // Clone-inline the proven linear return chain into this if-then's body.
+    // A prefix which is a natural loop header's designated exit remains
+    // unvisited because the normal loop continuation must emit it.  Clang
+    // `fib` shares an `add` block between an early base case and precisely that
+    // exit; claiming it drops the loop result.  A secondary body exit whose
+    // predecessors are all guards, such as `list_find`'s null-result block, has
+    // no such continuation owner and must be marked represented or structural
+    // accounting correctly rejects the orphan.
+    //
+    // The duplicated block references cause the AST lowerer to render the
+    // epilogue once per branch site, which is the right source semantics: each
+    // machine edge is conceptually `if (cond) { return value; }`.
     for &(body, cont) in &[(t, e), (e, t)] {
-        let body_is_shared_exit = cfg.succs[body].is_empty() && cfg.preds[body].len() > 1;
-        if body_is_shared_exit {
+        // A range guard whose other arm is a multi-way dispatch owns a partial
+        // switch join, not an early-return sibling.  The guarded-switch
+        // detector needs that continuation intact to keep its cases and bypass
+        // path in one region.
+        if cfg.is_switch_dispatch(cont) {
+            continue;
+        }
+        if let Some(chain) = shared_return_chain(body, cfg) {
+            if chain.contains(&cont) {
+                continue;
+            }
             let invert = invert_for(cfg, cond, body);
             visited.insert(cond);
-            // Don't mark `body` as visited — let outer recursion emit it
-            // when we eventually fall through (or when another branch also
-            // references it).
+            let prefix_is_owned_by_guards = cfg.preds[body]
+                .iter()
+                .all(|predecessor| cfg.succs[*predecessor].len() == 2);
+            if prefix_is_owned_by_guards && !is_natural_loop_header_exit(body, cfg) {
+                visited.extend(chain[..chain.len() - 1].iter().copied());
+            }
+            let then_r = if let [only] = chain.as_slice() {
+                Region::Block(*only)
+            } else {
+                Region::Seq(chain.into_iter().map(Region::Block).collect())
+            };
             return Some((
                 Region::IfThen {
                     cond,
-                    then_r: Box::new(Region::Block(body)),
+                    then_r: Box::new(then_r),
                     join: None,
                     invert,
                 },
@@ -1635,6 +1659,56 @@ fn detect_if_shape(
     }
 
     None
+}
+
+/// Return the exact acyclic block chain from a shared entry through a machine
+/// return.  Interior blocks must be private to the chain; only its terminal may
+/// merge other return-value paths.  This deliberately refuses calls without an
+/// explicit return, branches, cycles, and long chains so duplicating it cannot
+/// invent source-level termination or cause pathological AST growth.
+fn shared_return_chain(entry: usize, cfg: &Cfg) -> Option<Vec<usize>> {
+    if cfg.preds[entry].len() <= 1 {
+        return None;
+    }
+
+    let mut chain = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = entry;
+    for _ in 0..8 {
+        if !seen.insert(current) {
+            return None;
+        }
+        chain.push(current);
+        match cfg.succs[current].as_slice() {
+            [] if cfg.ends_in_return[current] => return Some(chain),
+            [next] => {
+                if cfg.preds[*next].iter().any(|pred| !seen.contains(pred))
+                    && !cfg.ends_in_return[*next]
+                {
+                    return None;
+                }
+                current = *next;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Whether `entry` is the distinguished exit successor of a natural loop's
+/// header.  Such a block is an enclosing continuation, even when another guard
+/// also branches to it, and therefore cannot be owned solely by a cloned arm.
+fn is_natural_loop_header_exit(entry: usize, cfg: &Cfg) -> bool {
+    (0..cfg.succs.len()).any(|header| {
+        cfg.preds[header]
+            .iter()
+            .copied()
+            .filter(|&tail| cfg.dominates(header, tail))
+            .any(|tail| {
+                let loop_body = natural_loop_body(header, tail, cfg);
+                cfg.succs[header].contains(&entry) && !loop_body.contains(&entry)
+            })
+    })
 }
 
 /// True when every path starting at `start` either reaches `join` or ends at a
@@ -3502,6 +3576,83 @@ mod tests {
     }
 
     #[test]
+    fn split_shared_return_epilogue_is_cloned_into_loop_exit_guards() {
+        use crate::ir::types::{Flag, VReg};
+
+        let branch = |target| {
+            vec![Op::CondJump {
+                cond: VReg::Flag(Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        // Clang -O2 `list_find`:
+        //
+        //   entry --null----------------------> zero_result -> return
+        //     |                                     ^           ^
+        //     v                                     |           |
+        //   loop_header --match---------------------------------+
+        //     |                                     |
+        //   advance --null--------------------------+
+        //     |
+        //     +-------------------------> loop_header
+        //
+        // `zero_result` and `return` are separate blocks.  Both null edges are
+        // source-level early returns and must not become gotos into another
+        // structured arm merely because the value setup precedes the terminal.
+        let lf = mk_cfg(vec![
+            (0x1120, branch(0x113d), vec![0x1125, 0x113d]),
+            (0x1125, vec![Op::Nop], vec![0x1130]),
+            (0x1130, branch(0x113f), vec![0x1135, 0x113f]),
+            (0x1135, branch(0x1130), vec![0x1130, 0x113d]),
+            (0x113d, vec![Op::Nop], vec![0x113f]),
+            (0x113f, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        let rendered = format!("{region:?}");
+        assert!(
+            !rendered.contains("Goto(4)"),
+            "the null-result chain must be cloned as an early return: {region:#?}"
+        );
+        assert!(
+            region.blocks().iter().filter(|&&block| block == 4).count() >= 2,
+            "both null guards must own the shared result setup: {region:#?}"
+        );
+        assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
+    fn cloned_return_prefix_remains_available_to_a_loop_exit() {
+        use crate::ir::types::{Flag, VReg};
+
+        let branch = |target| {
+            vec![Op::CondJump {
+                cond: VReg::Flag(Flag::Z),
+                target,
+                inverted: false,
+            }]
+        };
+        // Reduced Clang `fib`: the entry base case and the loop's normal exit
+        // both need b3 before the common return.  Cloning b3->b4 into the base
+        // case must not mark b3 globally consumed or the loop result vanishes.
+        let lf = mk_cfg(vec![
+            (0x1000, branch(0x1300), vec![0x1100, 0x1300]),
+            (0x1100, branch(0x1300), vec![0x1200, 0x1300]),
+            (0x1200, vec![Op::Jump { target: 0x1100 }], vec![0x1100]),
+            (0x1300, vec![Op::Nop], vec![0x1400]),
+            (0x1400, vec![Op::Return], vec![]),
+        ]);
+
+        let region = recover_for(&lf);
+        assert!(
+            region.blocks().iter().filter(|&&block| block == 3).count() >= 2,
+            "the shared result prefix must serve both entry and loop exits: {region:#?}"
+        );
+        assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+    }
+
+    #[test]
     fn nested_early_returns_chain_into_seq() {
         //   B0 cond → B1 (return), B2 (next test)
         //   B2 cond → B3 (return), B4 (return)
@@ -3846,13 +3997,13 @@ mod tests {
     }
 
     #[test]
-    fn short_circuit_shared_join_is_faithful_via_goto() {
+    fn short_circuit_shared_return_is_faithful_without_goto() {
         // The `x>0 && y>0` shape: two conditionals share a common false block.
         //   B0 -> {B1, Bfalse}   B1 -> {Btrue, Bfalse}
         //   Btrue -> Bend  Bfalse -> Bend  Bend: return
-        // The shared Bfalse must not be dropped into an empty arm: build_arm
-        // references it via Region::Goto, so the region is faithful (verifier
-        // clean) and the edge to Bfalse is preserved.
+        // Bfalse and Bend form a linear return chain.  It may be duplicated
+        // into both false arms, but it must neither be dropped nor represented
+        // as a cross-arm goto.
         let lf = mk_cfg(vec![
             (0x1000, vec![Op::Nop], vec![0x1100, 0x1300]), // B0 cond
             (0x1100, vec![Op::Nop], vec![0x1200, 0x1300]), // B1 cond
@@ -3864,10 +4015,11 @@ mod tests {
         let region = recover(&lf, &ssa);
         assert!(
             verify_structure(&lf, &ssa).is_empty(),
-            "short-circuit region must be faithful after the goto fix; got {:?}",
+            "short-circuit region must remain faithful after return cloning; got {:?}",
             verify_structure(&lf, &ssa)
         );
-        // The shared false block (index 3) is referenced via a Goto somewhere.
+        // The shared false block (index 3) is cloned into both guards and no
+        // longer needs a cross-region goto.
         fn has_goto(r: &Region, target: usize) -> bool {
             match r {
                 Region::Goto(b) => *b == target,
@@ -3882,9 +4034,12 @@ mod tests {
             }
         }
         assert!(
-            has_goto(&region, 3),
-            "expected a Goto to the shared false block; region={:?}",
-            region
+            !has_goto(&region, 3),
+            "unexpected shared-return goto: {region:?}"
+        );
+        assert!(
+            region.blocks().iter().filter(|&&block| block == 3).count() >= 2,
+            "both false guards must retain the shared result block: {region:#?}"
         );
     }
 

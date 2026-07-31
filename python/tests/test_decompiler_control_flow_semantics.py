@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
 
-pytestmark = pytest.mark.slow
+pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
 
 
 def _matching_brace(text: str, opening: int) -> int:
@@ -666,6 +666,18 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     assert "->val" in code, code
     assert "->next" in code, code
     assert "+ 0x8" not in code, code
+    # Clang shares its null-result setup between the entry guard and a loop
+    # exit, then falls through to a separate `ret` block.  That two-block
+    # epilogue is still a source-level `return NULL`, not a cross-region goto
+    # into the other arm of an if/else.
+    assert "goto " not in code, code
+    assert not re.search(r"L_[0-9a-f]+:\s*;", code), code
+    assert "return (node *)(0);" in code, code
+    # Once the shared return is explicit, this is the canonical sentinel scan:
+    # test the node pointer before dereferencing it, return on a matching field,
+    # and advance otherwise.  Keeping the field comparison as the while guard
+    # obscures both the null-termination condition and the early match return.
+    assert re.search(r"while \(\(\(long\)var\d+ != 0\)\)", code), code
     assert re.search(r"node \* var\d+;", code), code
     assert re.search(r"(?:var\d+|ret) = \(\(struct node \*\)var\d+\)->next;", code), (
         code
@@ -674,6 +686,11 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     assert re.search(
         r"(?:var\d+|ret) = \(\(struct node \*\)var\d+\)->next;", sum_code
     ), sum_code
+    # The source loop is entry-guarded.  GCC and Clang rotate that guard into a
+    # do/while latch, but the explicit pre-loop null return proves it is safe to
+    # recover the source-level while without dereferencing a null node.
+    assert "do {" not in sum_code, sum_code
+    assert re.search(r"while \(\(\(long\)var\d+ != 0\)\)", sum_code), sum_code
     # DecBench recompiles all functions from one binary as one translation
     # unit. Shared aggregate declarations therefore need an idempotent prelude,
     # not one unguarded definition per independently rendered function.
@@ -827,7 +844,7 @@ def test_clang_o0_range_default_recovers_direct_return_switch(
     assert results["dispatch"]["status"] == "pass", results
 
 
-@pytest.mark.parametrize("compiler", ["gcc", "clang"])
+@pytest.mark.parametrize("compiler", ["gcc", "clang"])  # ty: ignore[unresolved-attribute]
 def test_optimized_early_default_recovers_one_exhaustive_switch(
     tmp_path: Path, compiler: str
 ) -> None:
