@@ -438,10 +438,13 @@ fn collect_label_stack_deltas(
 }
 
 /// Discover the starts of bounded indexed frame regions before rewriting any
-/// statement.  Adjacent starts partition the compiler frame and the frame base
-/// closes the final region.  This intentionally recovers storage, not an
-/// element type: byte-array identity is enough for C pointer arithmetic to
-/// preserve aliases between wide zeroing stores and later byte/int indexing.
+/// statement.  Adjacent starts normally partition the compiler frame and the
+/// frame base closes the final region.  Compilers also spell one array through
+/// adjacent, same-stride views (for example, `base - 36 + 4 * (i + 1)` and
+/// `base - 32 + 4 * i`); those views must share storage rather than becoming
+/// separate C arrays.  This intentionally recovers storage, not an element
+/// type: byte-array identity is enough for C pointer arithmetic to preserve
+/// aliases between wide zeroing stores and later byte/int indexing.
 fn seed_indexed_stack_objects(
     body: &[Stmt],
     map: &mut HashMap<SlotKey, SlotVal>,
@@ -456,13 +459,13 @@ fn seed_indexed_stack_objects(
         sp_delta: Option<i64>,
         ctx: StackContext,
         address_defs: &HashMap<VReg, (String, i64)>,
-        starts: &mut Vec<(String, i64)>,
+        starts: &mut Vec<(String, i64, u8)>,
     ) {
         if let Some((base, disp, Some(_), scale)) =
             resolved_memory_address(expr, sp_delta, ctx, address_defs)
         {
             if scale != 0 && disp < 0 {
-                starts.push((base, disp));
+                starts.push((base, disp, scale));
             }
         }
         match expr {
@@ -510,7 +513,7 @@ fn seed_indexed_stack_objects(
         mut sp_delta: Option<i64>,
         address_defs: &HashMap<VReg, (String, i64)>,
         label_deltas: &HashMap<u64, Option<i64>>,
-        starts: &mut Vec<(String, i64)>,
+        starts: &mut Vec<(String, i64, u8)>,
     ) -> Option<i64> {
         for stmt in body {
             match stmt {
@@ -655,9 +658,53 @@ fn seed_indexed_stack_objects(
     let _ = walk(body, ctx, Some(0), address_defs, label_deltas, &mut starts);
     starts.sort();
     starts.dedup();
-    for index in 0..starts.len() {
-        let (base, start) = &starts[index];
-        let end = starts
+
+    let mut grouped_starts: Vec<(String, i64, Vec<u8>)> = Vec::new();
+    for (base, start, scale) in starts {
+        let joined_existing =
+            if let Some((last_base, last_start, scales)) = grouped_starts.last_mut() {
+                if *last_base == base && *last_start == start {
+                    if !scales.contains(&scale) {
+                        scales.push(scale);
+                    }
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+        if !joined_existing {
+            grouped_starts.push((base, start, vec![scale]));
+        }
+    }
+
+    // An indexed view displaced by at most one of its own elements from the
+    // preceding same-stride view is an aliasing bias, not a new allocation.
+    // Compare consecutive displacement groups so chains such as -40/-36/-32
+    // coalesce even when another access width also starts at one boundary.
+    let mut partitions = Vec::new();
+    for (index, (base, start, scales)) in grouped_starts.iter().enumerate() {
+        let aliases_previous = index
+            .checked_sub(1)
+            .and_then(|previous| grouped_starts.get(previous))
+            .is_some_and(|(previous_base, previous_start, previous_scales)| {
+                previous_base == base
+                    && start.checked_sub(*previous_start).is_some_and(|gap| {
+                        gap > 0
+                            && scales.iter().any(|scale| {
+                                previous_scales.contains(scale) && gap <= i64::from(*scale)
+                            })
+                    })
+            });
+        if !aliases_previous {
+            partitions.push((base.clone(), *start));
+        }
+    }
+
+    for index in 0..partitions.len() {
+        let (base, start) = &partitions[index];
+        let end = partitions
             .get(index + 1)
             .filter(|(next_base, _)| next_base == base)
             .map_or(0, |(_, next_start)| *next_start);
@@ -1306,6 +1353,15 @@ fn promote_address_taken_stack_object(
     sp_delta: Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
 ) {
+    // A call can receive a slice whose start is computed dynamically, e.g.
+    // `memcpy(rsp + index*4 + 48, src, n)`.  This is the same address shape as
+    // an indexed load/store, but there is no dereference node for
+    // `rewrite_expr` to promote.  Root it in an already-seeded object before
+    // falling back to the constant-address path below.
+    if let Some(object_addr) = stack_object_address(expr, 0, map, sp_delta, ctx, address_defs) {
+        *expr = object_addr;
+        return;
+    }
     let recovered = constant_stack_address(expr, ctx).or_else(|| match expr {
         Expr::Reg(reg) => address_defs.get(reg).cloned(),
         _ => None,
@@ -1559,6 +1615,65 @@ fn resolved_memory_address(
     ctx: StackContext,
     address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<(String, i64, Option<VReg>, u8)> {
+    fn scaled_index(expr: &Expr) -> Option<(VReg, u8)> {
+        match expr {
+            Expr::Reg(index) => Some((index.clone(), 1)),
+            Expr::Bin {
+                op: crate::ir::types::BinOp::Mul,
+                lhs,
+                rhs,
+            } => {
+                let (Expr::Reg(index), Expr::Const(scale)) = (lhs.as_ref(), rhs.as_ref()) else {
+                    let (Expr::Const(scale), Expr::Reg(index)) = (lhs.as_ref(), rhs.as_ref())
+                    else {
+                        return None;
+                    };
+                    return u8::try_from(*scale)
+                        .ok()
+                        .filter(|scale| *scale > 0)
+                        .map(|scale| (index.clone(), scale));
+                };
+                u8::try_from(*scale)
+                    .ok()
+                    .filter(|scale| *scale > 0)
+                    .map(|scale| (index.clone(), scale))
+            }
+            _ => None,
+        }
+    }
+
+    // Argument reconstruction represents effective addresses as ordinary AST
+    // arithmetic rather than `Lea`: `((stack_base + index*scale) + disp)`.
+    // Recover that form before handling the lower-level memory operand below.
+    if let Expr::Bin { op, lhs, rhs } = expr {
+        if let Expr::Const(amount) = rhs.as_ref() {
+            let adjustment = match op {
+                crate::ir::types::BinOp::Add => Some(*amount),
+                crate::ir::types::BinOp::Sub => amount.checked_neg(),
+                _ => None,
+            };
+            if let Some(adjustment) = adjustment {
+                if let Some((base, disp, index, scale)) =
+                    resolved_memory_address(lhs, sp_delta, ctx, address_defs)
+                {
+                    return Some((base, disp.checked_add(adjustment)?, index, scale));
+                }
+            }
+        }
+        if matches!(op, crate::ir::types::BinOp::Add) {
+            for (base_expr, index_expr) in
+                [(lhs.as_ref(), rhs.as_ref()), (rhs.as_ref(), lhs.as_ref())]
+            {
+                if let (Some((base, disp)), Some((index, scale))) = (
+                    resolve_stack_address(base_expr, sp_delta, ctx, address_defs),
+                    scaled_index(index_expr),
+                ) {
+                    return Some((base, disp, Some(index), scale));
+                }
+            }
+        }
+    }
+
     let Expr::Lea {
         base: Some(base),
         index,
@@ -1624,7 +1739,10 @@ fn stack_object_address(
         .filter_map(|(key, slot)| {
             let size = slot.object_size?;
             let end = key.disp.checked_add(i64::from(size))?;
-            (key.base == base && key.disp <= disp && (index.is_some() || access_end <= end))
+            (key.base == base
+                && key.disp <= disp
+                && disp < end
+                && (index.is_some() || access_end <= end))
                 .then_some((key.disp, slot, size))
         })
         .max_by_key(|(start, _, _)| *start)?;
@@ -2566,6 +2684,122 @@ mod tests {
             } if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
                 if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 } if object == &reg("local_20")))
         ));
+    }
+
+    #[test]
+    fn dynamic_stack_object_slice_passed_to_a_call_keeps_object_identity() {
+        let mut f = Function {
+            name: "merge_copy_shape".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: indexed_deref("rbp", "read_index", 4, -64, 4),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "memcpy".into(),
+                    },
+                    args: vec![Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Bin {
+                            op: crate::ir::types::BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("rbp"))),
+                            rhs: Box::new(Expr::Bin {
+                                op: crate::ir::types::BinOp::Mul,
+                                lhs: Box::new(Expr::Reg(reg("write_index"))),
+                                rhs: Box::new(Expr::Const(4)),
+                            }),
+                        }),
+                        rhs: Box::new(Expr::Const(-32)),
+                    }],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Call { args, .. } = &f.body[1] else {
+            panic!("expected call: {f:#?}");
+        };
+        assert!(
+            matches!(
+                args.as_slice(),
+                [Expr::Bin { lhs, .. }]
+                    if matches!(lhs.as_ref(), Expr::StackAddr { size: 32, .. })
+            ),
+            "dynamic call argument lost its stack object: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn adjacent_indexed_stack_views_with_one_element_bias_share_storage() {
+        let mut f = Function {
+            name: "biased_merge_buffer".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rbp")),
+                        index: Some(reg("write_index")),
+                        scale: 4,
+                        disp: -36,
+                        segment: None,
+                    },
+                    src: Expr::Reg(reg("eax")),
+                    size: 4,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "memcpy".into(),
+                    },
+                    args: vec![Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Bin {
+                            op: crate::ir::types::BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("rbp"))),
+                            rhs: Box::new(Expr::Bin {
+                                op: crate::ir::types::BinOp::Mul,
+                                lhs: Box::new(Expr::Reg(reg("read_index"))),
+                                rhs: Box::new(Expr::Const(4)),
+                            }),
+                        }),
+                        rhs: Box::new(Expr::Const(-32)),
+                    }],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::Store { addr, .. } = &f.body[0] else {
+            panic!("expected store: {f:#?}");
+        };
+        let Stmt::Call { args, .. } = &f.body[1] else {
+            panic!("expected call: {f:#?}");
+        };
+        let Expr::Bin {
+            lhs: store_object, ..
+        } = addr
+        else {
+            panic!("expected indexed object store: {f:#?}");
+        };
+        let [Expr::Bin {
+            lhs: call_object, ..
+        }] = args.as_slice()
+        else {
+            panic!("expected indexed object call argument: {f:#?}");
+        };
+        assert_eq!(
+            store_object, call_object,
+            "biased indexed views of one stack array were split: {f:#?}"
+        );
     }
 
     #[test]

@@ -99,3 +99,15 @@ def test_stack_array_base_copied_to_callee_saved_register_round_trip() -> None:
 
     lane = observed["21_graph_dfs:gcc:O2"]
     assert lane == {"graph_dfs": "pass"}, lane
+
+
+def test_dynamic_stack_buffer_passed_to_memcpy_round_trip() -> None:
+    """A stack array slice passed to ``memcpy`` must retain object identity."""
+    observed = H.run_lanes(
+        [("24_merge_sort", "gcc", "O2", ("merge_sort_i32",))],
+        fuzz=M.FIXTURE_FUZZ,
+        jobs=1,
+    )
+
+    lane = observed["24_merge_sort:gcc:O2"]
+    assert lane == {"merge_sort_i32": "pass"}, lane
