@@ -89,7 +89,7 @@ def test_curriculum_pointer_contracts_are_declared() -> None:
 
 @pytest.mark.slow
 def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
-    """A body-local break must not collapse the whole reducible CFG to gotos."""
+    """Body-local breaks and dead copy cycles must not hide source loops."""
     source = FIXTURES / "src" / "22_dijkstra.c"
     binary = tmp_path / "22_dijkstra-gcc-O0.so"
     compiled = subprocess.run(
@@ -112,8 +112,14 @@ def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
     functions = D.exported_functions(str(binary))
     code = D.decompiled_c(str(binary), functions["dijkstra_dense"])
     assert code is not None
-    assert code.count("while (") >= 3, code
+    # Loop promotion may render a recovered natural loop as either form. Count
+    # structure, not one spelling: Dijkstra contains the distance initializer,
+    # iteration loop, best-node scan, and edge-relaxation scan.
+    assert code.count("while (") + code.count("for (") >= 4, code
+    assert code.count("for (") >= 2, code
     assert code.count("break;") >= 2, code
+    for dead_copy in ("var15", "var18", "var22", "var23", "var45", "var59"):
+        assert dead_copy not in code, code
 
 
 @pytest.mark.slow

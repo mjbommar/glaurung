@@ -16,7 +16,7 @@
 //! analysis. A follow-up dead-copy elimination drops register copies whose
 //! destination is then never read.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::VReg;
@@ -50,6 +50,199 @@ pub fn propagate_copies(f: &mut Function) {
     // (local_c >> 1)` — the first write is overwritten before any read once the
     // reload was folded away). Remove those within each straight-line run.
     dead_store_runs(&mut f.body);
+    prune_unobservable_scratch_dataflow(f);
+}
+
+/// Remove closed scratch-value graphs that cannot influence observable output.
+///
+/// A whole-function read count cannot eliminate loop-carried SSA residue such
+/// as `a = b; ... b = a`: every name has a reader even when the graph only feeds
+/// itself. Compute liveness from semantic roots instead—conditions, addresses,
+/// stores, calls, returns, and writes to source-level stack locals—and retain
+/// only scratch assignments in their transitive dependency closure.
+///
+/// This is intentionally name-conservative. If value numbering left multiple
+/// definitions with one name, their dependencies are unioned, so one live use
+/// keeps every possibly reaching source. Assignment expressions are pure in the
+/// AST (calls and stores have dedicated statement variants), making an unrooted
+/// assignment safe to remove even when its expression contains an ordinary
+/// non-volatile load.
+pub fn prune_unobservable_scratch_dataflow(f: &mut Function) {
+    fn expr_regs(expr: &Expr) -> HashSet<VReg> {
+        let mut reads = HashMap::new();
+        count_reads_expr(expr, &mut reads);
+        reads.into_keys().collect()
+    }
+
+    fn add_roots(expr: &Expr, roots: &mut HashSet<VReg>) {
+        roots.extend(expr_regs(expr));
+    }
+
+    fn collect_body(
+        body: &[Stmt],
+        dependencies: &mut HashMap<VReg, HashSet<VReg>>,
+        roots: &mut HashSet<VReg>,
+        has_unknown: &mut bool,
+    ) {
+        for statement in body {
+            match statement {
+                Stmt::Assign { dst, src } if is_scratch_reg(dst) => {
+                    dependencies
+                        .entry(dst.clone())
+                        .or_default()
+                        .extend(expr_regs(src));
+                }
+                Stmt::Assign { src, .. } => add_roots(src, roots),
+                Stmt::Store { addr, src, .. } => {
+                    add_roots(addr, roots);
+                    add_roots(src, roots);
+                }
+                Stmt::Call {
+                    target, args, dst, ..
+                } => {
+                    add_roots(target, roots);
+                    for argument in args {
+                        add_roots(argument, roots);
+                    }
+                    if let Some(dst) = dst {
+                        dependencies.entry(dst.clone()).or_default();
+                    }
+                }
+                Stmt::Return { value } => {
+                    if let Some(value) = value {
+                        add_roots(value, roots);
+                    }
+                }
+                Stmt::Throw { value } => add_roots(value, roots),
+                Stmt::TryCatch { try_body, catches } => {
+                    collect_body(try_body, dependencies, roots, has_unknown);
+                    for catch in catches {
+                        collect_body(&catch.body, dependencies, roots, has_unknown);
+                    }
+                }
+                Stmt::IndirectGoto { target } => add_roots(target, roots),
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    add_roots(cond, roots);
+                    collect_body(then_body, dependencies, roots, has_unknown);
+                    if let Some(else_body) = else_body {
+                        collect_body(else_body, dependencies, roots, has_unknown);
+                    }
+                }
+                Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+                    add_roots(cond, roots);
+                    collect_body(body, dependencies, roots, has_unknown);
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    // A For owns boxed header statements that this pass cannot
+                    // delete without changing its representation. Treat their
+                    // complete dataflow as observable and prune only the body.
+                    let mut header_reads = HashMap::new();
+                    count_reads_stmt(init, &mut header_reads);
+                    count_reads_stmt(step, &mut header_reads);
+                    roots.extend(header_reads.into_keys());
+                    if let Stmt::Assign { dst, .. } = &**init {
+                        roots.insert(dst.clone());
+                    }
+                    if let Stmt::Assign { dst, .. } = &**step {
+                        roots.insert(dst.clone());
+                    }
+                    add_roots(cond, roots);
+                    collect_body(body, dependencies, roots, has_unknown);
+                }
+                Stmt::Push { value } => add_roots(value, roots),
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    add_roots(discriminant, roots);
+                    for (_, case_body) in cases {
+                        collect_body(case_body, dependencies, roots, has_unknown);
+                    }
+                    if let Some(default_body) = default {
+                        collect_body(default_body, dependencies, roots, has_unknown);
+                    }
+                }
+                // An opaque machine statement may read any scratch value. Abort
+                // rather than deleting dataflow across semantics we do not know.
+                Stmt::Unknown(_) => *has_unknown = true,
+                Stmt::Pop { .. }
+                | Stmt::Label(_)
+                | Stmt::Goto { .. }
+                | Stmt::Break
+                | Stmt::Nop
+                | Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    fn prune_body(body: &mut Vec<Stmt>, live: &HashSet<VReg>) {
+        body.retain(|statement| {
+            !matches!(statement, Stmt::Assign { dst, .. } if is_scratch_reg(dst) && !live.contains(dst))
+        });
+        for statement in body {
+            match statement {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    prune_body(then_body, live);
+                    if let Some(else_body) = else_body {
+                        prune_body(else_body, live);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                    prune_body(body, live)
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case_body) in cases {
+                        prune_body(case_body, live);
+                    }
+                    if let Some(default_body) = default {
+                        prune_body(default_body, live);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    prune_body(try_body, live);
+                    for catch in catches {
+                        prune_body(&mut catch.body, live);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut dependencies: HashMap<VReg, HashSet<VReg>> = HashMap::new();
+    let mut live = HashSet::new();
+    let mut has_unknown = false;
+    collect_body(&f.body, &mut dependencies, &mut live, &mut has_unknown);
+    if has_unknown {
+        return;
+    }
+
+    let mut frontier: Vec<VReg> = live.iter().cloned().collect();
+    while let Some(value) = frontier.pop() {
+        let Some(inputs) = dependencies.get(&value) else {
+            continue;
+        };
+        for input in inputs {
+            if live.insert(input.clone()) {
+                frontier.push(input.clone());
+            }
+        }
+    }
+    prune_body(&mut f.body, &live);
 }
 
 /// Carry a straight-line pure alias into a following structured switch.
@@ -1324,6 +1517,114 @@ mod tests {
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
+    }
+
+    #[test]
+    fn a_closed_loop_carried_scratch_copy_graph_is_dead() {
+        // GCC -O0 Dijkstra threads a reused address register through several
+        // SSA names even though that value never reaches a condition, memory
+        // access, call, or return. Name-wide read counts keep the cycle alive;
+        // observable-root liveness should remove the whole closed graph.
+        let mut f = Function {
+            name: "closed_copy_graph".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var15"),
+                    src: Expr::Reg(reg("arg3")),
+                },
+                Stmt::While {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(reg("local_30"))),
+                        rhs: Box::new(Expr::Reg(reg("arg1"))),
+                    },
+                    body: vec![
+                        Stmt::Assign {
+                            dst: reg("var18"),
+                            src: Expr::Reg(reg("var15")),
+                        },
+                        Stmt::If {
+                            cond: Expr::Reg(reg("zf_1")),
+                            then_body: vec![Stmt::Assign {
+                                dst: reg("var22"),
+                                src: Expr::Reg(reg("var18")),
+                            }],
+                            else_body: Some(vec![Stmt::Assign {
+                                dst: reg("var22"),
+                                src: Expr::Reg(reg("local_28")),
+                            }]),
+                        },
+                        Stmt::Assign {
+                            dst: reg("var15"),
+                            src: Expr::Reg(reg("var22")),
+                        },
+                    ],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_30"))),
+                },
+            ],
+        };
+
+        prune_unobservable_scratch_dataflow(&mut f);
+
+        let rendered = format!("{f:#?}");
+        for dead in ["var15", "var18", "var22", "arg3", "local_28"] {
+            assert!(
+                !rendered.contains(dead),
+                "closed scratch dataflow kept {dead}: {rendered}"
+            );
+        }
+        assert!(rendered.contains("local_30"));
+        assert!(rendered.contains("arg1"));
+        assert!(rendered.contains("zf_1"));
+    }
+
+    #[test]
+    fn a_loop_carried_copy_graph_feeding_a_return_stays_live() {
+        let mut f = Function {
+            name: "live_copy_graph".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var0"),
+                    src: Expr::Reg(reg("arg0")),
+                },
+                Stmt::While {
+                    cond: Expr::Reg(reg("zf_1")),
+                    body: vec![
+                        Stmt::Assign {
+                            dst: reg("var1"),
+                            src: Expr::Reg(reg("var0")),
+                        },
+                        Stmt::Assign {
+                            dst: reg("var0"),
+                            src: Expr::Reg(reg("var1")),
+                        },
+                    ],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("var0"))),
+                },
+            ],
+        };
+
+        prune_unobservable_scratch_dataflow(&mut f);
+
+        let rendered = format!("{f:#?}");
+        assert!(
+            rendered.contains("var0"),
+            "return value was deleted: {rendered}"
+        );
+        assert!(
+            rendered.contains("var1"),
+            "live dependency was deleted: {rendered}"
+        );
+        assert!(
+            rendered.contains("arg0"),
+            "live source was deleted: {rendered}"
+        );
     }
 
     #[test]

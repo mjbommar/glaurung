@@ -655,9 +655,7 @@
     "14_flag_effects:sub_then_sign": [],
     "15_binary_search_tree:bst_inorder_checksum": [],
     "15_binary_search_tree:bst_search": [],
-    "16_red_black_tree:rb_validate": [
-      "var4 is read but never defined"
-    ],
+    "16_red_black_tree:rb_validate": [],
     "17_hash_table:hash_insert": [],
     "17_hash_table:hash_lookup": [],
     "18_binary_heap:heap_pop": [],
@@ -668,9 +666,7 @@
     "21_graph_dfs:graph_dfs": [],
     "22_dijkstra:dijkstra_dense": [],
     "23_topological_sort:topological_sort": [],
-    "24_merge_sort:merge_sort_i32": [
-      "var3 is read but never defined"
-    ],
+    "24_merge_sort:merge_sort_i32": [],
     "25_kmp_search:kmp_search": [],
     "26_sparse_matrix:csr_matvec": [],
     "27_newton_raphson:newton_isqrt": [],
