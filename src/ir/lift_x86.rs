@@ -856,6 +856,9 @@ fn emit_bin_with_flags(dst: VReg, op: BinOp, rhs: Value, width: Width) -> Vec<Op
             );
             ops
         }
+        BinOp::LogicalAnd | BinOp::LogicalOr => {
+            unreachable!("source-level short-circuit operators are not x86 ALU operations")
+        }
     }
 }
 

@@ -153,6 +153,20 @@ impl ExprPool {
             Expr::Const { value, width } => format!("(_ bv{} {})", value, width.bits()),
             Expr::Sym { id, width } => format!("sym{}_{}", id, width.bits()),
             Expr::Bin { op, a, b, width } => {
+                if matches!(op, BinOp::LogicalAnd | BinOp::LogicalOr) {
+                    let predicate = if *op == BinOp::LogicalAnd {
+                        "and"
+                    } else {
+                        "or"
+                    };
+                    let zero = format!("(_ bv0 {})", width.bits());
+                    return format!(
+                        "(ite ({predicate} (distinct {} {zero}) (distinct {} {zero})) (_ bv1 {}) {zero})",
+                        self.render_coerced(*a, width.bits()),
+                        self.render_coerced(*b, width.bits()),
+                        width.bits(),
+                    );
+                }
                 let f = match op {
                     BinOp::Add => "bvadd",
                     BinOp::Sub => "bvsub",
@@ -164,6 +178,9 @@ impl ExprPool {
                     BinOp::Shl => "bvshl",
                     BinOp::Shr => "bvlshr",
                     BinOp::Sar => "bvashr",
+                    BinOp::LogicalAnd | BinOp::LogicalOr => unreachable!(
+                        "source-level logical operators use the truthiness renderer above"
+                    ),
                 };
                 // Coerce both operands to the node width so the emitted
                 // SMT-LIB is well-typed (the lifter emits width-mismatched
@@ -334,6 +351,20 @@ impl ExprPool {
         match self.get(id) {
             Expr::Const { .. } | Expr::Sym { .. } => self.render_smtlib(id),
             Expr::Bin { op, a, b, width } => {
+                if matches!(op, BinOp::LogicalAnd | BinOp::LogicalOr) {
+                    let predicate = if *op == BinOp::LogicalAnd {
+                        "and"
+                    } else {
+                        "or"
+                    };
+                    let zero = format!("(_ bv0 {})", width.bits());
+                    return format!(
+                        "(ite ({predicate} (distinct {} {zero}) (distinct {} {zero})) (_ bv1 {}) {zero})",
+                        self.render_shared_coerced(*a, width.bits(), bound),
+                        self.render_shared_coerced(*b, width.bits(), bound),
+                        width.bits(),
+                    );
+                }
                 let function = match op {
                     BinOp::Add => "bvadd",
                     BinOp::Sub => "bvsub",
@@ -345,6 +376,9 @@ impl ExprPool {
                     BinOp::Shl => "bvshl",
                     BinOp::Shr => "bvlshr",
                     BinOp::Sar => "bvashr",
+                    BinOp::LogicalAnd | BinOp::LogicalOr => unreachable!(
+                        "source-level logical operators use the truthiness renderer above"
+                    ),
                 };
                 format!(
                     "({function} {} {})",
@@ -594,6 +628,26 @@ mod tests {
             s,
             "(ite (= (bvadd sym0_32 (_ bv1 32)) (_ bv256 32)) (_ bv1 1) (_ bv0 1))"
         );
+    }
+
+    #[test]
+    fn source_logical_binops_render_as_booleanized_bitvectors() {
+        let mut p = ExprPool::new();
+        let lhs = p.fresh_symbol(Width::W32);
+        let rhs = p.constant(Width::W32, 7);
+        let either = p.intern(Expr::Bin {
+            op: BinOp::LogicalOr,
+            a: lhs,
+            b: rhs,
+            width: Width::W32,
+        });
+
+        let expected = concat!(
+            "(ite (or (distinct sym0_32 (_ bv0 32)) ",
+            "(distinct (_ bv7 32) (_ bv0 32))) (_ bv1 32) (_ bv0 32))"
+        );
+        assert_eq!(p.render_smtlib(either), expected);
+        assert_eq!(p.render_smtlib_shared(either), expected);
     }
 
     #[test]

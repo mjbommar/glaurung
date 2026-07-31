@@ -90,6 +90,8 @@ fn binop_str(op: BinOp) -> &'static str {
         BinOp::Sub => "sub",
         BinOp::Mul => "mul",
         BinOp::Div => "div",
+        BinOp::LogicalAnd => "logical_and",
+        BinOp::LogicalOr => "logical_or",
         BinOp::And => "and",
         BinOp::Or => "or",
         BinOp::Xor => "xor",

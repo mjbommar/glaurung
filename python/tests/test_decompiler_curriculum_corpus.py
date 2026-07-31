@@ -89,7 +89,7 @@ def test_curriculum_pointer_contracts_are_declared() -> None:
 
 @pytest.mark.slow
 def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
-    """Body-local breaks and dead copy cycles must not hide source loops."""
+    """Validation, body-local breaks, and dead copies retain source structure."""
     source = FIXTURES / "src" / "22_dijkstra.c"
     binary = tmp_path / "22_dijkstra-gcc-O0.so"
     compiled = subprocess.run(
@@ -118,6 +118,14 @@ def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
     assert code.count("while (") + code.count("for (") >= 4, code
     assert code.count("for (") >= 2, code
     assert code.count("break;") >= 2, code
+    # GCC -O0 lowers the six input checks to a shared labelled exit. Recover
+    # their source-level short-circuit predicate before the first natural loop;
+    # the two remaining gotos belong to the best-node scan, not validation.
+    validation_prefix = code.split("for (", maxsplit=1)[0]
+    assert validation_prefix.count("if (") == 1, code
+    assert validation_prefix.count(" || ") >= 5, code
+    assert "goto " not in validation_prefix, code
+    assert "ret = 0;" in validation_prefix, code
     for dead_copy in ("var15", "var18", "var22", "var23", "var45", "var59"):
         assert dead_copy not in code, code
 

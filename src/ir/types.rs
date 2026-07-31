@@ -168,6 +168,10 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    /// Source-level left-to-right, short-circuit conjunction.
+    LogicalAnd,
+    /// Source-level left-to-right, short-circuit disjunction.
+    LogicalOr,
     And,
     Or,
     Xor,

@@ -38,6 +38,7 @@ pub mod dwarf_fields;
 pub mod exception_recover;
 pub mod expr_reconstruct;
 pub mod function_tables;
+pub mod guard_chain;
 pub mod guarded_switch;
 pub mod high_variables;
 pub mod label_prune;

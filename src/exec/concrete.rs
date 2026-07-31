@@ -68,6 +68,8 @@ impl Domain for Concrete {
                     reduce(a, w) / reduce(b, w)
                 }
             }
+            BinOp::LogicalAnd => u128::from(a != 0 && b != 0),
+            BinOp::LogicalOr => u128::from(a != 0 || b != 0),
             BinOp::And => a & b,
             BinOp::Or => a | b,
             BinOp::Xor => a ^ b,

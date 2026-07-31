@@ -768,6 +768,8 @@ fn fold_expr(e: &mut Expr) {
                     }
                     a.wrapping_div(b)
                 }
+                BinOp::LogicalAnd => i64::from(a != 0 && b != 0),
+                BinOp::LogicalOr => i64::from(a != 0 || b != 0),
                 BinOp::And => a & b,
                 BinOp::Or => a | b,
                 BinOp::Xor => a ^ b,
