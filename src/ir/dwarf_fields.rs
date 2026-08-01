@@ -545,8 +545,15 @@ fn annotate_body(
             Stmt::Pop { target } => {
                 definitions.remove(target);
             }
+            Stmt::Label(_) => {
+                // A residual label is a control-flow join. The linear walk
+                // does not have predecessor-specific reaching definitions,
+                // so expanding any expression recorded before this point can
+                // substitute a value from the wrong path. Keep authoritative
+                // pointer types, but fail closed on expression provenance.
+                definitions.clear();
+            }
             Stmt::Goto { .. }
-            | Stmt::Label(_)
             | Stmt::Break
             | Stmt::Nop
             | Stmt::Unknown(_)
@@ -1179,6 +1186,60 @@ mod tests {
                 ..
             } if base == &VReg::phys("arg0") && index == &VReg::phys("index")
         ));
+    }
+
+    #[test]
+    fn field_annotation_does_not_expand_definitions_across_cfg_labels() {
+        let index = VReg::phys("index");
+        let pointer = VReg::phys("pointer");
+        let mut function = Function {
+            name: "joined_pointer".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: index.clone(),
+                    src: Expr::Reg(VReg::phys("good_index")),
+                },
+                Stmt::Assign {
+                    dst: pointer.clone(),
+                    src: Expr::Lea {
+                        base: Some(VReg::phys("arg0")),
+                        index: Some(index.clone()),
+                        scale: 16,
+                        disp: 0,
+                        segment: None,
+                    },
+                },
+                Stmt::Goto { target: 0x1020 },
+                Stmt::Label(0x1010),
+                Stmt::Assign {
+                    dst: index,
+                    src: Expr::Reg(VReg::phys("wrong_path_index")),
+                },
+                Stmt::Label(0x1020),
+                Stmt::Assign {
+                    dst: VReg::phys("value"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(pointer)),
+                            rhs: Box::new(Expr::Const(8)),
+                        }),
+                        size: 4,
+                    },
+                },
+            ],
+        };
+
+        annotate_function_fields(&mut function, Some(&node_prototype()), &[node_layout()], 8);
+
+        let Stmt::Assign { src, .. } = &function.body[6] else {
+            panic!("expected field load");
+        };
+        assert!(
+            field_hint(src).is_none(),
+            "a linear definition map must not invent an index across a CFG join: {src:#?}"
+        );
     }
 
     #[test]
