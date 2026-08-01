@@ -2213,11 +2213,23 @@ fn stack_assignment_object_address(
         .collect::<Vec<_>>();
     candidates.sort_unstable_by_key(|(candidate_disp, _)| *candidate_disp);
     let mut end = disp.checked_add(i64::from(first.span_size))?;
+    let mut extends_first_slot = false;
     for (candidate_disp, span) in candidates {
         if candidate_disp > end {
             break;
         }
-        end = end.max(candidate_disp.checked_add(i64::from(span))?);
+        let candidate_end = candidate_disp.checked_add(i64::from(span))?;
+        if candidate_disp > disp && candidate_end > end {
+            extends_first_slot = true;
+        }
+        end = end.max(candidate_end);
+    }
+    // A lone saved frame pointer is also an eight-byte slot followed by
+    // `rbp = rsp`. It is frame establishment, not evidence that the slot is an
+    // address-taken array. Require a second contiguous scalar initializer to
+    // extend the candidate object before joining the run.
+    if !extends_first_slot {
+        return None;
     }
     if boundary == Some(end) {
         end = boundary?;
@@ -4110,6 +4122,51 @@ mod tests {
                 object: reg("local_20"),
                 size: 32,
             }]
+        );
+    }
+
+    #[test]
+    fn frame_establishment_does_not_invent_a_saved_pointer_object() {
+        let mut f = Function {
+            name: "ordinary_frame_prologue".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("rsp", 0),
+                    src: Expr::Reg(reg("rbp")),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("rsp")),
+                },
+                Stmt::Store {
+                    addr: lea("rbp", -4),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(
+            matches!(
+                &f.body[2],
+                Stmt::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Expr::Reg(VReg::Phys(src)),
+                } if dst == "rbp" && src == "rsp"
+            ),
+            "the frame pointer assignment is not an address-taken array: {f:#?}"
         );
     }
 

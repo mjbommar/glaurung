@@ -248,7 +248,9 @@ impl DiscoverySeedKind {
     fn is_body_overlap_gated(self) -> bool {
         matches!(
             self,
-            Self::Prologue
+            Self::Vtable
+                | Self::JumpTable
+                | Self::Prologue
                 | Self::Thunk
                 | Self::TinyStub
                 | Self::DirectCall
@@ -1486,6 +1488,16 @@ fn va_in_discovered_body(functions: &[Function], current: Option<&Function>, va:
         }
     }
     functions.iter().any(|f| va_in_function_body(f, va))
+}
+
+fn va_is_discovered_block_leader(functions: &[Function], va: u64) -> bool {
+    functions.iter().any(|function| {
+        va != function.entry_point.value
+            && function
+                .basic_blocks
+                .iter()
+                .any(|block| block.start_address.value == va)
+    })
 }
 
 fn cap_discovered_functions_at_va(functions: &mut [Function], va: u64) -> usize {
@@ -3603,12 +3615,12 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     }
     let _ = vtable_method_count; // available for telemetry; unused for now.
 
-    // Jump-table discovery (#177). For non-PE stripped binaries this
-    // preserves the historical behavior of surfacing switch case bodies
-    // as discoverable functions. For PE function-discovery parity, do
-    // not promote case labels into the top-level function list: Ghidra
-    // keeps them as intra-function blocks, and switch reconstruction has
-    // its own comparison area.
+    // Jump-table discovery (#177). Case targets feed the owning CFG through
+    // `jump_table_index` below. They remain fallback entry seeds for stripped
+    // ELF code only when no previously discovered function owns the target;
+    // an ordinary switch arm is a basic block, not another top-level function.
+    // PE never promotes case labels because its trusted entry metadata is much
+    // stronger and Ghidra likewise keeps switch arms intraprocedural.
     // Indexed by table VA so a dispatch site can ask "what does the table I
     // computed point at". Previously these targets were consumed ONLY as
     // function-entry seeds, which is why the dispatching function's own CFG
@@ -3977,10 +3989,14 @@ fn analyze_functions_bytes_with_stats_and_seeds(
         }
         stats.seeds_processed = stats.seeds_processed.saturating_add(1);
         let seed_overlaps_body = va_in_discovered_body(&functions, None, seed.value);
+        let seed_is_owned_block_leader = seed_kind.is_body_overlap_gated()
+            && va_is_discovered_block_leader(&functions, seed.value);
         if seed_kind == DiscoverySeedKind::Pdata && seed_overlaps_body {
             stats.pdata_body_overlap_starts = stats.pdata_body_overlap_starts.saturating_add(1);
             cap_discovered_functions_at_va(&mut functions, seed.value);
-        } else if seed_kind.is_body_overlap_gated() && seed_overlaps_body {
+        } else if seed_kind.is_body_overlap_gated()
+            && (seed_overlaps_body || seed_is_owned_block_leader)
+        {
             record_scan_rejection(
                 &mut stats,
                 seed.value,
@@ -4870,6 +4886,65 @@ mod gcc_dispatch_corpus_tests {
             | Region::RawLoop { .. }
             | Region::Unstructured(_) => None,
         }
+    }
+
+    #[test]
+    fn clang_o0_statemachine_keeps_jump_table_arms_inside_fsm() {
+        let tmp = tempfile::tempdir().expect("temporary Clang state-machine build directory");
+        let source = tmp.path().join("statemachine.c");
+        let binary = tmp.path().join("statemachine.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decbench_corpus/src/statemachine.c"
+                ))
+            })
+            .expect("write the real state-machine fixture source");
+        let build = match Command::new("clang")
+            .args(["-shared", "-fPIC", "-g", "-O0", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch Clang: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile statemachine.c with Clang -O0: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read Clang output");
+        let object = object::read::File::parse(data.as_slice()).expect("parse Clang ELF");
+        let fsm = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("fsm"))
+            .expect("exported fsm symbol");
+        let fsm_start = fsm.address();
+        let fsm_end = fsm_start + fsm.size();
+        assert!(
+            fsm_end > fsm_start,
+            "Clang must emit an exact fsm symbol range"
+        );
+
+        let (functions, _callgraph, stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let interior: Vec<_> = functions
+            .iter()
+            .filter(|function| {
+                let entry = function.entry_point.value;
+                entry > fsm_start && entry < fsm_end
+            })
+            .map(|function| (function.name.clone(), function.entry_point.value))
+            .collect();
+
+        assert!(
+            interior.is_empty(),
+            "switch case labels are blocks in fsm, not functions: {interior:?}; seeds={:?}",
+            stats.function_seed_kinds
+        );
     }
 
     #[test]
