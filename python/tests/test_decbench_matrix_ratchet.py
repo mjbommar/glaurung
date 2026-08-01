@@ -365,3 +365,43 @@ def test_behavior_gate_fails_closed_on_any_required_nonpass(dm):
         {"f": {"status": "fail", "detail": "return differs"}}, ["f"]
     ) == ["f: fail (return differs)"]
     assert dm.behavior_problems({}, ["f"]) == ["f: missing verdict"]
+
+
+def test_behavior_only_uses_the_decbench_checkout_python(dm, tmp_path):
+    python = tmp_path / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.touch()
+
+    assert dm.decbench_python(tmp_path) == str(python)
+
+
+def test_behavior_only_cell_does_not_repeat_metric_evaluation(
+    dm, tmp_path, monkeypatch
+):
+    binary = tmp_path / "fixture.so"
+    binary.touch()
+    monkeypatch.setattr(dm, "compile_cell", lambda *_args, **_kwargs: binary)
+    monkeypatch.setattr(
+        dm,
+        "evaluate",
+        lambda *_args, **_kwargs: pytest.fail("metric evaluator must not run"),
+    )
+    monkeypatch.setattr(
+        dm,
+        "evaluate_behavior_only",
+        lambda *_args, **_kwargs: {
+            "behavior": {"newton_isqrt": {"status": "pass", "detail": "19 cases"}}
+        },
+    )
+
+    result = dm.run_cell(
+        "27_newton_raphson:gcc:O0",
+        "ghidra",
+        tmp_path,
+        tmp_path,
+        source_dir=tmp_path,
+        behavior=True,
+        behavior_only=True,
+    )
+
+    assert result["behavior"]["newton_isqrt"]["status"] == "pass"

@@ -77,6 +77,15 @@ typedef unsigned long long ulonglong; typedef long long longlong;
 typedef uint8_t undefined1; typedef uint16_t undefined2;
 typedef uint32_t undefined4; typedef uint64_t undefined8;
 typedef __uint128_t undefined16;
+typedef uint8_t uint1; typedef int8_t int1;
+typedef uint16_t uint2; typedef int16_t int2;
+typedef uint32_t uint4; typedef int32_t int4;
+typedef uint64_t uint8; typedef int64_t int8;
+#ifndef __cplusplus
+typedef _Bool bool;
+#define true 1
+#define false 0
+#endif
 long __unknown(long x){ (void)x; return 0; }
 """
 
@@ -126,6 +135,31 @@ def _scalar_desc(ref):
     if w not in (1, 2, 4, 8):
         return None
     return {"k": "int", "w": w, "s": enc.value in _SIGNED_ENC}
+
+
+def _dwarf_typedef_name(ref, cu) -> str | None:
+    """Return the first C typedef name on a DWARF wrapper chain, if any."""
+    for _ in range(16):
+        if ref.tag == "DW_TAG_typedef":
+            name_attr = ref.attributes.get("DW_AT_name")
+            if name_attr is not None:
+                name = name_attr.value.decode(errors="replace")
+                if re.fullmatch(r"[A-Za-z_]\w*", name):
+                    return name
+        if ref.tag not in (
+            "DW_TAG_typedef",
+            "DW_TAG_const_type",
+            "DW_TAG_volatile_type",
+        ):
+            return None
+        type_attr = ref.attributes.get("DW_AT_type")
+        if type_attr is None:
+            return None
+        try:
+            ref = cu.get_DIE_from_refaddr(type_attr.value)
+        except Exception:  # noqa: BLE001 - malformed debug data is unsupported
+            return None
+    return None
 
 
 def _die_desc(ref, cu, seen: set[int] | None = None):
@@ -210,10 +244,13 @@ def _type_desc(type_attr, cu):
             pref = cu.get_DIE_from_refaddr(pt.value)
         except Exception:  # noqa: BLE001
             return None
+        pointee_name = _dwarf_typedef_name(pref, cu)
         pref2, const = _resolve(pref, cu, drop_cv=True)
         pointee = _die_desc(pref2, cu)
         if pointee is None:
             return None
+        if pointee["k"] == "struct" and pointee_name is not None:
+            pointee = {**pointee, "name": pointee_name}
         desc = {"k": "ptr", "p": pointee, "const": const}
         if pointee["k"] == "int":
             desc.update({"pw": pointee["w"], "ps": pointee["s"]})
@@ -419,8 +456,9 @@ _EXTERN_FUNCTION_DECL = re.compile(
 )
 _FUNCTION_DEFINITION = re.compile(
     r"(?m)^(?!extern\b)(?P<prefix>[A-Za-z_][A-Za-z0-9_ \t*]*[ \t]+)"
-    r"(?P<name>[A-Za-z_]\w*)(?P<suffix>[ \t]*\([^;\n{}]*\)[ \t]*\{)"
+    r"(?P<name>[A-Za-z_]\w*)(?P<suffix>[ \t]*\([^;\n{}]*\)[ \t\r\n]*\{)"
 )
+_FUNCTION_CALL = re.compile(r"\b(?P<name>[A-Za-z_]\w*)[ \t]*\(")
 
 
 def _c_identifier(symbol: str) -> str:
@@ -448,23 +486,29 @@ def _rebind_function_definition(code: str, target: str) -> str | None:
     return function_token.sub(target, code)
 
 
-def include_referenced_local_callees(binary: str, root_c: str) -> str:
+def include_referenced_local_callees(
+    binary: str,
+    root_c: str,
+    decompiled_by_va: dict[int, str] | None = None,
+) -> str:
     """Prepend decompiled definitions for local callees named by ``root_c``.
 
     A standalone decompiled function is normally linked against the original
     fixture so calls to exported siblings retain their real behavior. ELF local
     symbols cannot be resolved by that dynamic link. Glaurung already recovered
-    their exact symbol names and call targets, so recursively decompile those
+    their exact symbol names and call targets, so recursively include those
     referenced local functions and compile them into the differential object.
+    When a comparator supplied ``decompiled_by_va``, helper bodies must come
+    from that same comparator. Falling back to Glaurung would produce a hybrid
+    translation unit and falsely credit the comparator for Glaurung's work.
 
-    Resolution is exact and bounded: only ``extern`` declarations whose name is
-    present in the original ``.symtab`` are considered, and at most 32 helpers
-    are included. Missing/stripped/ambiguous cases remain unresolved and fail as
-    before rather than substituting guessed behavior.
+    Resolution is exact and bounded: only direct call identifiers whose name is
+    present uniquely in the original ``.symtab`` are considered, and at most 32
+    helpers are included. Missing/stripped/ambiguous cases remain unresolved and
+    fail as before rather than substituting guessed behavior.
     """
-    if _EXTERN_FUNCTION_DECL.search(root_c) is None:
+    if not Path(binary).is_file():
         return root_c
-
     exports = exported_functions(binary)
     alias_candidates: dict[str, list[tuple[str, int]]] = {}
     for symbol, va in defined_functions(binary).items():
@@ -489,10 +533,13 @@ def include_referenced_local_callees(binary: str, root_c: str) -> str:
     visiting: set[str] = set()
 
     def references(code: str) -> list[str]:
+        # Glaurung emits explicit extern prototypes. Raw comparator backends
+        # commonly emit only a direct call token. Both are exact because the
+        # candidate must also resolve to a unique local symbol in this ELF.
         return list(
             dict.fromkeys(
                 match.group("name")
-                for match in _EXTERN_FUNCTION_DECL.finditer(code)
+                for match in _FUNCTION_CALL.finditer(code)
                 if match.group("name") in local
             )
         )
@@ -506,7 +553,11 @@ def include_referenced_local_callees(binary: str, root_c: str) -> str:
             return
         visiting.add(name)
         _symbol, va = local[name]
-        helper = decompiled_c(binary, va)
+        helper = (
+            decompiled_c(binary, va)
+            if decompiled_by_va is None
+            else decompiled_by_va.get(va)
+        )
         if helper is not None:
             for dependency in references(helper):
                 visit(dependency)
@@ -530,6 +581,85 @@ def include_referenced_local_callees(binary: str, root_c: str) -> str:
         for code in [*snippets.values(), root_c]
     ]
     return "\n".join(ordered)
+
+
+_C_INTEGER_TYPE = {
+    (1, True): "int8_t",
+    (1, False): "uint8_t",
+    (2, True): "int16_t",
+    (2, False): "uint16_t",
+    (4, True): "int32_t",
+    (4, False): "uint32_t",
+    (8, True): "int64_t",
+    (8, False): "uint64_t",
+}
+
+
+def dwarf_c_type_declarations(sig: dict, c_src: str) -> str:
+    """Render named plain-data structs required by one backend function.
+
+    Raw decompiler APIs return function bodies but commonly omit their data-type
+    archive. The execution harness already relies on DWARF to materialize exact
+    aggregate inputs. Use that same binary-derived layout to make named types in
+    comparator output compilable; never copy declarations from ground-truth C.
+    Unsupported nested aggregates remain a compile failure rather than receiving
+    a guessed layout.
+    """
+    structs: dict[str, dict] = {}
+    for raw_desc in [*sig["params"], sig["ret"]]:
+        desc = _as_desc(raw_desc)
+        if desc["k"] == "ptr":
+            desc = _pointee_desc(desc)
+        if desc["k"] != "struct" or "name" not in desc:
+            continue
+        name = desc["name"]
+        if re.search(rf"\b{re.escape(name)}\b", c_src) is None:
+            continue
+        existing = structs.get(name)
+        if existing is not None and existing != desc:
+            continue
+        structs[name] = desc
+
+    declarations: list[str] = []
+    for name, desc in structs.items():
+        already_defined = re.search(
+            rf"(?:\bstruct\s+{re.escape(name)}\s*\{{|"
+            rf"\btypedef\b[^;]*\b{re.escape(name)}\s*;)",
+            c_src,
+            re.DOTALL,
+        )
+        if already_defined is not None:
+            continue
+        fields: list[str] = []
+        cursor = 0
+        supported = True
+        for index, field in enumerate(desc["fields"]):
+            offset = field["off"]
+            if offset < cursor:
+                supported = False
+                break
+            if offset > cursor:
+                fields.append(f"uint8_t _dwarf_pad_{index}[{offset - cursor}];")
+            field_type = field["t"]
+            if field_type["k"] != "int":
+                supported = False
+                break
+            type_name = _C_INTEGER_TYPE[(field_type["w"], field_type["s"])]
+            field_name = field["name"]
+            if re.fullmatch(r"[A-Za-z_]\w*", field_name) is None:
+                field_name = f"field_{index}"
+            fields.append(f"{type_name} {field_name};")
+            cursor = offset + field_type["w"]
+        if not supported or cursor > desc["w"]:
+            continue
+        if cursor < desc["w"]:
+            fields.append(f"uint8_t _dwarf_tail_pad[{desc['w'] - cursor}];")
+        body = " ".join(fields)
+        declarations.append(
+            f"typedef struct __attribute__((packed)) {name} {{ {body} }} {name};\n"
+            f'_Static_assert(sizeof({name}) == {desc["w"]}, "DWARF layout");'
+        )
+    return "\n".join(declarations)
 
 
 def _inherited_cxx_runtime_args(binary: str) -> list[str]:
@@ -561,9 +691,9 @@ def _inherited_cxx_runtime_args(binary: str) -> list[str]:
     return args
 
 
-def build_so(
+def build_so_with_diagnostic(
     c_src: str, workdir: Path, tag: str, link_against: str | None = None
-) -> Path | None:
+) -> tuple[Path | None, str]:
     """Rebuild our decompiled C. Compiled under the PINNED toolchain: whether a
     given rendering compiles at all is compiler-version dependent (gcc >= 14 turns
     implicit declarations and int/pointer conversions into hard errors that gcc 11
@@ -605,14 +735,30 @@ def build_so(
         orig = Path(link_against).resolve()
         r = TC.run(base + [str(orig), f"-Wl,-rpath,{orig.parent}", *runtime_args])
         if r.returncode == 0:
-            return so
+            return so, ""
         # Linking is an ENHANCEMENT, so its failure must not be reported as
         # "decompiled C failed to compile" — that verdict belongs to the
         # decompiler. Retry without: a function that calls no sibling links fine,
         # and one that does will say `undefined symbol` at load time, which is a
         # different and accurate message.
     r = TC.run(base + runtime_args)
-    return so if r.returncode == 0 else None
+    if r.returncode == 0:
+        return so, ""
+    diagnostic = " ".join((r.stderr or r.stdout or "no compiler output").split())
+    return None, diagnostic
+
+
+def build_so(
+    c_src: str, workdir: Path, tag: str, link_against: str | None = None
+) -> Path | None:
+    """Compatibility wrapper returning only the rebuilt object, if any."""
+    rebuilt, _diagnostic = build_so_with_diagnostic(
+        c_src,
+        workdir,
+        tag,
+        link_against=link_against,
+    )
+    return rebuilt
 
 
 # ---------------------------------------------------------------------------
@@ -1050,10 +1196,21 @@ def run_function(
     )
     if c is None:
         return {"status": "fail", "detail": "decompile failed"}
-    c = include_referenced_local_callees(binary, c)
-    dec_so = build_so(c, workdir, f"dec_{name}", link_against=binary)
+    c = include_referenced_local_callees(binary, c, decompiled_by_va)
+    declarations = dwarf_c_type_declarations(sig, c)
+    if declarations:
+        c = declarations + "\n" + c
+    dec_so, diagnostic = build_so_with_diagnostic(
+        c,
+        workdir,
+        f"dec_{name}",
+        link_against=binary,
+    )
     if dec_so is None:
-        return {"status": "fail", "detail": "decompiled C failed to compile"}
+        return {
+            "status": "fail",
+            "detail": f"decompiled C failed to compile: {diagnostic[-500:]}",
+        }
     vectors = make_vectors(sig, ov, seed, fuzz)
     if not vectors:
         # An infra/manifest problem (no inputs generated), NOT a decompiler

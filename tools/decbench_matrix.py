@@ -44,7 +44,9 @@ SRC = ROOT / "tests" / "decbench_corpus" / "src"
 FIXTURE_SRC = ROOT / "tests" / "decompiler_fixtures" / "src"
 BASELINE = ROOT / "tests" / "decbench_corpus" / "baseline.json"
 GLAURUNG_ADAPTER = ROOT / "tools" / "decbench_glaurung.py"
+DECOMPILE_HELPER = ROOT / "tools" / "decbench_decompile.py"
 TOOLCHAIN_KEY = "__toolchain__"
+DECOMPILE_JSON_PREFIX = "__GLAURUNG_DECOMPILATION_JSON__="
 
 COMPILERS = ("gcc", "clang")
 OPTS = {"O0": ["-O0"], "O2": ["-O2"]}
@@ -158,6 +160,19 @@ def decbench_command(cwd: Path, backend: str) -> list[str]:
     )
 
 
+def decbench_python(cwd: Path) -> str:
+    """Resolve the interpreter containing DecBench and its backend dependencies."""
+    configured = os.environ.get("DECBENCH_PYTHON")
+    candidates = [Path(configured)] if configured else []
+    candidates += [cwd / ".venv" / "bin" / "python", cwd / ".venv" / "bin" / "python3"]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    raise FileNotFoundError(
+        f"behavior-only mode needs DECBENCH_PYTHON or {cwd}/.venv/bin/python"
+    )
+
+
 def toolchain_fingerprint() -> dict:
     """What compiled the corpus. A metric measured under a different compiler is
     not comparable, so the baseline records this and `--check` refuses to compare
@@ -233,6 +248,30 @@ def behavior_problems(verdicts: dict, required: list[str]) -> list[str]:
     return problems
 
 
+def run_behavior(
+    binary: Path,
+    source: Path,
+    fixture: str,
+    decompiled: dict[int, str],
+) -> tuple[dict, list[str]]:
+    """Execute injected decompiler output using the canonical fixture contract."""
+    import diff_decompile as differential
+
+    required = differential.M.REQUIRED_FUNCTIONS.get(fixture, [])
+    if not required:
+        return {}, [f"{fixture}: no required-function contract"]
+    verdicts = differential.run(
+        str(binary),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=differential.M.FIXTURE_FUZZ,
+        only=set(required),
+        decompiled_by_va=decompiled,
+    )
+    return verdicts, behavior_problems(verdicts, required)
+
+
 def evaluate_behavior(
     binary: Path,
     source: Path,
@@ -251,25 +290,99 @@ def evaluate_behavior(
             )
         ]
 
-    import diff_decompile as differential
-
     try:
         decompiled = parse_decompiled_functions(artifacts[0].read_text())
     except (OSError, ValueError) as exc:
         return {}, [f"{backend}: invalid combined C artifact ({exc})"]
+    return run_behavior(binary, source, fixture, decompiled)
+
+
+def decompile_backend(
+    binary: Path,
+    fixture: str,
+    backend: str,
+    output: Path,
+    cwd: Path,
+) -> tuple[dict[int, str], str | None]:
+    """Run only the requested DecBench backend, without Joern metric extraction."""
+    import diff_decompile as differential
+
     required = differential.M.REQUIRED_FUNCTIONS.get(fixture, [])
     if not required:
-        return {}, [f"{fixture}: no required-function contract"]
-    verdicts = differential.run(
-        str(binary),
-        str(source),
-        fixture,
-        seed=1234,
-        fuzz=differential.M.FIXTURE_FUZZ,
-        only=set(required),
-        decompiled_by_va=decompiled,
+        return {}, f"{fixture}: no required-function contract"
+    # Required exports may call file-local helpers. Request every function that
+    # exists in the exact input ELF so the behavioral harness can close those
+    # calls using the same backend. Restricting this to the exported roots left
+    # hash_slot/find_root unresolved and understated comparator correctness.
+    requested = list(
+        dict.fromkeys([*required, *differential.defined_functions(str(binary))])
     )
-    return verdicts, behavior_problems(verdicts, required)
+    command = [
+        decbench_python(cwd),
+        str(DECOMPILE_HELPER),
+        str(binary),
+        backend,
+        str(output),
+    ]
+    for function in requested:
+        command += ["--function", function]
+    try:
+        process = subprocess.run(
+            command,
+            cwd=cwd,
+            env=evaluator_environment(backend),
+            capture_output=True,
+            text=True,
+            timeout=900,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {}, f"{backend}: decompilation timeout"
+    if process.returncode != 0:
+        diagnostic = " ".join((process.stderr or process.stdout or "no output").split())
+        return {}, f"{backend}: decompilation exit {process.returncode}: {diagnostic[-500:]}"
+    payload_line = next(
+        (
+            line[len(DECOMPILE_JSON_PREFIX) :]
+            for line in reversed(process.stdout.splitlines())
+            if line.startswith(DECOMPILE_JSON_PREFIX)
+        ),
+        None,
+    )
+    if payload_line is None:
+        return {}, f"{backend}: decompilation produced no JSON payload"
+    try:
+        payload = json.loads(payload_line)
+        functions = payload["functions"]
+        decompiled = {
+            int(function["address"]): str(function["code"])
+            for function in functions
+            if isinstance(function, dict)
+        }
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return {}, f"{backend}: malformed decompilation payload ({exc})"
+    if not decompiled:
+        return {}, f"{backend}: decompilation produced zero functions"
+    return decompiled, None
+
+
+def evaluate_behavior_only(
+    binary: Path,
+    source: Path,
+    fixture: str,
+    backend: str,
+    results: Path,
+    cwd: Path,
+) -> dict:
+    """Decompiler -> C -> rebuilt binary -> execution, with no graph metrics."""
+    decompiled, error = decompile_backend(binary, fixture, backend, results, cwd)
+    if error is not None:
+        return {"behavior": {}, "error": error}
+    verdicts, problems = run_behavior(binary, source, fixture, decompiled)
+    result = {"behavior": verdicts}
+    if problems:
+        result["error"] = "behavior: " + "; ".join(problems)
+    return result
 
 
 def evaluate(
@@ -393,6 +506,7 @@ def run_cell(
     cwd: Path,
     source_dir: Path = SRC,
     behavior: bool = False,
+    behavior_only: bool = False,
 ) -> dict:
     """Compile and evaluate one independent matrix cell."""
     program, compiler, opt = key.split(":")
@@ -401,11 +515,15 @@ def run_cell(
     so = compile_cell(program, compiler, opt, cell_dir, source_dir)
     if so is None:
         return {"error": "build failed"}
+    source = source_dir / f"{program}.c"
+    results = cell_dir / "results"
+    if behavior_only:
+        return evaluate_behavior_only(so, source, program, backend, results, cwd)
     return evaluate(
         so,
-        source_dir / f"{program}.c",
+        source,
         backend,
-        cell_dir / "results",
+        results,
         cwd,
         behavior_fixture=program if behavior else None,
     )
@@ -416,6 +534,16 @@ def print_cell(key: str, cell: dict) -> None:
     if error := cell.get("error"):
         print(f"  {key:34s} ERROR {error}", flush=True)
         return
+    if behavior := cell.get("behavior"):
+        passed = sum(
+            verdict.get("status") == "pass" for verdict in behavior.values()
+        )
+        if not any(cell.get(metric) is not None for metric in TOLERANCE):
+            print(
+                f"  {key:34s} behavior={passed}/{len(behavior)} pass",
+                flush=True,
+            )
+            return
     shown = " ".join(
         f"{metric}={'-' if cell.get(metric) is None else cell[metric]}"
         for metric in ("ged", "type_match", "byte_match")
@@ -432,6 +560,7 @@ def run_matrix(
     source_dir: Path = SRC,
     programs: list[str] | tuple[str, ...] | None = None,
     behavior: bool = False,
+    behavior_only: bool = False,
 ) -> dict:
     result: dict = {TOOLCHAIN_KEY: toolchain_fingerprint()}
     keys = select_cells(only, source_dir, programs)
@@ -439,14 +568,29 @@ def run_matrix(
     if worker_count == 1:
         for key in keys:
             result[key] = run_cell(
-                key, backend, workdir, cwd, source_dir, behavior=behavior
+                key,
+                backend,
+                workdir,
+                cwd,
+                source_dir,
+                behavior=behavior,
+                behavior_only=behavior_only,
             )
             print_cell(key, result[key])
         return result
 
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
         futures = {
-            pool.submit(run_cell, key, backend, workdir, cwd, source_dir, behavior): key
+            pool.submit(
+                run_cell,
+                key,
+                backend,
+                workdir,
+                cwd,
+                source_dir,
+                behavior,
+                behavior_only,
+            ): key
             for key in keys
         }
         for future in as_completed(futures):
@@ -515,6 +659,11 @@ def main() -> int:
         action="store_true",
         help="also rebuild and execute each backend's decompiled curriculum C",
     )
+    ap.add_argument(
+        "--behavior-only",
+        action="store_true",
+        help="decompile/rebuild/execute curriculum cells without repeating graph metrics",
+    )
     ap.add_argument("--check", action="store_true", help="compare against the baseline")
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--backend", default="glaurung", help="glaurung | angr | …")
@@ -549,8 +698,17 @@ def main() -> int:
     source_dir = corpus_source(args.corpus)
     programs = corpus_programs(args.corpus)
 
+    if args.behavior_only:
+        args.behavior = True
+
     if args.behavior and args.corpus != "curriculum":
         print("--behavior currently requires --corpus curriculum", file=sys.stderr)
+        return 2
+    if args.behavior_only and (args.check or args.write_baseline):
+        print(
+            "--behavior-only cannot compare or write the metric baseline",
+            file=sys.stderr,
+        )
         return 2
 
     if args.list:
@@ -586,6 +744,7 @@ def main() -> int:
             source_dir=source_dir,
             programs=programs,
             behavior=args.behavior,
+            behavior_only=args.behavior_only,
         )
 
     if args.write_baseline:

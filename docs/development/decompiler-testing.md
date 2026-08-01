@@ -149,6 +149,16 @@ differs. Decompiler-dialect scalar names such as Ghidra's `uint` and
 `undefined4` have explicit fixed-width compatibility typedefs in the shared
 recompile prelude; they are not guessed per result.
 
+When the same backend/binary revision has already been scored, use
+`--behavior-only` to skip Joern entirely. It calls only the DecBench decompiler,
+then runs the identical rebuild/execution differential. On the Newton GCC-O0
+probe this reduced wall clock from roughly three minutes to about eleven seconds:
+
+```bash
+tools/decbench_matrix.py --backend angr --corpus curriculum --behavior-only \
+  --only '27_newton_raphson:gcc:O0' --json
+```
+
 ## The full gate
 
 ```bash

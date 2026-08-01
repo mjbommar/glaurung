@@ -1603,7 +1603,9 @@ def test_exit_code_distinguishes_infra_from_semantic():
 
 def test_recompile_prelude_accepts_ghidra_scalar_dialect(tmp_path):
     rebuilt = D.build_so(
-        "uint32_t dialect_identity(uint value) { return value; }",
+        "uint32_t dialect_identity(uint value, uint4 other) { "
+        "int4 signed_other = (int4)other; "
+        "while (true) { return value + signed_other; } }",
         tmp_path,
         "ghidra_scalar_dialect",
     )
@@ -1611,9 +1613,15 @@ def test_recompile_prelude_accepts_ghidra_scalar_dialect(tmp_path):
     assert rebuilt is not None
 
 
-def test_run_uses_injected_backend_source_without_invoking_glaurung(monkeypatch):
-    original = _compile_so("int injected(int value){return value+1;}", "injected")
-    address = D.exported_functions(original)["injected"]
+def test_injected_backend_named_struct_is_rebuilt_from_dwarf(monkeypatch):
+    original = _compile_so(
+        "typedef struct { int value; } NamedNode; "
+        "int named_read(const NamedNode *nodes, int index) { "
+        "if (!nodes || index < 0 || index >= 16) return -1; "
+        "return nodes[index].value; }",
+        "named_struct",
+    )
+    address = D.exported_functions(original)["named_read"]
     monkeypatch.setattr(
         D,
         "decompiled_many_c",
@@ -1628,11 +1636,73 @@ def test_run_uses_injected_backend_source_without_invoking_glaurung(monkeypatch)
         "fx",
         seed=1234,
         fuzz=8,
+        only={"named_read"},
+        decompiled_by_va={
+            address: (
+                "int named_read(NamedNode *nodes, int index) { "
+                "if (!nodes || index < 0 || index >= 16) return -1; "
+                "return nodes[index].value; }"
+            )
+        },
+    )
+
+    assert results == {"named_read": {"status": "pass", "detail": "18 cases"}}
+
+
+def test_run_uses_injected_backend_source_without_invoking_glaurung(monkeypatch):
+    original = _compile_so(
+        "static __attribute__((noinline)) int injected_helper(int value) { "
+        "return value + 1; } "
+        "int injected(int value) { return injected_helper(value); }",
+        "injected",
+    )
+    address = D.exported_functions(original)["injected"]
+    helper_address = D.defined_functions(original)["injected_helper"]
+    monkeypatch.setattr(
+        D,
+        "decompiled_many_c",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Glaurung must not run for injected code"
+        ),
+    )
+    monkeypatch.setattr(
+        D,
+        "decompiled_c",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Glaurung must not run for an injected helper"
+        ),
+    )
+
+    results = D.run(
+        original,
+        str(SRC / "01_conditional_polarity.c"),
+        "fx",
+        seed=1234,
+        fuzz=8,
         only={"injected"},
-        decompiled_by_va={address: "int injected(int value){return value+1;}"},
+        decompiled_by_va={
+            address: (
+                "int injected(int value) { return injected_helper(value); }"
+            ),
+            helper_address: (
+                "int injected_helper(int value)\n\n{ return value + 1; }"
+            ),
+        },
     )
 
     assert results == {"injected": {"status": "pass", "detail": "18 cases"}}
+
+
+def test_recompile_failure_reports_the_compiler_diagnostic(tmp_path):
+    rebuilt, diagnostic = D.build_so_with_diagnostic(
+        "int invalid_backend_output(void) { return this is not C; }",
+        tmp_path,
+        "invalid_backend_output",
+    )
+
+    assert rebuilt is None
+    assert "error:" in diagnostic
+    assert "this" in diagnostic
 
 
 def test_json_mode_returns_two_on_infra(tmp_path):
