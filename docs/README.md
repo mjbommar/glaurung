@@ -50,6 +50,15 @@ Per-command CLI guides.
 Multi-change effort records (design + as-built status).
 - `analyst-ergonomics-2026-06-DIFF.md` - the campaign behind the `cli/` doc above
 
+### `agentic-glaurung/`
+
+Design and delivery plan for the autonomous, tool-using source-recovery agent.
+
+- Separates native raw Glaurung, the fixed LLM rewrite pipeline, and the true
+  PydanticAI agent
+- Defines runtime, tool, safety, tracing, evaluation, and implementation
+  contracts for a DecBench sample-set run
+
 ### `research/`
 Experimental features and proposals.
 - `pyext-separation.md` - PyO3 extension separation design
@@ -64,6 +73,7 @@ Experimental features and proposals.
 **Setting up development?** → `development/setup.md`
 **Looking for compiler signatures?** → `formats/compiler-artifacts.md`
 **Planning interpreted/VM support?** → `analysis/interpreted/`
+**Building the autonomous decompiler agent?** → `agentic-glaurung/README.md`
 
 ## Documentation Standards
 
