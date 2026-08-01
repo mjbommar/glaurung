@@ -165,3 +165,36 @@ def test_switch_dispatch_vectors_execute_every_arm_with_signed_inputs():
     assert any(int(vector[0]) < 0 or int(vector[0]) > 7 for vector in vectors), (
         "the out-of-range default arm needs an explicit vector"
     )
+
+
+def test_unbounded_loops_and_signed_ub_are_excluded_from_execution_vectors():
+    """The differential must compare defined, terminating source executions.
+
+    Generic integer boundaries include INT_MIN/INT_MAX.  Those are valuable for
+    width recovery, but several tiny validation functions deliberately use C
+    operations whose contract excludes them: negating INT_MIN, overflowing a
+    signed multiply/subtract, shifting by 0 or >= the width, or iterating roughly
+    two billion times.  Pin only those parameters; the remaining corpus retains
+    the full boundary sweep.
+    """
+    expected_pins = {
+        ("arith", "addmul"): {0, 1, 2},
+        ("arith", "shifts"): {1},
+        ("arith", "signs"): {0, 1},
+        ("branches", "classify"): {0, 1},
+        ("branches", "nested"): {2},
+        ("loops", "sum_to"): {0},
+        ("loops", "factorial"): {0},
+    }
+
+    for key, indices in expected_pins.items():
+        pins = M.override(*key).get("arg_values", {})
+        assert set(pins) == indices, f"{key} must pin parameters {sorted(indices)}"
+        assert all(values for values in pins.values()), f"{key} has an empty domain"
+
+    shifts = M.override("arith", "shifts")["arg_values"][1]
+    assert shifts and all(1 <= count <= 31 for count in shifts)
+    assert -(2**31) not in M.override("arith", "signs")["arg_values"][0]
+    assert -(2**31) not in M.override("branches", "nested")["arg_values"][2]
+    assert max(M.override("loops", "sum_to")["arg_values"][0]) <= 1000
+    assert max(M.override("loops", "factorial")["arg_values"][0]) <= 20

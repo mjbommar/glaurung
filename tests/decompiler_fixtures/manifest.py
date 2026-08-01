@@ -64,6 +64,33 @@ FIXTURE_FUZZ = 12
 # `python/tests/test_decbench_corpus_contracts.py` fails closed if a corpus function
 # that needs an entry here does not have one.
 DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
+    # The generic sweep includes each integer type's extrema.  Keep it wherever
+    # the source operation is defined, but do not ask a differential to compare
+    # signed overflow or an invalid shift count: the optimiser is allowed to
+    # produce different answers for those even when the decompilation is exact.
+    ("arith", "addmul"): {
+        "arg_values": {
+            0: [-1000000, -1000, -1, 0, 1, 1000, 1000000],
+            1: [-1000000, -1000, -1, 0, 1, 1000, 1000000],
+            2: [-1000000, -1000, -1, 0, 1, 1000, 1000000],
+        }
+    },
+    ("arith", "shifts"): {"arg_values": {1: [1, 2, 7, 15, 16, 31]}},
+    ("arith", "signs"): {
+        "arg_values": {
+            0: [-1000000, -1000, -1, 0, 1, 1000, 1000000],
+            1: [-1000000, -1000, -1, 0, 1, 1000, 1000000],
+        }
+    },
+    ("branches", "classify"): {
+        "arg_values": {
+            0: [-1000000, -1, 0, 1, 1000000],
+            1: [-1000000, -1, 0, 1, 1000000],
+        }
+    },
+    ("branches", "nested"): {
+        "arg_values": {2: [-1000000, -1, 0, 1, 1000000]}
+    },
     ("arrays", "sum_array"): {"len_args": [1]},
     ("arrays", "max_array"): {"len_args": [1]},
     ("arrays", "reverse"): {"len_args": [1]},
@@ -113,6 +140,15 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
     ("strops", "str_cmp"): {"ptr_elem": "cstr"},
     ("strops", "hash_djb2"): {"ptr_elem": "cstr"},
     ("statemachine", "fsm"): {"len_args": [1], "ptr_elem": "u8"},
+    # These loops are finite for every integer but the generic INT_MAX boundary
+    # would make the gate spend billions of iterations.  factorial additionally
+    # has signed overflow above 20 on this 64-bit source type.
+    ("loops", "sum_to"): {
+        "arg_values": {0: [-2, -1, 0, 1, 2, 3, 7, 10, 100, 1000]}
+    },
+    ("loops", "factorial"): {
+        "arg_values": {0: [-2, -1, 0, 1, 2, 3, 7, 10, 15, 20]}
+    },
     # A random signed 32-bit opcode reaches the default arm almost every time.
     # Pin every jump-table arm, including the negative case-7 operand that caught
     # `sar eax,1` being rendered as a 64-bit logical shift. Values stay small so
@@ -144,6 +180,29 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
     # would test the allocator, and would do it by segfaulting.
     ("linkedlist", "list_sum"): {"skip_exec": True},
     ("linkedlist", "list_find"): {"skip_exec": True},
+}
+
+# Exported semantic units in the compact 14-program DecBench validation corpus.
+# This is intentionally separate from REQUIRED_FUNCTIONS below: that mapping is
+# an exact manifest of files in FIXTURE_SRC, while these sources live under
+# tests/decbench_corpus/src.  The matrix behavior gate uses this catalog to fail
+# closed when a function is absent or renamed instead of silently scoring only
+# whichever functions the backend happened to recover.
+DECBENCH_PROJECTS: dict[str, list[str]] = {
+    "arith": ["addmul", "shifts", "signs"],
+    "arrays": ["sum_array", "max_array", "reverse"],
+    "branches": ["classify", "nested"],
+    "checksum": ["crc32_step", "fletcher16"],
+    "fixedpoint": ["fp_mul", "fp_div", "isqrt"],
+    "linkedlist": ["list_sum", "list_find"],
+    "loops": ["sum_to", "factorial", "count_bits"],
+    "matrix": ["matmul"],
+    "recursion": ["fib", "ackermann"],
+    "sort": ["bubble", "bsearch_i"],
+    "statemachine": ["fsm"],
+    "strops": ["str_len", "str_cmp", "hash_djb2"],
+    "structs": ["dist2", "rect_area"],
+    "switch_jt": ["dispatch"],
 }
 
 OVERRIDES: dict[tuple[str, str], dict] = {

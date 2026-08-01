@@ -21,11 +21,28 @@ most of the way to not being real. Committing 47 lines fixes that permanently.
 
     tools/decbench_matrix.py --json > current.json         # 56 cells
     tools/decbench_matrix.py --check                       # against the baseline
+    tools/decbench_matrix.py --corpus decbench --backend glaurung \
+      --behavior-only --json > behavior.json               # 56 round trips
 
 Each cell is one `(program, compiler, opt)` triple: 14 x {gcc, clang} x {O0, O2}.
 The comparator fails on a per-cell regression, not merely on a worse mean — an
 aggregate hides a program getting much worse while another improves, and this
 session already had one case where a *missing* cell flattered the mean.
+
+The behavioral command is the stronger semantic gate: it compiles each source
+with both compilers at both optimization levels, decompiles the resulting shared
+object, recompiles that emitted C, and executes identical deterministic boundary
+and seeded-fuzz vectors against the original and rebuilt functions. Every
+exported semantic unit is named in `manifest.DECBENCH_PROJECTS`; a missing
+verdict, compile failure, timeout, return mismatch, or buffer-mutation mismatch
+fails the cell. `linkedlist` is reported separately as structural evidence
+because the generic harness cannot safely construct a recursive node graph;
+only functions explicitly marked `skip_exec` may receive that exemption.
+
+Text/graph metrics and behavior answer different questions. A baseline refresh
+must never be used to conceal a semantic regression: retain a full successful
+behavior-only report first, inspect any remaining structural-only functions, and
+then review the metric deltas before writing `baseline.json`.
 
 **Local only.** The run needs the DecBench fork installed (`decbench evaluate`),
 which the hosted CI does not have, so this is a `scripts/local-ci.sh` gate in the

@@ -23,10 +23,19 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 TOOL = ROOT / "tools" / "decbench_matrix.py"
+MANIFEST = ROOT / "tests" / "decompiler_fixtures" / "manifest.py"
 
 
 def _load():
     spec = importlib.util.spec_from_file_location("decbench_matrix", TOOL)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_manifest():
+    spec = importlib.util.spec_from_file_location("decbench_fixture_manifest", MANIFEST)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -166,6 +175,52 @@ def test_curriculum_corpus_selects_only_the_sixteen_textbook_projects(dm):
         "30_finite_difference",
     ]
     assert len(dm.all_cell_keys(src, projects)) == 64
+
+
+def test_decbench_behavior_catalog_names_every_exported_semantic_unit(dm):
+    """The 14-program metric corpus is also an executable semantic corpus.
+
+    Keep it separate from REQUIRED_FUNCTIONS: that table deliberately mirrors
+    only files in the fixture source directory, and merging these projects into
+    it would weaken its exact disk-vs-manifest consistency check.
+    """
+    manifest = _load_manifest()
+
+    assert manifest.DECBENCH_PROJECTS == {
+        "arith": ["addmul", "shifts", "signs"],
+        "arrays": ["sum_array", "max_array", "reverse"],
+        "branches": ["classify", "nested"],
+        "checksum": ["crc32_step", "fletcher16"],
+        "fixedpoint": ["fp_mul", "fp_div", "isqrt"],
+        "linkedlist": ["list_sum", "list_find"],
+        "loops": ["sum_to", "factorial", "count_bits"],
+        "matrix": ["matmul"],
+        "recursion": ["fib", "ackermann"],
+        "sort": ["bubble", "bsearch_i"],
+        "statemachine": ["fsm"],
+        "strops": ["str_len", "str_cmp", "hash_djb2"],
+        "structs": ["dist2", "rect_area"],
+        "switch_jt": ["dispatch"],
+    }
+    assert set(manifest.DECBENCH_PROJECTS) == set(dm.corpus_programs("decbench"))
+    assert not (set(manifest.DECBENCH_PROJECTS) & set(manifest.REQUIRED_FUNCTIONS))
+    assert dm.behavior_required_functions(manifest, "arrays") == [
+        "sum_array",
+        "max_array",
+        "reverse",
+    ]
+
+
+def test_structural_verdict_is_accepted_only_for_explicit_skip_exec(dm):
+    manifest = _load_manifest()
+    structural = {"status": "structural", "detail": "manifest skip_exec"}
+
+    assert dm.behavior_problems(
+        {"list_sum": structural}, ["list_sum"], "linkedlist", manifest
+    ) == []
+    assert dm.behavior_problems(
+        {"sum_array": structural}, ["sum_array"], "arrays", manifest
+    ) == ["sum_array: structural (manifest skip_exec)"]
 
 
 def test_unknown_corpus_is_rejected_instead_of_falling_back(dm):

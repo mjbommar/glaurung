@@ -150,6 +150,37 @@ def test_gcc_o2_signatures_follow_concrete_abstract_origins() -> None:
     ]
 
 
+def test_gcc_o2_ranged_signature_uses_the_exported_symbol_address() -> None:
+    """Newer GCC may describe an optimized function with ranges, not low_pc.
+
+    The dynamic symbol remains the authoritative callable address.  Discarding
+    the otherwise complete DWARF prototype made a valid switch round trip
+    structural-only in exactly one of the 56 DecBench lanes.
+    """
+    binary = _compile_so(
+        "int ranged_dispatch(int op, int a, int b) {\n"
+        "  switch (op) {\n"
+        "  case 0: return a + b; case 1: return a - b;\n"
+        "  case 2: return a * b; case 3: return a & b;\n"
+        "  case 4: return a | b; case 5: return a ^ b;\n"
+        "  case 6: return a << 1; case 7: return b >> 1;\n"
+        "  default: return -1;\n"
+        "  }\n"
+        "}",
+        "gcc_o2_ranged_signature",
+        optimization="O2",
+    )
+    exported = D.exported_functions(binary)
+    recovered = {signature["name"]: signature for signature in D.signatures(binary)}
+
+    assert recovered["ranged_dispatch"]["va"] == exported["ranged_dispatch"]
+    assert recovered["ranged_dispatch"]["params"] == [
+        {"k": "int", "w": 4, "s": True},
+        {"k": "int", "w": 4, "s": True},
+        {"k": "int", "w": 4, "s": True},
+    ]
+
+
 def test_batch_decompile_returns_every_requested_real_function():
     """One native analysis must produce every requested fixture function.
 

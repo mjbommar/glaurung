@@ -233,8 +233,31 @@ def parse_decompiled_functions(combined_c: str) -> dict[int, str]:
     return parsed
 
 
-def behavior_problems(verdicts: dict, required: list[str]) -> list[str]:
-    """Return every absent or non-passing required behavioral verdict."""
+def behavior_required_functions(manifest, fixture: str) -> list[str]:
+    """Return the exact semantic roots for any supported source corpus."""
+    for catalog in (
+        manifest.DECBENCH_PROJECTS,
+        manifest.CURRICULUM_PROJECTS,
+        manifest.REQUIRED_FUNCTIONS,
+    ):
+        if fixture in catalog:
+            return list(catalog[fixture])
+    return []
+
+
+def behavior_problems(
+    verdicts: dict,
+    required: list[str],
+    fixture: str | None = None,
+    manifest=None,
+) -> list[str]:
+    """Return every absent or unacceptable required behavioral verdict.
+
+    ``structural`` is weaker than execution and therefore fails by default.  It
+    is accepted only when the exact function contract explicitly says execution
+    is unsafe (currently the recursive linked-list nodes the generic harness
+    cannot construct without following fuzz integers as pointers).
+    """
     problems: list[str] = []
     for function in required:
         verdict = verdicts.get(function)
@@ -242,7 +265,13 @@ def behavior_problems(verdicts: dict, required: list[str]) -> list[str]:
             problems.append(f"{function}: missing verdict")
             continue
         status = verdict.get("status")
-        if status != "pass":
+        structurally_exempt = (
+            status == "structural"
+            and fixture is not None
+            and manifest is not None
+            and bool(manifest.override(fixture, function).get("skip_exec"))
+        )
+        if status != "pass" and not structurally_exempt:
             detail = verdict.get("detail", "no detail")
             problems.append(f"{function}: {status or 'invalid'} ({detail})")
     return problems
@@ -257,7 +286,7 @@ def run_behavior(
     """Execute injected decompiler output using the canonical fixture contract."""
     import diff_decompile as differential
 
-    required = differential.M.REQUIRED_FUNCTIONS.get(fixture, [])
+    required = behavior_required_functions(differential.M, fixture)
     if not required:
         return {}, [f"{fixture}: no required-function contract"]
     verdicts = differential.run(
@@ -269,7 +298,9 @@ def run_behavior(
         only=set(required),
         decompiled_by_va=decompiled,
     )
-    return verdicts, behavior_problems(verdicts, required)
+    return verdicts, behavior_problems(
+        verdicts, required, fixture, differential.M
+    )
 
 
 def evaluate_behavior(
@@ -307,7 +338,7 @@ def decompile_backend(
     """Run only the requested DecBench backend, without Joern metric extraction."""
     import diff_decompile as differential
 
-    required = differential.M.REQUIRED_FUNCTIONS.get(fixture, [])
+    required = behavior_required_functions(differential.M, fixture)
     if not required:
         return {}, f"{fixture}: no required-function contract"
     # Required exports may call file-local helpers. Request every function that
@@ -538,9 +569,13 @@ def print_cell(key: str, cell: dict) -> None:
         passed = sum(
             verdict.get("status") == "pass" for verdict in behavior.values()
         )
+        structural = sum(
+            verdict.get("status") == "structural" for verdict in behavior.values()
+        )
         if not any(cell.get(metric) is not None for metric in TOLERANCE):
             print(
-                f"  {key:34s} behavior={passed}/{len(behavior)} pass",
+                f"  {key:34s} behavior={passed} pass, "
+                f"{structural} structural / {len(behavior)} required",
                 flush=True,
             )
             return
@@ -657,12 +692,12 @@ def main() -> int:
     ap.add_argument(
         "--behavior",
         action="store_true",
-        help="also rebuild and execute each backend's decompiled curriculum C",
+        help="also rebuild and execute each backend's decompiled C",
     )
     ap.add_argument(
         "--behavior-only",
         action="store_true",
-        help="decompile/rebuild/execute curriculum cells without repeating graph metrics",
+        help="decompile/rebuild/execute cells without repeating graph metrics",
     )
     ap.add_argument("--check", action="store_true", help="compare against the baseline")
     ap.add_argument("--write-baseline", action="store_true")
@@ -701,9 +736,6 @@ def main() -> int:
     if args.behavior_only:
         args.behavior = True
 
-    if args.behavior and args.corpus != "curriculum":
-        print("--behavior currently requires --corpus curriculum", file=sys.stderr)
-        return 2
     if args.behavior_only and (args.check or args.write_baseline):
         print(
             "--behavior-only cannot compare or write the metric baseline",

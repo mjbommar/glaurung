@@ -330,6 +330,7 @@ def defined_functions(binary: str) -> dict[str, int]:
 
 
 def signatures(binary: str) -> list[dict]:
+    exported = exported_functions(binary)
     out = []
     with open(binary, "rb") as fh:
         elf = ELFFile(fh)
@@ -340,13 +341,19 @@ def signatures(binary: str) -> list[dict]:
             for die in cu.iter_DIEs():
                 if die.tag != "DW_TAG_subprogram":
                     continue
-                if "DW_AT_low_pc" not in die.attributes:
-                    continue
                 name_attr = _inherited_attr(die, "DW_AT_name", cu)
                 if name_attr is None:
                     continue
                 name = name_attr.value.decode()
-                va = die.attributes["DW_AT_low_pc"].value
+                # Optimized functions can be represented by DW_AT_ranges with
+                # no low_pc at all.  They are still callable, and the dynamic
+                # symbol table is already our authoritative name->address map.
+                # Use it for ranged exported DIEs rather than degrading a fully
+                # recoverable prototype to structural-only evidence.
+                low_pc = die.attributes.get("DW_AT_low_pc")
+                va = low_pc.value if low_pc is not None else exported.get(name)
+                if va is None:
+                    continue
                 params, ok = [], True
                 for c in die.iter_children():
                     if c.tag != "DW_TAG_formal_parameter":
