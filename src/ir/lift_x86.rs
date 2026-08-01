@@ -1453,49 +1453,7 @@ fn sbb_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
 }
 
 fn xorps_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
-    if instr.op_count() != 2 || instr.op_kind(0) != OpKind::Register {
-        return vec![Op::Unknown {
-            mnemonic: "xorps".into(),
-        }];
-    }
-    let dst = VReg::phys(reg_name(instr.op_register(0)));
-    match instr.op_kind(1) {
-        OpKind::Register => {
-            let src = VReg::phys(reg_name(instr.op_register(1)));
-            if src == dst {
-                return vec![Op::Assign {
-                    dst,
-                    src: Value::Const(0),
-                }];
-            }
-            vec![Op::Bin {
-                dst: dst.clone(),
-                op: BinOp::Xor,
-                lhs: Value::Reg(dst),
-                rhs: Value::Reg(src),
-            }]
-        }
-        OpKind::Memory => {
-            let tmp = VReg::Temp(0);
-            let mut addr = mem_op_of(instr);
-            addr.size = 16;
-            vec![
-                Op::Load {
-                    dst: tmp.clone(),
-                    addr,
-                },
-                Op::Bin {
-                    dst: dst.clone(),
-                    op: BinOp::Xor,
-                    lhs: Value::Reg(dst),
-                    rhs: Value::Reg(tmp),
-                },
-            ]
-        }
-        _ => vec![Op::Unknown {
-            mnemonic: "xorps".into(),
-        }],
-    }
+    packed_dword_binary_ops(instr, BinOp::Xor)
 }
 
 fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
@@ -1725,6 +1683,36 @@ fn packed_qword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
             ops
         }
         (OpKind::Register, OpKind::Register)
+            if is_xmm_register(instr.op_register(0))
+                && !is_xmm_register(instr.op_register(1))
+                && phys_reg_width(&reg_name(instr.op_register(1))) == Some(Width::W64) =>
+        {
+            let dst = instr.op_register(0);
+            let src = VReg::phys(reg_name(instr.op_register(1)));
+            vec![
+                Op::Trunc {
+                    dst: packed_dword_lane(dst, 0),
+                    src: Value::Reg(src.clone()),
+                    from: Width::W64,
+                    to: Width::W32,
+                },
+                Op::Extract {
+                    dst: packed_dword_lane(dst, 1),
+                    src: Value::Reg(src),
+                    hi: 64,
+                    lo: 32,
+                },
+                Op::Assign {
+                    dst: packed_dword_lane(dst, 2),
+                    src: Value::Const(0),
+                },
+                Op::Assign {
+                    dst: packed_dword_lane(dst, 3),
+                    src: Value::Const(0),
+                },
+            ]
+        }
+        (OpKind::Register, OpKind::Register)
             if !is_xmm_register(instr.op_register(0))
                 && is_xmm_register(instr.op_register(1))
                 && phys_reg_width(&reg_name(instr.op_register(0))) == Some(Width::W64) =>
@@ -1770,6 +1758,132 @@ fn packed_dword_binary_ops(instr: &iced_x86::Instruction, op: BinOp) -> Vec<Op> 
             rhs: source,
         });
     }
+    ops
+}
+
+/// SHUFPS treats its operands as four 32-bit bit-pattern lanes. The low two
+/// selectors address the old destination and the high two address the source.
+fn packed_float_shuffle_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 3
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || instr.op_kind(2) != OpKind::Immediate8
+        || !is_xmm_register(instr.op_register(0))
+        || !is_xmm_register(instr.op_register(1))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "shufps".into(),
+        }];
+    }
+    let dst = instr.op_register(0);
+    let src = instr.op_register(1);
+    let control = instr.immediate8();
+    let mut ops = Vec::with_capacity(12);
+    for lane in 0..4 {
+        ops.push(Op::Assign {
+            dst: VReg::Temp(84 + lane as u32),
+            src: Value::Reg(packed_dword_lane(dst, lane)),
+        });
+        ops.push(Op::Assign {
+            dst: VReg::Temp(88 + lane as u32),
+            src: Value::Reg(packed_dword_lane(src, lane)),
+        });
+    }
+    for lane in 0..4 {
+        let selected = ((control >> (lane * 2)) & 0x3) as u32;
+        let temporary = if lane < 2 {
+            84 + selected
+        } else {
+            88 + selected
+        };
+        ops.push(Op::Assign {
+            dst: packed_dword_lane(dst, lane),
+            src: Value::Reg(VReg::Temp(temporary)),
+        });
+    }
+    ops
+}
+
+/// MOVMSKPS packs each dword lane's sign bit into a four-bit GPR mask.
+fn packed_float_sign_mask_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || is_xmm_register(instr.op_register(0))
+        || !is_xmm_register(instr.op_register(1))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "movmskps".into(),
+        }];
+    }
+    let dst = VReg::phys(reg_name(instr.op_register(0)));
+    let src = instr.op_register(1);
+    let mut ops = vec![Op::Assign {
+        dst: dst.clone(),
+        src: Value::Const(0),
+    }];
+    for lane in 0..4 {
+        let sign = VReg::Temp(120 + lane as u32 * 2);
+        let shifted = VReg::Temp(121 + lane as u32 * 2);
+        ops.push(Op::Cmp {
+            dst: sign.clone(),
+            op: CmpOp::Slt,
+            lhs: Value::Reg(packed_dword_lane(src, lane)),
+            rhs: Value::Const(0),
+        });
+        ops.push(Op::Bin {
+            dst: shifted.clone(),
+            op: BinOp::Shl,
+            lhs: Value::Reg(sign),
+            rhs: Value::Const(lane as i64),
+        });
+        ops.push(Op::Bin {
+            dst: dst.clone(),
+            op: BinOp::Or,
+            lhs: Value::Reg(dst.clone()),
+            rhs: Value::Reg(shifted),
+        });
+    }
+    ops
+}
+
+/// PEXTRW zero-extends one selected 16-bit XMM word into a 32-bit GPR.
+fn packed_word_extract_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 3
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || instr.op_kind(2) != OpKind::Immediate8
+        || is_xmm_register(instr.op_register(0))
+        || !is_xmm_register(instr.op_register(1))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "pextrw".into(),
+        }];
+    }
+    let word = usize::from(instr.immediate8() & 7);
+    let lane = word / 2;
+    let extracted = VReg::Temp(128);
+    let mut ops = if word % 2 == 0 {
+        vec![Op::Trunc {
+            dst: extracted.clone(),
+            src: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+            from: Width::W32,
+            to: Width::W16,
+        }]
+    } else {
+        vec![Op::Extract {
+            dst: extracted.clone(),
+            src: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
+            hi: 32,
+            lo: 16,
+        }]
+    };
+    ops.push(Op::ZExt {
+        dst: VReg::phys(reg_name(instr.op_register(0))),
+        src: Value::Reg(extracted),
+        from: Width::W16,
+        to: Width::W32,
+    });
     ops
 }
 
@@ -1892,18 +2006,18 @@ fn packed_qword_unpack_low_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
 }
 
 /// Add two packed 64-bit lanes while retaining carry between their dword views.
-fn packed_qword_add_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+fn packed_qword_binary_ops(instr: &iced_x86::Instruction, op: BinOp, mnemonic: &str) -> Vec<Op> {
     if instr.op_count() != 2
         || instr.op_kind(0) != OpKind::Register
         || !is_xmm_register(instr.op_register(0))
     {
         return vec![Op::Unknown {
-            mnemonic: "paddq".into(),
+            mnemonic: mnemonic.into(),
         }];
     }
     let Some((mut ops, sources)) = packed_dword_sources(instr, 92) else {
         return vec![Op::Unknown {
-            mnemonic: "paddq".into(),
+            mnemonic: mnemonic.into(),
         }];
     };
     let dst = instr.op_register(0);
@@ -1926,7 +2040,7 @@ fn packed_qword_add_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
             },
             Op::Bin {
                 dst: sum.clone(),
-                op: BinOp::Add,
+                op,
                 lhs: Value::Reg(lhs),
                 rhs: Value::Reg(rhs),
             },
@@ -3087,42 +3201,9 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // Packed integer moves are split into explicit dword lanes so later
         // packed comparisons/arithmetic retain their element semantics.
         Mnemonic::Movdqa | Mnemonic::Movdqu => packed_dword_move_ops(instr),
-        // Floating-point bitwise moves still travel as a whole 128-bit value.
-        Mnemonic::Movaps | Mnemonic::Movups => {
-            if instr.op_count() != 2 {
-                return vec![Op::Unknown {
-                    mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
-                }];
-            }
-            match (instr.op_kind(0), instr.op_kind(1)) {
-                (OpKind::Register, OpKind::Memory) => {
-                    // mov* xmmN, [mem]  — load 16 bytes.
-                    let dst = VReg::phys(reg_name(instr.op_register(0)));
-                    let mut addr = mem_op_of(instr);
-                    addr.size = 16;
-                    return vec![Op::Load { dst, addr }];
-                }
-                (OpKind::Memory, OpKind::Register) => {
-                    let mut addr = mem_op_of(instr);
-                    addr.size = 16;
-                    return vec![Op::Store {
-                        addr,
-                        src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
-                    }];
-                }
-                (OpKind::Register, OpKind::Register) => {
-                    return vec![Op::Assign {
-                        dst: VReg::phys(reg_name(instr.op_register(0))),
-                        src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
-                    }];
-                }
-                _ => {
-                    return vec![Op::Unknown {
-                        mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
-                    }];
-                }
-            }
-        }
+        // Bitwise packed-float moves have the same four 32-bit lane transport
+        // as MOVDQA/MOVDQU; later SHUFPS/ANDPS/MOVMSKPS consume those lanes.
+        Mnemonic::Movaps | Mnemonic::Movups => packed_dword_move_ops(instr),
         Mnemonic::Movsd => {
             if instr.code() == Code::Movsd_m32_m32 {
                 string_movs_ops(4, bits)
@@ -3473,13 +3554,18 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Psrad => packed_dword_immediate_arithmetic_shift_right_ops(instr),
         Mnemonic::Punpckldq => packed_dword_unpack_low_ops(instr),
         Mnemonic::Punpcklqdq => packed_qword_unpack_low_ops(instr),
-        Mnemonic::Paddq => packed_qword_add_ops(instr),
+        Mnemonic::Paddq => packed_qword_binary_ops(instr, BinOp::Add, "paddq"),
+        Mnemonic::Psubq => packed_qword_binary_ops(instr, BinOp::Sub, "psubq"),
         Mnemonic::Pcmpeqd => packed_dword_compare_equal_ops(instr),
         Mnemonic::Pcmpgtd => packed_dword_compare_greater_ops(instr),
         Mnemonic::Pshufd => packed_dword_shuffle_ops(instr),
         Mnemonic::Movd => movd_ops(instr, bits),
         Mnemonic::Movq => packed_qword_move_ops(instr),
+        Mnemonic::Pextrw => packed_word_extract_ops(instr),
         Mnemonic::Xorps => xorps_ops(instr),
+        Mnemonic::Andps => packed_dword_binary_ops(instr, BinOp::And),
+        Mnemonic::Shufps => packed_float_shuffle_ops(instr),
+        Mnemonic::Movmskps => packed_float_sign_mask_ops(instr),
         Mnemonic::Push => push_ops(instr, bits),
         Mnemonic::Pop => pop_ops(instr, bits),
         Mnemonic::Stosb | Mnemonic::Stosw | Mnemonic::Stosd | Mnemonic::Stosq => {
@@ -5589,7 +5675,7 @@ mod tests {
     #[test]
     fn xorps_self_lifts_to_zero_assign() {
         let ops = lift64(&[0x0f, 0x57, 0xc0]);
-        assert_eq!(ops.len(), 1, "got: {ops:#?}");
+        assert_eq!(ops.len(), 5, "got: {ops:#?}");
         assert!(matches!(
             &ops[0].op,
             Op::Assign {
@@ -5597,6 +5683,15 @@ mod tests {
                 src: Value::Const(0),
             } if *dst == VReg::phys("xmm0")
         ));
+        for lane in 0..4 {
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Value::Const(0),
+                } if dst == &format!("xmm0_d{lane}")
+            )));
+        }
     }
 
     #[test]
@@ -5790,13 +5885,15 @@ mod tests {
     fn movaps_reg_reg_lifts_to_assign() {
         // MOVAPS xmm0, xmm1  (0f 28 c1)
         let ops = lift64(&[0x0f, 0x28, 0xc1]);
-        assert_eq!(ops.len(), 1);
-        match &ops[0].op {
-            Op::Assign { dst, src } => {
-                assert!(matches!(dst, VReg::Phys(n) if n == "xmm0"));
-                assert!(matches!(src, Value::Reg(VReg::Phys(n)) if n == "xmm1"));
-            }
-            other => panic!("expected Assign, got {:?}", other),
+        assert_eq!(ops.len(), 4, "got: {ops:#?}");
+        for lane in 0..4 {
+            assert!(ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Value::Reg(VReg::Phys(src)),
+                } if dst == &format!("xmm0_d{lane}") && src == &format!("xmm1_d{lane}")
+            )));
         }
     }
 
@@ -6243,6 +6340,94 @@ mod tests {
                 } if dst == &format!("xmm0_d{lane}")
             )));
         }
+    }
+
+    #[test]
+    fn movq_gpr_to_xmm_and_pextrw_preserve_the_selected_word() {
+        // Exact Clang -O2 Dijkstra guard shape:
+        // movq xmm0,r8; pextrw r8d,xmm0,4.
+        let ops = lift64(&[
+            0x66, 0x49, 0x0f, 0x6e, 0xc0, 0x66, 0x44, 0x0f, 0xc5, 0xc0, 0x04,
+        ]);
+
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "integer XMM transfer and word extraction must be explicit: {ops:#?}"
+        );
+        assert!(ops.iter().any(|instruction| matches!(
+            &instruction.op,
+            Op::Trunc {
+                dst: VReg::Phys(dst),
+                src: Value::Reg(VReg::Phys(src)),
+                from: Width::W64,
+                to: Width::W32,
+            } if dst == "xmm0_d0" && src == "r8"
+        )));
+        assert!(ops.iter().any(|instruction| matches!(
+            &instruction.op,
+            Op::ZExt {
+                dst: VReg::Phys(dst),
+                from: Width::W16,
+                to: Width::W32,
+                ..
+            } if dst == "r8d"
+        )));
+    }
+
+    #[test]
+    fn shufps_andps_movmskps_expose_clang_pointer_guard() {
+        // The exact core of Clang -O2's four-pointer null guard in csr_matvec.
+        let ops = lift64(&[
+            0x0f, 0xc6, 0xc2, 0xdd, // shufps xmm0,xmm2,0xdd
+            0x0f, 0xc6, 0xca, 0x88, // shufps xmm1,xmm2,0x88
+            0x0f, 0x54, 0xc8, // andps xmm1,xmm0
+            0x44, 0x0f, 0x50, 0xd1, // movmskps r10d,xmm1
+        ]);
+
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "packed pointer guard must be explicit: {ops:#?}"
+        );
+        assert!(ops.iter().any(|instruction| matches!(
+            &instruction.op,
+            Op::Assign {
+                dst: VReg::Phys(dst),
+                src: Value::Const(0),
+            } if dst == "r10d"
+        )));
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Cmp { op: CmpOp::Slt, .. }))
+                .count(),
+            4,
+            "MOVMSKPS must extract all four sign bits: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn psubq_subtracts_complete_qword_lanes() {
+        let ops = lift64(&[0x66, 0x0f, 0xfb, 0xc2]); // psubq xmm0,xmm2
+
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                instruction.op,
+                Op::Unknown { .. } | Op::Intrinsic { .. }
+            )),
+            "packed qword subtraction must be explicit: {ops:#?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Bin { op: BinOp::Sub, .. }))
+                .count(),
+            2,
+            "PSUBQ must subtract both complete qword lanes: {ops:#?}"
+        );
     }
 
     #[test]

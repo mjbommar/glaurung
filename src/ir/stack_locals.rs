@@ -22,7 +22,7 @@
 //! to [`Expr::StackAddr`] so the C renderer passes `&local_N`, never arithmetic
 //! on an uninitialised `rbp`/`rsp` local.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
@@ -1696,9 +1696,32 @@ fn promote_address_taken_stack_object(
 /// a Ghidra Varnode definition; it avoids asking the general expression pass to
 /// move an address computation across unrelated effects.
 fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg, (String, i64)> {
+    fn record_definition(
+        dst: &VReg,
+        address: Option<(String, i64)>,
+        out: &mut HashMap<VReg, (String, i64)>,
+        ambiguous: &mut HashSet<VReg>,
+    ) {
+        if ambiguous.contains(dst) {
+            return;
+        }
+        match (out.get(dst), address) {
+            (None, Some(address)) => {
+                out.insert(dst.clone(), address);
+            }
+            (Some(existing), Some(address)) if existing == &address => {}
+            (Some(_), Some(_)) | (Some(_), None) => {
+                out.remove(dst);
+                ambiguous.insert(dst.clone());
+            }
+            (None, None) => {}
+        }
+    }
+
     fn walk_direct(
         body: &[Stmt],
         out: &mut HashMap<VReg, (String, i64)>,
+        ambiguous: &mut HashSet<VReg>,
         ctx: StackContext,
         sp_delta: &mut Option<i64>,
     ) {
@@ -1716,8 +1739,9 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                         // `rbp = rsp` is a frame establishment, not an immutable
                         // SSA address alias to rebase as `entry_rsp`.
                         out.remove(dst);
-                    } else if let Some(address) = address {
-                        out.insert(dst.clone(), address);
+                        ambiguous.insert(dst.clone());
+                    } else {
+                        record_definition(dst, address, out, ambiguous);
                     }
                 }
                 Stmt::If {
@@ -1727,10 +1751,10 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                 } => {
                     let incoming = *sp_delta;
                     let mut then_delta = incoming;
-                    walk_direct(then_body, out, ctx, &mut then_delta);
+                    walk_direct(then_body, out, ambiguous, ctx, &mut then_delta);
                     let mut else_delta = incoming;
                     if let Some(body) = else_body {
-                        walk_direct(body, out, ctx, &mut else_delta);
+                        walk_direct(body, out, ambiguous, ctx, &mut else_delta);
                     }
                     let then_falls_through = body_falls_through(then_body);
                     let else_falls_through = else_body.as_deref().is_none_or(body_falls_through);
@@ -1744,19 +1768,26 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                     let incoming = *sp_delta;
                     let mut body_delta = incoming;
-                    walk_direct(body, out, ctx, &mut body_delta);
+                    walk_direct(body, out, ambiguous, ctx, &mut body_delta);
                     *sp_delta = merge_stack_deltas(incoming, body_delta);
                 }
                 Stmt::For {
                     init, step, body, ..
                 } => {
-                    walk_direct(std::slice::from_ref(init.as_ref()), out, ctx, sp_delta);
+                    walk_direct(
+                        std::slice::from_ref(init.as_ref()),
+                        out,
+                        ambiguous,
+                        ctx,
+                        sp_delta,
+                    );
                     let loop_entry = *sp_delta;
                     let mut body_delta = loop_entry;
-                    walk_direct(body, out, ctx, &mut body_delta);
+                    walk_direct(body, out, ambiguous, ctx, &mut body_delta);
                     walk_direct(
                         std::slice::from_ref(step.as_ref()),
                         out,
+                        ambiguous,
                         ctx,
                         &mut body_delta,
                     );
@@ -1767,7 +1798,7 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                     let mut merged: Option<Option<i64>> = None;
                     for (_, body) in cases {
                         let mut case_delta = incoming;
-                        walk_direct(body, out, ctx, &mut case_delta);
+                        walk_direct(body, out, ambiguous, ctx, &mut case_delta);
                         merged = Some(match merged {
                             Some(prior) => merge_stack_deltas(prior, case_delta),
                             None => case_delta,
@@ -1775,7 +1806,7 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                     }
                     if let Some(body) = default {
                         let mut default_delta = incoming;
-                        walk_direct(body, out, ctx, &mut default_delta);
+                        walk_direct(body, out, ambiguous, ctx, &mut default_delta);
                         merged = Some(match merged {
                             Some(prior) => merge_stack_deltas(prior, default_delta),
                             None => default_delta,
@@ -1801,8 +1832,9 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
     }
 
     let mut defs = HashMap::new();
+    let mut ambiguous = HashSet::new();
     let mut sp_delta = Some(0);
-    walk_direct(body, &mut defs, ctx, &mut sp_delta);
+    walk_direct(body, &mut defs, &mut ambiguous, ctx, &mut sp_delta);
     defs
 }
 
@@ -2600,6 +2632,71 @@ mod tests {
                 ..
             } if name == "stack_0"
         ));
+    }
+
+    #[test]
+    fn a_loop_carried_stack_pointer_is_not_frozen_at_one_iteration() {
+        let cursor = reg("cursor#1");
+        let next = reg("next#1");
+        let mut f = Function {
+            name: "loop_cursor".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: cursor.clone(),
+                    src: lea("rsp", -64),
+                },
+                Stmt::While {
+                    cond: Expr::Const(1),
+                    body: vec![
+                        Stmt::Store {
+                            addr: Expr::Lea {
+                                base: Some(cursor.clone()),
+                                index: None,
+                                scale: 1,
+                                disp: 0,
+                                segment: None,
+                            },
+                            src: Expr::Const(7),
+                            size: 4,
+                        },
+                        Stmt::Assign {
+                            dst: next.clone(),
+                            src: Expr::Bin {
+                                op: crate::ir::types::BinOp::Add,
+                                lhs: Box::new(Expr::Reg(cursor.clone())),
+                                rhs: Box::new(Expr::Const(4)),
+                            },
+                        },
+                        Stmt::Assign {
+                            dst: cursor.clone(),
+                            src: Expr::Reg(next),
+                        },
+                    ],
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        let Stmt::While { body, .. } = &f.body[1] else {
+            panic!("expected loop: {:#?}", f.body);
+        };
+        assert!(
+            matches!(
+                &body[0],
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(actual),
+                        disp: 0,
+                        ..
+                    },
+                    ..
+                } if actual == &cursor
+            ),
+            "loop-varying cursor must remain an indirect store: {:#?}",
+            f.body
+        );
     }
 
     #[test]
