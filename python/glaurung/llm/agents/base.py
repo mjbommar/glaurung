@@ -73,12 +73,25 @@ class ModelHyperparameters(BaseModel):
         # ModelSettings.extra_body verbatim to the provider's request.
         if model_name and model_name.startswith(("openai:", "openai-responses:")):
             from ..config import get_config
+
             tier = get_config().openai_service_tier
             if tier and tier != "default":
                 existing = kwargs.get("extra_body") or {}
                 existing["service_tier"] = tier
                 kwargs["extra_body"] = existing
         return kwargs
+
+    def to_model_settings(self, *, model_name: str | None = None) -> dict[str, Any]:
+        """Return the provider-neutral subset accepted by ``Agent.run``.
+
+        ``top_k`` is provider-specific and is not part of pydantic-ai's shared
+        ``ModelSettings`` contract. Keep it available to legacy provider
+        adapters through :meth:`to_model_kwargs`, but do not leak it into the
+        portable settings passed directly to an agent run.
+        """
+        settings = self.to_model_kwargs(model_name=model_name)
+        settings.pop("top_k", None)
+        return settings
 
 
 class AnalysisResult(BaseModel):

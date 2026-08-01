@@ -36,12 +36,11 @@ import manifest as M  # ty: ignore[unresolved-import]
 
 pytestmark = pytest.mark.slow
 
-# The comparison is only meaningful on a lane holding BOTH verdicts: an all-pass
-# lane cannot detect a filter that breaks the failing path, and vice versa. This
-# is the most evenly split lane in the baseline (9 pass / 9 fail); the test
-# asserts the mix rather than trusting this comment, so a lane that becomes
-# uniform fails loudly instead of quietly testing nothing.
-LANE = ("03_loop_shapes", "clang", "O0")
+# The comparison is only meaningful on a lane holding BOTH verdict classes: an
+# all-pass lane cannot detect a filter that breaks the structural/non-executable
+# path, and vice versa. Keep this on a compact mixed lane so the equivalence
+# proof stays fast as decompiler improvements move old failures to pass.
+LANE = ("08_indirect_dispatch", "clang", "O0")
 
 
 @pytest.fixture(scope="module")
@@ -57,13 +56,13 @@ def test_a_single_function_run_agrees_with_the_whole_lane(whole_lane):
     full = whole_lane[key]
     assert "__lane__" not in full, full
 
-    # Check one function of each verdict, so a filter that broke only the failing
-    # path (or only the passing one) cannot slip through.
+    # Check one function of each verdict class, so a filter that broke only the
+    # structural path (or only the passing one) cannot slip through.
     a_pass = next((f for f, st in sorted(full.items()) if st == "pass"), None)
-    a_fail = next((f for f, st in sorted(full.items()) if st == "fail"), None)
-    assert a_pass and a_fail, f"lane has no pass/fail mix to compare: {full}"
+    a_nonpass = next((f for f, st in sorted(full.items()) if st != "pass"), None)
+    assert a_pass and a_nonpass, f"lane has no pass/non-pass mix to compare: {full}"
 
-    for name in (a_pass, a_fail):
+    for name in (a_pass, a_nonpass):
         scoped = H.run_lanes([(fixture, cc, opt, (name,))], fuzz=M.FIXTURE_FUZZ, jobs=1)
         assert scoped[key] == {name: full[name]}, (
             f"{name}: scoped run said {scoped[key]}, whole lane said {full[name]}"
