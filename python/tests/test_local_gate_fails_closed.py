@@ -38,7 +38,11 @@ def test_a_missing_metric_lane_sets_the_failure_flag():
     """The absent-checkout branch must set `fail=1`, not merely narrate."""
     text = _text()
     # The branch that handles a missing DECBENCH_DIR, up to the `elif`.
-    m = re.search(r'if \[ ! -d "\$DECBENCH_DIR" \];(.*?)^elif ', text, re.S | re.M)
+    m = re.search(
+        r'if \[ ! -d "\$DECBENCH_DIR" \];(.*?)^elif ',
+        text,
+        re.DOTALL | re.MULTILINE,
+    )
     assert m, "expected a `[ ! -d $DECBENCH_DIR ]` guard on lane 3"
     branch = m.group(1)
     assert "fail=1" in branch, (
@@ -74,16 +78,31 @@ def test_the_success_line_does_not_claim_more_than_it_ran():
 
     That reads as a pass and buries the caveat in a parenthetical pointing at output
     the reader has already scrolled past. The unqualified success line must only be
-    reachable when all three lanes actually ran.
+    reachable when all four lanes actually ran.
     """
     text = _text()
     assert "see any SKIPPED notes above" not in text, (
         "the old hedged success line is back; a pass must not carry a caveat that "
         "points at earlier output"
     )
-    assert 'echo "HEAVY GATE: passed (all three lanes ran)"' in text, (
-        "the unqualified pass must state that all three lanes ran"
+    assert 'echo "HEAVY GATE: passed (all four lanes ran)"' in text, (
+        "the unqualified pass must state that all four lanes ran"
     )
+
+
+def test_heavy_gate_executes_both_behavioral_corpora_before_metrics():
+    """A metric pass is not a source->binary->C->binary semantic pass.
+
+    The compact legacy corpus and the undergraduate curriculum have disjoint
+    projects, so both executable matrices belong in the canonical local gate.
+    """
+    text = _text()
+    assert re.search(
+        r"decbench_matrix\.py.*--corpus decbench.*--behavior-only", text
+    ), "the 56-lane legacy execution matrix is absent from the heavy gate"
+    assert re.search(
+        r"decbench_matrix\.py.*--corpus curriculum.*--behavior-only", text
+    ), "the 64-lane curriculum execution matrix is absent from the heavy gate"
 
 
 def test_decbench_dir_defaults_so_the_normal_path_needs_no_setup():
