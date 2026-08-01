@@ -1831,11 +1831,16 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
         }
     }
 
-    let mut defs = HashMap::new();
     let mut ambiguous = HashSet::new();
-    let mut sp_delta = Some(0);
-    walk_direct(body, &mut defs, &mut ambiguous, ctx, &mut sp_delta);
-    defs
+    loop {
+        let prior_ambiguities = ambiguous.len();
+        let mut defs = HashMap::new();
+        let mut sp_delta = Some(0);
+        walk_direct(body, &mut defs, &mut ambiguous, ctx, &mut sp_delta);
+        if ambiguous.len() == prior_ambiguities {
+            return defs;
+        }
+    }
 }
 
 /// Resolve an expression that carries a stable stack address. Stack-pointer
@@ -2668,9 +2673,20 @@ mod tests {
                                 rhs: Box::new(Expr::Const(4)),
                             },
                         },
+                        Stmt::Store {
+                            addr: Expr::Lea {
+                                base: Some(next.clone()),
+                                index: None,
+                                scale: 1,
+                                disp: 0,
+                                segment: None,
+                            },
+                            src: Expr::Const(9),
+                            size: 4,
+                        },
                         Stmt::Assign {
                             dst: cursor.clone(),
-                            src: Expr::Reg(next),
+                            src: Expr::Reg(next.clone()),
                         },
                     ],
                 },
@@ -2695,6 +2711,21 @@ mod tests {
                 } if actual == &cursor
             ),
             "loop-varying cursor must remain an indirect store: {:#?}",
+            f.body
+        );
+        assert!(
+            matches!(
+                &body[2],
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(actual),
+                        disp: 0,
+                        ..
+                    },
+                    ..
+                } if actual == &next
+            ),
+            "an alias derived from the loop cursor must also remain indirect: {:#?}",
             f.body
         );
     }
