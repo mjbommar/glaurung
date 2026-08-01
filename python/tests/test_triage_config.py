@@ -3,6 +3,14 @@
 import pytest
 
 
+def test_python_triage_wrapper_preserves_symbol_listing_api():
+    """Importing the Python wrapper must not hide native symbol operations."""
+    import glaurung.triage as triage
+
+    assert callable(triage.list_symbols)
+    assert callable(triage.list_symbols_demangled)
+
+
 def test_triage_config_creation():
     """Test that triage configuration can be created and accessed from Python."""
     try:

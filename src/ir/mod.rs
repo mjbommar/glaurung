@@ -65,6 +65,7 @@ pub mod types_recover;
 pub mod use_def;
 pub mod value_number;
 pub mod value_split;
+pub mod vector_copy;
 pub mod verify;
 pub mod verify_defs;
 pub mod widen;

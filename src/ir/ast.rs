@@ -8174,6 +8174,17 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
     }
 
     if matches!(parameter_type, "float" | "double") {
+        // A source-level parameter already declared with the exact scalar
+        // floating type needs no conversion at the call boundary.  Retain the
+        // explicit cast for machine-word carriers, where it is the evidence
+        // that the bits belong to the VFP storage class rather than an integer
+        // numeric conversion.
+        if let Expr::Reg(register) = arg {
+            if declared_reg_ctype(register) == parameter_type {
+                write_call_arg_dec(arg, out);
+                return;
+            }
+        }
         out.push('(');
         out.push_str(parameter_type);
         out.push_str(")(");

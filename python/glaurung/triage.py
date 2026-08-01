@@ -183,6 +183,13 @@ class TriageConfig:
 
 # Import triage functions
 analyze_bytes = _native.triage.analyze_bytes
+# Keep the Python wrapper's runtime surface aligned with ``triage.pyi`` and
+# the native module.  Importing ``glaurung.triage`` replaces the package's
+# initial native-module alias with this file; without these passthroughs,
+# callers such as ``windows-risk`` lose symbol enumeration depending solely
+# on import order.
+list_symbols = _native.triage.list_symbols
+list_symbols_demangled = _native.triage.list_symbols_demangled
 
 
 class _StringsProxy:
@@ -395,6 +402,8 @@ __all__ = [
     "ParserConfig",
     "analyze_bytes",
     "analyze_path",
+    "list_symbols",
+    "list_symbols_demangled",
     "triage",
 ]
 

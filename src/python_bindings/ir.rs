@@ -336,6 +336,11 @@ fn run_ast_passes(
             }
         };
     }
+    // Packed XMM moves use four scalar lane operations so arithmetic remains
+    // analyzable.  Rejoin an untouched four-lane load/store pair before copy
+    // propagation erases the common 16-byte transport identity.
+    crate::ir::vector_copy::recover_wide_copies(f);
+    dp!("recover_wide_copies");
     crate::ir::expr_reconstruct::reconstruct(f);
     dp!("reconstruct");
     crate::ir::const_fold::fold_constants(f);

@@ -65,7 +65,12 @@ fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap) {
         Stmt::Store { src, size, .. } => {
             // The address expression is left alone: pointer arithmetic already
             // computes at 64 bits and carries its own recovered casts.
-            rewrite_expr(src, Some(*size), tm);
+            // A recovered 128-bit transport is an aggregate byte value, not a
+            // scalar integer to widen.  Casting its array temporary to a
+            // machine word would narrow the subsequent store back to 8 bytes.
+            if *size != 16 {
+                rewrite_expr(src, Some(*size), tm);
+            }
         }
         // NOT a blanket 64-bit context: a function declared to return `int`
         // returns a value the machine computed in 32 bits.

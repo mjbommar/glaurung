@@ -4362,6 +4362,27 @@ fn analyze_functions_bytes_with_stats_and_seeds(
                 }
             }
         }
+        // `object::File::dynamic_symbols()` is empty for PE exports.  The
+        // export table already seeded these function starts above; attach the
+        // corresponding names here as well so discovery does not return an
+        // anonymous `sub_<va>` for a publicly named entry point.
+        if let Ok(parser) = crate::formats::pe::PeParser::new(data) {
+            let image_base = parser.image_base();
+            if let Ok(exports) = parser.exports() {
+                for export in &exports.exports {
+                    let (Some(name), None) = (export.name, export.forwarder) else {
+                        continue;
+                    };
+                    let va = image_base + u64::from(export.rva);
+                    if !name.is_empty()
+                        && export.rva != 0
+                        && in_exec_regions(&regions, va).is_some()
+                    {
+                        sym_by_va.entry(va).or_insert_with(|| name.to_string());
+                    }
+                }
+            }
+        }
         // Apply renames
         for f in &mut functions {
             if let Some(name) = sym_by_va.get(&f.entry_point.value) {

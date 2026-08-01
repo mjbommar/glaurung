@@ -427,7 +427,7 @@ def test_real_arm_hard_float_call_round_trip(tmp_path: Path) -> None:
     )
 
     assert "float arm_hf_caller(float arg0, float arg1)" in generated, generated
-    assert "arm_hf_callee((float)(arg0), (float)(arg1))" in generated, generated
+    assert "arm_hf_callee(arg0, arg1)" in generated, generated
     assert "asm:" not in generated, generated
 
     driver = tmp_path / "hard_float_call_driver.c"

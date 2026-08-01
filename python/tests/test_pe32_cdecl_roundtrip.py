@@ -65,7 +65,7 @@ def test_real_mingw32_main_has_bounded_cdecl_arguments() -> None:
 
     assert "\nint _main(int arg0, int arg1) {\n" in text, text[:300]
     assert "arg536870" not in text
-    assert "_printf(" in text and "0x409044" in text
+    assert '_printf((const char *)("Hello, World from C!\\n"))' in text
     assert "strlen(" in text and "strlen()" not in text
     assert "_print_sum(stack_1)" in text
 

@@ -1213,12 +1213,6 @@ fn fold_one_call(
             return;
         }
     }
-    // A missing leading slot may be forwarded from this function's entry only
-    // when the call terminates the current structured body.  Otherwise a
-    // reaching definition hidden by branch structuring can be mistaken for the
-    // original parameter (for example an ARM call result held in r0).
-    let is_tail_position =
-        call_idx + 1 == body.len() || matches!(body.get(call_idx + 1), Some(Stmt::Return { .. }));
     // Map slot → (stmt_index, expression) for assignments we will eat.
     let mut found: Vec<Option<(usize, Expr)>> = vec![None; arg_slots(arch).len()];
     let mut read_between: Vec<bool> = vec![false; arg_slots(arch).len()];
@@ -1254,6 +1248,10 @@ fn fold_one_call(
                 | Stmt::Return { .. }
                 | Stmt::Break
         ) {
+            // The local scan cannot prove what reaches the call across this
+            // control-flow boundary. In particular, do not interpret an
+            // unwritten leading ABI slot as the function-entry value.
+            blocked_incoming.fill(true);
             break;
         }
         if arch == CallConv::SysVAmd64 && preallocated_stack.is_none() {
@@ -1533,7 +1531,6 @@ fn fold_one_call(
             // and a void callee acquires one out of thin air
             // (`__stack_chk_fail(var24)`).
             None if args_out.is_empty()
-                && is_tail_position
                 && !blocked_incoming[slot_idx]
                 && param_slots.contains(&slot_idx) =>
             {
@@ -2307,7 +2304,19 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
             }
             mark_arg_reads_in_expr(cond, arch, read_between);
         }
-        Stmt::Push { value } => mark_arg_reads_in_expr(value, arch, read_between),
+        Stmt::Push { value } | Stmt::Throw { value } => {
+            mark_arg_reads_in_expr(value, arch, read_between)
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            for stmt in try_body {
+                mark_arg_reads_in_stmt(stmt, arch, read_between);
+            }
+            for catch in catches {
+                for stmt in &catch.body {
+                    mark_arg_reads_in_stmt(stmt, arch, read_between);
+                }
+            }
+        }
         Stmt::Switch {
             discriminant,
             cases,
@@ -2331,9 +2340,7 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
         | Stmt::Break
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_)
-        | Stmt::Throw { .. }
-        | Stmt::TryCatch { .. } => {}
+        | Stmt::Comment(_) => {}
     }
 }
 
@@ -2341,6 +2348,10 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
     match s {
         // A computed transfer writes no argument slot.
         Stmt::IndirectGoto { .. } => {}
+        // Every ABI argument register is caller-clobbered. A top-level call is
+        // also a backward-scan barrier; this arm matters for calls nested in a
+        // structured branch/loop before the call currently being recovered.
+        Stmt::Call { .. } => blocked_incoming.fill(true),
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
             mark_slot_write(dst, arch, blocked_incoming);
         }
@@ -2384,8 +2395,17 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
                 }
             }
         }
+        Stmt::TryCatch { try_body, catches } => {
+            for stmt in try_body {
+                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+            }
+            for catch in catches {
+                for stmt in &catch.body {
+                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                }
+            }
+        }
         Stmt::Store { .. }
-        | Stmt::Call { .. }
         | Stmt::Return { .. }
         | Stmt::Push { .. }
         | Stmt::Goto { .. }
@@ -2394,8 +2414,7 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)
-        | Stmt::Throw { .. }
-        | Stmt::TryCatch { .. } => {}
+        | Stmt::Throw { .. } => {}
     }
 }
 
@@ -4897,7 +4916,7 @@ mod tests {
     }
 
     #[test]
-    fn value_numbered_nonterminal_call_does_not_backfill_a_live_in_prefix() {
+    fn value_numbered_nonterminal_call_backfills_a_proven_untouched_live_in_prefix() {
         let mut f = Function {
             name: "ordinary_caller".to_string(),
             entry_va: 0x1000,
@@ -4946,9 +4965,81 @@ mod tests {
                 _ => None,
             })
             .expect("call must survive");
+        assert_eq!(
+            args,
+            &vec![Expr::Reg(reg("rdi")), Expr::Const(24)],
+            "the proven live-in remains the machine value in rdi: {:#?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn nonterminal_call_does_not_backfill_across_a_nested_call_clobber() {
+        let mut f = Function {
+            name: "branching_caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rdi")),
+                        index: None,
+                        scale: 0,
+                        disp: 0x100,
+                        segment: None,
+                    },
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::If {
+                    cond: Expr::Const(1),
+                    then_body: vec![Stmt::Call {
+                        target: Expr::Named {
+                            va: 0x4000,
+                            name: "may_clobber_rdi".to_string(),
+                        },
+                        args: vec![],
+                        dst: None,
+                        call_spec: None,
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Const(24),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x5000,
+                        name: "sub_5000".to_string(),
+                    },
+                    args: vec![],
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("rbx#1"),
+                    src: Expr::Const(1),
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0].into_iter().collect());
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Call {
+                    target: Expr::Named { name, .. },
+                    args,
+                    ..
+                } if name == "sub_5000" => Some(args),
+                _ => None,
+            })
+            .expect("call must survive");
         assert!(
             args.is_empty(),
-            "a nonterminal call must not guess across structured data flow: {:#?}",
+            "a nested call may clobber the incoming ABI register: {:#?}",
             f.body
         );
     }
