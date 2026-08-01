@@ -116,7 +116,6 @@ coverage.xml
 .hypothesis/
 
 # uv
-uv.lock
 .python-version
 
 # Reference implementations are managed as git submodules
