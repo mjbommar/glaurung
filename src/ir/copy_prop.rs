@@ -669,6 +669,87 @@ fn invalidate(copies: &mut Copies, written: &VReg) {
     copies.retain(|dst, src| dst != written && !contains_reg(src, written));
 }
 
+/// Every register/local a structured statement may redefine.
+///
+/// A pre-loop copy is valid in a loop condition only when neither its
+/// destination nor any source register can change in the body.  The condition
+/// is evaluated again after every backedge, so substituting an entry snapshot
+/// for a loop-carried cursor freezes it after the first iteration.
+fn collect_written_regs(body: &[Stmt], written: &mut HashSet<VReg>) {
+    for statement in body {
+        match statement {
+            Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
+                written.insert(dst.clone());
+            }
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                ..
+            } => {
+                written.insert(dst.clone());
+            }
+            Stmt::Call { dst: Some(dst), .. } => {
+                written.insert(dst.clone());
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_written_regs(then_body, written);
+                if let Some(else_body) = else_body {
+                    collect_written_regs(else_body, written);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_written_regs(body, written);
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                collect_written_regs(std::slice::from_ref(init.as_ref()), written);
+                collect_written_regs(body, written);
+                collect_written_regs(std::slice::from_ref(step.as_ref()), written);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    collect_written_regs(case_body, written);
+                }
+                if let Some(default_body) = default {
+                    collect_written_regs(default_body, written);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collect_written_regs(try_body, written);
+                for catch in catches {
+                    collect_written_regs(&catch.body, written);
+                }
+            }
+            Stmt::Store { .. }
+            | Stmt::Call { dst: None, .. }
+            | Stmt::Return { .. }
+            | Stmt::Push { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Label(_)
+            | Stmt::Goto { .. }
+            | Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. } => {}
+        }
+    }
+}
+
+fn copies_stable_across_loop(copies: &Copies, body: &[Stmt]) -> Copies {
+    let mut stable = copies.clone();
+    let mut written = HashSet::new();
+    collect_written_regs(body, &mut written);
+    for register in written {
+        invalidate(&mut stable, &register);
+    }
+    stable
+}
+
 fn propagate_run(stmts: &mut [Stmt]) -> Copies {
     let mut copies: Copies = HashMap::new();
     for s in stmts.iter_mut() {
@@ -721,7 +802,7 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 }
             }
             Stmt::While { cond, body } => {
-                subst(cond, &copies);
+                subst(cond, &copies_stable_across_loop(&copies, body));
                 propagate_run(body);
                 copies.clear();
             }
@@ -1002,7 +1083,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 }
             }
             Stmt::While { cond, body } => {
-                subst(cond, &copies);
+                subst(cond, &copies_stable_across_loop(&copies, body));
                 propagate_run_counted(body, reads);
                 copies.clear();
             }
@@ -1830,6 +1911,61 @@ mod tests {
         propagate_switch_entry_copies(&mut f);
 
         assert_eq!(f, before, "a loop entry copy is not a loop invariant");
+    }
+
+    #[test]
+    fn ordinary_copy_propagation_does_not_freeze_loop_carried_pointer_load() {
+        // Clang -O2 list_find seeds `cursor = arg0`, reads cursor->val in the
+        // loop guard, and advances `cursor = cursor->next` in the body.  An
+        // entry copy is valid for the first test only; substituting arg0 into
+        // the structured While condition freezes every later iteration.
+        let cursor = reg("cursor");
+        let original_guard = Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Deref {
+                addr: Box::new(Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(cursor.clone())),
+                    rhs: Box::new(Expr::Const(8)),
+                }),
+                size: 4,
+            }),
+            rhs: Box::new(Expr::Reg(reg("arg1"))),
+        };
+        let mut function = Function {
+            name: "list_find".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: cursor.clone(),
+                    src: Expr::Reg(reg("arg0")),
+                },
+                Stmt::While {
+                    cond: original_guard.clone(),
+                    body: vec![Stmt::Assign {
+                        dst: cursor.clone(),
+                        src: Expr::Deref {
+                            addr: Box::new(Expr::Reg(cursor)),
+                            size: 8,
+                        },
+                    }],
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        let cond = function.body.iter().find_map(|statement| match statement {
+            Stmt::While { cond, .. } => Some(cond),
+            _ => None,
+        });
+        let Some(cond) = cond else {
+            panic!("expected the pointer scan loop")
+        };
+        assert_eq!(
+            cond, &original_guard,
+            "the cursor is loop-carried, not arg0"
+        );
     }
 
     #[test]

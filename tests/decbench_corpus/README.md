@@ -35,9 +35,10 @@ object, recompiles that emitted C, and executes identical deterministic boundary
 and seeded-fuzz vectors against the original and rebuilt functions. Every
 exported semantic unit is named in `manifest.DECBENCH_PROJECTS`; a missing
 verdict, compile failure, timeout, return mismatch, or buffer-mutation mismatch
-fails the cell. `linkedlist` is reported separately as structural evidence
-because the generic harness cannot safely construct a recursive node graph;
-only functions explicitly marked `skip_exec` may receive that exemption.
+fails the cell. Recursive linked-list nodes are materialized as bounded acyclic
+graphs; pointer results are compared by their node index in each independently
+allocated graph. Structural evidence is accepted only for a function explicitly
+marked `skip_exec`; the DecBench validation corpus currently needs no exemption.
 
 Text/graph metrics and behavior answer different questions. A baseline refresh
 must never be used to conceal a semantic regression: retain a full successful

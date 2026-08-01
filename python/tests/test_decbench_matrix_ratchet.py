@@ -216,7 +216,7 @@ def test_structural_verdict_is_accepted_only_for_explicit_skip_exec(dm):
     structural = {"status": "structural", "detail": "manifest skip_exec"}
 
     assert dm.behavior_problems(
-        {"list_sum": structural}, ["list_sum"], "linkedlist", manifest
+        {"apply": structural}, ["apply"], "08_indirect_dispatch", manifest
     ) == []
     assert dm.behavior_problems(
         {"sum_array": structural}, ["sum_array"], "arrays", manifest

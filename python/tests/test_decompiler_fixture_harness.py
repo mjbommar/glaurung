@@ -1714,6 +1714,75 @@ def test_injected_backend_named_struct_is_rebuilt_from_dwarf(monkeypatch):
     assert results == {"named_read": {"status": "pass", "detail": "18 cases"}}
 
 
+def test_recursive_linked_list_round_trips_values_links_and_pointer_returns():
+    """Recursive node pointers are real behavioral inputs, not a skip-worthy ABI.
+
+    The two functions exercise both traversal and a pointer return into the
+    caller-owned graph.  Compare that return by node index, since the original
+    and rebuilt graphs necessarily live at different addresses.
+    """
+    source = (
+        "struct node { struct node *next; int val; };\n"
+        "int list_sum(const struct node *h) {\n"
+        "  int s = 0; while (h) { s += h->val; h = h->next; } return s;\n"
+        "}\n"
+        "struct node *list_find(struct node *h, int v) {\n"
+        "  while (h) { if (h->val == v) return h; h = h->next; } return 0;\n"
+        "}"
+    )
+    original = _compile_so(source, "recursive_linked_list")
+    addresses = D.exported_functions(original)
+    signatures = {signature["name"]: signature for signature in D.signatures(original)}
+
+    node = signatures["list_sum"]["params"][0]["p"]
+    assert node["fields"][0]["t"] == {"k": "self_ptr", "w": 8}
+    assert not M.override("linkedlist", "list_sum").get("skip_exec")
+    assert M.override("linkedlist", "list_find")["pointer_return_arg"] == 0
+
+    results = D.run(
+        original,
+        str(ROOT / "tests" / "decbench_corpus" / "src" / "linkedlist.c"),
+        "linkedlist",
+        seed=1234,
+        fuzz=12,
+        only={"list_sum", "list_find"},
+        decompiled_by_va={
+            addresses["list_sum"]: (
+                "struct node { struct node *next; int val; };\n"
+                "int list_sum(const struct node *h) { int s = 0; "
+                "while (h) { s += h->val; h = h->next; } return s; }"
+            ),
+            addresses["list_find"]: (
+                "struct node { struct node *next; int val; };\n"
+                "struct node *list_find(struct node *h, int v) { "
+                "while (h) { if (h->val == v) return h; h = h->next; } "
+                "return 0; }"
+            ),
+        },
+    )
+
+    assert results["list_sum"]["status"] == "pass", results
+    assert results["list_find"]["status"] == "pass", results
+
+    wrong = D.run(
+        original,
+        str(ROOT / "tests" / "decbench_corpus" / "src" / "linkedlist.c"),
+        "linkedlist",
+        seed=1234,
+        fuzz=0,
+        only={"list_find"},
+        decompiled_by_va={
+            addresses["list_find"]: (
+                "struct node { struct node *next; int val; };\n"
+                "struct node *list_find(struct node *h, int v) { "
+                "(void)v; return h; }"
+            )
+        },
+    )
+    assert wrong["list_find"]["status"] == "fail", wrong
+    assert "return node" in wrong["list_find"]["detail"]
+
+
 def test_run_uses_injected_backend_source_without_invoking_glaurung(monkeypatch):
     original = _compile_so(
         "static __attribute__((noinline)) int injected_helper(int value) { "

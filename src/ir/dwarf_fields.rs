@@ -430,12 +430,37 @@ fn annotate_body(
                 }
                 invalidate_written_definitions(statement, definitions);
             }
-            Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+            Stmt::While { cond, body } => {
                 let mut written = Vec::new();
                 for nested in body.iter() {
                     collect_written_registers(nested, &mut written);
                 }
-                annotate_expr(cond, layouts, pointer_width, pointer_types, definitions);
+                let mut loop_definitions = definitions.clone();
+                invalidate_registers(&written, &mut loop_definitions);
+                // A While condition executes after every backedge. Expand only
+                // definitions invariant across the body; using `cursor = arg0`
+                // here turns every later `cursor->field` into `arg0->field`.
+                annotate_expr(
+                    cond,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    &loop_definitions,
+                );
+                annotate_body(
+                    body,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    &mut loop_definitions,
+                );
+                invalidate_registers(&written, definitions);
+            }
+            Stmt::DoWhile { cond, body } => {
+                let mut written = Vec::new();
+                for nested in body.iter() {
+                    collect_written_registers(nested, &mut written);
+                }
                 let mut loop_definitions = definitions.clone();
                 invalidate_registers(&written, &mut loop_definitions);
                 annotate_body(
@@ -444,6 +469,13 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut loop_definitions,
+                );
+                annotate_expr(
+                    cond,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    &loop_definitions,
                 );
                 invalidate_registers(&written, definitions);
             }
@@ -454,7 +486,6 @@ fn annotate_body(
                 body,
             } => {
                 let mut written = Vec::new();
-                collect_written_registers(init, &mut written);
                 for nested in body.iter() {
                     collect_written_registers(nested, &mut written);
                 }
@@ -466,9 +497,15 @@ fn annotate_body(
                     pointer_types,
                     definitions,
                 );
-                annotate_expr(cond, layouts, pointer_width, pointer_types, definitions);
                 let mut loop_definitions = definitions.clone();
                 invalidate_registers(&written, &mut loop_definitions);
+                annotate_expr(
+                    cond,
+                    layouts,
+                    pointer_width,
+                    pointer_types,
+                    &loop_definitions,
+                );
                 annotate_body(
                     body,
                     layouts,
@@ -1240,6 +1277,62 @@ mod tests {
             field_hint(src).is_none(),
             "a linear definition map must not invent an index across a CFG join: {src:#?}"
         );
+    }
+
+    #[test]
+    fn field_annotation_keeps_a_loop_carried_pointer_as_the_member_base() {
+        let cursor = VReg::phys("cursor");
+        let mut function = Function {
+            name: "list_find".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: cursor.clone(),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::While {
+                    cond: Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Ne,
+                        lhs: Box::new(Expr::Deref {
+                            addr: Box::new(Expr::Bin {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Reg(cursor.clone())),
+                                rhs: Box::new(Expr::Const(8)),
+                            }),
+                            size: 4,
+                        }),
+                        rhs: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                    },
+                    body: vec![Stmt::Assign {
+                        dst: cursor.clone(),
+                        src: Expr::Deref {
+                            addr: Box::new(Expr::Reg(cursor.clone())),
+                            size: 8,
+                        },
+                    }],
+                },
+            ],
+        };
+
+        annotate_function_fields(&mut function, Some(&node_prototype()), &[node_layout()], 8);
+
+        let Stmt::While { cond, .. } = &function.body[1] else {
+            panic!("expected pointer scan loop")
+        };
+        let Expr::Cmp { lhs, .. } = cond else {
+            panic!("expected field comparison")
+        };
+        let Expr::Deref { addr, .. } = lhs.as_ref() else {
+            panic!("expected field load")
+        };
+        assert!(matches!(
+            addr.as_ref(),
+            Expr::PdbFieldAddr {
+                base: Some(base),
+                hints,
+                ..
+            } if base == &cursor && hints[0].field_name == "val"
+        ));
     }
 
     #[test]

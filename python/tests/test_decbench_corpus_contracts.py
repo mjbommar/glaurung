@@ -99,12 +99,21 @@ def test_pointer_plus_scalar_declares_a_bound(program, func, params):
     ov = M.override(program, func)
     if ov.get("skip_exec"):
         return  # not executed at all, so there is no vector to bound
-    assert ov.get("len_args") or ov.get("arg_values"), (
+    scalar_indices = {
+        index for index, param in enumerate(params) if _is_integral_scalar(param)
+    }
+    reviewed_non_lengths = set(ov.get("non_length_args", []))
+    assert (
+        ov.get("len_args")
+        or ov.get("arg_values")
+        or scalar_indices <= reviewed_non_lengths
+    ), (
         f"{program}:{func}({', '.join(params)}) takes a pointer and a scalar but "
-        f"declares neither len_args nor arg_values. The harness will invent the "
-        f"scalar, and if it exceeds the buffer length BOTH binaries read out of "
-        f"bounds — the differential then compares garbage against garbage and "
-        f"reports a decompiler bug that is not there. Add an entry to "
+        f"declares neither len_args/arg_values nor a reviewed non_length_args "
+        f"classification. The harness will invent the scalar, and if it exceeds "
+        f"the buffer length BOTH binaries read out of bounds — the differential "
+        f"then compares garbage against garbage and reports a decompiler bug that "
+        f"is not there. Add an entry to "
         f"DECBENCH_OVERRIDES in tests/decompiler_fixtures/manifest.py."
     )
 

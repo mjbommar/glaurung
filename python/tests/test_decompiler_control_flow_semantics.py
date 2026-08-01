@@ -679,13 +679,13 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     # obscures both the null-termination condition and the early match return.
     assert re.search(r"while \(\(\(long\)var\d+ != 0\)\)", code), code
     assert re.search(r"node \* var\d+;", code), code
-    assert re.search(r"(?:var\d+|ret) = \(\(struct node \*\)var\d+\)->next;", code), (
-        code
+    next_assignment = (
+        r"(?:var\d+|ret) = "
+        r"(?:var\d+|\(\(struct node \*\)var\d+\))->next;"
     )
+    assert re.search(next_assignment, code), code
     assert sum_code.count("node * var") >= 2, sum_code
-    assert re.search(
-        r"(?:var\d+|ret) = \(\(struct node \*\)var\d+\)->next;", sum_code
-    ), sum_code
+    assert re.search(next_assignment, sum_code), sum_code
     # The source loop is entry-guarded.  GCC and Clang rotate that guard into a
     # do/while latch, but the explicit pre-loop null return proves it is safe to
     # recover the source-level while without dereferencing a null node.

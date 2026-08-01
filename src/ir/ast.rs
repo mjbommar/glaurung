@@ -5873,6 +5873,11 @@ pub fn prepare_for_decbench_with_output(
         crate::ir::label_prune::recover_forward_exit_regions(&mut owned);
         crate::ir::loop_form::recover_linear_latched_do_whiles(&mut owned);
     }
+    // Inlining a shared terminal epilogue can leave its old fallthrough
+    // assignment after an explicit return. Remove that newly unreachable tail
+    // before exact sentinel-loop matching; it is not an effect the candidate
+    // should have to tolerate, but it also must not block a faithful rewrite.
+    crate::ir::label_prune::prune_unreachable_tails(&mut owned);
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
     crate::ir::loop_form::recover_sentinel_search_loops(&mut owned);

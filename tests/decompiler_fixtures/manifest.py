@@ -50,6 +50,10 @@ FIXTURE_FUZZ = 12
 #                          Optimisation changes the SHAPE, so a function can be
 #                          unexecutable at -O0 and correct at -O2; skipping it
 #                          everywhere would discard the lanes that do work.
+#   pointer_return_arg: int — compare a returned pointer by its element index
+#                          within this caller-owned pointer-argument buffer.
+#   non_length_args: [int] — human-reviewed scalar parameters beside a pointer
+#                          that are values/keys, not bounds used for addressing.
 # --- the DecBench validation corpus (tests/decbench_corpus/) --------------------
 #
 # The same mechanism, for a corpus that had none. Without these the harness invents
@@ -172,14 +176,21 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
             [7, 0, -1],
         ]
     },
-    # A `struct node *` whose first member is itself a `struct node *`. The harness
-    # builds a pointer argument by allocating a buffer of fuzz values, so `h->next`
-    # would be an integer reinterpreted as an address and the very first iteration
-    # follows a wild pointer. That is not a bound to declare — it is a data structure
-    # the harness cannot construct, so these are checked structurally. Executing them
-    # would test the allocator, and would do it by segfaulting.
-    ("linkedlist", "list_sum"): {"skip_exec": True},
-    ("linkedlist", "list_find"): {"skip_exec": True},
+    # Recursive node links are materialized as bounded acyclic chains. list_find's
+    # pointer result is meaningful only relative to its input graph, so compare the
+    # returned node index rather than unrelated process addresses.
+    ("linkedlist", "list_sum"): {
+        "extra_vectors": [[[[1, 10], [2, -20], [-1, 30]]]]
+    },
+    ("linkedlist", "list_find"): {
+        "pointer_return_arg": 0,
+        "non_length_args": [1],
+        "extra_vectors": [
+            [[[1, 10], [2, 20], [-1, 30]], 10],
+            [[[1, 10], [2, 20], [-1, 30]], 20],
+            [[[1, 10], [2, 20], [-1, 30]], 99],
+        ],
+    },
 }
 
 # Exported semantic units in the compact 14-program DecBench validation corpus.
