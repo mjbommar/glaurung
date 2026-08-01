@@ -822,7 +822,7 @@ fn rewrite_body(
                 );
                 if !is_stack_pointer_reg(dst, ctx) {
                     if let Some(object_addr) =
-                        stack_object_constant_address(src, map, *sp_delta, ctx, address_defs)
+                        stack_assignment_object_address(src, map, *sp_delta, ctx, address_defs)
                     {
                         *src = object_addr;
                     }
@@ -1431,39 +1431,72 @@ fn rewrite_expr(
 /// addressable object. Reconcile those earlier and later scalar spellings with
 /// the final slot map so the renderer declares and accesses one byte object.
 fn reconcile_late_address_taken_objects(body: &mut [Stmt], map: &HashMap<SlotKey, SlotVal>) {
-    let mut objects: HashMap<VReg, (u16, u8)> = HashMap::new();
-    for slot in map.values() {
-        let Some(size) = slot.object_size else {
+    #[derive(Clone)]
+    struct ObjectView {
+        object: VReg,
+        size: u16,
+        offset: i64,
+        width: u8,
+    }
+
+    let roots = map
+        .iter()
+        .filter_map(|(key, slot)| {
+            slot.object_size
+                .map(|size| (key, VReg::phys(slot.name.clone()), size))
+        })
+        .collect::<Vec<_>>();
+    let mut objects: HashMap<VReg, ObjectView> = HashMap::new();
+    for (key, slot) in map {
+        let Some((root, object, size)) = roots
+            .iter()
+            .filter(|(root, _, size)| {
+                root.base == key.base
+                    && root.disp <= key.disp
+                    && key.disp < root.disp.saturating_add(i64::from(*size))
+            })
+            .max_by_key(|(root, _, _)| root.disp)
+        else {
             continue;
         };
-        objects
-            .entry(VReg::phys(slot.name.clone()))
-            .and_modify(|known| {
-                known.0 = known.0.max(size);
-                known.1 = known.1.max(slot.declared_size);
-            })
-            .or_insert((size, slot.declared_size));
+        objects.insert(
+            VReg::phys(slot.name.clone()),
+            ObjectView {
+                object: object.clone(),
+                size: *size,
+                offset: key.disp.saturating_sub(root.disp),
+                width: slot.declared_size,
+            },
+        );
     }
     if objects.is_empty() {
         return;
     }
 
-    fn object_address(reg: &VReg, objects: &HashMap<VReg, (u16, u8)>) -> Option<Expr> {
-        objects.get(reg).map(|(size, _)| Expr::StackAddr {
-            object: reg.clone(),
-            size: *size,
+    fn object_address(reg: &VReg, objects: &HashMap<VReg, ObjectView>) -> Option<Expr> {
+        objects.get(reg).map(|view| {
+            let object = Expr::StackAddr {
+                object: view.object.clone(),
+                size: view.size,
+            };
+            if view.offset == 0 {
+                object
+            } else {
+                Expr::Bin {
+                    op: crate::ir::types::BinOp::Add,
+                    lhs: Box::new(object),
+                    rhs: Box::new(Expr::Const(view.offset)),
+                }
+            }
         })
     }
 
-    fn rewrite_value(expr: &mut Expr, objects: &HashMap<VReg, (u16, u8)>) {
+    fn rewrite_value(expr: &mut Expr, objects: &HashMap<VReg, ObjectView>) {
         if let Expr::Reg(reg) = expr {
-            if let Some((size, width)) = objects.get(reg) {
+            if let Some(view) = objects.get(reg) {
                 *expr = Expr::Deref {
-                    addr: Box::new(Expr::StackAddr {
-                        object: reg.clone(),
-                        size: *size,
-                    }),
-                    size: *width,
+                    addr: Box::new(object_address(reg, objects).expect("known object view")),
+                    size: view.width,
                 };
             }
             return;
@@ -1513,7 +1546,7 @@ fn reconcile_late_address_taken_objects(body: &mut [Stmt], map: &HashMap<SlotKey
         }
     }
 
-    fn walk(body: &mut [Stmt], objects: &HashMap<VReg, (u16, u8)>) {
+    fn walk(body: &mut [Stmt], objects: &HashMap<VReg, ObjectView>) {
         for statement in body {
             match statement {
                 Stmt::Assign { src, .. } => rewrite_value(src, objects),
@@ -2129,6 +2162,76 @@ fn stack_object_constant_address(
     } else {
         object
     })
+}
+
+/// Materialise a copied frame address even when the object was first observed
+/// as contiguous scalar initialisers. Optimised GCC commonly zeroes a small
+/// array with lane stores, then copies `rsp` into a cursor for the scalar
+/// fallback. A separately recovered indexed object at the next displacement is
+/// a hard boundary; otherwise only a gap-free run of promoted slots is joined.
+fn stack_assignment_object_address(
+    expr: &Expr,
+    map: &mut HashMap<SlotKey, SlotVal>,
+    sp_delta: Option<i64>,
+    ctx: StackContext,
+    address_defs: &HashMap<VReg, (String, i64)>,
+) -> Option<Expr> {
+    if let Some(existing) = stack_object_constant_address(expr, map, sp_delta, ctx, address_defs) {
+        return Some(existing);
+    }
+    let recovered = match expr {
+        Expr::Reg(VReg::Phys(name)) if is_active_stack_base(name, ctx) => Some((name.clone(), 0)),
+        Expr::Reg(reg) => address_defs.get(reg).cloned(),
+        _ => constant_stack_address(expr, ctx),
+    }?;
+    let (base, disp) = normalized_stack_slot(&recovered.0, recovered.1, sp_delta, ctx);
+    let key = SlotKey {
+        base: base.clone(),
+        disp,
+    };
+    let first = map.get(&key)?;
+    if first.object_size.is_some() {
+        return stack_object_constant_address(expr, map, sp_delta, ctx, address_defs);
+    }
+
+    let boundary = map
+        .iter()
+        .filter(|(candidate, slot)| {
+            candidate.base == base && candidate.disp > disp && slot.object_size.is_some()
+        })
+        .map(|(candidate, _)| candidate.disp)
+        .min();
+    let mut candidates = map
+        .iter()
+        .filter(|(candidate, slot)| {
+            candidate.base == base
+                && candidate.disp >= disp
+                && candidate.disp < boundary.unwrap_or(i64::MAX)
+                && slot.object_size.is_none()
+        })
+        .map(|(candidate, slot)| (candidate.disp, slot.span_size))
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by_key(|(candidate_disp, _)| *candidate_disp);
+    let mut end = disp.checked_add(i64::from(first.span_size))?;
+    for (candidate_disp, span) in candidates {
+        if candidate_disp > end {
+            break;
+        }
+        end = end.max(candidate_disp.checked_add(i64::from(span))?);
+    }
+    if boundary == Some(end) {
+        end = boundary?;
+    }
+    let minimum_size = match ctx.cc {
+        Some(CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat) => 4,
+        Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64) | None => 8,
+    };
+    let size = u16::try_from(end.checked_sub(disp)?)
+        .ok()
+        .filter(|size| *size > 0)?
+        .max(minimum_size);
+    map.get_mut(&key)?.object_size = Some(size);
+    stack_object_constant_address(expr, map, sp_delta, ctx, address_defs)
 }
 
 fn constant_stack_address(expr: &Expr, ctx: StackContext) -> Option<(String, i64)> {
@@ -3256,6 +3359,75 @@ mod tests {
             } if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
                 if matches!(lhs.as_ref(), Expr::StackAddr { size: 40, .. }))
         ));
+    }
+
+    #[test]
+    fn copied_stack_base_unifies_a_contiguous_initialized_array() {
+        let mut body = vec![Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(152)),
+            },
+        }];
+        body.extend((0..16).map(|index| Stmt::Store {
+            addr: lea("rsp", index * 4),
+            src: Expr::Const(0),
+            size: 4,
+        }));
+        // A neighboring indexed object supplies the hard boundary at +64.
+        body.push(Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg("rsp")),
+                index: Some(reg("queue_index")),
+                scale: 4,
+                disp: 64,
+                segment: None,
+            },
+            src: Expr::Const(1),
+            size: 4,
+        });
+        body.push(Stmt::Assign {
+            dst: reg("cursor"),
+            src: Expr::Reg(reg("rsp")),
+        });
+        let mut f = Function {
+            name: "topological_sort_shape".into(),
+            entry_va: 0,
+            body,
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(
+            matches!(
+                f.body.last(),
+                Some(Stmt::Assign {
+                    src: Expr::StackAddr { size: 64, .. },
+                    ..
+                })
+            ),
+            "the copied stack base must name the whole initialized array: {f:#?}"
+        );
+        let root = match f.body.last() {
+            Some(Stmt::Assign {
+                src: Expr::StackAddr { object, .. },
+                ..
+            }) => object,
+            _ => unreachable!(),
+        };
+        assert!(
+            matches!(
+                &f.body[2],
+                Stmt::Store {
+                    addr: Expr::Bin { lhs, rhs, .. },
+                    ..
+                } if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 64 } if object == root)
+                    && rhs.as_ref() == &Expr::Const(4)
+            ),
+            "the second initializer must alias byte offset four of the object: {f:#?}"
+        );
     }
 
     #[test]

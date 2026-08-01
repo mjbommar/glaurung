@@ -1923,6 +1923,46 @@ fn packed_dword_immediate_shift_left_ops(instr: &iced_x86::Instruction) -> Vec<O
         .collect()
 }
 
+/// Lift PSRLD's immediate form as four independent unsigned 32-bit shifts.
+/// Like PSLLD, Intel defines counts above 31 to clear each complete lane.
+fn packed_dword_immediate_logical_shift_right_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
+    if instr.op_count() != 2
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Immediate8
+        || !is_xmm_register(instr.op_register(0))
+    {
+        return vec![Op::Unknown {
+            mnemonic: "psrld".into(),
+        }];
+    }
+    let count = instr.immediate8();
+    let mut ops = Vec::with_capacity(if count > 31 { 4 } else { 8 });
+    for lane in 0..4 {
+        let dst = packed_dword_lane(instr.op_register(0), lane);
+        if count > 31 {
+            ops.push(Op::Assign {
+                dst,
+                src: Value::Const(0),
+            });
+        } else {
+            let narrowed = VReg::Temp(140 + lane as u32);
+            ops.push(Op::Trunc {
+                dst: narrowed.clone(),
+                src: Value::Reg(dst.clone()),
+                from: Width::W64,
+                to: Width::W32,
+            });
+            ops.push(Op::Bin {
+                dst,
+                op: BinOp::Shr,
+                lhs: Value::Reg(narrowed),
+                rhs: Value::Const(i64::from(count)),
+            });
+        }
+    }
+    ops
+}
+
 /// Lift PSRAD's immediate form as four signed 32-bit lane shifts.
 ///
 /// Counts above the lane width produce the sign mask, which is equivalent to
@@ -2175,6 +2215,14 @@ fn packed_dword_compare_equal_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
         return vec![Op::Unknown {
             mnemonic: "pcmpeqd".into(),
         }];
+    }
+    if instr.op_kind(1) == OpKind::Register && instr.op_register(0) == instr.op_register(1) {
+        return (0..4)
+            .map(|lane| Op::Assign {
+                dst: packed_dword_lane(instr.op_register(0), lane),
+                src: Value::Const(-1),
+            })
+            .collect();
     }
     let Some((mut ops, sources)) = packed_dword_sources(instr, 92) else {
         return vec![Op::Unknown {
@@ -3551,6 +3599,7 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Paddd => packed_dword_binary_ops(instr, BinOp::Add),
         Mnemonic::Psubd => packed_dword_binary_ops(instr, BinOp::Sub),
         Mnemonic::Pslld => packed_dword_immediate_shift_left_ops(instr),
+        Mnemonic::Psrld => packed_dword_immediate_logical_shift_right_ops(instr),
         Mnemonic::Psrad => packed_dword_immediate_arithmetic_shift_right_ops(instr),
         Mnemonic::Punpckldq => packed_dword_unpack_low_ops(instr),
         Mnemonic::Punpcklqdq => packed_qword_unpack_low_ops(instr),
@@ -6028,6 +6077,56 @@ mod tests {
             &mmx_ops[0].op,
             Op::Unknown { mnemonic } if mnemonic == "pslld"
         ));
+    }
+
+    #[test]
+    fn packed_dword_logical_right_shift_preserves_all_lanes_and_zeroes_large_counts() {
+        let ops = lift64(&[0x66, 0x0f, 0x72, 0xd4, 0x1f]); // psrld xmm4,31
+        assert_eq!(ops.len(), 8);
+        for lane in 0..4 {
+            assert!(matches!(
+                &ops[lane * 2].op,
+                Op::Trunc {
+                    dst: VReg::Temp(temp),
+                    src: Value::Reg(VReg::Phys(src)),
+                    to: Width::W32,
+                    ..
+                } if *temp == 140 + lane as u32 && src == &format!("xmm4_d{lane}")
+            ));
+            assert!(matches!(
+                &ops[lane * 2 + 1].op,
+                Op::Bin {
+                    dst: VReg::Phys(dst),
+                    op: BinOp::Shr,
+                    lhs: Value::Reg(VReg::Temp(temp)),
+                    rhs: Value::Const(31),
+                } if dst == &format!("xmm4_d{lane}") && *temp == 140 + lane as u32
+            ));
+        }
+
+        let large = lift64(&[0x66, 0x0f, 0x72, 0xd4, 0x20]); // psrld xmm4,32
+        assert!(large.iter().all(|instruction| matches!(
+            &instruction.op,
+            Op::Assign {
+                src: Value::Const(0),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn packed_self_equality_materializes_ones_without_reading_old_lanes() {
+        let ops = lift64(&[0x66, 0x0f, 0x76, 0xe4]); // pcmpeqd xmm4,xmm4
+        assert_eq!(ops.len(), 4);
+        for (lane, instruction) in ops.iter().enumerate() {
+            assert!(matches!(
+                &instruction.op,
+                Op::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Value::Const(-1),
+                } if dst == &format!("xmm4_d{lane}")
+            ));
+        }
     }
 
     #[test]
