@@ -24,13 +24,13 @@
     "type_match": 1.0
   },
   "arrays:clang:O0": {
-    "byte_match": 0.05,
+    "byte_match": 0.12,
     "ged": 1.0,
     "type_match": 1.0
   },
   "arrays:clang:O2": {
-    "byte_match": 0.01,
-    "ged": 15.67,
+    "byte_match": 0.02,
+    "ged": 17.33,
     "type_match": 1.0
   },
   "arrays:gcc:O0": {
@@ -40,7 +40,7 @@
   },
   "arrays:gcc:O2": {
     "byte_match": 0.49,
-    "ged": 8.0,
+    "ged": 8.33,
     "type_match": 0.47
   },
   "branches:clang:O0": {
@@ -49,7 +49,7 @@
     "type_match": 1.0
   },
   "branches:clang:O2": {
-    "byte_match": 0.05,
+    "byte_match": 0.06,
     "ged": 7.5,
     "type_match": 1.0
   },
@@ -64,12 +64,12 @@
     "type_match": 1.0
   },
   "checksum:clang:O0": {
-    "byte_match": 0.04,
+    "byte_match": 0.08,
     "ged": 0.0,
     "type_match": 1.0
   },
   "checksum:clang:O2": {
-    "byte_match": 0.04,
+    "byte_match": 0.05,
     "ged": 18.0,
     "type_match": 1.0
   },
@@ -89,7 +89,7 @@
     "type_match": 1.0
   },
   "fixedpoint:clang:O2": {
-    "byte_match": 0.1,
+    "byte_match": 0.09,
     "ged": 7.67,
     "type_match": 1.0
   },
@@ -104,8 +104,8 @@
     "type_match": 0.78
   },
   "linkedlist:clang:O0": {
-    "byte_match": 0.48,
-    "ged": 2.5,
+    "byte_match": 0.47,
+    "ged": 0.0,
     "type_match": 1.0
   },
   "linkedlist:clang:O2": {
@@ -114,8 +114,8 @@
     "type_match": 1.0
   },
   "linkedlist:gcc:O0": {
-    "byte_match": 0.29,
-    "ged": 2.5,
+    "byte_match": 0.44,
+    "ged": 0.0,
     "type_match": 1.0
   },
   "linkedlist:gcc:O2": {
@@ -124,13 +124,13 @@
     "type_match": 0.75
   },
   "loops:clang:O0": {
-    "byte_match": 0.15,
+    "byte_match": 0.2,
     "ged": 0.0,
     "type_match": 1.0
   },
   "loops:clang:O2": {
     "byte_match": 0.04,
-    "ged": 4.67,
+    "ged": 3.0,
     "type_match": 1.0
   },
   "loops:gcc:O0": {
@@ -140,17 +140,17 @@
   },
   "loops:gcc:O2": {
     "byte_match": 0.25,
-    "ged": 13.0,
+    "ged": 14.0,
     "type_match": 0.44
   },
   "matrix:clang:O0": {
-    "byte_match": 0.01,
+    "byte_match": 0.07,
     "ged": 3.0,
     "type_match": 1.0
   },
   "matrix:clang:O2": {
-    "byte_match": 0.01,
-    "ged": 23.0,
+    "byte_match": 0.03,
+    "ged": 24.0,
     "type_match": null
   },
   "matrix:gcc:O0": {
@@ -169,8 +169,8 @@
     "type_match": 1.0
   },
   "recursion:clang:O2": {
-    "byte_match": 0.02,
-    "ged": 11.0,
+    "byte_match": 0.04,
+    "ged": 14.0,
     "type_match": null
   },
   "recursion:gcc:O0": {
@@ -184,38 +184,38 @@
     "type_match": null
   },
   "sort:clang:O0": {
-    "byte_match": 0.03,
-    "ged": 4.0,
+    "byte_match": 0.11,
+    "ged": 1.5,
     "type_match": 0.75
   },
   "sort:clang:O2": {
     "byte_match": 0.03,
-    "ged": 23.0,
+    "ged": 24.5,
     "type_match": 1.0
   },
   "sort:gcc:O0": {
-    "byte_match": 0.29,
-    "ged": 4.0,
+    "byte_match": 0.3,
+    "ged": 1.5,
     "type_match": 1.0
   },
   "sort:gcc:O2": {
-    "byte_match": 0.42,
-    "ged": 10.0,
+    "byte_match": 0.25,
+    "ged": 8.5,
     "type_match": 0.45
   },
   "statemachine:clang:O0": {
-    "byte_match": 0.02,
+    "byte_match": 0.13,
     "ged": 0.0,
     "type_match": 1.0
   },
   "statemachine:clang:O2": {
-    "byte_match": 0.01,
+    "byte_match": 0.04,
     "ged": 8.0,
     "type_match": 1.0
   },
   "statemachine:gcc:O0": {
-    "byte_match": 0.34,
-    "ged": 15.0,
+    "byte_match": 0.37,
+    "ged": 10.0,
     "type_match": 1.0
   },
   "statemachine:gcc:O2": {
@@ -224,18 +224,18 @@
     "type_match": 0.4
   },
   "strops:clang:O0": {
-    "byte_match": 0.16,
+    "byte_match": 0.17,
     "ged": 1.33,
     "type_match": 1.0
   },
   "strops:clang:O2": {
-    "byte_match": 0.04,
-    "ged": 10.0,
+    "byte_match": 0.03,
+    "ged": 9.67,
     "type_match": 1.0
   },
   "strops:gcc:O0": {
-    "byte_match": 0.45,
-    "ged": 4.67,
+    "byte_match": 0.47,
+    "ged": 4.33,
     "type_match": 1.0
   },
   "strops:gcc:O2": {
@@ -264,12 +264,12 @@
     "type_match": 0.5
   },
   "switch_jt:clang:O0": {
-    "byte_match": 0.02,
+    "byte_match": 0.2,
     "ged": 0.0,
     "type_match": 1.0
   },
   "switch_jt:clang:O2": {
-    "byte_match": 0.01,
+    "byte_match": 0.05,
     "ged": 0.0,
     "type_match": 1.0
   },
@@ -279,7 +279,7 @@
     "type_match": 1.0
   },
   "switch_jt:gcc:O2": {
-    "byte_match": 0.11,
+    "byte_match": 1.0,
     "ged": 0.0,
     "type_match": 1.0
   }
