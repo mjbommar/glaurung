@@ -57,10 +57,16 @@ def _require_llm_flag(require_llm: Optional[bool]) -> bool:
     return val in ("1", "true", "yes", "on")
 
 
-def can_call_llm() -> bool:
-    """True when there is a configured provider we can actually reach."""
+def can_call_llm(model: Optional[str] = None) -> bool:
+    """True when the selected model's provider has credentials.
+
+    A credential for an unrelated provider is not enough: for example, a
+    Gemini key cannot authenticate the project-default OpenAI model.
+    """
     cfg = get_config()
-    return any(cfg.available_models().values())
+    model_name = model or cfg.preferred_model()
+    provider = model_name.split(":", 1)[0]
+    return cfg.available_models().get(provider, False)
 
 
 def in_running_event_loop() -> bool:
@@ -107,7 +113,7 @@ def run_structured_llm(
     """
     require = _require_llm_flag(require_llm)
 
-    if not can_call_llm():
+    if not can_call_llm(model):
         msg = (
             "LLM unreachable: no provider credentials configured "
             "(check OPENAI_API_KEY / ANTHROPIC_API_KEY)."

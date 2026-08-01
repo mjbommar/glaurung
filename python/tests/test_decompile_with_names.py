@@ -30,8 +30,8 @@ def _need(p: Path) -> Path:
 
 def test_decompile_with_names_substitutes_known_slots(tmp_path: Path) -> None:
     """When stack-frame slots are populated for a function, the
-    rendered output should substitute named locals for the raw
-    `(rbp - N)` references."""
+    rendered output should substitute named locals for raw frame
+    references or promoted `local_N` identifiers."""
     binary = _need(_C2_DEMO)
     db = tmp_path / "decomp.glaurung"
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
@@ -49,7 +49,7 @@ def test_decompile_with_names_substitutes_known_slots(tmp_path: Path) -> None:
     rendered = xref_db.render_decompile_with_names(
         kb, str(binary), int(main.entry_point.value),
     )
-    # The original output contains `(rbp - N)` references; after
+    # The native output contains promoted `local_N` identifiers; after
     # substitution, at least one should be replaced with a `var_*` name.
     assert "var_" in rendered, (
         f"no var_* substitutions made:\n{rendered[:400]}"
@@ -57,8 +57,8 @@ def test_decompile_with_names_substitutes_known_slots(tmp_path: Path) -> None:
 
 
 def test_decompile_with_names_preserves_address_of_semantics(tmp_path: Path) -> None:
-    """`(rbp - N)` is the *address* of a local — it must render as
-    `&var_N` after substitution, not just `var_N`."""
+    """Address-of on a promoted local must survive KB substitution as
+    `&var_N`, not collapse to the local's value."""
     binary = _need(_C2_DEMO)
     db = tmp_path / "decomp.glaurung"
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)

@@ -164,14 +164,21 @@ def test_jbe_materializes_unsigned_less_equal():
 
 def test_sete_lifts_to_assign_from_flag():
     ops = g.ir.lift_bytes(bytes([0x0F, 0x94, 0xC0]), 0x1000, 64)
-    assert ops == [
-        {
-            "va": 0x1000,
-            "kind": "assign",
-            "dst": "al",
-            "src": {"kind": "reg", "name": "%zf"},
-        }
-    ]
+    # AL aliases the low byte of RAX.  The lifter must preserve the upper
+    # 56 bits rather than model AL as an independent register.
+    assert [o["kind"] for o in ops] == ["bin", "bin", "bin"]
+    assert ops[0] == {
+        "va": 0x1000,
+        "kind": "bin",
+        "dst": "rax",
+        "op": "and",
+        "lhs": {"kind": "reg", "name": "rax"},
+        "rhs": {"kind": "const", "value": -256},
+    }
+    assert ops[1]["op"] == "and"
+    assert ops[1]["lhs"] == {"kind": "reg", "name": "%zf"}
+    assert ops[1]["rhs"] == {"kind": "const", "value": 255}
+    assert ops[2]["dst"] == "rax" and ops[2]["op"] == "or"
 
 
 def test_cmovne_lifts_to_cond_assign_dict():
@@ -213,13 +220,20 @@ def test_int3_lifts_to_nop_dict():
 
 def test_div_lifts_to_two_output_intrinsic_and_poisoned_flags():
     ops = g.ir.lift_bytes(bytes([0x48, 0xF7, 0xF1]), 0x1000, 64)
-    assert ops[0]["kind"] == "intrinsic"
-    assert ops[0]["name"] == "div"
-    assert ops[0]["outs"] == [
-        {"reg": "rax", "width": 64},
-        {"reg": "rdx", "width": 64},
+    # Snapshot the dividend and divisor before either architectural output is
+    # overwritten, then compute quotient and remainder from the same inputs.
+    assert [o["src"]["name"] for o in ops[:3]] == ["rdx", "rax", "rcx"]
+    intrinsics = [o for o in ops if o["kind"] == "intrinsic"]
+    assert [o["name"] for o in intrinsics] == [
+        "x86.udiv_quot.64",
+        "x86.udiv_rem.64",
     ]
-    assert {o["dst"] for o in ops[1:] if o["kind"] == "undef"} == {
+    assert [o["outs"] for o in intrinsics] == [
+        [{"reg": "rax", "width": 64}],
+        [{"reg": "rdx", "width": 64}],
+    ]
+    assert intrinsics[0]["ins"] == intrinsics[1]["ins"]
+    assert {o["dst"] for o in ops if o["kind"] == "undef"} == {
         "%cf",
         "%of",
         "%zf",
@@ -275,14 +289,16 @@ def test_sbb_reg_reg_lifts_to_sub_with_carry_dependency():
 
 def test_xorps_self_lifts_to_zero_assign():
     ops = g.ir.lift_bytes(bytes([0x0F, 0x57, 0xC0]), 0x1000, 64)
-    assert ops == [
-        {
-            "va": 0x1000,
-            "kind": "assign",
-            "dst": "xmm0",
-            "src": {"kind": "const", "value": 0},
-        }
+    # Keep the aggregate SIMD register and the scalar lane aliases coherent.
+    assert [o["dst"] for o in ops] == [
+        "xmm0",
+        "xmm0_d0",
+        "xmm0_d1",
+        "xmm0_d2",
+        "xmm0_d3",
     ]
+    assert all(o["kind"] == "assign" for o in ops)
+    assert all(o["src"] == {"kind": "const", "value": 0} for o in ops)
 
 
 def test_movsd_scalar_lifts_to_assign():

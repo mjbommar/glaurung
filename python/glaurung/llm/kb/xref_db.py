@@ -2081,8 +2081,9 @@ def render_decompile_with_names(
     include_call_proto_hints: bool = True,
 ) -> str:
     """Decompile `function_va` and rewrite frame-offset references
-    (`(rbp - 0x10)`, `(rbp + 8)`, `*&[rbp - 0x40]`, ...) to named
-    stack-frame variables from the persistent KB.
+    (`(rbp - 0x10)`, `(rbp + 8)`, `*&[rbp - 0x40]`, ...) and promoted
+    stack locals (`local_10`) to named stack-frame variables from the
+    persistent KB.
 
     With `include_locals_prelude=True` (default), prepend a comment
     block listing every typed local with its declared c_type and
@@ -2159,6 +2160,19 @@ def render_decompile_with_names(
 
     out = paren_re.sub(_paren_sub, out)
     out = bracket_re.sub(_bracket_sub, out)
+
+    # The native stack-local promotion pass renders `[rbp - 0x10]` as
+    # `local_10` before this KB-aware layer sees it.  Keep the two naming
+    # systems connected so analyst renames and auto-discovered `var_*`
+    # names continue to work after promotion.  The suffix is hexadecimal,
+    # matching `promoted_local_name` in src/ir/stack_locals.rs.
+    promoted_local_re = re.compile(r"\blocal_([0-9a-fA-F]+)\b")
+
+    def _promoted_local_sub(m: "re.Match[str]") -> str:
+        offset = -int(m.group(1), 16)
+        return name_by_offset.get(offset, m.group(0))
+
+    out = promoted_local_re.sub(_promoted_local_sub, out)
 
     # Apply analyst-renamed function names everywhere they appear in the
     # rendered output: `sub_1080(...)` and `0x1080(...)` are common shapes

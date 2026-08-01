@@ -53,7 +53,7 @@ def test_index_callgraph_persists_exact_callsite_vas(
     binary = _hello_path()
     db = tmp_path / "callsites.glaurung"
 
-    def fake_analyze_functions_path(_path: str):
+    def fake_analyze_functions_path(_path: str, *_budgets: int):
         funcs = [
             SimpleNamespace(
                 name="caller",

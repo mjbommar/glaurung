@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 import glaurung as g
+from pydantic_ai.models.test import TestModel
 
 from glaurung.llm.agents.memory_agent import create_memory_agent
 from glaurung.llm.context import Budgets, MemoryContext
@@ -166,7 +167,13 @@ class TestDisasmAndAgent:
             file_path=str(sample), artifact=art, budgets=Budgets(max_functions=3)
         )
         import_triage(ctx.kb, art, str(sample))
-        agent = create_memory_agent(model="test")
+        # Newer pydantic-ai TestModel versions call every registered tool by
+        # default.  This smoke test validates agent execution, not fabricated
+        # arguments for the full analysis catalog, so make the offline model
+        # return deterministic text without selecting tools.
+        agent = create_memory_agent(
+            model=TestModel(call_tools=[], custom_output_text="ok")
+        )
         r1 = agent.run_sync("hash the file", deps=ctx)
         assert isinstance(r1.output, str)
         r2 = agent.run_sync("annotate binary", deps=ctx)

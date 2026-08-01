@@ -4,7 +4,9 @@ import logging
 import time
 from typing import Optional, Dict, Any
 from functools import wraps
-from pydantic_ai.usage import Usage
+from pydantic_ai.usage import RequestUsage, RunUsage
+
+Usage = RequestUsage | RunUsage
 
 logger = logging.getLogger(__name__)
 

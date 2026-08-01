@@ -53,7 +53,7 @@ class MemoryTool(ABC, Generic[InputModelT, OutputModelT]):
 _DEFAULT_TOOL_STRICT: bool | None = None
 
 
-def default_tool_strict_for_model(model_name: str | None) -> bool:
+def default_tool_strict_for_model(model_name: object | None) -> bool:
     """Choose pydantic-ai tool strictness based on the target LLM provider.
 
     Anthropic limits strict-tool counts (currently 20). Glaurung's memory
@@ -63,7 +63,7 @@ def default_tool_strict_for_model(model_name: str | None) -> bool:
 
     Returns True if strict schemas are safe for the model, False if not.
     """
-    if not model_name:
+    if not model_name or not isinstance(model_name, str):
         return True
     if model_name.startswith("anthropic:"):
         return False

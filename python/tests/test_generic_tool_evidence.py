@@ -124,7 +124,9 @@ def test_tool_to_pyd_ai_allows_strict_mode_selection() -> None:
 
     assert strict_tool.strict is True
     assert loose_tool.strict is False
-    assert provider_default_tool.strict is None
+    # ``None`` asks the wrapper to resolve the project default, which is
+    # strict unless a registration scope or environment override relaxes it.
+    assert provider_default_tool.strict is True
 
 
 def test_tool_to_pyd_ai_uses_memory_tool_input_schema() -> None:
