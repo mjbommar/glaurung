@@ -51,6 +51,19 @@ def test_real_canary_payload_is_accepted(runner) -> None:
     }
 
 
+def test_thumb_target_keeps_the_function_identifier_from_the_prototype(runner) -> None:
+    payload = {
+        **REAL_CANARY,
+        "entry_va": 0x4623F,
+        "c_prototype": "int sub_4623f(void);",
+        "source": "int sub_4623f(void)\n{\n    return 0;\n}\n",
+    }
+
+    accepted = runner.accept_payload(payload, requested_va=0x4623F)
+
+    assert accepted.identifier == "sub_4623f"
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [

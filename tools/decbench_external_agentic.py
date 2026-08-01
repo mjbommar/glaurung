@@ -164,9 +164,23 @@ def accept_payload(payload: object, *, requested_va: int) -> AcceptedPayload:
     if "```" in source:
         raise PayloadError("source contains a markdown fence")
 
-    identifier = f"sub_{requested_va & ~1:x}"
-    if not _definition_present(source, identifier):
-        raise PayloadError(f"source has no top-level {identifier} function definition")
+    candidates = [f"sub_{requested_va:x}", f"sub_{requested_va & ~1:x}"]
+    prototype = payload.get("c_prototype") or payload.get("prototype")
+    if isinstance(prototype, str):
+        prototype_names = re.findall(r"\b([A-Za-z_]\w*)\s*\(", prototype)
+        if prototype_names:
+            candidates.append(prototype_names[-1])
+    identifier = next(
+        (
+            name
+            for name in dict.fromkeys(candidates)
+            if _definition_present(source, name)
+        ),
+        None,
+    )
+    if identifier is None:
+        joined = ", ".join(dict.fromkeys(candidates))
+        raise PayloadError(f"source has no target function definition ({joined})")
     confidence = payload.get("confidence")
     confidence_value = (
         float(confidence) if isinstance(confidence, (int, float)) else None
