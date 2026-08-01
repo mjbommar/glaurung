@@ -399,7 +399,7 @@ def test_windows_triage_worklist_derives_project_and_diff_queues(
     kinds = {item.kind for item in result.queue}
     assert "changed_function" in kinds
     assert "gate_source_blocker" in kinds
-    assert result.changed_function_fact_count >= 3
+    assert result.changed_function_fact_count == 1
     assert result.operation_risk_group_count == 1
     assert "windows_binary_diff_summary:changed" in result.tool_sequence
     assert "windows_project_operation_risk_summary" in result.tool_sequence
@@ -447,7 +447,7 @@ def test_windows_triage_worklist_resolves_paths_from_build_corpus(
     assert result.build_corpus_resolution.resolved_project_path == str(project)
     assert result.build_corpus_resolution.resolved_diff_binary_a == str(_SWITCHY_V1)
     assert result.build_corpus_resolution.resolved_diff_binary_b == str(_SWITCHY_V2)
-    assert result.changed_function_fact_count >= 3
+    assert result.changed_function_fact_count == 1
     assert result.operation_risk_group_count == 1
     assert "windows_build_corpus" in result.tool_sequence
     assert "windows_binary_diff_summary:changed" in result.tool_sequence

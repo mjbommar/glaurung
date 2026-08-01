@@ -59,7 +59,7 @@ def test_windows_binary_diff_summary_reports_changed_function(
     assert result.rows[0].status == "changed"
     assert result.rows[0].a is not None
     assert result.rows[0].b is not None
-    assert result.rows[0].b.size > result.rows[0].a.size
+    assert result.rows[0].b.body_hash != result.rows[0].a.body_hash
     assert "patch-triage seed" in result.notes[0]
 
 

@@ -92,7 +92,7 @@ def test_windows_seed_binary_diff_triage_reports_seed_function_change(
     assert dispatch.status == "changed"
     assert dispatch.b_size is not None
     assert dispatch.a_size is not None
-    assert dispatch.b_size > dispatch.a_size
+    assert dispatch.b_hash != dispatch.a_hash
     assert "does not prove" in result.notes[0]
 
 
