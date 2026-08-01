@@ -52,6 +52,20 @@ def test_real_canary_payload_is_accepted(runner) -> None:
     }
 
 
+def test_documented_role_heuristic_is_allowed_when_rewrite_is_llm(runner) -> None:
+    payload = {
+        **REAL_CANARY,
+        "stages": {
+            **REAL_CANARY["stages"],
+            "classify_function_role": {"source": "heuristic"},
+        },
+    }
+
+    accepted = runner.accept_payload(payload, requested_va=0x8350)
+
+    assert accepted.stage_sources["classify_function_role"] == "heuristic"
+
+
 def test_thumb_target_keeps_the_function_identifier_from_the_prototype(runner) -> None:
     payload = {
         **REAL_CANARY,

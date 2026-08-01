@@ -27,9 +27,9 @@ DEFAULT_MODEL = "openai:gpt-5.4-mini"
 DEFAULT_SERVICE_TIER = "flex"
 REQUIRED_LLM_STAGES = (
     "infer_function_signature",
-    "classify_function_role",
     "rewrite_function_idiomatic",
 )
+ROLE_STAGE = "classify_function_role"
 DIAGNOSTICS_NAME = "glaurung-agentic-diagnostics.json"
 C_PREAMBLE = """#include <errno.h>
 #include <fcntl.h>
@@ -157,6 +157,11 @@ def accept_payload(payload: object, *, requested_va: int) -> AcceptedPayload:
         if source != "llm":
             raise PayloadError(f"{name} did not use the LLM: {source!r}")
         stage_sources[name] = cast(str, source)
+    role_record = stages.get(ROLE_STAGE)
+    role_source = role_record.get("source") if isinstance(role_record, dict) else None
+    if role_source not in {"llm", "heuristic"}:
+        raise PayloadError(f"{ROLE_STAGE} has invalid provenance: {role_source!r}")
+    stage_sources[ROLE_STAGE] = cast(str, role_source)
 
     source = payload.get("source")
     if not isinstance(source, str) or not source.strip():
