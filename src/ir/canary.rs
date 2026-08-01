@@ -103,7 +103,33 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
     }
 
     let mut i = 0;
-    while i + 1 < body.len() {
+    while i < body.len() {
+        // After stack-local promotion and flag folding GCC's reload/xor/jne
+        // sequence can already be one direct comparison of the saved slot
+        // against the recovered TLS displacement. The preceding save comment
+        // supplies the provenance that makes this otherwise broad-looking
+        // constant comparison safe to erase.
+        let is_direct_check = matches!(
+            &body[i],
+            Stmt::If {
+                cond,
+                then_body,
+                else_body: None,
+            } if then_body.len() == 1
+                && matches!(&then_body[0], Stmt::Goto { .. })
+                && expr_mentions_slot(cond, slot)
+                && expr_mentions_canary_marker(cond)
+        );
+        if is_direct_check {
+            body[i] = Stmt::Comment("stack-canary check".to_string());
+            i += 1;
+            continue;
+        }
+
+        if i + 1 >= body.len() {
+            break;
+        }
+
         // Reload: `%X = %stack_N`.
         let reload = match &body[i] {
             Stmt::Assign {
@@ -153,6 +179,58 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
             body.insert(i, Stmt::Comment("stack-canary check".to_string()));
         }
         i += 1;
+    }
+}
+
+fn expr_mentions_slot(e: &Expr, slot: &str) -> bool {
+    match e {
+        Expr::Reg(crate::ir::types::VReg::Phys(name)) => name == slot,
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_mentions_slot(lhs, slot) || expr_mentions_slot(rhs, slot)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expr_mentions_slot(cond, slot)
+                || expr_mentions_slot(if_true, slot)
+                || expr_mentions_slot(if_false, slot)
+        }
+        Expr::Un { src, .. } => expr_mentions_slot(src, slot),
+        Expr::Cast { expr, .. } => expr_mentions_slot(expr, slot),
+        Expr::Deref { addr, .. } => expr_mentions_slot(addr, slot),
+        Expr::FunctionTableEntry { index, .. } => expr_mentions_slot(index, slot),
+        Expr::WideArithmetic { args, .. } => args.iter().any(|arg| expr_mentions_slot(arg, slot)),
+        _ => false,
+    }
+}
+
+fn expr_mentions_canary_marker(e: &Expr) -> bool {
+    if matches!(e, Expr::Const(CANARY_DISP)) || expr_mentions_guard(e) {
+        return true;
+    }
+    match e {
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_mentions_canary_marker(lhs) || expr_mentions_canary_marker(rhs)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expr_mentions_canary_marker(cond)
+                || expr_mentions_canary_marker(if_true)
+                || expr_mentions_canary_marker(if_false)
+        }
+        Expr::Un { src, .. } => expr_mentions_canary_marker(src),
+        Expr::Cast { expr, .. } => expr_mentions_canary_marker(expr),
+        Expr::Deref { addr, .. } => expr_mentions_canary_marker(addr),
+        Expr::FunctionTableEntry { index, .. } => expr_mentions_canary_marker(index),
+        Expr::WideArithmetic { args, .. } => args.iter().any(expr_mentions_canary_marker),
+        _ => false,
     }
 }
 
@@ -620,6 +698,49 @@ mod tests {
         assert!(matches!(&f.body[1], Stmt::Call { .. }));
         assert!(matches!(&f.body[2], Stmt::Comment(s) if s == "stack-canary check"));
         assert!(matches!(&f.body[3], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn directly_promoted_canary_comparison_collapses_with_its_save() {
+        use crate::ir::types::{CmpOp, VReg};
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Expr::Deref {
+                        addr: Box::new(lea_abs(0x28)),
+                        size: 8,
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("stack_0")),
+                    src: Expr::Reg(VReg::phys("rax")),
+                    size: 8,
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Reg(VReg::phys("stack_0"))),
+                        rhs: Box::new(Expr::Const(CANARY_DISP)),
+                    },
+                    then_body: vec![Stmt::Goto { target: 0x1227 }],
+                    else_body: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(7)),
+                },
+            ],
+        };
+
+        recognise_canary(&mut f);
+        collapse_canary_save(&mut f);
+
+        assert_eq!(f.body.len(), 3, "got: {:?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Comment(s) if s.contains("save guard")));
+        assert!(matches!(&f.body[1], Stmt::Comment(s) if s == "stack-canary check"));
+        assert!(matches!(&f.body[2], Stmt::Return { .. }));
     }
 
     #[test]

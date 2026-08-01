@@ -1209,6 +1209,11 @@ fn decbench_text(
     cc: crate::ir::call_args::CallConv,
 ) -> String {
     let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
+    // Source-level preparation folds GCC's multi-statement reload/sub/flag
+    // sequence into a direct comparison of the promoted canary slot. Re-run
+    // the idempotent canary pass here so the earlier collapsed save cannot
+    // leave that now-recognisable check reading an uninitialised C local.
+    crate::ir::canary::collapse_canary_save(&mut prepared);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!(
             "\n===== after prepare_for_decbench =====\n{}",
