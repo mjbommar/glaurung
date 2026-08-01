@@ -226,6 +226,9 @@ def test_cross_block_table_base_recovers_clang_o2_switch(tmp_path: Path) -> None
     for case in (0, 1, 2, 3):
         assert f"case {case}:" in switch_body, code
     assert "unrecovered indirect jump" not in code, code
+    assert "do {" in code, "the reducible state loop should remain structured"
+    assert "while (1)" not in code, code
+    assert "goto L_" not in code, code
     assert D.build_so(code, tmp_path, "dec_fsm_o2", link_against=str(binary))
 
     compared = subprocess.run(

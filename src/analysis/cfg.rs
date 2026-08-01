@@ -5160,6 +5160,34 @@ mod gcc_dispatch_corpus_tests {
         }
     }
 
+    fn structured_loop_owns_dispatch(region: &crate::ir::structure::Region) -> bool {
+        use crate::ir::structure::Region;
+        match region {
+            Region::While { body, .. } | Region::DoWhile { body, .. } => {
+                switch_case_labels(body).is_some()
+            }
+            Region::Seq(parts) => parts.iter().any(structured_loop_owns_dispatch),
+            Region::IfThen { then_r, .. } => structured_loop_owns_dispatch(then_r),
+            Region::IfThenElse { then_r, else_r, .. } => {
+                structured_loop_owns_dispatch(then_r) || structured_loop_owns_dispatch(else_r)
+            }
+            Region::Switch {
+                arms,
+                formal_default,
+                ..
+            } => {
+                arms.iter().any(structured_loop_owns_dispatch)
+                    || formal_default
+                        .as_deref()
+                        .is_some_and(structured_loop_owns_dispatch)
+            }
+            Region::Block(_)
+            | Region::Goto(_)
+            | Region::RawLoop { .. }
+            | Region::Unstructured(_) => false,
+        }
+    }
+
     #[test]
     fn clang_o0_statemachine_keeps_jump_table_arms_inside_fsm() {
         let tmp = tempfile::tempdir().expect("temporary Clang state-machine build directory");
@@ -5270,7 +5298,7 @@ mod gcc_dispatch_corpus_tests {
         let ssa = crate::ir::ssa::compute_ssa(&lifted);
         let region = crate::ir::structure::recover_verified(&lifted, &ssa);
         assert!(
-            raw_loop_owns_dispatch(&region, &lifted),
+            raw_loop_owns_dispatch(&region, &lifted) || structured_loop_owns_dispatch(&region),
             "the validated four-way CFG must remain inside its state-machine loop: {region:#?}"
         );
     }

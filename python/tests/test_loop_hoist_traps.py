@@ -76,6 +76,7 @@ def _decompile(so: Path, va: int) -> str:
 
 def _condition_reads_a_body_updated_value(text: str) -> bool:
     """Whether a source-level while condition retains a loop-carried value."""
+    loops: list[tuple[str, str]] = []
     for match in re.finditer(r"while\s*\(([^\n]*)\)\s*\{", text):
         condition = match.group(1)
         body_start = match.end()
@@ -84,7 +85,25 @@ def _condition_reads_a_body_updated_value(text: str) -> bool:
         body_end = text.find("}", body_start)
         if body_end < 0:
             continue
-        body = text[body_start:body_end]
+        loops.append((condition, text[body_start:body_end]))
+
+    for match in re.finditer(r"\bdo\s*\{", text):
+        body_start = match.end()
+        depth = 1
+        body_end = body_start
+        while body_end < len(text) and depth:
+            if text[body_end] == "{":
+                depth += 1
+            elif text[body_end] == "}":
+                depth -= 1
+            body_end += 1
+        if depth:
+            continue
+        tail = re.match(r"\s*while\s*\(([^\n]*)\)\s*;", text[body_end:])
+        if tail is not None:
+            loops.append((tail.group(1), text[body_start : body_end - 1]))
+
+    for condition, body in loops:
         condition_names = set(re.findall(r"\b[A-Za-z_]\w*\b", condition))
         assigned_names = set(
             re.findall(r"(?m)^\s*([A-Za-z_]\w*)\s*(?:=|\+\+|--)", body)

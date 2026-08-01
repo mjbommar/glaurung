@@ -1277,6 +1277,13 @@ fn detect_raw_dispatch_loop(
         .into_iter()
         .collect();
     exits.sort_unstable();
+    // One normal-exhaustion path plus one terminal case is representable by
+    // the ordinary structured loop/switch builder. Raw labelled CFG is needed
+    // only once the dispatch has additional distinct exits that the current
+    // region algebra cannot own without dropping or inventing an edge.
+    if exits.len() < 3 {
+        return None;
+    }
 
     let mut blocks: Vec<usize> = body.into_iter().filter(|block| *block != header).collect();
     blocks.sort_unstable();
