@@ -402,6 +402,41 @@ def test_cfg_owns_lsda_only_cpp_landing_pad_blocks() -> None:
     ), "landing-pad discovery must not create overlapping basic blocks"
 
 
+def test_cfg_owns_lsda_landing_pad_in_a_compiler_split_cold_chunk() -> None:
+    """A cold FDE remains owned after its symbol is folded into the hot parent."""
+    binary = _compile_cpp_so(
+        "static int may_throw(int x) {\n"
+        "    if (x < 0) throw x;\n"
+        "    return x + 5;\n"
+        "}\n"
+        'extern "C" int catches_split_int(int x) {\n'
+        "    try { return may_throw(x) + 30; }\n"
+        "    catch (int e) { return 90 - e; }\n"
+        "}",
+        "cpp_split_landing_pad_cfg",
+        optimization="O2",
+    )
+
+    functions, _callgraph = D.g.analysis.analyze_functions_path(binary)
+    function = next(fn for fn in functions if fn.name == "catches_split_int")
+    cold_ranges = [
+        chunk
+        for chunk in function.all_ranges()
+        if chunk.start.value != function.entry_point.value
+    ]
+    assert cold_ranges, "GCC O2 must emit the exercised split cold chunk"
+    cold = min(cold_ranges, key=lambda chunk: chunk.start.value)
+    cold_end = cold.start.value + cold.size
+    recovered_cold_end = max(
+        block.end_address.value
+        for block in function.basic_blocks
+        if cold.start.value <= block.start_address.value < cold_end
+    )
+
+    assert function.has_flag(0x4), "the split parent must retain HAS_EH"
+    assert recovered_cold_end == cold_end, "the cold catch tail must be discovered"
+
+
 def test_round_trip_rebinds_a_demangled_local_cpp_callee() -> None:
     """The included definition must retain the caller's exact C identifier.
 

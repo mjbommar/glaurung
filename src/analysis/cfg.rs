@@ -3231,16 +3231,28 @@ fn attach_exception_landing_pads(
     if sites.is_empty() {
         return Vec::new();
     }
-    let parent_by_entry: std::collections::HashMap<u64, usize> = functions
+    // An LSDA FDE is rooted at the compiler's original function fragment.
+    // Split-function merging removes the cold fragment's standalone Function,
+    // but deliberately retains its authoritative range on the hot parent.
+    // Preserve exact entry ownership first, then teach the lookup about those
+    // merged chunk starts so landing-pad discovery still reaches the parent.
+    let mut parent_by_fde_start: std::collections::HashMap<u64, usize> = functions
         .iter()
         .enumerate()
         .map(|(index, function)| (function.entry_point.value, index))
         .collect();
+    for (index, function) in functions.iter().enumerate() {
+        for range in function.all_ranges() {
+            parent_by_fde_start
+                .entry(range.start.value)
+                .or_insert(index);
+        }
+    }
     let mut call_edges = Vec::new();
     let mut touched = std::collections::BTreeSet::new();
 
     for site in sites {
-        let Some(&parent_index) = parent_by_entry.get(&site.function_start) else {
+        let Some(&parent_index) = parent_by_fde_start.get(&site.function_start) else {
             continue;
         };
         let ranges = functions[parent_index].all_ranges();
@@ -3344,7 +3356,7 @@ fn attach_exception_landing_pads(
                             && xref.callsite_va < block.end_address.value
                     })
                 })
-                .map(|xref| (site.function_start, xref)),
+                .map(|xref| (parent.entry_point.value, xref)),
         );
     }
 

@@ -576,7 +576,7 @@
     "_ZN7DerivedD1Ev": "structural",
     "_ZN7DerivedD2Ev": "structural",
     "cpp_ctor_dtor": "pass",
-    "cpp_exception": "fail",
+    "cpp_exception": "pass",
     "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
     "cpp_raii_guard": "pass",

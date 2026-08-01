@@ -155,10 +155,9 @@ pub fn with_exceptional_successors(
         .iter()
         .map(|block| block.start_va)
         .collect();
-    for site in sites
-        .iter()
-        .filter(|site| site.function_start == augmented.entry_va)
-    {
+    for site in sites.iter().filter(|site| {
+        site.function_start == augmented.entry_va || starts.contains(&site.function_start)
+    }) {
         if !starts.contains(&site.landing_pad) {
             continue;
         }
@@ -600,5 +599,55 @@ mod tests {
         assert_eq!(augmented.blocks[0].succs, vec![0x1010, 0x1030]);
         assert!(augmented.blocks[1].succs.is_empty());
         assert!(augmented.blocks[2].succs.is_empty());
+    }
+
+    #[test]
+    fn exceptional_successor_accepts_an_owned_split_chunk_fde() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1010,
+                    instrs: Vec::new(),
+                    succs: Vec::new(),
+                },
+                LlirBlock {
+                    start_va: 0x0900,
+                    end_va: 0x0910,
+                    instrs: Vec::new(),
+                    succs: vec![0x0950],
+                },
+                LlirBlock {
+                    start_va: 0x0920,
+                    end_va: 0x0930,
+                    instrs: Vec::new(),
+                    succs: Vec::new(),
+                },
+                LlirBlock {
+                    start_va: 0x0950,
+                    end_va: 0x0960,
+                    instrs: Vec::new(),
+                    succs: Vec::new(),
+                },
+            ],
+        };
+        let sites = [ExceptionCallSite {
+            function_start: 0x0900,
+            protected_start: 0x0908,
+            protected_end: 0x0910,
+            landing_pad: 0x0920,
+            action: ExceptionAction::Catch,
+            catch_type: Some(super::CatchType::Int),
+            type_info_location: Some(0x4000),
+        }];
+
+        let augmented = with_exceptional_successors(&function, &sites);
+
+        assert_eq!(augmented.blocks[1].succs, vec![0x0950, 0x0920]);
+        assert!(
+            augmented.blocks[1].succs.contains(&sites[0].landing_pad),
+            "an LSDA FDE rooted at an owned cold chunk belongs to the merged function"
+        );
     }
 }
