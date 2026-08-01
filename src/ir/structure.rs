@@ -74,7 +74,10 @@ pub enum Region {
     RawLoop {
         header: usize,
         blocks: Vec<usize>,
-        exit: usize,
+        /// Every CFG successor leaving the owned natural-loop body. Raw
+        /// dispatch loops can terminate through more than one case, so a
+        /// single distinguished exit would lose executable control flow.
+        exits: Vec<usize>,
     },
     /// `switch (discriminant) { case 0: <arm>; case 1: <arm>; ... }`
     /// (#193). The dispatch block has N>=3 successors (typical jump-
@@ -677,9 +680,12 @@ fn build_full(lf: &LlirFunction, cfg: &Cfg) -> Region {
     // the other return (clang -O2 binary search was the real canary).  Preserve
     // the complete labelled CFG until the region algebra grows owned multi-
     // exits; `Unstructured` is explicitly the lossless fallback contract.
-    if has_multi_latch_loop_with_distinct_exits(cfg)
-        || has_loop_conditional_with_join_beyond_loop(cfg)
-        || has_inner_loop_exit_that_reenters_via_outer_cycle(cfg)
+    let has_dispatch_loop_fallback = (0..cfg.succs.len())
+        .any(|header| detect_raw_dispatch_loop(header, cfg, &mut HashSet::new()).is_some());
+    if !has_dispatch_loop_fallback
+        && (has_multi_latch_loop_with_distinct_exits(cfg)
+            || has_loop_conditional_with_join_beyond_loop(cfg)
+            || has_inner_loop_exit_that_reenters_via_outer_cycle(cfg))
     {
         return Region::Unstructured((0..lf.blocks.len()).collect());
     }
@@ -991,6 +997,22 @@ fn build(start: usize, cfg: &Cfg, visited: &mut HashSet<usize>, stop_at: Option<
             break;
         }
 
+        // A compiler state machine can use its jump-table dispatch, or the
+        // range guard immediately before it, as the natural-loop header. No
+        // one case is a source-level loop condition. Detect this before a
+        // bottom-tested loop can wrap the raw dispatch body and claim one of
+        // its internal case blocks as a distinguished latch.
+        if let Some(loop_r) = detect_raw_dispatch_loop(cur, cfg, visited) {
+            parts.push(loop_r.region);
+            match loop_r.exit {
+                Some(next) => {
+                    cur = next;
+                    continue;
+                }
+                None => break,
+            }
+        }
+
         // --- Bottom-tested natural loop ------------------------------------
         // Detect this before inserting `cur` into `visited`: the recovered body
         // begins at `cur` and must be structured recursively up to (but not
@@ -1197,6 +1219,87 @@ struct LoopRegion {
     exit: Option<usize>,
 }
 
+/// Recognise a natural loop whose header is a resolved indirect dispatch, or
+/// whose binary range guard directly feeds one.
+///
+/// A state-machine loop has no binary header condition that can be represented
+/// as `While`: the table cases either update state and return to the dispatch,
+/// or leave through one of several terminal paths. The ordinary switch builder
+/// treats the dispatch as a one-shot choice and strands its back-edge. Own the
+/// dominator-proven natural-loop body as labelled CFG instead. Every transfer
+/// remains explicit during AST lowering, including all dispatch cases and all
+/// exits.
+fn detect_raw_dispatch_loop(
+    header: usize,
+    cfg: &Cfg,
+    visited: &mut HashSet<usize>,
+) -> Option<LoopRegion> {
+    let tails: Vec<usize> = cfg.preds[header]
+        .iter()
+        .copied()
+        .filter(|&tail| cfg.dominates(header, tail))
+        .collect();
+    if tails.is_empty() {
+        return None;
+    }
+
+    let mut body = HashSet::new();
+    for tail in tails {
+        body.extend(natural_loop_body(header, tail, cfg));
+    }
+    if body
+        .iter()
+        .any(|&block| block != header && !cfg.dominates(header, block))
+    {
+        return None;
+    }
+
+    let dispatches: Vec<usize> = body
+        .iter()
+        .copied()
+        .filter(|block| cfg.is_switch_dispatch(*block))
+        .collect();
+    let [dispatch] = dispatches.as_slice() else {
+        return None;
+    };
+    if *dispatch != header
+        && (cfg.succs[header].len() != 2 || !cfg.succs[header].contains(dispatch))
+    {
+        return None;
+    }
+
+    let mut exits: Vec<usize> = body
+        .iter()
+        .copied()
+        .flat_map(|block| cfg.succs[block].iter().copied())
+        .filter(|successor| !body.contains(successor))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    exits.sort_unstable();
+
+    let mut blocks: Vec<usize> = body.into_iter().filter(|block| *block != header).collect();
+    blocks.sort_unstable();
+    blocks.insert(0, header);
+    visited.extend(blocks.iter().copied());
+
+    // Only a unique exit can be emitted immediately after the loop. Multiple
+    // exits remain function-level labelled regions and are reached by the
+    // explicit transfers emitted from RawLoop.
+    let continuation = match exits.as_slice() {
+        [exit] => Some(*exit),
+        _ => None,
+    };
+    Some(LoopRegion {
+        region: Region::RawLoop {
+            header,
+            blocks,
+            exits,
+        },
+        exit: continuation,
+    })
+}
+
 /// Recognise a reducible multi-latch loop whose only exits all reach the same
 /// block and whose header has no exit edge of its own.
 ///
@@ -1237,7 +1340,8 @@ fn detect_raw_multi_latch_loop(
         .flat_map(|block| cfg.succs[block].iter().copied())
         .filter(|successor| !body.contains(successor))
         .collect();
-    let exits: Vec<usize> = exits.into_iter().collect();
+    let mut exits: Vec<usize> = exits.into_iter().collect();
+    exits.sort_unstable();
     let [exit] = exits.as_slice() else {
         return None;
     };
@@ -1251,7 +1355,7 @@ fn detect_raw_multi_latch_loop(
         region: Region::RawLoop {
             header,
             blocks,
-            exit,
+            exits,
         },
         exit: Some(exit),
     })

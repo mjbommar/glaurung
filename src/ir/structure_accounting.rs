@@ -284,12 +284,13 @@ fn has_explicit_goto(r: &Region, from: usize, target: usize, edges: &[Vec<Edge>]
 /// Every edge the tree declares.
 fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
     match r {
-        Region::Block(_) | Region::Unstructured(_) => {}
+        Region::Block(_) => {}
         Region::Goto(_) => {}
-        Region::RawLoop { blocks, .. } => {
-            // RawLoop lowering emits every machine transfer explicitly when
-            // source-order fallthrough is displaced, so its declared graph is
-            // exactly the CFG induced by its owned blocks (including exits).
+        Region::RawLoop { blocks, .. } | Region::Unstructured(blocks) => {
+            // Lossless labelled-CFG regions emit every machine transfer
+            // explicitly when source-order fallthrough is displaced, so their
+            // declared graph is exactly the CFG induced by their owned blocks
+            // (including exits).
             for block in blocks {
                 for edge in edges.get(*block).into_iter().flatten() {
                     out.insert((*block, edge.to));
@@ -304,6 +305,12 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
             // goto soup came out fully accounted. Skip them, and let the edges be
             // reported as `EdgeViaGoto` instead.
             for (i, part) in parts.iter().enumerate() {
+                // Labelled-CFG regions already declare their exact outgoing
+                // transfers. Their lexical successor is only an emission
+                // order, not an additional control-flow claim.
+                if matches!(part, Region::RawLoop { .. } | Region::Unstructured(_)) {
+                    continue;
+                }
                 let next = parts[i + 1..].iter().find_map(structural_entry);
                 if let Some(next) = next {
                     for (from, target) in escaping(part, edges) {

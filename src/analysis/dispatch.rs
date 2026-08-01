@@ -445,6 +445,44 @@ impl DispatchTracker {
         }
     }
 
+    /// Bounds established by value-producing instructions, excluding the
+    /// assumption made by the last comparison in this block.
+    ///
+    /// A `cmp index, N; ja default` proves the bound only on the fallthrough
+    /// edge.  In contrast, `xor state,state`, `mov state,1`, and
+    /// `sete state_byte; or state,2` produce bounded values on every outgoing
+    /// edge.  Keeping the two classes separate lets CFG dataflow carry compiler
+    /// generated enum/state values through loops without leaking a conditional
+    /// guard onto its taken edge.
+    pub fn export_stable_bounds(&self) -> Bounds {
+        let mut stable = self.export_bounds();
+        if let Some((register, _)) = &self.last_cmp {
+            if let Some(value) = self.reg_values.get(register) {
+                stable
+                    .regs
+                    .retain(|candidate, _| self.reg_values.get(candidate) != Some(value));
+                stable
+                    .slots
+                    .retain(|slot, _| self.slot_values.get(slot) != Some(value));
+            } else {
+                stable.regs.remove(register);
+            }
+        }
+        if let Some((slot, _)) = &self.last_slot_cmp {
+            if let Some(value) = self.slot_values.get(slot) {
+                stable
+                    .regs
+                    .retain(|candidate, _| self.reg_values.get(candidate) != Some(value));
+                stable
+                    .slots
+                    .retain(|candidate, _| self.slot_values.get(candidate) != Some(value));
+            } else {
+                stable.slots.remove(slot);
+            }
+        }
+        stable
+    }
+
     /// Update the tracked state with one decoded instruction.
     pub fn observe(&mut self, ins: &Instruction) {
         let m = ins.mnemonic.to_ascii_lowercase();
@@ -552,10 +590,14 @@ impl DispatchTracker {
                 _ => {
                     if let Some(dr) = Self::dest_reg(ins) {
                         self.define_fresh_value(dr);
+                        if let Some(value) = imm1.filter(|value| *value >= 0) {
+                            self.bound_value(dr, value as u64);
+                        }
                     }
                 }
             }
         } else if let Some(d) = Self::dest_reg(ins) {
+            let previous_bound = self.bounded.get(&canon(d)).copied();
             // Synthetic instruction adapters may mark `cmp`'s first operand as
             // ReadWrite even though the machine instruction does not write it.
             // Preserve its identity just as the real decoder does.
@@ -568,7 +610,34 @@ impl DispatchTracker {
                 // subsequent table index through the same register.
                 self.define_fresh_value(d);
             }
-            if m == "and" {
+            if m == "xor"
+                && ins
+                    .operands
+                    .get(1)
+                    .and_then(|operand| operand.register.as_deref())
+                    .is_some_and(|source| canon(source) == canon(d))
+            {
+                self.bound_value(d, 0);
+            } else if m.starts_with("set") {
+                if let Some(previous) = previous_bound {
+                    // SETcc replaces only the low byte.  The highest possible
+                    // upper-byte prefix is inherited from the old value; the
+                    // new low byte is exactly zero or one.
+                    let upper = previous & !0xff;
+                    if let Some(bound) = upper.checked_add(1) {
+                        self.bound_value(d, bound);
+                    }
+                }
+            } else if m == "or" {
+                if let (Some(previous), Some(mask)) =
+                    (previous_bound, imm1.filter(|value| *value >= 0))
+                {
+                    // x | mask <= x + mask for non-negative integers.
+                    if let Some(bound) = previous.checked_add(mask as u64) {
+                        self.bound_value(d, bound);
+                    }
+                }
+            } else if m == "and" {
                 if let Some(n) = imm1
                     .filter(|n| *n > 0 && (*n as u64).count_zeros() == (*n as u64).leading_zeros())
                 {
@@ -1119,6 +1188,30 @@ mod tests {
             Some(Resolution::Table { targets, .. }) => assert_eq!(targets.len(), 4),
             other => panic!("a 2^k-1 mask bounds the index, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn stable_bounds_follow_compiler_generated_state_values() {
+        let mut state = DispatchTracker::new();
+        state.observe(&ins("xor", vec![reg_op("r8d"), reg_read("r8d")]));
+        assert_eq!(state.export_stable_bounds().regs.get("r8"), Some(&0));
+
+        // Clang emits `xor r8d,r8d; sete r8b; or $2,r8d` for the enum
+        // transition whose only possible results are 2 and 3.
+        state.observe(&ins("sete", vec![reg_op("r8b")]));
+        state.observe(&ins("or", vec![reg_op("r8d"), imm_op(2)]));
+        assert_eq!(state.export_stable_bounds().regs.get("r8"), Some(&3));
+    }
+
+    #[test]
+    fn stable_bounds_exclude_a_branch_local_comparison_assumption() {
+        let mut guard = DispatchTracker::new();
+        guard.observe(&ins("cmp", vec![reg_op("rdi"), imm_op(3)]));
+        assert_eq!(guard.export_bounds().regs.get("rdi"), Some(&3));
+        assert!(
+            !guard.export_stable_bounds().regs.contains_key("rdi"),
+            "a comparison bounds only its in-range edge, not every successor"
+        );
     }
 
     /// A non-power-of-two mask constrains the value but is not a dense index

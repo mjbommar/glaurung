@@ -216,8 +216,10 @@ fn annotate_resolved_switch_indices(blocks: &mut [LlirBlock]) {
 }
 
 /// Find the table index and the instruction position before which it must be
-/// snapshotted. Returns `None` unless a 4-byte table load has one concrete
-/// address component and one index component with total stride four.
+/// snapshotted. A locally materialized table address identifies the other
+/// component as the index. For a CFG-proven dispatch whose table base was
+/// materialized in a predecessor block, the x86 addressing mode itself is
+/// sufficient when it has exactly one scale-one base and one scale-four index.
 fn switch_index_source_before(
     instructions: &[LlirInstr],
     jump_index: usize,
@@ -236,11 +238,22 @@ fn switch_index_source_before(
         if let Some(index) = &addr.index {
             components.push((index, u64::from(addr.scale.max(1))));
         }
+        let cross_block_index =
+            if components.len() == 2 && components.iter().any(|(_, scale)| *scale == 1) {
+                components
+                    .iter()
+                    .find_map(|(register, scale)| (*scale == 4).then_some((*register).clone()))
+            } else {
+                None
+            };
         let has_table_base = components.iter().any(|(register, address_scale)| {
             *address_scale == 1
                 && resolves_to_address(instructions, register, load_index, 0).is_some()
         });
         if !has_table_base {
+            if let Some(index) = cross_block_index {
+                return Some((Value::Reg(index), load_index));
+            }
             continue;
         }
         for (register, address_scale) in components {
@@ -539,6 +552,54 @@ mod tests {
                 index: Some(Value::Reg(index)),
                 ..
             }) if index == &snapshot
+        ));
+    }
+
+    #[test]
+    fn resolved_switch_snapshots_an_index_with_a_cross_block_table_base() {
+        let mut blocks = vec![LlirBlock {
+            start_va: 0x11bd,
+            end_va: 0x11cc,
+            instrs: vec![
+                LlirInstr {
+                    va: 0x11c1,
+                    op: Op::Assign {
+                        dst: VReg::phys("rax"),
+                        src: Value::Reg(VReg::phys("rdx")),
+                    },
+                },
+                LlirInstr {
+                    va: 0x11c3,
+                    op: Op::Load {
+                        dst: VReg::Temp(0),
+                        addr: MemOp::plain(
+                            Some(VReg::phys("r9")),
+                            Some(VReg::phys("rax")),
+                            4,
+                            0,
+                            4,
+                        ),
+                    },
+                },
+                LlirInstr {
+                    va: 0x11ca,
+                    op: Op::IndirectJump {
+                        target: Value::Reg(VReg::phys("rax")),
+                        index: None,
+                    },
+                },
+            ],
+            succs: vec![0x11cc, 0x11e0, 0x11a0, 0x1224],
+        }];
+
+        annotate_resolved_switch_indices(&mut blocks);
+
+        assert!(matches!(
+            blocks[0].instrs.last().map(|instruction| &instruction.op),
+            Some(Op::IndirectJump {
+                index: Some(Value::Reg(_)),
+                ..
+            })
         ));
     }
 

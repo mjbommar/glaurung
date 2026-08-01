@@ -1841,6 +1841,57 @@ fn implicit_successor(block: &crate::ir::types::LlirBlock) -> Option<u64> {
     }
 }
 
+/// Lower one block owned by [`Region::RawLoop`], preserving a resolved table
+/// dispatch as an explicit low-level switch.
+///
+/// A raw loop deliberately keeps labelled CFG rather than claiming that its
+/// cases form source-level structured arms. The indirect machine transfer must
+/// still become valid C, though: `goto *expr` is not portable C and the normal
+/// renderer cannot recompile it safely. A typed `IndirectJump` with a proven
+/// index and ordered CFG successors is exactly a positional switch whose case
+/// bodies jump to the original block labels.
+fn lower_raw_loop_block(
+    block: &crate::ir::types::LlirBlock,
+    lower_scalar_float: bool,
+) -> Vec<Stmt> {
+    let explicit_index = block
+        .instrs
+        .iter()
+        .rev()
+        .find_map(|instruction| match &instruction.op {
+            Op::IndirectJump {
+                index: Some(index), ..
+            } => Some(lower_value(index)),
+            _ => None,
+        });
+    let mut statements = lower_block(block, lower_scalar_float);
+    let Some(discriminant) = explicit_index else {
+        return statements;
+    };
+    if block.succs.len() < 2 {
+        return statements;
+    }
+    let Some(indirect_position) = statements
+        .iter()
+        .rposition(|statement| matches!(statement, Stmt::IndirectGoto { .. }))
+    else {
+        return statements;
+    };
+    statements.remove(indirect_position);
+    let cases = block
+        .succs
+        .iter()
+        .enumerate()
+        .map(|(case, target)| (Some(case as i64), vec![Stmt::Goto { target: *target }]))
+        .collect();
+    statements.push(Stmt::Switch {
+        discriminant,
+        cases,
+        default: None,
+    });
+    statements
+}
+
 fn lower_region(
     r: &Region,
     lf: &LlirFunction,
@@ -2075,14 +2126,14 @@ fn lower_region_inner(
         Region::RawLoop {
             header,
             blocks,
-            exit: _,
+            exits: _,
         } => {
             let header_va = lf.blocks[*header].start_va;
             let mut loop_body = Vec::new();
             for (position, block_index) in blocks.iter().copied().enumerate() {
                 let block = &lf.blocks[block_index];
                 loop_body.push(Stmt::Label(block.start_va));
-                loop_body.extend(lower_block(block, lower_scalar_float));
+                loop_body.extend(lower_raw_loop_block(block, lower_scalar_float));
 
                 // Raw blocks normally rely on source order for fallthrough. The
                 // loop owns a non-contiguous subset and starts at its header, so
@@ -2216,9 +2267,21 @@ fn lower_region_inner(
         }
         Region::Unstructured(blocks) => {
             let mut out = Vec::new();
-            for &bi in blocks {
+            for (position, &bi) in blocks.iter().enumerate() {
                 out.push(Stmt::Label(lf.blocks[bi].start_va));
-                out.extend(lower_block(&lf.blocks[bi], lower_scalar_float));
+                let block = &lf.blocks[bi];
+                out.extend(lower_block(block, lower_scalar_float));
+                // A partial labelled-CFG fallback need not own every block
+                // between two addresses. Preserve a displaced machine
+                // fallthrough explicitly instead of relying on vector order.
+                let lexical_next = blocks
+                    .get(position + 1)
+                    .map(|next| lf.blocks[*next].start_va);
+                if let Some(successor) = implicit_successor(block) {
+                    if Some(successor) != lexical_next {
+                        out.push(Stmt::Goto { target: successor });
+                    }
+                }
             }
             out
         }
@@ -2241,8 +2304,8 @@ fn collect_goto_targets(r: &Region, lf: &LlirFunction, out: &mut std::collection
         Region::While { body, .. } | Region::DoWhile { body, .. } => {
             collect_goto_targets(body, lf, out)
         }
-        Region::RawLoop { exit, .. } => {
-            out.insert(lf.blocks[*exit].start_va);
+        Region::RawLoop { exits, .. } => {
+            out.extend(exits.iter().map(|exit| lf.blocks[*exit].start_va));
         }
         Region::Switch {
             arms,
@@ -9663,6 +9726,66 @@ function f @ 0x1000 {
             latch,
             "the raw case goto must land on the emitted latch body: {:#?}",
             lowered.body
+        );
+    }
+
+    #[test]
+    fn a_raw_dispatch_loop_lowers_the_table_to_labelled_switch_edges() {
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("state"))),
+                }],
+                vec![0x1010, 0x1020, 0x1030],
+            ),
+            (0x1010, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (0x1020, vec![Op::Return], vec![]),
+            (0x1030, vec![Op::Return], vec![]),
+        ]);
+        let region = Region::Seq(vec![
+            Region::RawLoop {
+                header: 0,
+                blocks: vec![0, 1],
+                exits: vec![2, 3],
+            },
+            Region::Unstructured(vec![2, 3]),
+        ]);
+
+        let lowered = lower(&lf, &region, "raw_dispatch_loop");
+        let Some(Stmt::While { body, .. }) = lowered
+            .body
+            .iter()
+            .find(|statement| matches!(statement, Stmt::While { .. }))
+        else {
+            panic!("expected raw while loop: {:#?}", lowered.body);
+        };
+        let Some(Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        }) = body
+            .iter()
+            .find(|statement| matches!(statement, Stmt::Switch { .. }))
+        else {
+            panic!("expected typed switch inside raw loop: {body:#?}");
+        };
+        assert_eq!(discriminant, &Expr::Reg(VReg::phys("state")));
+        assert_eq!(
+            cases,
+            &vec![
+                (Some(0), vec![Stmt::Goto { target: 0x1010 }]),
+                (Some(1), vec![Stmt::Goto { target: 0x1020 }]),
+                (Some(2), vec![Stmt::Goto { target: 0x1030 }]),
+            ]
+        );
+        assert!(default.is_none());
+        assert!(
+            !body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::IndirectGoto { .. })),
+            "the switch replaces the computed machine transfer: {body:#?}"
         );
     }
 

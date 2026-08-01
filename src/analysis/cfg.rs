@@ -703,6 +703,74 @@ fn merge_dispatch_addresses(
     }
 }
 
+/// Join upper-bound facts from reachable predecessors.
+///
+/// A register remains bounded only when every currently reachable predecessor
+/// proves a bound for it; the joined maximum covers every incoming value.
+/// Predecessors without an output are still unreachable in the fixed-point and
+/// therefore do not weaken the result yet.
+fn join_dispatch_bounds<'a>(
+    incoming: impl Iterator<Item = &'a crate::analysis::dispatch::Bounds>,
+) -> crate::analysis::dispatch::Bounds {
+    let mut incoming = incoming;
+    let Some(first) = incoming.next() else {
+        return crate::analysis::dispatch::Bounds::default();
+    };
+    let mut joined = first.clone();
+    for next in incoming {
+        joined.regs.retain(|register, bound| {
+            let Some(next_bound) = next.regs.get(register) else {
+                return false;
+            };
+            *bound = (*bound).max(*next_bound);
+            true
+        });
+        joined.slots.retain(|slot, bound| {
+            let Some(next_bound) = next.slots.get(slot) else {
+                return false;
+            };
+            *bound = (*bound).max(*next_bound);
+            true
+        });
+    }
+    joined
+}
+
+/// Combine independent proofs that hold on the same path.  Either proof is
+/// sufficient, so retain their union and choose the tighter bound on overlap.
+fn combine_dispatch_bounds(
+    mut left: crate::analysis::dispatch::Bounds,
+    right: Option<&crate::analysis::dispatch::Bounds>,
+) -> crate::analysis::dispatch::Bounds {
+    let Some(right) = right else {
+        return left;
+    };
+    for (register, bound) in &right.regs {
+        left.regs
+            .entry(register.clone())
+            .and_modify(|old| *old = (*old).min(*bound))
+            .or_insert(*bound);
+    }
+    for (slot, bound) in &right.slots {
+        left.slots
+            .entry(slot.clone())
+            .and_modify(|old| *old = (*old).min(*bound))
+            .or_insert(*bound);
+    }
+    left
+}
+
+#[derive(Debug)]
+struct TentativeDispatchEdges {
+    site: u64,
+    block_start: u64,
+    attached: Vec<u64>,
+    /// True when the section scan supplied candidate arms before range
+    /// dataflow proved the dispatch extent.  Such edges must be trimmed or
+    /// rejected during final validation; they are never accepted as-is.
+    needs_bound_proof: bool,
+}
+
 /// Replay one decoded block through the dispatch abstract interpreter.
 ///
 /// The first CFG walk must speculate with the predecessors known at that point
@@ -840,7 +908,7 @@ fn discover_function(
     // (dispatch instruction, containing block, tentatively attached targets).
     // Revalidated against the completed CFG's address-dataflow fixed point
     // before the Function is built.
-    let mut resolved_dispatch_edges: Vec<(u64, u64, Vec<u64>)> = Vec::new();
+    let mut resolved_dispatch_edges: Vec<TentativeDispatchEdges> = Vec::new();
 
     if let Some(r) = in_exec_regions(regions, entry.value) {
         let _ = r;
@@ -1035,7 +1103,51 @@ fn discover_function(
                                     arms += 1;
                                 }
                                 stats.resolved_dispatches.push((cur_va, arms));
-                                resolved_dispatch_edges.push((cur_va, start_va, attached));
+                                resolved_dispatch_edges.push(TentativeDispatchEdges {
+                                    site: cur_va,
+                                    block_start: start_va,
+                                    attached,
+                                    needs_bound_proof: false,
+                                });
+                            }
+                            Some(crate::analysis::dispatch::Resolution::Unresolved(
+                                crate::analysis::dispatch::Unresolved::NoBound(table),
+                            )) if facts
+                                .tables
+                                .get(&table)
+                                .is_some_and(|targets| (2..=256).contains(&targets.len())) =>
+                            {
+                                // Some optimized state machines have no explicit
+                                // range check: the compiler proves the enum
+                                // invariant and emits a bare table dispatch. Use
+                                // the scanned targets only as speculative CFG
+                                // reachability. A later whole-CFG range analysis
+                                // must prove an exact prefix before any edge is
+                                // retained.
+                                let targets = facts.tables[&table].clone();
+                                let mut attached = Vec::new();
+                                for tgt in targets {
+                                    if in_exec_regions(regions, tgt).is_none() {
+                                        continue;
+                                    }
+                                    if seen.insert(tgt) {
+                                        queue.push_back(tgt);
+                                    }
+                                    edges.push((start_va, tgt, ControlFlowEdgeKind::Branch));
+                                    merge_dispatch_addresses(
+                                        &mut dispatch_addresses,
+                                        tgt,
+                                        dispatch.export_addresses(),
+                                    );
+                                    attached.push(tgt);
+                                }
+                                stats.resolved_dispatches.push((cur_va, attached.len()));
+                                resolved_dispatch_edges.push(TentativeDispatchEdges {
+                                    site: cur_va,
+                                    block_start: start_va,
+                                    attached,
+                                    needs_bound_proof: true,
+                                });
                             }
                             Some(crate::analysis::dispatch::Resolution::Unresolved(why)) => {
                                 stats.unresolved_indirect.push((cur_va, why));
@@ -1131,14 +1243,84 @@ fn discover_function(
         }
     }
 
+    // Prove loop-carried value ranges over the completed speculative graph.
+    // This is deliberately separate from the one-edge `index_bounds` map: a
+    // compiler may remove a switch guard after proving that an enum/state
+    // register is always in range.  Candidate table arms make those state
+    // transitions reachable for analysis, but final validation below keeps
+    // only the exact prefix justified by this fixed point.
+    let thumb =
+        arm32_mode.map(|mode| matches!(mode, crate::analysis::arm32_mode::Arm32Mode::Thumb));
+    let mut final_bound_inputs: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
+    let mut final_bound_outputs: HashMap<u64, crate::analysis::dispatch::Bounds> = HashMap::new();
+    let mut bound_queue: VecDeque<u64> = VecDeque::from([entry.value]);
+    let mut bound_queued = std::collections::HashSet::from([entry.value]);
+    let bound_step_limit = blocks.len().saturating_mul(256).max(256);
+    let mut bound_steps = 0usize;
+    while let Some(block_start) = bound_queue.pop_front() {
+        bound_queued.remove(&block_start);
+        bound_steps += 1;
+        if bound_steps > bound_step_limit {
+            // Failure to converge means no range proof is trustworthy.  The
+            // speculative dispatches will consequently be rejected below.
+            final_bound_inputs.clear();
+            final_bound_outputs.clear();
+            break;
+        }
+        let Some(&(block_end, _)) = blocks.get(&block_start) else {
+            continue;
+        };
+        let predecessors: Vec<u64> = edges
+            .iter()
+            .filter_map(|(source, target, _)| (*target == block_start).then_some(*source))
+            .collect();
+        let input = if block_start == entry.value {
+            crate::analysis::dispatch::Bounds::default()
+        } else {
+            let reachable: Vec<_> = predecessors
+                .iter()
+                .filter_map(|predecessor| final_bound_outputs.get(predecessor))
+                .collect();
+            if reachable.is_empty() {
+                continue;
+            }
+            join_dispatch_bounds(reachable.into_iter())
+        };
+        final_bound_inputs.insert(block_start, input.clone());
+        let Some((tracker, _)) = replay_dispatch_block(
+            data,
+            arch,
+            end,
+            thumb,
+            block_start,
+            block_end,
+            Some(input),
+            None,
+            None,
+        ) else {
+            continue;
+        };
+        let output = tracker.export_stable_bounds();
+        if final_bound_outputs.get(&block_start) == Some(&output) {
+            continue;
+        }
+        final_bound_outputs.insert(block_start, output);
+        for successor in edges
+            .iter()
+            .filter_map(|(source, target, _)| (*source == block_start).then_some(*target))
+        {
+            if bound_queued.insert(successor) {
+                bound_queue.push_back(successor);
+            }
+        }
+    }
+
     // Recompute concrete-address facts to a fixed point over the now-complete
     // graph. The streaming walk above sees predecessors incrementally; a loop
     // back-edge discovered after its header can invalidate a table-base fact
     // that looked unique on the first visit. Must-dataflow makes that loss
     // propagate through every downstream block before tentative table edges are
     // accepted.
-    let thumb =
-        arm32_mode.map(|mode| matches!(mode, crate::analysis::arm32_mode::Arm32Mode::Thumb));
     let mut final_address_inputs: HashMap<u64, HashMap<String, u64>> = HashMap::new();
     final_address_inputs.insert(entry.value, HashMap::new());
     let mut address_queue: VecDeque<u64> = VecDeque::from([entry.value]);
@@ -1188,42 +1370,88 @@ fn discover_function(
 
     let mut invalid_dispatches: Vec<(u64, u64, Vec<u64>, crate::analysis::dispatch::Unresolved)> =
         Vec::new();
-    for (site, block_start, attached) in &resolved_dispatch_edges {
-        let resolution = blocks.get(block_start).and_then(|(block_end, _)| {
-            replay_dispatch_block(
-                data,
-                arch,
-                end,
-                thumb,
-                *block_start,
-                *block_end,
-                index_bounds.get(block_start).cloned(),
-                final_address_inputs.get(block_start),
-                Some(*site),
-            )
-            .and_then(|(tracker, instruction)| {
-                instruction.and_then(|instruction| {
-                    resolve_dispatch(data, regions, &tracker, &instruction, facts.tables)
+    let mut trimmed_dispatches: Vec<(u64, u64, Vec<u64>, usize)> = Vec::new();
+    for dispatch_edge in &resolved_dispatch_edges {
+        let inherited_bounds = combine_dispatch_bounds(
+            final_bound_inputs
+                .get(&dispatch_edge.block_start)
+                .cloned()
+                .unwrap_or_default(),
+            index_bounds.get(&dispatch_edge.block_start),
+        );
+        let resolution = blocks
+            .get(&dispatch_edge.block_start)
+            .and_then(|(block_end, _)| {
+                replay_dispatch_block(
+                    data,
+                    arch,
+                    end,
+                    thumb,
+                    dispatch_edge.block_start,
+                    *block_end,
+                    Some(inherited_bounds),
+                    final_address_inputs.get(&dispatch_edge.block_start),
+                    Some(dispatch_edge.site),
+                )
+                .and_then(|(tracker, instruction)| {
+                    instruction.and_then(|instruction| {
+                        resolve_dispatch(data, regions, &tracker, &instruction, facts.tables)
+                    })
                 })
-            })
-        });
-        let still_exact = matches!(
-            &resolution,
-            Some(crate::analysis::dispatch::Resolution::Table { targets, .. })
-                if targets
+            });
+        let resolved_targets = match &resolution {
+            Some(crate::analysis::dispatch::Resolution::Table { targets, .. }) => Some(
+                targets
                     .iter()
                     .copied()
                     .filter(|target| in_exec_regions(regions, *target).is_some())
-                    .eq(attached.iter().copied())
-        );
-        if !still_exact {
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        let still_exact = resolved_targets.as_ref().is_some_and(|targets| {
+            if dispatch_edge.needs_bound_proof {
+                !targets.is_empty() && dispatch_edge.attached.starts_with(targets)
+            } else {
+                targets == &dispatch_edge.attached
+            }
+        });
+        if still_exact {
+            if dispatch_edge.needs_bound_proof {
+                let targets = resolved_targets.expect("checked above");
+                let extras = dispatch_edge.attached[targets.len()..].to_vec();
+                if !extras.is_empty() {
+                    trimmed_dispatches.push((
+                        dispatch_edge.site,
+                        dispatch_edge.block_start,
+                        extras,
+                        targets.len(),
+                    ));
+                }
+            }
+        } else {
             let why = match resolution {
                 Some(crate::analysis::dispatch::Resolution::Unresolved(why)) => why,
                 Some(crate::analysis::dispatch::Resolution::Table { .. }) | None => {
                     crate::analysis::dispatch::Unresolved::UnknownBase
                 }
             };
-            invalid_dispatches.push((*site, *block_start, attached.clone(), why));
+            invalid_dispatches.push((
+                dispatch_edge.site,
+                dispatch_edge.block_start,
+                dispatch_edge.attached.clone(),
+                why,
+            ));
+        }
+    }
+    for (site, block_start, extras, retained) in trimmed_dispatches {
+        edges.retain(|(source, target, _)| !(*source == block_start && extras.contains(target)));
+        if let Some((_, arms)) = stats
+            .resolved_dispatches
+            .iter_mut()
+            .find(|(resolved, _)| *resolved == site)
+        {
+            *arms = retained;
         }
     }
     for (site, block_start, attached, why) in invalid_dispatches {
@@ -4888,6 +5116,38 @@ mod gcc_dispatch_corpus_tests {
         }
     }
 
+    fn raw_loop_owns_dispatch(
+        region: &crate::ir::structure::Region,
+        function: &crate::ir::types::LlirFunction,
+    ) -> bool {
+        use crate::ir::structure::Region;
+        match region {
+            Region::RawLoop { blocks, .. } => blocks
+                .iter()
+                .any(|block| function.blocks[*block].succs.len() >= 3),
+            Region::Seq(parts) => parts
+                .iter()
+                .any(|part| raw_loop_owns_dispatch(part, function)),
+            Region::IfThen { then_r, .. }
+            | Region::While { body: then_r, .. }
+            | Region::DoWhile { body: then_r, .. } => raw_loop_owns_dispatch(then_r, function),
+            Region::IfThenElse { then_r, else_r, .. } => {
+                raw_loop_owns_dispatch(then_r, function) || raw_loop_owns_dispatch(else_r, function)
+            }
+            Region::Switch {
+                arms,
+                formal_default,
+                ..
+            } => {
+                arms.iter().any(|arm| raw_loop_owns_dispatch(arm, function))
+                    || formal_default
+                        .as_deref()
+                        .is_some_and(|default| raw_loop_owns_dispatch(default, function))
+            }
+            Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => false,
+        }
+    }
+
     #[test]
     fn clang_o0_statemachine_keeps_jump_table_arms_inside_fsm() {
         let tmp = tempfile::tempdir().expect("temporary Clang state-machine build directory");
@@ -4997,10 +5257,65 @@ mod gcc_dispatch_corpus_tests {
         );
         let ssa = crate::ir::ssa::compute_ssa(&lifted);
         let region = crate::ir::structure::recover_verified(&lifted, &ssa);
-        assert_eq!(
-            switch_case_labels(&region),
-            Some([vec![0], vec![1], vec![2], vec![3]].as_slice()),
-            "the validated four-way CFG must remain a switch region: {region:#?}"
+        assert!(
+            raw_loop_owns_dispatch(&region, &lifted),
+            "the validated four-way CFG must remain inside its state-machine loop: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn clang_o2_cleanup_state_machine_retains_loop_carried_dispatch_edges() {
+        let tmp = tempfile::tempdir().expect("temporary Clang cleanup-state-machine directory");
+        let source = tmp.path().join("cleanup_state_machine.c");
+        let binary = tmp.path().join("cleanup_state_machine.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decompiler_fixtures/src/05_cleanup_and_state_machine.c"
+                ))
+            })
+            .expect("write the real cleanup/state-machine fixture source");
+        let build = match Command::new("clang")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch Clang: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile cleanup/state-machine fixture with Clang -O2: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read Clang output");
+        let (functions, _callgraph, stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let function = functions
+            .iter()
+            .find(|function| function.name == "fsm")
+            .expect("discover fsm");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift the real fsm CFG");
+        assert!(
+            lifted.blocks.iter().any(|block| block.succs.len() == 4),
+            "loop-carried four-way state dispatch missing; resolved={:?}, unresolved={:?}, blocks={:#?}",
+            stats.resolved_dispatches,
+            stats.unresolved_indirect,
+            lifted.blocks
+        );
+        let ssa = crate::ir::ssa::compute_ssa(&lifted);
+        let region = crate::ir::structure::recover_verified(&lifted, &ssa);
+        assert!(
+            raw_loop_owns_dispatch(&region, &lifted),
+            "the guarded or dispatch-headed cycle must retain an owned raw loop: {region:#?}"
         );
     }
 

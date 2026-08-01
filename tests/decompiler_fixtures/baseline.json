@@ -169,7 +169,7 @@
     "smul_high64": "pass",
     "srem64": "pass",
     "trunc_u16_after_mul": "pass",
-    "trunc_u8": "structural",
+    "trunc_u8": "pass",
     "umul_high64": "pass",
     "urem64": "pass",
     "wrap_sub_u32": "pass",
@@ -456,8 +456,8 @@
   "08_indirect_dispatch:gcc:O2": {
     "apply": "structural",
     "dispatch": "pass",
-    "dispatch_switch": "structural",
-    "tail_dispatch": "structural"
+    "dispatch_switch": "pass",
+    "tail_dispatch": "pass"
   },
   "09_memory_effects:clang:O0": {
     "cas_update": "pass",
@@ -576,7 +576,7 @@
     "_ZN7DerivedD1Ev": "structural",
     "_ZN7DerivedD2Ev": "structural",
     "cpp_ctor_dtor": "pass",
-    "cpp_exception": "structural",
+    "cpp_exception": "fail",
     "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
     "cpp_raii_guard": "pass",
