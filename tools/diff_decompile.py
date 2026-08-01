@@ -490,6 +490,7 @@ def include_referenced_local_callees(
     binary: str,
     root_c: str,
     decompiled_by_va: dict[int, str] | None = None,
+    allow_native_fallback: bool = False,
 ) -> str:
     """Prepend decompiled definitions for local callees named by ``root_c``.
 
@@ -501,6 +502,9 @@ def include_referenced_local_callees(
     When a comparator supplied ``decompiled_by_va``, helper bodies must come
     from that same comparator. Falling back to Glaurung would produce a hybrid
     translation unit and falsely credit the comparator for Glaurung's work.
+    ``allow_native_fallback`` is therefore only set by the canonical Glaurung
+    batch path: it lets that path fetch exact local dependencies omitted from
+    the batch of exported roots without weakening comparator isolation.
 
     Resolution is exact and bounded: only direct call identifiers whose name is
     present uniquely in the original ``.symtab`` are considered, and at most 32
@@ -545,19 +549,13 @@ def include_referenced_local_callees(
         )
 
     def visit(name: str) -> None:
-        if (
-            name in snippets
-            or name in visiting
-            or len(snippets) + len(visiting) >= 32
-        ):
+        if name in snippets or name in visiting or len(snippets) + len(visiting) >= 32:
             return
         visiting.add(name)
         _symbol, va = local[name]
-        helper = (
-            decompiled_c(binary, va)
-            if decompiled_by_va is None
-            else decompiled_by_va.get(va)
-        )
+        helper = None if decompiled_by_va is None else decompiled_by_va.get(va)
+        if helper is None and (decompiled_by_va is None or allow_native_fallback):
+            helper = decompiled_c(binary, va)
         if helper is not None:
             for dependency in references(helper):
                 visit(dependency)
@@ -1180,6 +1178,7 @@ def run_function(
     fuzz,
     lane=None,
     decompiled_by_va: dict[int, str] | None = None,
+    allow_native_helper_fallback: bool = False,
 ) -> dict:
     name = sig["name"]
     ov = M.override(fixture, name)
@@ -1196,7 +1195,12 @@ def run_function(
     )
     if c is None:
         return {"status": "fail", "detail": "decompile failed"}
-    c = include_referenced_local_callees(binary, c, decompiled_by_va)
+    c = include_referenced_local_callees(
+        binary,
+        c,
+        decompiled_by_va,
+        allow_native_fallback=allow_native_helper_fallback,
+    )
     declarations = dwarf_c_type_declarations(sig, c)
     if declarations:
         c = declarations + "\n" + c
@@ -1336,7 +1340,8 @@ def run(
         if name in sig_by_name
         and exec_class(sig_by_name[name], fixture, lane)[0] == "exec"
     ]
-    if decompiled_by_va is None:
+    owns_decompilation = decompiled_by_va is None
+    if owns_decompilation:
         decompiled_by_va = decompiled_many_c(
             binary, [sig["va"] for sig in executable_sigs]
         )
@@ -1365,6 +1370,7 @@ def run(
                 fuzz,
                 lane=lane,
                 decompiled_by_va=decompiled_by_va,
+                allow_native_helper_fallback=owns_decompilation,
             )
     return results
 

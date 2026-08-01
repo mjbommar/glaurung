@@ -211,6 +211,40 @@ def test_round_trip_includes_a_referenced_local_static_callee() -> None:
     assert result["status"] == "pass", result
 
 
+def test_batch_round_trip_includes_a_referenced_local_static_callee() -> None:
+    """Batching exported roots must not strand an exact local dependency.
+
+    ``run`` decompiles exported functions together for speed.  Its local-callee
+    closure still has to fetch helpers that were not exported roots; otherwise
+    an O0 caller recompiles successfully but fails at load time with an
+    unresolved local symbol.
+    """
+    binary = _compile_so(
+        "static __attribute__((noinline)) int local_batch_step(int x) {\n"
+        "    return (x * 5 + 1) & 7;\n"
+        "}\n"
+        "int calls_local_batch_step(int x) {\n"
+        "    int total = 0;\n"
+        "    for (int i = 0; i < 8; i++) {\n"
+        "        x = local_batch_step(x); total += x;\n"
+        "    }\n"
+        "    return total;\n"
+        "}",
+        "batch_local_static_callee",
+    )
+
+    results = D.run(
+        binary,
+        str(SRC / "01_conditional_polarity.c"),
+        "fx",
+        seed=1234,
+        fuzz=24,
+        only={"calls_local_batch_step"},
+    )
+
+    assert results["calls_local_batch_step"]["status"] == "pass", results
+
+
 def test_round_trip_resolves_a_sanitized_clang_lambda_symbol() -> None:
     """Clang's local lambda symbol contains ``$``, which C cannot spell.
 
