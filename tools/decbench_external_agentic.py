@@ -343,6 +343,57 @@ def build_submission(
     )
 
 
+def audit_sources(
+    sources: dict[str, str], *, compiler: Path, timeout: int = 60
+) -> dict[str, Any]:
+    """Syntax-check every emitted translation unit without executing code."""
+    files: dict[str, Any] = {}
+    for name, source in sorted(sources.items()):
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                [
+                    str(compiler),
+                    "-fsyntax-only",
+                    "-std=gnu11",
+                    "-Wno-implicit-function-declaration",
+                    "-Wno-int-conversion",
+                    "-x",
+                    "c",
+                    "-",
+                ],
+                input=source,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            files[name] = {
+                "compilable": completed.returncode == 0,
+                "returncode": completed.returncode,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "stderr_tail": completed.stderr[-4000:],
+            }
+        except subprocess.TimeoutExpired as error:
+            files[name] = {
+                "compilable": False,
+                "returncode": None,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "stderr_tail": f"syntax-check timeout after {timeout}s: {error}",
+            }
+    return {
+        "compiler": str(compiler),
+        "static_syntax_only": True,
+        "summary": {
+            "files_checked": len(files),
+            "files_compilable": sum(
+                1 for record in files.values() if record["compilable"]
+            ),
+        },
+        "files": files,
+    }
+
+
 def _atomic_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -427,9 +478,10 @@ def _diagnostics(
     version: str,
     stage_timeout_ms: int,
     process_timeout: int,
+    syntax_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     accepted = [run for run in runs if run.status == "accepted"]
-    return {
+    diagnostics = {
         "schema_version": 1,
         "static_analysis_only": True,
         "uses_functions_json_public_only": True,
@@ -454,6 +506,9 @@ def _diagnostics(
             for run in sorted(runs, key=lambda item: (item.binary, item.requested_va))
         ],
     }
+    if syntax_audit is not None:
+        diagnostics["syntax_audit"] = syntax_audit
+    return diagnostics
 
 
 def _write_state(
@@ -467,6 +522,7 @@ def _write_state(
     version: str,
     stage_timeout_ms: int,
     process_timeout: int,
+    syntax_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     diagnostics = _diagnostics(
         runs,
@@ -477,6 +533,7 @@ def _write_state(
         version=version,
         stage_timeout_ms=stage_timeout_ms,
         process_timeout=process_timeout,
+        syntax_audit=syntax_audit,
     )
     _atomic_text(
         output_root / DIAGNOSTICS_NAME,
@@ -549,6 +606,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage-timeout-ms", type=int, default=120_000)
     parser.add_argument("--process-timeout", type=int, default=900)
     parser.add_argument("--jobs", type=int, default=1)
+    parser.add_argument("--cc", type=Path, default=None)
+    parser.add_argument("--skip-syntax-check", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
         "--only", action="append", default=[], help="attempt only this binary name"
@@ -653,9 +712,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 130
 
+    final_runs = list(runs_by_key.values())
+    syntax_audit = None
+    if not args.skip_syntax_check:
+        compiler_raw = args.cc or shutil.which("cc") or shutil.which("gcc")
+        if compiler_raw:
+            _, final_sources = build_submission(final_runs, version=version)
+            syntax_audit = audit_sources(
+                final_sources, compiler=Path(compiler_raw).resolve()
+            )
+        else:
+            print("warning: no C compiler found; syntax audit skipped", file=sys.stderr)
     diagnostics = _write_state(
         output_root,
-        list(runs_by_key.values()),
+        final_runs,
         targets_total=total_targets,
         binaries_total=len(targets),
         model=args.model,
@@ -663,6 +733,7 @@ def main(argv: list[str] | None = None) -> int:
         version=version,
         stage_timeout_ms=args.stage_timeout_ms,
         process_timeout=args.process_timeout,
+        syntax_audit=syntax_audit,
     )
     summary = diagnostics["summary"]
     print(

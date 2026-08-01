@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 from pathlib import Path
 
 import pytest
@@ -123,3 +124,21 @@ def test_submission_uses_authoritative_target_address(runner) -> None:
     assert sources["bin_000.c"].startswith("#include <errno.h>\n")
     assert "#include <sys/stat.h>" in sources["bin_000.c"]
     assert "void sub_8350" in sources["bin_000.c"]
+
+
+def test_emitted_submission_is_checked_with_a_real_c_compiler(runner) -> None:
+    compiler = shutil.which("cc") or shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("no C compiler available")
+    run = runner.FunctionRun.success(
+        binary="bin_000.elf",
+        requested_va=0x8350,
+        accepted=runner.accept_payload(REAL_CANARY, requested_va=0x8350),
+        elapsed_seconds=23.5,
+    )
+    _, sources = runner.build_submission([run], version="canary")
+
+    audit = runner.audit_sources(sources, compiler=Path(compiler))
+
+    assert audit["summary"] == {"files_checked": 1, "files_compilable": 1}
+    assert audit["files"]["bin_000.c"]["compilable"] is True
