@@ -252,10 +252,11 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
         match statement {
             Stmt::If {
+                cond,
                 then_body,
                 else_body,
-                ..
             } => {
+                recover_owned_pretested_do_while(cond, then_body, else_body.as_deref());
                 recover_guarded_do_while_body(then_body);
                 if let Some(else_body) = else_body {
                     recover_guarded_do_while_body(else_body);
@@ -301,6 +302,89 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
             },
         );
         start = do_index;
+    }
+}
+
+/// Turn an entry-owned rotated loop back into a head-tested loop after phi
+/// coalescing has made the seed and latch cursor one value.
+///
+/// The outer `if` is retained, so no seed moves across the entry guard. The new
+/// head test is only an extra check on the taken path, and alias substitution
+/// proves it equal to the guard there. Every effect and the latch condition keep
+/// their original order inside the loop.
+fn recover_owned_pretested_do_while(
+    entry_guard: &Expr,
+    then_body: &mut [Stmt],
+    else_body: Option<&[Stmt]>,
+) {
+    if else_body.is_some() {
+        return;
+    }
+    let Some((last, prelude)) = then_body.split_last_mut() else {
+        return;
+    };
+    let Stmt::DoWhile {
+        body: loop_body,
+        cond: latch_guard,
+    } = last
+    else {
+        return;
+    };
+    let mut aliases = HashMap::<VReg, Expr>::new();
+    for statement in prelude {
+        match statement {
+            Stmt::Nop => {}
+            Stmt::Assign { dst, src } if stable_value_expr(src) => {
+                aliases.insert(dst.clone(), src.clone());
+            }
+            _ => return,
+        }
+    }
+    // The aliases execute only after the entry guard. They may prove that the
+    // latch guard names the entry value, but they must never rewrite the entry
+    // guard itself.
+    if resolve_entry_aliases(latch_guard, &aliases, 0) != *entry_guard {
+        return;
+    }
+    *last = Stmt::While {
+        cond: latch_guard.clone(),
+        body: std::mem::take(loop_body),
+    };
+}
+
+fn resolve_entry_aliases(expr: &Expr, aliases: &HashMap<VReg, Expr>, depth: usize) -> Expr {
+    if depth > aliases.len() {
+        return expr.clone();
+    }
+    match expr {
+        Expr::Reg(reg) => aliases.get(reg).map_or_else(
+            || expr.clone(),
+            |value| resolve_entry_aliases(value, aliases, depth + 1),
+        ),
+        Expr::Bin { op, lhs, rhs } => Expr::Bin {
+            op: *op,
+            lhs: Box::new(resolve_entry_aliases(lhs, aliases, depth + 1)),
+            rhs: Box::new(resolve_entry_aliases(rhs, aliases, depth + 1)),
+        },
+        Expr::Cmp { op, lhs, rhs } => Expr::Cmp {
+            op: *op,
+            lhs: Box::new(resolve_entry_aliases(lhs, aliases, depth + 1)),
+            rhs: Box::new(resolve_entry_aliases(rhs, aliases, depth + 1)),
+        },
+        Expr::Un { op, src } => Expr::Un {
+            op: *op,
+            src: Box::new(resolve_entry_aliases(src, aliases, depth + 1)),
+        },
+        Expr::Cast {
+            signed,
+            width,
+            expr,
+        } => Expr::Cast {
+            signed: *signed,
+            width: *width,
+            expr: Box::new(resolve_entry_aliases(expr, aliases, depth + 1)),
+        },
+        _ => expr.clone(),
     }
 }
 
@@ -1522,6 +1606,91 @@ mod tests {
             } if lhs.as_ref() == &Expr::Reg(reg("current"))
                 && rhs.as_ref() == &Expr::Const(0)
         ));
+    }
+
+    #[test]
+    fn an_entry_owned_coalesced_cursor_recovers_a_head_tested_loop() {
+        let guard = Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Reg(reg("arg0"))),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let latch = Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Reg(reg("cursor"))),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let mut function = Function {
+            name: "list_sum".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond: guard,
+                then_body: vec![
+                    Stmt::Assign {
+                        dst: reg("cursor"),
+                        src: Expr::Reg(reg("arg0")),
+                    },
+                    Stmt::DoWhile {
+                        body: vec![Stmt::Assign {
+                            dst: reg("cursor"),
+                            src: Expr::Deref {
+                                addr: Box::new(Expr::Reg(reg("cursor"))),
+                                size: 8,
+                            },
+                        }],
+                        cond: latch.clone(),
+                    },
+                ],
+                else_body: None,
+            }],
+        };
+
+        recover_guarded_do_whiles(&mut function);
+
+        let Stmt::If { then_body, .. } = &function.body[0] else {
+            panic!("entry guard was not retained: {function:#?}");
+        };
+        assert!(matches!(
+            &then_body[1],
+            Stmt::While { cond, .. } if cond == &latch
+        ));
+    }
+
+    #[test]
+    fn an_entry_guard_overwritten_by_the_prelude_stays_rotated() {
+        let entry_guard = Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Reg(reg("cursor"))),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let latch_guard = Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Reg(reg("arg0"))),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let original = Function {
+            name: "overwritten_entry_guard".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond: entry_guard,
+                then_body: vec![
+                    Stmt::Assign {
+                        dst: reg("cursor"),
+                        src: Expr::Reg(reg("arg0")),
+                    },
+                    Stmt::DoWhile {
+                        body: vec![Stmt::Nop],
+                        cond: latch_guard,
+                    },
+                ],
+                else_body: None,
+            }],
+        };
+        let mut function = original.clone();
+
+        recover_guarded_do_whiles(&mut function);
+
+        assert_eq!(function, original);
     }
 
     #[test]

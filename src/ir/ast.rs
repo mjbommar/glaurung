@@ -4458,6 +4458,16 @@ fn ctype_for(ident: &str, tm: Option<&TypeMap>) -> &'static str {
 /// casts/operations must not inherit a stray final `eax` hint and render as
 /// `int`, which truncates a valid machine `long` at the C ABI boundary.
 pub(crate) fn refine_decbench_abi_widths(f: &Function, tm: &mut TypeMap) {
+    refine_decbench_abi_widths_with_value_widths(f, tm, None);
+}
+
+/// Refine declarations after source-level preparation while retaining exact
+/// per-SSA-value width evidence from value numbering.
+pub(crate) fn refine_decbench_abi_widths_with_value_widths(
+    f: &Function,
+    tm: &mut TypeMap,
+    value_widths: Option<&std::collections::HashMap<String, u8>>,
+) {
     refine_signed_comparison_operands(&f.body, tm);
 
     let mut required_wide = std::collections::HashSet::new();
@@ -4489,21 +4499,19 @@ pub(crate) fn refine_decbench_abi_widths(f: &Function, tm: &mut TypeMap) {
             break;
         }
     }
-    for (name, &definition_width) in &defs {
+    for (name, &ast_definition_width) in &defs {
         if !is_high_variable(name) || !all_definitions_proven_scalar(&f.body, name, tm) {
             continue;
         }
         let value = VReg::phys(name);
-        if let Some(TypeHint::Int {
-            signed,
-            width: recovered_width,
-        }) = tm.get(&value)
-        {
-            if definition_width > recovered_width {
-                // Phi coalescing can give an exact value a narrow final
-                // register spelling even though every reaching AST definition
-                // is explicitly wide. Keeping the narrow declaration makes the
-                // widening pass zero-extend a signed int64_t loop carrier.
+        if let Some(TypeHint::Int { signed, width }) = tm.get(&value) {
+            let definition_width = value_widths
+                .and_then(|widths| widths.get(name).copied())
+                .unwrap_or(ast_definition_width);
+            if definition_width > width {
+                // The per-value semantic map belongs to the final rendered
+                // identity and therefore outranks a prepared expression whose
+                // copy/cast history no longer exposes its machine width.
                 tm.force_scalar_int(value, signed, definition_width);
             }
         }
@@ -5119,25 +5127,10 @@ fn expression_value_width(
     defs: &std::collections::HashMap<String, u8>,
 ) -> Option<u8> {
     match expr {
-        Expr::Reg(VReg::Phys(name)) => {
-            let definition_width = defs.get(name).copied();
-            let recovered = tm.get(&VReg::phys(name));
-            match (definition_width, recovered) {
-                // A recovered integer width can retain source-width evidence
-                // lost when a wide loop carrier is copied through a narrow
-                // register view. Non-integer hints cannot: in particular, a
-                // stale pointer attached through raw-register reuse must not
-                // override explicit scalar definitions.
-                (
-                    Some(width),
-                    Some(TypeHint::Int {
-                        width: recovered, ..
-                    }),
-                ) => Some(width.max(recovered)),
-                (Some(width), _) => Some(width),
-                (None, hint) => hint.and_then(type_hint_width),
-            }
-        }
+        Expr::Reg(VReg::Phys(name)) => defs
+            .get(name)
+            .copied()
+            .or_else(|| tm.get(&VReg::phys(name)).and_then(type_hint_width)),
         Expr::Const(value) => Some(if constant_needs_wide_word(*value) {
             8
         } else {
@@ -6381,6 +6374,11 @@ pub fn prepare_for_decbench_with_output(
     crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
     crate::ir::guard_chain::collapse_redundant_copy_nested_guards(&mut owned);
     crate::ir::guard_chain::collapse_matching_terminal_return_guard(&mut owned);
+    // Late copy/guard folding can make an entry-owned do-while's initial and
+    // latch predicates structurally identical only after the first loop-form
+    // pass. The recovery is exact and idempotent; rerun it on the final AST so
+    // phi-coalesced cursors retain their source-level pre-test.
+    crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
     remove_redundant_return_constant_assignments(&mut owned.body);
     owned
 }
@@ -12229,6 +12227,56 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn a_narrow_definition_does_not_inherit_a_wide_source_register_hint() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "narrow_scratch".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: Expr::Const(8),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(VReg::phys("var1"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+            ],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        tm.upsert_public(
+            VReg::phys("var1"),
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        );
+
+        refine_decbench_abi_widths(&f, &mut tm);
+
+        assert_eq!(
+            tm.get(&VReg::phys("var0")),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            }),
+            "the source's parent-register width must not leak through its exact narrow definition"
+        );
+    }
+
+    #[test]
     fn a_loop_carrier_copied_from_a_wide_result_keeps_the_result_width() {
         use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -12275,6 +12323,7 @@ function f @ 0x1000 {
             ],
         };
         let mut tm = TypeMap::default();
+        let mut value_widths = std::collections::HashMap::new();
         for (name, width) in [("var1", 8), ("var2", 4), ("ret", 8)] {
             tm.upsert_public(
                 VReg::phys(name),
@@ -12284,8 +12333,11 @@ function f @ 0x1000 {
                 },
             );
         }
+        value_widths.insert("var1".to_string(), 8);
+        value_widths.insert("var2".to_string(), 8);
+        value_widths.insert("ret".to_string(), 8);
 
-        refine_decbench_abi_widths(&f, &mut tm);
+        refine_decbench_abi_widths_with_value_widths(&f, &mut tm, Some(&value_widths));
 
         assert_eq!(
             tm.get(&VReg::phys("var2")),

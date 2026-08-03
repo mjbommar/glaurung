@@ -1660,7 +1660,12 @@ fn classify_int_default() -> TypeHint {
 /// `w0`->4, `x0`->8, `di`->2, `dil`->1). Falls back to 8 for unknown names.
 fn reg_width_bytes(v: &VReg) -> u8 {
     if let VReg::Phys(n) = v {
-        if let Some(w) = crate::ir::types::phys_reg_width(n) {
+        // Value numbering appends `#version` to the architectural spelling.
+        // Width belongs to the storage view, not to the SSA identity:
+        // `xmm0_d0#3` is still one 32-bit lane. Passing the tagged spelling to
+        // `phys_reg_width` misses and falls back to eight bytes, silently
+        // widening every numbered SIMD lane to `long`.
+        if let Some(w) = crate::ir::types::phys_reg_width(crate::ir::abi::ssa_base(n)) {
             return (w.bits() / 8).max(1) as u8;
         }
     }
@@ -3013,6 +3018,12 @@ mod tests {
                 succs: vec![],
             }],
         }
+    }
+
+    #[test]
+    fn value_number_tags_do_not_change_register_view_width() {
+        assert_eq!(reg_width_bytes(&VReg::phys("xmm0_d0#3")), 4);
+        assert_eq!(reg_width_bytes(&VReg::phys("rax#7")), 8);
     }
 
     #[test]

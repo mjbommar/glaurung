@@ -813,9 +813,9 @@ fn decompile_at_py(
                 &definition_widths,
             )
         });
-        let (decl, width) = match &maps {
-            Some((d, w)) => (Some(d), Some(w)),
-            None => (None, None),
+        let (decl, width, exact_value_widths) = match &maps {
+            Some((d, w, exact)) => (Some(d), Some(w), Some(exact)),
+            None => (None, None, None),
         };
         let declared_render = dwarf_outputs
             .as_ref()
@@ -826,6 +826,7 @@ fn decompile_at_py(
             &exception_sites,
             decl,
             width,
+            exact_value_widths,
             &readonly_data,
             prototype.as_ref().map_or(
                 crate::ir::types_recover::RecoveredOutputKind::Unknown,
@@ -1041,9 +1042,9 @@ fn decompile_range_at_py(
                 &definition_widths,
             )
         });
-        let (decl, width) = match &maps {
-            Some((d, w)) => (Some(d), Some(w)),
-            None => (None, None),
+        let (decl, width, exact_value_widths) = match &maps {
+            Some((d, w, exact)) => (Some(d), Some(w), Some(exact)),
+            None => (None, None, None),
         };
         let declared_render = dwarf_outputs
             .as_ref()
@@ -1054,6 +1055,7 @@ fn decompile_range_at_py(
             &exception_sites,
             decl,
             width,
+            exact_value_widths,
             &readonly_data,
             prototype.as_ref().map_or(
                 crate::ir::types_recover::RecoveredOutputKind::Unknown,
@@ -1280,6 +1282,7 @@ fn decbench_text(
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
     decl: Option<&crate::ir::types_recover::TypeMap>,
     width: Option<&crate::ir::types_recover::TypeMap>,
+    exact_value_widths: Option<&std::collections::HashMap<String, u8>>,
     readonly_data: &crate::ir::readonly_fold::ReadonlyData,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
@@ -1324,11 +1327,19 @@ fn decbench_text(
     let mut refined_decl = decl.cloned();
     let mut refined_width = width.cloned();
     if let Some(tm) = refined_decl.as_mut() {
-        crate::ir::ast::refine_decbench_abi_widths(&prepared, tm);
+        crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
+            &prepared,
+            tm,
+            exact_value_widths,
+        );
         crate::ir::high_variables::refine_pointer_high_variables(&prepared, tm);
     }
     if let Some(tm) = refined_width.as_mut() {
-        crate::ir::ast::refine_decbench_abi_widths(&prepared, tm);
+        crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
+            &prepared,
+            tm,
+            exact_value_widths,
+        );
     }
     if let Some(tm) = refined_decl.as_ref() {
         crate::ir::const_fold::fold_typed_declared_views(&mut prepared, tm);
@@ -2168,6 +2179,7 @@ fn decbench_type_maps(
 ) -> (
     crate::ir::types_recover::TypeMap,
     crate::ir::types_recover::TypeMap,
+    std::collections::HashMap<String, u8>,
 ) {
     use crate::ir::types_recover::recover_types_for;
     let raw = recover_types_for(lf_raw, cc);
@@ -2266,7 +2278,29 @@ fn decbench_type_maps(
         eprintln!("\n===== recovered declaration types =====\n{decl:#?}");
         eprintln!("\n===== recovered expression-width types =====\n{width:#?}");
     }
-    (decl, width)
+    let exact_value_widths = integer_widths_by_role(&width);
+    (decl, width, exact_value_widths)
+}
+
+/// Extract scalar widths from the final per-value expression map.
+///
+/// This map has already combined raw operation evidence with exact numbered
+/// identities. It intentionally excludes pointers and floats: declaration-kind
+/// recovery owns those, while this companion only answers integer expression
+/// width after prepared AST copies have hidden the original storage spelling.
+fn integer_widths_by_role(
+    widths: &crate::ir::types_recover::TypeMap,
+) -> std::collections::HashMap<String, u8> {
+    widths
+        .iter()
+        .filter_map(|(role, hint)| match (role, hint) {
+            (
+                crate::ir::types::VReg::Phys(role),
+                crate::ir::types_recover::TypeHint::Int { width, .. },
+            ) => Some((role.clone(), *width)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Apply per-value SSA evidence without discarding a previously proven pointer.
@@ -2449,7 +2483,7 @@ fn decompile_all_py(
             crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
         }
         let text = if style == "decbench" {
-            let (decl, width) = decbench_type_maps(
+            let (decl, width, exact_value_widths) = decbench_type_maps(
                 &f,
                 &lf_raw,
                 &lf,
@@ -2469,6 +2503,7 @@ fn decompile_all_py(
                 &exception_sites,
                 Some(&decl),
                 Some(&width),
+                Some(&exact_value_widths),
                 &readonly_data,
                 prototype
                     .as_ref()
@@ -2691,7 +2726,7 @@ fn decompile_many_py(
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
         let text = if style == "decbench" {
-            let (decl, width) = decbench_type_maps(
+            let (decl, width, exact_value_widths) = decbench_type_maps(
                 &f,
                 &lf_raw,
                 &lf,
@@ -2711,6 +2746,7 @@ fn decompile_many_py(
                 &exception_sites,
                 Some(&decl),
                 Some(&width),
+                Some(&exact_value_widths),
                 &readonly_data,
                 prototype
                     .as_ref()
@@ -2760,7 +2796,7 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
 #[cfg(test)]
 mod tests {
     use super::{
-        dwarf_return_hint, dwarf_stack_object_hints, imported_symbol_base,
+        dwarf_return_hint, dwarf_stack_object_hints, imported_symbol_base, integer_widths_by_role,
         merge_exact_definition_widths, refine_numbered_declaration, DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
@@ -2774,6 +2810,24 @@ mod tests {
         assert_eq!(imported_symbol_base("signed_step@plt"), "signed_step");
         assert_eq!(imported_symbol_base("signed_step.plt"), "signed_step");
         assert_eq!(imported_symbol_base("signed_step"), "signed_step");
+    }
+
+    #[test]
+    fn semantic_value_widths_exclude_non_integer_kinds() {
+        let mut widths = TypeMap::default();
+        widths.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        widths.upsert_public(VReg::phys("var1"), TypeHint::Pointer { pointee_width: 8 });
+
+        assert_eq!(
+            integer_widths_by_role(&widths),
+            HashMap::from([("var0".to_string(), 4)])
+        );
     }
 
     #[test]

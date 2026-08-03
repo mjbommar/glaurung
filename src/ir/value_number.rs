@@ -1260,18 +1260,20 @@ fn class_widths(
 /// of one source variable. Joining its phi class to later scratch definitions
 /// creates artificial long-lived cycles: otherwise single-use address
 /// calculations stop inlining and shared guards can no longer be structured.
-/// A live-in copied before a later real use remains open, which preserves the
-/// legitimate loop-carried parameter case this coalescer was introduced for.
-/// A bare value never used outside phi plumbing is not a parameter proof at all:
-/// it is an undefined incoming edge to later scratch state. Coalescing that edge
-/// makes a path-local dead copy appear globally live and emits an undefined C
-/// read, so it is refused just like a late snapshot.
+/// A phi destination consumed by a real architectural operand proves that its
+/// bare incoming value participates in the same source-level carrier, even when
+/// an entry guard consumed that value before the loop. Such a value remains
+/// open; loop-form recovery retains the guard proof after coalescing.
+/// A destination retained only by call may-uses or otherwise unread supplies no
+/// parameter proof; its bare edge is refused, as is a late snapshot whose phi
+/// result is not genuinely consumed.
 fn consumed_live_ins_before_phi_copy(
     out: &LlirFunction,
     names: &HashSet<VReg>,
     copies: &[(VReg, VReg)],
 ) -> HashSet<VReg> {
     let copy_pairs: HashSet<(VReg, VReg)> = copies.iter().cloned().collect();
+    let architecturally_read = architecturally_read_names(out);
     let definitions: HashSet<VReg> = out
         .blocks
         .iter()
@@ -1279,6 +1281,7 @@ fn consumed_live_ins_before_phi_copy(
         .filter_map(|instruction| def_uses(&instruction.op).0)
         .collect();
     let mut first_copy = HashMap::<VReg, u64>::new();
+    let mut read_through_phi = HashSet::<VReg>::new();
     for block in &out.blocks {
         for instruction in &block.instrs {
             let Op::Assign {
@@ -1293,6 +1296,9 @@ fn consumed_live_ins_before_phi_copy(
                 && !names.contains(src)
                 && !definitions.contains(src)
             {
+                if matches!(dst, VReg::Phys(name) if architecturally_read.contains(name)) {
+                    read_through_phi.insert(src.clone());
+                }
                 first_copy
                     .entry(src.clone())
                     .and_modify(|va| *va = (*va).min(instruction.va))
@@ -1326,10 +1332,11 @@ fn consumed_live_ins_before_phi_copy(
     first_copy
         .into_iter()
         .filter_map(|(source, copy_va)| {
-            first_semantic_use
+            let consumed_before = first_semantic_use
                 .get(&source)
-                .is_none_or(|use_va| *use_va < copy_va)
-                .then_some(source)
+                .is_some_and(|use_va| *use_va < copy_va);
+            let unread = !first_semantic_use.contains_key(&source);
+            (!read_through_phi.contains(&source) && (consumed_before || unread)).then_some(source)
         })
         .collect()
 }
@@ -2483,10 +2490,7 @@ mod tests {
                     end_va: 0x1024,
                     instrs: vec![LlirInstr {
                         va: 0x1020,
-                        op: Op::Assign {
-                            dst: VReg::phys("rax"),
-                            src: Value::Reg(VReg::phys("rdi#3")),
-                        },
+                        op: Op::Nop,
                     }],
                     succs: vec![],
                 },
@@ -2549,10 +2553,7 @@ mod tests {
                     end_va: 0x1024,
                     instrs: vec![LlirInstr {
                         va: 0x1020,
-                        op: Op::Assign {
-                            dst: VReg::phys("rax"),
-                            src: Value::Reg(VReg::phys("rcx#3")),
-                        },
+                        op: Op::Nop,
                     }],
                     succs: vec![],
                 },
@@ -2568,6 +2569,89 @@ mod tests {
         assert!(
             register_copies(&lf).contains(&("rcx#3".to_string(), "rcx#2".to_string())),
             "an unproven version-zero value is undefined, not a parameter: {lf:#?}"
+        );
+    }
+
+    #[test]
+    fn a_live_in_reached_through_a_read_phi_coalesces_with_its_loop_carrier() {
+        let carrier = VReg::phys("rdi#1");
+        let next = VReg::phys("rdi#2");
+        let mut widths = HashMap::from([(next.clone(), 8)]);
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1008,
+                    instrs: vec![
+                        LlirInstr {
+                            va: 0x1000,
+                            op: Op::Bin {
+                                dst: VReg::Temp(1),
+                                op: crate::ir::types::BinOp::Add,
+                                lhs: Value::Reg(VReg::phys("rdi")),
+                                rhs: Value::Const(0),
+                            },
+                        },
+                        LlirInstr {
+                            va: 0x1004,
+                            op: Op::Assign {
+                                dst: carrier.clone(),
+                                src: Value::Reg(VReg::phys("rdi")),
+                            },
+                        },
+                    ],
+                    succs: vec![0x1010],
+                },
+                LlirBlock {
+                    start_va: 0x1010,
+                    end_va: 0x1020,
+                    instrs: vec![
+                        LlirInstr {
+                            va: 0x1010,
+                            op: Op::Load {
+                                dst: VReg::Temp(0),
+                                addr: crate::ir::types::MemOp {
+                                    base: Some(carrier.clone()),
+                                    index: None,
+                                    scale: 1,
+                                    disp: 0,
+                                    size: 1,
+                                    ..Default::default()
+                                },
+                            },
+                        },
+                        LlirInstr {
+                            va: 0x1014,
+                            op: Op::Bin {
+                                dst: next.clone(),
+                                op: crate::ir::types::BinOp::Add,
+                                lhs: Value::Reg(carrier.clone()),
+                                rhs: Value::Const(1),
+                            },
+                        },
+                        LlirInstr {
+                            va: 0x1018,
+                            op: Op::Assign {
+                                dst: carrier.clone(),
+                                src: Value::Reg(next.clone()),
+                            },
+                        },
+                    ],
+                    succs: vec![0x1010],
+                },
+            ],
+        };
+        let copies = vec![
+            (carrier.clone(), VReg::phys("rdi")),
+            (carrier.clone(), next.clone()),
+        ];
+
+        coalesce_phi_copies(&mut lf, &copies, &mut widths);
+
+        assert!(
+            !register_copies(&lf).contains(&("rdi#1".to_string(), "rdi#2".to_string())),
+            "the bare live-in is genuinely consumed through the phi destination: {lf:#?}"
         );
     }
 
