@@ -1776,7 +1776,13 @@ def test_injected_backend_named_struct_is_rebuilt_from_dwarf(monkeypatch):
         },
     )
 
-    assert results == {"named_read": {"status": "pass", "detail": "18 cases"}}
+    assert results == {
+        "named_read": {
+            "status": "pass",
+            "detail": "18 cases",
+            "width_sensitive": False,
+        }
+    }
 
 
 def test_recursive_linked_list_round_trips_values_links_and_pointer_returns():
@@ -1889,7 +1895,13 @@ def test_run_uses_injected_backend_source_without_invoking_glaurung(monkeypatch)
         },
     )
 
-    assert results == {"injected": {"status": "pass", "detail": "18 cases"}}
+    assert results == {
+        "injected": {
+            "status": "pass",
+            "detail": "18 cases",
+            "width_sensitive": False,
+        }
+    }
 
 
 def test_recompile_failure_reports_the_compiler_diagnostic(tmp_path):

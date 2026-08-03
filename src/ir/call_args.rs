@@ -1210,6 +1210,19 @@ fn fold_one_call(
         if fold_one_recovered_layout_call(body, call_idx, layout) {
             return;
         }
+        // A locked callee layout says which architectural storage the callee
+        // reads even when optimization left no adjacent setup assignment (an
+        // incoming argument reused directly, or an epilogue between setup and
+        // a tail call). Keep the current register values explicit instead of
+        // degrading the proven fixed-arity call to `callee(void)`.
+        if matches!(arch, CallConv::Arm | CallConv::ArmHardFloat) {
+            if let Stmt::Call { args, .. } = &mut body[call_idx] {
+                if args.is_empty() {
+                    *args = layout.iter().cloned().map(Expr::Reg).collect();
+                }
+            }
+            return;
+        }
     }
     if arch == CallConv::ArmHardFloat {
         if let Some(layout) = known_arm_hard_float_layout(&body[call_idx]) {
@@ -5251,6 +5264,29 @@ mod tests {
             ]
         );
         assert_eq!(dst, &Some(reg("s0")));
+    }
+
+    #[test]
+    fn recovered_callee_layout_keeps_current_register_without_adjacent_setup() {
+        let mut f = Function {
+            name: "tail_caller".into(),
+            entry_va: 0x1000,
+            body: vec![call_to("mixed_float")],
+        };
+        let layouts = std::collections::HashMap::from([(0x2000, vec![reg("r0")])]);
+        let mut parameter_slots = [0].into_iter().collect();
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::Arm,
+            &mut parameter_slots,
+            &layouts,
+        );
+
+        let Stmt::Call { args, .. } = &f.body[0] else {
+            panic!("call disappeared: {:#?}", f.body);
+        };
+        assert_eq!(args, &[Expr::Reg(reg("r0"))]);
     }
 
     fn dst_of(s: &Stmt) -> &Option<VReg> {

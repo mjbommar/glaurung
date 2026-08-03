@@ -50,7 +50,11 @@ pub fn insert_widening_casts(f: &mut Function, tm: &TypeMap) {
 /// pass four for ARM32/i386 so their recovered C is not widened merely because
 /// the differential runner rebuilds it on an LP64 host.
 pub fn insert_widening_casts_for_machine_width(f: &mut Function, tm: &TypeMap, machine_width: u8) {
-    let ret_width = crate::ir::ast::inferred_return_width(&f.body, Some(tm)).min(machine_width);
+    // A return value may span more than one architectural register.  ARM32 and
+    // i386 return a uint64_t in a register pair, so clamping the return context
+    // to one machine word turns `(uint64_t)a * b` back into a 32-bit C multiply
+    // and only widens the already-truncated product.
+    let ret_width = crate::ir::ast::inferred_return_width(&f.body, Some(tm));
     rewrite_body(&mut f.body, ret_width, tm, machine_width);
 }
 
@@ -64,10 +68,9 @@ fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap, machine_width: u8) {
     match s {
         Stmt::Assign { dst, src } => {
             // The destination's own declaration says how wide this value is kept.
-            let want = declared_int(dst_name(dst), tm)
+            let want = declared_int_destination(dst, tm)
                 .map(|(_, w)| w)
-                .unwrap_or(machine_width)
-                .min(machine_width);
+                .unwrap_or(machine_width);
             rewrite_expr(src, Some(want), tm);
         }
         Stmt::Store { src, size, .. } => {
@@ -246,8 +249,14 @@ fn reg_name(v: &VReg) -> Option<&str> {
     }
 }
 
-fn dst_name(v: &VReg) -> Option<&str> {
-    reg_name(v)
+fn declared_int_destination(v: &VReg, tm: &TypeMap) -> Option<(bool, u8)> {
+    if let Some(name) = reg_name(v) {
+        return declared_int(Some(name), tm);
+    }
+    match tm.get(v) {
+        Some(crate::ir::types_recover::TypeHint::Int { signed, width }) => Some((signed, width)),
+        _ => None,
+    }
 }
 
 /// The `(signed, width)` the renderer will actually **declare** this name with —
@@ -655,6 +664,33 @@ mod tests {
                 width: 8,
                 expr: Box::new(reg("arg0")),
             }
+        );
+    }
+
+    #[test]
+    fn a_wide_register_pair_return_widens_operands_on_a_32_bit_machine() {
+        let mut f = func(vec![
+            Stmt::Assign {
+                dst: VReg::phys("t0"),
+                src: bin(BinOp::Mul, reg("arg0"), reg("arg1")),
+            },
+            Stmt::Return {
+                value: Some(reg("t0")),
+            },
+        ]);
+        let tm = tm_of(&[
+            ("arg0", false, 4),
+            ("arg1", false, 4),
+            ("t0", false, 8),
+            ("ret", false, 8),
+        ]);
+
+        insert_widening_casts_for_machine_width(&mut f, &tm, 4);
+        let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
+
+        assert!(
+            out.contains("(unsigned long)(arg0)") && out.contains("(unsigned long)(arg1)"),
+            "both register-pair operands must widen before multiplication:\n{out}"
         );
     }
 }

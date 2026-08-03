@@ -1295,3 +1295,35 @@ function against RetDec's 4.121 and Ghidra's 3.792 on Tier A. Resolved callees
 declarations per function on Tier B against Ghidra's 13.5. None of these are
 correctness defects — they are completeness and readability — but they are what
 separates the output from a production decompiler's.
+
+## 15. P9 execution closure — 2026-08-03
+
+The ten-item follow-up was executed as one evidence-bounded campaign. The string
+and callee-name work deliberately stopped at diagnosis; the request explicitly
+required root cause before code, and the corrected architecture split disproved
+the proposed single ARM/data-xref explanation. The other eight items landed with
+focused regressions and current native-extension output.
+
+| item | current result | retained acceptance evidence |
+|---|---|---|
+| string recovery | diagnosed, no speculative recovery heuristic added | `string-recovery-root-cause-2026-08-03.md`; x86-64 remains the widest real string deficit and the misses split across address provenance, join loss, and short-string policy |
+| phi-copy coalescing | implemented past missing-width evidence while refusing contradictory arithmetic widths | Tier B local declarations/function **52.445 -> 48.217** (Ghidra 13.468); real stripped AArch64 loop still recovers 2 parameters after parameter evidence was moved before provenance-erasing coalescing |
+| interprocedural pointer parameters | direct-callee layouts and recovered fixed-arity contracts now apply to SysV AMD64, AArch64, ARM hard-float, and 32-bit cdecl | callee layout tests cover register and stack conventions; pointer parameter spills remain exact rather than width-guessed |
+| large-function GED | unwind/symbol extents now bound the real body; the 15 retained historical outliers all decompile | aggregate GED **4,434 -> 1,856** (-58.1%); wrapper collapses include `em_inc_search_prev` 267 -> 0, `fill_inbuf` 454 -> 4, and `modinfo_name_do` 216 -> 7. Remaining high cells are genuinely large bodies, including Betaflight's 350-node dispatcher, rather than adjacent-function capture |
+| resolved callee names | scoped with the string diagnosis, then separated where the data disagreed | corrected x86-64 density is 3.774 vs Ghidra 3.893; the large residual is ARMv7 PLT/call-target resolution, not the x86 string root cause |
+| fused bitwise guards | pure, explicitly boolean SETcc trees recover `&&`/`||`; eager evaluation is retained for memory reads or other unsafe leaves | positive logical-disjunction regression plus memory-read and unobserved-value refusal controls |
+| x86 ADC/SBB flags | CF/ZF/SF/OF are exact over the wrapped result; PF/AF stay explicitly undefined | ADC/SBB unit regressions pass and x86-64 `14_flag_effects` is 14/14 across O0/O2 |
+| ARM adds/adc/subs/sbc | exact carry/borrow, zero, sign, and overflow in the existing borrow polarity | randomized O0/O2 flag fixture preserves `dec_preserves_carry`; a new real ITTE sequence proves narrow Thumb ADD/SUB do not overwrite the incoming `cmp` carry. Existing `lo/hs/ls/hi` polarity assertions remain unchanged |
+| instruments | micro-averaged rates with denominators; Tier B uses one bounded local disassembly per binary and refuses an empty score | aggregation tests pass; Tier B call check completes in **1.52 s**, scores **263** Glaurung functions, reports 63% imported-callee recall and **0/263** functions with an invented import call |
+| `cpp_exception` | Itanium throws/catches recovered on AArch64, ARM EHABI, and i386 | all six non-control cells pass at O0 and O2. Fixes include AArch64 bit-branch targets, Itanium runtime arity, relocation-backed `_ZTIi`, throw-value preservation, ARM EHABI LSDA discovery, and catch-return folding |
+
+The GED replay used an isolated materialized tree. The retained shared benchmark's
+`function_results.json` and `scoreboard.toml` were restored byte-for-byte from
+their immutable `24b3826` evidence snapshot after an exploratory evaluator run;
+no `glaurung_current` artifact remains in that tree.
+
+The final architecture ratchet matches its refreshed baseline exactly with no
+regressions and 25 verified improvements: x86-64 328/328, i386 232 behavioral
+passes, AArch64 274, and ARMv7 202. The Rust library gate passes 1,802 tests;
+the focused Python decompiler/instrument tests and all 24 register-view semantic
+tests pass.

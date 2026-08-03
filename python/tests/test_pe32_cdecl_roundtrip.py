@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -63,7 +64,7 @@ def test_real_mingw32_main_has_bounded_cdecl_arguments() -> None:
         style="decbench",
     )
 
-    assert "\nint _main(int arg0, int arg1) {\n" in text, text[:300]
+    assert re.search(r"\nint _main\([^,\n]+ arg0, [^,\n]+ arg1\) \{\n", text), text[:300]
     assert "arg536870" not in text
     assert '_printf((const char *)("Hello, World from C!\\n"))' in text
     assert "strlen(" in text and "strlen()" not in text

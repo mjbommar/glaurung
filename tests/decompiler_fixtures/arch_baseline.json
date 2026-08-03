@@ -19,7 +19,7 @@
     "cmp_unsigned": "pass",
     "early_return": "pass",
     "early_return_ge": "pass",
-    "elseif": "fail",
+    "elseif": "pass",
     "nested": "pass",
     "sc_and": "pass",
     "sc_mixed": "pass",
@@ -42,7 +42,7 @@
     "ternary_nested": "pass"
   },
   "01_conditional_polarity:armv7:O2": {
-    "classify": "fail",
+    "classify": "pass",
     "cmp_signed": "pass",
     "cmp_unsigned": "pass",
     "early_return": "pass",
@@ -281,7 +281,7 @@
     "nested_pairs": "pass",
     "two_latches": "pass",
     "while_prefix": "pass",
-    "while_reload_header": "fail"
+    "while_reload_header": "pass"
   },
   "03_loop_shapes:armv7:O0": {
     "cond_reload_and_transform": "fail",
@@ -312,14 +312,14 @@
     "for_stride2": "pass",
     "for_sum": "pass",
     "loop_break": "pass",
-    "loop_continue": "fail",
+    "loop_continue": "pass",
     "loop_early_return": "pass",
     "loop_return_on_neg": "fail",
     "mutate_prefix": "pass",
     "mutate_reverse": "pass",
     "nested_carry": "pass",
     "nested_pairs": "pass",
-    "two_latches": "fail",
+    "two_latches": "pass",
     "while_prefix": "pass",
     "while_reload_header": "pass"
   },
@@ -465,14 +465,14 @@
     "fallthrough_chain": "pass",
     "negative_cases": "fail",
     "negative_sparse": "pass",
-    "nested_switch": "fail",
+    "nested_switch": "pass",
     "no_default": "pass",
     "shared_bodies": "pass",
     "shared_sparse": "pass",
     "sparse_shared_tail": "fail",
     "sparse_switch": "pass",
     "sparse_wide": "pass",
-    "switch_in_loop": "fail",
+    "switch_in_loop": "pass",
     "switch_loop_break": "pass"
   },
   "04_switch_shapes:i386:O0": {
@@ -921,7 +921,7 @@
     "_ZN7MovableC2EOS_": "structural",
     "_ZN7MovableC2Ei": "structural",
     "cpp_ctor_dtor": "pass",
-    "cpp_exception": "fail",
+    "cpp_exception": "pass",
     "cpp_lambda_capture": "fail",
     "cpp_move": "pass",
     "cpp_raii_guard": "pass",
@@ -937,7 +937,7 @@
     "_ZN7DerivedD1Ev": "structural",
     "_ZN7DerivedD2Ev": "structural",
     "cpp_ctor_dtor": "fail",
-    "cpp_exception": "fail",
+    "cpp_exception": "pass",
     "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
     "cpp_raii_guard": "fail",
@@ -965,7 +965,7 @@
     "_ZN7MovableC2EOS_": "structural",
     "_ZN7MovableC2Ei": "structural",
     "cpp_ctor_dtor": "fail",
-    "cpp_exception": "fail",
+    "cpp_exception": "pass",
     "cpp_lambda_capture": "fail",
     "cpp_move": "fail",
     "cpp_raii_guard": "fail",
@@ -981,7 +981,7 @@
     "_ZN7DerivedD1Ev": "structural",
     "_ZN7DerivedD2Ev": "structural",
     "cpp_ctor_dtor": "pass",
-    "cpp_exception": "fail",
+    "cpp_exception": "pass",
     "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
     "cpp_raii_guard": "pass",
@@ -1009,7 +1009,7 @@
     "_ZN7MovableC2EOS_": "structural",
     "_ZN7MovableC2Ei": "structural",
     "cpp_ctor_dtor": "fail",
-    "cpp_exception": "fail",
+    "cpp_exception": "pass",
     "cpp_lambda_capture": "fail",
     "cpp_move": "pass",
     "cpp_raii_guard": "fail",
@@ -1025,7 +1025,7 @@
     "_ZN7DerivedD1Ev": "structural",
     "_ZN7DerivedD2Ev": "structural",
     "cpp_ctor_dtor": "pass",
-    "cpp_exception": "fail",
+    "cpp_exception": "pass",
     "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
     "cpp_raii_guard": "pass",
@@ -1106,12 +1106,12 @@
     "wrap_byte": "pass"
   },
   "11_call_shapes:armv7:O0": {
-    "call_accumulate_bytes": "fail",
+    "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
     "call_fold_wide_result": "fail",
     "call_forward_result": "pass",
     "call_into_spill": "fail",
-    "call_nested": "fail",
+    "call_nested": "pass",
     "call_result_drives_branch": "pass",
     "call_result_unused": "pass",
     "call_twice_and_combine": "pass",
@@ -1121,13 +1121,13 @@
     "wrap_byte": "pass"
   },
   "11_call_shapes:armv7:O2": {
-    "call_accumulate_bytes": "fail",
+    "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
     "call_fold_wide_result": "fail",
     "call_forward_result": "pass",
     "call_into_spill": "fail",
-    "call_nested": "fail",
-    "call_result_drives_branch": "fail",
+    "call_nested": "pass",
+    "call_result_drives_branch": "pass",
     "call_result_unused": "pass",
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
@@ -1304,7 +1304,7 @@
     "classify_run": "pass",
     "find_first": "pass",
     "has_pair": "pass",
-    "sum_positive": "fail",
+    "sum_positive": "pass",
     "sum_until_zero": "pass"
   },
   "13_loop_early_exit:i386:O0": {
@@ -1420,7 +1420,7 @@
     "bst_search": "fail"
   },
   "15_binary_search_tree:armv7:O0": {
-    "bst_inorder_checksum": "fail",
+    "bst_inorder_checksum": "pass",
     "bst_search": "pass"
   },
   "15_binary_search_tree:armv7:O2": {
@@ -1642,7 +1642,7 @@
     "topological_sort": "fail"
   },
   "23_topological_sort:armv7:O0": {
-    "topological_sort": "fail"
+    "topological_sort": "pass"
   },
   "23_topological_sort:armv7:O2": {
     "topological_sort": "fail"
@@ -1666,7 +1666,7 @@
     "merge_sort_i32": "pass"
   },
   "24_merge_sort:armv7:O0": {
-    "merge_sort_i32": "fail"
+    "merge_sort_i32": "pass"
   },
   "24_merge_sort:armv7:O2": {
     "merge_sort_i32": "fail"
@@ -1690,7 +1690,7 @@
     "kmp_search": "fail"
   },
   "25_kmp_search:armv7:O0": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:armv7:O2": {
     "kmp_search": "fail"
@@ -1768,10 +1768,10 @@
     "euler_decay_q16": "fail"
   },
   "28_euler_ode:i386:O0": {
-    "euler_decay_q16": "fail"
+    "euler_decay_q16": "pass"
   },
   "28_euler_ode:i386:O2": {
-    "euler_decay_q16": "fail"
+    "euler_decay_q16": "pass"
   },
   "28_euler_ode:x86_64:O0": {
     "euler_decay_q16": "pass"

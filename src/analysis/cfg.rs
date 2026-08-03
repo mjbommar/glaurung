@@ -766,10 +766,14 @@ fn is_unconditional_branch_mnemonic(mnemonic: &str, arch: BArch) -> bool {
 }
 
 fn immediate_target(ins: &Instruction) -> Option<u64> {
-    // Heuristic: use first immediate operand if present (our adapters parse simple immediates)
+    // Branch destinations are the final immediate operand. Most control-flow
+    // instructions have only one, but AArch64 TBZ/TBNZ spell both a tested bit
+    // index and the destination as immediates (`tbnz w0,#31,target`). Taking the
+    // first queues address 31 and leaves the real cold block undiscovered.
     ins.operands
         .iter()
-        .find_map(|op| op.immediate)
+        .filter_map(|op| op.immediate)
+        .next_back()
         .map(|v| v as u64)
 }
 
@@ -5031,7 +5035,9 @@ fn analyze_functions_bytes_within(
 
 #[cfg(test)]
 mod aarch64_ctrl_flow_tests {
-    use super::{classify_ctrl_flow, is_unconditional_branch_mnemonic, BArch};
+    use super::{classify_ctrl_flow, immediate_target, is_unconditional_branch_mnemonic, BArch};
+    use crate::core::address::{Address, AddressKind};
+    use crate::core::instruction::{Access, Instruction, Operand};
 
     fn class(m: &str) -> (bool, bool, bool) {
         classify_ctrl_flow(m, BArch::AArch64)
@@ -5076,6 +5082,28 @@ mod aarch64_ctrl_flow_tests {
         }
         // Plain unconditional B has no fallthrough.
         assert!(is_unconditional_branch_mnemonic("b", BArch::AArch64));
+    }
+
+    #[test]
+    fn test_bit_branch_uses_its_last_immediate_as_the_target() {
+        let instruction = Instruction::new(
+            Address::new(AddressKind::VA, 0x1028, 64, None, None).unwrap(),
+            0x3700_0060u32.to_le_bytes().to_vec(),
+            "tbnz".to_string(),
+            vec![
+                Operand::register("w0".to_string(), 32, Access::Read),
+                Operand::immediate(31, 8),
+                Operand::immediate(0x1034, 64),
+            ],
+            4,
+            "aarch64".to_string(),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(immediate_target(&instruction), Some(0x1034));
     }
 
     #[test]

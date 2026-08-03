@@ -620,6 +620,24 @@ pub fn value_number_with_definition_widths(
     ssa: &crate::ir::ssa::SsaInfo,
     cc: CallConv,
 ) -> (LlirFunction, HashMap<VReg, u8>) {
+    let (numbered, widths, _) = value_number_with_parameter_slots(lf, ssa, cc);
+    (numbered, widths)
+}
+
+/// Value-number `lf` while retaining parameter evidence from before phi-copy
+/// coalescing.
+///
+/// Coalescing is allowed to reuse a dead phi destination for a later scratch
+/// definition. That is semantically correct and removes declarations, but it
+/// deliberately erases the distinction used by [`live_in_arg_slots_llir`]: a
+/// call-only phi destination and a later genuinely-read scratch may then share
+/// one name. Parameter evidence is therefore sampled after phi insertion (when
+/// call-only plumbing is identifiable) and returned beside the coalesced LLIR.
+pub fn value_number_with_parameter_slots(
+    lf: &LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    cc: CallConv,
+) -> (LlirFunction, HashMap<VReg, u8>, HashSet<usize>) {
     let ret_names = return_reg_names(cc);
     // Keep bare every return-register def that can reach a `Return` without being
     // overwritten — the value(s) the function actually returns. Keeping ALL of
@@ -690,8 +708,9 @@ pub fn value_number_with_definition_widths(
         }
     }
     let phi_copies = insert_phi_copies(&mut out, lf, ssa, &ctx, &mut definition_widths);
+    let parameter_slots = live_in_arg_slots_llir(&out, cc);
     coalesce_phi_copies(&mut out, &phi_copies, &mut definition_widths);
-    (out, definition_widths)
+    (out, definition_widths, parameter_slots)
 }
 
 /// Translate *out* of SSA: give every phi result an actual definition.
@@ -1072,14 +1091,16 @@ impl ClassWidth {
 /// Width constraints that must survive even when several SSA values receive one
 /// source-level name.
 ///
-/// A plain assignment, load, comparison or explicit conversion already carries
+/// A plain assignment, load, comparison or truncation already carries
 /// its value semantics in the expression that lowering emits. The destination's
 /// physical register spelling is only storage, so an eight-byte `mov` of a
 /// four-byte value must not conflict with that value's four-byte arithmetic.
-/// Arithmetic and width-parameterized intrinsics are different: their result
-/// wraps at the recorded destination width, and a shared C declaration has to
-/// preserve it. Join every definition of a name up front so kept-bare names are
-/// no longer attributed by whichever definition happened to be visited last.
+/// Arithmetic, widening conversions and width-parameterized intrinsics are
+/// different: their result requires the recorded destination width, and a
+/// shared C declaration has to preserve it. In particular, rendering an 8-byte
+/// `sext` through an `int` declaration silently truncates the widened value.
+/// Join every definition of a name up front so kept-bare names are no longer
+/// attributed by whichever definition happened to be visited last.
 fn coalescing_definition_claims(
     out: &LlirFunction,
     definition_widths: &HashMap<VReg, u8>,
@@ -1091,18 +1112,57 @@ fn coalescing_definition_claims(
                 continue;
             };
             let claim = match &instruction.op {
-                Op::Bin { .. } | Op::Un { .. } | Op::Ite { .. } | Op::Intrinsic { .. } => {
-                    definition_widths
-                        .get(&destination)
-                        .copied()
-                        .map_or(ClassWidth::Open, ClassWidth::Known)
-                }
+                Op::Bin { .. }
+                | Op::Un { .. }
+                | Op::Ite { .. }
+                | Op::ZExt { .. }
+                | Op::SExt { .. }
+                | Op::Intrinsic { .. } => definition_widths
+                    .get(&destination)
+                    .copied()
+                    .map_or(ClassWidth::Open, ClassWidth::Known),
                 _ => ClassWidth::Open,
             };
             claims
                 .entry(destination)
                 .and_modify(|existing: &mut ClassWidth| *existing = existing.join(claim))
                 .or_insert(claim);
+        }
+    }
+    // Lowering often materialises a widening into a temporary and then moves
+    // that temporary into the architectural SSA value consumed by a phi. The
+    // move is width-neutral, but its destination still needs a declaration wide
+    // enough to hold the already-widened result. Propagate only when source and
+    // destination storage widths agree: a 4-byte result moved through an 8-byte
+    // register does not require a narrow declaration, and an 8-to-4 move already
+    // carries truncation semantics.
+    loop {
+        let mut changed = false;
+        for block in &out.blocks {
+            for instruction in &block.instrs {
+                let Op::Assign {
+                    dst,
+                    src: Value::Reg(src),
+                } = &instruction.op
+                else {
+                    continue;
+                };
+                let Some(ClassWidth::Known(source_width)) = claims.get(src).copied() else {
+                    continue;
+                };
+                if definition_widths.get(dst).copied() != Some(source_width) {
+                    continue;
+                }
+                let current = claims.get(dst).copied().unwrap_or(ClassWidth::Open);
+                let next = current.join(ClassWidth::Known(source_width));
+                if next != current {
+                    claims.insert(dst.clone(), next);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
         }
     }
     claims
@@ -1134,6 +1194,7 @@ fn class_widths(
     index: &HashMap<VReg, usize>,
     copies: &[(VReg, VReg)],
     definition_claims: &HashMap<VReg, ClassWidth>,
+    consumed_live_ins: &HashSet<VReg>,
 ) -> Vec<ClassWidth> {
     let mut widths: Vec<ClassWidth> = names
         .iter()
@@ -1164,10 +1225,13 @@ fn class_widths(
             if let Some(&s) = index.get(src) {
                 return Some((d, Some(s), ClassWidth::Open));
             }
-            let claim = definition_claims
-                .get(src)
-                .copied()
-                .unwrap_or(ClassWidth::Open);
+            let claim = definition_claims.get(src).copied().unwrap_or_else(|| {
+                if consumed_live_ins.contains(src) {
+                    ClassWidth::Ambiguous
+                } else {
+                    ClassWidth::Open
+                }
+            });
             Some((d, None, claim))
         })
         .collect();
@@ -1188,6 +1252,86 @@ fn class_widths(
         }
     }
     widths
+}
+
+/// Live-in architectural values that are not proven safe phi inputs.
+///
+/// Such a copy is usually a compiler scratch-register snapshot, not the start
+/// of one source variable. Joining its phi class to later scratch definitions
+/// creates artificial long-lived cycles: otherwise single-use address
+/// calculations stop inlining and shared guards can no longer be structured.
+/// A live-in copied before a later real use remains open, which preserves the
+/// legitimate loop-carried parameter case this coalescer was introduced for.
+/// A bare value never used outside phi plumbing is not a parameter proof at all:
+/// it is an undefined incoming edge to later scratch state. Coalescing that edge
+/// makes a path-local dead copy appear globally live and emits an undefined C
+/// read, so it is refused just like a late snapshot.
+fn consumed_live_ins_before_phi_copy(
+    out: &LlirFunction,
+    names: &HashSet<VReg>,
+    copies: &[(VReg, VReg)],
+) -> HashSet<VReg> {
+    let copy_pairs: HashSet<(VReg, VReg)> = copies.iter().cloned().collect();
+    let definitions: HashSet<VReg> = out
+        .blocks
+        .iter()
+        .flat_map(|block| block.instrs.iter())
+        .filter_map(|instruction| def_uses(&instruction.op).0)
+        .collect();
+    let mut first_copy = HashMap::<VReg, u64>::new();
+    for block in &out.blocks {
+        for instruction in &block.instrs {
+            let Op::Assign {
+                dst,
+                src: Value::Reg(src),
+            } = &instruction.op
+            else {
+                continue;
+            };
+            if copy_pairs.contains(&(dst.clone(), src.clone()))
+                && names.contains(dst)
+                && !names.contains(src)
+                && !definitions.contains(src)
+            {
+                first_copy
+                    .entry(src.clone())
+                    .and_modify(|va| *va = (*va).min(instruction.va))
+                    .or_insert(instruction.va);
+            }
+        }
+    }
+
+    let mut first_semantic_use = HashMap::<VReg, u64>::new();
+    for block in &out.blocks {
+        for instruction in &block.instrs {
+            let (_, uses) = def_uses(&instruction.op);
+            for source in uses {
+                if !first_copy.contains_key(&source) {
+                    continue;
+                }
+                let is_phi_copy = matches!(
+                    &instruction.op,
+                    Op::Assign { dst, src: Value::Reg(src) }
+                        if copy_pairs.contains(&(dst.clone(), src.clone()))
+                );
+                if !is_phi_copy {
+                    first_semantic_use
+                        .entry(source)
+                        .and_modify(|va| *va = (*va).min(instruction.va))
+                        .or_insert(instruction.va);
+                }
+            }
+        }
+    }
+    first_copy
+        .into_iter()
+        .filter_map(|(source, copy_va)| {
+            first_semantic_use
+                .get(&source)
+                .is_none_or(|use_va| *use_va < copy_va)
+                .then_some(source)
+        })
+        .collect()
 }
 
 /// Coalescing is bounded work: past this many distinct phi-copy operands the
@@ -1357,7 +1501,15 @@ fn coalesce_phi_copies(
     }
     let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
     let definition_claims = coalescing_definition_claims(out, definition_widths);
-    let mut width: Vec<ClassWidth> = class_widths(&names, &index, copies, &definition_claims);
+    let candidate_names: HashSet<VReg> = names.iter().cloned().collect();
+    let consumed_live_ins = consumed_live_ins_before_phi_copy(out, &candidate_names, copies);
+    let mut width: Vec<ClassWidth> = class_widths(
+        &names,
+        &index,
+        copies,
+        &definition_claims,
+        &consumed_live_ins,
+    );
     for (d, s) in pairs.iter().copied() {
         let (a, b) = (find(&mut parent, d), find(&mut parent, s));
         if a == b {
@@ -1392,6 +1544,15 @@ fn coalesce_phi_copies(
                 }
             })
             .or_insert(i);
+    }
+    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        for (&root, &rep) in &representative {
+            let class: Vec<&VReg> = members[root].iter().map(|&member| &names[member]).collect();
+            eprintln!(
+                "phi-coalesce {:?} width={:?} -> {:?}",
+                class, width[root], names[rep]
+            );
+        }
     }
     let mut rename: HashMap<VReg, VReg> = HashMap::new();
     for i in 0..n {
@@ -2224,6 +2385,192 @@ mod tests {
         assert_eq!(widths.get(&VReg::phys("rax#1")), Some(&8));
     }
 
+    #[test]
+    fn an_explicit_widening_result_constrains_the_merged_declaration_width() {
+        let widened = VReg::Temp(0);
+        let value = VReg::phys("rax#1");
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1008,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::SExt {
+                            dst: widened.clone(),
+                            src: Value::Reg(VReg::phys("eax")),
+                            from: crate::ir::types::Width::W32,
+                            to: crate::ir::types::Width::W64,
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Assign {
+                            dst: value.clone(),
+                            src: Value::Reg(widened.clone()),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let claims =
+            coalescing_definition_claims(&lf, &HashMap::from([(widened, 8), (value.clone(), 8)]));
+
+        assert_eq!(
+            claims.get(&value),
+            Some(&ClassWidth::Known(8)),
+            "assigning a sign-extended long through an int declaration would truncate it"
+        );
+    }
+
+    #[test]
+    fn a_late_phi_snapshot_does_not_merge_a_consumed_live_in_with_scratch_state() {
+        let mut widths = HashMap::new();
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1008,
+                    instrs: vec![
+                        // The ABI value has already served its source-level role.
+                        LlirInstr {
+                            va: 0x1000,
+                            op: Op::Bin {
+                                dst: VReg::Temp(0),
+                                op: crate::ir::types::BinOp::Add,
+                                lhs: Value::Reg(VReg::phys("rdi")),
+                                rhs: Value::Const(0),
+                            },
+                        },
+                        // A later synthetic snapshot must not make unrelated
+                        // scratch state one long-lived source variable.
+                        LlirInstr {
+                            va: 0x1004,
+                            op: Op::Assign {
+                                dst: VReg::phys("rdi#3"),
+                                src: Value::Reg(VReg::phys("rdi")),
+                            },
+                        },
+                    ],
+                    succs: vec![2],
+                },
+                LlirBlock {
+                    start_va: 0x1010,
+                    end_va: 0x1018,
+                    instrs: vec![
+                        LlirInstr {
+                            va: 0x1010,
+                            op: Op::Assign {
+                                dst: VReg::phys("rdi#2"),
+                                src: Value::Const(7),
+                            },
+                        },
+                        LlirInstr {
+                            va: 0x1014,
+                            op: Op::Assign {
+                                dst: VReg::phys("rdi#3"),
+                                src: Value::Reg(VReg::phys("rdi#2")),
+                            },
+                        },
+                    ],
+                    succs: vec![2],
+                },
+                LlirBlock {
+                    start_va: 0x1020,
+                    end_va: 0x1024,
+                    instrs: vec![LlirInstr {
+                        va: 0x1020,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax"),
+                            src: Value::Reg(VReg::phys("rdi#3")),
+                        },
+                    }],
+                    succs: vec![],
+                },
+            ],
+        };
+        let copies = vec![
+            (VReg::phys("rdi#3"), VReg::phys("rdi")),
+            (VReg::phys("rdi#3"), VReg::phys("rdi#2")),
+        ];
+
+        coalesce_phi_copies(&mut lf, &copies, &mut widths);
+
+        assert!(
+            register_copies(&lf).contains(&("rdi#3".to_string(), "rdi#2".to_string())),
+            "a consumed live-in must keep the later scratch phi class separate: {lf:#?}"
+        );
+    }
+
+    #[test]
+    fn an_unread_live_in_does_not_merge_with_later_scratch_state() {
+        let mut widths = HashMap::new();
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1004,
+                    instrs: vec![LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx#3"),
+                            src: Value::Reg(VReg::phys("rcx")),
+                        },
+                    }],
+                    succs: vec![2],
+                },
+                LlirBlock {
+                    start_va: 0x1010,
+                    end_va: 0x1018,
+                    instrs: vec![
+                        LlirInstr {
+                            va: 0x1010,
+                            op: Op::Assign {
+                                dst: VReg::phys("rcx#2"),
+                                src: Value::Const(7),
+                            },
+                        },
+                        LlirInstr {
+                            va: 0x1014,
+                            op: Op::Assign {
+                                dst: VReg::phys("rcx#3"),
+                                src: Value::Reg(VReg::phys("rcx#2")),
+                            },
+                        },
+                    ],
+                    succs: vec![2],
+                },
+                LlirBlock {
+                    start_va: 0x1020,
+                    end_va: 0x1024,
+                    instrs: vec![LlirInstr {
+                        va: 0x1020,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax"),
+                            src: Value::Reg(VReg::phys("rcx#3")),
+                        },
+                    }],
+                    succs: vec![],
+                },
+            ],
+        };
+        let copies = vec![
+            (VReg::phys("rcx#3"), VReg::phys("rcx")),
+            (VReg::phys("rcx#3"), VReg::phys("rcx#2")),
+        ];
+
+        coalesce_phi_copies(&mut lf, &copies, &mut widths);
+
+        assert!(
+            register_copies(&lf).contains(&("rcx#3".to_string(), "rcx#2".to_string())),
+            "an unproven version-zero value is undefined, not a parameter: {lf:#?}"
+        );
+    }
+
     /// A phi destination has no width of its own; it takes the one its incoming
     /// values agree on. When they disagree it is width-ambiguous, and the answer
     /// must not depend on which incoming edge is visited first — otherwise
@@ -2247,7 +2594,7 @@ mod tests {
         claims.insert(VReg::phys("rax#2"), ClassWidth::Known(8));
         let edge = |d: usize, s: usize| (names[d].clone(), names[s].clone());
         for copies in [vec![edge(0, 1), edge(0, 2)], vec![edge(0, 2), edge(0, 1)]] {
-            let decided = class_widths(&names, &index, &copies, &claims);
+            let decided = class_widths(&names, &index, &copies, &claims, &HashSet::new());
             assert_eq!(
                 decided[0],
                 ClassWidth::Ambiguous,
@@ -2265,14 +2612,14 @@ mod tests {
         let mut with_bare = HashMap::new();
         with_bare.insert(VReg::phys("rax#1"), ClassWidth::Known(4));
         with_bare.insert(VReg::phys("rax"), ClassWidth::Ambiguous);
-        let decided = class_widths(&names, &index, &both, &with_bare);
+        let decided = class_widths(&names, &index, &both, &with_bare, &HashSet::new());
         assert_eq!(
             decided[0],
             ClassWidth::Ambiguous,
             "conflicting definitions of a kept-bare source must remain ambiguous"
         );
         with_bare.insert(VReg::phys("rax"), ClassWidth::Known(4));
-        let decided = class_widths(&names, &index, &both, &with_bare);
+        let decided = class_widths(&names, &index, &both, &with_bare, &HashSet::new());
         assert_eq!(decided[0], ClassWidth::Known(4));
         // A live-in has no definition here at all, so this map says nothing
         // about it. Missing evidence is Open, not a contradiction: the phi may
@@ -2281,7 +2628,7 @@ mod tests {
         // using width ambiguity as that guard couples two unrelated proofs and
         // is what refuses ordinary parameter-fed phi webs at scale.
         with_bare.remove(&VReg::phys("rax"));
-        let decided = class_widths(&names, &index, &both, &with_bare);
+        let decided = class_widths(&names, &index, &both, &with_bare, &HashSet::new());
         assert_eq!(decided[0], ClassWidth::Known(4));
 
         // Agreement is what permits a merge, and it propagates through a chain of
@@ -2308,6 +2655,7 @@ mod tests {
                 (chain[1].clone(), chain[0].clone()),
             ],
             &agreed,
+            &HashSet::new(),
         );
         assert_eq!(decided[0], ClassWidth::Known(4));
         assert_eq!(

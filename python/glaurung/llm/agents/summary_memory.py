@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Optional, List
+import os
+
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
-from ..context import MemoryContext
-import os
 from ..config import get_config
+from ..context import MemoryContext
 
 
 class BinarySummary(BaseModel):
     summary: str
     purpose: str
     risk_level: str = Field(default="unknown")
-    key_behaviors: List[str] = Field(default_factory=list)
+    key_behaviors: list[str] = Field(default_factory=list)
     recommendation: str = Field(default="Review further")
 
 
@@ -27,7 +27,7 @@ SYSTEM_PROMPT = (
 
 
 def create_summarizer_agent(
-    model: Optional[str] = None,
+    model: str | None = None,
 ) -> Agent[MemoryContext, BinarySummary]:
     cfg = get_config()
     avail = cfg.available_models()
@@ -37,7 +37,7 @@ def create_summarizer_agent(
         or (cfg.default_model if any(avail.values()) else "test")
     )
     # If no API key for external providers, fall back to test model
-    if not model and os.environ.get("OPENAI_API_KEY") is None:
+    if not model and not os.environ.get("OPENAI_API_KEY"):
         chosen = "test"
     agent = Agent(
         model=chosen,
@@ -59,7 +59,7 @@ def create_summarizer_agent(
 
 
 async def summarize_binary(
-    artifact, file_path: str, model: Optional[str] = None
+    artifact, file_path: str, model: str | None = None
 ) -> BinarySummary:
     from ..kb.adapters import import_triage
 
@@ -77,7 +77,7 @@ async def summarize_binary(
 
 
 def summarize_binary_sync(
-    artifact, file_path: str, model: Optional[str] = None
+    artifact, file_path: str, model: str | None = None
 ) -> BinarySummary:
     import asyncio
 

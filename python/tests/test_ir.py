@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 import glaurung as g
+import pytest
 
 
 def test_nop_lifts_to_nop_dict():
@@ -262,14 +261,14 @@ def test_sbb_reg_reg_lifts_to_sub_with_carry_dependency():
     assert ops[0] == {
         "va": 0x1000,
         "kind": "assign",
-        "dst": "t60",
+        "dst": "%t60",
         "src": {"kind": "reg", "name": "%cf"},
     }
     arithmetic = [o for o in ops if o["kind"] == "bin" and o["dst"] == "rax"]
     assert arithmetic[0]["op"] == "sub"
     assert arithmetic[0]["rhs"] == {"kind": "reg", "name": "rcx"}
     assert arithmetic[1]["op"] == "sub"
-    assert arithmetic[1]["rhs"] == {"kind": "reg", "name": "t60"}
+    assert arithmetic[1]["rhs"] == {"kind": "reg", "name": "%t60"}
     assert {o["dst"] for o in ops if o["kind"] == "undef"} == {"%pf", "%af"}
     for flag in ("%cf", "%of", "%zf", "%sf"):
         assert any(o["dst"] == flag and o["kind"] != "undef" for o in ops)

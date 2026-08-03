@@ -58,61 +58,66 @@ pub fn extract_exception_call_sites(data: &[u8]) -> Vec<ExceptionCallSite> {
         Ok(object) => object,
         Err(_) => return Vec::new(),
     };
-    let Some(eh_section) = object.section_by_name(".eh_frame") else {
-        return Vec::new();
-    };
-    let Ok(eh_data) = eh_section.uncompressed_data() else {
-        return Vec::new();
-    };
     let endian = if object.is_little_endian() {
         gimli::RunTimeEndian::Little
     } else {
         gimli::RunTimeEndian::Big
     };
     let address_size = if object.is_64() { 8 } else { 4 };
-    let eh_frame = EhFrame::new(&eh_data, endian);
-    let mut bases = BaseAddresses::default().set_eh_frame(eh_section.address());
-    if let Some(section) = object.section_by_name(".eh_frame_hdr") {
-        bases = bases.set_eh_frame_hdr(section.address());
-    }
-    if let Some(section) = object.section_by_name(".text") {
-        bases = bases.set_text(section.address());
-    }
-    if let Some(section) = object
-        .section_by_name(".got")
-        .or_else(|| object.section_by_name(".got.plt"))
-    {
-        bases = bases.set_got(section.address());
-    }
-
     let mut out = Vec::new();
-    let mut entries = eh_frame.entries(&bases);
-    while let Ok(Some(entry)) = entries.next() {
-        let CieOrFde::Fde(partial) = entry else {
-            continue;
-        };
-        let Ok(fde) = partial.parse(EhFrame::cie_from_offset) else {
-            continue;
-        };
-        let Some(lsda_va) = fde.lsda().and_then(direct_pointer) else {
-            continue;
-        };
-        let Some((section_data, section_va)) = section_containing_va(&object, lsda_va) else {
-            continue;
-        };
-        let Ok(offset) = usize::try_from(lsda_va - section_va) else {
-            continue;
-        };
-        let Some(lsda) = section_data.get(offset..) else {
-            continue;
-        };
-        let mut sites = parse_lsda(lsda, lsda_va, fde.initial_address(), address_size, endian);
-        for site in &mut sites {
-            site.catch_type = site
-                .type_info_location
-                .and_then(|location| catch_type_at_relocation(&object, location));
+    if let Some(eh_section) = object.section_by_name(".eh_frame") {
+        if let Ok(eh_data) = eh_section.uncompressed_data() {
+            let eh_frame = EhFrame::new(&eh_data, endian);
+            let mut bases = BaseAddresses::default().set_eh_frame(eh_section.address());
+            if let Some(section) = object.section_by_name(".eh_frame_hdr") {
+                bases = bases.set_eh_frame_hdr(section.address());
+            }
+            if let Some(section) = object.section_by_name(".text") {
+                bases = bases.set_text(section.address());
+            }
+            if let Some(section) = object
+                .section_by_name(".got")
+                .or_else(|| object.section_by_name(".got.plt"))
+            {
+                bases = bases.set_got(section.address());
+            }
+
+            let mut entries = eh_frame.entries(&bases);
+            while let Ok(Some(entry)) = entries.next() {
+                let CieOrFde::Fde(partial) = entry else {
+                    continue;
+                };
+                let Ok(fde) = partial.parse(EhFrame::cie_from_offset) else {
+                    continue;
+                };
+                let Some(lsda_va) = fde.lsda().and_then(direct_pointer) else {
+                    continue;
+                };
+                let Some((section_data, section_va)) = section_containing_va(&object, lsda_va)
+                else {
+                    continue;
+                };
+                let Ok(offset) = usize::try_from(lsda_va - section_va) else {
+                    continue;
+                };
+                let Some(lsda) = section_data.get(offset..) else {
+                    continue;
+                };
+                out.extend(parse_lsda(
+                    lsda,
+                    lsda_va,
+                    fde.initial_address(),
+                    address_size,
+                    endian,
+                ));
+            }
         }
-        out.extend(sites);
+    }
+    out.extend(extract_arm_ehabi_call_sites(&object, endian));
+    for site in &mut out {
+        site.catch_type = site
+            .type_info_location
+            .and_then(|location| catch_type_at_relocation(&object, location));
     }
     out.sort_by_key(|site| (site.function_start, site.protected_start, site.landing_pad));
     out.dedup();
@@ -120,6 +125,104 @@ pub fn extract_exception_call_sites(data: &[u8]) -> Vec<ExceptionCallSite> {
         eprintln!("[exception-sites] {out:#?}");
     }
     out
+}
+
+/// Recover the language-specific data embedded after a generic ARM EHABI
+/// unwind descriptor.
+///
+/// ARM32 GCC does not emit C++ landing-pad metadata in `.eh_frame`; it uses an
+/// `.ARM.exidx` entry whose second PREL31 word points at `.ARM.extab`.  In the
+/// generic model the first extab word names the personality routine, the next
+/// word contains a count plus unwind opcodes, and the ordinary Itanium LSDA
+/// begins after that word and its counted continuations.
+fn extract_arm_ehabi_call_sites(
+    object: &object::read::File<'_>,
+    endian: gimli::RunTimeEndian,
+) -> Vec<ExceptionCallSite> {
+    let Some(exidx) = object.section_by_name(".ARM.exidx") else {
+        return Vec::new();
+    };
+    let Some(extab) = object.section_by_name(".ARM.extab") else {
+        return Vec::new();
+    };
+    let Ok(exidx_data) = exidx.uncompressed_data() else {
+        return Vec::new();
+    };
+    let Ok(extab_data) = extab.uncompressed_data() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (index, entry) in exidx_data.chunks_exact(8).enumerate() {
+        let entry_va = exidx.address().saturating_add((index * 8) as u64);
+        let function_word = read_u32(entry, endian);
+        let descriptor_word = read_u32(&entry[4..], endian);
+        let Some(function_start) = resolve_prel31(entry_va, function_word) else {
+            continue;
+        };
+        // EXIDX_CANTUNWIND and inline compact descriptors carry no handler data.
+        if descriptor_word == 1 || descriptor_word & 0x8000_0000 != 0 {
+            continue;
+        }
+        let Some(extab_va) = resolve_prel31(entry_va.saturating_add(4), descriptor_word) else {
+            continue;
+        };
+        let Ok(extab_offset) = usize::try_from(extab_va.saturating_sub(extab.address())) else {
+            continue;
+        };
+        let Some(lsda_offset) = generic_arm_extab_lsda_offset(&extab_data, extab_offset, endian)
+        else {
+            continue;
+        };
+        let Some(lsda) = extab_data.get(lsda_offset..) else {
+            continue;
+        };
+        out.extend(parse_lsda(
+            lsda,
+            extab.address().saturating_add(lsda_offset as u64),
+            function_start,
+            4,
+            endian,
+        ));
+    }
+    out
+}
+
+fn generic_arm_extab_lsda_offset(
+    extab: &[u8],
+    offset: usize,
+    endian: gimli::RunTimeEndian,
+) -> Option<usize> {
+    let first = read_u32(extab.get(offset..offset.checked_add(4)?)?, endian);
+    // Bit 31 selects a compact-model descriptor, which has no generic LSDA
+    // layout. A clear bit is a PREL31 personality pointer.
+    if first & 0x8000_0000 != 0 {
+        return None;
+    }
+    let unwind = read_u32(
+        extab.get(offset.checked_add(4)?..offset.checked_add(8)?)?,
+        endian,
+    );
+    let continuation_words = (unwind >> 24) as usize;
+    offset
+        .checked_add(8)?
+        .checked_add(continuation_words.checked_mul(4)?)
+}
+
+fn read_u32(bytes: &[u8], endian: gimli::RunTimeEndian) -> u32 {
+    let array: [u8; 4] = bytes[..4].try_into().expect("four-byte slice");
+    match endian {
+        gimli::RunTimeEndian::Little => u32::from_le_bytes(array),
+        gimli::RunTimeEndian::Big => u32::from_be_bytes(array),
+    }
+}
+
+fn resolve_prel31(place: u64, encoded: u32) -> Option<u64> {
+    let displacement = ((encoded << 1) as i32) >> 1;
+    if displacement >= 0 {
+        place.checked_add(displacement as u64)
+    } else {
+        place.checked_sub(displacement.unsigned_abs() as u64)
+    }
 }
 
 fn catch_type_at_relocation(object: &object::read::File<'_>, location: u64) -> Option<CatchType> {
@@ -589,9 +692,22 @@ impl<'data> LsdaReader<'data> {
 #[cfg(test)]
 mod tests {
     use super::{
-        eh_frame_functions, parse_lsda, with_exceptional_successors, ExceptionAction,
-        ExceptionCallSite,
+        eh_frame_functions, generic_arm_extab_lsda_offset, parse_lsda, resolve_prel31,
+        with_exceptional_successors, ExceptionAction, ExceptionCallSite,
     };
+
+    #[test]
+    fn arm_ehabi_generic_descriptor_locates_its_real_lsda_bytes() {
+        // First eight bytes of GCC's generic descriptor for the ARMv7 O2 C++
+        // fixture: PREL31 __gxx_personality_v0, then zero continuation words.
+        let descriptor = [0x78, 0xfc, 0xff, 0x7f, 0x00, 0x84, 0x02, 0x00];
+        assert_eq!(
+            generic_arm_extab_lsda_offset(&descriptor, 0, gimli::RunTimeEndian::Little),
+            Some(8)
+        );
+        assert_eq!(resolve_prel31(0xd60, 0x7fff_fdf0), Some(0xb50));
+        assert_eq!(resolve_prel31(0xd64, 0x7fff_ffd0), Some(0xd34));
+    }
     use crate::ir::types::{LlirBlock, LlirFunction};
     use object::Object;
 

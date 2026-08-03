@@ -120,6 +120,7 @@ pub fn recover_typed_handlers(function: &mut Function, sites: &[ExceptionCallSit
     );
     replace_caught_value(&mut catch_body, &catch_pointer, &binding);
     catch_body.extend(return_suffix);
+    fold_restored_catch_return(&mut catch_body);
 
     function.body = vec![Stmt::TryCatch {
         try_body: normal.to_vec(),
@@ -137,6 +138,51 @@ pub fn recover_typed_handlers(function: &mut Function, sites: &[ExceptionCallSit
     }
 }
 
+/// ARM EHABI epilogues may save the computed catch result in the promoted
+/// `stack_top` slot, call `__cxa_end_catch`, then restore r0 with a `Pop`.
+/// A standalone C rebuild has no machine stack behind that pop, so carry the
+/// exact saved expression into the return before the ABI scaffolding is erased.
+fn fold_restored_catch_return(body: &mut Vec<Stmt>) {
+    let Some((store_index, saved)) =
+        body.iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, stmt)| match stmt {
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::Phys(name)),
+                    src,
+                    ..
+                } if name == "stack_top" => Some((index, src.clone())),
+                _ => None,
+            })
+    else {
+        return;
+    };
+    let Some((pop_index, target)) =
+        body.iter()
+            .enumerate()
+            .skip(store_index + 1)
+            .find_map(|(index, stmt)| match stmt {
+                Stmt::Pop { target } => Some((index, target.clone())),
+                _ => None,
+            })
+    else {
+        return;
+    };
+    if !matches!(
+        body.get(pop_index + 1),
+        Some(Stmt::Return {
+            value: Some(Expr::Reg(register))
+        }) if register == &target
+    ) {
+        return;
+    }
+    body.splice(
+        pop_index..=pop_index + 1,
+        [Stmt::Return { value: Some(saved) }],
+    );
+}
+
 /// Recover exact Itanium integer throws anywhere in an AST.
 pub fn recover_throws(function: &mut Function) {
     recover_throws_in(&mut function.body);
@@ -144,38 +190,81 @@ pub fn recover_throws(function: &mut Function) {
 
 /// Retain an `_ZTIi` proof while ordinary preparation folds the ABI sequence.
 pub fn mark_int_throws(function: &mut Function) {
-    mark_int_throws_in(&mut function.body);
+    mark_int_throws_in(&mut function.body, None, &std::collections::HashMap::new());
+}
+
+/// Retain an exact integer-RTTI proof reached through an ELF GOT slot.
+///
+/// AArch64 materialises `_ZTIi` as `adrp page; ldr [page + offset]`.  Ordinary
+/// name resolution runs before copy propagation has joined those instructions,
+/// while source-level preparation later deletes the now-dead RTTI load.  Track
+/// only local constant address definitions here and consult the relocation-
+/// backed address map before that proof disappears.
+pub fn mark_int_throws_with_address_map(
+    function: &mut Function,
+    address_names: &std::collections::HashMap<u64, String>,
+) {
+    mark_int_throws_in(
+        &mut function.body,
+        Some(address_names),
+        &std::collections::HashMap::new(),
+    );
 }
 
 const INT_THROW_MARKER: &str = "__glaurung_throw_int";
 
-fn mark_int_throws_in(body: &mut Vec<Stmt>) {
+fn mark_int_throws_in(
+    body: &mut Vec<Stmt>,
+    address_names: Option<&std::collections::HashMap<u64, String>>,
+    inherited_addresses: &std::collections::HashMap<VReg, u64>,
+) {
+    let mut addresses = inherited_addresses.clone();
     for statement in body.iter_mut() {
         match statement {
+            Stmt::Assign { dst, src } => {
+                if let Some(address) = known_exception_address(src, &addresses) {
+                    addresses.insert(dst.clone(), address);
+                } else {
+                    addresses.remove(dst);
+                }
+            }
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                src,
+                ..
+            } if promoted_exception_local(dst) => {
+                if let Some(address) = known_exception_address(src, &addresses) {
+                    addresses.insert(dst.clone(), address);
+                } else {
+                    addresses.remove(dst);
+                }
+            }
             Stmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                mark_int_throws_in(then_body);
+                mark_int_throws_in(then_body, address_names, &addresses);
                 if let Some(else_body) = else_body {
-                    mark_int_throws_in(else_body);
+                    mark_int_throws_in(else_body, address_names, &addresses);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => mark_int_throws_in(body),
-            Stmt::For { body, .. } => mark_int_throws_in(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                mark_int_throws_in(body, address_names, &addresses)
+            }
+            Stmt::For { body, .. } => mark_int_throws_in(body, address_names, &addresses),
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    mark_int_throws_in(body);
+                    mark_int_throws_in(body, address_names, &addresses);
                 }
                 if let Some(body) = default {
-                    mark_int_throws_in(body);
+                    mark_int_throws_in(body, address_names, &addresses);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                mark_int_throws_in(try_body);
+                mark_int_throws_in(try_body, address_names, &addresses);
                 for catch in catches {
-                    mark_int_throws_in(&mut catch.body);
+                    mark_int_throws_in(&mut catch.body, address_names, &addresses);
                 }
             }
             _ => {}
@@ -192,13 +281,164 @@ fn mark_int_throws_in(body: &mut Vec<Stmt>) {
     else {
         return;
     };
-    if body[allocate..=throw]
+    if (body[allocate..=throw]
         .iter()
         .any(statement_mentions_typeinfo_int)
+        || address_names.is_some_and(|names| {
+            statements_reference_named_address(
+                &body[..=throw],
+                allocate,
+                inherited_addresses,
+                names,
+                "_ZTIi",
+            )
+        }))
         && !matches!(body.get(allocate.wrapping_sub(1)), Some(Stmt::Comment(text)) if text == INT_THROW_MARKER)
     {
         body.insert(allocate, Stmt::Comment(INT_THROW_MARKER.to_string()));
     }
+}
+
+fn known_exception_address(
+    expression: &Expr,
+    definitions: &std::collections::HashMap<VReg, u64>,
+) -> Option<u64> {
+    use crate::ir::types::BinOp;
+
+    match expression {
+        Expr::Addr(value) => Some(*value),
+        Expr::Const(value) => u64::try_from(*value).ok(),
+        Expr::Reg(register) => definitions.get(register).copied(),
+        Expr::Cast { expr, .. } => known_exception_address(expr, definitions),
+        Expr::Bin { op, lhs, rhs } => {
+            let lhs = known_exception_address(lhs, definitions)?;
+            let rhs = known_exception_address(rhs, definitions)?;
+            match op {
+                BinOp::Add => lhs.checked_add(rhs),
+                BinOp::Sub => lhs.checked_sub(rhs),
+                _ => None,
+            }
+        }
+        Expr::Lea {
+            base,
+            index,
+            scale,
+            disp,
+            segment: None,
+            ..
+        } => {
+            let base = base
+                .as_ref()
+                .and_then(|register| definitions.get(register).copied())
+                .unwrap_or(0);
+            let indexed = match index {
+                Some(register) => definitions
+                    .get(register)
+                    .copied()?
+                    // ARM adapters use scale zero for an unshifted register
+                    // offset; in address arithmetic that means a factor of
+                    // one, not that the index vanishes.
+                    .checked_mul(u64::from((*scale).max(1)))?,
+                None => 0,
+            };
+            let address = base.checked_add(indexed)?;
+            if *disp >= 0 {
+                address.checked_add(*disp as u64)
+            } else {
+                address.checked_sub(disp.unsigned_abs())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn promoted_exception_local(register: &VReg) -> bool {
+    matches!(register, VReg::Phys(name) if name.starts_with("local_") || name.starts_with("stack_"))
+}
+
+fn statements_reference_named_address(
+    statements: &[Stmt],
+    proof_start: usize,
+    inherited_addresses: &std::collections::HashMap<VReg, u64>,
+    address_names: &std::collections::HashMap<u64, String>,
+    expected_name: &str,
+) -> bool {
+    fn expression_references(
+        expression: &Expr,
+        definitions: &std::collections::HashMap<VReg, u64>,
+        address_names: &std::collections::HashMap<u64, String>,
+        expected_name: &str,
+    ) -> bool {
+        let address = match expression {
+            Expr::Deref { addr, .. } => known_exception_address(addr, definitions),
+            Expr::Addr(_) | Expr::Const(_) | Expr::Reg(_) | Expr::Bin { .. } | Expr::Lea { .. } => {
+                known_exception_address(expression, definitions)
+            }
+            _ => None,
+        };
+        address
+            .and_then(|address| address_names.get(&address))
+            .is_some_and(|name| name.starts_with(expected_name))
+    }
+
+    let mut definitions = inherited_addresses.clone();
+    for (index, statement) in statements.iter().enumerate() {
+        match statement {
+            Stmt::Assign { dst, src } => {
+                if index >= proof_start
+                    && expression_references(src, &definitions, address_names, expected_name)
+                {
+                    return true;
+                }
+                if let Some(address) = known_exception_address(src, &definitions) {
+                    definitions.insert(dst.clone(), address);
+                } else {
+                    definitions.remove(dst);
+                }
+            }
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                src,
+                ..
+            } if promoted_exception_local(dst) => {
+                if index >= proof_start
+                    && expression_references(src, &definitions, address_names, expected_name)
+                {
+                    return true;
+                }
+                if let Some(address) = known_exception_address(src, &definitions) {
+                    definitions.insert(dst.clone(), address);
+                } else {
+                    definitions.remove(dst);
+                }
+            }
+            Stmt::Store { addr, src, .. } => {
+                if index >= proof_start
+                    && (expression_references(addr, &definitions, address_names, expected_name)
+                        || expression_references(src, &definitions, address_names, expected_name))
+                {
+                    return true;
+                }
+            }
+            Stmt::Call { target, args, .. } => {
+                if index >= proof_start
+                    && (expression_references(target, &definitions, address_names, expected_name)
+                        || args.iter().any(|argument| {
+                            expression_references(
+                                argument,
+                                &definitions,
+                                address_names,
+                                expected_name,
+                            )
+                        }))
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn recover_throws_in(body: &mut Vec<Stmt>) {
@@ -255,10 +495,7 @@ fn recover_throws_in(body: &mut Vec<Stmt>) {
     {
         return;
     }
-    let Some(value) = body[allocate..throw].iter().find_map(|stmt| match stmt {
-        Stmt::Store { src, size: 4, .. } => Some(src.clone()),
-        _ => None,
-    }) else {
+    let Some(value) = resolved_throw_value(body, allocate, throw) else {
         return;
     };
     body.splice(
@@ -271,6 +508,74 @@ fn recover_throws_in(body: &mut Vec<Stmt>) {
             },
         }],
     );
+}
+
+/// Resolve the exception-object store through the pure SSA and promoted-stack
+/// copies that feed it before removing the Itanium runtime sequence.
+///
+/// Keeping the final temporary is not sufficient: that temporary is defined
+/// between `__cxa_allocate_exception` and `__cxa_throw`, and the whole interval
+/// is replaced by `Throw`.  The replacement must therefore carry an expression
+/// rooted outside the removed interval (normally the source parameter).
+fn resolved_throw_value(body: &[Stmt], allocate: usize, throw: usize) -> Option<Expr> {
+    fn promoted_local(register: &VReg) -> bool {
+        matches!(register, VReg::Phys(name) if name.starts_with("local_") || name.starts_with("stack_"))
+    }
+
+    fn resolve(expression: &Expr, definitions: &std::collections::HashMap<VReg, Expr>) -> Expr {
+        fn inner(
+            expression: &Expr,
+            definitions: &std::collections::HashMap<VReg, Expr>,
+            visiting: &mut std::collections::HashSet<VReg>,
+        ) -> Expr {
+            match expression {
+                Expr::Reg(register) if visiting.insert(register.clone()) => {
+                    let resolved = definitions.get(register).map_or_else(
+                        || expression.clone(),
+                        |definition| inner(definition, definitions, visiting),
+                    );
+                    visiting.remove(register);
+                    resolved
+                }
+                Expr::Cast {
+                    signed,
+                    width,
+                    expr,
+                } => Expr::Cast {
+                    signed: *signed,
+                    width: *width,
+                    expr: Box::new(inner(expr, definitions, visiting)),
+                },
+                _ => expression.clone(),
+            }
+        }
+        inner(
+            expression,
+            definitions,
+            &mut std::collections::HashSet::new(),
+        )
+    }
+
+    let mut definitions = std::collections::HashMap::new();
+    for (index, statement) in body.iter().enumerate().take(throw) {
+        match statement {
+            Stmt::Assign { dst, src } => {
+                definitions.insert(dst.clone(), src.clone());
+            }
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                src,
+                ..
+            } if promoted_local(dst) => {
+                definitions.insert(dst.clone(), src.clone());
+            }
+            Stmt::Store { src, size: 4, .. } if index >= allocate => {
+                return Some(resolve(src, &definitions));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn call_name(statement: &Stmt) -> Option<&str> {
@@ -419,7 +724,7 @@ fn replace_caught_value(body: &mut [Stmt], pointer: &VReg, binding: &VReg) {
 
 #[cfg(test)]
 mod tests {
-    use super::{recover_throws, recover_typed_handlers};
+    use super::{mark_int_throws_with_address_map, recover_throws, recover_typed_handlers};
     use crate::analysis::exception::{CatchType, ExceptionAction, ExceptionCallSite};
     use crate::ir::ast::{Expr, Function, Stmt};
     use crate::ir::types::VReg;
@@ -600,6 +905,65 @@ mod tests {
     }
 
     #[test]
+    fn arm_ehabi_handler_returns_the_value_saved_across_end_catch() {
+        let pointer = VReg::phys("caught_ptr");
+        let result = VReg::phys("catch_result");
+        let restored = VReg::phys("scr_r0");
+        let mut function = Function {
+            name: "f".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Return {
+                    value: Some(Expr::Const(7)),
+                },
+                Stmt::Label(0x1030),
+                abi_call("__cxa_begin_catch@plt", Some(pointer)),
+                Stmt::Assign {
+                    dst: result.clone(),
+                    src: Expr::Const(9001),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("stack_top")),
+                    src: Expr::Reg(result.clone()),
+                    size: 4,
+                },
+                abi_call("__cxa_end_catch@plt", None),
+                Stmt::Pop {
+                    target: restored.clone(),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(restored)),
+                },
+            ],
+        };
+        let sites = [ExceptionCallSite {
+            function_start: 0x1000,
+            protected_start: 0x1004,
+            protected_end: 0x1010,
+            landing_pad: 0x1030,
+            action: ExceptionAction::Catch,
+            catch_type: Some(CatchType::Int),
+            type_info_location: Some(0x4000),
+        }];
+
+        recover_typed_handlers(&mut function, &sites);
+
+        let Stmt::TryCatch { catches, .. } = &function.body[0] else {
+            panic!("expected typed try/catch")
+        };
+        assert!(catches[0].body.iter().any(|statement| matches!(
+            statement,
+            Stmt::Return {
+                value: Some(Expr::Reg(register))
+            } if register == &result
+        )));
+        assert!(!catches[0]
+            .body
+            .iter()
+            .any(|statement| matches!(statement, Stmt::Pop { .. })));
+    }
+
+    #[test]
     fn split_chunk_lsda_int_handler_becomes_typed_try_catch() {
         let pointer = VReg::phys("caught_ptr");
         let mut function = Function {
@@ -681,6 +1045,101 @@ mod tests {
                     expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
                 }
             }]
+        );
+    }
+
+    #[test]
+    fn aarch64_got_typeinfo_sequence_retains_the_int_throw_proof() {
+        let page = VReg::phys("typeinfo_page");
+        let offset = VReg::phys("typeinfo_offset");
+        let spill = VReg::phys("stack_2");
+        let reloaded = VReg::phys("reloaded");
+        let widened = VReg::phys("widened");
+        let mut function = Function {
+            name: "f".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: page.clone(),
+                    src: Expr::Const(0x1f000),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_c")),
+                    src: Expr::Reg(page.clone()),
+                    size: 8,
+                },
+                Stmt::If {
+                    cond: Expr::Const(1),
+                    then_body: vec![
+                        Stmt::Store {
+                            addr: Expr::Reg(spill.clone()),
+                            src: Expr::Reg(VReg::phys("arg0")),
+                            size: 4,
+                        },
+                        abi_call("__cxa_allocate_exception@plt", Some(VReg::phys("object"))),
+                        Stmt::Assign {
+                            dst: reloaded.clone(),
+                            src: Expr::Reg(spill),
+                        },
+                        Stmt::Assign {
+                            dst: widened.clone(),
+                            src: Expr::Cast {
+                                signed: false,
+                                width: 8,
+                                expr: Box::new(Expr::Reg(reloaded)),
+                            },
+                        },
+                        Stmt::Store {
+                            addr: Expr::Reg(VReg::phys("object")),
+                            src: Expr::Reg(widened),
+                            size: 4,
+                        },
+                        Stmt::Assign {
+                            dst: offset.clone(),
+                            src: Expr::Const(0xf98),
+                        },
+                        Stmt::Assign {
+                            dst: VReg::phys("typeinfo"),
+                            src: Expr::Deref {
+                                addr: Box::new(Expr::Lea {
+                                    base: Some(VReg::phys("local_c")),
+                                    index: Some(offset),
+                                    // ARM represents an unshifted index with zero.
+                                    scale: 0,
+                                    disp: 0,
+                                    segment: None,
+                                }),
+                                size: 8,
+                            },
+                        },
+                        abi_call("__cxa_throw@plt", None),
+                    ],
+                    else_body: None,
+                },
+            ],
+        };
+        let names = std::collections::HashMap::from([(0x1ff98, "_ZTIi".to_string())]);
+
+        mark_int_throws_with_address_map(&mut function, &names);
+        recover_throws(&mut function);
+        let prepared = crate::ir::ast::prepare_for_decbench(&function);
+
+        let Some(Stmt::If { then_body, .. }) = prepared
+            .body
+            .iter()
+            .find(|statement| matches!(statement, Stmt::If { .. }))
+        else {
+            panic!("expected if")
+        };
+        assert!(
+            matches!(
+                then_body.last(),
+                Some(Stmt::Throw {
+                    value: Expr::Cast { expr, .. }
+                }) if matches!(expr.as_ref(), Expr::Cast { expr, .. }
+                    if expr.as_ref() == &Expr::Reg(VReg::phys("arg0")))
+            ),
+            "the throw value must survive removal of its SSA chain: {then_body:#?}"
         );
     }
 }

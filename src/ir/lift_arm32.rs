@@ -644,6 +644,11 @@ fn arm_carry_arithmetic(
             src: Value::Reg(VReg::Flag(Flag::C)),
         });
     }
+    // Keep the architectural destination in the same portable machine-word
+    // representation as every other ARM32 arithmetic lift. The wrapped 32-bit
+    // view is a private flag input, not a second write to `dst`: materialising
+    // `dst = (uint32_t)dst` truncates recompiled host pointers carried in a core
+    // register and made the ARM execution gate fault across ordinary loops.
     out.extend([
         Op::Assign {
             dst: saved_lhs.clone(),
@@ -654,26 +659,10 @@ fn arm_carry_arithmetic(
             src: rhs,
         },
     ]);
-    let unsigned_lhs = arm_unsigned32(
-        Value::Reg(saved_lhs.clone()),
-        VReg::Temp(24),
-        &mut out,
-    );
-    let unsigned_rhs = arm_unsigned32(
-        Value::Reg(saved_rhs.clone()),
-        VReg::Temp(25),
-        &mut out,
-    );
-    let signed_lhs = arm_signed32(
-        Value::Reg(saved_lhs.clone()),
-        VReg::Temp(26),
-        &mut out,
-    );
-    let signed_rhs = arm_signed32(
-        Value::Reg(saved_rhs.clone()),
-        VReg::Temp(27),
-        &mut out,
-    );
+    let unsigned_lhs = arm_unsigned32(Value::Reg(saved_lhs.clone()), VReg::Temp(24), &mut out);
+    let unsigned_rhs = arm_unsigned32(Value::Reg(saved_rhs.clone()), VReg::Temp(25), &mut out);
+    let signed_lhs = arm_signed32(Value::Reg(saved_lhs.clone()), VReg::Temp(26), &mut out);
+    let signed_rhs = arm_signed32(Value::Reg(saved_rhs.clone()), VReg::Temp(27), &mut out);
     let lhs_negative = VReg::Temp(28);
     let rhs_negative = VReg::Temp(29);
     out.extend([
@@ -696,14 +685,10 @@ fn arm_carry_arithmetic(
             rhs: Value::Reg(saved_rhs),
         },
         Op::Trunc {
-            dst: dst.clone(),
+            dst: partial.clone(),
             src: Value::Reg(dst.clone()),
             from: Width::W64,
             to: Width::W32,
-        },
-        Op::Assign {
-            dst: partial.clone(),
-            src: Value::Reg(dst.clone()),
         },
     ]);
 
@@ -720,31 +705,34 @@ fn arm_carry_arithmetic(
         } else {
             Value::Reg(VReg::Flag(Flag::C))
         };
-        out.extend([
-            Op::Bin {
-                dst: dst.clone(),
-                op: arithmetic,
-                lhs: Value::Reg(dst.clone()),
-                rhs: adjustment,
-            },
-            Op::Trunc {
-                dst: dst.clone(),
-                src: Value::Reg(dst.clone()),
-                from: Width::W64,
-                to: Width::W32,
-            },
-        ]);
+        out.extend([Op::Bin {
+            dst: dst.clone(),
+            op: arithmetic,
+            lhs: Value::Reg(dst.clone()),
+            rhs: adjustment,
+        }]);
     }
 
     if !sets_flags {
         return out;
     }
 
-    let unsigned_partial =
-        arm_unsigned32(Value::Reg(partial), VReg::Temp(31), &mut out);
+    let unsigned_partial = arm_unsigned32(Value::Reg(partial.clone()), VReg::Temp(31), &mut out);
+    let wrapped_result = if with_carry {
+        let wrapped = VReg::Temp(38);
+        out.push(Op::Trunc {
+            dst: wrapped.clone(),
+            src: Value::Reg(dst),
+            from: Width::W64,
+            to: Width::W32,
+        });
+        wrapped
+    } else {
+        partial
+    };
     let unsigned_result =
-        arm_unsigned32(Value::Reg(dst.clone()), VReg::Temp(32), &mut out);
-    let signed_result = arm_signed32(Value::Reg(dst), VReg::Temp(33), &mut out);
+        arm_unsigned32(Value::Reg(wrapped_result.clone()), VReg::Temp(32), &mut out);
+    let signed_result = arm_signed32(Value::Reg(wrapped_result), VReg::Temp(33), &mut out);
     out.extend([
         Op::Cmp {
             dst: VReg::Flag(Flag::Z),
@@ -1631,9 +1619,7 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
                 operand_to_value(&ops[1]).map(|value| resolve_pc(value, ctx.pc_at(ins))),
                 operand(2, &mut prefix),
             ) {
-                prefix.extend(arm_carry_arithmetic(
-                    dst, lhs, rhs, add, true, sets_flags,
-                ));
+                prefix.extend(arm_carry_arithmetic(dst, lhs, rhs, add, true, sets_flags));
                 return prefix;
             }
         }
@@ -1688,7 +1674,14 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
                 operand(2, &mut out),
             ) {
                 if sets_flags && matches!(op, BinOp::Add | BinOp::Sub) {
-                    out.extend(arm_carry_arithmetic(dst, lhs, rhs, op == BinOp::Add, false, true));
+                    out.extend(arm_carry_arithmetic(
+                        dst,
+                        lhs,
+                        rhs,
+                        op == BinOp::Add,
+                        false,
+                        true,
+                    ));
                     return out;
                 }
                 let (before, after) = if sets_flags {
@@ -2274,6 +2267,21 @@ fn is_it_mnemonic(m: &str) -> bool {
         && m[2..].bytes().all(|b| b == b't' || b == b'e')
 }
 
+/// Apply Thumb's `setflags = !InITBlock` rule to the narrow ADD/SUB forms.
+///
+/// Their 16-bit encodings have no explicit S bit.  Disassemblers conventionally
+/// print them as `adds`/`subs`, but inside an IT block the architecture suppresses
+/// those implicit writes.  Keeping the printed suffix would both clobber the
+/// condition that predicates the remaining slots and turn the one arithmetic
+/// write into a multi-op flag expansion that cannot be conditionally selected.
+fn mnemonic_in_it<'a>(ins: &Instruction, mnem: &'a str) -> &'a str {
+    if ins.length == 2 && matches!(mnem, "adds" | "subs") {
+        &mnem[..mnem.len() - 1]
+    } else {
+        mnem
+    }
+}
+
 /// Per-slot (flag, inverted) conditions for the instructions an IT block
 /// predicates. Capstone reports the mask in the mnemonic (`it`/`ite`/`itt`/…)
 /// and the base condition as the first operand (a pseudo-register named `lt`,
@@ -2437,7 +2445,7 @@ pub fn lift_bytes_in_image(
             it_queue = it_conditions(mnem, cond_name).into();
             out.push(LlirInstr { va, op: Op::Nop });
         } else if let Some((flag, inverted)) = it_queue.pop_front() {
-            let lifted = lift_one(&ins, mnem, &ctx);
+            let lifted = lift_one(&ins, mnemonic_in_it(&ins, mnem), &ctx);
             for op in make_conditional(lifted, flag, inverted) {
                 out.push(LlirInstr { va, op });
             }
@@ -3082,6 +3090,52 @@ mod tests {
         assert!(out.iter().any(|o| matches!(o, Op::Nop)));
     }
 
+    /// Thumb's narrow add/sub encodings set flags only when they execute outside
+    /// an IT block.  Capstone still spells the encoded operations `subs`/`adds`,
+    /// so the lifter has to apply the IT-state semantic override itself.  This
+    /// is the real `dec_preserves_carry` O2 sequence: the initial `cmp` supplies
+    /// carry to all three predicated slots and neither arithmetic slot may
+    /// replace it.
+    #[test]
+    fn narrow_arithmetic_inside_it_preserves_the_incoming_flags() {
+        let body: &[u8] = &[
+            0x88, 0x42, // cmp r0, r1
+            0x26, 0xbf, // itte cs
+            0x40, 0x1a, // subcs r0, r0, r1 (encoded narrow SUBS)
+            0x02, 0x30, // addcs r0, #2     (encoded narrow ADDS)
+            0x02, 0x20, // movcc r0, #2
+            0x70, 0x47, // bx lr
+        ];
+        let out = ops(body);
+        let carry_writes = out
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op,
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::C),
+                        ..
+                    } | Op::Assign {
+                        dst: VReg::Flag(Flag::C),
+                        ..
+                    } | Op::Bin {
+                        dst: VReg::Flag(Flag::C),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            carry_writes, 1,
+            "the predicated narrow arithmetic overwrote cmp carry: {out:#?}"
+        );
+        assert_eq!(
+            out.iter().filter(|op| matches!(op, Op::Ite { .. })).count(),
+            3,
+            "all three IT slots must remain conditional selects: {out:#?}"
+        );
+    }
+
     /// `subs` must write the flags of `cmp`, not just the subtraction.
     ///
     /// `bin_for_mnem` maps `sub` and `subs` to the same `BinOp`, so before this
@@ -3424,16 +3478,24 @@ mod tests {
             .unwrap_or_else(|| panic!("no zero flag: {out:#?}"));
         let saved_lhs = out
             .iter()
-            .position(|op| matches!(
-                op,
-                Op::Assign {
-                    dst: VReg::Temp(21),
-                    src: Value::Reg(VReg::Phys(source)),
-                } if source == "r3"
-            ))
+            .position(|op| {
+                matches!(
+                    op,
+                    Op::Assign {
+                        dst: VReg::Temp(21),
+                        src: Value::Reg(VReg::Phys(source)),
+                    } if source == "r3"
+                )
+            })
             .unwrap_or_else(|| panic!("old lhs was not captured: {out:#?}"));
-        assert!(saved_lhs < subtract, "lhs capture must precede overwrite: {out:#?}");
-        assert!(subtract < zero, "result-derived zero flag must follow subtraction: {out:#?}");
+        assert!(
+            saved_lhs < subtract,
+            "lhs capture must precede overwrite: {out:#?}"
+        );
+        assert!(
+            subtract < zero,
+            "result-derived zero flag must follow subtraction: {out:#?}"
+        );
 
         // The three-operand form with `Rd == Rn` has the same hazard:
         // subs r0, r0, r1 (A1) = 0xe0500001.
@@ -3510,9 +3572,16 @@ mod tests {
             assert!(
                 out.iter().any(|op| matches!(
                     op,
-                    Op::Cmp { dst: VReg::Flag(Flag::C), .. }
-                        | Op::Bin { dst: VReg::Flag(Flag::C), .. }
-                        | Op::Assign { dst: VReg::Flag(Flag::C), .. }
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::C),
+                        ..
+                    } | Op::Bin {
+                        dst: VReg::Flag(Flag::C),
+                        ..
+                    } | Op::Assign {
+                        dst: VReg::Flag(Flag::C),
+                        ..
+                    }
                 )),
                 "{name} did not define the carry/borrow convention: {out:#?}"
             );
@@ -3522,28 +3591,34 @@ mod tests {
             .into_iter()
             .map(|instruction| instruction.op)
             .collect();
-        assert!(adcs.iter().any(|op| matches!(
-            op,
-            Op::Cmp {
-                op: CmpOp::Eq,
-                lhs: Value::Reg(VReg::Flag(Flag::C)),
-                rhs: Value::Const(0),
-                ..
-            }
-        )), "ADCS must invert stored borrow/no-carry into architectural carry-in: {adcs:#?}");
+        assert!(
+            adcs.iter().any(|op| matches!(
+                op,
+                Op::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Value::Reg(VReg::Flag(Flag::C)),
+                    rhs: Value::Const(0),
+                    ..
+                }
+            )),
+            "ADCS must invert stored borrow/no-carry into architectural carry-in: {adcs:#?}"
+        );
 
         let sbcs: Vec<Op> = lift_bytes(&0xe0d10002u32.to_le_bytes(), 0x1000, false)
             .into_iter()
             .map(|instruction| instruction.op)
             .collect();
-        assert!(sbcs.iter().any(|op| matches!(
-            op,
-            Op::Bin {
-                op: BinOp::Sub,
-                rhs: Value::Reg(VReg::Flag(Flag::C)),
-                ..
-            }
-        )), "SBCS must subtract the stored incoming borrow directly: {sbcs:#?}");
+        assert!(
+            sbcs.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    op: BinOp::Sub,
+                    rhs: Value::Reg(VReg::Flag(Flag::C)),
+                    ..
+                }
+            )),
+            "SBCS must subtract the stored incoming borrow directly: {sbcs:#?}"
+        );
 
         assert_eq!(cond_flag_for("ls"), Some((VReg::Flag(Flag::Ule), false)));
         assert_eq!(cond_flag_for("hi"), Some((VReg::Flag(Flag::Ule), true)));

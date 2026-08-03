@@ -1557,11 +1557,14 @@ fn emit_adc_sbb_with_flags(dst: VReg, rhs: Value, width: Width, add: bool) -> Ve
         },
     ];
 
-    let unsigned_lhs =
-        unsigned_cmp_value(Value::Reg(original.clone()), width, VReg::Temp(63), &mut ops);
+    let unsigned_lhs = unsigned_cmp_value(
+        Value::Reg(original.clone()),
+        width,
+        VReg::Temp(63),
+        &mut ops,
+    );
     let unsigned_rhs = unsigned_cmp_value(rhs.clone(), width, VReg::Temp(64), &mut ops);
-    let signed_lhs =
-        signed_cmp_value(Value::Reg(original), width, VReg::Temp(65), &mut ops);
+    let signed_lhs = signed_cmp_value(Value::Reg(original), width, VReg::Temp(65), &mut ops);
     let signed_rhs = signed_cmp_value(rhs.clone(), width, VReg::Temp(66), &mut ops);
     let lhs_negative = VReg::Temp(67);
     let rhs_negative = VReg::Temp(68);
@@ -1607,10 +1610,8 @@ fn emit_adc_sbb_with_flags(dst: VReg, rhs: Value, width: Width, add: bool) -> Ve
     }
     zero_sign_flags(Value::Reg(dst.clone()), width, 69, &mut ops);
 
-    let unsigned_partial =
-        unsigned_cmp_value(Value::Reg(partial), width, VReg::Temp(70), &mut ops);
-    let unsigned_result =
-        unsigned_cmp_value(Value::Reg(dst), width, VReg::Temp(71), &mut ops);
+    let unsigned_partial = unsigned_cmp_value(Value::Reg(partial), width, VReg::Temp(70), &mut ops);
+    let unsigned_result = unsigned_cmp_value(Value::Reg(dst), width, VReg::Temp(71), &mut ops);
     let first_carry = VReg::Temp(72);
     let second_carry = VReg::Temp(73);
     if add {

@@ -237,8 +237,9 @@ pub enum Op {
     /// defined (or whose defined semantics are not yet modelled).
     ///
     /// This is a real definition for SSA: a later read must reach this new value,
-    /// never an older plausible value. Execution halts and AST verification marks
-    /// a live poison, while ordinary DCE can remove an unused poisoned flag.
+    /// never an older plausible value. Execution halts if the poisoned value is
+    /// read and AST verification marks a live poison, while ordinary DCE can
+    /// remove an unused poisoned flag.
     Undef {
         dst: VReg,
         reason: String,

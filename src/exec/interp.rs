@@ -84,6 +84,10 @@ pub struct Machine<D: Domain> {
     pub simprocs: SimProcRegistry<D>,
     /// Virtual timestamp counter backing `rdtsc` (deterministic — no host time).
     tsc: u64,
+    /// Poisoned architectural values. `Op::Undef` is a definition, not an
+    /// immediate control-flow event: execution stops only if a later operation
+    /// actually demands that value.
+    undefined: HashMap<VReg, String>,
 }
 
 impl<D: Domain + Default> Default for Machine<D> {
@@ -105,6 +109,7 @@ impl<D: Domain + Clone> Clone for Machine<D> {
             helpers: self.helpers.clone(),
             simprocs: self.simprocs.clone(),
             tsc: self.tsc,
+            undefined: self.undefined.clone(),
         }
     }
 }
@@ -145,6 +150,7 @@ impl<D: Domain> Machine<D> {
             helpers,
             simprocs: SimProcRegistry::empty(),
             tsc: 0,
+            undefined: HashMap::new(),
         }
     }
 
@@ -191,6 +197,18 @@ impl<D: Domain> Machine<D> {
         }
     }
 
+    fn undefined_key(register: &VReg) -> VReg {
+        match register {
+            VReg::FlagValue { flag, .. } => VReg::Flag(*flag),
+            _ => register.clone(),
+        }
+    }
+
+    fn write_defined(&mut self, register: &VReg, value: D::Val) {
+        self.undefined.remove(&Self::undefined_key(register));
+        self.regs.write(&mut self.dom, register, value);
+    }
+
     /// Effective address of a memory operand: base + index*scale + disp.
     /// Segment overrides are ignored for now (Phase-later: fs/gs bases).
     fn effective_addr(&mut self, m: &MemOp) -> Option<u64> {
@@ -209,21 +227,32 @@ impl<D: Domain> Machine<D> {
 
     /// Execute one op, returning the resulting control [`Flow`].
     pub fn step(&mut self, op: &Op) -> Flow {
+        let (_, uses) = crate::ir::use_def::def_uses(op);
+        if let Some(reason) = uses
+            .iter()
+            .find_map(|register| self.undefined.get(&Self::undefined_key(register)).cloned())
+        {
+            return Flow::Halt(Halt::UndefinedValue(reason));
+        }
         match op {
             Op::Nop => Flow::Next,
             Op::Assign { dst, src } => {
                 let w = op_width(&self.regs, dst, &[src]);
                 let v = self.read(src, w);
-                self.regs.write(&mut self.dom, dst, v);
+                self.write_defined(dst, v);
                 Flow::Next
             }
-            Op::Undef { reason, .. } => Flow::Halt(Halt::UndefinedValue(reason.clone())),
+            Op::Undef { dst, reason } => {
+                self.undefined
+                    .insert(Self::undefined_key(dst), reason.clone());
+                Flow::Next
+            }
             Op::CondAssign { dst, cond, src } => {
                 let c = self.regs.read(&mut self.dom, cond);
                 if let BranchDecision::Taken = self.dom.as_branch(&c) {
                     let w = op_width(&self.regs, dst, &[src]);
                     let v = self.read(src, w);
-                    self.regs.write(&mut self.dom, dst, v);
+                    self.write_defined(dst, v);
                 }
                 Flow::Next
             }
@@ -232,14 +261,14 @@ impl<D: Domain> Machine<D> {
                 let a = self.read(lhs, w);
                 let b = self.read(rhs, w);
                 let r = self.dom.binop(*op, &a, &b, w);
-                self.regs.write(&mut self.dom, dst, r);
+                self.write_defined(dst, r);
                 Flow::Next
             }
             Op::Un { dst, op, src } => {
                 let w = op_width(&self.regs, dst, &[src]);
                 let a = self.read(src, w);
                 let r = self.dom.unop(*op, &a, w);
-                self.regs.write(&mut self.dom, dst, r);
+                self.write_defined(dst, r);
                 Flow::Next
             }
             Op::Cmp { dst, op, lhs, rhs } => {
@@ -250,32 +279,32 @@ impl<D: Domain> Machine<D> {
                 let a = self.read(lhs, w);
                 let b = self.read(rhs, w);
                 let r = self.dom.cmp(*op, &a, &b, w);
-                self.regs.write(&mut self.dom, dst, r);
+                self.write_defined(dst, r);
                 Flow::Next
             }
             Op::ZExt { dst, src, from, to } => {
                 let v = self.read(src, *from);
                 let r = self.dom.zext(&v, *from, *to);
-                self.regs.write(&mut self.dom, dst, r);
+                self.write_defined(dst, r);
                 Flow::Next
             }
             Op::SExt { dst, src, from, to } => {
                 let v = self.read(src, *from);
                 let r = self.dom.sext(&v, *from, *to);
-                self.regs.write(&mut self.dom, dst, r);
+                self.write_defined(dst, r);
                 Flow::Next
             }
             Op::Trunc { dst, src, from, to } => {
                 let v = self.read(src, *from);
                 let r = self.dom.trunc(&v, *to);
-                self.regs.write(&mut self.dom, dst, r);
+                self.write_defined(dst, r);
                 Flow::Next
             }
             Op::Extract { dst, src, hi, lo } => {
                 let w = value_width(&self.regs, src).unwrap_or(Width(*hi));
                 let v = self.read(src, w);
                 let r = self.dom.extract(&v, *hi, *lo);
-                self.regs.write(&mut self.dom, dst, r);
+                self.write_defined(dst, r);
                 Flow::Next
             }
             Op::Concat { dst, hi, lo } => {
@@ -284,7 +313,7 @@ impl<D: Domain> Machine<D> {
                 let h = self.read(hi, hw);
                 let l = self.read(lo, lw);
                 let r = self.dom.concat(&h, &l, hw, lw);
-                self.regs.write(&mut self.dom, dst, r);
+                self.write_defined(dst, r);
                 Flow::Next
             }
             Op::Ite {
@@ -298,7 +327,7 @@ impl<D: Domain> Machine<D> {
                 let tv = self.read(t, *width);
                 let ev = self.read(e, *width);
                 let r = self.dom.ite(&c, &tv, &ev, *width);
-                self.regs.write(&mut self.dom, dst, r);
+                self.write_defined(dst, r);
                 Flow::Next
             }
             Op::Load { dst, addr } => {
@@ -306,7 +335,7 @@ impl<D: Domain> Machine<D> {
                     return Flow::Halt(Halt::UnresolvedAddress);
                 };
                 let v = self.mem.load(&mut self.dom, ea, addr.size, addr.endian);
-                self.regs.write(&mut self.dom, dst, v);
+                self.write_defined(dst, v);
                 Flow::Next
             }
             Op::Store { addr, src } => {
@@ -456,6 +485,28 @@ mod tests {
                 .collect(),
             succs: vec![],
         }
+    }
+
+    #[test]
+    fn an_undefined_flag_halts_only_when_it_is_observed() {
+        let reason = "parity is not modelled".to_string();
+        let mut machine = machine();
+
+        assert_eq!(
+            machine.step(&Op::Undef {
+                dst: VReg::Flag(Flag::P),
+                reason: reason.clone(),
+            }),
+            Flow::Next
+        );
+        assert_eq!(
+            machine.step(&Op::CondJump {
+                cond: VReg::Flag(Flag::P),
+                target: 0x2000,
+                inverted: false,
+            }),
+            Flow::Halt(Halt::UndefinedValue(reason))
+        );
     }
 
     fn machine() -> Machine<Concrete> {

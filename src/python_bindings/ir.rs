@@ -684,14 +684,18 @@ fn decompile_at_py(
     // intact) while everything downstream uses the canonicalised `lf`; the
     // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
     // narrower width.
-    let (lf, definition_widths) = if style == "decbench" {
-        crate::ir::value_number::value_number_with_definition_widths(&lf_raw, &ssa, cc)
+    let (lf, definition_widths, mut param_slots) = if style == "decbench" {
+        crate::ir::value_number::value_number_with_parameter_slots(&lf_raw, &ssa, cc)
     } else {
-        (lf_raw.clone(), std::collections::HashMap::new())
+        let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf_raw, cc);
+        (
+            lf_raw.clone(),
+            std::collections::HashMap::new(),
+            parameter_slots,
+        )
     };
     // Live-in argument slots (authoritative parameter set) for the type-map
     // remap, so scratch reuse of an arg register never becomes a spurious `argN`.
-    let mut param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
     // Recover the semantic prototype while SSA value IDs are still available.
     // It survives the AST pipeline as an immutable companion object; naming is
     // now only a final projection (`value -> argN`), never a type-analysis key.
@@ -715,7 +719,7 @@ fn decompile_at_py(
     let callee_facts = recover_direct_callee_layouts(
         &data,
         &funcs,
-        &func,
+        &lf_raw,
         arch,
         cc,
         arm_vfp_args,
@@ -772,7 +776,8 @@ fn decompile_at_py(
     );
     if style == "decbench" {
         crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-        crate::ir::exception_recover::mark_int_throws(&mut f);
+        crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
+        crate::ir::exception_recover::recover_throws(&mut f);
     }
     recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
@@ -799,6 +804,7 @@ fn decompile_at_py(
             decbench_type_maps(
                 &f,
                 &lf_raw,
+                &lf,
                 prototype.as_ref().expect("typed DecBench prototype"),
                 cc,
                 &param_slots,
@@ -949,12 +955,16 @@ fn decompile_range_at_py(
     // intact) while everything downstream uses the canonicalised `lf`; the
     // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
     // narrower width.
-    let (lf, definition_widths) = if style == "decbench" {
-        crate::ir::value_number::value_number_with_definition_widths(&lf_raw, &ssa, cc)
+    let (lf, definition_widths, mut param_slots) = if style == "decbench" {
+        crate::ir::value_number::value_number_with_parameter_slots(&lf_raw, &ssa, cc)
     } else {
-        (lf_raw.clone(), std::collections::HashMap::new())
+        let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf_raw, cc);
+        (
+            lf_raw.clone(),
+            std::collections::HashMap::new(),
+            parameter_slots,
+        )
     };
-    let mut param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
     let prototype = (style == "decbench" && types).then(|| {
         recover_decbench_prototype(
             &lf_raw,
@@ -1010,7 +1020,8 @@ fn decompile_range_at_py(
     );
     if style == "decbench" {
         crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-        crate::ir::exception_recover::mark_int_throws(&mut f);
+        crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
+        crate::ir::exception_recover::recover_throws(&mut f);
     }
     recognise_machine_frame(&mut f, cc);
     if let Some(field_map) = &field_map {
@@ -1021,6 +1032,7 @@ fn decompile_range_at_py(
             decbench_type_maps(
                 &f,
                 &lf_raw,
+                &lf,
                 prototype.as_ref().expect("typed DecBench prototype"),
                 cc,
                 &param_slots,
@@ -1107,7 +1119,7 @@ fn remap_type_map(
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
 ) -> crate::ir::types_recover::TypeMap {
-    remap_type_map_impl(tm, cc, param_slots, true, None)
+    remap_type_map_impl(tm, cc, param_slots, true, None, false)
 }
 
 fn remap_type_map_impl(
@@ -1116,6 +1128,7 @@ fn remap_type_map_impl(
     param_slots: &std::collections::HashSet<usize>,
     include_parameters: bool,
     exact_roles: Option<&std::collections::HashMap<String, String>>,
+    exact_integer_roles: bool,
 ) -> crate::ir::types_recover::TypeMap {
     // Reconstruct the alias table the naming pass used for arg/ret slots;
     // `varN` aliases are assigned by first-appearance order and we can't
@@ -1215,13 +1228,18 @@ fn remap_type_map_impl(
                 // intrinsic proves every operand's source class. Keeping this
                 // projection narrow avoids letting flow-insensitive register
                 // hints perturb unrelated call prototypes.
-                let exact = matches!(hint, crate::ir::types_recover::TypeHint::Float { .. })
-                    .then(|| exact_roles.and_then(|roles| roles.get(n)))
-                    .flatten()
-                    .filter(|role| {
-                        include_parameters || crate::ir::ast::parse_arg_index(role).is_none()
-                    })
-                    .cloned();
+                let exact = (exact_integer_roles
+                    || matches!(
+                        hint,
+                        crate::ir::types_recover::TypeHint::Float { .. }
+                            | crate::ir::types_recover::TypeHint::Pointer { .. }
+                    ))
+                .then(|| exact_roles.and_then(|roles| roles.get(n)))
+                .flatten()
+                .filter(|role| {
+                    include_parameters || crate::ir::ast::parse_arg_index(role).is_none()
+                })
+                .cloned();
                 let new_name = exact
                     .or_else(|| alias.get(n).cloned())
                     .unwrap_or_else(|| n.clone());
@@ -1654,6 +1672,58 @@ struct DirectCalleeFacts {
     prototypes: std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
 }
 
+fn imported_symbol_base(name: &str) -> &str {
+    name.strip_suffix("@plt")
+        .or_else(|| name.strip_suffix(".plt"))
+        .unwrap_or(name)
+}
+
+fn defined_text_symbol_address(data: &[u8], name: &str) -> Option<u64> {
+    use object::{Object, ObjectSymbol};
+
+    let object = object::read::File::parse(data).ok()?;
+    object
+        .symbols()
+        .chain(object.dynamic_symbols())
+        .find(|symbol| {
+            symbol.is_definition()
+                && symbol.kind() == object::SymbolKind::Text
+                && symbol.name().is_ok_and(|symbol_name| symbol_name == name)
+        })
+        .map(|symbol| symbol.address())
+}
+
+/// Fixed Itanium C++ runtime layouts whose imported PLT stubs have no body from
+/// which parameter liveness can be recovered.
+///
+/// In particular, `__cxa_throw(object, typeinfo, destructor)` must retain all
+/// three setup registers. Without this layout x1/x2 are dead before final
+/// exception recovery, `_ZTIi` disappears, and the ABI call cannot become a
+/// source-level `throw int`.
+fn itanium_runtime_layout(
+    name: &str,
+    cc: crate::ir::call_args::CallConv,
+) -> Option<Vec<crate::ir::types::VReg>> {
+    let clean = imported_symbol_base(name);
+    let arity = match clean {
+        "__cxa_allocate_exception" | "__cxa_begin_catch" => 1,
+        "__cxa_throw" => 3,
+        "__cxa_end_catch" => 0,
+        _ => return None,
+    };
+    if cc == crate::ir::call_args::CallConv::Cdecl32 {
+        // cdecl arguments are reconstructed from stack pushes, not registers.
+        return None;
+    }
+    Some(
+        crate::ir::abi::argument_slots(cc)
+            .iter()
+            .take(arity)
+            .map(|slot| crate::ir::types::VReg::phys(slot[0]))
+            .collect(),
+    )
+}
+
 fn recovered_call_prototype(
     prototype: &crate::ir::types_recover::RecoveredPrototype,
 ) -> crate::ir::call_contracts::CallPrototype {
@@ -1715,7 +1785,7 @@ fn recovered_call_prototype(
 fn recover_direct_callee_layouts(
     data: &[u8],
     functions: &[crate::core::function::Function],
-    caller: &crate::core::function::Function,
+    caller: &crate::ir::types::LlirFunction,
     arch: crate::core::binary::Arch,
     cc: crate::ir::call_args::CallConv,
     arm_vfp_args: bool,
@@ -1735,20 +1805,74 @@ fn recover_direct_callee_layouts(
     use crate::ir::ssa::compute_ssa;
 
     let mut facts = DirectCalleeFacts::default();
-    for callee_address in &caller.callees {
-        let callee_va = callee_address.value;
+    let callees: std::collections::BTreeSet<u64> = caller
+        .blocks
+        .iter()
+        .flat_map(|block| block.instrs.iter())
+        .filter_map(|instruction| match instruction.op {
+            crate::ir::types::Op::Call {
+                target: crate::ir::types::CallTarget::Direct(address),
+                ..
+            } => Some(address),
+            _ => None,
+        })
+        .collect();
+    let dump = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
+    if dump {
+        eprintln!("\n===== direct callee candidates =====\n{callees:#x?}");
+    }
+    for callee_va in callees {
+        if let Some(layout) = address_names
+            .get(&callee_va)
+            .and_then(|name| itanium_runtime_layout(name, cc))
+        {
+            facts.layouts.insert(callee_va, layout);
+            continue;
+        }
+        // PIC code commonly calls a local exported definition through its PLT
+        // entry.  The stub has no parameter evidence, but the same binary's
+        // real `signed_step`/etc. body does. Resolve that body by the imported
+        // symbol name while keeping facts keyed by the call instruction's
+        // actual target address.
+        let body_va = address_names
+            .get(&callee_va)
+            .map(|name| imported_symbol_base(name))
+            .and_then(|name| {
+                defined_text_symbol_address(data, name).or_else(|| {
+                    functions
+                        .iter()
+                        .find(|function| {
+                            let entry = function.entry_point.value;
+                            function.name == name
+                                || [entry, entry | 1].into_iter().any(|address| {
+                                    address_names.get(&address).is_some_and(|resolved| {
+                                        imported_symbol_base(resolved) == name
+                                    })
+                                })
+                        })
+                        .map(|function| function.entry_point.value)
+                })
+            })
+            .unwrap_or(callee_va);
+        let body_va = crate::analysis::arm32_mode::normalise_entry(data, body_va);
+        if dump {
+            eprintln!(
+                "callee 0x{callee_va:x} {:?} -> body 0x{body_va:x}",
+                address_names.get(&callee_va)
+            );
+        }
         let recovered = cache
             .entry(callee_va)
             .or_insert_with(|| {
                 let targeted;
                 let callee = match functions
                     .iter()
-                    .find(|function| function.entry_point.value == callee_va)
+                    .find(|function| function.entry_point.value == body_va)
                 {
                     Some(callee) => callee,
                     None => {
                         targeted = crate::analysis::cfg::discover_function_bytes_at(
-                            data, budgets, callee_va,
+                            data, budgets, body_va,
                         )?;
                         &targeted
                     }
@@ -1764,7 +1888,7 @@ fn recover_direct_callee_layouts(
                     cc,
                     &parameter_slots,
                     arm_vfp_args,
-                    dwarf_outputs.and_then(|outputs| outputs.get(&callee_va)),
+                    dwarf_outputs.and_then(|outputs| outputs.get(&body_va)),
                 );
                 let layout: Vec<crate::ir::types::VReg> = prototype
                     .parameters()
@@ -1776,6 +1900,9 @@ fn recover_direct_callee_layouts(
             })
             .clone();
         if let Some((layout, prototype, name)) = recovered {
+            if dump {
+                eprintln!("callee 0x{callee_va:x}: recovered layout {layout:?}");
+            }
             match address_names.entry(callee_va) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     entry.insert(name);
@@ -1789,6 +1916,8 @@ fn recover_direct_callee_layouts(
             }
             facts.layouts.insert(callee_va, layout);
             facts.prototypes.insert(callee_va, prototype);
+        } else if dump {
+            eprintln!("callee 0x{callee_va:x}: no recovered layout");
         }
     }
     facts
@@ -1996,6 +2125,19 @@ fn merge_exact_definition_widths(
             continue;
         }
         let role = crate::ir::types::VReg::phys(role_name);
+        // An exact SSA value used as an address is stronger than its register
+        // storage width. On 32-bit ARM both facts are four bytes, but projecting
+        // the latter as `int` truncates the former when DecBench recompiles the
+        // recovered C on a 64-bit host (`var = p; *(var + 4)`).
+        if matches!(
+            tm.get(&role),
+            Some(
+                crate::ir::types_recover::TypeHint::Pointer { .. }
+                    | crate::ir::types_recover::TypeHint::CodePointer
+            )
+        ) {
+            continue;
+        }
         let signed = match tm.get(&role) {
             Some(crate::ir::types_recover::TypeHint::Int { signed, .. }) => signed,
             // The definition map proves storage width, not source-language
@@ -2016,6 +2158,7 @@ fn merge_exact_definition_widths(
 fn decbench_type_maps(
     f: &crate::ir::ast::Function,
     lf_raw: &crate::ir::types::LlirFunction,
+    lf_numbered: &crate::ir::types::LlirFunction,
     prototype: &crate::ir::types_recover::RecoveredPrototype,
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
@@ -2028,7 +2171,15 @@ fn decbench_type_maps(
 ) {
     use crate::ir::types_recover::recover_types_for;
     let raw = recover_types_for(lf_raw, cc);
-    let mut decl = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names));
+    let numbered = remap_type_map_impl(
+        &recover_types_for(lf_numbered, cc),
+        cc,
+        param_slots,
+        false,
+        Some(role_names),
+        true,
+    );
+    let mut decl = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names), false);
     let live_ins = prototype.parameter_type_map();
     let result = prototype.result_type_map();
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
@@ -2056,7 +2207,10 @@ fn decbench_type_maps(
     merge_exact_definition_widths(&mut decl, definition_widths, role_names, cc);
     crate::ir::call_contracts::refine_call_result_types(f, &mut decl);
     refine_float_copy_types(&f.body, &mut decl);
-    let mut width = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names));
+    for (role, hint) in numbered.iter() {
+        refine_numbered_declaration(&mut decl, role, hint);
+    }
+    let mut width = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names), false);
     if let Some(hint) = result.get(&crate::ir::types::VReg::phys("ret")) {
         if prototype.output_is_locked() {
             width.apply_locked_fact(crate::ir::types::VReg::phys("ret"), hint);
@@ -2078,11 +2232,66 @@ fn decbench_type_maps(
     merge_exact_definition_widths(&mut width, definition_widths, role_names, cc);
     crate::ir::call_contracts::refine_call_result_types(f, &mut width);
     refine_float_copy_types(&f.body, &mut width);
+    for (role, hint) in numbered.iter() {
+        match hint {
+            crate::ir::types_recover::TypeHint::Pointer { pointee_width } => {
+                width.refine_from_value(
+                    role.clone(),
+                    crate::ir::types_recover::TypeHint::Pointer {
+                        pointee_width: *pointee_width,
+                    },
+                );
+            }
+            crate::ir::types_recover::TypeHint::Int {
+                signed,
+                width: exact_width,
+            } if matches!(
+                width.get(role),
+                Some(crate::ir::types_recover::TypeHint::Int { .. })
+            ) =>
+            {
+                // This companion map governs expression casts, not storage
+                // declarations. Per-value SSA evidence therefore owns both
+                // width and signedness: raw-register recovery routinely sees a
+                // zero-extended move before the same value's signed wide use.
+                width.force_int_width(role.clone(), *exact_width);
+                width.force_int_signedness(role.clone(), *signed);
+            }
+            _ => {}
+        }
+    }
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== exact role names =====\n{role_names:#?}");
+        eprintln!("\n===== numbered value types =====\n{numbered:#?}");
         eprintln!("\n===== recovered declaration types =====\n{decl:#?}");
+        eprintln!("\n===== recovered expression-width types =====\n{width:#?}");
     }
     (decl, width)
+}
+
+/// Apply per-value SSA evidence without discarding a previously proven pointer.
+fn refine_numbered_declaration(
+    decl: &mut crate::ir::types_recover::TypeMap,
+    role: &crate::ir::types::VReg,
+    hint: &crate::ir::types_recover::TypeHint,
+) {
+    match hint {
+        crate::ir::types_recover::TypeHint::Pointer { pointee_width } => {
+            decl.refine_from_value(
+                role.clone(),
+                crate::ir::types_recover::TypeHint::Pointer {
+                    pointee_width: *pointee_width,
+                },
+            );
+        }
+        // Register width alone does not prove a source integer declaration.
+        // This is especially important when a 32-bit pointer is transported
+        // through a full-width GPR and the recovered C is rebuilt on a 64-bit
+        // host. Prepared-AST definition widths refine genuine wide scalars
+        // later, with enough context to distinguish those cases.
+        crate::ir::types_recover::TypeHint::Int { .. } => {}
+        _ => {}
+    }
 }
 
 /// Decompile the first `limit` discovered functions. Returns a list of
@@ -2161,12 +2370,16 @@ fn decompile_all_py(
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
-        let (lf, definition_widths) = if style == "decbench" {
-            crate::ir::value_number::value_number_with_definition_widths(&lf_raw, &ssa, cc)
+        let (lf, definition_widths, mut param_slots) = if style == "decbench" {
+            crate::ir::value_number::value_number_with_parameter_slots(&lf_raw, &ssa, cc)
         } else {
-            (lf_raw.clone(), std::collections::HashMap::new())
+            let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf_raw, cc);
+            (
+                lf_raw.clone(),
+                std::collections::HashMap::new(),
+                parameter_slots,
+            )
         };
-        let mut param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let prototype = (style == "decbench").then(|| {
             recover_decbench_prototype(
                 &lf_raw,
@@ -2201,7 +2414,7 @@ fn decompile_all_py(
         let callee_facts = recover_direct_callee_layouts(
             &data,
             &funcs,
-            func,
+            &lf_raw,
             arch,
             cc,
             arm_vfp_args,
@@ -2228,7 +2441,8 @@ fn decompile_all_py(
         );
         if style == "decbench" {
             crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-            crate::ir::exception_recover::mark_int_throws(&mut f);
+            crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
+            crate::ir::exception_recover::recover_throws(&mut f);
         }
         recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {
@@ -2238,6 +2452,7 @@ fn decompile_all_py(
             let (decl, width) = decbench_type_maps(
                 &f,
                 &lf_raw,
+                &lf,
                 prototype.as_ref().expect("DecBench prototype"),
                 cc,
                 &param_slots,
@@ -2386,12 +2601,16 @@ fn decompile_many_py(
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
-        let (lf, definition_widths) = if style == "decbench" {
-            crate::ir::value_number::value_number_with_definition_widths(&lf_raw, &ssa, cc)
+        let (lf, definition_widths, mut param_slots) = if style == "decbench" {
+            crate::ir::value_number::value_number_with_parameter_slots(&lf_raw, &ssa, cc)
         } else {
-            (lf_raw.clone(), std::collections::HashMap::new())
+            let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf_raw, cc);
+            (
+                lf_raw.clone(),
+                std::collections::HashMap::new(),
+                parameter_slots,
+            )
         };
-        let mut param_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf, cc);
         let prototype = (style == "decbench").then(|| {
             recover_decbench_prototype(
                 &lf_raw,
@@ -2433,7 +2652,7 @@ fn decompile_many_py(
         let callee_facts = recover_direct_callee_layouts(
             &data,
             &funcs,
-            func,
+            &lf_raw,
             arch,
             cc,
             arm_vfp_args,
@@ -2460,7 +2679,8 @@ fn decompile_many_py(
         );
         if style == "decbench" {
             crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-            crate::ir::exception_recover::mark_int_throws(&mut f);
+            crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
+            crate::ir::exception_recover::recover_throws(&mut f);
         }
         recognise_machine_frame(&mut f, cc);
         if let Some(field_map) = &field_map {
@@ -2474,6 +2694,7 @@ fn decompile_many_py(
             let (decl, width) = decbench_type_maps(
                 &f,
                 &lf_raw,
+                &lf,
                 prototype.as_ref().expect("DecBench prototype"),
                 cc,
                 &param_slots,
@@ -2539,14 +2760,21 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
 #[cfg(test)]
 mod tests {
     use super::{
-        dwarf_return_hint, dwarf_stack_object_hints, merge_exact_definition_widths,
-        DwarfPrototypeContract,
+        dwarf_return_hint, dwarf_stack_object_hints, imported_symbol_base,
+        merge_exact_definition_widths, refine_numbered_declaration, DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
     use crate::ir::call_args::CallConv;
     use crate::ir::types::VReg;
     use crate::ir::types_recover::{TypeHint, TypeMap};
     use std::collections::HashMap;
+
+    #[test]
+    fn a_plt_target_can_be_matched_to_its_local_definition() {
+        assert_eq!(imported_symbol_base("signed_step@plt"), "signed_step");
+        assert_eq!(imported_symbol_base("signed_step.plt"), "signed_step");
+        assert_eq!(imported_symbol_base("signed_step"), "signed_step");
+    }
 
     #[test]
     fn later_subregister_definition_does_not_narrow_a_parameter_prototype() {
@@ -2592,6 +2820,78 @@ mod tests {
             &definition_widths,
             &role_names,
             CallConv::SysVAmd64,
+        );
+
+        assert_eq!(
+            types.get(&role),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn a_storage_width_does_not_overwrite_an_exact_pointer_role() {
+        let role = VReg::phys("var0");
+        let mut types = TypeMap::default();
+        types.upsert_public(role.clone(), TypeHint::Pointer { pointee_width: 4 });
+        let definition_widths = HashMap::from([(VReg::phys("r3#2"), 4)]);
+        let role_names = HashMap::from([("r3#2".to_string(), "var0".to_string())]);
+
+        merge_exact_definition_widths(
+            &mut types,
+            &definition_widths,
+            &role_names,
+            CallConv::ArmHardFloat,
+        );
+
+        assert_eq!(
+            types.get(&role),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+    }
+
+    #[test]
+    fn numbered_integer_evidence_does_not_overwrite_a_proven_pointer() {
+        let role = VReg::phys("var0");
+        let mut types = TypeMap::default();
+        types.refine_from_value(role.clone(), TypeHint::Pointer { pointee_width: 4 });
+
+        refine_numbered_declaration(
+            &mut types,
+            &role,
+            &TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        assert_eq!(
+            types.get(&role),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+    }
+
+    #[test]
+    fn numbered_register_width_does_not_retype_a_prepared_scalar_declaration() {
+        let role = VReg::phys("var0");
+        let mut types = TypeMap::default();
+        types.refine_from_value(
+            role.clone(),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        refine_numbered_declaration(
+            &mut types,
+            &role,
+            &TypeHint::Int {
+                signed: true,
+                width: 8,
+            },
         );
 
         assert_eq!(
@@ -2691,6 +2991,22 @@ mod tests {
         assert_eq!(super::machine_word_bytes(CallConv::SysVAmd64), 8);
         assert_eq!(super::machine_word_bytes(CallConv::Win64), 8);
         assert_eq!(super::machine_word_bytes(CallConv::Aarch64), 8);
+    }
+
+    #[test]
+    fn itanium_throw_runtime_has_a_fixed_three_register_layout() {
+        assert_eq!(
+            super::itanium_runtime_layout("__cxa_throw@plt", CallConv::Aarch64),
+            Some(vec![VReg::phys("x0"), VReg::phys("x1"), VReg::phys("x2")])
+        );
+        assert_eq!(
+            super::itanium_runtime_layout("__cxa_allocate_exception@plt", CallConv::SysVAmd64),
+            Some(vec![VReg::phys("rdi")])
+        );
+        assert_eq!(
+            super::itanium_runtime_layout("ordinary_function", CallConv::Aarch64),
+            None
+        );
     }
 
     /// The ambiguity rule is applied where it has been MEASURED to pay, and only

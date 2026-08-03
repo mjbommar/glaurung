@@ -191,7 +191,8 @@ def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> Non
     )
 
     assert " frame_return(int arg0)" in text.splitlines()[1], text
-    assert "return local_" in text, text
+    assert "arg0 = (int)((signed char)(*(char *)((&local_" in text, text
+    assert "return arg0;" in text, text
     assert "return 0;" not in text, text
 
 

@@ -537,9 +537,7 @@ fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashS
 mod tests {
     use super::refine_pointer_high_variables;
     use crate::ir::ast::{Expr, Function, Stmt};
-    use crate::ir::call_contracts::{
-        CallPrototype, CallPrototypeAuthority, CallSiteSpec,
-    };
+    use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
     use crate::ir::types::{BinOp, VReg};
     use crate::ir::types_recover::{TypeHint, TypeMap};
 

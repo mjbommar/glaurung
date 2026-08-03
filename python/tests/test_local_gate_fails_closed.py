@@ -78,15 +78,15 @@ def test_the_success_line_does_not_claim_more_than_it_ran():
 
     That reads as a pass and buries the caveat in a parenthetical pointing at output
     the reader has already scrolled past. The unqualified success line must only be
-    reachable when all four lanes actually ran.
+    reachable when all five lanes actually ran.
     """
     text = _text()
     assert "see any SKIPPED notes above" not in text, (
         "the old hedged success line is back; a pass must not carry a caveat that "
         "points at earlier output"
     )
-    assert 'echo "HEAVY GATE: passed (all four lanes ran)"' in text, (
-        "the unqualified pass must state that all four lanes ran"
+    assert 'echo "HEAVY GATE: passed (all five lanes ran)"' in text, (
+        "the unqualified pass must state that all five lanes ran"
     )
 
 

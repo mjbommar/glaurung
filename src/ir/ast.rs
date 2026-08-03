@@ -4489,6 +4489,25 @@ pub(crate) fn refine_decbench_abi_widths(f: &Function, tm: &mut TypeMap) {
             break;
         }
     }
+    for (name, &definition_width) in &defs {
+        if !is_high_variable(name) || !all_definitions_proven_scalar(&f.body, name, tm) {
+            continue;
+        }
+        let value = VReg::phys(name);
+        if let Some(TypeHint::Int {
+            signed,
+            width: recovered_width,
+        }) = tm.get(&value)
+        {
+            if definition_width > recovered_width {
+                // Phi coalescing can give an exact value a narrow final
+                // register spelling even though every reaching AST definition
+                // is explicitly wide. Keeping the narrow declaration makes the
+                // widening pass zero-extend a signed int64_t loop carrier.
+                tm.force_scalar_int(value, signed, definition_width);
+            }
+        }
+    }
     if let Some(width) = widest_return_value(&f.body, tm, &defs) {
         if all_definitions_proven_scalar(&f.body, "ret", tm) {
             // Raw rax reuse can attach an earlier address-computation pointer
@@ -5100,10 +5119,25 @@ fn expression_value_width(
     defs: &std::collections::HashMap<String, u8>,
 ) -> Option<u8> {
     match expr {
-        Expr::Reg(VReg::Phys(name)) => defs
-            .get(name)
-            .copied()
-            .or_else(|| tm.get(&VReg::phys(name)).and_then(type_hint_width)),
+        Expr::Reg(VReg::Phys(name)) => {
+            let definition_width = defs.get(name).copied();
+            let recovered = tm.get(&VReg::phys(name));
+            match (definition_width, recovered) {
+                // A recovered integer width can retain source-width evidence
+                // lost when a wide loop carrier is copied through a narrow
+                // register view. Non-integer hints cannot: in particular, a
+                // stale pointer attached through raw-register reuse must not
+                // override explicit scalar definitions.
+                (
+                    Some(width),
+                    Some(TypeHint::Int {
+                        width: recovered, ..
+                    }),
+                ) => Some(width.max(recovered)),
+                (Some(width), _) => Some(width),
+                (None, hint) => hint.and_then(type_hint_width),
+            }
+        }
         Expr::Const(value) => Some(if constant_needs_wide_word(*value) {
             8
         } else {
@@ -5566,11 +5600,106 @@ struct FrameParamHome {
 fn coalesce_frame_object_param_spills(body: &mut Vec<Stmt>) {
     let mut homes = Vec::new();
     collect_frame_param_homes(body, &mut homes);
-    homes.retain(|home| home.stores == 1 && home.arg.is_some());
+    homes.retain(|home| {
+        home.stores == 1 && home.arg.is_some() && body_reads_exact_frame_home(body, home)
+    });
     if homes.is_empty() {
         return;
     }
     rewrite_frame_param_homes(body, &homes);
+}
+
+fn expr_reads_exact_frame_home(expr: &Expr, home: &FrameParamHome) -> bool {
+    if matches!(expr, Expr::Deref { addr, size } if *size == home.size && **addr == home.addr) {
+        return true;
+    }
+    match expr {
+        Expr::Deref { addr, .. } => expr_reads_exact_frame_home(addr, home),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_reads_exact_frame_home(lhs, home) || expr_reads_exact_frame_home(rhs, home)
+        }
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
+            expr_reads_exact_frame_home(src, home)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expr_reads_exact_frame_home(cond, home)
+                || expr_reads_exact_frame_home(if_true, home)
+                || expr_reads_exact_frame_home(if_false, home)
+        }
+        Expr::FunctionTableEntry { index, .. } => expr_reads_exact_frame_home(index, home),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .any(|arg| expr_reads_exact_frame_home(arg, home)),
+        _ => false,
+    }
+}
+
+fn body_reads_exact_frame_home(body: &[Stmt], home: &FrameParamHome) -> bool {
+    body.iter().any(|statement| match statement {
+        Stmt::Assign { src, .. } => expr_reads_exact_frame_home(src, home),
+        Stmt::Store { addr, src, .. } => {
+            expr_reads_exact_frame_home(addr, home) || expr_reads_exact_frame_home(src, home)
+        }
+        Stmt::Call { target, args, .. } => {
+            expr_reads_exact_frame_home(target, home)
+                || args
+                    .iter()
+                    .any(|arg| expr_reads_exact_frame_home(arg, home))
+        }
+        Stmt::Return { value: Some(value) } => expr_reads_exact_frame_home(value, home),
+        Stmt::Push { value } | Stmt::Throw { value } => expr_reads_exact_frame_home(value, home),
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            expr_reads_exact_frame_home(cond, home)
+                || body_reads_exact_frame_home(then_body, home)
+                || else_body
+                    .as_deref()
+                    .is_some_and(|body| body_reads_exact_frame_home(body, home))
+        }
+        Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+            expr_reads_exact_frame_home(cond, home) || body_reads_exact_frame_home(body, home)
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            body_reads_exact_frame_home(std::slice::from_ref(init.as_ref()), home)
+                || expr_reads_exact_frame_home(cond, home)
+                || body_reads_exact_frame_home(body, home)
+                || body_reads_exact_frame_home(std::slice::from_ref(step.as_ref()), home)
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            expr_reads_exact_frame_home(discriminant, home)
+                || cases
+                    .iter()
+                    .any(|(_, body)| body_reads_exact_frame_home(body, home))
+                || default
+                    .as_deref()
+                    .is_some_and(|body| body_reads_exact_frame_home(body, home))
+        }
+        Stmt::IndirectGoto { target } => expr_reads_exact_frame_home(target, home),
+        Stmt::TryCatch { try_body, catches } => {
+            body_reads_exact_frame_home(try_body, home)
+                || catches
+                    .iter()
+                    .any(|catch| body_reads_exact_frame_home(&catch.body, home))
+        }
+        _ => false,
+    })
 }
 
 fn expression_contains_stack_object(expr: &Expr) -> bool {
@@ -11639,6 +11768,45 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn prepare_keeps_a_frame_store_read_only_through_an_alias() {
+        let stack = Expr::StackAddr {
+            object: VReg::phys("stack_0"),
+            size: 64,
+        };
+        let f = Function {
+            name: "graph_stack_seed".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Store {
+                    addr: stack.clone(),
+                    src: Expr::Reg(VReg::phys("arg2")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("rbp"),
+                    src: stack,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("rbp"))),
+                        size: 4,
+                    }),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+
+        assert!(
+            prepared
+                .body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::Store { src: Expr::Reg(VReg::Phys(name)), .. } if name == "arg2")),
+            "the seed store cannot be erased when its load is reached through an alias: {prepared:#?}"
+        );
+    }
+
+    #[test]
     fn an_in_place_update_of_a_coalesced_slot_is_an_assignment_not_a_pointer_store() {
         // The `-O0` shape of `n &= 31u` on a spilled parameter: the slot is stored
         // to from the parameter, then updated IN PLACE (a memory read-modify-write).
@@ -12021,6 +12189,110 @@ function f @ 0x1000 {
         assert!(
             text.contains("float square(void)"),
             "a bare machine return overrode the recovered prototype:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_wide_scalar_definition_widens_a_coalesced_local_declaration() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "wide_carrier".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var0"),
+                src: Expr::Cast {
+                    signed: true,
+                    width: 8,
+                    expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                },
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        refine_decbench_abi_widths(&f, &mut tm);
+
+        assert_eq!(
+            tm.get(&VReg::phys("var0")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn a_loop_carrier_copied_from_a_wide_result_keeps_the_result_width() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "factorial_carrier".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        }),
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var2"),
+                    src: Expr::Const(1),
+                },
+                Stmt::DoWhile {
+                    body: vec![
+                        Stmt::Assign {
+                            dst: VReg::phys("ret"),
+                            src: Expr::Bin {
+                                op: BinOp::Mul,
+                                lhs: Box::new(Expr::Reg(VReg::phys("var2"))),
+                                rhs: Box::new(Expr::Reg(VReg::phys("var1"))),
+                            },
+                        },
+                        Stmt::Assign {
+                            dst: VReg::phys("var2"),
+                            src: Expr::Reg(VReg::phys("ret")),
+                        },
+                    ],
+                    cond: Expr::Const(0),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                },
+            ],
+        };
+        let mut tm = TypeMap::default();
+        for (name, width) in [("var1", 8), ("var2", 4), ("ret", 8)] {
+            tm.upsert_public(
+                VReg::phys(name),
+                TypeHint::Int {
+                    signed: true,
+                    width,
+                },
+            );
+        }
+
+        refine_decbench_abi_widths(&f, &mut tm);
+
+        assert_eq!(
+            tm.get(&VReg::phys("var2")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
         );
     }
 

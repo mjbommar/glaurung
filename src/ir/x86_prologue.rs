@@ -508,7 +508,13 @@ fn is_rsp(v: &VReg) -> bool {
 }
 
 fn is_promoted_stack_slot(v: &VReg) -> bool {
-    matches!(v, VReg::Phys(name) if name == "stack_top" || name.starts_with("stack_"))
+    matches!(
+        v,
+        VReg::Phys(name)
+            if name == "stack_top"
+                || name.starts_with("stack_")
+                || name.starts_with("local_")
+    )
 }
 
 fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
@@ -1135,6 +1141,56 @@ mod tests {
         ));
         assert!(matches!(&f.body[3], Stmt::Comment(text) if text.contains("epilogue")));
         assert!(matches!(&f.body[4], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn promoted_local_object_callee_saves_are_recognised() {
+        let slot = |offset: i64| Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::StackAddr {
+                // Stack promotion uses the source-facing `local_<offset>`
+                // spelling for real recovered objects, not only `stack_N`.
+                object: reg("local_68"),
+                size: 16,
+            }),
+            rhs: Box::new(Expr::Const(offset)),
+        };
+        let save = |offset: i64, value: &str| Stmt::Store {
+            addr: slot(offset),
+            src: Expr::Reg(reg(value)),
+            size: 8,
+        };
+        let restore = |offset: i64, value: &str| Stmt::Assign {
+            dst: VReg::phys(format!("{value}#9")),
+            src: Expr::Deref {
+                addr: Box::new(slot(offset)),
+                size: 8,
+            },
+        };
+        let mut f = Function {
+            name: "shared_exit".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Comment("frame: 16 bytes".into()),
+                sub_rsp(8),
+                save(8, "rbp"),
+                sub_rsp(8),
+                save(0, "rax"),
+                rsp_add(8),
+                restore(8, "rbp"),
+                rsp_add(8),
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert!(f.body.iter().any(
+            |statement| matches!(statement, Stmt::Comment(text) if text.contains("save callee registers"))
+        ));
+        assert!(!format!("{:#?}", f.body).contains("StackAddr"));
     }
 
     #[test]
