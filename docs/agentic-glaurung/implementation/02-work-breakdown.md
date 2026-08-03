@@ -1,7 +1,9 @@
 # Work breakdown and dependencies
 
-Status legend: `TODO`, `ACTIVE`, `BLOCKED`, `DONE`. Initial implementation
-status is intentionally `TODO`; writing this plan does not complete code work.
+Status legend: `TODO`, `ACTIVE`, `BLOCKED`, `DONE`. The table below is the
+initial dependency and acceptance catalog. Live execution state is maintained
+in [`../PLAN.md`](../PLAN.md) and [`../STATUS.md`](../STATUS.md); writing the
+design package does not complete code work.
 
 ## Milestone dependency graph
 

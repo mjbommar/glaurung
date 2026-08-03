@@ -3,6 +3,12 @@
 Status: design and implementation plan. This document does not claim that the
 autonomous agent exists.
 
+Canonical execution surfaces:
+
+- [`PLAN.md`](PLAN.md) — ordered executable checklist and acceptance mapping.
+- [`STATUS.md`](STATUS.md) — current evidence, blockers, ref state, and exact
+  next action.
+
 Last live Glaurung code audit: 2026-08-01 at `8a51f6d`. DecBench measurements
 below are retained artifact evidence and must be revalidated on the frozen
 integration revision before an official run.
@@ -57,6 +63,8 @@ Read in this order:
 ```text
 agentic-glaurung/
 ├── README.md
+├── PLAN.md
+├── STATUS.md
 ├── 00-current-state-and-scope.md
 ├── architecture/
 │   ├── 01-runtime-and-control-loop.md

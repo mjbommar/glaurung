@@ -54,6 +54,10 @@ Multi-change effort records (design + as-built status).
 
 Design and delivery plan for the autonomous, tool-using source-recovery agent.
 
+- Canonical execution checklist:
+  [`agentic-glaurung/PLAN.md`](agentic-glaurung/PLAN.md)
+- Current status and exact resume action:
+  [`agentic-glaurung/STATUS.md`](agentic-glaurung/STATUS.md)
 - Separates native raw Glaurung, the fixed LLM rewrite pipeline, and the true
   PydanticAI agent
 - Defines runtime, tool, safety, tracing, evaluation, and implementation
@@ -73,7 +77,10 @@ Experimental features and proposals.
 **Setting up development?** → `development/setup.md`
 **Looking for compiler signatures?** → `formats/compiler-artifacts.md`
 **Planning interpreted/VM support?** → `analysis/interpreted/`
-**Building the autonomous decompiler agent?** → `agentic-glaurung/README.md`
+**Building the autonomous decompiler agent?** →
+[`agentic-glaurung/README.md`](agentic-glaurung/README.md)
+**Resuming autonomous-agent implementation?** →
+[`agentic-glaurung/STATUS.md`](agentic-glaurung/STATUS.md)
 
 ## Documentation Standards
 
