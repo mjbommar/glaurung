@@ -207,6 +207,66 @@ fn detect_entry_path_py(
     Ok(detect_entry_bytes_py(&data))
 }
 
+/// Run whole-binary discovery so that a `Ctrl-C` actually stops it.
+///
+/// Releasing the GIL is necessary but NOT sufficient. CPython runs a signal
+/// handler only on a thread that holds the GIL and is executing Python; the
+/// thread that called us is inside Rust for the whole analysis, so a pending
+/// `SIGINT` is not acted on until the call returns. Measured on a 123 MB
+/// `libLLVM-18.so.1`: with the GIL merely released, a `SIGINT` at t=8s did not
+/// stop a run that was still going at t=300s.
+///
+/// So the analysis moves to a scoped worker thread and the calling thread stays
+/// in `Python::check_signals`, sleeping with the GIL released between polls. When
+/// a signal arrives the cancellation flag is set, the worker's discovery loops
+/// see it at their next budget check (see `cfg::Deadline::with_cancel`), and the
+/// call unwinds with the `KeyboardInterrupt` CPython raised.
+///
+/// `data` is an owned `Vec<u8>` and `Budgets` is `Copy`; nothing GIL-bound
+/// crosses into the worker.
+fn analyze_interruptible(
+    py: Python<'_>,
+    data: &[u8],
+    budgets: &crate::analysis::cfg::Budgets,
+    requested_vas: &[u64],
+) -> PyResult<(
+    Vec<crate::core::function::Function>,
+    crate::core::call_graph::CallGraph,
+    crate::analysis::cfg::FunctionDiscoveryStats,
+)> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let cancel = AtomicBool::new(false);
+    let mut interrupt: Option<PyErr> = None;
+    let out = std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            crate::analysis::cfg::analyze_functions_bytes_cancellable(
+                data,
+                budgets,
+                requested_vas,
+                &cancel,
+            )
+        });
+        while !worker.is_finished() {
+            if let Err(err) = py.check_signals() {
+                // Ask the worker to stop, then fall through and JOIN it. A thread
+                // borrowing `data` cannot be left behind, and `scope` would block
+                // on it regardless; making the request explicit is what bounds how
+                // long that join takes.
+                cancel.store(true, Ordering::Relaxed);
+                interrupt = Some(err);
+                break;
+            }
+            py.detach(|| std::thread::sleep(std::time::Duration::from_millis(20)));
+        }
+        worker.join()
+    })
+    .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("analysis worker panicked"))?;
+    match interrupt {
+        Some(err) => Err(err),
+        None => Ok(out),
+    }
+}
+
 /// Analyze functions from binary data.
 #[pyfunction]
 #[pyo3(name = "analyze_functions_bytes")]
@@ -226,6 +286,11 @@ fn analyze_functions_bytes_py(
         max_blocks,
         max_instructions,
         timeout_ms,
+        // The `_bytes` entry points deliberately keep their `Budgets` ceiling-free
+        // and keep the GIL: their input is a BORROWED Python buffer, so releasing
+        // it would let another thread resize a `bytearray` under the analysis.
+        // Callers that need either want the `_path` form, which owns its data.
+        total_timeout_ms: 0,
     };
     crate::analysis::cfg::analyze_functions_bytes(data, &budgets)
 }
@@ -233,8 +298,9 @@ fn analyze_functions_bytes_py(
 /// Analyze functions from file path.
 #[pyfunction]
 #[pyo3(name = "analyze_functions_path")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64))]
+#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64, total_timeout_ms=0u64))]
 fn analyze_functions_path_py(
+    py: Python<'_>,
     path: String,
     max_read_bytes: u64,
     max_file_size: u64,
@@ -242,6 +308,7 @@ fn analyze_functions_path_py(
     max_blocks: usize,
     max_instructions: usize,
     timeout_ms: u64,
+    total_timeout_ms: u64,
 ) -> PyResult<(
     Vec<crate::core::function::Function>,
     crate::core::call_graph::CallGraph,
@@ -254,10 +321,10 @@ fn analyze_functions_path_py(
         max_blocks,
         max_instructions,
         timeout_ms,
+        total_timeout_ms,
     };
-    Ok(crate::analysis::cfg::analyze_functions_bytes(
-        &data, &budgets,
-    ))
+    let (funcs, cg, _stats) = analyze_interruptible(py, &data, &budgets, &[])?;
+    Ok((funcs, cg))
 }
 
 /// Analyze functions from binary data and return budget telemetry.
@@ -281,6 +348,11 @@ fn analyze_functions_bytes_with_stats_py(
         max_blocks,
         max_instructions,
         timeout_ms,
+        // The `_bytes` entry points deliberately keep their `Budgets` ceiling-free
+        // and keep the GIL: their input is a BORROWED Python buffer, so releasing
+        // it would let another thread resize a `bytearray` under the analysis.
+        // Callers that need either want the `_path` form, which owns its data.
+        total_timeout_ms: 0,
     };
     let (funcs, cg, stats) =
         crate::analysis::cfg::analyze_functions_bytes_with_stats(data, &budgets);
@@ -290,7 +362,7 @@ fn analyze_functions_bytes_with_stats_py(
 /// Analyze functions from file path and return budget telemetry.
 #[pyfunction]
 #[pyo3(name = "analyze_functions_path_with_stats")]
-#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64))]
+#[pyo3(signature = (path, max_read_bytes=10_485_760u64, max_file_size=104_857_600u64, max_functions=0usize, max_blocks=2048usize, max_instructions=50000usize, timeout_ms=100u64, total_timeout_ms=0u64))]
 fn analyze_functions_path_with_stats_py(
     py: Python<'_>,
     path: String,
@@ -300,6 +372,7 @@ fn analyze_functions_path_with_stats_py(
     max_blocks: usize,
     max_instructions: usize,
     timeout_ms: u64,
+    total_timeout_ms: u64,
 ) -> PyResult<(
     Vec<crate::core::function::Function>,
     crate::core::call_graph::CallGraph,
@@ -313,9 +386,9 @@ fn analyze_functions_path_with_stats_py(
         max_blocks,
         max_instructions,
         timeout_ms,
+        total_timeout_ms,
     };
-    let (funcs, cg, stats) =
-        crate::analysis::cfg::analyze_functions_bytes_with_stats(&data, &budgets);
+    let (funcs, cg, stats) = analyze_interruptible(py, &data, &budgets, &[])?;
     Ok((funcs, cg, function_discovery_stats_to_py(py, &stats)?))
 }
 
@@ -328,6 +401,8 @@ fn function_discovery_stats_to_py(
     dict.set_item("max_blocks", stats.max_blocks)?;
     dict.set_item("max_instructions", stats.max_instructions)?;
     dict.set_item("timeout_ms", stats.timeout_ms)?;
+    dict.set_item("total_timeout_ms", stats.total_timeout_ms)?;
+    dict.set_item("elapsed_ms", stats.elapsed_ms)?;
     dict.set_item("functions_discovered", stats.functions_discovered)?;
     dict.set_item("callgraph_functions", stats.callgraph_functions)?;
     dict.set_item("callgraph_edges", stats.callgraph_edges)?;
@@ -460,12 +535,18 @@ fn function_discovery_stats_to_py(
     dict.set_item("hit_block_limit", stats.hit_block_limit)?;
     dict.set_item("hit_instruction_limit", stats.hit_instruction_limit)?;
     dict.set_item("hit_timeout", stats.hit_timeout)?;
+    dict.set_item("hit_total_timeout", stats.hit_total_timeout)?;
     dict.set_item(
         "truncated",
         stats.hit_function_limit
             || stats.hit_block_limit
             || stats.hit_instruction_limit
-            || stats.hit_timeout,
+            || stats.hit_timeout
+            // A whole-analysis timeout stops SEED DISCOVERY, not just one
+            // function's walk, so the function list itself is short. Leaving it
+            // out of `truncated` would let the most severe truncation be the one
+            // consumers never hear about.
+            || stats.hit_total_timeout,
     )?;
     Ok(dict.into())
 }
@@ -512,6 +593,7 @@ fn find_code_pointers_path_py(
 #[pyo3(name = "data_xrefs_path")]
 #[pyo3(signature = (path, max_read_bytes=104_857_600u64, max_file_size=104_857_600u64, max_functions=30_000usize, max_blocks=1_000_000usize, max_instructions=30_000_000usize, timeout_ms=600_000u64, max_xrefs=1_000_000usize))]
 fn data_xrefs_path_py(
+    py: Python<'_>,
     path: String,
     max_read_bytes: u64,
     max_file_size: u64,
@@ -529,9 +611,17 @@ fn data_xrefs_path_py(
         max_blocks,
         max_instructions,
         timeout_ms,
+        // The `_bytes` entry points deliberately keep their `Budgets` ceiling-free
+        // and keep the GIL: their input is a BORROWED Python buffer, so releasing
+        // it would let another thread resize a `bytearray` under the analysis.
+        // Callers that need either want the `_path` form, which owns its data.
+        total_timeout_ms: 0,
     };
-    let (funcs, _cg) = crate::analysis::cfg::analyze_functions_bytes(&data, &budgets);
-    let xrefs = crate::analysis::xrefs::function_data_xrefs(&data, &funcs, max_xrefs);
+    // See `analyze_functions_path_py` for why the GIL is released here.
+    let xrefs = py.detach(|| {
+        let (funcs, _cg) = crate::analysis::cfg::analyze_functions_bytes(&data, &budgets);
+        crate::analysis::xrefs::function_data_xrefs(&data, &funcs, max_xrefs)
+    });
     Ok(xrefs
         .into_iter()
         .map(|xref| (xref.from.value, xref.to.value, xref.function_va.value))

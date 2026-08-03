@@ -1,0 +1,9 @@
+# The harness deliberately shells out without `check=True` and catches broad
+# exceptions: a comparator crashing, timing out or emitting malformed JSON is a
+# *result* to be recorded for that binary, not a reason to abort a 27-binary run
+# and lose the other 26. Every such site writes the failure into the output JSON,
+# and `analyze.py` reports a missing cell rather than silently dropping it.
+extend = "../../pyproject.toml"
+
+[lint]
+extend-ignore = ["BLE001", "S603", "S607", "PLR2004", "PLW1510"]

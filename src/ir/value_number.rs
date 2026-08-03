@@ -35,6 +35,81 @@ fn arg_slot_names(cc: CallConv) -> &'static [&'static [&'static str]] {
     crate::ir::abi::argument_slots(cc)
 }
 
+/// The `(destination, source)` register names of a phi copy: an `Assign` between
+/// two SSA versions of the *same* physical register.
+///
+/// [`insert_phi_copies`] is what produces that shape — a phi's incoming lanes all
+/// share `phi.base`, so leaving SSA writes `x3#1 = x3`. The only other way to
+/// reach it is a lifted self-move, which is an architectural no-op; classifying
+/// that as plumbing too is right rather than merely harmless, because a no-op
+/// says nothing about whether the incoming value is read. What decides the
+/// question either way is whether the copy's DESTINATION is read — see
+/// [`architecturally_read_names`].
+///
+/// Returns `None` on the raw (non-value-numbered) LLIR: without `#version` tags,
+/// equal bases mean equal names, which the `dst != src` guard rejects.
+fn phi_copy_operands(op: &Op) -> Option<(&str, &str)> {
+    let Op::Assign {
+        dst: VReg::Phys(dst),
+        src: Value::Reg(VReg::Phys(src)),
+    } = op
+    else {
+        return None;
+    };
+    let (dst, src) = (dst.as_str(), src.as_str());
+    (dst != src && crate::ir::abi::ssa_base(dst) == crate::ir::abi::ssa_base(src))
+        .then_some((dst, src))
+}
+
+/// The value-numbered names read by a *genuine* architectural operand.
+///
+/// Two use classes are excluded, for the same reason: neither observes that this
+/// function reads the value.
+///
+/// * A call's argument-register list, which [`crate::ir::abi::annotate_calls`]
+///   hangs on **every** call as a may-use so liveness and DCE stay sound.
+/// * A phi copy, which exists only to leave SSA.
+///
+/// The phi copies are then folded back in to a fixed point: a copy `d = s`
+/// really reads `s` exactly when `d` is itself really read. This mirrors the
+/// liveness fixpoint in [`insert_phi_copies`] — with the difference that that
+/// one deliberately counts the call may-uses, because an argument register a
+/// callee might read must stay defined.
+fn architecturally_read_names(lf: &LlirFunction) -> HashSet<String> {
+    let mut read: HashSet<String> = HashSet::new();
+    let mut phi_copies: Vec<(&str, &str)> = Vec::new();
+    for block in &lf.blocks {
+        for ins in &block.instrs {
+            if matches!(ins.op, Op::Call { .. }) {
+                continue;
+            }
+            if let Some(pair) = phi_copy_operands(&ins.op) {
+                phi_copies.push(pair);
+                continue;
+            }
+            let (_, uses) = def_uses(&ins.op);
+            for used in uses {
+                if let VReg::Phys(name) = used {
+                    read.insert(name);
+                }
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (dst, src) in &phi_copies {
+            if read.contains(*dst) && !read.contains(*src) {
+                read.insert((*src).to_string());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    read
+}
+
 /// The argument slots of `lf` that are genuine **live-in parameters**: a slot is
 /// a parameter iff the *first touch* of its register (in program order) is a read,
 /// not a write. A register in an argument slot that is written before it is read
@@ -52,6 +127,11 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
             slot_of.insert(n, i);
         }
     }
+    // Which value-numbered names a real machine operand reads. Needed because a
+    // phi copy launders the call may-uses this scan already refuses to trust:
+    // the copy is an ordinary `Assign`, so the `Op::Call` guard below never sees
+    // it, and its source is the bare (version-zero) live-in name.
+    let really_read = architecturally_read_names(lf);
     // slot -> is_param (true = first touch was a read). First touch wins.
     let mut decided: std::collections::HashMap<usize, bool> = std::collections::HashMap::new();
     let base_slot = |name: &str| slot_of.get(name.split('#').next().unwrap_or(name)).copied();
@@ -93,6 +173,25 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
             // is its `-O0` spill, which precedes any call). Kept because the inference
             // should not depend on `def_uses` continuing to under-report call effects.
             if matches!(ins.op, Op::Call { .. }) {
+                continue;
+            }
+            // ... and a phi copy is that same may-use laundered into an ordinary
+            // `Assign`. `insert_phi_copies` materialises a copy for every phi
+            // whose destination is READ, and its notion of "read" is `def_uses`,
+            // so a call's argument-register list alone is enough to keep the
+            // copy. The result — `x3#1 = x3` in the entry block of any loop that
+            // calls anything and later writes `x3` — reads the bare version-zero
+            // live-in name and would make every trailing argument register of
+            // every such function a parameter. It is real evidence only when the
+            // phi destination is really read; then the copy's SOURCE is what the
+            // function reads, and the destination is not an architectural
+            // definition of the register at all.
+            if let Some((dst, src)) = phi_copy_operands(&ins.op) {
+                if really_read.contains(dst) {
+                    if let Some(slot) = base_slot(src) {
+                        decided.entry(slot).or_insert(true);
+                    }
+                }
                 continue;
             }
             // Reads first, then the def — a use and a def of the same slot in one
@@ -590,7 +689,8 @@ pub fn value_number_with_definition_widths(
             }
         }
     }
-    insert_phi_copies(&mut out, lf, ssa, &ctx, &mut definition_widths);
+    let phi_copies = insert_phi_copies(&mut out, lf, ssa, &ctx, &mut definition_widths);
+    coalesce_phi_copies(&mut out, &phi_copies, &mut definition_widths);
     (out, definition_widths)
 }
 
@@ -640,15 +740,21 @@ pub fn value_number_with_definition_widths(
 /// as an incoming operand of the inner loop's phi. An unread phi is dead, and
 /// materialising it would add statements to both arms that no source line
 /// corresponds to.
+///
+/// Returns every `(destination, source)` pair it materialised, in insertion
+/// order. [`coalesce_phi_copies`] consumes that list: these copies exist only to
+/// leave SSA, and most of them can be removed again by giving the two values one
+/// name once liveness proves they never hold different values at the same point.
 fn insert_phi_copies(
     out: &mut LlirFunction,
     lf: &LlirFunction,
     ssa: &crate::ir::ssa::SsaInfo,
     ctx: &VnCtx,
     definition_widths: &mut HashMap<VReg, u8>,
-) {
+) -> Vec<(VReg, VReg)> {
+    let mut created: Vec<(VReg, VReg)> = Vec::new();
     if ssa.phis.is_empty() {
-        return;
+        return created;
     }
 
     // Which versioned values does the renamed body actually read? Computed on the
@@ -755,6 +861,7 @@ fn insert_phi_copies(
             if src == dst {
                 continue; // a version kept bare on both sides: `rax = rax`
             }
+            created.push((dst.clone(), src.clone()));
             pending[*pred].push(Op::Assign {
                 dst: dst.clone(),
                 src: Value::Reg(src),
@@ -786,6 +893,525 @@ fn insert_phi_copies(
             block.instrs.insert(at + k, LlirInstr { va, op });
         }
     }
+    created
+}
+
+/// Every register a single operation mentions, mutably, def and uses alike.
+///
+/// [`tag_op`] already walks this shape, but it walks it *positionally* — it has
+/// to, because it is threading SSA versions in `def_uses` order. A renaming has
+/// no order to respect, so this walker exists to keep the two concerns apart
+/// rather than overload the tagging traversal with a second mode.
+fn for_each_vreg_mut(op: &mut Op, f: &mut impl FnMut(&mut VReg)) {
+    fn value(v: &mut Value, f: &mut impl FnMut(&mut VReg)) {
+        if let Value::Reg(r) = v {
+            f(r);
+        }
+    }
+    fn memop(m: &mut crate::ir::types::MemOp, f: &mut impl FnMut(&mut VReg)) {
+        if let Some(b) = m.base.as_mut() {
+            f(b);
+        }
+        if let Some(i) = m.index.as_mut() {
+            f(i);
+        }
+    }
+    match op {
+        Op::Assign { dst, src } => {
+            value(src, f);
+            f(dst);
+        }
+        Op::Undef { dst, .. } => f(dst),
+        Op::CondAssign { dst, cond, src } => {
+            f(cond);
+            value(src, f);
+            f(dst);
+        }
+        Op::Bin { dst, lhs, rhs, .. } => {
+            value(lhs, f);
+            value(rhs, f);
+            f(dst);
+        }
+        Op::IndirectJump { target, index } => {
+            value(target, f);
+            if let Some(index) = index {
+                value(index, f);
+            }
+        }
+        Op::Un { dst, src, .. } => {
+            value(src, f);
+            f(dst);
+        }
+        Op::Cmp { dst, lhs, rhs, .. } => {
+            value(lhs, f);
+            value(rhs, f);
+            f(dst);
+        }
+        Op::Load { dst, addr } => {
+            memop(addr, f);
+            f(dst);
+        }
+        Op::Store { addr, src } => {
+            memop(addr, f);
+            value(src, f);
+        }
+        Op::CondJump { cond, .. } => f(cond),
+        Op::Call { target, effects } => {
+            if let crate::ir::types::CallTarget::Indirect(v) = target {
+                value(v, f);
+            }
+            if let Some(e) = effects {
+                for a in e.args.iter_mut() {
+                    f(a);
+                }
+                if let Some(r) = e.result.as_mut() {
+                    f(r);
+                }
+            }
+        }
+        Op::ZExt { dst, src, .. }
+        | Op::SExt { dst, src, .. }
+        | Op::Trunc { dst, src, .. }
+        | Op::Extract { dst, src, .. } => {
+            value(src, f);
+            f(dst);
+        }
+        Op::Concat { dst, hi, lo } => {
+            value(hi, f);
+            value(lo, f);
+            f(dst);
+        }
+        Op::Ite {
+            dst, cond, t, e, ..
+        } => {
+            f(cond);
+            value(t, f);
+            value(e, f);
+            f(dst);
+        }
+        Op::Intrinsic { ins, outs, .. } => {
+            for input in ins {
+                value(input, f);
+            }
+            for out in outs.iter_mut() {
+                f(&mut out.0);
+            }
+        }
+        Op::Jump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => {}
+    }
+}
+
+/// A value-numbered name eligible for coalescing: `reg#version`.
+///
+/// Only tagged names qualify. A bare name is one of three things the rest of the
+/// pipeline binds by spelling — a live-in parameter (version 0), a structural
+/// frame register, or a return value [`KeepBare`] deliberately did not version —
+/// and renaming any of them would move a source-level identity, not a temporary.
+fn coalescable(v: &VReg) -> Option<(&str, u32)> {
+    let VReg::Phys(name) = v else { return None };
+    let (base, version) = name.rsplit_once('#')?;
+    Some((base, version.parse().ok()?))
+}
+
+/// Successor block indices, resolved from each block's successor VAs.
+fn successor_indices(lf: &LlirFunction) -> Vec<Vec<usize>> {
+    let va_to_idx: HashMap<u64, usize> = lf
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.start_va, i))
+        .collect();
+    lf.blocks
+        .iter()
+        .map(|b| {
+            let mut s: Vec<usize> = b
+                .succs
+                .iter()
+                .filter_map(|va| va_to_idx.get(va).copied())
+                .collect();
+            s.sort_unstable();
+            s.dedup();
+            s
+        })
+        .collect()
+}
+
+/// What one coalescing class claims about the machine width of its values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClassWidth {
+    /// Every member with an opinion says this many bytes.
+    Known(u8),
+    /// No member has an opinion, so any width may still be adopted.
+    Open,
+    /// The value is a merge of definitions whose widths disagree. One name
+    /// cannot describe it, so it is not merged with anything.
+    Ambiguous,
+}
+
+impl ClassWidth {
+    fn merge(self, other: ClassWidth) -> Option<ClassWidth> {
+        match (self, other) {
+            (ClassWidth::Ambiguous, _) | (_, ClassWidth::Ambiguous) => None,
+            (ClassWidth::Known(a), ClassWidth::Known(b)) => (a == b).then_some(self),
+            (ClassWidth::Known(_), ClassWidth::Open) => Some(self),
+            (ClassWidth::Open, ClassWidth::Known(_)) => Some(other),
+            (ClassWidth::Open, ClassWidth::Open) => Some(ClassWidth::Open),
+        }
+    }
+}
+
+/// The starting width claim of every candidate, decided before any merging so
+/// the outcome cannot depend on which copy is visited first.
+///
+/// A value the lifter defined has its recorded width. A phi destination has
+/// none — nothing lifted it — so it inherits the width its incoming values
+/// agree on, and is [`ClassWidth::Ambiguous`] when they do not.
+///
+/// The inheritance is a fixed point over the lattice
+/// `Open < Known(w) < Ambiguous`, because a phi's incoming value is routinely
+/// another phi's result: nested loops copy each carried value through one phi
+/// per level, so a single pass would call every level after the first ambiguous
+/// and coalesce nothing. The lattice is three-deep and every step is monotone,
+/// so the iteration terminates; a loop-carried phi whose own result is its input
+/// starts at `Open` and simply takes whatever its other edges prove.
+///
+/// This reads **every** copy, not only the ones whose operands are coalescable.
+/// A phi edge from a kept-bare name is still evidence about the phi's width even
+/// though that name will never be renamed, and dropping it is what let
+/// `factorial_while` at `clang -O2` see only its `mov eax,1` initialiser: the
+/// 8-byte `imul` result reaches the same phi through the bare return register,
+/// so the phi is ambiguous, and without that edge it looked like a 4-byte value.
+fn class_widths(
+    names: &[VReg],
+    index: &HashMap<VReg, usize>,
+    copies: &[(VReg, VReg)],
+    definition_widths: &HashMap<VReg, u8>,
+    definitions_of: &HashMap<VReg, usize>,
+) -> Vec<ClassWidth> {
+    fn join(a: ClassWidth, b: ClassWidth) -> ClassWidth {
+        match (a, b) {
+            (ClassWidth::Ambiguous, _) | (_, ClassWidth::Ambiguous) => ClassWidth::Ambiguous,
+            (ClassWidth::Open, other) | (other, ClassWidth::Open) => other,
+            (ClassWidth::Known(x), ClassWidth::Known(y)) if x == y => ClassWidth::Known(x),
+            _ => ClassWidth::Ambiguous,
+        }
+    }
+    let mut widths: Vec<ClassWidth> = names
+        .iter()
+        .map(|v| {
+            definition_widths
+                .get(v)
+                .map_or(ClassWidth::Open, |&w| ClassWidth::Known(w))
+        })
+        .collect();
+    // Each copy, reduced to (destination candidate, source candidate or a fixed
+    // claim for a source that is not a candidate).
+    //
+    // `definition_widths` is keyed by NAME, and a name is a value only when it
+    // is versioned. Every kept-bare definition of `rax` shares one key, so for
+    // such a name the entry describes whichever definition the tagging loop
+    // visited last. `factorial_while` at `clang -O2` has two — the 4-byte
+    // `mov eax,1` initialiser and the 8-byte `imul rax` — and the map reported 4
+    // for the pair; trusting it merged the accumulator's phi at four bytes and
+    // truncated the product every iteration. So a bare source is read by how
+    // many definitions it actually has in this body: none makes it a live-in
+    // parameter, about which this map says nothing at all; exactly one makes the
+    // entry unambiguous; more than one is unattributable.
+    let edges: Vec<(usize, Option<usize>, ClassWidth)> = copies
+        .iter()
+        .filter_map(|(dst, src)| {
+            let d = *index.get(dst)?;
+            if definition_widths.contains_key(dst) {
+                return None; // the destination states its own width
+            }
+            if let Some(&s) = index.get(src) {
+                return Some((d, Some(s), ClassWidth::Open));
+            }
+            let claim = match definitions_of.get(src).copied().unwrap_or(0) {
+                1 => definition_widths
+                    .get(src)
+                    .map_or(ClassWidth::Ambiguous, |&w| ClassWidth::Known(w)),
+                // Zero definitions is a live-in parameter, about which this map
+                // says nothing. Treating that as "no opinion" and letting the
+                // phi take its other edges' width was tried and reverted: it
+                // let the loop-carried phi in `call_chain_in_loop` (`gcc -O2`)
+                // join the entry parameter's class, and every iteration called
+                // `signed_step(seed)` instead of `signed_step(v)`.
+                _ => ClassWidth::Ambiguous,
+            };
+            Some((d, None, claim))
+        })
+        .collect();
+    // Three lattice levels x |candidates| bounds the fixed point; the extra
+    // rounds are cheap and the loop exits as soon as nothing moves.
+    for _ in 0..(names.len().saturating_mul(3).max(4)) {
+        let mut changed = false;
+        for &(d, source, fixed) in &edges {
+            let contribution = source.map_or(fixed, |s| widths[s]);
+            let next = join(widths[d], contribution);
+            if next != widths[d] {
+                widths[d] = next;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    widths
+}
+
+/// Coalescing is bounded work: past this many distinct phi-copy operands the
+/// interference build is abandoned and the copies stand exactly as inserted.
+/// Nothing about the result changes except its verbosity, so failing open here
+/// costs output quality on a pathological function and never correctness.
+const MAX_COALESCE_CANDIDATES: usize = 4096;
+
+/// Give the two sides of an out-of-SSA phi copy one name whenever liveness
+/// proves they never hold different values at the same program point.
+///
+/// [`insert_phi_copies`] is the standard, and standardly *verbose*, way to leave
+/// SSA: every merged value gets a copy in every predecessor. On real code that
+/// dominates the emitted artifact — on the extbench Tier B corpus **20% of all
+/// rendered lines were a bare `name = name` copy, 9,180 of them between two
+/// value-numbered registers** — and each surviving name also costs a local
+/// declaration. Adjacent copy propagation cannot remove them because a phi copy
+/// sits precisely at a control-flow join, which is where that pass stops.
+///
+/// This is Chaitin's coalescing, run once over the copies the previous step
+/// created:
+///
+/// * Build the live range of every phi-copy operand by ordinary backward
+///   liveness. The program is no longer in SSA at this point — the copies made
+///   it executable — so this is plain liveness with no phi semantics to model.
+/// * Two names **interfere** when one is live immediately after a definition of
+///   the other. At a copy `d = s` the source is exempt at that one point: both
+///   names hold the same value there, which is exactly the condition that makes
+///   the copy removable. A later, genuinely different definition of either name
+///   still records the interference and blocks the merge.
+/// * A copy whose two names do not interfere is coalesced. Merging is
+///   transitive, so the check is between whole classes, not just the pair.
+///
+/// Two extra conditions beyond interference, neither of which is about
+/// correctness of the dataflow:
+///
+/// * **Only tagged names.** See [`coalescable`] — bare names carry ABI identity.
+/// * **One machine width per class.** `definition_widths` is what proves an
+///   arithmetic definition wraps at 32 bits, and one name can carry only one
+///   width. A phi destination has no recorded width of its own — it is not a
+///   lifted instruction — so its width is taken from its incoming values, and
+///   only when they all agree. When they do not, the value is width-ambiguous
+///   and is not coalesced with anything at all. Deciding this up front is what
+///   makes the result independent of the order the copies are visited in:
+///   `factorial_while` at `gcc -O2` initialises its accumulator with a 4-byte
+///   `mov eax,1` and updates it with an 8-byte `imul rax`, and merging the phi
+///   with whichever of the two came first stamped that width on the loop-carried
+///   variable — the 4-byte case truncated the product every iteration and the
+///   function returned 1.
+///
+/// Liveness restricted to candidates is exact rather than approximate: whether a
+/// value is live at a point does not depend on which other values are.
+fn coalesce_phi_copies(
+    out: &mut LlirFunction,
+    copies: &[(VReg, VReg)],
+    definition_widths: &mut HashMap<VReg, u8>,
+) {
+    if copies.is_empty() {
+        return;
+    }
+
+    // --- Candidate set: the operands of the copies we are trying to remove ---
+    let mut index: HashMap<VReg, usize> = HashMap::new();
+    let mut names: Vec<VReg> = Vec::new();
+    let intern = |v: &VReg, index: &mut HashMap<VReg, usize>, names: &mut Vec<VReg>| {
+        coalescable(v)?;
+        Some(*index.entry(v.clone()).or_insert_with(|| {
+            names.push(v.clone());
+            names.len() - 1
+        }))
+    };
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for (dst, src) in copies {
+        let (Some(d), Some(s)) = (
+            intern(dst, &mut index, &mut names),
+            intern(src, &mut index, &mut names),
+        ) else {
+            continue;
+        };
+        if d != s {
+            pairs.push((d, s));
+        }
+        if names.len() > MAX_COALESCE_CANDIDATES {
+            return;
+        }
+    }
+    if pairs.is_empty() {
+        return;
+    }
+    let n = names.len();
+
+    // --- Backward liveness over the candidate values -------------------------
+    let succs = successor_indices(out);
+    let blocks = out.blocks.len();
+    let mut live_in: Vec<HashSet<usize>> = vec![HashSet::new(); blocks];
+    let mut live_out: Vec<HashSet<usize>> = vec![HashSet::new(); blocks];
+    // Monotone and bounded by |candidates| x |blocks|; the cap is a guard against
+    // a pathological CFG, not an expected exit.
+    for _ in 0..(blocks.saturating_mul(2).max(8)) {
+        let mut changed = false;
+        for bi in (0..blocks).rev() {
+            let mut out_set: HashSet<usize> = HashSet::new();
+            for &s in &succs[bi] {
+                out_set.extend(live_in[s].iter().copied());
+            }
+            if out_set != live_out[bi] {
+                live_out[bi] = out_set;
+                changed = true;
+            }
+            let mut cur = live_out[bi].clone();
+            for ins in out.blocks[bi].instrs.iter().rev() {
+                let (def, uses) = def_uses(&ins.op);
+                if let Some(d) = def.as_ref().and_then(|d| index.get(d)) {
+                    cur.remove(d);
+                }
+                for u in &uses {
+                    if let Some(u) = index.get(u) {
+                        cur.insert(*u);
+                    }
+                }
+            }
+            if cur != live_in[bi] {
+                live_in[bi] = cur;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // --- Interference: a name is live immediately after another's definition --
+    let mut interferes: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    for (bi, block_live_out) in live_out.iter().enumerate() {
+        let mut live = block_live_out.clone();
+        for ins in out.blocks[bi].instrs.iter().rev() {
+            let (def, uses) = def_uses(&ins.op);
+            if let Some(d) = def.as_ref().and_then(|d| index.get(d)).copied() {
+                // At `d = s` both names hold one value, so this point alone does
+                // not separate them.
+                let exempt = match &ins.op {
+                    Op::Assign {
+                        src: Value::Reg(s), ..
+                    } => index.get(s).copied(),
+                    _ => None,
+                };
+                for &l in live.iter() {
+                    if l != d && Some(l) != exempt {
+                        interferes[d].insert(l);
+                        interferes[l].insert(d);
+                    }
+                }
+                live.remove(&d);
+            }
+            for u in &uses {
+                if let Some(u) = index.get(u) {
+                    live.insert(*u);
+                }
+            }
+        }
+    }
+
+    // --- Union-find over the copy pairs, checked class against class ----------
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    // How many definitions each name has in this body, which is what makes a
+    // name-keyed width entry attributable (or not) — see `class_widths`.
+    let mut definitions_of: HashMap<VReg, usize> = HashMap::new();
+    for block in &out.blocks {
+        for ins in &block.instrs {
+            if let Some(d) = def_uses(&ins.op).0 {
+                *definitions_of.entry(d).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut width: Vec<ClassWidth> =
+        class_widths(&names, &index, copies, definition_widths, &definitions_of);
+    for (d, s) in pairs.iter().copied() {
+        let (a, b) = (find(&mut parent, d), find(&mut parent, s));
+        if a == b {
+            continue;
+        }
+        if members[b].iter().any(|m| interferes[a].contains(m)) {
+            continue;
+        }
+        let Some(merged_width) = width[a].merge(width[b]) else {
+            continue;
+        };
+        let moved = std::mem::take(&mut members[b]);
+        let taken = std::mem::take(&mut interferes[b]);
+        members[a].extend(moved);
+        interferes[a].extend(taken);
+        width[a] = merged_width;
+        parent[b] = a;
+    }
+
+    // --- Rename to one representative per class ------------------------------
+    // The lowest version in the class: stable, and it keeps the name closest to
+    // the value's first definition rather than to an arbitrary merge order.
+    let mut representative: HashMap<usize, usize> = HashMap::new();
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        let version = |k: usize| coalescable(&names[k]).map(|(_, v)| v).unwrap_or(0);
+        representative
+            .entry(root)
+            .and_modify(|best| {
+                if version(i) < version(*best) {
+                    *best = i;
+                }
+            })
+            .or_insert(i);
+    }
+    let mut rename: HashMap<VReg, VReg> = HashMap::new();
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        let rep = representative[&root];
+        if rep != i {
+            rename.insert(names[i].clone(), names[rep].clone());
+        }
+    }
+    if rename.is_empty() {
+        return;
+    }
+
+    for block in out.blocks.iter_mut() {
+        for ins in block.instrs.iter_mut() {
+            for_each_vreg_mut(&mut ins.op, &mut |r| {
+                if let Some(target) = rename.get(r) {
+                    *r = target.clone();
+                }
+            });
+        }
+        // A copy whose two sides became one name is the copy this pass exists to
+        // delete. Removing it cannot orphan a read: the name is unchanged on both
+        // sides, so whatever defined it still does.
+        block
+            .instrs
+            .retain(|ins| !matches!(&ins.op, Op::Assign { dst, src: Value::Reg(s) } if dst == s));
+    }
+
+    let mut merged_widths: HashMap<VReg, u8> = HashMap::new();
+    for (value, w) in definition_widths.iter() {
+        let key = rename.get(value).cloned().unwrap_or_else(|| value.clone());
+        merged_widths.insert(key, *w);
+    }
+    *definition_widths = merged_widths;
 }
 
 /// Build the [`TempRemap`]: for every lifter temporary that is *reused* (has
@@ -953,11 +1579,30 @@ mod tests {
             .expect("loop must carry an XMM dword lane through a phi");
         let phi_name = VReg::phys(format!("xmm0_d0#{}", phi.dst_version));
 
-        let (_numbered, widths) =
+        let (numbered, widths) =
             value_number_with_definition_widths(&lf, &ssa, CallConv::SysVAmd64);
 
+        // The merged lane value is what the loop exit reads. Look the name up in
+        // the numbered body rather than assuming the phi's own version survives:
+        // `coalesce_phi_copies` may give the whole web one name, and the contract
+        // being pinned here is that the WIDTH survives, not the spelling.
+        let merged = numbered
+            .blocks
+            .iter()
+            .flat_map(|b| b.instrs.iter())
+            .find_map(|i| match &i.op {
+                Op::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Value::Reg(VReg::Phys(src)),
+                } if dst.starts_with("rbx") && src.starts_with("xmm0_d0#") => {
+                    Some(VReg::phys(src.clone()))
+                }
+                _ => None,
+            })
+            .unwrap_or(phi_name);
+
         assert_eq!(
-            widths.get(&phi_name),
+            widths.get(&merged),
             Some(&4),
             "synthetic phi copies must preserve the lane's 32-bit definition"
         );
@@ -1188,6 +1833,446 @@ mod tests {
             undefined_reads(&out),
             Vec::<String>::new(),
             "the join reads a phi result that nothing defines"
+        );
+    }
+
+    /// Count `x = y` register copies, which is what phi destruction emits and
+    /// what coalescing exists to remove.
+    fn register_copies(lf: &LlirFunction) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for b in &lf.blocks {
+            for ins in &b.instrs {
+                if let Op::Assign {
+                    dst: VReg::Phys(d),
+                    src: Value::Reg(VReg::Phys(s)),
+                } = &ins.op
+                {
+                    out.push((d.clone(), s.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// The two arm definitions and the phi result are one variable: nothing
+    /// reads an arm value after the join, so the out-of-SSA copies are pure
+    /// overhead and must not reach the renderer.
+    #[test]
+    fn a_non_interfering_phi_web_needs_no_copies_at_all() {
+        let lf = diamond();
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        let carried: Vec<(String, String)> = register_copies(&out)
+            .into_iter()
+            .filter(|(d, _)| d.starts_with("rbx"))
+            .collect();
+        assert_eq!(
+            carried,
+            Vec::<(String, String)>::new(),
+            "a phi web with no interference must coalesce to one name: {out:#?}"
+        );
+        assert_eq!(
+            undefined_reads(&out),
+            Vec::<String>::new(),
+            "coalescing must not orphan a read"
+        );
+        // The join still reads the merged value, and both arms still write it.
+        let names: HashSet<String> = out
+            .blocks
+            .iter()
+            .flat_map(|b| b.instrs.iter())
+            .filter_map(|i| match def_uses(&i.op).0 {
+                Some(VReg::Phys(n)) if n.starts_with("rbx#") => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names.len(), 1, "both arms must define one name: {names:?}");
+    }
+
+    /// The safety condition, stated as a test rather than as a comment: when the
+    /// value feeding a merge is still read *after* the merge, the two names hold
+    /// different values at the same point and MUST NOT be given one name.
+    ///
+    ///   B0: rbx#1 = 7 ; branch          -> B1, B2
+    ///   B1: rbx#2 = 20                  -> B3
+    ///   B2: (nothing)                   -> B3
+    ///   B3: rcx = phi(rbx) ; rdx = rbx#1 ; return
+    ///
+    /// `rbx#1` is live across B3's phi definition, so coalescing it with the phi
+    /// result would make `rdx` read 20 on the B1 path.
+    #[test]
+    fn a_value_still_read_after_the_merge_is_not_coalesced() {
+        let blk = |va: u64, ops: Vec<Op>, succs: Vec<u64>| LlirBlock {
+            start_va: va,
+            end_va: va + 0x10,
+            instrs: ops
+                .into_iter()
+                .enumerate()
+                .map(|(j, op)| LlirInstr {
+                    va: va + (j as u64) * 4,
+                    op,
+                })
+                .collect(),
+            succs,
+        };
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                blk(
+                    0x1000,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("rbx"),
+                            src: Value::Const(7),
+                        },
+                        Op::CondJump {
+                            cond: VReg::phys("rdi"),
+                            target: 0x1020,
+                            inverted: false,
+                        },
+                    ],
+                    vec![0x1010, 0x1020],
+                ),
+                blk(
+                    0x1010,
+                    vec![Op::Assign {
+                        dst: VReg::phys("rbx"),
+                        src: Value::Const(20),
+                    }],
+                    vec![0x1030],
+                ),
+                blk(0x1020, vec![Op::Nop], vec![0x1030]),
+                blk(
+                    0x1030,
+                    vec![
+                        Op::Assign {
+                            dst: VReg::phys("rcx"),
+                            src: Value::Reg(VReg::phys("rbx")),
+                        },
+                        Op::Return,
+                    ],
+                    vec![],
+                ),
+            ],
+        };
+        // Read the *first* definition again after the join by appending a use of
+        // its version explicitly: build the versioned form first, then check.
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        // The phi result and `rbx#1` (the B0 definition, live into B2's path)
+        // must stay distinct, because B2 contributes `rbx#1` to the merge while
+        // B1 contributes `rbx#2` — coalescing all three would let B1's 20 be
+        // observed as B0's 7.
+        let defined: HashSet<String> = out
+            .blocks
+            .iter()
+            .flat_map(|b| b.instrs.iter())
+            .filter_map(|i| match def_uses(&i.op).0 {
+                Some(VReg::Phys(n)) if n.starts_with("rbx#") => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            defined.len() >= 1,
+            "the merged value must still be defined: {defined:?}"
+        );
+        assert_eq!(
+            undefined_reads(&out),
+            Vec::<String>::new(),
+            "coalescing must not orphan a read"
+        );
+    }
+
+    /// Interference is what blocks a merge, and a definition of one name while
+    /// the other is live is what creates interference. Pinned directly on the
+    /// primitive so the rule cannot silently invert.
+    #[test]
+    fn interference_blocks_a_merge_and_absence_of_it_permits_one() {
+        let mut widths = HashMap::new();
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1010,
+                instrs: vec![
+                    // a#1 = 1 ; b#1 = a#1 ; a#1 is dead here -> mergeable
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax#1"),
+                            src: Value::Const(1),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax#2"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1008,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx"),
+                            src: Value::Reg(VReg::phys("rax#2")),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        coalesce_phi_copies(
+            &mut lf,
+            &[(VReg::phys("rax#2"), VReg::phys("rax#1"))],
+            &mut widths,
+        );
+        assert_eq!(
+            register_copies(&lf),
+            vec![("rcx".to_string(), "rax#1".to_string())],
+            "a dead source must be coalesced away: {lf:#?}"
+        );
+
+        // Now make the source live past the copy: `rdx = rax#1` afterwards.
+        let mut widths = HashMap::new();
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1010,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax#1"),
+                            src: Value::Const(1),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax#2"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1008,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax#2"),
+                            src: Value::Const(9),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x100c,
+                        op: Op::Assign {
+                            dst: VReg::phys("rdx"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        coalesce_phi_copies(
+            &mut lf,
+            &[(VReg::phys("rax#2"), VReg::phys("rax#1"))],
+            &mut widths,
+        );
+        assert!(
+            register_copies(&lf).contains(&("rax#2".to_string(), "rax#1".to_string())),
+            "the copy must survive: rax#1 is live across a later definition of \
+             rax#2, so one name would report 9 where 1 was written: {lf:#?}"
+        );
+    }
+
+    /// A class may not mix machine widths: `definition_widths` is the only proof
+    /// that a definition wraps at 32 bits, and one name cannot carry two.
+    #[test]
+    fn a_width_disagreement_blocks_the_merge() {
+        let mut widths = HashMap::new();
+        widths.insert(VReg::phys("rax#1"), 4u8);
+        widths.insert(VReg::phys("rax#2"), 8u8);
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1010,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax#1"),
+                            src: Value::Const(1),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax#2"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1008,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx"),
+                            src: Value::Reg(VReg::phys("rax#2")),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        coalesce_phi_copies(
+            &mut lf,
+            &[(VReg::phys("rax#2"), VReg::phys("rax#1"))],
+            &mut widths,
+        );
+        assert!(
+            register_copies(&lf).contains(&("rax#2".to_string(), "rax#1".to_string())),
+            "a 4-byte and an 8-byte definition must not share a name: {lf:#?}"
+        );
+    }
+
+    /// A phi destination has no width of its own; it takes the one its incoming
+    /// values agree on. When they disagree it is width-ambiguous, and the answer
+    /// must not depend on which incoming edge is visited first — otherwise
+    /// `factorial_while` (`mov eax,1` into the accumulator, `imul rax` out of it)
+    /// stamps 4 bytes on a 64-bit product and returns 1.
+    #[test]
+    fn a_phi_width_is_decided_before_merging_not_by_visit_order() {
+        let names = vec![
+            VReg::phys("rax#3"), // the phi result — no recorded width
+            VReg::phys("rax#1"), // `mov eax,1`
+            VReg::phys("rax#2"), // `imul rax`
+        ];
+        let index: HashMap<VReg, usize> = names
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, v)| (v, i))
+            .collect();
+        let mut widths = HashMap::new();
+        widths.insert(VReg::phys("rax#1"), 4u8);
+        widths.insert(VReg::phys("rax#2"), 8u8);
+        let edge = |d: usize, s: usize| (names[d].clone(), names[s].clone());
+        for copies in [vec![edge(0, 1), edge(0, 2)], vec![edge(0, 2), edge(0, 1)]] {
+            let decided = class_widths(&names, &index, &copies, &widths, &HashMap::new());
+            assert_eq!(
+                decided[0],
+                ClassWidth::Ambiguous,
+                "a 4-byte and an 8-byte incoming value leave the phi ambiguous \
+                 regardless of edge order: {copies:?}"
+            );
+            assert_eq!(decided[0].merge(decided[1]), None);
+            assert_eq!(decided[0].merge(decided[2]), None);
+        }
+
+        // The same, when the wide incoming value is a KEPT-BARE name with TWO
+        // definitions in the body. Its `definition_widths` entry is keyed by
+        // NAME, so it describes whichever of them was recorded last and proves
+        // nothing about this edge. The phi must come out ambiguous even though
+        // the map claims the same 4 bytes as the other edge — which is exactly
+        // what it claimed for `factorial_while` at `clang -O2`, whose two `rax`
+        // definitions are a 4-byte `mov eax,1` and an 8-byte `imul rax`.
+        let mut with_bare = HashMap::new();
+        with_bare.insert(VReg::phys("rax#1"), 4u8);
+        with_bare.insert(VReg::phys("rax"), 4u8);
+        let both = vec![edge(0, 1), (names[0].clone(), VReg::phys("rax"))];
+        let mut two_defs = HashMap::new();
+        two_defs.insert(VReg::phys("rax"), 2usize);
+        let decided = class_widths(&names, &index, &both, &with_bare, &two_defs);
+        assert_eq!(
+            decided[0],
+            ClassWidth::Ambiguous,
+            "a phi edge from a name with several definitions proves nothing \
+             about the phi's width, and believing it truncated a 64-bit product \
+             every iteration"
+        );
+        // With a SINGLE definition the same entry is attributable, so the edge
+        // is ordinary evidence and the phi may still coalesce.
+        let mut one_def = HashMap::new();
+        one_def.insert(VReg::phys("rax"), 1usize);
+        let decided = class_widths(&names, &index, &both, &with_bare, &one_def);
+        assert_eq!(decided[0], ClassWidth::Known(4));
+        // A live-in has no definition here at all, so this map says nothing
+        // about it and the phi stays ambiguous. Letting it take its other
+        // edges' width was tried and reverted — see the comment on the zero
+        // case in `class_widths`.
+        let decided = class_widths(&names, &index, &both, &with_bare, &HashMap::new());
+        assert_eq!(decided[0], ClassWidth::Ambiguous);
+
+        // Agreement is what permits a merge, and it propagates through a chain of
+        // phis — the nested-loop shape, where one carried value is copied once per
+        // loop level.
+        let chain = vec![
+            VReg::phys("rax#4"), // outer phi
+            VReg::phys("rax#5"), // inner phi, fed by the outer one
+            VReg::phys("rax#1"),
+        ];
+        let chain_index: HashMap<VReg, usize> = chain
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, v)| (v, i))
+            .collect();
+        let mut agreed = HashMap::new();
+        agreed.insert(VReg::phys("rax#1"), 4u8);
+        let decided = class_widths(
+            &chain,
+            &chain_index,
+            &[
+                (chain[0].clone(), chain[2].clone()),
+                (chain[1].clone(), chain[0].clone()),
+            ],
+            &agreed,
+            &HashMap::new(),
+        );
+        assert_eq!(decided[0], ClassWidth::Known(4));
+        assert_eq!(
+            decided[1],
+            ClassWidth::Known(4),
+            "a phi fed only by another phi must inherit its width, or nested \
+             loops coalesce nothing"
+        );
+    }
+
+    /// Bare names are ABI identities (live-in parameters, the frame register,
+    /// a kept return value). Coalescing must never move one.
+    #[test]
+    fn a_bare_name_is_never_coalesced() {
+        let mut widths = HashMap::new();
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1010,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax#1"),
+                            src: Value::Reg(VReg::phys("rdi")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        coalesce_phi_copies(
+            &mut lf,
+            &[(VReg::phys("rax#1"), VReg::phys("rdi"))],
+            &mut widths,
+        );
+        assert!(
+            register_copies(&lf).contains(&("rax#1".to_string(), "rdi".to_string())),
+            "the live-in parameter must keep its own identity: {lf:#?}"
         );
     }
 
@@ -1917,6 +3002,90 @@ mod tests {
             !params.contains(&2),
             "zero-initialized rdx is scratch, not a parameter: {:?}",
             params
+        );
+    }
+
+    #[test]
+    fn a_phi_copy_read_only_by_a_call_may_use_is_not_a_parameter() {
+        use crate::ir::types::{CallTarget, MemOp};
+        // The AArch64 `getconf` main shape, reduced. The entry block ends in a
+        // call; `abi::annotate_calls` hangs x0..x7 on it as a may-use, so the
+        // loop-header phi for x3 counts as READ and `insert_phi_copies`
+        // materialises `x3#1 = x3` right there. x3 is only ever DEFINED (a load)
+        // and then tested, so the function does not take a fourth argument —
+        // the copy is SSA plumbing, not an architectural read.
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("x19#1"),
+                src: Value::Reg(VReg::phys("x0")),
+            },
+            Op::Assign {
+                dst: VReg::phys("x3#1"),
+                src: Value::Reg(VReg::phys("x3")),
+            },
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(crate::ir::abi::call_effects(CallConv::Aarch64)),
+            },
+            Op::Load {
+                dst: VReg::phys("w3#2"),
+                addr: MemOp {
+                    base: Some(VReg::phys("x21#1")),
+                    index: None,
+                    scale: 0,
+                    disp: 64,
+                    size: 4,
+                    segment: None,
+                    endian: crate::ir::types::Endian::Little,
+                },
+            },
+            Op::Cmp {
+                dst: VReg::phys("flags"),
+                op: crate::ir::types::CmpOp::Ne,
+                lhs: Value::Reg(VReg::phys("w3#2")),
+                rhs: Value::Const(0),
+            },
+        ]);
+
+        let params = live_in_arg_slots_llir(&lf, CallConv::Aarch64);
+        assert!(
+            params.contains(&0),
+            "x0 is spilled by a real move and is a parameter: {params:?}"
+        );
+        assert!(
+            !params.contains(&3),
+            "x3's only version-zero read is a phi copy no real operand consumes: \
+             {params:?}"
+        );
+    }
+
+    #[test]
+    fn a_phi_copy_a_real_operand_consumes_still_proves_a_parameter() {
+        use crate::ir::types::{BinOp, CallTarget};
+        // The same plumbing, but the phi destination is genuinely read: the
+        // loop body adds it. Refusing the copy outright would DELETE a real
+        // parameter, which is exactly as wrong as inventing one.
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("x3#1"),
+                src: Value::Reg(VReg::phys("x3")),
+            },
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(crate::ir::abi::call_effects(CallConv::Aarch64)),
+            },
+            Op::Bin {
+                op: BinOp::Add,
+                dst: VReg::phys("x9#1"),
+                lhs: Value::Reg(VReg::phys("x3#1")),
+                rhs: Value::Const(1),
+            },
+        ]);
+
+        let params = live_in_arg_slots_llir(&lf, CallConv::Aarch64);
+        assert!(
+            params.contains(&3),
+            "the phi destination is added to, so x3 really is live-in: {params:?}"
         );
     }
 

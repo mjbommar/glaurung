@@ -140,6 +140,87 @@ fn catch_type_at_relocation(object: &object::read::File<'_>, location: u64) -> O
     None
 }
 
+/// One function interval proven by an `.eh_frame` FDE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EhFrameFunction {
+    /// FDE `initial_location` — an authoritative function entry point.
+    pub start: u64,
+    /// FDE `address_range` — the exact byte length of the function.
+    pub end: u64,
+}
+
+/// Every function interval described by `.eh_frame`.
+///
+/// This is the strongest function-boundary evidence available in a stripped
+/// ELF, and essentially every Linux binary of the last fifteen years carries it:
+/// `-fasynchronous-unwind-tables` is the default on x86-64 and AArch64 because
+/// the C++ unwinder and `backtrace()` need it, so it survives `strip`.
+///
+/// It is *sound but incomplete*. Every FDE start is a real function entry, so a
+/// seed taken from here never invents a function. But hand-written assembly and
+/// anything built `-fno-asynchronous-unwind-tables` (Alpine's `busybox`, which
+/// ships a 4-byte `.eh_frame`) has no FDE, so absence proves nothing and this
+/// cannot be the only discovery source.
+///
+/// Distinct from [`extract_exception_call_sites`], which walks the same table
+/// but keeps only FDEs carrying an LSDA — a small minority, and none at all in a
+/// C program. That is why exception recovery being wired up did not give
+/// discovery these boundaries for free.
+pub fn eh_frame_functions(data: &[u8]) -> Vec<EhFrameFunction> {
+    let Ok(object) = object::read::File::parse(data) else {
+        return Vec::new();
+    };
+    let Some(eh_section) = object.section_by_name(".eh_frame") else {
+        return Vec::new();
+    };
+    let Ok(eh_data) = eh_section.uncompressed_data() else {
+        return Vec::new();
+    };
+    let endian = if object.is_little_endian() {
+        gimli::RunTimeEndian::Little
+    } else {
+        gimli::RunTimeEndian::Big
+    };
+    let eh_frame = EhFrame::new(&eh_data, endian);
+    let mut bases = BaseAddresses::default().set_eh_frame(eh_section.address());
+    if let Some(section) = object.section_by_name(".eh_frame_hdr") {
+        bases = bases.set_eh_frame_hdr(section.address());
+    }
+    if let Some(section) = object.section_by_name(".text") {
+        bases = bases.set_text(section.address());
+    }
+    if let Some(section) = object
+        .section_by_name(".got")
+        .or_else(|| object.section_by_name(".got.plt"))
+    {
+        bases = bases.set_got(section.address());
+    }
+
+    let mut out = Vec::new();
+    let mut entries = eh_frame.entries(&bases);
+    while let Ok(Some(entry)) = entries.next() {
+        let CieOrFde::Fde(partial) = entry else {
+            continue;
+        };
+        let Ok(fde) = partial.parse(EhFrame::cie_from_offset) else {
+            continue;
+        };
+        let start = fde.initial_address();
+        let len = fde.len();
+        // A zero-length FDE describes no code; a terminator run produces one.
+        if len == 0 {
+            continue;
+        }
+        let Some(end) = start.checked_add(len) else {
+            continue;
+        };
+        out.push(EhFrameFunction { start, end });
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// Clone an LLIR graph and add only its LSDA-proven exceptional successors.
 ///
 /// The normal graph remains the input to region structuring. This augmented
@@ -507,8 +588,12 @@ impl<'data> LsdaReader<'data> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_lsda, with_exceptional_successors, ExceptionAction, ExceptionCallSite};
+    use super::{
+        eh_frame_functions, parse_lsda, with_exceptional_successors, ExceptionAction,
+        ExceptionCallSite,
+    };
     use crate::ir::types::{LlirBlock, LlirFunction};
+    use object::Object;
 
     #[test]
     fn clang_o0_typed_catch_call_site_is_recovered() {
@@ -648,6 +733,57 @@ mod tests {
         assert!(
             augmented.blocks[1].succs.contains(&sites[0].landing_pad),
             "an LSDA FDE rooted at an owned cold chunk belongs to the merged function"
+        );
+    }
+
+    /// `.eh_frame` must yield the real function starts of a stripped binary.
+    ///
+    /// Checked against the DWARF in the unstripped twin, which is the same
+    /// bytes: stripping removes symbols but moves no code, so every
+    /// `DW_AT_low_pc` must appear as an FDE start.
+    #[test]
+    fn eh_frame_functions_recover_real_starts() {
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples")
+            .join("containers")
+            .join("hello-cpp-g++-O0");
+        if !path.exists() {
+            eprintln!("skipping eh_frame fixture test: {} absent", path.display());
+            return;
+        }
+        let data = std::fs::read(&path).expect("read fixture");
+        let funcs = eh_frame_functions(&data);
+
+        assert!(
+            funcs.len() >= 5,
+            "expected several FDEs in a real C++ binary, got {}",
+            funcs.len()
+        );
+        for f in &funcs {
+            assert!(f.end > f.start, "FDE {f:?} has non-positive length");
+        }
+        // Intervals must not overlap: each describes one function's extent, and
+        // overlapping ranges would make them useless as lifting bounds.
+        let mut sorted = funcs.clone();
+        sorted.sort_unstable();
+        for pair in sorted.windows(2) {
+            assert!(
+                pair[0].end <= pair[1].start,
+                "overlapping FDE intervals {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+
+        // The entry point is generated code with unwind info in every glibc
+        // link, so it anchors the result to something externally checkable.
+        let obj = object::read::File::parse(&*data).expect("parse");
+        let entry = obj.entry();
+        assert!(
+            funcs.iter().any(|f| f.start <= entry && entry < f.end),
+            "entry point {entry:#x} is not covered by any FDE"
         );
     }
 }

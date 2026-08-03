@@ -113,8 +113,18 @@ fn is_ssa_reg(v: &VReg) -> bool {
 /// The layout and the merge rule both come from [`crate::ir::regview`], the one
 /// register-view descriptor shared with the lifter and the execution engine — this
 /// is deliberately not a third private register table.
+/// AArch64 is consulted after x86-64 because the two name spaces are disjoint
+/// except for `sp`, which x86-64 spells as a 16-bit bit-preserving view (so
+/// [`regview::ssa_parent`] declines it) and AArch64 spells as its own 64-bit
+/// parent (so the fallback maps it to itself — an identity, not a merge).
+///
+/// Leaving AArch64 out was not a missing nicety: `wN` is the zero-extending low
+/// half of `xN`, so without it `ldr w0,[sp,#12]` followed by `lsl x1,x0,#32`
+/// were two unrelated SSA values and the shift read an undefined live-in.
+/// `reconstruct_64` decompiled to `return 0;`.
 pub fn parent64(n: &str) -> Option<&'static str> {
     regview::ssa_parent(regview::Arch::X86_64, n)
+        .or_else(|| regview::ssa_parent(regview::Arch::AArch64, n))
 }
 
 /// Canonicalize a GP sub-register VReg to its 64-bit parent (identity otherwise).
@@ -850,6 +860,7 @@ mod tests {
                 max_blocks: 128,
                 max_instructions: 2000,
                 timeout_ms: 500,
+                total_timeout_ms: 0,
             },
         );
         for f in &funcs {
@@ -879,5 +890,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// AArch64 `wN` must share one SSA identity with `xN`, exactly as `eax`
+    /// shares one with `rax`. Without this a value stored through the 32-bit
+    /// view and read at full width binds to a stale definition.
+    #[test]
+    fn aarch64_w_views_share_the_x_parent_ssa_identity() {
+        assert_eq!(parent64("w0"), Some("x0"));
+        assert_eq!(parent64("w19"), Some("x19"));
+        assert_eq!(parent64("x0"), Some("x0"));
+        assert_eq!(canon_gpr(&VReg::phys("w8")), VReg::phys("x8"));
+        // x86-64 is unchanged, and its bit-PRESERVING views still keep their
+        // own identity — merging those would claim a def that does not exist.
+        assert_eq!(parent64("eax"), Some("rax"));
+        assert_eq!(parent64("al"), None);
+        assert_eq!(parent64("ax"), None);
+        // `sp` is the one name both tables spell. x86-64 declines it (16-bit,
+        // bit-preserving); the AArch64 fallback maps it to itself.
+        assert_eq!(parent64("sp"), Some("sp"));
     }
 }

@@ -486,6 +486,7 @@ mod tests {
                 max_blocks: 64,
                 max_instructions: 1000,
                 timeout_ms: 500,
+                total_timeout_ms: 0,
             },
         );
         let lf = lift_function_from_bytes(&data, &funcs[0], Arch::X86_64).unwrap();

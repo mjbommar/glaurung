@@ -520,6 +520,20 @@ fn apply_recovered_body(body: &mut [Stmt], prototypes: &HashMap<u64, CallPrototy
                     Expr::Named { va, .. } => prototypes.get(va).cloned(),
                     _ => None,
                 };
+                // A callee recovered from its own definition proves whether it
+                // produces a result. The caller only observed that a
+                // caller-saved result register was live out of the call, which
+                // is not evidence of a returned value, so the callee's
+                // declaration wins — exactly the authority rule
+                // `apply_known_call_contracts` already applies to catalog
+                // contracts. Keeping the destination would emit
+                // `var = (void call)`, which no C compiler accepts.
+                if recovered
+                    .as_ref()
+                    .is_some_and(|prototype| prototype.return_type == "void")
+                {
+                    *dst = None;
+                }
                 if recovered.is_some() {
                     *call_spec = Some(recover_call_site_spec_with_types(
                         target,
@@ -1006,6 +1020,51 @@ mod tests {
         assert!(
             rendered.contains("extern void free(void *);"),
             "the authoritative contract must be declared in standalone C: {rendered}"
+        );
+    }
+
+    #[test]
+    fn recovered_void_callee_removes_the_impossible_result_destination() {
+        // A locally recovered callee prototype is definition-site evidence: the
+        // callee's own body proves it produces no result. The caller's ABI
+        // liveness guess that the (caller-saved) result register is live out of
+        // the call cannot outrank it, and keeping the destination emits
+        // `var = (void call)`, which is not C.
+        let mut function = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x8000258,
+                    name: "sub_8000258".into(),
+                },
+                args: vec![Expr::Const(0x80010e0)],
+                dst: Some(VReg::phys("r0")),
+                call_spec: None,
+            }],
+        };
+        let recovered = CallPrototype {
+            return_type: "void".into(),
+            parameter_types: vec!["int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let prototypes = std::collections::HashMap::from([(0x8000258, recovered)]);
+
+        super::apply_recovered_callee_prototypes(&mut function, &prototypes);
+
+        let Stmt::Call { dst, .. } = &function.body[0] else {
+            panic!("expected the recovered call to survive")
+        };
+        assert!(
+            dst.is_none(),
+            "a declared-void callee cannot keep a result destination: {dst:?}"
+        );
+
+        let rendered = crate::ir::ast::render_decbench(&function);
+        assert!(
+            !rendered.contains("= ((void"),
+            "a void call must not be assigned in emitted C:\n{rendered}"
         );
     }
 

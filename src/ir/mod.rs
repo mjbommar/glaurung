@@ -53,6 +53,7 @@ pub mod pdb_fields;
 pub mod readonly_fold;
 pub mod regview;
 pub mod select_fold;
+pub mod soft_helpers;
 pub mod ssa;
 pub mod stack_idiom;
 pub mod stack_locals;

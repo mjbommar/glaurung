@@ -119,6 +119,28 @@ pub struct Bounds {
     pub slots: HashMap<(String, i64), u64>,
 }
 
+/// A Thumb-2 `tbb`/`tbh` table branch, and the extent its guard proves.
+///
+/// Kept separate from [`Resolution`] because a table branch names its table in
+/// the *instruction*, not in a tracked register: `pc` is the base, so the table
+/// address is a decode-time constant and only the entry COUNT is a dataflow
+/// fact. There is no `UnknownBase` case to report, and pretending there is would
+/// mean threading a register through that the encoding does not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThumbTableBranch {
+    /// VA of the inline table — the value `pc` reads at this instruction, which
+    /// in Thumb state is its own address plus 4 and therefore the byte
+    /// immediately after the 4-byte `tbb`/`tbh` encoding.
+    pub table_va: u64,
+    /// 1 for `tbb`, 2 for `tbh`.
+    pub entry_size: u8,
+    /// Entries the range check proves. `None` when the index reached this
+    /// dispatch unbounded — the same fail-closed position `Unresolved::NoBound`
+    /// takes, and for the same reason: past the last entry lie the case bodies,
+    /// whose instruction bytes read as perfectly plausible table entries.
+    pub entry_count: Option<usize>,
+}
+
 /// The outcome of resolving one indirect transfer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
@@ -739,6 +761,58 @@ impl DispatchTracker {
             // safe direction: it costs a resolution, never invents one.
             _ => self.clear(dest),
         }
+    }
+
+    /// Forget everything known about `register`, for a caller that must model
+    /// definitions itself.
+    ///
+    /// [`Self::observe`] discovers definitions through `Access::Write` on
+    /// operand 0, and Capstone's ARM detail marks **every** operand `Read` (see
+    /// `disasm::capstone`). On ARM32 that leaves `observe` unable to see any
+    /// write at all, so a range bound would survive the very instruction that
+    /// overwrote the index — `sub.w r5, r5, #0x3000` between the guard and the
+    /// dispatch is exactly that shape, and it appears in betaflight. The ARM
+    /// block walker therefore identifies definitions from the mnemonic and
+    /// reports them here.
+    pub fn kill_register(&mut self, register: &str) {
+        self.define_fresh_value(register);
+        self.regs.remove(&canon(register));
+    }
+
+    /// Recognise a Thumb-2 `tbb`/`tbh` and report its inline table.
+    ///
+    /// `None` when this is not a table branch. The entry count comes from the
+    /// index register's proven bound, which the walker carried across the range
+    /// check's in-range edge — see [`Self::inherit_bound`].
+    pub fn thumb_table_branch(&self, ins: &Instruction) -> Option<ThumbTableBranch> {
+        let entry_size = match ins.mnemonic.to_ascii_lowercase().as_str() {
+            "tbb" => 1u8,
+            "tbh" => 2,
+            _ => return None,
+        };
+        // Both encodings are 32-bit Thumb-2. Anything else is a decode this
+        // module does not understand, and inventing a table start for it would
+        // be worse than declining.
+        if ins.length != 4 {
+            return None;
+        }
+        // Compilers only ever emit the `pc`-based form; a non-`pc` base names a
+        // table this pass cannot locate.
+        let operand = ins
+            .operands
+            .iter()
+            .find(|operand| operand.base.as_deref() == Some("pc"))?;
+        let index = operand.index.as_deref()?;
+        let entry_count = self
+            .bounded
+            .get(&canon(index))
+            .and_then(|bound| usize::try_from(*bound).ok())
+            .and_then(|bound| bound.checked_add(1));
+        Some(ThumbTableBranch {
+            table_va: ins.address.value.checked_add(4)?,
+            entry_size,
+            entry_count,
+        })
     }
 
     /// Resolve an indirect transfer, given the tables discovered in this binary.

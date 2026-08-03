@@ -190,10 +190,30 @@ impl Disassembler for CapstoneDisassembler {
         address: &Address,
         bytes: &[u8],
     ) -> DisassemblerResult<Instruction> {
-        // Disassemble a single instruction
+        // Decode exactly one instruction.
+        //
+        // This used to call `disasm_all`, which decodes the WHOLE slice and
+        // then dropped everything but the first instruction. Callers pass the
+        // rest of the image (`&data[file_offset..]`), so every single
+        // instruction decoded the entire remaining binary: cost quadratic in
+        // file size, paid on every architecture routed through Capstone.
+        //
+        // x86-64 goes through iced, which decodes one instruction, and was
+        // unaffected — which is why the same `cat` took 0.1 s on x86-64 and
+        // 3.7 s on AArch64 with a third as many functions, and why AArch64
+        // `grep` (199 KB) never finished at all.
+        //
+        // The slice is additionally capped, because `disasm_count` still walks
+        // its input. The cap is x86's architectural maximum rather than this
+        // backend's `max_instruction_length()` (8): `for_arch_with` lets a
+        // caller select Capstone for x86, where an instruction may be 15 bytes,
+        // and an 8-byte window would silently fail to decode the longest ones.
+        // Every other architecture here is fixed-width and far below 16.
+        const MAX_INSN_BYTES: usize = 16;
+        let window = &bytes[..MAX_INSN_BYTES.min(bytes.len())];
         let insns = self
             .cs
-            .disasm_all(bytes, address.value)
+            .disasm_count(window, address.value, 1)
             .map_err(|_| DisassemblerError::InvalidInstruction())?;
         if insns.is_empty() {
             return Err(DisassemblerError::InvalidInstruction());

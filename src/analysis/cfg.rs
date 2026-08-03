@@ -5,7 +5,9 @@
 //! exports/PLT/etc.), disassembles within executable ranges only, splits basic
 //! blocks on control flow, and emits `Function`s plus a `CallGraph`.
 
-use crate::analysis::jump_table::{decode_bounded_relative_jump_table, discover_jump_tables};
+use crate::analysis::jump_table::{
+    decode_bounded_relative_jump_table, decode_thumb_table_branch, discover_jump_tables,
+};
 use crate::analysis::vtable::discover_vtables;
 use crate::core::address::{Address, AddressKind};
 use crate::core::address_range::AddressRange;
@@ -31,7 +33,23 @@ pub struct Budgets {
     pub max_functions: usize,
     pub max_blocks: usize,
     pub max_instructions: usize,
+    /// Wall clock for ONE function's block/instruction walk. Despite the bare
+    /// name this has never bounded an analysis: `discover_function` restarts its
+    /// clock per seed, so a binary with 20 000 functions can spend 20 000 times
+    /// this and still be inside budget. Use `total_timeout_ms` to bound the run.
     pub timeout_ms: u64,
+    /// Wall clock for the WHOLE analysis: every whole-binary discovery phase and
+    /// every seed in the worklist, not just one function's walk. `0` means no
+    /// ceiling.
+    ///
+    /// Zero is the default because a ceiling that truncates changes what
+    /// discovery finds, and every recorded corpus number was measured without
+    /// one; silently applying a wall clock to existing callers would move those
+    /// numbers with nothing to attribute the movement to. Callers that would
+    /// rather have a bounded answer than a complete one — the CLI does — set it
+    /// explicitly, and `FunctionDiscoveryStats::hit_total_timeout` then says the
+    /// result is a truncation rather than an answer.
+    pub total_timeout_ms: u64,
 }
 
 impl Default for Budgets {
@@ -43,7 +61,74 @@ impl Default for Budgets {
             max_blocks: 2048,
             max_instructions: 50_000,
             timeout_ms: 100,
+            total_timeout_ms: 0,
         }
+    }
+}
+
+/// A wall-clock ceiling for one whole analysis, threaded through every discovery
+/// loop so exceeding it is a reported outcome instead of an unbounded run.
+///
+/// Copyable and cheap to test: `expired()` is one `clock_gettime`, the same call
+/// the per-function `timeout_ms` check already makes on the decode path.
+#[derive(Debug, Clone, Copy)]
+pub struct Deadline<'a> {
+    end: Option<std::time::Instant>,
+    start: std::time::Instant,
+    cancel: Option<&'a std::sync::atomic::AtomicBool>,
+}
+
+impl<'a> Deadline<'a> {
+    /// The ceiling `budgets.total_timeout_ms` describes, starting now.
+    pub fn start(budgets: &Budgets) -> Self {
+        let start = std::time::Instant::now();
+        Self {
+            end: (budgets.total_timeout_ms > 0)
+                .then(|| start + std::time::Duration::from_millis(budgets.total_timeout_ms)),
+            start,
+            cancel: None,
+        }
+    }
+
+    /// A deadline that never expires — for callers with no whole-run ceiling.
+    pub fn none() -> Self {
+        Self {
+            end: None,
+            start: std::time::Instant::now(),
+            cancel: None,
+        }
+    }
+
+    /// The same ceiling, additionally stopped as soon as `cancel` is set.
+    ///
+    /// This is what makes a long analysis interruptible from Python. Releasing
+    /// the GIL is NOT enough on its own: the interpreter runs its signal handler
+    /// only on a thread that holds the GIL, and the thread that called us is
+    /// inside Rust for the whole analysis, so a `Ctrl-C` sits pending until the
+    /// call returns — which is exactly the 20-minute unkillable run. The binding
+    /// runs the analysis on a worker thread, keeps the calling thread in
+    /// `Python::check_signals`, and sets this flag when a signal arrives.
+    pub fn with_cancel(self, cancel: &'a std::sync::atomic::AtomicBool) -> Self {
+        Self {
+            cancel: Some(cancel),
+            ..self
+        }
+    }
+
+    /// Whether the analysis must stop: the ceiling passed, or a caller asked.
+    pub fn expired(&self) -> bool {
+        self.cancelled() || self.end.is_some_and(|end| std::time::Instant::now() >= end)
+    }
+
+    /// Whether a caller asked for the analysis to stop.
+    pub fn cancelled(&self) -> bool {
+        self.cancel
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Wall clock consumed so far, in milliseconds.
+    pub fn elapsed_ms(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
     }
 }
 
@@ -53,6 +138,9 @@ pub struct FunctionDiscoveryStats {
     pub max_blocks: usize,
     pub max_instructions: usize,
     pub timeout_ms: u64,
+    pub total_timeout_ms: u64,
+    /// Wall clock the whole analysis actually consumed.
+    pub elapsed_ms: u64,
     pub functions_discovered: usize,
     pub callgraph_functions: usize,
     pub callgraph_edges: usize,
@@ -71,6 +159,8 @@ pub struct FunctionDiscoveryStats {
     pub pdata_entries: usize,
     pub pdata_function_starts: usize,
     pub pdata_seeds_inserted: usize,
+    pub eh_frame_candidates: usize,
+    pub eh_frame_seeds_inserted: usize,
     pub pdata_zero_begin_rejected: usize,
     pub pdata_zero_size_rejected: usize,
     pub pdata_overlapping_entries: usize,
@@ -108,6 +198,12 @@ pub struct FunctionDiscoveryStats {
     pub hit_block_limit: bool,
     pub hit_instruction_limit: bool,
     pub hit_timeout: bool,
+    /// The WHOLE-ANALYSIS wall clock ran out. Unlike the three limits above this
+    /// is not a per-function truncation: seed discovery stopped early, so
+    /// `seeds_remaining` functions were never walked and the callgraph is
+    /// incomplete. A consumer that treats this result as a complete function list
+    /// is wrong, which is why it is reported rather than absorbed.
+    pub hit_total_timeout: bool,
     /// Register-indirect transfers whose targets could not be recovered. A
     /// non-empty list means at least one returned CFG is incomplete.
     pub unresolved_indirect: Vec<(u64, crate::analysis::dispatch::Unresolved)>,
@@ -128,6 +224,8 @@ struct SingleFunctionDiscoveryStats {
     hit_block_limit: bool,
     hit_instruction_limit: bool,
     hit_timeout: bool,
+    /// The whole-analysis deadline expired inside this function's walk.
+    hit_total_timeout: bool,
     /// Indirect transfers whose target set could not be recovered, with the
     /// dispatch VA and why.
     ///
@@ -149,6 +247,7 @@ fn merge_single_function_stats(
     aggregate.hit_block_limit |= local.hit_block_limit;
     aggregate.hit_instruction_limit |= local.hit_instruction_limit;
     aggregate.hit_timeout |= local.hit_timeout;
+    aggregate.hit_total_timeout |= local.hit_total_timeout;
     aggregate
         .unresolved_indirect
         .append(&mut local.unresolved_indirect);
@@ -234,6 +333,8 @@ enum DiscoverySeedKind {
     JumpTable,
     Export,
     Pdata,
+    /// An `.eh_frame` FDE start — the ELF counterpart of `Pdata`.
+    EhFrame,
     Prologue,
     Thunk,
     TinyStub,
@@ -270,6 +371,7 @@ impl DiscoverySeedKind {
             Self::JumpTable => "jump_table",
             Self::Export => "export",
             Self::Pdata => "trusted_pdata",
+            Self::EhFrame => "trusted_eh_frame",
             Self::Prologue => "prologue",
             Self::Thunk => "thunk",
             Self::TinyStub => "tiny_stub",
@@ -450,6 +552,69 @@ fn arm_pop_writes_pc(ins: &Instruction) -> bool {
     false
 }
 
+/// The register an ARM32 instruction defines, for a caller that must model
+/// definitions itself.
+///
+/// Capstone's ARM detail marks every operand `Access::Read`, so
+/// `DispatchTracker::observe` — which finds definitions through `Access::Write`
+/// on operand 0 — sees no ARM write at all. Without this, a range bound proved
+/// by `cmp` would survive an intervening `sub.w r5, r5, #0x3000`, and the
+/// dispatch would size its table from a value that no longer exists.
+///
+/// The recognised set is the mnemonics that do NOT write operand 0: comparisons,
+/// stores, and the `it` block prefix. Everything else is treated as a
+/// definition, so an unmodelled instruction costs a resolution rather than
+/// producing a table sized from a stale bound.
+fn arm_defined_register(ins: &Instruction) -> Option<&str> {
+    let lower = ins.mnemonic.to_ascii_lowercase();
+    let m = lower
+        .strip_suffix(".w")
+        .or_else(|| lower.strip_suffix(".n"))
+        .unwrap_or(&lower);
+    // `cmp`/`cmn`/`tst`/`teq` read both operands; `str*`/`stm*`/`push` read the
+    // register and write memory; `it*` carries only a condition. Prefix matching
+    // covers the condition-suffixed and flag-setting spellings (`cmpne`,
+    // `strbeq`, `stmia`) in one rule.
+    if m.starts_with("cmp")
+        || m.starts_with("cmn")
+        || m.starts_with("tst")
+        || m.starts_with("teq")
+        || m.starts_with("str")
+        || m.starts_with("stm")
+        || m.starts_with("push")
+        || m.starts_with("it")
+    {
+        return None;
+    }
+    ins.operands.first()?.register.as_deref()
+}
+
+/// Does this conditional branch's FALLTHROUGH edge carry the range bound its
+/// block's last comparison established?
+///
+/// Only the unsigned "above" forms qualify: `cmp idx, N` followed by "branch
+/// away when idx > N" leaves `idx <= N` on the fallthrough, which is exactly the
+/// jump table's entry count minus one. A signed test is a different construct
+/// and proves nothing about an unsigned table index.
+fn guard_bound_reaches_fallthrough(mnemonic: &str, arch: BArch) -> bool {
+    let lower = mnemonic.to_ascii_lowercase();
+    match arch {
+        BArch::X86 | BArch::X86_64 => matches!(lower.as_str(), "ja" | "jae" | "jnbe" | "jnb"),
+        // Thumb-2's `cmp idx, #N; bhi.w default; tbb/tbh [pc, idx]`. `bhi` alone,
+        // because it is the only form whose in-range edge admits exactly `[0, N]`
+        // — and it is what GCC and Clang emit for every table branch measured
+        // here (three sites in `tests/decompiler_fixtures`, two in betaflight).
+        BArch::ARM => {
+            lower
+                .strip_suffix(".w")
+                .or_else(|| lower.strip_suffix(".n"))
+                .unwrap_or(&lower)
+                == "bhi"
+        }
+        _ => false,
+    }
+}
+
 fn classify_ctrl_flow(mnemonic: &str, arch: BArch) -> (bool, bool, bool) {
     let lower = mnemonic.to_ascii_lowercase();
     // Strip the Thumb-2 `.w`/`.n` width qualifier so `bne.w`, `bl.w`, `b.w`
@@ -484,7 +649,20 @@ fn classify_ctrl_flow(mnemonic: &str, arch: BArch) -> (bool, bool, bool) {
             if m == "bl" || m == "blx" {
                 return (false, true, false);
             }
-            if m == "b" || m == "b.w" || m == "cbz" || m == "cbnz" || is_arm_cond_branch(&m) {
+            // `tbb`/`tbh` are the Thumb-2 table branches. They ARE the switch
+            // dispatch, and they are unconditional: control never falls through
+            // to the byte after them, because that byte is the first entry of
+            // the table they read. Leaving them unclassified made the linear
+            // sweep decode the whole table as instructions and then walk into
+            // the default arm, so a 240-case switch produced no cases at all.
+            if m == "b"
+                || m == "b.w"
+                || m == "cbz"
+                || m == "cbnz"
+                || m == "tbb"
+                || m == "tbh"
+                || is_arm_cond_branch(&m)
+            {
                 return (true, false, false);
             }
             (false, false, false)
@@ -575,8 +753,10 @@ fn is_unconditional_branch_mnemonic(mnemonic: &str, arch: BArch) -> bool {
     match arch {
         BArch::ARM | BArch::AArch64 => matches!(
             m.as_str(),
-            // `b.w` is the Thumb-2 wide unconditional branch.
-            "b" | "b.w" | "br" | "braa" | "braaz" | "brab" | "brabz"
+            // `b.w` is the Thumb-2 wide unconditional branch; `tbb`/`tbh` are
+            // the Thumb-2 table branches, whose lexical successor is their own
+            // table rather than a fallthrough arm.
+            "b" | "b.w" | "br" | "braa" | "braaz" | "brab" | "brabz" | "tbb" | "tbh"
         ),
         BArch::X86 | BArch::X86_64 => m == "jmp",
         // Preserve the historical (arch-agnostic) semantics for the remaining
@@ -674,6 +854,35 @@ fn elf_x86_tail_target_looks_like_function_start(data: &[u8], target_va: u64, ar
         // REX prefix.  This is too weak for the general xref-start gate, but is
         // strong enough behind an architecture-matching CET landing pad.
         || matches!(after_landing_pad, [0x53 | 0x55 | 0x56 | 0x57, ..])
+}
+
+/// Is this ARM32 branch target a PLT stub — i.e. is the branch a tail call?
+///
+/// A PLT entry is linker-generated import glue. No compiler places one inside a
+/// function body, so an unconditional branch to one always leaves the function
+/// for good. GCC lowers `return f(x);` for an imported `f` to exactly
+/// `b.w f@plt`, and ARM has no CET landing pad for
+/// [`elf_x86_tail_target_looks_like_function_start`] to key on — so without this
+/// the branch stayed an intra-function edge, and `call_forward_result`
+/// decompiled to `goto L_49c; L_49c: ;` with no return value at all.
+///
+/// Deliberately restricted to ARM32 and to the stub SECTIONS: the test is a
+/// property of where the target lives, not a guess about the bytes there, and
+/// no other architecture's classification is touched.
+fn elf_arm_tail_target_is_plt_stub(data: &[u8], target_va: u64, arch: BArch) -> bool {
+    use object::{Object, ObjectSection};
+    if !matches!(arch, BArch::ARM) || !data.starts_with(b"\x7fELF") {
+        return false;
+    }
+    let Ok(object) = object::read::File::parse(data) else {
+        return false;
+    };
+    object.sections().any(|section| {
+        matches!(section.name(), Ok(".plt" | ".plt.sec" | ".iplt"))
+            && section.size() != 0
+            && target_va >= section.address()
+            && target_va < section.address().saturating_add(section.size())
+    })
 }
 
 /// Discover a single function starting at `entry` within executable regions.
@@ -808,6 +1017,15 @@ fn replay_dispatch_block(
         let address = Address::new(AddressKind::VA, cur_va, bits, None, None).ok()?;
         let instruction = backend.disassemble_instruction(&address, bytes).ok()?;
         let next_va = cur_va.saturating_add(instruction.length as u64);
+        // Mirrors the streaming walk in `discover_function`: the ARM decoder
+        // reports no writes, so definitions are named from the mnemonic. A
+        // replay that skipped this would prove a bound the first pass refused
+        // and re-validate a dispatch into existence.
+        if matches!(arch, BArch::ARM) {
+            if let Some(defined) = arm_defined_register(&instruction) {
+                tracker.kill_register(defined);
+            }
+        }
         tracker.observe(&instruction);
         if stop_at == Some(cur_va) {
             return Some((tracker, Some(instruction)));
@@ -835,9 +1053,24 @@ struct DiscoveryFacts<'a> {
     // Existing basic-block starts in the owning function. A landing-pad walk
     // must treat these as leaders even when it reaches one by linear flow.
     owned_leaders: Option<&'a [u64]>,
+    // Exclusive upper bound on this function's bytes, when `.eh_frame` proves
+    // one. Without it a function whose last instruction is a call to a
+    // `noreturn` helper has no terminator, so the walk falls through into
+    // whatever follows and keeps going: `main` in a stripped musl `getent` is
+    // 97 bytes but was discovered as 154, swallowing `_start` and `_start_c`
+    // and reporting their calls — including `__libc_start_main` — as its own.
+    proven_end: Option<u64>,
 }
 
 impl DiscoveryFacts<'_> {
+    /// True when `va` lies at or past this function's proven end.
+    ///
+    /// Only ever consulted when `.eh_frame` supplied an exact extent, so this
+    /// cannot truncate a function whose length is merely guessed.
+    fn beyond_proven_end(&self, va: u64) -> bool {
+        self.proven_end.is_some_and(|end| va >= end)
+    }
+
     fn owns(&self, va: u64) -> bool {
         self.owned_ranges.is_some_and(|ranges| {
             ranges.iter().any(|range| {
@@ -857,12 +1090,62 @@ fn resolve_dispatch(
     instruction: &Instruction,
     tables: &std::collections::BTreeMap<u64, Vec<u64>>,
 ) -> Option<crate::analysis::dispatch::Resolution> {
+    // Thumb-2 `tbb`/`tbh` name their table in the instruction (`pc` is the base)
+    // and store it inline in `.text` as unsigned halfword counts. Nothing about
+    // that shape reaches `resolve_with`, which resolves a REGISTER to a
+    // rodata-relative table, so it is answered here and reported through the
+    // same `Resolution` so every caller — including the post-CFG revalidation —
+    // treats it identically.
+    if let Some(branch) = tracker.thumb_table_branch(instruction) {
+        let Some(entry_count) = branch.entry_count else {
+            return Some(crate::analysis::dispatch::Resolution::Unresolved(
+                crate::analysis::dispatch::Unresolved::NoBound(branch.table_va),
+            ));
+        };
+        return Some(
+            match decode_thumb_table_branch(
+                data,
+                branch.table_va,
+                branch.entry_size,
+                entry_count,
+                |target| in_exec_regions(regions, target).is_some(),
+            ) {
+                Some(table) => crate::analysis::dispatch::Resolution::Table {
+                    table_va: table.table_va,
+                    targets: table.targets,
+                },
+                None => crate::analysis::dispatch::Resolution::Unresolved(
+                    crate::analysis::dispatch::Unresolved::NoTableAt(branch.table_va),
+                ),
+            },
+        );
+    }
     tracker.resolve_with(instruction, tables, |table_va, entry_count| {
         decode_bounded_relative_jump_table(data, table_va, entry_count, |target| {
             in_exec_regions(regions, target).is_some()
         })
         .map(|table| table.targets)
     })
+}
+
+/// Run a whole-binary seed scan unless the analysis deadline has already passed.
+///
+/// The discovery loops check the deadline themselves; these scans are
+/// straight-line sweeps over the whole image with no loop to instrument, so the
+/// check has to be at the call. Once the ceiling is gone every remaining scan is
+/// skipped instead of run to completion, and `hit_total_timeout` is set — which
+/// is what makes an empty candidate list a REPORTED truncation rather than a
+/// binary that simply had no vtables in it.
+fn scan_within<T: Default>(
+    deadline: Deadline<'_>,
+    stats: &mut FunctionDiscoveryStats,
+    scan: impl FnOnce() -> T,
+) -> T {
+    if deadline.expired() {
+        stats.hit_total_timeout = true;
+        return T::default();
+    }
+    scan()
 }
 
 fn discover_function(
@@ -873,6 +1156,7 @@ fn discover_function(
     regions: &[ExecRegion],
     budgets: &Budgets,
     facts: &DiscoveryFacts<'_>,
+    deadline: Deadline<'_>,
 ) -> Option<(Function, Vec<FunctionXref>, SingleFunctionDiscoveryStats)> {
     let darch: crate::core::disassembler::Architecture = arch.into();
     let mut backend = registry::for_arch(darch, end)?;
@@ -939,6 +1223,20 @@ fn discover_function(
             stats.hit_timeout = true;
             break;
         }
+        // Whichever ceiling fires first wins: the per-function clock restarts on
+        // every seed, so without this check the whole-analysis budget could be
+        // exceeded by an arbitrary multiple and nothing would notice.
+        if deadline.expired() {
+            stats.hit_total_timeout = true;
+            break;
+        }
+        // A block start at or past the proven end belongs to the next function,
+        // not this one. Guarding here rather than at each of the four enqueue
+        // sites keeps the rule in one place and covers branch, dispatch and
+        // fallthrough targets alike.
+        if facts.beyond_proven_end(start_va) {
+            continue;
+        }
         // Decode sequentially until a terminating control flow or budget hit
         let mut cur_va = start_va;
         let mut instrs = 0u32;
@@ -960,6 +1258,10 @@ fn discover_function(
                 stats.hit_timeout = true;
                 break 'block;
             }
+            if deadline.expired() {
+                stats.hit_total_timeout = true;
+                break 'block;
+            }
             // Basic-block leader rule: if the linear sweep has reached the start
             // of another already-discovered block (a branch/fallthrough target
             // in `seen`), the current block ends here and falls through to it.
@@ -967,6 +1269,14 @@ fn discover_function(
             // `-O0` loop's body falling into its condition block) would swallow
             // the successor's instructions and inherit its edges, destroying the
             // back-edge so no natural loop is recovered.
+            // Linear flow has reached the end `.eh_frame` proved for this
+            // function. The bytes from here belong to the next one, so the
+            // block ends without a fallthrough edge — inventing one would
+            // reintroduce exactly the overrun this bound exists to stop.
+            if cur_va != start_va && facts.beyond_proven_end(cur_va) {
+                blocks.insert(start_va, (cur_va, instrs));
+                break 'block;
+            }
             if cur_va != start_va && seen.contains(&cur_va) {
                 edges.push((start_va, cur_va, ControlFlowEdgeKind::Fallthrough));
                 merge_dispatch_addresses(
@@ -996,6 +1306,13 @@ fn discover_function(
             decoded_instructions += 1;
             instrs = instrs.saturating_add(1);
             // Streaming, so the block is neither buffered nor decoded twice.
+            // On ARM the decoder reports no writes at all, so the definition
+            // has to be named here or a stale bound would size the next table.
+            if matches!(arch, BArch::ARM) {
+                if let Some(defined) = arm_defined_register(&ins) {
+                    dispatch.kill_register(defined);
+                }
+            }
             dispatch.observe(&ins);
             let end_va = cur_va.saturating_add(ins.length as u64);
             if is_code_padding_terminator(&ins.mnemonic, arch) {
@@ -1048,7 +1365,12 @@ fn discover_function(
                         && tgt != entry.value
                         && is_exec_target
                         && elf_x86_tail_target_looks_like_function_start(data, tgt, arch);
-                    if is_pe_tail_target || is_elf_x86_tail_target {
+                    let is_elf_arm_tail_target = unconditional
+                        && !facts.owns(tgt)
+                        && tgt != entry.value
+                        && is_exec_target
+                        && elf_arm_tail_target_is_plt_stub(data, tgt, arch);
+                    if is_pe_tail_target || is_elf_x86_tail_target || is_elf_arm_tail_target {
                         call_edges.push(FunctionXref {
                             callsite_va: cur_va,
                             target_va: tgt,
@@ -1174,10 +1496,8 @@ fn discover_function(
                     // the jump table's entry count. Restricted to the unsigned
                     // forms because a switch index is unsigned after the
                     // compiler's rebase; a signed test is a different construct.
-                    if matches!(
-                        ins.mnemonic.to_ascii_lowercase().as_str(),
-                        "ja" | "jae" | "jnbe" | "jnb"
-                    ) && dispatch.pending_bound().is_some()
+                    if guard_bound_reaches_fallthrough(&ins.mnemonic, arch)
+                        && dispatch.pending_bound().is_some()
                     {
                         // Carry the register bounds AND the slot bounds: clang -O0
                         // spills the switch value before the check and reloads it
@@ -1928,6 +2248,47 @@ fn scan_aarch64_prologue_function_starts(
     starts
 }
 
+/// Head patterns that open a System V x86-64 function.
+///
+/// Deliberately narrower than [`head_looks_like_fn_start`], which also accepts
+/// thunk and stub shapes that suit PE. Here the candidate must look like a real
+/// GCC/Clang function entry, because ELF discovery already has `.eh_frame` for
+/// the easy cases and this scan exists only for what `.eh_frame` cannot cover:
+/// hand-written assembly, `-fno-asynchronous-unwind-tables` builds such as
+/// Alpine's `busybox`, and `.init`/`.fini` fragments.
+fn elf_x86_prologue_head(head: &[u8]) -> bool {
+    match head {
+        // endbr64 — CET, and the first instruction of essentially every
+        // function in a current distro build.
+        [0xf3, 0x0f, 0x1e, 0xfa, ..] => true,
+        // push rbp; mov rbp, rsp
+        [0x55, 0x48, 0x89, 0xe5, ..] => true,
+        // push rbp alone, then any callee-saved push
+        [0x55, 0x41, 0x54 | 0x55 | 0x56 | 0x57, ..] => true,
+        // push rbx / rbp / rsi / rdi followed by a REX-prefixed move
+        [0x53 | 0x55 | 0x56 | 0x57, 0x48, 0x89, ..] => true,
+        // sub rsp, imm8 / imm32
+        [0x48, 0x83, 0xec, ..] => true,
+        [0x48, 0x81, 0xec, ..] => true,
+        _ => false,
+    }
+}
+
+/// AArch64 words that open a function without pointer authentication.
+///
+/// `stp x29, x30, [sp, #-N]!` is the canonical frame save and `sub sp, sp, #N`
+/// the canonical frame allocation. Matching only PAC prologues meant this scan
+/// found nothing on the Ubuntu and Alpine AArch64 builds actually in the sample
+/// tree, which are BTI-enabled but not PAC-signed.
+fn aarch64_unhardened_prologue(word: u32) -> bool {
+    // stp x29, x30, [sp, #imm]!  — pre-indexed, base sp, pair x29/x30.
+    // Encoding: 1010 1001 10ii iiii i111 1011 111x xxxx with Rt=x29, Rt2=x30.
+    let stp_frame = (word & 0xffc0_7fff) == 0xa980_7bfd;
+    // sub sp, sp, #imm  (64-bit, immediate form, Rd=Rn=sp=31)
+    let sub_sp = (word & 0xff80_03ff) == 0xd100_03ff;
+    stp_frame || sub_sp
+}
+
 fn scan_pe_prologue_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<u64> {
     if !arch.is_64_bit() || data.len() < 2 || &data[..2] != b"MZ" {
         return Vec::new();
@@ -1947,6 +2308,65 @@ fn scan_pe_prologue_function_starts(data: &[u8], regions: &[ExecRegion], arch: B
             };
         }
     }
+    starts
+}
+
+/// Scan ELF executable regions for function prologues.
+///
+/// Candidates are emitted as ordinary `Prologue` seeds, which remain
+/// body-overlap gated: unlike an `.eh_frame` FDE start this is a heuristic, and
+/// it must never split a function that a trusted seed already proved.
+fn scan_elf_prologue_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<u64> {
+    if data.len() < 4 || &data[..4] != b"\x7fELF" {
+        return Vec::new();
+    }
+    let mut starts = Vec::new();
+    match arch {
+        BArch::X86_64 => {
+            for region in regions {
+                // 16-byte alignment is what both GCC and Clang use for function
+                // entries by default; scanning every byte would trade a large
+                // slowdown for candidates that are almost all false.
+                let mut va = align_up_u64(region.start, 16);
+                while va < region.end {
+                    if let Some(off) = crate::analysis::entry::va_to_code_file_offset(data, va) {
+                        if off < data.len()
+                            && has_function_boundary_marker(data, off)
+                            && elf_x86_prologue_head(&data[off..])
+                        {
+                            starts.push(va);
+                        }
+                    }
+                    va = match va.checked_add(16) {
+                        Some(next) => next,
+                        None => break,
+                    };
+                }
+            }
+        }
+        BArch::AArch64 => {
+            for region in regions {
+                let mut va = align_up_u64(region.start, 4);
+                while va + 4 <= region.end {
+                    if let Some(off) = crate::analysis::entry::va_to_code_file_offset(data, va) {
+                        if let Some(b) = data.get(off..off + 4) {
+                            let word = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                            if aarch64_unhardened_prologue(word) {
+                                starts.push(va);
+                            }
+                        }
+                    }
+                    va = match va.checked_add(4) {
+                        Some(next) => next,
+                        None => break,
+                    };
+                }
+            }
+        }
+        _ => {}
+    }
+    starts.sort_unstable();
+    starts.dedup();
     starts
 }
 
@@ -3226,6 +3646,7 @@ fn attach_exception_landing_pads(
     budgets: &Budgets,
     facts: &DiscoveryFacts<'_>,
     functions: &mut [Function],
+    deadline: Deadline<'_>,
 ) -> Vec<(u64, FunctionXref)> {
     let sites = crate::analysis::exception::extract_exception_call_sites(data);
     if sites.is_empty() {
@@ -3309,7 +3730,9 @@ fn attach_exception_landing_pads(
                 noreturn_targets: facts.noreturn_targets,
                 owned_ranges: Some(&ranges),
                 owned_leaders: Some(&leaders),
+                proven_end: None,
             },
+            deadline,
         ) else {
             continue;
         };
@@ -3695,6 +4118,7 @@ pub(crate) fn discover_function_bytes_at(
     budgets: &Budgets,
     entry_va: u64,
 ) -> Option<Function> {
+    let deadline = Deadline::start(budgets);
     let (regions, arch, end, _entry) = parse_exec_regions(data);
     if regions.is_empty() || in_exec_regions(&regions, entry_va).is_none() {
         return None;
@@ -3708,9 +4132,10 @@ pub(crate) fn discover_function_bytes_at(
         noreturn_targets: &noreturn_targets,
         owned_ranges: None,
         owned_leaders: None,
+        proven_end: None,
     };
     let (mut function, _calls, _stats) =
-        discover_function(data, arch, end, entry, &regions, budgets, &facts)?;
+        discover_function(data, arch, end, entry, &regions, budgets, &facts, deadline)?;
 
     // Preserve the same exact-address symbol naming as whole-binary discovery
     // without paying for its unrelated seed work.
@@ -3743,6 +4168,39 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     budgets: &Budgets,
     requested_vas: &[u64],
 ) -> (Vec<Function>, CallGraph, FunctionDiscoveryStats) {
+    // Started before ANY work, including `parse_exec_regions`: a budget that only
+    // begins once the expensive part is under way is not a budget.
+    analyze_functions_bytes_within(data, budgets, requested_vas, Deadline::start(budgets))
+}
+
+/// Whole-binary discovery, stopped by an EXTERNAL cancellation flag as well as by
+/// `budgets.total_timeout_ms`.
+///
+/// The flag is what makes the analysis interruptible from Python — see
+/// `Deadline::with_cancel`. A cancelled run returns the functions it had already
+/// discovered with `hit_total_timeout` set, so a caller that wants a partial
+/// answer can keep it and one that wants a complete answer can tell it did not
+/// get one.
+pub fn analyze_functions_bytes_cancellable(
+    data: &[u8],
+    budgets: &Budgets,
+    requested_vas: &[u64],
+    cancel: &std::sync::atomic::AtomicBool,
+) -> (Vec<Function>, CallGraph, FunctionDiscoveryStats) {
+    analyze_functions_bytes_within(
+        data,
+        budgets,
+        requested_vas,
+        Deadline::start(budgets).with_cancel(cancel),
+    )
+}
+
+fn analyze_functions_bytes_within(
+    data: &[u8],
+    budgets: &Budgets,
+    requested_vas: &[u64],
+    deadline: Deadline<'_>,
+) -> (Vec<Function>, CallGraph, FunctionDiscoveryStats) {
     let (regions, arch, end, entry) = parse_exec_regions(data);
     let mut functions: Vec<Function> = Vec::new();
     let mut cg = CallGraph::new();
@@ -3751,9 +4209,11 @@ fn analyze_functions_bytes_with_stats_and_seeds(
         max_blocks: budgets.max_blocks,
         max_instructions: budgets.max_instructions,
         timeout_ms: budgets.timeout_ms,
+        total_timeout_ms: budgets.total_timeout_ms,
         ..FunctionDiscoveryStats::default()
     };
     if regions.is_empty() {
+        stats.elapsed_ms = deadline.elapsed_ms();
         return (functions, cg, stats);
     }
     let noreturn_targets = crate::analysis::call_semantics::imported_noreturn_targets(data);
@@ -3796,7 +4256,9 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     // discovery completes (see post-processing below).
     let flirt_lib_for_seeds: Option<FlirtLibrary> = load_default_library();
     let flirt_seeds: Vec<(u64, String)> = if let Some(ref lib) = flirt_lib_for_seeds {
-        discover_flirt_seeds(data, &functions, lib)
+        scan_within(deadline, &mut stats, || {
+            discover_flirt_seeds(data, &functions, lib)
+        })
     } else {
         Vec::new()
     };
@@ -3833,7 +4295,9 @@ fn analyze_functions_bytes_with_stats_and_seeds(
             .iter()
             .any(|r| va >= r.start && va < r.end)
     };
-    let vtable_entries = discover_vtables(data, is_executable);
+    let vtable_entries = scan_within(deadline, &mut stats, || {
+        discover_vtables(data, is_executable)
+    });
     let mut vtable_method_count = 0usize;
     for entry in &vtable_entries {
         if known.contains(&entry.target_va) {
@@ -3874,7 +4338,9 @@ fn analyze_functions_bytes_with_stats_and_seeds(
                 .iter()
                 .any(|r| va >= r.start && va < r.end)
         };
-        let jump_tables = discover_jump_tables(data, is_executable2);
+        let jump_tables = scan_within(deadline, &mut stats, || {
+            discover_jump_tables(data, is_executable2)
+        });
         for jt in &jump_tables {
             jump_table_index.insert(jt.table_va, jt.targets.clone());
         }
@@ -3907,7 +4373,9 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     // sweep (most kernel32 exports are tiny `jmp [iat]` thunks not
     // covered by .pdata). Exports are trusted entry points, so insert
     // them before the body-overlap-gated .pdata seeds below.
-    let export_starts = parse_pe_export_function_starts(data, &regions, arch);
+    let export_starts = scan_within(deadline, &mut stats, || {
+        parse_pe_export_function_starts(data, &regions, arch)
+    });
     stats.export_function_starts = export_starts.len();
     for va in export_starts {
         if known.contains(&va) {
@@ -3929,7 +4397,9 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     // highest-leverage seed source on stripped Windows PE -- it
     // closed most of the ~98% recall gap vs Ghidra on ntdll.dll
     // observed in asb's iter 13 comparison.
-    let (pdata_starts, pdata_stats) = parse_pdata_function_starts(data, &regions, arch);
+    let (pdata_starts, pdata_stats) = scan_within(deadline, &mut stats, || {
+        parse_pdata_function_starts(data, &regions, arch)
+    });
     let pdata_start_set: std::collections::HashSet<u64> = pdata_starts.iter().copied().collect();
     stats.pdata_entries = pdata_stats.entries;
     stats.pdata_function_starts = pdata_stats.accepted_starts;
@@ -3990,10 +4460,59 @@ fn analyze_functions_bytes_with_stats_and_seeds(
         }
     }
 
-    let mut prologue_starts = scan_pe_prologue_function_starts(data, &regions, arch);
+    // `.eh_frame` FDE starts — the ELF counterpart of `.pdata`, and the only
+    // authoritative function boundary a stripped ELF still carries. Trusted, so
+    // not body-overlap gated: an earlier wrong function must not be allowed to
+    // suppress a proven start. Before this, a stripped ELF was discovered from
+    // its entry point and direct calls alone, which recovered 48-57% of these
+    // starts on glibc binaries and none at all on small musl ones.
+    let eh_frame_functions = crate::analysis::exception::eh_frame_functions(data);
+    stats.eh_frame_candidates = eh_frame_functions.len();
+    // start -> exclusive end, so a walk can be stopped at the proven boundary.
+    let eh_frame_extent: std::collections::HashMap<u64, u64> = eh_frame_functions
+        .iter()
+        .map(|f| (f.start, f.end))
+        .collect();
+    for func in &eh_frame_functions {
+        let va = func.start;
+        if !regions.iter().any(|r| va >= r.start && va < r.end) {
+            record_scan_rejection(
+                &mut stats,
+                va,
+                None,
+                "eh_frame:nonexec",
+                "FDE start is outside every executable region",
+            );
+            continue;
+        }
+        if known.contains(&va) {
+            continue;
+        }
+        if let Ok(addr) = Address::new(AddressKind::VA, va, bits, None, None) {
+            seeds.push((addr, DiscoverySeedKind::EhFrame));
+            known.insert(va);
+            seed_kind_by_va.insert(va, DiscoverySeedKind::EhFrame);
+            record_seed_provenance(&mut stats, va, None, DiscoverySeedKind::EhFrame, "eh_frame");
+            stats.eh_frame_seeds_inserted = stats.eh_frame_seeds_inserted.saturating_add(1);
+        }
+    }
+
+    let mut prologue_starts = scan_within(deadline, &mut stats, || {
+        scan_pe_prologue_function_starts(data, &regions, arch)
+    });
+    // The ELF counterpart. `.eh_frame` (above) covers every function built with
+    // unwind tables, which is most of them; this scan exists for the rest —
+    // hand-written assembly and `-fno-asynchronous-unwind-tables` builds like
+    // Alpine's `busybox`, whose `.eh_frame` is four bytes long. Discovery recall
+    // against the full DWARF function set was 0.514 with `.eh_frame` alone.
+    prologue_starts.extend(scan_within(deadline, &mut stats, || {
+        scan_elf_prologue_function_starts(data, &regions, arch)
+    }));
     // AArch64 ELF PAC prologues recover functions on stripped hardened binaries
     // (Pixel device .so files) where the PE-specific scan does not apply.
-    prologue_starts.extend(scan_aarch64_prologue_function_starts(data, &regions, arch));
+    prologue_starts.extend(scan_within(deadline, &mut stats, || {
+        scan_aarch64_prologue_function_starts(data, &regions, arch)
+    }));
     stats.prologue_scan_candidates = prologue_starts.len();
     for va in prologue_starts {
         if known.contains(&va) {
@@ -4022,7 +4541,9 @@ fn analyze_functions_bytes_with_stats_and_seeds(
         }
     }
 
-    let thunk_starts = scan_pe_thunk_function_starts(data, &regions, arch);
+    let thunk_starts = scan_within(deadline, &mut stats, || {
+        scan_pe_thunk_function_starts(data, &regions, arch)
+    });
     stats.thunk_scan_candidates = thunk_starts.len();
     for va in thunk_starts {
         if known.contains(&va) {
@@ -4044,7 +4565,7 @@ fn analyze_functions_bytes_with_stats_and_seeds(
         }
     }
 
-    let pe_code_pointers = scan_pe_code_pointers(data);
+    let pe_code_pointers = scan_within(deadline, &mut stats, || scan_pe_code_pointers(data));
     stats.data_ref_code_pointer_candidates = pe_code_pointers.len();
     let code_pointer_tables: std::collections::BTreeSet<(String, usize)> = pe_code_pointers
         .iter()
@@ -4054,13 +4575,15 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     let code_pointer_target_set: std::collections::HashSet<u64> =
         pe_code_pointers.iter().map(|ptr| ptr.target_va).collect();
 
-    let tiny_stub_scan = scan_pe_tiny_stub_function_starts(
-        data,
-        &regions,
-        arch,
-        &pdata_start_set,
-        &code_pointer_target_set,
-    );
+    let tiny_stub_scan = scan_within(deadline, &mut stats, || {
+        scan_pe_tiny_stub_function_starts(
+            data,
+            &regions,
+            arch,
+            &pdata_start_set,
+            &code_pointer_target_set,
+        )
+    });
     stats.tiny_stub_scan_candidates = tiny_stub_scan.starts.len();
     for va in &tiny_stub_scan.pdata_rejected {
         record_scan_rejection(
@@ -4107,7 +4630,9 @@ fn analyze_functions_bytes_with_stats_and_seeds(
         }
     }
 
-    let raw_call_starts = scan_pe_raw_call_function_starts(data, &regions, arch, &pdata_start_set);
+    let raw_call_starts = scan_within(deadline, &mut stats, || {
+        scan_pe_raw_call_function_starts(data, &regions, arch, &pdata_start_set)
+    });
     stats.raw_call_target_candidates = raw_call_starts.len();
     for start in raw_call_starts {
         if known.contains(&start.va) {
@@ -4216,6 +4741,7 @@ fn analyze_functions_bytes_with_stats_and_seeds(
         noreturn_targets: &noreturn_targets,
         owned_ranges: None,
         owned_leaders: None,
+        proven_end: None,
     };
     let mut calls_all: Vec<(u64, FunctionXref)> = Vec::new(); // (caller_entry_va, xref)
     let mut worklist: std::collections::VecDeque<(Address, DiscoverySeedKind)> =
@@ -4224,6 +4750,15 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     while let Some((seed, seed_kind)) = worklist.pop_front() {
         if budgets.max_functions > 0 && functions.len() >= budgets.max_functions {
             stats.hit_function_limit = true;
+            worklist.push_front((seed, seed_kind));
+            break;
+        }
+        // The one loop that was genuinely unbounded: `timeout_ms` restarts inside
+        // `discover_function`, so a binary with tens of thousands of seeds could
+        // run for hours entirely inside budget. The seed goes back on the front
+        // so `seeds_remaining` counts what was NOT analysed.
+        if deadline.expired() {
+            stats.hit_total_timeout = true;
             worklist.push_front((seed, seed_kind));
             break;
         }
@@ -4246,6 +4781,13 @@ fn analyze_functions_bytes_with_stats_and_seeds(
             );
             continue;
         }
+        // Bound this function by its own FDE when one covers the seed. Looked
+        // up per seed rather than stored on the shared facts because the bound
+        // is a property of the function being walked, not of the binary.
+        let seed_facts = DiscoveryFacts {
+            proven_end: eh_frame_extent.get(&seed.value).copied(),
+            ..discovery_facts
+        };
         if let Some((f, calls, func_stats)) = discover_function(
             data,
             arch,
@@ -4253,7 +4795,8 @@ fn analyze_functions_bytes_with_stats_and_seeds(
             seed.clone(),
             &regions,
             budgets,
-            &discovery_facts,
+            &seed_facts,
+            deadline,
         ) {
             stats.function_seed_kinds.push((
                 f.entry_point.value,
@@ -4418,6 +4961,7 @@ fn analyze_functions_bytes_with_stats_and_seeds(
         budgets,
         &discovery_facts,
         &mut functions,
+        deadline,
     ));
 
     // FLIRT-style signature matching. Runs *after* DWARF / symbol-rename
@@ -4480,6 +5024,7 @@ fn analyze_functions_bytes_with_stats_and_seeds(
     stats.functions_discovered = functions.len();
     stats.callgraph_functions = cg.function_count();
     stats.callgraph_edges = cg.edge_count();
+    stats.elapsed_ms = deadline.elapsed_ms();
 
     (functions, cg, stats)
 }
@@ -5022,6 +5567,46 @@ mod unwind_info_tests {
     fn parse_chain_rejects_missing_trailer() {
         let data = [0x21, 0x05, 0x02, 0x00, 0xaa, 0xbb, 0xcc, 0xdd];
         assert_eq!(parse_unwind_chain_info(&data, 0), None);
+    }
+}
+
+#[cfg(test)]
+mod arm_tail_call_tests {
+    use super::*;
+
+    fn sample(name: &str) -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/cross")
+            .join(name);
+        std::fs::read(path).expect("read checked-in cross sample")
+    }
+
+    /// `.plt` in the checked-in armhf sample spans 0x4d8..0x54c (a 20-byte
+    /// header plus eight 12-byte stubs). A branch into that range is a tail
+    /// call; a branch into `.text` is ordinary control flow.
+    #[test]
+    fn an_arm_branch_into_the_plt_is_a_tail_call() {
+        let data = sample("armhf/c2_demo-armhf-gcc");
+        assert!(elf_arm_tail_target_is_plt_stub(&data, 0x4ec, BArch::ARM));
+        assert!(elf_arm_tail_target_is_plt_stub(&data, 0x540, BArch::ARM));
+        assert!(!elf_arm_tail_target_is_plt_stub(&data, 0x4d0, BArch::ARM));
+        assert!(!elf_arm_tail_target_is_plt_stub(&data, 0x698, BArch::ARM));
+    }
+
+    /// The rule is ARM32-only, so no other architecture's branch
+    /// classification can move because of it.
+    #[test]
+    fn no_other_architecture_is_reclassified() {
+        let data = sample("armhf/c2_demo-armhf-gcc");
+        for arch in [BArch::X86_64, BArch::X86, BArch::AArch64] {
+            assert!(!elf_arm_tail_target_is_plt_stub(&data, 0x4ec, arch));
+        }
+        let arm64 = sample("arm64/c2_demo-arm64-gcc");
+        assert!(!elf_arm_tail_target_is_plt_stub(
+            &arm64,
+            0x810,
+            BArch::AArch64
+        ));
     }
 }
 
@@ -5944,6 +6529,7 @@ mod degenerate_block_tests {
             max_blocks: 64,
             max_instructions: 256,
             timeout_ms: 1_000,
+            total_timeout_ms: 0,
         };
         // The data buffer is VA-addressed by the region's file offset mapping.
         let tables = std::collections::BTreeMap::new();
@@ -5953,6 +6539,7 @@ mod degenerate_block_tests {
             noreturn_targets: &noreturn_targets,
             owned_ranges: None,
             owned_leaders: None,
+            proven_end: None,
         };
         let out = discover_function(
             code,
@@ -5962,6 +6549,7 @@ mod degenerate_block_tests {
             &regions,
             &budgets,
             &facts,
+            Deadline::none(),
         );
         let (func, _, _) = out.expect("discovery must succeed, not panic");
         // The decodable blocks survive; the empty one contributes nothing.
@@ -5990,6 +6578,265 @@ mod degenerate_block_tests {
                 0x1234,
                 crate::analysis::dispatch::Unresolved::NoBound(0x4000)
             )]
+        );
+    }
+}
+
+#[cfg(test)]
+mod elf_prologue_scan_tests {
+    use super::*;
+
+    /// The AArch64 prologue masks must match the real encodings and nothing else.
+    ///
+    /// These are bit patterns, so a wrong mask fails silently by matching
+    /// everything or nothing; both were plausible and neither would surface in
+    /// a metric until discovery recall moved the wrong way.
+    #[test]
+    fn aarch64_prologue_masks_match_the_real_encodings() {
+        // stp x29, x30, [sp, #-16]!   (pre-indexed frame save)
+        assert!(aarch64_unhardened_prologue(0xa9bf_7bfd));
+        // stp x29, x30, [sp, #-64]!   — different immediate, same shape
+        assert!(aarch64_unhardened_prologue(0xa9bc_7bfd));
+        // sub sp, sp, #0x30
+        assert!(aarch64_unhardened_prologue(0xd100_c3ff));
+        // sub sp, sp, #0x10
+        assert!(aarch64_unhardened_prologue(0xd100_43ff));
+
+        // stp x19, x20, [sp, #-16]! — a callee-saved pair, not the frame pair,
+        // and a very common instruction: matching it would over-generate badly.
+        assert!(!aarch64_unhardened_prologue(0xa9bf_53f3));
+        // sub x0, x0, #1 — not the stack pointer.
+        assert!(!aarch64_unhardened_prologue(0xd100_0400));
+        // nop
+        assert!(!aarch64_unhardened_prologue(0xd503_201f));
+        // ret
+        assert!(!aarch64_unhardened_prologue(0xd65f_03c0));
+    }
+
+    /// The x86-64 head predicate accepts real GCC/Clang entries and rejects
+    /// mid-function bytes.
+    #[test]
+    fn elf_x86_prologue_head_is_specific() {
+        assert!(elf_x86_prologue_head(&[0xf3, 0x0f, 0x1e, 0xfa])); // endbr64
+        assert!(elf_x86_prologue_head(&[0x55, 0x48, 0x89, 0xe5])); // push rbp; mov rbp,rsp
+        assert!(elf_x86_prologue_head(&[0x48, 0x83, 0xec, 0x28])); // sub rsp, 0x28
+
+        assert!(!elf_x86_prologue_head(&[0x90])); // nop
+        assert!(!elf_x86_prologue_head(&[0xc3])); // ret
+        assert!(!elf_x86_prologue_head(&[0x48, 0x89, 0xc6])); // mov rsi, rax
+        assert!(!elf_x86_prologue_head(&[]));
+    }
+
+    /// On a real ELF the scan must not invent starts outside executable memory.
+    #[test]
+    fn elf_scan_stays_inside_executable_regions() {
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples")
+            .join("containers")
+            .join("hello-cpp-g++-O0");
+        if !path.exists() {
+            eprintln!("skipping ELF prologue scan test: {} absent", path.display());
+            return;
+        }
+        let data = std::fs::read(&path).expect("read fixture");
+        let (regions, arch, _, _) = parse_exec_regions(&data);
+        let starts = scan_elf_prologue_function_starts(&data, &regions, arch);
+        assert!(
+            !starts.is_empty(),
+            "no prologue candidates on a real unstripped C++ binary"
+        );
+        for va in &starts {
+            assert!(
+                regions.iter().any(|r| *va >= r.start && *va < r.end),
+                "candidate {va:#x} is outside every executable region"
+            );
+        }
+    }
+
+    /// A PE must not be fed to the ELF scan, and vice versa.
+    #[test]
+    fn elf_scan_rejects_non_elf_input() {
+        let regions = vec![ExecRegion {
+            start: 0x1000,
+            end: 0x2000,
+            _file_off_start: 0,
+        }];
+        assert!(
+            scan_elf_prologue_function_starts(b"MZ\x90\x00", &regions, BArch::X86_64).is_empty()
+        );
+    }
+}
+
+#[cfg(test)]
+mod analysis_deadline_tests {
+    use super::*;
+
+    /// A binary big enough that whole-binary discovery takes real time.
+    fn big_sample() -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/go/hello-go-static");
+        std::fs::read(path).expect("read the checked-in static Go sample")
+    }
+
+    #[test]
+    fn a_deadline_of_zero_never_expires() {
+        let deadline = Deadline::start(&Budgets {
+            total_timeout_ms: 0,
+            ..Budgets::default()
+        });
+        assert!(!deadline.expired());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(!deadline.expired(), "0 must mean no ceiling at all");
+    }
+
+    #[test]
+    fn a_deadline_expires_once_its_wall_clock_passes() {
+        let deadline = Deadline::start(&Budgets {
+            total_timeout_ms: 1,
+            ..Budgets::default()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        assert!(deadline.expired());
+        assert!(deadline.elapsed_ms() >= 10);
+    }
+
+    /// The default must be the unbounded one, or every existing caller's
+    /// recorded function counts would move with nothing to attribute it to.
+    #[test]
+    fn the_default_budget_has_no_whole_analysis_ceiling() {
+        assert_eq!(Budgets::default().total_timeout_ms, 0);
+    }
+
+    /// The defect this closes: `timeout_ms` restarts inside `discover_function`,
+    /// so before `total_timeout_ms` existed there was no ceiling on the analysis
+    /// as a whole and a pathological binary ran until it finished or the user
+    /// gave up. Exceeding it must now TRUNCATE AND SAY SO.
+    #[test]
+    fn an_impossible_deadline_truncates_discovery_and_reports_it() {
+        let data = big_sample();
+        let (functions, _cg, stats) = analyze_functions_bytes_with_stats(
+            &data,
+            &Budgets {
+                total_timeout_ms: 1,
+                ..Budgets::default()
+            },
+        );
+        assert!(
+            stats.hit_total_timeout,
+            "a 1ms ceiling on a {}-byte binary must be reported as exceeded",
+            data.len()
+        );
+        assert_eq!(stats.total_timeout_ms, 1, "the ceiling must be recorded");
+        let (full, _cg, full_stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        assert!(
+            !full_stats.hit_total_timeout,
+            "the default budget has no ceiling and must never report one"
+        );
+        assert!(
+            functions.len() < full.len(),
+            "truncation must actually truncate: {} vs {}",
+            functions.len(),
+            full.len()
+        );
+    }
+
+    /// A budget that is not exceeded must not change what discovery finds. This
+    /// is the property the whole change stands on — an enforcement that quietly
+    /// drops functions is worse than no enforcement.
+    #[test]
+    fn a_ceiling_that_is_never_reached_changes_nothing() {
+        let data = big_sample();
+        let (unbounded, _cg, unbounded_stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let generous = 10 * unbounded_stats.elapsed_ms.max(1) + 60_000;
+        let (bounded, _cg, bounded_stats) = analyze_functions_bytes_with_stats(
+            &data,
+            &Budgets {
+                total_timeout_ms: generous,
+                ..Budgets::default()
+            },
+        );
+        assert!(!bounded_stats.hit_total_timeout);
+        assert_eq!(
+            unbounded
+                .iter()
+                .map(|f| f.entry_point.value)
+                .collect::<Vec<_>>(),
+            bounded
+                .iter()
+                .map(|f| f.entry_point.value)
+                .collect::<Vec<_>>(),
+            "a generous ceiling must yield the identical function set"
+        );
+    }
+
+    /// Cancellation is what makes a long analysis interruptible from Python: the
+    /// binding polls `Python::check_signals` on the calling thread and sets this
+    /// flag. A cancelled run must stop, report the truncation, and still return
+    /// whatever it had — never hang, never lie about completeness.
+    #[test]
+    fn a_cancelled_analysis_stops_and_reports_the_truncation() {
+        use std::sync::atomic::AtomicBool;
+        let data = big_sample();
+        let cancel = AtomicBool::new(true); // already asked to stop
+        let started = std::time::Instant::now();
+        let (functions, _cg, stats) =
+            analyze_functions_bytes_cancellable(&data, &Budgets::default(), &[], &cancel);
+        assert!(stats.hit_total_timeout, "cancellation must be reported");
+        assert!(
+            functions.is_empty(),
+            "a run cancelled before it started has nothing to report: {}",
+            functions.len()
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "cancellation must actually stop the run"
+        );
+    }
+
+    /// The flag is checked, not merely accepted: a run with the flag CLEAR must
+    /// produce exactly what the uncancellable path produces.
+    #[test]
+    fn a_cancellable_run_that_is_never_cancelled_is_the_ordinary_run() {
+        use std::sync::atomic::AtomicBool;
+        let data = big_sample();
+        let cancel = AtomicBool::new(false);
+        let (cancellable, _cg, cancellable_stats) =
+            analyze_functions_bytes_cancellable(&data, &Budgets::default(), &[], &cancel);
+        let (ordinary, _cg, _stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        assert!(!cancellable_stats.hit_total_timeout);
+        assert_eq!(
+            cancellable
+                .iter()
+                .map(|f| f.entry_point.value)
+                .collect::<Vec<_>>(),
+            ordinary
+                .iter()
+                .map(|f| f.entry_point.value)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Truncation must leave a trail: the seeds that were never walked are
+    /// counted, so a consumer can tell an incomplete answer from a complete one.
+    #[test]
+    fn a_truncated_run_reports_the_seeds_it_never_reached() {
+        let data = big_sample();
+        let (_functions, _cg, stats) = analyze_functions_bytes_with_stats(
+            &data,
+            &Budgets {
+                total_timeout_ms: 1,
+                ..Budgets::default()
+            },
+        );
+        assert!(stats.hit_total_timeout);
+        assert!(
+            stats.elapsed_ms > 0,
+            "a truncated run must report the wall clock it consumed"
         );
     }
 }

@@ -1077,6 +1077,16 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
         return false;
     }
 
+    // Nor may it read a value-numbered register that is rewritten between the
+    // setup and the call — see `versioned_operand_is_reassigned`. Declining here
+    // falls back to the general backward scan, which keeps the setup in place
+    // and names the argument register at the call.
+    if found.iter().flatten().any(|(index, expression, _)| {
+        versioned_operand_is_reassigned(expression, body, *index, call_idx)
+    }) {
+        return false;
+    }
+
     let arguments: Vec<Expr> = found
         .iter()
         .flatten()
@@ -1297,8 +1307,9 @@ fn fold_one_call(
                         // captured arg expression reads this register. If
                         // one does, folding this assignment would leave a
                         // dangling reference in the higher slot's expr.
-                        let substitutable = is_pure_arg_normalisation(src)
-                            || is_stable_frame_arg_definition(src, body, i, call_idx);
+                        let substitutable = (is_pure_arg_normalisation(src)
+                            || is_stable_frame_arg_definition(src, body, i, call_idx))
+                            && !versioned_operand_is_reassigned(src, body, i, call_idx);
                         let feeds_captured_register_argument = found
                             .iter()
                             .any(|f| f.as_ref().is_some_and(|(_, e)| reads_reg_in_expr(e, dst)));
@@ -1324,7 +1335,15 @@ fn fold_one_call(
                         let would_dangle =
                             feeds_captured_register_argument && !feeds_balanced_stack_argument;
                         if !would_dangle && (!read_between[slot] || feeds_balanced_stack_argument) {
-                            found[slot] = Some((i, src.clone()));
+                            // Keep the setup where it stands when moving it to
+                            // the call would read a value written after it; the
+                            // call then names the argument register instead.
+                            found[slot] = if versioned_operand_is_reassigned(src, body, i, call_idx)
+                            {
+                                Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())))
+                            } else {
+                                Some((i, src.clone()))
+                            };
                             if feeds_balanced_stack_argument {
                                 for argument in &mut stack_args {
                                     let _ = substitute_exact_reg(argument, dst, src);
@@ -1346,8 +1365,9 @@ fn fold_one_call(
                     if opaque_reaching_defs.contains(dst) {
                         continue;
                     }
-                    let substitutable = is_pure_arg_normalisation(src)
-                        || is_stable_frame_arg_definition(src, body, i, call_idx);
+                    let substitutable = (is_pure_arg_normalisation(src)
+                        || is_stable_frame_arg_definition(src, body, i, call_idx))
+                        && !versioned_operand_is_reassigned(src, body, i, call_idx);
                     let feeds_captured_argument = resolve_captured_definition(
                         &mut found,
                         &mut stack_args,
@@ -1385,8 +1405,9 @@ fn fold_one_call(
                     if opaque_reaching_defs.contains(dst) {
                         continue;
                     }
-                    let substitutable = is_pure_arg_normalisation(src)
-                        || is_stable_frame_arg_definition(src, body, i, call_idx);
+                    let substitutable = (is_pure_arg_normalisation(src)
+                        || is_stable_frame_arg_definition(src, body, i, call_idx))
+                        && !versioned_operand_is_reassigned(src, body, i, call_idx);
                     if resolve_captured_definition(
                         &mut found,
                         &mut stack_args,
@@ -1472,8 +1493,22 @@ fn fold_one_call(
         // nonterminal fail-closed case where a parameter is used for unrelated
         // work before a zero-setup call.
         let contiguous_leading_parameter = param_slots.contains(&0) || param_slots.contains(&1);
-        let first_direct_value_call = arch == CallConv::SysVAmd64
-            && contiguous_leading_parameter
+        // AAPCS has the same property this rule depends on: integer parameter
+        // slots are contiguous and slot zero is a register the caller already
+        // holds, so `bl callee` with no setup at all forwards this function's
+        // own first parameter. Every armv7 `-O2` one-argument forward
+        // (`11_call_shapes:call_result_drives_branch`, the inner `wrap_byte(a)`
+        // of `call_nested`) is that shape, and without this they rendered as
+        // `signed_step()` — a call whose argument list contradicts the
+        // prototype the same run recovers for the callee.
+        //
+        // Deliberately NOT extended to `Cdecl32` (arguments are on the stack,
+        // so a zero-setup call forwards nothing) or to `Aarch64`/`Win64`, which
+        // are unmeasured here.
+        let first_direct_value_call = matches!(
+            arch,
+            CallConv::SysVAmd64 | CallConv::Arm | CallConv::ArmHardFloat
+        ) && contiguous_leading_parameter
             && !read_between[0]
             && !blocked_incoming[0]
             && !body[..call_idx]
@@ -1523,7 +1558,9 @@ fn fold_one_call(
         match &found[slot_idx] {
             Some((stmt_idx, expr)) => {
                 args_out.push(expr.clone());
-                used_stmt_indices.push(*stmt_idx);
+                if *stmt_idx != KEEP_ARG_SETUP {
+                    used_stmt_indices.push(*stmt_idx);
+                }
             }
             // Backfill an unwritten earlier slot from the incoming register —
             // but only when that slot really is one of THIS function's
@@ -1862,6 +1899,13 @@ fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
         std::collections::BTreeMap::new();
     let mut pushed_args = Vec::new();
     let mut used = Vec::new();
+    // How many bytes the CALLER pops after the call, if it does. cdecl makes the
+    // caller clean up its own outgoing area, so this is an independent proof of
+    // how much of the preceding stack traffic belongs to this call — and it is
+    // what makes it safe to step over a statement sitting between the last push
+    // and the call. See `proven_outgoing_cleanup`.
+    let cleanup = proven_outgoing_cleanup(body, call_idx);
+    let mut skipped_before_setup = 0usize;
     let mut cursor = call_idx;
     while cursor > 0 {
         let i = cursor - 1;
@@ -1924,6 +1968,23 @@ fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
                 }
             }
             Stmt::Comment(_) | Stmt::Nop => {}
+            // 32-bit PIC puts `mov %eax,%ebx` (the materialised
+            // `_GLOBAL_OFFSET_TABLE_`) between the last push and the call, which
+            // ended the scan before it saw a single argument: `forward_sum6` and
+            // `tailcall_to_sum4` came out as zero-argument calls at -O0. Step
+            // over a bounded run of pure value statements, but only when the
+            // caller's own post-call cleanup proves an outgoing area exists —
+            // a callee-saved prologue is balanced by POPS in the epilogue, never
+            // by an `add $N,%esp` after a call, so that shape still stops here.
+            statement
+                if pushed_args.is_empty()
+                    && by_offset.is_empty()
+                    && cleanup.is_some()
+                    && skipped_before_setup < 4
+                    && is_pure_register_value(statement) =>
+            {
+                skipped_before_setup += 1;
+            }
             _ if pushed_args.is_empty() && by_offset.is_empty() => {
                 // Outgoing cdecl setup must reach the call directly (apart
                 // from comments/no-ops).  Scanning backward across an ordinary
@@ -1959,6 +2020,27 @@ fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
         return;
     }
 
+    // An argument that reads `esp` names a different slot once it is hoisted to
+    // the call, where `esp` sits below its own pushes. Rather than guess the
+    // per-argument offset, leave the whole call alone: an unfolded call renders
+    // the pushes verbatim, while a folded one with mis-based arguments is a
+    // confidently wrong prototype.
+    if args.iter().any(mentions_stack_pointer) {
+        return;
+    }
+    // Never fold more stack traffic than the caller proved it owns.
+    let pushed_bytes: i64 = used
+        .iter()
+        .filter_map(|&index| stack_pointer_sub_width(&body[index]))
+        .sum();
+    if let Some(cleanup) = cleanup {
+        if pushed_bytes > cleanup {
+            return;
+        }
+    } else if skipped_before_setup > 0 {
+        return;
+    }
+
     if let Stmt::Call {
         args: call_args, ..
     } = &mut body[call_idx]
@@ -1966,9 +2048,241 @@ fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
         *call_args = args;
     }
     used.sort_unstable_by(|left, right| right.cmp(left));
+    let removed_pushes: Vec<(usize, i64)> = used
+        .iter()
+        .filter_map(|&index| stack_pointer_sub_width(&body[index]).map(|width| (index, width)))
+        .collect();
+    let folded_bytes: i64 = removed_pushes.iter().map(|(_, width)| *width).sum();
+    rebase_esp_after_removed_pushes(body, call_idx, &removed_pushes);
+    let removed_before_call = used.iter().filter(|&&index| index < call_idx).count();
     for stmt_idx in used {
         body.remove(stmt_idx);
     }
+    if folded_bytes > 0 {
+        body.insert(
+            call_idx - removed_before_call,
+            folded_push_adjustment(folded_bytes),
+        );
+    }
+}
+
+/// Keep the stack pointer honest after `push` setup statements are folded away.
+///
+/// Absorbing `esp -= 4; [esp] = X` into the call's argument list deletes the
+/// decrements, and everything downstream reads `esp` as if they never happened.
+/// Two things then go wrong, and both are silent:
+///
+/// * an argument the caller loads THROUGH `esp` moves under its own pushes. gcc
+///   -O2 forwards six stacked parameters with six identical `push 0x2c(%esp)`
+///   instructions — identical precisely because `esp` drops four bytes between
+///   each — so with the decrements gone all six read the same slot and
+///   `forward_sum6(a0..a5)` was recovered as `sum_arg6(a5, a5, a5, a5, a5, a5)`;
+/// * the epilogue's own `esp` arithmetic is off by the folded bytes, which moves
+///   every frame slot named after the call.
+///
+/// So: shift each surviving `esp`-relative displacement in the folded span by
+/// the decrements removed BEFORE it, and reinstate the total as one adjustment
+/// immediately before the call. `stack_locals` then recovers exactly the slots
+/// the machine addressed.
+fn rebase_esp_after_removed_pushes(
+    body: &mut [Stmt],
+    call_idx: usize,
+    removed_pushes: &[(usize, i64)],
+) {
+    if removed_pushes.is_empty() {
+        return;
+    }
+    let first = removed_pushes
+        .iter()
+        .map(|(index, _)| *index)
+        .min()
+        .unwrap_or(call_idx);
+    let removed: std::collections::HashSet<usize> =
+        removed_pushes.iter().map(|(index, _)| *index).collect();
+    let mut shifted = 0i64;
+    for index in first..call_idx {
+        if let Some(&(_, width)) = removed_pushes.iter().find(|(at, _)| *at == index) {
+            shifted += width;
+            continue;
+        }
+        if removed.contains(&index) || shifted == 0 {
+            continue;
+        }
+        shift_stack_pointer_displacements(&mut body[index], shifted);
+    }
+}
+
+/// The net stack decrement the folded pushes performed, as one statement.
+///
+/// The call site is where the machine's `esp` sits lowest. Reinstating the total
+/// immediately before the call keeps the post-call `add $N,%esp` cleanup and the
+/// epilogue balanced; without it every frame slot named after the call moves by
+/// the folded bytes.
+fn folded_push_adjustment(total: i64) -> Stmt {
+    Stmt::Assign {
+        dst: VReg::phys("esp"),
+        src: Expr::Bin {
+            op: BinOp::Sub,
+            lhs: Box::new(Expr::Reg(VReg::phys("esp"))),
+            rhs: Box::new(Expr::Const(total)),
+        },
+    }
+}
+
+/// True when `expr` reads the stack pointer, so hoisting it to the call site
+/// would change which slot it names.
+fn mentions_stack_pointer(expr: &Expr) -> bool {
+    let mut found = false;
+    visit_expr(expr, &mut |node| {
+        let named = match node {
+            Expr::Reg(VReg::Phys(name)) => Some(name),
+            Expr::Lea {
+                base: Some(VReg::Phys(name)),
+                ..
+            } => Some(name),
+            _ => None,
+        };
+        if named.is_some_and(|name| matches!(ssa_base(name), "esp" | "rsp")) {
+            found = true;
+        }
+    });
+    found
+}
+
+fn visit_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(expr);
+    match expr {
+        Expr::Deref { addr, .. } => visit_expr(addr, f),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            visit_expr(lhs, f);
+            visit_expr(rhs, f);
+        }
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => visit_expr(src, f),
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            visit_expr(cond, f);
+            visit_expr(if_true, f);
+            visit_expr(if_false, f);
+        }
+        Expr::WideArithmetic { args, .. } => args.iter().for_each(|arg| visit_expr(arg, f)),
+        Expr::FunctionTableEntry { index, .. } => visit_expr(index, f),
+        _ => {}
+    }
+}
+
+fn visit_expr_mut(expr: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
+    f(expr);
+    match expr {
+        Expr::Deref { addr, .. } => visit_expr_mut(addr, f),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            visit_expr_mut(lhs, f);
+            visit_expr_mut(rhs, f);
+        }
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => visit_expr_mut(src, f),
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            visit_expr_mut(cond, f);
+            visit_expr_mut(if_true, f);
+            visit_expr_mut(if_false, f);
+        }
+        Expr::WideArithmetic { args, .. } => args.iter_mut().for_each(|arg| visit_expr_mut(arg, f)),
+        Expr::FunctionTableEntry { index, .. } => visit_expr_mut(index, f),
+        _ => {}
+    }
+}
+
+/// Subtract `bytes` from every `esp`/`rsp`-relative displacement in `stmt`.
+fn shift_stack_pointer_displacements(stmt: &mut Stmt, bytes: i64) {
+    match stmt {
+        Stmt::Assign { src, .. } => shift_stack_pointer_displacements_in_expr(src, bytes),
+        Stmt::Store { addr, src, .. } => {
+            shift_stack_pointer_displacements_in_expr(addr, bytes);
+            shift_stack_pointer_displacements_in_expr(src, bytes);
+        }
+        Stmt::Push { value } => shift_stack_pointer_displacements_in_expr(value, bytes),
+        Stmt::Return { value: Some(value) } => {
+            shift_stack_pointer_displacements_in_expr(value, bytes)
+        }
+        _ => {}
+    }
+}
+
+fn shift_stack_pointer_displacements_in_expr(expr: &mut Expr, bytes: i64) {
+    visit_expr_mut(expr, &mut |node| {
+        if let Expr::Lea {
+            base: Some(VReg::Phys(base)),
+            index: None,
+            disp,
+            ..
+        } = node
+        {
+            if matches!(ssa_base(base), "esp" | "rsp") {
+                *disp -= bytes;
+            }
+        }
+    });
+}
+
+/// The bytes the caller pops immediately after `call_idx`, if it demonstrably does.
+///
+/// cdecl leaves the outgoing argument area for the CALLER to release, so an
+/// `add $N,%esp` after the call is an independent statement of how large that
+/// area was. Flag and temporary assignments the lifter emits for the arithmetic
+/// itself are stepped over; anything else ends the search, because a cleanup
+/// that is not adjacent proves nothing about this call.
+fn proven_outgoing_cleanup(body: &[Stmt], call_idx: usize) -> Option<i64> {
+    for statement in body.iter().skip(call_idx + 1).take(16) {
+        if let Stmt::Assign {
+            dst: VReg::Phys(dst),
+            src:
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs,
+                    rhs,
+                },
+        } = statement
+        {
+            if matches!(ssa_base(dst), "esp" | "rsp")
+                && matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(base)) if ssa_base(base) == ssa_base(dst))
+            {
+                return match rhs.as_ref() {
+                    Expr::Const(bytes) if *bytes > 0 => Some(*bytes),
+                    _ => None,
+                };
+            }
+        }
+        match statement {
+            Stmt::Comment(_) | Stmt::Nop => {}
+            Stmt::Assign { dst, src } if is_pure_arg_normalisation(src) => match dst {
+                VReg::Temp(_) | VReg::Flag(_) | VReg::FlagValue { .. } => {}
+                VReg::Phys(_) => return None,
+            },
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// A statement that only computes a value into a register, touching neither
+/// memory nor the stack pointer.
+fn is_pure_register_value(statement: &Stmt) -> bool {
+    let Stmt::Assign { dst, src } = statement else {
+        return false;
+    };
+    if let VReg::Phys(name) = dst {
+        if matches!(ssa_base(name), "esp" | "rsp") {
+            return false;
+        }
+    }
+    is_pure_arg_normalisation(src) && !mentions_stack_pointer(src)
 }
 
 /// Width of `esp/rsp = esp/rsp - N`, if this is exactly a stack allocation.
@@ -2418,6 +2732,85 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
     }
 }
 
+/// A captured argument slot that must keep its defining statement: the value is
+/// referenced by name at the call instead of being spliced into it.
+const KEEP_ARG_SETUP: usize = usize::MAX;
+
+/// Does any **value-numbered** register that `expr` reads get reassigned in
+/// `body[from + 1 .. to]`?
+///
+/// Folding an argument setup into its call moves the whole expression forward
+/// over everything in between, which is sound exactly when nothing it reads
+/// changes there. For a `reg#version` name that used to be true by
+/// construction — one static definition per value — so the backward scan
+/// deliberately treats versioned scratch as statement-rooted and never repairs
+/// it. `value_number::coalesce_phi_copies` ends that: a coalesced phi web is one
+/// name with a definition per incoming edge, and a loop body routinely reads the
+/// carried value, computes the next one, and writes it back before the call:
+///
+/// ```text
+/// rdi#2 = (unsigned)rbx#1;      // the argument: this iteration's cursor
+/// rbx#3 = rbx#1 + 1;
+/// rbx#1 = (unsigned)rbx#3;      // the merged name now holds the NEXT cursor
+/// call wrap_byte;               // ... and folding rdi#2 here reads it
+/// ```
+///
+/// Measured on `11_call_shapes:gcc:O2:call_accumulate_bytes`, which accumulated
+/// `wrap_byte(seed + i + 1)` instead of `wrap_byte(seed + i)`.
+fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: usize) -> bool {
+    fn writes(statement: &Stmt, out: &mut Vec<VReg>) {
+        let mut record = |register: &VReg| {
+            if matches!(register, VReg::Phys(name) if name.contains('#')) {
+                out.push(register.clone());
+            }
+        };
+        match statement {
+            Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => record(dst),
+            Stmt::Call { dst: Some(dst), .. } => record(dst),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                for s in then_body.iter().chain(else_body.iter().flatten()) {
+                    writes(s, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                for s in body {
+                    writes(s, out);
+                }
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                writes(init, out);
+                writes(step, out);
+                for s in body {
+                    writes(s, out);
+                }
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for s in cases
+                    .iter()
+                    .flat_map(|(_, b)| b)
+                    .chain(default.iter().flatten())
+                {
+                    writes(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut reassigned = Vec::new();
+    for statement in &body[(from + 1).min(to)..to] {
+        writes(statement, &mut reassigned);
+    }
+    reassigned
+        .iter()
+        .any(|register| reads_reg_in_expr(expr, register))
+}
+
 fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
     match e {
         Expr::Reg(r) => r == target,
@@ -2480,6 +2873,103 @@ mod tests {
                 size: 8,
             },
         }
+    }
+
+    /// An argument setup may only be folded into its call when nothing it reads
+    /// changes in between. A coalesced phi web is one name with several
+    /// definitions, so a loop that reads the carried value, computes the next
+    /// one and writes it back before the call breaks that condition — and the
+    /// hoist silently passed the NEXT iteration's value.
+    #[test]
+    fn an_argument_setup_is_not_hoisted_across_a_rewrite_of_what_it_reads() {
+        let carried_then_call = || {
+            vec![
+                Stmt::Assign {
+                    dst: reg("rdi#2"),
+                    src: Expr::Reg(reg("rbx#1")),
+                },
+                Stmt::Assign {
+                    dst: reg("rbx#3"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rbx#1"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                // The merged name now holds the NEXT cursor.
+                Stmt::Assign {
+                    dst: reg("rbx#1"),
+                    src: Expr::Reg(reg("rbx#3")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1090,
+                        name: "wrap_byte".to_string(),
+                    },
+                    args: vec![],
+                    dst: None,
+                    call_spec: None,
+                },
+            ]
+        };
+        let mut f = Function {
+            name: "caller".to_string(),
+            entry_va: 0x1000,
+            body: carried_then_call(),
+        };
+        let mut slots = std::collections::HashSet::new();
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::SysVAmd64,
+            &mut slots,
+            &Default::default(),
+        );
+        let call = f.body.last().expect("the call must survive");
+        let Stmt::Call { args, .. } = call else {
+            panic!("expected a call, got {call:?}");
+        };
+        assert_eq!(
+            args,
+            &vec![Expr::Reg(reg("rdi#2"))],
+            "the argument must stay named, not be replaced by an expression \
+             reading a register rewritten after it: {:#?}",
+            f.body
+        );
+        assert!(
+            f.body.iter().any(|s| matches!(
+                s,
+                Stmt::Assign { dst, src: Expr::Reg(source) }
+                    if dst == &reg("rdi#2") && source == &reg("rbx#1")
+            )),
+            "and its defining statement must stay where it is: {:#?}",
+            f.body
+        );
+
+        // Without the intervening rewrite the setup still folds into the call —
+        // this rule must not turn every argument into a named temporary.
+        let mut foldable = carried_then_call();
+        foldable.remove(2);
+        let mut f = Function {
+            name: "caller".to_string(),
+            entry_va: 0x1000,
+            body: foldable,
+        };
+        let mut slots = std::collections::HashSet::new();
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::SysVAmd64,
+            &mut slots,
+            &Default::default(),
+        );
+        let Some(Stmt::Call { args, .. }) = f.body.last() else {
+            panic!("expected a call: {:#?}", f.body);
+        };
+        assert_eq!(
+            args,
+            &vec![Expr::Reg(reg("rbx#1"))],
+            "an unobstructed setup must still be spliced into the call: {:#?}",
+            f.body
+        );
     }
 
     #[test]
@@ -2974,6 +3464,48 @@ mod tests {
             _ => None,
         });
         assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi"))]));
+    }
+
+    /// The AAPCS shape of the test above, as
+    /// `arm-linux-gnueabihf-gcc -O2 -mthumb` emits
+    /// `11_call_shapes:call_result_drives_branch`: the incoming parameter is
+    /// already in `r0`, so the call has no argument setup at all and used to
+    /// render as `signed_step()`.
+    #[test]
+    fn an_aapcs_zero_setup_call_forwards_the_incoming_first_parameter() {
+        let mut f = Function {
+            name: "call_result_drives_branch".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("sp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Reg(reg("lr")),
+                    size: 4,
+                },
+                call_to("signed_step"),
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("r0"))),
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::ArmHardFloat, &[0].into_iter().collect());
+
+        let args = f.body.iter().find_map(|statement| match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                args,
+                ..
+            } if name == "signed_step" => Some(args),
+            _ => None,
+        });
+        assert_eq!(args, Some(&vec![Expr::Reg(reg("r0"))]));
     }
 
     #[test]
@@ -3721,17 +4253,241 @@ mod tests {
 
         reconstruct_args(&mut f, CallConv::Cdecl32);
 
+        // Six statements collapse to the call plus ONE stack adjustment holding
+        // the twelve bytes the folded pushes moved `esp` by — see
+        // `rebase_esp_after_removed_pushes` for why the net delta has to survive.
         assert_eq!(
             f.body.len(),
-            1,
+            2,
             "push setup was not absorbed: {:#?}",
             f.body
         );
+        assert_eq!(stack_pointer_sub_width(&f.body[0]), Some(12));
         assert!(matches!(
-            &f.body[0],
+            &f.body[1],
             Stmt::Call { args, .. }
                 if args == &vec![Expr::Const(10), Expr::Const(20), Expr::Const(30)]
         ));
+    }
+
+    /// Six identical `push 0x2c(%esp)` instructions forward six DIFFERENT
+    /// arguments: `esp` drops four bytes between each. Folding the pushes deletes
+    /// those decrements, so each surviving load has to be rebased or the call
+    /// gets six copies of one argument — which is exactly what
+    /// `06_calling_conventions:i386:O2:forward_sum6` recovered.
+    #[test]
+    fn cdecl32_push_through_esp_rebases_each_load() {
+        let load_and_push = |temp: u32| {
+            [
+                Stmt::Assign {
+                    dst: VReg::Temp(temp),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("rsp")),
+                            index: None,
+                            scale: 1,
+                            disp: 0x2c,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Reg(VReg::Temp(temp)),
+                    size: 4,
+                },
+            ]
+        };
+        let mut body = Vec::new();
+        for temp in 0..3u32 {
+            body.extend(load_and_push(temp));
+        }
+        body.push(Stmt::Call {
+            target: Expr::Named {
+                va: 0,
+                name: "callee".into(),
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        });
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body,
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        let displacements: Vec<i64> = f
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Assign {
+                    src: Expr::Deref { addr, .. },
+                    ..
+                } => match addr.as_ref() {
+                    Expr::Lea { disp, .. } => Some(*disp),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            displacements,
+            vec![0x2c, 0x28, 0x24],
+            "the surviving loads were not rebased onto the folded `esp`: {:#?}",
+            f.body
+        );
+    }
+
+    /// 32-bit PIC copies the materialised GOT base into `ebx` right before the
+    /// call. That single statement used to end the backward scan, so
+    /// `06_calling_conventions:i386:O0:forward_sum6` recovered as a
+    /// ZERO-argument call. The caller's own `add $N,%esp` cleanup is what makes
+    /// stepping over it safe.
+    #[test]
+    fn cdecl32_steps_over_the_pic_got_copy_before_a_call() {
+        let push_pair = |value| {
+            [
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(value),
+                    size: 4,
+                },
+            ]
+        };
+        let mut body = Vec::new();
+        body.extend(push_pair(20));
+        body.extend(push_pair(10));
+        body.push(Stmt::Assign {
+            dst: reg("ebx"),
+            src: Expr::Reg(reg("eax")),
+        });
+        body.push(Stmt::Call {
+            target: Expr::Named {
+                va: 0,
+                name: "callee".into(),
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        });
+        body.push(Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(8)),
+            },
+        });
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body,
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert!(
+            f.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Call { args, .. }
+                    if args == &vec![Expr::Const(10), Expr::Const(20)]
+            )),
+            "the GOT copy stopped argument recovery: {:#?}",
+            f.body
+        );
+    }
+
+    /// Without the caller-side cleanup there is no proof the preceding stack
+    /// traffic belongs to this call, so the gap must NOT be stepped over — this
+    /// is the callee-saved-prologue shape the scan has always refused.
+    #[test]
+    fn cdecl32_does_not_step_over_a_gap_without_a_proven_cleanup() {
+        let push_pair = |value| {
+            [
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(value),
+                    size: 4,
+                },
+            ]
+        };
+        let mut body = Vec::new();
+        body.extend(push_pair(20));
+        body.extend(push_pair(10));
+        body.push(Stmt::Assign {
+            dst: reg("ebx"),
+            src: Expr::Reg(reg("eax")),
+        });
+        body.push(Stmt::Call {
+            target: Expr::Named {
+                va: 0,
+                name: "callee".into(),
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        });
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body,
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert!(
+            f.body.iter().any(|statement| matches!(
+                statement, Stmt::Call { args, .. } if args.is_empty()
+            )),
+            "arguments were invented across an unproven gap: {:#?}",
+            f.body
+        );
     }
 
     #[test]

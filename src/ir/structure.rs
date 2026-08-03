@@ -4583,6 +4583,7 @@ mod tests {
                 max_blocks: 128,
                 max_instructions: 2000,
                 timeout_ms: 500,
+                total_timeout_ms: 0,
             },
         );
         for f in &funcs {

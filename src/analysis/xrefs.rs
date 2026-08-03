@@ -932,6 +932,7 @@ mod tests {
             max_blocks: 512,
             max_instructions: 10_000,
             timeout_ms: 500,
+            total_timeout_ms: 0,
         };
         let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
         let mut any_xref = false;

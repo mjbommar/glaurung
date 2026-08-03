@@ -151,8 +151,34 @@ fn fold_masks_in_expr(expr: &mut Expr) {
 /// arbitrary value expressions. Stores are accepted only for promoted stack
 /// locals: moving a genuine pointer-address calculation out of an arm could
 /// change faults or other address dependencies.
+///
+/// # When a diamond may NOT collapse
+///
+/// Validity is not the only question — the collapse also has to be the *likely
+/// source spelling*, because DecBench scores structure as graph edit distance
+/// against the source CFG and Joern gives `?:` and `if` different CFGs.
+/// Measured against pyjoern (see the unit tests below for the shapes):
+///
+/// * `int r; if (c) r = a; else r = b; return r;` — a **joined result whose only
+///   use is the return**. Every C author writes that as `if (c) return a; return
+///   b;`, not as a ternary, and the two spellings are 5 vs 6 CFG nodes: turning
+///   `branches.c:classify` into one nested ternary cost GED 7 where keeping the
+///   branch costs 0-2. So an *immediately returned* destination keeps its
+///   branch, and [`crate::ir::ast::fold_exhaustive_if_returns`] later moves the
+///   `return` into both arms — the exact source shape.
+///
+/// What still collapses is the case the transform was added for: a value that is
+/// consumed by a larger computation (`arith.c:signs`, whose source really is two
+/// sequential ternaries summed, scores GED 0 as a select pair and GED 3 as
+/// branches). Those are genuine value selects, not source-level control flow.
+///
+/// A **nested** select is deliberately still allowed. Refusing it was tried and
+/// measured: `statemachine.c:fsm` writes `st = (c=='b') ? 2 : (c=='a' ? 1 : 0);`
+/// in the source, and blocking the nesting turned `statemachine:clang:O0` from
+/// GED 0.0 into GED 3.0 while improving nothing — the joined-result rule above
+/// already keeps the `classify` if-chain intact without it.
 pub fn collapse_assignment_diamonds(function: &mut Function) {
-    collapse_body(&mut function.body);
+    collapse_body(&mut function.body, None);
 }
 
 /// Recover direct returns from an initialized result guarded by a lazy select.
@@ -353,39 +379,66 @@ fn expression_reads_register(expression: &Expr, target: &VReg) -> bool {
     }
 }
 
-fn collapse_body(body: &mut Vec<Stmt>) {
-    for statement in body.iter_mut() {
-        match statement {
+/// `joined_result` is the register the enclosing control flow returns once this
+/// body falls through — the reason `branches.c:nested` recovers four direct
+/// returns rather than an outer `if` around an inner ternary. It is inherited
+/// through `if` arms only: a loop body or a `switch` case does not fall through
+/// to the join, so recovery there sees no joined result and behaves as before.
+fn collapse_body(body: &mut Vec<Stmt>, joined_result: Option<VReg>) {
+    for index in 0..body.len() {
+        let returned = immediately_returned_register(body, index).or_else(|| joined_result.clone());
+        match &mut body[index] {
             Stmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                collapse_body(then_body);
+                collapse_body(then_body, returned.clone());
                 if let Some(else_body) = else_body {
-                    collapse_body(else_body);
+                    collapse_body(else_body, returned.clone());
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collapse_body(body)
+                collapse_body(body, None)
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    collapse_body(case_body);
+                    collapse_body(case_body, None);
                 }
                 if let Some(default) = default {
-                    collapse_body(default);
+                    collapse_body(default, None);
                 }
             }
             _ => {}
         }
-        if let Some(replacement) = select_from_diamond(statement) {
-            *statement = replacement;
+        if let Some(replacement) = select_from_diamond(&body[index], returned.as_ref()) {
+            body[index] = replacement;
         }
     }
 
     for index in (0..body.len()).rev() {
         let _ = fold_created_select_return(body, index);
+    }
+}
+
+/// The register this body returns immediately after `index`, if any.
+///
+/// Layout noise (`Nop`, a rendered prologue/epilogue comment) sits between a
+/// join and its return often enough that skipping it is what makes the check
+/// meaningful; anything else terminates the search, because a following
+/// *statement* means the value has another use and the diamond is a real value
+/// select rather than the tail of an `if`/`return` chain.
+fn immediately_returned_register(body: &[Stmt], index: usize) -> Option<VReg> {
+    let mut cursor = index + 1;
+    while matches!(body.get(cursor), Some(Stmt::Comment(_) | Stmt::Nop)) {
+        cursor += 1;
+    }
+    match body.get(cursor) {
+        Some(Stmt::Return { value: Some(value) }) => match strip_integer_views(value) {
+            Expr::Reg(register) => Some(register.clone()),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -422,7 +475,7 @@ fn fold_created_select_return(body: &mut Vec<Stmt>, index: usize) -> bool {
     true
 }
 
-fn select_from_diamond(statement: &Stmt) -> Option<Stmt> {
+fn select_from_diamond(statement: &Stmt, immediately_returned: Option<&VReg>) -> Option<Stmt> {
     match statement {
         Stmt::If {
             cond,
@@ -442,18 +495,25 @@ fn select_from_diamond(statement: &Stmt) -> Option<Stmt> {
                 (
                     Some(AssignmentValue::Register(then_dst, then_src)),
                     Some(AssignmentValue::Register(else_dst, else_src)),
-                ) if then_dst == else_dst => Some(Stmt::Assign {
-                    dst: then_dst.clone(),
-                    src: make_select(cond, then_src, else_src),
-                }),
+                ) if then_dst == else_dst && immediately_returned != Some(then_dst) => {
+                    Some(Stmt::Assign {
+                        dst: then_dst.clone(),
+                        src: make_select(cond, then_src, else_src),
+                    })
+                }
                 (
                     Some(AssignmentValue::PromotedLocal(then_dst, then_src, then_size)),
                     Some(AssignmentValue::PromotedLocal(else_dst, else_src, else_size)),
-                ) if then_dst == else_dst && then_size == else_size => Some(Stmt::Store {
-                    addr: Expr::Reg(then_dst.clone()),
-                    src: make_select(cond, then_src, else_src),
-                    size: then_size,
-                }),
+                ) if then_dst == else_dst
+                    && then_size == else_size
+                    && immediately_returned != Some(then_dst) =>
+                {
+                    Some(Stmt::Store {
+                        addr: Expr::Reg(then_dst.clone()),
+                        src: make_select(cond, then_src, else_src),
+                        size: then_size,
+                    })
+                }
                 _ => None,
             }
         }
@@ -598,7 +658,13 @@ mod tests {
     }
 
     #[test]
-    fn nested_same_destination_diamonds_collapse_bottom_up() {
+    /// `branches.c:classify` in miniature. Collapsing the OUTER diamond too
+    /// produced `return c ? (d ? a : b) : e;` — one nested ternary where the
+    /// source is an `if`/`else if`/`return` chain. Measured against pyjoern that
+    /// spelling is 6 nodes / 7 edges against the source's 5 / 4 (GED 7); keeping
+    /// the outer branch is 5 / 5 (GED 2). The inner diamond still collapses:
+    /// its value is consumed by the outer arm, not returned.
+    fn nested_same_destination_diamond_keeps_its_returned_outer_branch() {
         let mut f = function(vec![
             Stmt::If {
                 cond: Expr::Reg(reg("outer")),
@@ -612,21 +678,152 @@ mod tests {
             return_reg("result"),
         ]);
 
+        let original = f.body.clone();
+        collapse_assignment_diamonds(&mut f);
+
+        assert_eq!(
+            f.body, original,
+            "both diamonds feed the same joined return, so both keep their branch"
+        );
+    }
+
+    /// The inner diamond of a returned nest is refused *because* it is inherited
+    /// through the arm; a diamond whose value is consumed inside the arm is not.
+    #[test]
+    fn a_diamond_consumed_inside_a_returned_arm_still_collapses() {
+        let mut f = function(vec![
+            Stmt::If {
+                cond: Expr::Reg(reg("outer")),
+                then_body: vec![
+                    Stmt::If {
+                        cond: Expr::Reg(reg("inner")),
+                        then_body: vec![assign("scratch", Expr::Const(1))],
+                        else_body: Some(vec![assign("scratch", Expr::Const(2))]),
+                    },
+                    assign("result", Expr::Reg(reg("scratch"))),
+                ],
+                else_body: Some(vec![assign("result", Expr::Reg(reg("outer_no")))]),
+            },
+            return_reg("result"),
+        ]);
+
+        collapse_assignment_diamonds(&mut f);
+
+        let Stmt::If { then_body, .. } = &f.body[0] else {
+            panic!("{:?}", f.body)
+        };
+        assert!(
+            matches!(
+                then_body.as_slice(),
+                [
+                    Stmt::Assign {
+                        src: Expr::Select { .. },
+                        ..
+                    },
+                    Stmt::Assign { .. }
+                ]
+            ),
+            "{:?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn a_terminal_result_diamond_keeps_its_branch() {
+        let diamond = Stmt::If {
+            cond: Expr::Reg(reg("cond")),
+            then_body: vec![assign("result", Expr::Const(1))],
+            else_body: Some(vec![assign("result", Expr::Const(2))]),
+        };
+        let terminal_return = return_reg("result");
+        let mut f = function(vec![diamond.clone(), terminal_return.clone()]);
+
+        collapse_assignment_diamonds(&mut f);
+
+        assert_eq!(
+            f.body,
+            vec![diamond, terminal_return],
+            "a joined result whose only use is the return is a source-level `if`"
+        );
+    }
+
+    #[test]
+    fn a_terminal_promoted_local_diamond_keeps_its_branch() {
+        let local = reg("local_2c");
+        let store = |value| Stmt::Store {
+            addr: Expr::Reg(local.clone()),
+            src: Expr::Const(value),
+            size: 4,
+        };
+        let diamond = Stmt::If {
+            cond: Expr::Reg(reg("is_b")),
+            then_body: vec![store(2)],
+            else_body: Some(vec![store(0)]),
+        };
+        let terminal_return = return_reg("local_2c");
+        let mut f = function(vec![diamond.clone(), terminal_return.clone()]);
+
+        collapse_assignment_diamonds(&mut f);
+
+        assert_eq!(f.body, vec![diamond, terminal_return]);
+    }
+
+    #[test]
+    fn a_diamond_returned_through_a_cast_keeps_its_branch() {
+        let diamond = Stmt::If {
+            cond: Expr::Reg(reg("cond")),
+            then_body: vec![assign("result", Expr::Const(1))],
+            else_body: Some(vec![assign("result", Expr::Const(2))]),
+        };
+        let terminal_return = Stmt::Return {
+            value: Some(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg("result"))),
+            }),
+        };
+        let mut f = function(vec![diamond.clone(), terminal_return.clone()]);
+
+        collapse_assignment_diamonds(&mut f);
+
+        assert_eq!(f.body, vec![diamond, terminal_return]);
+    }
+
+    /// `statemachine.c:fsm` really does write
+    /// `st = (c=='b') ? 2 : (c=='a' ? 1 : 0);`. Refusing to nest a select inside
+    /// a select's arm was tried and measured: it moved `statemachine:clang:O0`
+    /// from GED 0.0 to 3.0 and improved no other cell, because the joined-result
+    /// refusal already protects the `classify` if-chain.
+    #[test]
+    fn a_diamond_whose_arm_already_selects_still_collapses() {
+        let inner = Expr::Select {
+            cond: Box::new(Expr::Reg(reg("inner"))),
+            if_true: Box::new(Expr::Const(1)),
+            if_false: Box::new(Expr::Const(2)),
+            width: 4,
+        };
+        let diamond = Stmt::If {
+            cond: Expr::Reg(reg("outer")),
+            then_body: vec![assign("scratch", inner)],
+            else_body: Some(vec![assign("scratch", Expr::Const(3))]),
+        };
+        let mut f = function(vec![
+            diamond,
+            assign("other", Expr::Reg(reg("scratch"))),
+            return_reg("other"),
+        ]);
+
         collapse_assignment_diamonds(&mut f);
 
         assert!(
             matches!(
-                f.body.as_slice(),
-                [Stmt::Return {
-                    value: Some(Expr::Select {
-                        if_true,
-                        if_false,
-                        ..
-                    })
-                }] if matches!(if_true.as_ref(), Expr::Select { .. })
-                    && matches!(if_false.as_ref(), Expr::Reg(r) if r == &reg("outer_no"))
+                f.body.first(),
+                Some(Stmt::Assign {
+                    src: Expr::Select { if_true, .. },
+                    ..
+                }) if matches!(if_true.as_ref(), Expr::Select { .. })
             ),
-            "both return-value diamonds must collapse into the return: {:?}",
+            "{:?}",
             f.body
         );
     }
@@ -789,14 +986,42 @@ mod tests {
         assert_eq!(f.body, vec![original, terminal_return]);
     }
 
+    /// A rendered epilogue comment must not hide the terminal return from the
+    /// refusal above — `local_X = ...; // epilogue; return local_X;` is the same
+    /// source-level `if` as the comment-free spelling.
     #[test]
-    fn a_created_select_feeding_the_return_folds_through_comments() {
+    fn a_terminal_result_diamond_keeps_its_branch_through_comments() {
+        let diamond = Stmt::If {
+            cond: Expr::Reg(reg("cond")),
+            then_body: vec![assign("result", Expr::Const(1))],
+            else_body: Some(vec![assign("result", Expr::Const(2))]),
+        };
         let mut f = function(vec![
-            Stmt::If {
-                cond: Expr::Reg(reg("cond")),
-                then_body: vec![assign("result", Expr::Const(1))],
-                else_body: Some(vec![assign("result", Expr::Const(2))]),
-            },
+            diamond.clone(),
+            Stmt::Comment("epilogue".into()),
+            return_reg("result"),
+        ]);
+
+        collapse_assignment_diamonds(&mut f);
+
+        assert_eq!(f.body[0], diamond, "{:?}", f.body);
+    }
+
+    /// A lifted `Expr::Select` (a real CMOV, not a recovered diamond) still
+    /// folds into its adjacent return: both spellings are the same CFG, and the
+    /// copy is pure noise.
+    #[test]
+    fn a_lifted_select_still_folds_into_its_return() {
+        let mut f = function(vec![
+            assign(
+                "result",
+                Expr::Select {
+                    cond: Box::new(Expr::Reg(reg("cond"))),
+                    if_true: Box::new(Expr::Const(1)),
+                    if_false: Box::new(Expr::Const(2)),
+                    width: 4,
+                },
+            ),
             Stmt::Comment("epilogue".into()),
             return_reg("result"),
         ]);
@@ -813,7 +1038,7 @@ mod tests {
                     }
                 ]
             ),
-            "the diamond-created return value must become one expression: {:?}",
+            "{:?}",
             f.body
         );
     }

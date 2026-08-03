@@ -49,6 +49,49 @@ fn reg_size(r: Register) -> u8 {
     }
 }
 
+/// The register a 32-bit PIC "PC thunk" body materialises the program counter
+/// into, or `None` when `body` is not a PC thunk.
+///
+/// 32-bit x86 has no PC-relative addressing mode, so position-independent code
+/// obtains its own address by CALLing a two-instruction helper that copies the
+/// pushed return address into a GP register:
+///
+/// ```text
+///     call __x86.get_pc_thunk.bx      ; ebx = address of the next instruction
+///     add  $_GLOBAL_OFFSET_TABLE_, %ebx
+/// ```
+///
+/// It is a `call` in encoding only. It takes no argument, returns no value in
+/// the ABI sense, and its entire effect is `reg = <return address>` — so lifting
+/// it as a call both invents a callee that has no C spelling and, worse, leaves
+/// the GOT base an unknown value, which makes every global and string reference
+/// derived from it unrecoverable.
+///
+/// Matched on the callee's BYTES rather than its symbol name: the idiom survives
+/// stripping, and gcc has spelled the symbol `__i686.get_pc_thunk.*` as well as
+/// `__x86.get_pc_thunk.*`. `8b /r` with mod=00 and rm=100 (SIB) plus SIB byte
+/// 0x24 (base=esp, no index) is `mov reg,(%esp)`; `c3` is `ret`. `esp` as the
+/// destination is rejected: `mov (%esp),%esp` is not this idiom, and treating it
+/// as one would silently rewrite the stack pointer.
+pub fn pc_thunk_register(body: &[u8]) -> Option<&'static str> {
+    let [0x8b, modrm, 0x24, 0xc3, ..] = body else {
+        return None;
+    };
+    if modrm & 0xC7 != 0x04 {
+        return None;
+    }
+    match (modrm >> 3) & 7 {
+        0 => Some("eax"),
+        1 => Some("ecx"),
+        2 => Some("edx"),
+        3 => Some("ebx"),
+        4 => None, // `mov (%esp),%esp`
+        5 => Some("ebp"),
+        6 => Some("esi"),
+        _ => Some("edi"),
+    }
+}
+
 /// The register-view descriptor for a partial (bit-preserving) GP write, or
 /// `None` when the destination is a full-width or zero-extending view that needs
 /// no read-modify-write. Covers the 8-/16-bit low views AND the legacy high bytes
@@ -871,6 +914,15 @@ fn emit_bin_with_flags(dst: VReg, op: BinOp, rhs: Value, width: Width) -> Vec<Op
 /// into the low word. Make that read width explicit before the operation. A
 /// 32-bit GP destination on x86-64 then zero-extends into its parent, so record
 /// that write effect explicitly after the flag values have consumed the result.
+///
+/// The narrowing is stated against the IR's CANONICAL 64-bit value width on both
+/// x86-64 and i386, not against the target's register width. On i386 a 32-bit
+/// operand is the whole machine register, so the extension looks redundant — but
+/// the IR value it names is 64 bits wide, and the recovered C is rebuilt at the
+/// host word, where a `long` local really can carry bits above 31. Omitting it
+/// there made `t >>= 8` on a negative `int` shift a sign-extended 64-bit value:
+/// `03_loop_shapes:i386:O0:dowhile_recompute` ran eight loop iterations instead
+/// of four.
 fn emit_machine_bin_with_flags(
     dst: VReg,
     op: BinOp,
@@ -878,7 +930,7 @@ fn emit_machine_bin_with_flags(
     width: Width,
     bits: u32,
 ) -> Vec<Op> {
-    let machine_width = if bits == 64 { Width::W64 } else { Width::W32 };
+    let machine_width = Width::W64;
     let mut ops = Vec::new();
     if width < machine_width && matches!(op, BinOp::Shr | BinOp::Sar) {
         let src = Value::Reg(dst.clone());
@@ -1359,6 +1411,280 @@ fn scalar_float_binary_ops(instr: &iced_x86::Instruction, width: Width, mnemonic
     ops
 }
 
+/// `shrd dst, src, imm8` / `shld dst, src, imm8` — the double-precision shift.
+///
+/// This is how a 32-bit compiler shifts a 64-bit value held in a register pair:
+/// `add eax,ecx ; adc edx,ebx ; shrd eax,edx,2 ; sar edx,2` is `(int64_t)x / 4`.
+/// The `adc` half has been modelled since this lifter learned x86 CF; the
+/// `shrd` half had not, so every one of those sequences lost its low word to an
+/// opaque comment. All four i386 fixtures that compute in a register pair
+/// (`28_euler_ode`, `30_finite_difference`, both optimisation levels) fail on
+/// exactly that.
+///
+/// The lowering is exact, and the operand width is what makes it exact. A
+/// canonicalised `eax` lives in a 64-bit `rax` whose high half this IR never
+/// clears, so `dst >> count` on the raw value would shift bits that are not the
+/// machine's, and `src << (32 - count)` would leave a result no 32-bit register
+/// can hold. Both operands are therefore zero-extended from their encoded width
+/// first and the joined result masked back to it — the same `unsigned_cmp_value`
+/// discipline that lets `add`/`adc` claim a provable carry.
+///
+/// Deliberately narrow:
+/// * only the immediate-count form. `shrd dst, src, cl` shifts by a value this
+///   lifter would have to mask and branch on at lift time, and a count of zero
+///   is architecturally a *no-op that leaves the flags alone* — not something a
+///   single shift expression can say.
+/// * only a register destination; the memory form would need a load/store pair
+///   with the same masking and does not occur in the corpus.
+/// * the flags are declared undefined rather than guessed, exactly as
+///   `adc_sbb_ops` does. x86 defines CF as the last bit shifted out and leaves
+///   OF/AF undefined for counts above 1; a later `jb` reading a fabricated CF
+///   would render a branch the CPU never evaluated.
+fn double_shift_ops(instr: &iced_x86::Instruction, right: bool) -> Vec<Op> {
+    let mnemonic = if right { "shrd" } else { "shld" };
+    let unsupported = || {
+        vec![Op::Unknown {
+            mnemonic: mnemonic.into(),
+        }]
+    };
+    if instr.op_count() != 3
+        || instr.op_kind(0) != OpKind::Register
+        || instr.op_kind(1) != OpKind::Register
+        || !matches!(instr.op_kind(2), OpKind::Immediate8)
+    {
+        return unsupported();
+    }
+    let dst_name = reg_name(instr.op_register(0));
+    let src_name = reg_name(instr.op_register(1));
+    let Some(width) = phys_reg_width(&dst_name) else {
+        return unsupported();
+    };
+    if !matches!(width, Width::W32 | Width::W64) || phys_reg_width(&src_name) != Some(width) {
+        return unsupported();
+    }
+    let bits = u32::from(width.bits());
+    // The architectural count mask: 5 bits for 32-bit operands, 6 for 64-bit.
+    let count = u32::from(instr.immediate8()) & (bits - 1);
+    if count == 0 {
+        // Architecturally a complete no-op, flags included.
+        return vec![Op::Nop];
+    }
+    let dst = VReg::phys(dst_name);
+    let src = VReg::phys(src_name);
+    let kept = VReg::Temp(0);
+    let joined = VReg::Temp(1);
+    let mut ops = Vec::new();
+
+    // The destination's own contribution, at its real width.
+    ops.push(Op::ZExt {
+        dst: kept.clone(),
+        src: Value::Reg(dst.clone()),
+        from: width,
+        to: Width::W64,
+    });
+    ops.push(Op::Bin {
+        dst: kept.clone(),
+        op: if right { BinOp::Shr } else { BinOp::Shl },
+        lhs: Value::Reg(kept.clone()),
+        rhs: Value::Const(i64::from(count)),
+    });
+    // The bits shifted in from the other half of the pair.
+    ops.push(Op::ZExt {
+        dst: joined.clone(),
+        src: Value::Reg(src),
+        from: width,
+        to: Width::W64,
+    });
+    ops.push(Op::Bin {
+        dst: joined.clone(),
+        op: if right { BinOp::Shl } else { BinOp::Shr },
+        lhs: Value::Reg(joined.clone()),
+        rhs: Value::Const(i64::from(bits - count)),
+    });
+    ops.push(Op::Bin {
+        dst: dst.clone(),
+        op: BinOp::Or,
+        lhs: Value::Reg(kept),
+        rhs: Value::Reg(joined),
+    });
+    // At 32 bits one of the two halves is always shifted left past the
+    // register, so the join has to be masked back down; at 64 bits the IR word
+    // is the register and the shift truncates on its own.
+    if bits < 64 {
+        ops.push(Op::Bin {
+            dst: dst.clone(),
+            op: BinOp::And,
+            lhs: Value::Reg(dst),
+            rhs: Value::Const(((1u64 << bits) - 1) as i64),
+        });
+    }
+    append_undef_flags(
+        &mut ops,
+        &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
+        "x86 SHRD/SHLD define CF from the last bit shifted out and leave OF/AF \
+         undefined above a count of one; none of that is modelled",
+    );
+    ops
+}
+
+/// Exact CF/ZF/SF/OF effects for one ADC/SBB destination.
+///
+/// The arithmetic is deliberately split into two machine-width steps. Besides
+/// matching the instruction's dataflow, that gives carry/borrow two exact
+/// predicates that work at 64 bits without trying to represent `2^64` in an IR
+/// constant:
+///
+/// * ADC carry is `(partial < lhs) || (result < partial)`;
+/// * SBB borrow is `(lhs < rhs) || (partial < old_cf)`.
+///
+/// Signed overflow follows the architectural sign relation. ADC overflows when
+/// the operand signs agree and the result sign changes; SBB when they disagree
+/// and the result sign changes. PF/AF remain explicit poison rather than stale
+/// values because their low-bit expressions are not yet modelled.
+fn emit_adc_sbb_with_flags(dst: VReg, rhs: Value, width: Width, add: bool) -> Vec<Op> {
+    let arithmetic = if add { BinOp::Add } else { BinOp::Sub };
+    let old_carry = VReg::Temp(60);
+    let original = VReg::Temp(61);
+    let partial = VReg::Temp(62);
+    let mut ops = vec![
+        Op::Assign {
+            dst: old_carry.clone(),
+            src: Value::Reg(VReg::Flag(Flag::C)),
+        },
+        Op::Assign {
+            dst: original.clone(),
+            src: Value::Reg(dst.clone()),
+        },
+    ];
+
+    let unsigned_lhs =
+        unsigned_cmp_value(Value::Reg(original.clone()), width, VReg::Temp(63), &mut ops);
+    let unsigned_rhs = unsigned_cmp_value(rhs.clone(), width, VReg::Temp(64), &mut ops);
+    let signed_lhs =
+        signed_cmp_value(Value::Reg(original), width, VReg::Temp(65), &mut ops);
+    let signed_rhs = signed_cmp_value(rhs.clone(), width, VReg::Temp(66), &mut ops);
+    let lhs_negative = VReg::Temp(67);
+    let rhs_negative = VReg::Temp(68);
+    ops.extend([
+        Op::Cmp {
+            dst: lhs_negative.clone(),
+            op: CmpOp::Slt,
+            lhs: signed_lhs,
+            rhs: Value::Const(0),
+        },
+        Op::Cmp {
+            dst: rhs_negative.clone(),
+            op: CmpOp::Slt,
+            lhs: signed_rhs,
+            rhs: Value::Const(0),
+        },
+        emit_bin(dst.clone(), arithmetic, rhs),
+    ]);
+    if width.bits() < 64 {
+        ops.push(Op::Trunc {
+            dst: dst.clone(),
+            src: Value::Reg(dst.clone()),
+            from: Width::W64,
+            to: width,
+        });
+    }
+    ops.push(Op::Assign {
+        dst: partial.clone(),
+        src: Value::Reg(dst.clone()),
+    });
+    ops.push(emit_bin(
+        dst.clone(),
+        arithmetic,
+        Value::Reg(old_carry.clone()),
+    ));
+    if width.bits() < 64 {
+        ops.push(Op::Trunc {
+            dst: dst.clone(),
+            src: Value::Reg(dst.clone()),
+            from: Width::W64,
+            to: width,
+        });
+    }
+    zero_sign_flags(Value::Reg(dst.clone()), width, 69, &mut ops);
+
+    let unsigned_partial =
+        unsigned_cmp_value(Value::Reg(partial), width, VReg::Temp(70), &mut ops);
+    let unsigned_result =
+        unsigned_cmp_value(Value::Reg(dst), width, VReg::Temp(71), &mut ops);
+    let first_carry = VReg::Temp(72);
+    let second_carry = VReg::Temp(73);
+    if add {
+        ops.extend([
+            Op::Cmp {
+                dst: first_carry.clone(),
+                op: CmpOp::Ult,
+                lhs: unsigned_partial.clone(),
+                rhs: unsigned_lhs,
+            },
+            Op::Cmp {
+                dst: second_carry.clone(),
+                op: CmpOp::Ult,
+                lhs: unsigned_result,
+                rhs: unsigned_partial,
+            },
+        ]);
+    } else {
+        ops.extend([
+            Op::Cmp {
+                dst: first_carry.clone(),
+                op: CmpOp::Ult,
+                lhs: unsigned_lhs,
+                rhs: unsigned_rhs,
+            },
+            Op::Cmp {
+                dst: second_carry.clone(),
+                op: CmpOp::Ult,
+                lhs: unsigned_partial,
+                rhs: Value::Reg(old_carry),
+            },
+        ]);
+    }
+    ops.push(Op::Bin {
+        dst: VReg::Flag(Flag::C),
+        op: BinOp::Or,
+        lhs: Value::Reg(first_carry),
+        rhs: Value::Reg(second_carry),
+    });
+
+    let operand_sign_relation = VReg::Temp(74);
+    let result_sign_changed = VReg::Temp(75);
+    ops.extend([
+        Op::Cmp {
+            dst: operand_sign_relation.clone(),
+            op: if add { CmpOp::Eq } else { CmpOp::Ne },
+            lhs: Value::Reg(lhs_negative.clone()),
+            rhs: Value::Reg(rhs_negative),
+        },
+        Op::Cmp {
+            dst: result_sign_changed.clone(),
+            op: CmpOp::Ne,
+            lhs: Value::Reg(VReg::Flag(Flag::S)),
+            rhs: Value::Reg(lhs_negative),
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::O),
+            op: BinOp::And,
+            lhs: Value::Reg(operand_sign_relation),
+            rhs: Value::Reg(result_sign_changed),
+        },
+    ]);
+    append_undef_flags(
+        &mut ops,
+        &[Flag::P, Flag::A],
+        if add {
+            "x86 ADC defines PF/AF, but their exact low-bit expressions are not modelled"
+        } else {
+            "x86 SBB defines PF/AF, but their exact low-bit expressions are not modelled"
+        },
+    );
+    ops
+}
+
 fn adc_sbb_ops(instr: &iced_x86::Instruction, add: bool) -> Vec<Op> {
     let mnemonic = if add { "adc" } else { "sbb" };
     if instr.op_count() != 2 {
@@ -1367,9 +1693,8 @@ fn adc_sbb_ops(instr: &iced_x86::Instruction, add: bool) -> Vec<Op> {
         }];
     }
 
-    let carry = Value::Reg(VReg::Flag(Flag::C));
-    let arithmetic = if add { BinOp::Add } else { BinOp::Sub };
-    let mut ops = match instr.op_kind(0) {
+    let width = operand_width(instr, 0);
+    match instr.op_kind(0) {
         OpKind::Register => {
             let dst = VReg::phys(reg_name(instr.op_register(0)));
             let mut ops = Vec::new();
@@ -1378,18 +1703,7 @@ fn adc_sbb_ops(instr: &iced_x86::Instruction, add: bool) -> Vec<Op> {
                     mnemonic: mnemonic.into(),
                 }];
             };
-            ops.push(Op::Bin {
-                dst: dst.clone(),
-                op: arithmetic,
-                lhs: Value::Reg(dst.clone()),
-                rhs,
-            });
-            ops.push(Op::Bin {
-                dst: dst.clone(),
-                op: arithmetic,
-                lhs: Value::Reg(dst),
-                rhs: carry,
-            });
+            ops.extend(emit_adc_sbb_with_flags(dst, rhs, width, add));
             ops
         }
         OpKind::Memory => {
@@ -1408,18 +1722,7 @@ fn adc_sbb_ops(instr: &iced_x86::Instruction, add: bool) -> Vec<Op> {
                     addr: addr.clone(),
                 },
             );
-            ops.push(Op::Bin {
-                dst: tmp.clone(),
-                op: arithmetic,
-                lhs: Value::Reg(tmp.clone()),
-                rhs,
-            });
-            ops.push(Op::Bin {
-                dst: tmp.clone(),
-                op: arithmetic,
-                lhs: Value::Reg(tmp.clone()),
-                rhs: carry,
-            });
+            ops.extend(emit_adc_sbb_with_flags(tmp.clone(), rhs, width, add));
             ops.push(Op::Store {
                 addr,
                 src: Value::Reg(tmp),
@@ -1429,19 +1732,7 @@ fn adc_sbb_ops(instr: &iced_x86::Instruction, add: bool) -> Vec<Op> {
         _ => vec![Op::Unknown {
             mnemonic: mnemonic.into(),
         }],
-    };
-    if !ops.iter().any(|op| matches!(op, Op::Unknown { .. })) {
-        append_undef_flags(
-            &mut ops,
-            &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
-            if add {
-                "x86 ADC defines flags from lhs+rhs+CF, but those expressions are not yet modelled"
-            } else {
-                "x86 SBB defines flags from lhs-rhs-CF, but those expressions are not yet modelled"
-            },
-        );
     }
-    ops
 }
 
 fn adc_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
@@ -3592,6 +3883,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             }),
         Mnemonic::Adc => adc_ops(instr),
         Mnemonic::Sbb => sbb_ops(instr),
+        Mnemonic::Shrd => double_shift_ops(instr, true),
+        Mnemonic::Shld => double_shift_ops(instr, false),
         Mnemonic::Pxor => packed_dword_binary_ops(instr, BinOp::Xor),
         Mnemonic::Pand => packed_dword_binary_ops(instr, BinOp::And),
         Mnemonic::Pandn => packed_dword_and_not_ops(instr),
@@ -4007,6 +4300,105 @@ mod tests {
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].op, Op::Nop);
         assert_eq!(ops[0].va, 0x1000);
+    }
+
+    /// Every register form gcc actually emits a `__x86.get_pc_thunk.*` for.
+    /// Encodings assembled with `as --32` (`mov (%esp),%REG ; ret`), not
+    /// hand-derived from the modrm tables.
+    #[test]
+    fn pc_thunk_bodies_name_their_destination_register() {
+        for (bytes, reg) in [
+            ([0x8bu8, 0x04, 0x24, 0xc3], "eax"),
+            ([0x8b, 0x0c, 0x24, 0xc3], "ecx"),
+            ([0x8b, 0x14, 0x24, 0xc3], "edx"),
+            ([0x8b, 0x1c, 0x24, 0xc3], "ebx"),
+            ([0x8b, 0x2c, 0x24, 0xc3], "ebp"),
+            ([0x8b, 0x34, 0x24, 0xc3], "esi"),
+            ([0x8b, 0x3c, 0x24, 0xc3], "edi"),
+        ] {
+            assert_eq!(
+                pc_thunk_register(&bytes),
+                Some(reg),
+                "{bytes:02x?} is `mov (%esp),%{reg} ; ret`"
+            );
+        }
+        // Trailing padding after the `ret` is normal (gcc aligns the next
+        // symbol), so a longer window must still match.
+        assert_eq!(
+            pc_thunk_register(&[0x8b, 0x1c, 0x24, 0xc3, 0x66, 0x90]),
+            Some("ebx")
+        );
+    }
+
+    /// `shr %eax,$8` in 32-BIT mode must still state the 32-bit read explicitly.
+    /// The IR value is 64 bits wide whatever the target register is, so without
+    /// the narrowing a negative value's sign-extension bits shift down into the
+    /// low word. Encoding from `as --32` (`shr $8,%eax` = `c1 e8 08`).
+    #[test]
+    fn a_thirty_two_bit_logical_shift_narrows_before_shifting() {
+        let ops = lift_bytes(&[0xc1, 0xe8, 0x08], 0x1000, 32);
+        let narrowing = ops.iter().position(|instruction| {
+            matches!(
+                &instruction.op,
+                Op::ZExt {
+                    dst: VReg::Phys(dst),
+                    from: Width::W32,
+                    to: Width::W64,
+                    ..
+                } if dst == "eax"
+            )
+        });
+        let shift = ops.iter().position(|instruction| {
+            matches!(
+                &instruction.op,
+                Op::Bin {
+                    op: BinOp::Shr,
+                    dst: VReg::Phys(dst),
+                    ..
+                } if dst == "eax"
+            )
+        });
+        let (Some(narrowing), Some(shift)) = (narrowing, shift) else {
+            panic!("expected a zero-extension before the shift, got {ops:#?}");
+        };
+        assert!(
+            narrowing < shift,
+            "the narrowing must precede the shift: {ops:#?}"
+        );
+    }
+
+    /// `sar` replicates bit 31, so its narrowing is a SIGN extension.
+    /// `sar $8,%eax` = `c1 f8 08`.
+    #[test]
+    fn a_thirty_two_bit_arithmetic_shift_sign_extends_before_shifting() {
+        let ops = lift_bytes(&[0xc1, 0xf8, 0x08], 0x1000, 32);
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::SExt {
+                    dst: VReg::Phys(dst),
+                    from: Width::W32,
+                    to: Width::W64,
+                    ..
+                } if dst == "eax"
+            )),
+            "expected a sign-extension before the arithmetic shift, got {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn non_thunk_bodies_are_not_mistaken_for_one() {
+        // `mov (%esp),%esp` — architecturally the same load, but not the idiom,
+        // and rewriting it would silently redefine the stack pointer.
+        assert_eq!(pc_thunk_register(&[0x8b, 0x24, 0x24, 0xc3]), None);
+        // `mov (%eax),%eax ; ret` — a real one-instruction accessor.
+        assert_eq!(pc_thunk_register(&[0x8b, 0x00, 0xc3]), None);
+        // `mov 0x4(%esp),%eax ; ret` — reads an argument, not the return address.
+        assert_eq!(pc_thunk_register(&[0x8b, 0x44, 0x24, 0x04]), None);
+        // A load that does not return immediately is some other function.
+        assert_eq!(pc_thunk_register(&[0x8b, 0x1c, 0x24, 0x90]), None);
+        assert_eq!(pc_thunk_register(&[0x8b, 0x1c, 0x24]), None);
+        assert_eq!(pc_thunk_register(&[]), None);
     }
 
     // ----------------------------------------------------------------------
@@ -5694,30 +6086,157 @@ mod tests {
         ));
     }
 
+    /// `shrd eax, edx, 2` is the low word of a 64-bit `>> 2` held in `edx:eax`.
+    /// It is exact only if both halves are read at their ENCODED width: `eax`
+    /// canonicalises into a 64-bit `rax` whose high half nothing clears, so a
+    /// raw `>>` would shift in bits that are not the machine's and a raw `<<`
+    /// would produce a value no 32-bit register can hold.
+    #[test]
+    fn shrd_reads_both_halves_at_their_encoded_thirty_two_bit_width() {
+        // 0f ac d0 02 -> shrd eax, edx, 0x2
+        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xac, 0xd0, 0x02], 0x1000, 32)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        let arithmetic: Vec<&Op> = ops
+            .iter()
+            .filter(|op| !matches!(op, Op::Undef { .. }))
+            .collect();
+        assert_eq!(
+            arithmetic.len(),
+            6,
+            "zext, shift, zext, shift, or, mask: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                arithmetic[0],
+                Op::ZExt { src: Value::Reg(VReg::Phys(n)), from: Width::W32, to: Width::W64, .. }
+                    if n == "eax"
+            ),
+            "the destination half must be read at 32 bits: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                arithmetic[1],
+                Op::Bin {
+                    op: BinOp::Shr,
+                    rhs: Value::Const(2),
+                    ..
+                }
+            ),
+            "the kept half shifts right by the count: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                arithmetic[2],
+                Op::ZExt { src: Value::Reg(VReg::Phys(n)), from: Width::W32, to: Width::W64, .. }
+                    if n == "edx"
+            ),
+            "the incoming half must be read at 32 bits: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                arithmetic[3],
+                Op::Bin {
+                    op: BinOp::Shl,
+                    rhs: Value::Const(30),
+                    ..
+                }
+            ),
+            "the incoming half shifts left by width - count: {ops:#?}"
+        );
+        assert!(
+            matches!(arithmetic[4], Op::Bin { op: BinOp::Or, dst, .. } if *dst == VReg::phys("eax")),
+            "the halves join into the destination: {ops:#?}"
+        );
+        assert!(
+            matches!(
+                arithmetic[5],
+                Op::Bin {
+                    op: BinOp::And,
+                    rhs: Value::Const(0xffff_ffff),
+                    ..
+                }
+            ),
+            "the joined word must stay 32 bits wide: {ops:#?}"
+        );
+        // A wrong CF would let a later `jb` render a branch the CPU never
+        // evaluated; x86 defines it as the last bit shifted out, and this
+        // lowering does not compute that.
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::Undef { dst, .. } if *dst == VReg::Flag(Flag::C))),
+            "the unmodelled flags must be undefined, never stale: {ops:#?}"
+        );
+    }
+
+    /// A count of zero is architecturally a complete no-op — the destination is
+    /// unchanged AND the flags are untouched. Emitting the shift chain anyway
+    /// would shift by the full width, which is undefined in the C we render.
+    #[test]
+    fn a_zero_count_double_shift_is_a_nop() {
+        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xac, 0xd0, 0x00], 0x1000, 32)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(ops, vec![Op::Nop], "got: {ops:#?}");
+    }
+
+    /// The `cl`-count form shifts by a value that is only known at run time and
+    /// whose zero case must leave the flags alone. That is not one expression,
+    /// so it stays unlifted rather than becoming a wrong one.
+    #[test]
+    fn a_variable_count_double_shift_is_not_guessed() {
+        // 0f ad d0 -> shrd eax, edx, cl
+        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xad, 0xd0], 0x1000, 32)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            ops.iter()
+                .all(|op| matches!(op, Op::Unknown { mnemonic } if mnemonic == "shrd")),
+            "got: {ops:#?}"
+        );
+    }
+
     #[test]
     fn sbb_reg_reg_lifts_to_sub_with_carry_dependency() {
         let ops = lift64(&[0x48, 0x19, 0xc8]);
+        let arithmetic: Vec<_> = ops
+            .iter()
+            .filter(|instruction| {
+                matches!(
+                    &instruction.op,
+                    Op::Bin {
+                        dst,
+                        op: BinOp::Sub,
+                        ..
+                    } if *dst == VReg::phys("rax")
+                )
+            })
+            .collect();
         assert!(matches!(
-            &ops[0].op,
+            &arithmetic[0].op,
             Op::Bin {
-                dst,
-                op: BinOp::Sub,
                 lhs: Value::Reg(lhs),
                 rhs: Value::Reg(rhs),
-            } if *dst == VReg::phys("rax")
-                && *lhs == VReg::phys("rax")
-                && *rhs == VReg::phys("rcx")
+                ..
+            } if *lhs == VReg::phys("rax") && *rhs == VReg::phys("rcx")
         ));
         assert!(matches!(
-            &ops[1].op,
+            &arithmetic[1].op,
             Op::Bin {
-                dst,
-                op: BinOp::Sub,
                 lhs: Value::Reg(lhs),
-                rhs: Value::Reg(rhs),
-            } if *dst == VReg::phys("rax")
-                && *lhs == VReg::phys("rax")
-                && *rhs == VReg::Flag(Flag::C)
+                rhs: Value::Reg(VReg::Temp(60)),
+                ..
+            } if *lhs == VReg::phys("rax")
+        ));
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign {
+                dst: VReg::Temp(60),
+                src: Value::Reg(VReg::Flag(Flag::C)),
+            }
         ));
     }
 

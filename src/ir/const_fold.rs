@@ -499,6 +499,42 @@ fn fold_expr(e: &mut Expr) {
         _ => {}
     }
 
+    // `castN(castM(x)) == castN(x)` whenever `M >= N`: the outer cast observes
+    // only the low N bits, and an inner cast to an equal-or-wider width cannot
+    // have altered them. The inner cast's signedness is irrelevant for the same
+    // reason — sign extension only writes bits above M, which N discards.
+    //
+    // This is the general form of the round-trip rule below, and it is what
+    // collapses the chains that actually appear in output:
+    // `(unsigned long)((unsigned long)((unsigned int)(...)))`. It must NOT fire
+    // when the inner cast narrows (`M < N`), because then the truncation is
+    // real and observable.
+    let subsumed_inner_cast = match e {
+        Expr::Cast {
+            signed,
+            width,
+            expr: inner,
+        } => match inner.as_ref() {
+            Expr::Cast {
+                width: inner_width,
+                expr: source,
+                ..
+            } if inner_width >= width => Some(Expr::Cast {
+                signed: *signed,
+                width: *width,
+                expr: Box::new(source.as_ref().clone()),
+            }),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(replacement) = subsumed_inner_cast {
+        *e = replacement;
+        // Re-run: a chain of three or more collapses one layer per visit.
+        fold_expr(e);
+        return;
+    }
+
     // `castN(extW(castN(x))) == castN(x)`: the widening step cannot alter the
     // low N bits that the outer cast immediately observes. Preserve the outer
     // cast's signedness because a later wider consumer may depend on it.
@@ -773,6 +809,58 @@ fn fold_expr(e: &mut Expr) {
             }
             if matches!(op, BinOp::Or) {
                 *e = Expr::Const(-1);
+                return;
+            }
+        }
+
+        // Addr ± Const fold — how AArch64 and ARM32 name a global at all.
+        //
+        // x86-64 materialises the address of a string or global in one
+        // instruction (`lea rax, [rip+disp]`), which lifts straight to
+        // `Value::Addr(abs)`, so `name_resolve` and `strings_fold` see a
+        // complete VA and do their work. AArch64 needs two: `adrp` supplies the
+        // 4 KiB page and a following `add`/`ldr` supplies the low 12 bits. The
+        // page alone resolves to nothing, so without this fold every string and
+        // global reference on AArch64 stayed an arithmetic expression over a
+        // bare number — measured as 0.00 string literals per function on both
+        // ARM targets against 5.68 for Ghidra.
+        //
+        // Only `Add`/`Sub` are folded, and only against an address: an address
+        // that has been masked, shifted or multiplied is no longer a reference
+        // to the same object, and quietly renaming it would be a lie.
+        if matches!(op, BinOp::Add | BinOp::Sub) {
+            // A `Named` base folds too, and its name is deliberately DISCARDED.
+            // An `adrp` page is a 4 KiB-aligned number that frequently collides
+            // with some unrelated symbol's address — `read_counter`'s page
+            // resolved to `__cxa_finalize`, so the reference to the volatile
+            // counter at page+0x1c printed as `__cxa_finalize + 28` and never
+            // folded, leaving a raw original-image address the recompiled C
+            // dereferenced as a wild pointer. `base + offset` is a DIFFERENT
+            // object from `base`, so carrying the base's name forward would be
+            // the same lie the masked-address case below refuses to tell; the
+            // folded VA is re-resolved against the symbol table instead.
+            let as_base = |e: &Expr| match e {
+                Expr::Addr(base) | Expr::Named { va: base, .. } => Some(*base),
+                _ => None,
+            };
+            let addr_and_offset = match (lhs.as_ref(), rhs.as_ref()) {
+                (base, Expr::Const(off)) if as_base(base).is_some() => {
+                    as_base(base).map(|base| (base, *off))
+                }
+                // `Const + Addr` is the same value; `Const - Addr` is not an
+                // address at all, so it is deliberately not matched.
+                (Expr::Const(off), base) if matches!(op, BinOp::Add) => {
+                    as_base(base).map(|base| (base, *off))
+                }
+                _ => None,
+            };
+            if let Some((base, off)) = addr_and_offset {
+                let folded = if matches!(op, BinOp::Add) {
+                    base.wrapping_add(off as u64)
+                } else {
+                    base.wrapping_sub(off as u64)
+                };
+                *e = Expr::Addr(folded);
                 return;
             }
         }
@@ -1326,6 +1414,73 @@ mod tests {
         if let Stmt::Assign { src, .. } = &f.body[0] {
             assert_eq!(*src, Expr::Const(5));
         }
+    }
+
+    /// `adrp` + `add` must reassemble into one address.
+    ///
+    /// This is the AArch64 spelling of `lea rax, [rip+disp]`, and without the
+    /// fold the low 12 bits never rejoin the page, so no string or global on
+    /// AArch64 ever resolves to a name.
+    #[test]
+    fn addr_plus_const_folds_to_the_addressed_va() {
+        let mut f = one_stmt(bin(BinOp::Add, Expr::Addr(0x1f000), Expr::Const(0x2a8)));
+        fold_constants(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment");
+        };
+        assert_eq!(*src, Expr::Addr(0x1f2a8));
+    }
+
+    /// A NAMED base folds too, and loses the name.
+    ///
+    /// An `adrp` page is 4 KiB-aligned and routinely collides with an unrelated
+    /// symbol: `read_counter`'s page resolved to `__cxa_finalize`, so the
+    /// volatile counter at page+0x1c printed as `__cxa_finalize + 28`, never
+    /// folded, and the recovered C dereferenced a raw original-image address.
+    /// `base + offset` is a different object from `base`, so the name must not
+    /// survive the fold — the resulting VA is re-resolved on its own merits.
+    #[test]
+    fn a_named_page_base_plus_const_folds_to_the_addressed_va() {
+        let mut f = one_stmt(bin(
+            BinOp::Add,
+            Expr::Named {
+                va: 0x20000,
+                name: "__cxa_finalize".into(),
+            },
+            Expr::Const(0x1c),
+        ));
+        fold_constants(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment");
+        };
+        assert_eq!(*src, Expr::Addr(0x2001c));
+    }
+
+    /// Operand order is irrelevant to the value, so both spellings must fold.
+    #[test]
+    fn const_plus_addr_folds_the_same_way() {
+        let mut f = one_stmt(bin(BinOp::Add, Expr::Const(0x2a8), Expr::Addr(0x1f000)));
+        fold_constants(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment");
+        };
+        assert_eq!(*src, Expr::Addr(0x1f2a8));
+    }
+
+    /// An address that has been masked is no longer a reference to that object,
+    /// so folding it into a new address would invent a symbol.
+    #[test]
+    fn addr_under_non_additive_arithmetic_is_left_alone() {
+        let original = bin(BinOp::And, Expr::Addr(0x1f2a8), Expr::Const(0xfff));
+        let mut f = one_stmt(original.clone());
+        fold_constants(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment");
+        };
+        assert!(
+            !matches!(src, Expr::Addr(_)),
+            "masked address must not become an address literal: {src:?}"
+        );
     }
 
     #[test]
@@ -2029,6 +2184,7 @@ mod tests {
                 max_blocks: 64,
                 max_instructions: 1000,
                 timeout_ms: 500,
+                total_timeout_ms: 0,
             },
         );
         for f in &funcs {
@@ -2049,5 +2205,89 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `castN(castM(x))` collapses to `castN(x)` when the inner cast is no
+    /// narrower — the outer only observes the low N bits, which a widening
+    /// inner cast cannot have touched.
+    #[test]
+    fn equal_or_wider_inner_cast_is_subsumed() {
+        // (u32)((u64)rax)  ->  (u32)rax
+        let mut f = one_stmt(Expr::Cast {
+            signed: false,
+            width: 4,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(Expr::Reg(reg("rax"))),
+            }),
+        });
+        fold_constants(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!()
+        };
+        assert_eq!(
+            *src,
+            Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg("rax")))
+            }
+        );
+    }
+
+    /// A three-deep chain collapses completely, which is the shape that
+    /// actually appears in output.
+    #[test]
+    fn deep_identical_cast_chain_collapses() {
+        let inner = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Reg(reg("rax"))),
+        };
+        let mut f = one_stmt(Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(inner),
+            }),
+        });
+        fold_constants(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!()
+        };
+        assert_eq!(
+            *src,
+            Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(Expr::Reg(reg("rax")))
+            },
+            "chain did not fully collapse: {src:?}"
+        );
+    }
+
+    /// A NARROWING inner cast is a real truncation and must survive: dropping
+    /// it would silently widen the value the outer cast sees.
+    #[test]
+    fn narrowing_inner_cast_is_preserved() {
+        // (u64)((u8)rax) must keep the u8 truncation.
+        let original = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 1,
+                expr: Box::new(Expr::Reg(reg("rax"))),
+            }),
+        };
+        let mut f = one_stmt(original.clone());
+        fold_constants(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!()
+        };
+        assert_eq!(*src, original, "truncation was folded away");
     }
 }

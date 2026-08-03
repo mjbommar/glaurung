@@ -26,7 +26,7 @@
 use glaurung::exec::{Concrete, Flow, Machine, RegArch};
 use glaurung::ir::lift_arm64;
 use glaurung::ir::lift_x86;
-use glaurung::ir::types::{LlirBlock, VReg};
+use glaurung::ir::types::{Flag, LlirBlock, Op, VReg};
 
 const BASE: u64 = 0x1000;
 
@@ -80,6 +80,92 @@ fn run_arm64(code: &[u8]) -> Machine<Concrete> {
 
 fn reg(m: &mut Machine<Concrete>, name: &str) -> u64 {
     m.regs.read(&mut m.dom, &VReg::phys(name)) as u64
+}
+
+fn flag(m: &mut Machine<Concrete>, flag: Flag) -> u64 {
+    m.regs.read(&mut m.dom, &VReg::Flag(flag)) as u64
+}
+
+fn run_x86_carry_arithmetic(
+    code: &[u8],
+    lhs: u64,
+    rhs: u64,
+    carry: u64,
+) -> Machine<Concrete> {
+    let mut machine = Machine::new(Concrete);
+    machine
+        .regs
+        .write(&mut machine.dom, &VReg::phys("rax"), lhs as u128);
+    machine
+        .regs
+        .write(&mut machine.dom, &VReg::phys("rcx"), rhs as u128);
+    machine.regs.write(
+        &mut machine.dom,
+        &VReg::Flag(Flag::C),
+        carry as u128,
+    );
+    let mut instrs = lift_x86::lift_bytes(code, BASE, 64);
+    // PF/AF are intentionally outside the current exact model. They are poison
+    // definitions, and the concrete executor halts on any poison write even
+    // though this test never reads them, so remove only those two definitions.
+    instrs.retain(|instruction| {
+        !matches!(
+            instruction.op,
+            Op::Undef {
+                dst: VReg::Flag(Flag::P | Flag::A),
+                ..
+            }
+        )
+    });
+    let block = LlirBlock {
+        start_va: BASE,
+        end_va: BASE + code.len() as u64,
+        instrs,
+        succs: vec![],
+    };
+    assert_eq!(machine.run_block(&block), Flow::Next);
+    machine
+}
+
+#[test]
+fn adc_and_sbb_compute_control_flow_flags_at_64_bits() {
+    // adc rax, rcx: signed overflow without unsigned carry.
+    let mut adc_overflow = run_x86_carry_arithmetic(
+        &[0x48, 0x11, 0xc8],
+        i64::MAX as u64,
+        0,
+        1,
+    );
+    assert_eq!(reg(&mut adc_overflow, "rax"), i64::MIN as u64);
+    assert_eq!(flag(&mut adc_overflow, Flag::C), 0);
+    assert_eq!(flag(&mut adc_overflow, Flag::Z), 0);
+    assert_eq!(flag(&mut adc_overflow, Flag::S), 1);
+    assert_eq!(flag(&mut adc_overflow, Flag::O), 1);
+
+    // adc rax, rcx: wrap to zero with unsigned carry and no signed overflow.
+    let mut adc_carry = run_x86_carry_arithmetic(&[0x48, 0x11, 0xc8], u64::MAX, 0, 1);
+    assert_eq!(reg(&mut adc_carry, "rax"), 0);
+    assert_eq!(flag(&mut adc_carry, Flag::C), 1);
+    assert_eq!(flag(&mut adc_carry, Flag::Z), 1);
+    assert_eq!(flag(&mut adc_carry, Flag::S), 0);
+    assert_eq!(flag(&mut adc_carry, Flag::O), 0);
+
+    // sbb rax, rcx: INT_MIN - 0 - 1 overflows to INT_MAX without borrow.
+    let mut sbb_overflow =
+        run_x86_carry_arithmetic(&[0x48, 0x19, 0xc8], i64::MIN as u64, 0, 1);
+    assert_eq!(reg(&mut sbb_overflow, "rax"), i64::MAX as u64);
+    assert_eq!(flag(&mut sbb_overflow, Flag::C), 0);
+    assert_eq!(flag(&mut sbb_overflow, Flag::Z), 0);
+    assert_eq!(flag(&mut sbb_overflow, Flag::S), 0);
+    assert_eq!(flag(&mut sbb_overflow, Flag::O), 1);
+
+    // sbb rax, rcx: 0 - 0 - 1 borrows and becomes all ones.
+    let mut sbb_borrow = run_x86_carry_arithmetic(&[0x48, 0x19, 0xc8], 0, 0, 1);
+    assert_eq!(reg(&mut sbb_borrow, "rax"), u64::MAX);
+    assert_eq!(flag(&mut sbb_borrow, Flag::C), 1);
+    assert_eq!(flag(&mut sbb_borrow, Flag::Z), 0);
+    assert_eq!(flag(&mut sbb_borrow, Flag::S), 1);
+    assert_eq!(flag(&mut sbb_borrow, Flag::O), 0);
 }
 
 /// `movabs $imm64, %rax`

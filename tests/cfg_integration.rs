@@ -14,6 +14,7 @@ fn cfg_discovers_functions_on_sample_if_present() {
         max_blocks: 2048,
         max_instructions: 50_000,
         timeout_ms: 200,
+        total_timeout_ms: 0,
     };
     let (funcs, _) = glaurung::analysis::cfg::analyze_functions_bytes(&data, &budgets);
     assert!(!funcs.is_empty(), "expected at least one function");

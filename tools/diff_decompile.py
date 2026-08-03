@@ -38,6 +38,7 @@ import hashlib
 import json
 import random
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -76,18 +77,61 @@ typedef unsigned int uint; typedef unsigned long ulong;
 typedef unsigned long long ulonglong; typedef long long longlong;
 typedef uint8_t undefined1; typedef uint16_t undefined2;
 typedef uint32_t undefined4; typedef uint64_t undefined8;
+/* A 128-bit integer is a 64-bit-target extension. Guarded rather than assumed so
+   this scaffolding builds for a 32-bit target too — `native_rebuild_diagnostic`
+   compiles the SAME translation unit there, and an unguarded typedef would make
+   the harness's own prelude look like a decompiler defect. If the RECOVERY names
+   `undefined16` on such a target, that is a real defect and still fails. */
+#ifdef __SIZEOF_INT128__
 typedef __uint128_t undefined16;
+#endif
 typedef uint8_t uint1; typedef int8_t int1;
 typedef uint16_t uint2; typedef int16_t int2;
 typedef uint32_t uint4; typedef int32_t int4;
 typedef uint64_t uint8; typedef int64_t int8;
-#ifndef __cplusplus
+/* `bool` became a keyword in C23, which gcc >= 15 defaults to. */
+#if !defined(__cplusplus) && (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L)
 typedef _Bool bool;
 #define true 1
 #define false 0
 #endif
 long __unknown(long x){ (void)x; return 0; }
+/* Scrub the stack the measured call is about to use, to a fixed pattern.
+
+   A recovered function that reads an UNINITIALISED local returns whatever the
+   stack happened to hold, so without this its verdict is not a property of the
+   decompilation at all. `09_memory_effects:armv7:O2:read_counter` (recovered as
+   `*(int *)(*(int *)(var1 + 4) + var1)`) and
+   `04_switch_shapes:armv7:O0:dense_compute` (a switch whose compare temporary is
+   never assigned) each flipped pass/fail with address randomization, with the
+   size of the caller's environment block, and — after both of those were pinned —
+   with the LENGTH OF THE SCRATCH DIRECTORY'S NAME, because the dynamic loader's
+   own stack use scales with the path it is handed. Chasing each channel is
+   endless; removing the dependence is not.
+
+   Scrubbed, the read yields 0xA5A5... every time: a value comparison then fails
+   deterministically and a pointer built from it faults deterministically, which
+   is the correct verdict for a function that reads uninitialised memory rather
+   than a coin flip. Called before BOTH sides so neither is privileged. */
+void glaurung_scrub_stack(void);
+void glaurung_scrub_stack(void) {
+    volatile unsigned char scrub[1 << 16];
+    for (unsigned long i = 0; i < sizeof(scrub); i++) scrub[i] = 0xA5;
+}
 """
+
+#: `PRELUDE` spells its 64-bit typedefs with `long`, which is 8 bytes only on an
+#: LP64 host. `native_rebuild_diagnostic` compiles the SAME recovered C for the
+#: architecture it was recovered FROM, where `long` is 4 bytes on i386/ARM32, so
+#: the scaffolding has to say `long long` there or the probe would blame the
+#: decompiler for the harness's own typedef. Nothing else in the prelude has a
+#: width that moves.
+_HOST_WIDTH_TYPEDEFS = "typedef unsigned long uint64_t; typedef long int64_t;"
+_PORTABLE_WIDTH_TYPEDEFS = (
+    "typedef unsigned long long uint64_t; typedef long long int64_t;"
+)
+NATIVE_PRELUDE = PRELUDE.replace(_HOST_WIDTH_TYPEDEFS, _PORTABLE_WIDTH_TYPEDEFS)
+assert NATIVE_PRELUDE != PRELUDE, "PRELUDE no longer spells int64_t as `long`"
 
 # ---------------------------------------------------------------------------
 # Signature recovery
@@ -423,6 +467,170 @@ def _pointee_desc(d):
     return {"k": "int", "w": d.get("pw", 1), "s": d.get("ps", False)}
 
 
+def abi_incomparable(sig: dict, reference_sig: dict | None) -> str | None:
+    """Why one ctypes prototype cannot describe BOTH sides of the differential.
+
+    A cross-architecture lane executes the recovery against the same source built
+    for the host, and marshals the call through ONE signature — the one recovered
+    from the object being decompiled. That is sound only while both builds agree
+    on the ABI type of every parameter and the return.
+
+    They do not always agree. `long` is 4 bytes on i386/ARM32 and 8 on the LP64
+    host, so `long count_up(int)` in `12_loop_rotation` is `w:4` in the 32-bit
+    object's DWARF and `w:8` in the reference's. The worker then hands the host
+    function a 32-bit argument where it expects 64, and truncates the reference's
+    64-bit return to 32 before comparing. The resulting verdict is a statement
+    about that truncation, not about the lifter — and it lands on `pass` for every
+    input small enough not to notice, which is the silent-green shape this whole
+    lane exists to remove.
+
+    Returns `None` when the two sides are comparable, else the reason. `None` for
+    a missing `reference_sig` is deliberate: same-architecture lanes pass the very
+    same object as both sides and have nothing to compare.
+    """
+    if reference_sig is None:
+        return None
+    mine, theirs = _as_desc(sig["ret"]), _as_desc(reference_sig["ret"])
+    if mine != theirs:
+        return (
+            f"return type differs between the target build and the host "
+            f"reference ({mine} vs {theirs}) — one ctypes prototype cannot "
+            f"describe both sides, so no execution verdict is meaningful"
+        )
+    mine_params = [_as_desc(p) for p in sig["params"]]
+    their_params = [_as_desc(p) for p in reference_sig["params"]]
+    if len(mine_params) != len(their_params):
+        return (
+            f"parameter count differs between the target build and the host "
+            f"reference ({len(mine_params)} vs {len(their_params)})"
+        )
+    for index, (a, b) in enumerate(zip(mine_params, their_params)):
+        if a != b:
+            return (
+                f"parameter {index} differs between the target build and the "
+                f"host reference ({a} vs {b}) — one ctypes prototype cannot "
+                f"describe both sides, so no execution verdict is meaningful"
+            )
+    return None
+
+
+#: What the native probe must hold FIXED so it measures the architecture and only
+#: the architecture.
+#:
+#: The host rebuild runs under the pinned image's gcc 11; the target drivers are
+#: whatever this host ships (gcc 15 here). Two differences between those have
+#: nothing to do with 32 vs 64 bits and would otherwise be reported as decompiler
+#: defects:
+#:
+#: * the default C standard moved to gnu23, where `bool` is a keyword;
+#: * gcc 14 promoted five long-standing warnings to errors. The recovery does
+#:   pass a machine word where a pointer is expected (`read_be32(local_28)` in
+#:   `07_packet_parser`) — that is worth fixing, and `-Wint-conversion` is
+#:   exactly the right diagnostic for it — but it is a TYPE-RECOVERY defect that
+#:   is equally present at 64 bits, not evidence the target cannot compile this.
+#:   Letting it fail here would attribute an architecture-independent bug to the
+#:   32-bit lanes and make the probe's headline number wrong.
+_NATIVE_PARITY_FLAGS = (
+    "-std=gnu17",
+    "-Wno-error=implicit-function-declaration",
+    "-Wno-error=implicit-int",
+    "-Wno-error=int-conversion",
+    "-Wno-error=incompatible-pointer-types",
+    "-Wno-error=return-mismatch",
+    "-Wno-error=declaration-missing-parameter-type",
+)
+_NATIVE_PARITY_FLAGS_CXX = ("-std=gnu++17", "-fpermissive")
+
+
+def native_rebuild_diagnostic(
+    c_src: str, workdir: Path, tag: str, native_cc: list[str]
+) -> str:
+    """Compile the recovered C for the architecture it was recovered FROM.
+
+    The execution differential rebuilds the recovery for the HOST, because that is
+    where it can be run. That rebuild accepts C the target could never compile —
+    most importantly `__int128`, which does not exist on any 32-bit target and
+    which the renderer emitted for every 32-bit multiply-high until
+    `double_width_ctype` derived the intermediate from the operand width. DecBench
+    caught that; four green lanes here did not, and could not.
+
+    So compile the same translation unit with the target's own driver, object only
+    (`-c`): no link, no execution, nothing about behaviour. It answers exactly one
+    question — is what we emitted valid C for the machine we read it off — and a
+    `no` is a decompiler defect no host rebuild can see.
+
+    Returns `""` when it builds, else the compiler's diagnostic.
+    """
+    uses_cpp = bool(re.search(r"\b(?:try\s*\{|catch\s*\(|throw\b)", c_src))
+    translation_unit = NATIVE_PRELUDE + "\n" + c_src + "\n"
+    if uses_cpp:
+        translation_unit = 'extern "C" {\n' + translation_unit + "}\n"
+    src = workdir / f"native_{tag}.{'cpp' if uses_cpp else 'c'}"
+    src.write_text(translation_unit)
+    compiler = re.sub(r"gcc$", "g++", native_cc[0]) if uses_cpp else native_cc[0]
+    if shutil.which(compiler) is None:
+        # NOT a `nonportable` verdict. "We could not check" and "the target
+        # rejects our C" are opposite claims, and reporting the first as the
+        # second invents a decompiler defect out of a missing package. Callers
+        # reach here only for a target whose fixture already cross-built, so this
+        # is a broken environment and must fail the lane, not the function.
+        raise FileNotFoundError(
+            f"native rebuild probe wanted {compiler}, which is not on PATH"
+        )
+    r = subprocess.run(
+        [
+            compiler,
+            *native_cc[1:],
+            *(_NATIVE_PARITY_FLAGS_CXX if uses_cpp else _NATIVE_PARITY_FLAGS),
+            "-c",
+            "-fPIC",
+            "-O0",
+            "-w",
+            "-o",
+            str(workdir / f"native_{tag}.o"),
+            str(src),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode == 0:
+        return ""
+    return " ".join((r.stderr or r.stdout or "no compiler output").split())
+
+
+#: Types whose size changes between ILP32 and LP64. A recovered fragment naming
+#: none of them computes the same values at either width, so a host rebuild of it
+#: is a faithful stand-in for the 32-bit one — see `width_sensitive`.
+_WIDTH_VARYING = re.compile(
+    r"\blong\b|\b(?:size_t|ssize_t|intptr_t|uintptr_t|ptrdiff_t"
+    r"|__int128|__uint128_t|__int128_t)\b"
+)
+
+#: `long long` is 8 bytes at both widths, so it must be removed before looking for
+#: a bare `long` — a negative lookahead cannot do it, because in `long long f(...)`
+#: it is the SECOND `long` that is not followed by another.
+_FIXED_WIDTH_LONG_LONG = re.compile(r"\blong\s+long\b")
+
+
+def width_sensitive(c_src: str) -> bool:
+    """Whether rebuilding this recovered C at the host's pointer width can change
+    what it computes.
+
+    Conservative in the direction that matters: `False` means every type named is
+    fixed-width (`int`, `short`, `char`, `long long`, explicit `intN_t`), so the
+    64-bit rebuild the 32-bit lanes execute is value-identical to a 32-bit one and
+    a `fail` there is a real semantic defect rather than a portability artifact.
+    `True` only means "cannot be ruled out".
+
+    Pointers themselves are not listed. Their width does change, but the recovery
+    only ever dereferences pointers the harness allocated, at offsets it computed
+    itself, so the arithmetic stays self-consistent at either width; what breaks is
+    an integer type that silently changes size underneath a value.
+    """
+    return bool(_WIDTH_VARYING.search(_FIXED_WIDTH_LONG_LONG.sub(" ", c_src)))
+
+
 # ---------------------------------------------------------------------------
 # Decompile + compile
 # ---------------------------------------------------------------------------
@@ -732,6 +940,29 @@ def _inherited_cxx_runtime_args(binary: str) -> list[str]:
     return args
 
 
+#: Name the reference object is linked/loaded under inside a worker's scratch
+#: directory. Fixed, and short, so what the dynamic loader sees does not vary
+#: with where the gate happens to be run from — see `build_so_with_diagnostic`.
+REFERENCE_LINK_NAME = "reference.so"
+
+
+def _fixed_name_sibling(target: Path, workdir: Path) -> Path:
+    """A COPY of `target` at `workdir/reference.so`. Idempotent.
+
+    A copy rather than a symlink: the pinned toolchain compiles inside a
+    container that mounts only the directories the command line names, so a
+    symlink pointing outside `workdir` dangles there, the link step fails, and
+    `build_so_with_diagnostic` falls back to an unlinked object whose calls to
+    exported siblings then die with `undefined symbol` at load time. Copying is a
+    few tens of kilobytes per lane and cannot dangle.
+    """
+    copy = workdir / REFERENCE_LINK_NAME
+    resolved = target.resolve()
+    if not copy.exists() or copy.stat().st_mtime_ns != resolved.stat().st_mtime_ns:
+        shutil.copy2(resolved, copy)
+    return copy
+
+
 def build_so_with_diagnostic(
     c_src: str, workdir: Path, tag: str, link_against: str | None = None
 ) -> tuple[Path | None, str]:
@@ -754,7 +985,16 @@ def build_so_with_diagnostic(
 
     A self-recursive call still binds locally: `dlopen` searches the object itself
     before its dependencies, so the decompiled `fib` recurses into itself rather
-    than delegating to the original — otherwise the recursion would go untested."""
+    than delegating to the original — otherwise the recursion would go untested.
+
+    The dependency is recorded as a BARE NAME resolved through `$ORIGIN`, not as
+    an absolute path. The dynamic loader's own stack use scales with the path it
+    is handed, so a recovery that reads an uninitialised local saw different
+    residue depending on how long the scratch directory happened to be: the same
+    build of `04_switch_shapes:armv7:O0:dense_compute` reported `fail` under
+    `/tmp/aa` and `pass` under a 65-character sibling. `run_function` links a
+    fixed-name sibling into `workdir` for this to point at, so what the loader
+    sees is the same length wherever the gate is run from."""
     uses_cpp_exceptions = bool(re.search(r"\b(?:try\s*\{|catch\s*\(|throw\b)", c_src))
     src = workdir / f"{tag}.{'cpp' if uses_cpp_exceptions else 'c'}"
     translation_unit = PRELUDE + "\n" + c_src + "\n"
@@ -766,15 +1006,18 @@ def build_so_with_diagnostic(
     src.write_text(translation_unit)
     so = workdir / f"{tag}.so"
     compiler = "g++" if uses_cpp_exceptions else "gcc"
-    base = [compiler, "-shared", "-fPIC", "-O0", "-w", "-o", str(so), str(src)]
+    base = [compiler, "-shared", "-fPIC", "-O0", "-w", "-o", so.name, src.name]
     runtime_args = (
         _inherited_cxx_runtime_args(link_against)
         if link_against and Path(link_against).is_file()
         else []
     )
     if link_against and Path(link_against).is_file():
-        orig = Path(link_against).resolve()
-        r = TC.run(base + [str(orig), f"-Wl,-rpath,{orig.parent}", *runtime_args])
+        sibling = _fixed_name_sibling(Path(link_against), workdir)
+        r = TC.run(
+            base + [sibling.name, "-Wl,-rpath,$ORIGIN", *runtime_args],
+            cwd=workdir,
+        )
         if r.returncode == 0:
             return so, ""
         # Linking is an ENHANCEMENT, so its failure must not be reported as
@@ -782,7 +1025,7 @@ def build_so_with_diagnostic(
         # decompiler. Retry without: a function that calls no sibling links fine,
         # and one that does will say `undefined symbol` at load time, which is a
         # different and accurate message.
-    r = TC.run(base + runtime_args)
+    r = TC.run(base + runtime_args, cwd=workdir)
     if r.returncode == 0:
         return so, ""
     diagnostic = " ".join((r.stderr or r.stdout or "no compiler output").split())
@@ -878,9 +1121,7 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
             elif field_type["k"] == "self_ptr":
                 values.append(-1)
             else:
-                values.append(
-                    _wrap(field_seed, field_type["w"], field_type["s"])
-                )
+                values.append(_wrap(field_seed, field_type["w"], field_type["s"]))
         return values
 
     def chain(values, d, length):
@@ -928,8 +1169,7 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         pointee = _pointee_desc(d)
         if pointee["k"] == "struct":
             values = [
-                aggregate(rng.randrange(-64, 64), pointee)
-                for _ in range(ptr_len)
+                aggregate(rng.randrange(-64, 64), pointee) for _ in range(ptr_len)
             ]
             return chain(values, pointee, rng.randrange(1, ptr_len + 1))
         if is_cstr:
@@ -951,9 +1191,7 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         vectors.append(args)
 
     # Deterministic scalar boundaries, per scalar arg's own width/signedness.
-    scalar_ws = [
-        (d["w"], d.get("s", False)) for d in params if d["k"] != "ptr"
-    ]
+    scalar_ws = [(d["w"], d.get("s", False)) for d in params if d["k"] != "ptr"]
     n_bounds = max((len(M.scalar_boundaries(w, s)) for w, s in scalar_ws), default=0)
     for bi in range(n_bounds):
 
@@ -1020,7 +1258,14 @@ def _zero_value(d):
 #: that needs more than this is a fixture-design problem (pin the guard parameter
 #: with the manifest's `arg_values`), not something to paper over with a bigger
 #: number.
-WORKER_TIMEOUT_S = 60
+#:
+#: It MUST also exceed `vectors x DECOMPILED_CALL_BUDGET_S`, or a recovery that
+#: fails to terminate on every input gets its determinate `fail` converted into a
+#: machine-speed-dependent `timeout` — which blocks `--write-baseline` outright.
+#: At 60s and the default 12 vectors the two were exactly equal, and
+#: `18_binary_heap:aarch64:O0:heap_pop` (which does not terminate on any input)
+#: landed on whichever side the load average put it.
+WORKER_TIMEOUT_S = 300
 
 #: Wall clock for ONE call into the recompiled decompilation, once the original has
 #: already returned for the same input. Generous by three orders of magnitude for
@@ -1211,6 +1456,15 @@ def worker(spec_path: str) -> int:
     orig = ctypes.CDLL(spec["orig_so"])
     dec = ctypes.CDLL(spec["dec_so"])
     fo, fd = _ctypes_fn(orig, sig, forced_u8), _ctypes_fn(dec, sig, forced_u8)
+    # See PRELUDE: without a scrubbed stack, a recovery that reads an
+    # uninitialised local has no stable verdict at all. It lives in the REBUILT
+    # object because that is the one this harness owns the source of; a
+    # comparator artifact rebuilt without the prelude simply keeps the old,
+    # residue-dependent behaviour rather than failing to load.
+    scrub = getattr(dec, "glaurung_scrub_stack", None)
+    if scrub is not None:
+        scrub.restype = None
+        scrub.argtypes = []
     progress_path = Path(spec["progress_path"])
 
     for vec in spec["vectors"]:
@@ -1229,12 +1483,8 @@ def worker(spec_path: str) -> int:
                     ob = _materialize_buffer(pointee, a)
                     db = _materialize_buffer(pointee, a)
                 else:
-                    ob = (ct * len(a))(
-                        *[_materialize_value(pointee, v) for v in a]
-                    )
-                    db = (ct * len(a))(
-                        *[_materialize_value(pointee, v) for v in a]
-                    )
+                    ob = (ct * len(a))(*[_materialize_value(pointee, v) for v in a])
+                    db = (ct * len(a))(*[_materialize_value(pointee, v) for v in a])
                 obufs.append(ob)
                 dbufs.append(db)
                 pointer_buffers[param_index] = (ob, db)
@@ -1246,6 +1496,8 @@ def worker(spec_path: str) -> int:
             else:
                 oargs.append(a)
                 dargs.append(a)
+        if scrub is not None:
+            scrub()
         ro = fo(*oargs)
         # The ORIGINAL returned, so this input terminates. If our version does not,
         # that is a behavioural divergence — the most severe kind — and it must be
@@ -1254,6 +1506,8 @@ def worker(spec_path: str) -> int:
         # disposition: the kernel kills this worker, and the parent maps that exact
         # signal to non-termination. It also bounds the gate's wall clock, which a
         # per-function timeout does not (a hung call used to burn the whole budget).
+        if scrub is not None:
+            scrub()
         signal.setitimer(signal.ITIMER_REAL, DECOMPILED_CALL_BUDGET_S)
         try:
             rd = fd(*dargs)
@@ -1357,8 +1611,39 @@ def run_function(
     lane=None,
     decompiled_by_va: dict[int, str] | None = None,
     allow_native_helper_fallback: bool = False,
+    reference_so: str | None = None,
+    reference_sig: dict | None = None,
+    native_cc: list[str] | None = None,
 ) -> dict:
+    """Run one function's execution differential.
+
+    `binary` is the object being *decompiled*. `reference_so` is the object the
+    recovery is executed against, and defaults to `binary` — which is the right
+    thing whenever the binary is host-loadable.
+
+    They differ only for cross-architecture lanes (`tools/arch_roundtrip.py`):
+    an AArch64, ARM32 or i386 object cannot be `dlopen`ed here, so the reference
+    is the same source built for the host. The question being asked is unchanged
+    — does the C recovered from that object behave like the source it came from —
+    and keeping an emulator out of the loop means a qemu bug can never be
+    mistaken for a decompiler bug.
+
+    `reference_so` is also what the rebuilt decompilation LINKS against. Linking
+    against a foreign-architecture object silently fails and every recovered body
+    that calls an exported sibling then dies at load time with `undefined symbol`
+    — a harness artifact indistinguishable from a decompiler bug (it accounted
+    for 44 of the first ARM run's "failures"). The host-side reference supplies
+    exactly the sibling behaviour the same-architecture lanes get.
+
+    `reference_sig` is that host object's DWARF signature for the same function,
+    used by `abi_incomparable` to refuse a verdict where the two builds do not
+    agree on the ABI types. `native_cc` is the target's own compiler driver and
+    flags: when given, the recovered body is additionally compiled FOR ITS OWN
+    ARCHITECTURE (see `native_rebuild_diagnostic`), which is the only build that
+    can reject C the target cannot spell.
+    """
     name = sig["name"]
+    reference_so = reference_so or binary
     ov = M.override(fixture, name)
     # Structural-only functions (function-pointer callbacks, void-no-buffer,
     # pointer returns) have no observable int value to diff — never a silent
@@ -1386,13 +1671,29 @@ def run_function(
         c,
         workdir,
         f"dec_{name}",
-        link_against=binary,
+        link_against=reference_so,
     )
     if dec_so is None:
         return {
             "status": "fail",
             "detail": f"decompiled C failed to compile: {diagnostic[-500:]}",
         }
+    # Checked BEFORE the ABI refusal below and before any execution: C the target
+    # cannot compile is a decompiler defect outright, and it must not be hidden
+    # behind a function whose two sides happen to be incomparable.
+    if native_cc is not None:
+        native = native_rebuild_diagnostic(c, workdir, name, native_cc)
+        if native:
+            return {
+                "status": "nonportable",
+                "detail": (
+                    f"recovered C does not compile for the architecture it was "
+                    f"recovered from ({' '.join(native_cc)}): {native[-400:]}"
+                ),
+            }
+    why_incomparable = abi_incomparable(sig, reference_sig)
+    if why_incomparable is not None:
+        return {"status": "incomparable", "detail": why_incomparable}
     vectors = make_vectors(sig, ov, seed, fuzz)
     if not vectors:
         # An infra/manifest problem (no inputs generated), NOT a decompiler
@@ -1400,24 +1701,48 @@ def run_function(
         return {"status": "nocases", "detail": "no executable cases"}
     progress_path = workdir / f"progress_{name}.json"
     progress_path.unlink(missing_ok=True)
+    # Every path the worker hands to `dlopen`/`open` is RELATIVE to `workdir`
+    # (it runs with `cwd=workdir`). The loader's own stack use scales with the
+    # path it is given, so absolute paths made a recovery that reads an
+    # uninitialised local report `fail` from `/tmp/aa` and `pass` from a
+    # 65-character sibling directory — the verdict was a property of where the
+    # gate was run from. Relative, fixed-length names remove the channel.
     spec = {
         "sig": sig,
-        "orig_so": binary,
-        "dec_so": str(dec_so),
+        "orig_so": f"./{_fixed_name_sibling(Path(reference_so), workdir).name}",
+        "dec_so": f"./{dec_so.name}",
         "vectors": vectors,
         "ptr_elem": ov.get("ptr_elem", "int"),
         "pointer_return_arg": ov.get("pointer_return_arg"),
-        "progress_path": str(progress_path),
+        "progress_path": progress_path.name,
     }
     spec_path = workdir / f"spec_{name}.json"
     spec_path.write_text(json.dumps(spec))
     try:
         r = subprocess.run(
-            [sys.executable, __file__, "--worker", str(spec_path)],
+            [
+                *BG.worker_launch_prefix(),
+                sys.executable,
+                __file__,
+                "--worker",
+                # Relative, from `cwd` below. argv lands on the initial stack
+                # next to the environment, so an ABSOLUTE spec path made the
+                # frame offset depend on how long the scratch directory's name
+                # happened to be — `GLAURUNG_FIXTURE_TMPDIR` alone was enough to
+                # flip `04_switch_shapes:armv7:O0:dense_compute`. Relative keeps
+                # argv a constant for a given function.
+                spec_path.name,
+            ],
             capture_output=True,
             text=True,
             timeout=WORKER_TIMEOUT_S,
             check=False,
+            cwd=str(workdir),
+            # Fixed environment + no address randomization: see
+            # `build_guard.worker_env`. Without all three, a recovery that reads
+            # an uninitialised local gives a different verdict per shell, per
+            # scratch directory, and per run.
+            env=BG.worker_env(),
         )
     except subprocess.TimeoutExpired:
         # NOT `fail`: exceeding a wall clock is not evidence that the
@@ -1447,7 +1772,14 @@ def run_function(
         verdict = json.loads(r.stdout.strip().splitlines()[-1])
     except (json.JSONDecodeError, IndexError):
         return {"status": "fail", "detail": "worker produced no verdict"}
-    return {"status": "pass" if verdict["ok"] else "fail", "detail": verdict["detail"]}
+    return {
+        "status": "pass" if verdict["ok"] else "fail",
+        "detail": verdict["detail"],
+        # Quantifies the residual 32-bit confound (see `width_sensitive`): a
+        # `fail` with this False is a real semantic defect, not a portability
+        # artifact of rebuilding at the host's width.
+        "width_sensitive": width_sensitive(c),
+    }
 
 
 INFRA_STATUSES = {"missing", "nocases", "timeout"}
@@ -1462,7 +1794,11 @@ def exit_code(results: dict) -> int:
     statuses = {r["status"] for r in results.values()}
     if statuses & INFRA_STATUSES:
         return 2
-    return 1 if "fail" in statuses else 0
+    # `nonportable` is a decompiler defect (we emitted C its own target cannot
+    # compile), so it is a semantic failure. `incomparable` is not a verdict about
+    # the decompiler at all — it is this harness declining to measure — so it
+    # neither passes nor fails the run.
+    return 1 if statuses & {"fail", "nonportable"} else 0
 
 
 def run(
@@ -1473,6 +1809,9 @@ def run(
     fuzz: int,
     only: set[str] | None = None,
     decompiled_by_va: dict[int, str] | None = None,
+    reference_so: str | None = None,
+    lane: str | None = None,
+    native_cc: list[str] | None = None,
 ) -> dict:
     """`only` restricts which functions are executed and reported.
 
@@ -1481,11 +1820,24 @@ def run(
     filtered run gives a filtered function exactly the verdict a full run would.
     A filter that changed the vectors would make `tools/dectest.py` a different
     measurement from the gate, which is the one thing it must not be.
+
+    `reference_so` (see `run_function`) is the host-loadable object the recovery
+    is executed and linked against; it defaults to `binary`. `lane` overrides the
+    lane label otherwise inferred from the binary's filename.
+
+    Only DYNAMICALLY EXPORTED functions are executed, at every architecture. A
+    file-local `static` helper has no dynamic symbol, so the reference side
+    cannot be called through ctypes at all, and — because it is local — the
+    round-trip closure in `include_referenced_local_callees` prepends the very
+    body being tested and the rebuild dies with `redefinition of ...`. Both are
+    harness artifacts; `static` helpers are covered where they belong, inside
+    their exported callers.
     """
     # `<fixture>-<compiler>-<opt>.so` — the lane a per-lane skip is keyed on.
-    stem = Path(binary).stem
-    parts = stem.rsplit("-", 2)
-    lane = f"{parts[1]}:{parts[2]}" if len(parts) == 3 else None
+    if lane is None:
+        stem = Path(binary).stem
+        parts = stem.rsplit("-", 2)
+        lane = f"{parts[1]}:{parts[2]}" if len(parts) == 3 else None
     results: dict[str, dict] = {}
     # A truly stripped (no-.debug_info) binary must ERROR — never a green all-
     # structural run. (has_dwarf_info() also counts .eh_frame, so check the
@@ -1502,6 +1854,27 @@ def run(
     if not exported:
         return {"__error__": f"no exported functions in {binary}"}
     sig_by_name = {s["name"]: s for s in signatures(binary)}
+    # Zero recoverable signatures would make EVERY function `structural` — a
+    # green, entirely un-executed lane. That is the exact failure mode this gate
+    # exists to prevent, so it is an error, not a result. (A single unrecoverable
+    # signature still degrades to `structural`; only a wholesale loss is infra.)
+    if not sig_by_name:
+        return {"__error__": f"no DWARF signatures recoverable from {binary}"}
+    # The host reference's own prototypes. Only meaningful when it is a DIFFERENT
+    # build from the object being decompiled, which is exactly the cross-
+    # architecture case `abi_incomparable` exists for.
+    reference_sig_by_name: dict[str, dict] = {}
+    if reference_so is not None and str(reference_so) != str(binary):
+        reference_sig_by_name = {s["name"]: s for s in signatures(reference_so)}
+        if not reference_sig_by_name:
+            # Without the reference's prototypes every ABI mismatch is invisible
+            # and every verdict silently trusts the target's widths. Fail closed.
+            return {
+                "__error__": (
+                    f"no DWARF signatures recoverable from the reference "
+                    f"{reference_so} — ABI comparability cannot be checked"
+                )
+            }
     # Required-function presence = present in the symbol table. (A dropped/renamed
     # export is a real infra failure; an unparseable signature is not.)
     for req in M.REQUIRED_FUNCTIONS.get(fixture, []):
@@ -1550,6 +1923,9 @@ def run(
                 lane=lane,
                 decompiled_by_va=decompiled_by_va,
                 allow_native_helper_fallback=owns_decompilation,
+                reference_so=reference_so,
+                reference_sig=reference_sig_by_name.get(name),
+                native_cc=native_cc,
             )
     return results
 
@@ -1568,6 +1944,25 @@ def main() -> int:
         default=None,
         help="only this function (repeatable); default: every export",
     )
+    ap.add_argument(
+        "--reference-so",
+        default=None,
+        help="host-loadable object to execute/link the recovery against "
+        "(default: the binary itself; differs only for cross-architecture lanes)",
+    )
+    ap.add_argument(
+        "--lane",
+        default=None,
+        help="lane label for manifest per-lane skips (default: inferred from the "
+        "binary filename)",
+    )
+    ap.add_argument(
+        "--native-cc",
+        default=None,
+        help="the TARGET's own compiler driver and flags, JSON list. Every "
+        "recovered body is additionally compiled for that architecture; C the "
+        "target cannot spell is reported `nonportable`.",
+    )
     ap.add_argument("--worker", default=None)
     args = ap.parse_args()
 
@@ -1584,6 +1979,9 @@ def main() -> int:
         args.seed,
         args.fuzz,
         only=set(args.function) if args.function else None,
+        reference_so=args.reference_so,
+        lane=args.lane,
+        native_cc=json.loads(args.native_cc) if args.native_cc else None,
     )
     if args.json:
         print(json.dumps(results, indent=2))
@@ -1598,6 +1996,8 @@ def main() -> int:
         "missing": "MISSING",
         "nocases": "NOCASES",
         "timeout": "TIMEOUT",
+        "incomparable": "INCOMP",
+        "nonportable": "NONPORT",
     }
     counts = {k: 0 for k in tags}
     for name, r in sorted(results.items()):
@@ -1606,7 +2006,8 @@ def main() -> int:
     print(
         f"\n{counts['pass']} pass, {counts['fail']} fail, {counts['structural']} structural, "
         f"{counts['missing']} missing, {counts['nocases']} no-cases, "
-        f"{counts['timeout']} timed out"
+        f"{counts['timeout']} timed out, {counts['incomparable']} ABI-incomparable, "
+        f"{counts['nonportable']} non-portable"
     )
     return exit_code(results)
 

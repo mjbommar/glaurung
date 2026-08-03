@@ -111,6 +111,14 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
             }
         }
         if total_uses == 1 && first_use_idx == Some(i + 1) {
+            // (e) the use is somewhere `substitute_in_expr` can actually write.
+            // An `Expr::Lea` base/index is a REGISTER slot, not an expression,
+            // so substitution silently declines — and deleting the definition
+            // anyway leaves the address reading a name nothing assigns.
+            if reads_as_address_register(&stmts[i + 1], &temp) {
+                i += 1;
+                continue;
+            }
             substitute_in_stmt(&mut stmts[i + 1], &temp, &def_expr);
             stmts.remove(i);
             // Don't advance — the next iteration may inline a chained temp.
@@ -182,6 +190,77 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
         Expr::WideArithmetic { args, .. } => {
             args.iter().any(|argument| contains_reg(argument, target))
         }
+    }
+}
+
+/// Does `target` appear in a slot that only holds a register — an `Expr::Lea` or
+/// `Expr::PdbFieldAddr` base or index — anywhere in this statement?
+///
+/// Such a use is invisible to [`substitute_in_expr`], which leaves those nodes
+/// untouched by design, so its definition must be kept.
+fn reads_as_address_register(s: &Stmt, target: &VReg) -> bool {
+    fn in_expr(e: &Expr, target: &VReg) -> bool {
+        match e {
+            Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+                base.as_ref() == Some(target) || index.as_ref() == Some(target)
+            }
+            Expr::Reg(_)
+            | Expr::StackAddr { .. }
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Unknown(_) => false,
+            Expr::Deref { addr, .. } => in_expr(addr, target),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                in_expr(lhs, target) || in_expr(rhs, target)
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => in_expr(cond, target) || in_expr(if_true, target) || in_expr(if_false, target),
+            Expr::Un { src, .. } => in_expr(src, target),
+            Expr::Cast { expr, .. } => in_expr(expr, target),
+            Expr::FunctionTableEntry { index, .. } => in_expr(index, target),
+            Expr::WideArithmetic { args, .. } => {
+                args.iter().any(|argument| in_expr(argument, target))
+            }
+        }
+    }
+    let mut found = false;
+    for_each_expr_in_stmt(s, &mut |e| found |= in_expr(e, target));
+    found
+}
+
+/// Visit every top-level expression of a statement.
+fn for_each_expr_in_stmt(s: &Stmt, visit: &mut impl FnMut(&Expr)) {
+    match s {
+        Stmt::IndirectGoto { target } => visit(target),
+        Stmt::Assign { src, .. } => visit(src),
+        Stmt::Store { addr, src, .. } => {
+            visit(addr);
+            visit(src);
+        }
+        Stmt::Call { target, args, .. } => {
+            visit(target);
+            for a in args {
+                visit(a);
+            }
+        }
+        Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
+            visit(cond)
+        }
+        Stmt::Return { value } => {
+            if let Some(e) = value {
+                visit(e);
+            }
+        }
+        Stmt::Push { value } => visit(value),
+        Stmt::Switch { discriminant, .. } => visit(discriminant),
+        _ => {}
     }
 }
 
@@ -452,7 +531,7 @@ mod tests {
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
     use crate::ir::types::{
-        BinOp, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value,
+        BinOp, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value, Width,
     };
 
     fn mk_single_block(ops: Vec<Op>) -> LlirFunction {
@@ -508,6 +587,53 @@ mod tests {
             !text.contains("%t0 ="),
             "temp definition not removed: {}",
             text
+        );
+    }
+
+    /// A temporary whose only use is an address's index survives.
+    ///
+    /// `substitute_in_expr` deliberately refuses to rewrite inside an
+    /// `Expr::Lea`, whose base and index are *registers*, not expressions.
+    /// Removing the definition anyway left the address reading a name nothing
+    /// ever assigned — undefined behaviour in the recovered C, and a wrong
+    /// answer from the recompiled function.
+    ///
+    /// Latent until AArch64: a `Lea` slot only ever held a physical register, so
+    /// this loop — which inlines `VReg::Temp` definitions only — could not reach
+    /// it. `ldr x0,[x1, w2, sxtw #2]` puts the widened index in a temporary and
+    /// does.
+    #[test]
+    fn a_temp_used_only_as_an_address_index_keeps_its_definition() {
+        let lf = mk_single_block(vec![
+            Op::SExt {
+                dst: VReg::Temp(0),
+                src: Value::Reg(VReg::phys("w2")),
+                from: Width::W32,
+                to: Width::W64,
+            },
+            Op::Load {
+                dst: VReg::phys("w0"),
+                addr: MemOp {
+                    base: Some(VReg::phys("x1")),
+                    index: Some(VReg::Temp(0)),
+                    scale: 4,
+                    disp: 0,
+                    size: 4,
+                    segment: None,
+                    endian: crate::ir::types::Endian::Little,
+                },
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let r = recover(&lf, &ssa);
+        let mut f = lower(&lf, &r, "f");
+        reconstruct(&mut f);
+        let text = render(&f);
+        assert!(
+            text.contains("%t0 ="),
+            "the index temp's definition was removed but its use was not \
+             substituted, so the address reads an undefined name:\n{text}"
         );
     }
 
@@ -765,6 +891,7 @@ mod tests {
                 max_blocks: 128,
                 max_instructions: 2000,
                 timeout_ms: 500,
+                total_timeout_ms: 0,
             },
         );
         for fn_ in &funcs {

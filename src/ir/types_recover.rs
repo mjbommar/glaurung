@@ -1202,8 +1202,11 @@ fn live_in_parameter_view_hint(
     value: &SsaValue,
     raw: &TypeMap,
 ) -> Option<TypeHint> {
-    let mut widest = 0;
-    let mut widest_hints = Vec::new();
+    // Architectural reads (a real machine operand) and speculative ABI reads
+    // (the argument-register may-use list `abi::annotate_calls` hangs on every
+    // call) are accumulated separately. See `call_effect_use_floor`.
+    let mut real = (0u8, Vec::new());
+    let mut speculative = (0u8, Vec::new());
     for (block_idx, block) in lf.blocks.iter().enumerate() {
         for (instr_idx, instruction) in block.instrs.iter().enumerate() {
             let addr = InstrAddr {
@@ -1211,24 +1214,34 @@ fn live_in_parameter_view_hint(
                 instr_idx,
             };
             let (_, uses) = def_uses(&instruction.op);
+            let floor = call_effect_use_floor(&instruction.op);
             for (use_index, register) in uses.iter().enumerate() {
                 if ssa.use_value(lf, addr, use_index).as_ref() != Some(value) {
                     continue;
                 }
+                let bucket = match floor {
+                    Some(floor) if use_index >= floor => &mut speculative,
+                    _ => &mut real,
+                };
                 let width = reg_width_bytes(register);
-                if width < widest {
+                if width < bucket.0 {
                     continue;
                 }
-                if width > widest {
-                    widest = width;
-                    widest_hints.clear();
+                if width > bucket.0 {
+                    bucket.0 = width;
+                    bucket.1.clear();
                 }
                 if let Some(hint) = raw.get(register) {
-                    widest_hints.push(hint);
+                    bucket.1.push(hint);
                 }
             }
         }
     }
+    // A real read is evidence of the source width; the ABI annotation is only a
+    // convention-wide placeholder, so it decides nothing unless it is all there
+    // is. Without this split every parameter of every function that calls
+    // anything was widened to the machine word and rendered `long`.
+    let (widest, widest_hints) = if real.0 > 0 { real } else { speculative };
     if widest == 0 {
         return None;
     }
@@ -1246,6 +1259,29 @@ fn live_in_parameter_view_hint(
         },
         other => other,
     })
+}
+
+/// First index in [`def_uses`]'s use list that belongs to a call's synthesized
+/// [`crate::ir::abi::CallEffects::args`], or `None` for any other operation.
+///
+/// `Op::Call` reports the convention's whole argument-register list as uses so
+/// that liveness and DCE stay sound across the call. Those entries are a
+/// may-use of a 64-bit register, not an observation that the callee read all 64
+/// bits — for a `mov %esi, ...` parameter, the only architectural evidence is
+/// the four-byte view. An indirect call's target read precedes the effect args
+/// and is a genuine read, so it stays below the floor.
+fn call_effect_use_floor(op: &Op) -> Option<usize> {
+    match op {
+        Op::Call { target, effects } => {
+            let effects = effects.as_ref()?;
+            let target_uses = usize::from(matches!(
+                target,
+                crate::ir::types::CallTarget::Indirect(crate::ir::types::Value::Reg(_))
+            ));
+            (!effects.args.is_empty()).then_some(target_uses)
+        }
+        _ => None,
+    }
 }
 
 /// Recover a prototype with the binary-level ARM VFP argument contract.
@@ -2977,6 +3013,79 @@ mod tests {
                 succs: vec![],
             }],
         }
+    }
+
+    #[test]
+    fn abi_call_liveness_does_not_widen_a_narrowly_read_parameter() {
+        // `abi::annotate_calls` gives EVERY call the convention's full argument
+        // register list as a may-use, so a function that calls anything appears
+        // to read all six 64-bit argument registers. That annotation is
+        // speculative liveness, not an architectural read: here the only real
+        // machine read of `rsi` is the four-byte `esi` spill that `-O0` emits
+        // for an `int` parameter, so the recovered parameter must stay 4 bytes
+        // wide. Before this was separated, any function containing a call had
+        // every parameter widened to the machine word and rendered `long`.
+        let mut lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("rbp")),
+                    disp: -0x18,
+                    size: 4,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("esi")),
+            },
+            Op::Call {
+                target: crate::ir::types::CallTarget::Direct(0x2000),
+                effects: None,
+            },
+            Op::Return,
+        ]);
+        crate::ir::abi::annotate_calls(&mut lf, crate::ir::call_args::CallConv::SysVAmd64);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([1]),
+        );
+        assert_eq!(
+            prototype.parameter(1).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "the four-byte esi spill is the only real read of the parameter"
+        );
+    }
+
+    #[test]
+    fn a_parameter_only_forwarded_to_a_call_keeps_the_machine_word() {
+        // With no architectural read at all the convention's register width is
+        // still the best available fact, so the fallback must not narrow.
+        let mut lf = mk_block(vec![
+            Op::Call {
+                target: crate::ir::types::CallTarget::Direct(0x2000),
+                effects: None,
+            },
+            Op::Return,
+        ]);
+        crate::ir::abi::annotate_calls(&mut lf, crate::ir::call_args::CallConv::SysVAmd64);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([1]),
+        );
+        assert_eq!(
+            prototype.parameter(1).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            }),
+            "an unread parameter keeps the ABI register width"
+        );
     }
 
     #[test]
@@ -5324,6 +5433,7 @@ int never_returns(void) { for (;;) {} }
                 max_blocks: 128,
                 max_instructions: 2000,
                 timeout_ms: 500,
+                total_timeout_ms: 0,
             },
         );
         let mut saw_pointer = false;

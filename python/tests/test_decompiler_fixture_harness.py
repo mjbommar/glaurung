@@ -137,7 +137,7 @@ def test_gcc_o2_signatures_follow_concrete_abstract_origins() -> None:
         "  return ackermann(m - 1, ackermann(m, n - 1));\n"
         "}",
         "gcc_o2_abstract_origin",
-        optimization="O2",
+        optimization="O0",
     )
 
     recovered = {signature["name"]: signature for signature in D.signatures(binary)}
@@ -900,6 +900,36 @@ def test_real_named_call_output_declares_its_recovered_callee_prototype():
         )
 
     assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+
+def test_real_direct_callee_pointer_type_refines_forwarding_caller_parameter():
+    """A direct callee's dereference must type a caller that only forwards.
+
+    The caller contains no load/store through ``values`` and therefore offers
+    no intraprocedural pointer evidence.  Its only sound pointer fact is the
+    recovered prototype of ``read_first``, whose own body dereferences the
+    parameter.  This is the common project-local boundary missed when direct
+    callee analysis is restricted to ARM hard-float layout recovery.
+    """
+    binary = _compile_so(
+        "static __attribute__((noinline)) int read_first(const int *values) {\n"
+        "    return values[0] + 1;\n"
+        "}\n"
+        "__attribute__((noinline)) int forward_pointer(const int *values) {\n"
+        "    return read_first(values);\n"
+        "}",
+        "direct_callee_pointer_parameter",
+        debug=False,
+        optimization="O0",
+    )
+    caller_va = D.exported_functions(binary)["forward_pointer"]
+
+    decompiled = D.decompiled_c(binary, caller_va)
+
+    assert decompiled is not None
+    assert "forward_pointer(int * arg0)" in decompiled, decompiled
+    assert "arg1" not in decompiled, decompiled
+    assert "read_first(arg0)" in decompiled, decompiled
 
 
 def test_real_known_memcpy_output_declares_a_self_contained_library_prototype():

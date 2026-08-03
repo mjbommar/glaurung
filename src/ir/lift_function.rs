@@ -16,12 +16,23 @@ use crate::ir::use_def::def_uses;
 use crate::ir::{lift_arm32, lift_arm64, lift_x86};
 
 /// Lift a byte window into LLIR using the appropriate per-arch lifter.
-fn lift_window(bytes: &[u8], start_va: u64, arch: Arch, thumb: bool) -> Vec<LlirInstr> {
+///
+/// `image` is the whole file the window came from. ARM32 needs it: its
+/// constants live in a literal pool read through `ldr Rd,[pc,#imm]`, and the
+/// pool sits after the function's last basic block — outside every per-block
+/// window this function lifts.
+fn lift_window(
+    bytes: &[u8],
+    start_va: u64,
+    arch: Arch,
+    thumb: bool,
+    image: &[u8],
+) -> Vec<LlirInstr> {
     match arch {
         Arch::X86 => lift_x86::lift_bytes(bytes, start_va, 32),
         Arch::X86_64 => lift_x86::lift_bytes(bytes, start_va, 64),
         Arch::AArch64 => lift_arm64::lift_bytes(bytes, start_va),
-        Arch::ARM => lift_arm32::lift_bytes(bytes, start_va, thumb),
+        Arch::ARM => lift_arm32::lift_bytes_in_image(bytes, start_va, thumb, Some(image)),
         _ => Vec::new(),
     }
 }
@@ -86,7 +97,7 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
         }
         let window = &data[foff..end_off];
         let thumb = func.has_flag(crate::core::function::FunctionFlags::IS_THUMB);
-        let instrs = lift_window(window, start, arch, thumb);
+        let instrs = lift_window(window, start, arch, thumb, data);
 
         // Successors are the CFG successor block starts, which we can recover
         // from bb.successor_ids by finding the corresponding BasicBlock.
@@ -120,6 +131,9 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
     }
 
     recover_proven_direct_tail_calls(&mut blocks, func);
+    resolve_pc_thunk_calls(&mut blocks, |target| {
+        image_pc_thunk_register(data, arch, target)
+    });
     annotate_resolved_switch_indices(&mut blocks);
 
     if blocks.is_empty() {
@@ -445,6 +459,61 @@ fn recover_proven_direct_tail_calls(blocks: &mut [LlirBlock], func: &Function) {
     }
 }
 
+/// Replace each `call <PC thunk>` with the constant address it materialises.
+///
+/// See [`lift_x86::pc_thunk_register`] for what a PC thunk is and why it is
+/// recognised by its body rather than its name. `thunk_register` answers "what
+/// does the function at this VA leave in which register", and is a parameter so
+/// this rewrite is testable without an ELF image.
+///
+/// The materialised value is the address of the instruction *after* the call —
+/// the return address the thunk loads off the stack. That is the VA of the next
+/// LLIR instruction in the block, or the block's end when the call is last.
+/// [`Value::Addr`] rather than [`Value::Const`] so `const_fold` folds the
+/// following `add $_GLOBAL_OFFSET_TABLE_,%reg` into a single named address,
+/// exactly as it already does for the AArch64 `adrp`/`add` pair.
+fn resolve_pc_thunk_calls(
+    blocks: &mut [LlirBlock],
+    thunk_register: impl Fn(u64) -> Option<String>,
+) {
+    for block in blocks.iter_mut() {
+        for index in 0..block.instrs.len() {
+            let Op::Call {
+                target: CallTarget::Direct(target),
+                ..
+            } = block.instrs[index].op
+            else {
+                continue;
+            };
+            let Some(register) = thunk_register(target) else {
+                continue;
+            };
+            let va = block.instrs[index].va;
+            let return_va = block.instrs[index + 1..]
+                .iter()
+                .map(|instruction| instruction.va)
+                .find(|next| *next != va)
+                .unwrap_or(block.end_va);
+            block.instrs[index].op = Op::Assign {
+                dst: VReg::phys(&register),
+                src: Value::Addr(return_va),
+            };
+        }
+    }
+}
+
+/// The PC-thunk destination register for the function at `va` in `data`, if it
+/// is one. Only 32-bit x86 has the idiom: x86-64 addresses everything
+/// RIP-relative and never emits it, so the 64-bit lane is left untouched.
+fn image_pc_thunk_register(data: &[u8], arch: Arch, va: u64) -> Option<String> {
+    if arch != Arch::X86 {
+        return None;
+    }
+    let offset = va_to_code_file_offset(data, va)?;
+    let end = offset.saturating_add(4).min(data.len());
+    lift_x86::pc_thunk_register(data.get(offset..end)?).map(str::to_string)
+}
+
 /// Rewrite every residual [`Op::Unknown`] in `blocks` into a conservative
 /// [`Op::Intrinsic`] (see [`Op::opaque`]).
 fn lower_unknowns(blocks: &mut [LlirBlock]) {
@@ -462,6 +531,109 @@ mod tests {
     use super::*;
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use std::path::Path;
+
+    /// The i386 PIC preamble `call __x86.get_pc_thunk.bx ; add $GOT,%ebx` must
+    /// leave `ebx` holding the address of the instruction after the call — not a
+    /// call to a callee with no C spelling.
+    #[test]
+    fn a_pc_thunk_call_becomes_the_address_it_materialises() {
+        let mut blocks = vec![LlirBlock {
+            start_va: 0x11ba,
+            end_va: 0x11ca,
+            instrs: vec![
+                LlirInstr {
+                    va: 0x11c0,
+                    op: Op::Call {
+                        target: CallTarget::Direct(0x1380),
+                        effects: None,
+                    },
+                },
+                LlirInstr {
+                    va: 0x11c5,
+                    op: Op::Bin {
+                        dst: VReg::phys("ebx"),
+                        op: BinOp::Add,
+                        lhs: Value::Reg(VReg::phys("ebx")),
+                        rhs: Value::Const(0x2e2f),
+                    },
+                },
+            ],
+            succs: vec![],
+        }];
+        resolve_pc_thunk_calls(&mut blocks, |target| {
+            (target == 0x1380).then(|| "ebx".to_string())
+        });
+        assert_eq!(
+            blocks[0].instrs[0].op,
+            Op::Assign {
+                dst: VReg::phys("ebx"),
+                src: Value::Addr(0x11c5),
+            }
+        );
+    }
+
+    /// A thunk call that terminates its block has no following instruction to
+    /// read the return address from; the block's end VA is that address.
+    #[test]
+    fn a_trailing_pc_thunk_call_uses_the_block_end_as_its_return_address() {
+        let mut blocks = vec![LlirBlock {
+            start_va: 0x1000,
+            end_va: 0x1005,
+            instrs: vec![LlirInstr {
+                va: 0x1000,
+                op: Op::Call {
+                    target: CallTarget::Direct(0x2000),
+                    effects: None,
+                },
+            }],
+            succs: vec![0x1005],
+        }];
+        resolve_pc_thunk_calls(&mut blocks, |_| Some("eax".to_string()));
+        assert_eq!(
+            blocks[0].instrs[0].op,
+            Op::Assign {
+                dst: VReg::phys("eax"),
+                src: Value::Addr(0x1005),
+            }
+        );
+    }
+
+    /// An ordinary callee is not a thunk and must stay a call.
+    #[test]
+    fn a_non_thunk_call_is_left_alone() {
+        let call = Op::Call {
+            target: CallTarget::Direct(0x2000),
+            effects: None,
+        };
+        let mut blocks = vec![LlirBlock {
+            start_va: 0x1000,
+            end_va: 0x1005,
+            instrs: vec![LlirInstr {
+                va: 0x1000,
+                op: call.clone(),
+            }],
+            succs: vec![],
+        }];
+        resolve_pc_thunk_calls(&mut blocks, |_| None);
+        assert_eq!(blocks[0].instrs[0].op, call);
+    }
+
+    /// x86-64 has RIP-relative addressing and never emits the idiom, so the
+    /// image probe must refuse to look at all — the 64-bit lane cannot be
+    /// perturbed by this rewrite even if some callee happened to start with
+    /// those bytes.
+    #[test]
+    fn the_pc_thunk_image_probe_is_thirty_two_bit_only() {
+        // `mov (%esp),%ebx ; ret` at file offset 0 of a byte blob. The probe is
+        // asked about it under both architectures.
+        let data = std::fs::read(
+            "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-c-gcc-O0",
+        )
+        .expect("sample binary");
+        let entry = 0u64;
+        assert_eq!(image_pc_thunk_register(&data, Arch::X86_64, entry), None);
+        assert_eq!(image_pc_thunk_register(&data, Arch::ARM, entry), None);
+    }
 
     #[test]
     fn resolved_gcc_switch_snapshots_the_index_before_table_base_clobber() {
@@ -727,6 +899,7 @@ mod tests {
             max_blocks: 256,
             max_instructions: 4000,
             timeout_ms: 500,
+            total_timeout_ms: 0,
         };
         let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
         assert!(!funcs.is_empty(), "cfg produced no functions");
@@ -821,6 +994,7 @@ mod tests {
                 max_blocks: 256,
                 max_instructions: 20_000,
                 timeout_ms: 2000,
+                total_timeout_ms: 0,
             };
             let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
             let mut checked = 0;
@@ -912,6 +1086,7 @@ mod tests {
             max_blocks: 256,
             max_instructions: 4000,
             timeout_ms: 500,
+            total_timeout_ms: 0,
         };
         let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
         assert!(!funcs.is_empty(), "cfg produced no functions for arm64");

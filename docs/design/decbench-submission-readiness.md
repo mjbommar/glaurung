@@ -8,11 +8,299 @@ The native DecBench adapter is preserved and pushed to the Glaurung owner's
 DecBench fork as `codex/glaurung-external-eval` at `e110ad7`. It is not merged
 into `Noelo-Lab/decbench`: there is no upstream PR, issue, or submission.
 
-Last updated: 2026-07-30.
+Last updated: 2026-08-02.
 
 ## Current decision: do not submit
 
-### Current output checkpoint: `d6882dc`
+### Current output checkpoint: `a374669` + uncommitted working tree, compile regression repaired (2026-08-02, later)
+
+The 26-function compile regression recorded in the checkpoint below is **fixed**.
+The holdout was re-extracted from the repaired tree, re-packaged, re-ingested as
+column `glaurung-fix1`, and re-scored on all three official metrics with the same
+DecBench checkout (`efc5d5a`). Static-only throughout: nothing in the extraction
+or scoring path executes an input binary.
+
+**Package.** SHA-256
+`94963501e902af20908ab49c0575f16cd4a28e7f76fda774c1a8f6bed939e42b`, 258,248
+bytes, 225 files. Coverage 224/224 binaries and 250/250 target functions, zero
+adapter or decompilation errors; extraction 52.9 s wall at 12 workers. Retained
+at `~/projects/personal/decbench-evalkit-sample-set/glaurung-results-fix1.zip`
+and `.../glaurung-evidence-fix1/`.
+
+| official metric | baseline `5f8b933` | regressed `wt9c0ba99` | repaired `fix1` |
+|---|---:|---:|---:|
+| byte match (mean, n=250) | 0.1866975601529133 | 0.2285033717892795 | **0.2391510254904763** |
+| byte-match compile coverage | 250/250 | 224/250 | **250/250** |
+| type match (mean, n=235) | 0.1284714912163488 | 0.1814063697206141 | **0.1814063697206141** |
+| type match, perfect | 8 | 15 | 15 |
+| GED (mean, n=239, lower is better) | 29.807531380753137 | 28.527196652719667 | **28.527196652719667** |
+| GED, perfect | 52/239 | 56/239 | 56/239 |
+
+type_match and GED are bit-identical to the regressed checkpoint — the repair is
+confined to C emission and changes no recovered type or control-flow structure.
+byte match rises a further `+0.0107` on top of it, and all 26 lost functions
+compile again. Against the baseline: byte match improved on 139 functions,
+declined on 44, unchanged on 67 (was 131/52/67); functions with a nonzero byte
+match move `194 -> 204`. Per architecture, every lane now compiles 100 %:
+
+| | n | byte base | byte `wt9c0ba99` | byte `fix1` | compiles |
+|---|---:|---:|---:|---:|---|
+| ELF64-x86-64 | 158 | 0.2356 | 0.2720 | **0.2799** | 158 -> 146 -> **158** |
+| ELF32-ARM | 84 | 0.1013 | 0.1576 | **0.1660** | 84 -> 72 -> **84** |
+| PE32-i386 | 8 | 0.1180 | 0.1137 | **0.2027** | 8 -> 6 -> **8** |
+
+The PE32 lane — the one lane that moved the wrong way at `wt9c0ba99` — is now the
+largest relative gain, because both of its lost functions were the `__int128`
+ones.
+
+**The regression had five causes, not three.** The three named below are real and
+account for 22 of the 26; the full stderr classification is:
+
+1. **A void call assigned — 11 functions, all ARM32** (10 `void value not ignored
+   as it ought to be`, plus `cleanflight:m25p16_enable`, whose cast made it
+   `invalid use of void expression`). Root cause: `recover_direct_callee_layouts`
+   (`src/python_bindings/ir.rs`) analyses each direct callee's own body and
+   supplies a recovered `CallPrototype`; when that prototype's return is `void`,
+   `apply_recovered_callee_prototypes` installed it as the callee declaration but
+   left the caller's `dst` in place. It runs **only** for `CallConv::ArmHardFloat`,
+   which is exactly why the class is ARM-only. Fixed by dropping the destination,
+   the same authority rule `apply_known_call_contracts` already applies to catalog
+   contracts (`a5149a1`): the callee's definition-site evidence outranks the
+   caller's observation that a *caller-saved* result register was live out of the
+   call. Occurrences `18 -> 0`.
+2. **A portable global address in an integer slot — 9 functions.** Not "undeclared
+   globals": the compile error occurs even with Glaurung's own declaration
+   present. `Expr::Addr(va)` began rendering as `&glaurung_global_X[0]` — a real C
+   pointer — while `expression_has_pointer_representation` still classified
+   `Expr::Addr` as an integer (`Expr::Named`, its twin spelling, was already
+   classified as a pointer). Every integer-typed consumer therefore got a pointer
+   with no conversion. Fixed by making the classifier agree with the printer;
+   32 `(long)(&glaurung_global_...)` conversions now appear.
+   *Separately*, the declaration genuinely did not survive DecBench's per-function
+   slicing (`decbench.evalkit.ingest` keeps only the function definition, so the
+   file-scope `static` is dropped and the fixup pass injects `long g[1024]`). The
+   renderer now also emits `extern unsigned char glaurung_global_X[16];` inside
+   the body — legal against the file-scope `static` (C11 6.2.2p4), so whole-file
+   sharing is preserved and the sliced fragment declares everything it names.
+   Measured cost of self-declaring: on the 88 affected functions the mean is
+   0.26558 with the declaration against 0.27125 without (~0.002 on the 250-function
+   mean). The alternative of a block-scope `static` *definition* was also measured
+   and is much worse (0.19179) — it loses the shared object.
+3. **`__int128` on a 32-bit target — 2 PE32 functions.** `write_wide_arithmetic_dec`
+   hard-coded the 128-bit intermediate regardless of operand width. The
+   double-width type belongs to the operand width, so it is now derived
+   (`double_width_ctype`): 4-byte operands widen to `long long`, 8-byte operands
+   keep `__int128`. Occurrences `54 -> 40`, and all 40 remaining are on
+   ELF64-x86-64. `RandStrA` 0.0250 -> 0.2119 and `RandStrW` 0.0600 -> 0.5000
+   against the *baseline*, not just against zero.
+4. **16-byte transport builtins passed integers — 3 functions**
+   (`coreutils/sort:mergelines_node`, `libbsd:r_sort_a`, `shadow/groupmod:grp_update`).
+   `__builtin_memcpy`/`memmove`/`memset` take `void *`; their address operands were
+   written with the raw machine-word printer. They now go through the same
+   representation conversion as every other pointer boundary.
+5. **A recovered pointer parameter contradicted by the argument — 1 function**
+   (`crazyflie/cf2:write_power_mode`). The emitted declaration said `int *` and the
+   call passed a `char *`; "renders as a pointer" was treated as sufficient to skip
+   the boundary cast. Two *different* pointer types are still a type error, so the
+   declared parameter type is now reasserted when the argument's declared pointer
+   spelling differs.
+
+**Coverage added for defect 3.** `tools/arch_roundtrip.py` cannot catch it by
+construction — it declares `__int128` an *unsupported source* on its 32-bit lanes
+and rebuilds recovered C at the host pointer width, where the type exists.
+`python/tests/test_decompiler_wide_arithmetic_width.py` builds a real i386 and a
+real ARM32 shared object of constant divisions and a widening multiply, asserts no
+`__int128` in the recovered C, asserts the double-width intermediate was in fact
+recovered (non-vacuity), and **recompiles the recovered C for that same 32-bit
+target** — the only compile that can reject the type. An x86-64 control asserts a
+genuine 64x64 multiply-high still uses `__int128`.
+
+**Gates at this checkpoint.** `cargo test --lib` 1,657 passed / 0 failed (1,651 +
+6 new); `tools/fixture_harness.py` 656 pass / 0 fail / 67 structural;
+`pytest -m slow python/tests/test_decompiler_fixture_structural.py` 23 passed;
+`tools/arch_roundtrip.py --check` matches the recorded baseline exactly (x86-64
+328/328 = 100 % control lane clean, i386 244/272 = 89.7 %, aarch64 261/318 = 82.1 %,
+armv7 183/262 = 69.8 %); `tools/decbench_matrix.py --check` reports `FULL MATRIX:
+no per-cell regressions across 56 of 56 cells`; `tools/dectest.py @smoke` reports
+`SCOPED: 4 lanes of 120 (3%) — no regressions in scope`.
+
+**Verdict: unchanged — still do not submit.** The blocking gap is competitive,
+not mechanical: on pairwise-common keys type match and GED remain behind Ghidra,
+angr and Kuna. What has changed is that the package no longer scores worse than
+the one it replaces on DecBench's own compile oracle.
+
+### Superseded: output checkpoint `a374669` + uncommitted working tree (2026-08-02)
+
+Re-measured on the frozen 250-function / 224-binary `sample-set` holdout with
+the DecBench checkout at `efc5d5a`. Static-only: no blinded binary was executed,
+emulated, or made executable, and nothing in the scoring path executes one
+either — the only subprocesses are compilers run over Glaurung's own decompiled
+C and `objdump -h` reading input headers.
+
+**Package.** SHA-256
+`ea86525a638eaabba3ad5d7a73fc85573ac9bdaacc442559d28c45ed4d622709`,
+256,800 bytes, 225 files, 1,158,153 uncompressed bytes. Coverage is 224/224
+binaries and 250/250 target functions with zero adapter or decompilation errors,
+matching the standing coverage bar. Extraction took 74.7 s wall at 12 workers
+(883 s of summed per-binary work); the slowest binary was 4.66 s, against a
+206.52 s outlier at `19dde75`. The package and its scoring artifacts are retained
+at `~/projects/personal/decbench-evalkit-sample-set/glaurung-results-wt9c0ba99.zip`
+and `.../glaurung-evidence-wt9c0ba99/`.
+
+**The baseline is `5f8b933`, not `d6882dc`.** The `d6882dc` figure recorded
+below was superseded five times on 2026-07-30 without this document being
+updated. The last checkpoint with a full recorded official byte-match score is
+`5f8b933` (`byte_match_5f8b933.json`, 2026-07-30 07:24) at
+`0.1866975601529133`, 250/250 compiling. The intervening measured values were
+`6ddf4ce` 0.16146020536865263, `6175a19` 0.16206524218413854, `e4bbbef`
+0.18422828241317493, and `bd2d13c` 0.18421191793090594. Seven further packages
+(`923d740`, `afc2d64`, `ef303d2`, `f3ddcec`, `8ea9686`, `f7ce61d`, `b241e40`)
+were built and never scored at all. Quoting `d6882dc` as the reference would have
+overstated this checkpoint's byte-match gain by roughly 0.031.
+
+**Baseline reproduction.** `glaurung-results-5f8b933.zip` was re-ingested into a
+fresh column and re-scored with today's checkout. All 250 byte-match values and
+compilable flags, and all 235 type-match values, are bit-identical to the
+retained artifacts, with and without `DECBENCH_NO_CACHE=1`. The tooling
+reference point is therefore trustworthy and the A/B below is same-tooling.
+
+| official metric | baseline `5f8b933` | this checkpoint | delta |
+|---|---:|---:|---|
+| byte match (mean, n=250) | 0.1866975601529133 | 0.2285033717892795 | **+0.0418** (+22.4%) |
+| byte-match compile coverage | 250/250 | **224/250** | **-26 — regression** |
+| type match (mean, n=235) | 0.1284714912163488 | 0.1814063697206141 | **+0.0529** (+41.2%) |
+| type match, perfect | 8 | 15 | +7 |
+| GED (mean, n=239, lower is better) | 29.807531380753137 | 28.527196652719667 | **-1.2803** (-4.3%) |
+| GED, perfect | 52/239 | 56/239 | +4 |
+
+Byte match improved on 131 functions, declined on 52 and was unchanged on 67.
+Perfect byte matches stayed at 6; functions with a nonzero byte match moved
+`194 -> 191`, because 26 functions that used to compile no longer do and score 0.
+Type match improved on 44, declined on 20 and was unchanged on 171. GED improved
+on 58, worsened on 39 and was unchanged on 142; the largest single GED
+regression is `gnutls/certtool:yyparse` at `195 -> 357`.
+
+**Per architecture.** The holdout is 158 x86-64 ELF functions (158 binaries,
+13 of them shared objects), 84 ELF32-ARM functions (58 binaries) and 8 PE32-i386
+functions (8 binaries). It contains **no AArch64 and no ELF32 i386 at all**.
+
+| | n | byte base | byte new | byte delta | type base | type new | type delta | compiles |
+|---|---:|---:|---:|---|---:|---:|---|---|
+| ELF64-x86-64 | 158 | 0.2356 | 0.2720 | +0.0364 (+15.5%) | 0.1587 | 0.1698 | +0.0111 | 158 -> 146 |
+| ELF32-ARM | 84 | 0.1013 | 0.1576 | **+0.0563 (+55.6%)** | 0.0712 | 0.2192 | **+0.1480 (+208%)** | 84 -> 72 |
+| PE32-i386 | 8 | 0.1180 | 0.1137 | **-0.0043** | 0.1012 | 0.0417 | **-0.0595** | 8 -> 6 |
+
+GED does **not** show the same ARM concentration; it improves near-uniformly and
+slightly everywhere: x86-64 `33.7898 -> 32.3885` (n=157), ARM32
+`22.4865 -> 21.4054` (n=74), PE32 `19.3750 -> 18.6250` (n=8).
+
+The ARM32 hypothesis holds, decisively on type match and clearly on byte match,
+and the effect concentrates at `-O0` (ARM32 byte match `0.0978 -> 0.1648`,
++68.5%). It is corroborated structurally: across the ARM32 payloads only,
+emitted `int` declarations move `135 -> 338` while `long` declarations move
+`790 -> 517`, and leaked condition-flag temporaries move `145 -> 18`. The PE32
+slice regressed on both metrics; it is only eight functions, but it is the one
+lane that moved the wrong way.
+
+**Attribution limit — the gain is not the lifter fixes alone.** The A/B spans
+131 committed commits (47 on 2026-07-30, 77 on 2026-07-31, 7 on 2026-08-01;
+157 files, ~46k lines) *plus* the uncommitted working tree (~7.2k inserted lines
+across 21 core files). Many of the 2026-07-30 commits are themselves ARM- and
+DecBench-targeted (`recover ARM hard-float scalar expressions`, `recover ARM
+frame-backed results`, `preserve ARM narrow parameter semantics`). No isolation
+run was performed, so the holdout movement cannot be attributed to the
+cross-architecture execution differential's lifter work specifically. Note also
+that one of the shared-IR fixes credited for it — the `expr_reconstruct`
+`Expr::Lea` register-slot bug — is documented in its own regression test as
+"latent until AArch64", and the holdout contains no AArch64.
+
+**The compile regression is real and has three named causes.** (Superseded — see
+the repaired checkpoint above: the classification below is right about three of
+the five actual causes, and "undeclared globals" is the wrong root cause for the
+second.) 26 functions that compiled at `5f8b933` no longer do; zero moved the
+other way. Twelve of them had
+a nonzero byte match that is now 0, including `gnutls/systemkey:get_organization_crt_set`
+(0.3086 -> 0), `shadow/groupmod:grp_update` (0.2703 -> 0) and
+`cleanflight:m25p16_enable` (0.2500 -> 0). Classified from full compiler stderr:
+
+1. **`void value not ignored as it ought to be` — 10 functions, 9 of them ARM.**
+   The renderer emits `var58 = ((void (*)(int))sub_8000258)(0x80010e0);`: the
+   recovered callee prototype says `void` and the call is still assigned to a
+   result. This is the exact defect `a5149a1` drove to zero for *imported* void
+   callees, reappearing for locally recovered `sub_XXXX` callees. Occurrences of
+   the pattern move `0 -> 18` across the package.
+2. **Undeclared globals in integer slots — 14 functions.** The new work emits
+   `&glaurung_global_XXXX[0]` 1,100 times (from 0) and **never declares them**.
+   DecBench's fixup compiler injects `long glaurung_global_XXXX[1024];`, so the
+   expression is `long *`, and every use in a `long` slot fails
+   (`assignment to 'long int' from 'long int *'`, `passing argument 1 of
+   'sub_3506d' makes integer from pointer`, `__builtin_memcpy`, `pam_start`,
+   several `gnutls_*_allocate_*`). Emitting an identifier the payload does not
+   declare is the defect; the fixup compiler's `long[1024]` guess is only what
+   makes it visible.
+3. **`__int128` on a 32-bit target — 2 functions**, both PE32
+   (`dexter:RandStrA`, `dexter:RandStrW`). `__int128` occurrences move `0 -> 54`.
+   `tools/arch_roundtrip.py` declares this a *skip* on 32-bit lanes rather than a
+   failure, so its four green lanes cannot see it.
+
+**Like-for-like comparison — and a correction to the table further down.** The
+reference decompilers were only byte-match-scored on the 158 x86-64 functions;
+they have no score at all on the 84 ARM32 and 8 PE32 functions. Comparing
+Glaurung's 250-denominator compile count against their 152-158 denominators, as
+this document has been doing, is not a like comparison. On pairwise-common keys:
+
+| metric | n | Glaurung base | Glaurung new | Ghidra | angr | Kuna | IDA | Binja |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| byte match (x86-64 only) | 158 | 0.2356 | **0.2720** | 0.3106 | 0.3261 | 0.3322 | 0.3448 | 0.2350 |
+| compiles (x86-64 only) | 158 | 158 | **146** | 125 | 120 | 131 | 131 | 94 |
+| type match | ~217 | 0.1369 | **0.1941** | 0.2307 | 0.2798 | 0.1933 | 0.1895 | 0.3041 |
+| GED, lower better | ~225 | 30.556 | **29.236** | 20.431 | 22.212 | 18.951 | 20.640 | 30.975 |
+
+(Each column is restricted to the keys that reference scored, so `n` differs per
+pair; the byte-match row is 158 because the references have **no** byte-match
+score on the 84 ARM32 or 8 PE32 functions at all.)
+
+So: Glaurung's *compile rate* leads every reference decompiler on the common
+x86-64 set and always has — the "97/250 vs Ghidra 125/250" line recorded below
+under-reported it. On byte match Glaurung is now ahead of Binja and has halved
+the gap to Ghidra (`-0.075 -> -0.039`). On type match it has drawn level with
+Kuna and IDA and halved the gap to Ghidra (`-0.094 -> -0.037`), while angr and
+Binja remain ahead. On GED it is now ahead of Binja and the gap to Ghidra has
+narrowed from roughly 2x to about 1.43x — real progress, still not parity.
+
+**GED is measurable on this tree, contrary to the record.** The claim recorded
+under `d6882dc` that "the current sample tree cannot produce fresh GED/type-match
+values" is wrong on both counts: type match recomputes from `checkpoints/*.pkl`
+via `scripts/reeval_typematch.py` in about 4m20s, and GED scores from the tree's
+221 published `source_cfgs/*.json` via `decbench evaluate-tree` (about 65 min at
+16 workers) without needing the absent `.i` files. Only nuttx (3 binaries) has no
+source CFG, which is why GED scores 239 of 250 rather than 250. A second stale
+figure falls out of this: the retained GED of `41.335` for `f02ecb9` in the
+comparison table below is several days of work out of date — the reproduced
+`5f8b933` baseline already scores `29.808`, so the "roughly 2x GED gap" repeated
+throughout this document was already stale before this checkpoint.
+
+**Gates at this checkpoint.** `cargo test --lib` 1,651 passed / 0 failed;
+`tools/fixture_harness.py` 656 pass / 0 fail / 67 structural;
+`tools/arch_roundtrip.py --check` matches the recorded baseline exactly
+(x86-64 328/328 = 100%, i386 244/272 = 89.7%, aarch64 261/318 = 82.1%,
+armv7 183/262 = 69.8%); `tools/decbench_matrix.py --check` reports
+`FULL MATRIX: no per-cell regressions across 56 of 56 cells`.
+
+**Verdict: still do not submit.** All three official metrics moved in the right
+direction, the ARM hypothesis is confirmed on two of them, and compile rate leads
+the field on the common set. But the two axes this document has named as blocking
+are still short: on pairwise-common keys type match is 0.194 against Ghidra's
+0.231 and angr's 0.280, and GED is 29.24 against Ghidra's 20.43, angr's 22.21 and
+Kuna's 18.95. Against that, this checkpoint *introduces* a
+26-function compile regression from three defects that are ordinary emission
+bugs, not architectural limits — undeclared globals, a void result assigned, and
+`__int128` on a 32-bit target. Submitting a package that scores worse on
+DecBench's own compile oracle than the one it replaces, while two headline
+metrics are still behind the production reference, is not a submission. Fix the
+three defects, re-measure, and reconsider.
+
+### Previous output checkpoint: `d6882dc`
 
 The call-site specification, stack representation, and pointer-boundary slices
 now produce a valid static-only package covering all 250 target functions in

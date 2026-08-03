@@ -52,9 +52,15 @@ pub struct FunctionTableTarget {
     pub name: String,
 }
 
-/// Exact integer operations whose machine result is wider than an ordinary C
-/// scalar. Keeping them typed prevents x86's implicit high-half registers from
-/// disappearing at the LLIR-to-AST boundary.
+/// Exact integer operations that C has no operator for, and that therefore need
+/// their own renderer to survive the LLIR-to-AST boundary.
+///
+/// Originally this was only the operations whose machine result is *wider* than
+/// an ordinary C scalar — keeping them typed is what prevents x86's implicit
+/// high-half registers from disappearing. [`Self::CountLeadingZeros`] joins them
+/// for the same structural reason rather than the same arithmetic one: it is
+/// exactly representable in C, but only through a spelling no `BinOp`/`UnOp`
+/// covers, and its operand's *width* is part of its meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WideArithmetic {
     UnsignedMulHigh,
@@ -63,6 +69,10 @@ pub enum WideArithmetic {
     UnsignedDivRemainder,
     SignedDivQuotient,
     SignedDivRemainder,
+    /// `clz` — leading zeros of the operand at the declared width, with the
+    /// architectural `clz(0) == width_in_bits` (ARM DDI 0487 C6.2.66; AArch64
+    /// and ARM32 agree). NOT `__builtin_clz` alone, which is undefined at zero.
+    CountLeadingZeros,
 }
 
 impl WideArithmetic {
@@ -74,6 +84,7 @@ impl WideArithmetic {
             Self::UnsignedDivRemainder => "udiv_wide_remainder",
             Self::SignedDivQuotient => "sdiv_wide_quotient",
             Self::SignedDivRemainder => "sdiv_wide_remainder",
+            Self::CountLeadingZeros => "count_leading_zeros",
         }
     }
 }
@@ -365,6 +376,23 @@ pub struct Function {
 /// question: every register the preamble reads, other than one it defines itself
 /// earlier in the chain, must not be assigned anywhere in the body.
 ///
+/// The preamble is *itself* part of that body. It executes at the top of every
+/// iteration, so a register it assigns is loop-carried exactly like one the body
+/// assigns, and a statement that reads such a register **before** the preamble
+/// reassigns it is reading the previous iteration's value:
+///
+/// ```text
+/// cursor = estimate;                    <- reads the carried value
+/// estimate = (cursor + n / cursor) / 2; <- and produces the next one
+/// while (cursor > estimate) { ... }
+/// ```
+///
+/// Hoisting that runs the recurrence once and leaves the condition comparing two
+/// values nothing updates. Checking only the body missed it because the body here
+/// is just the latch. `newton_isqrt` at `gcc -O2` is the measured case: its whole
+/// Newton step moved out of the loop and the function returned the first estimate.
+///
+
 /// What remains disqualifying regardless of the body:
 ///
 /// * a MEMORY read — the body may store through the same pointer via a `Stmt::Store`
@@ -483,6 +511,11 @@ fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
     let mut body_assigns = std::collections::HashSet::new();
     collect_assigned(body, &mut body_assigns);
 
+    // Everything one iteration can change: the body's writes AND the preamble's
+    // own, since the preamble runs once per iteration too.
+    let mut carried = body_assigns.clone();
+    collect_assigned(pre, &mut carried);
+
     // Registers the preamble has defined so far: reading one of those is reading a
     // value this chain produced, not a loop-carried one.
     let mut defined_here: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -502,7 +535,7 @@ fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
                 let mut reads = std::collections::HashSet::new();
                 collect_read(src, &mut reads);
                 for r in &reads {
-                    if body_assigns.contains(r) && !defined_here.contains(r) {
+                    if carried.contains(r) && !defined_here.contains(r) {
                         return false;
                     }
                 }
@@ -623,7 +656,17 @@ fn wide_integer_intrinsic(
     let [(_, output_width)] = outs else {
         return None;
     };
-    let (stem, bits) = name.strip_prefix("x86.")?.rsplit_once('.')?;
+    // The lowerings below are pure C, not x86 semantics: AArch64's `umulh` and
+    // `smulh` are the same wide product as x86's `mul`/`imul` high half, and
+    // `sdiv`/`udiv` the same wide quotient. ARM32 has no divide instruction at
+    // all, but `ir::soft_helpers` lowers the libgcc division helpers into the
+    // same exact form. Accept every producer's namespace rather than
+    // duplicating the double-width renderer per architecture.
+    let (stem, bits) = name
+        .strip_prefix("x86.")
+        .or_else(|| name.strip_prefix("aarch64."))
+        .or_else(|| name.strip_prefix("arm."))?
+        .rsplit_once('.')?;
     let bits: u16 = bits.parse().ok()?;
     if output_width.bits() != bits || !matches!(bits, 16 | 32 | 64) {
         return None;
@@ -635,6 +678,7 @@ fn wide_integer_intrinsic(
         "udiv_rem" if ins.len() == 3 => WideArithmetic::UnsignedDivRemainder,
         "sdiv_quot" if ins.len() == 3 => WideArithmetic::SignedDivQuotient,
         "sdiv_rem" if ins.len() == 3 => WideArithmetic::SignedDivRemainder,
+        "clz" if ins.len() == 1 => WideArithmetic::CountLeadingZeros,
         _ => return None,
     };
     Some((op, (bits / 8) as u8))
@@ -6545,6 +6589,21 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
         out.push_str(");\n");
     }
 
+    // The portable objects above are file-scope definitions, which keeps the
+    // sharing between decompiled sibling functions that the original static
+    // storage had. Consumers that score ONE function definition sliced out of
+    // the translation unit never see them, so restate each one here: a
+    // block-scope `extern` of an identifier whose file-scope `static` is
+    // visible denotes that same internal-linkage object (C11 6.2.2p4), and the
+    // sliced fragment declares everything it names.
+    for address in ids.global_addresses.keys() {
+        let _ = writeln!(
+            out,
+            "    extern unsigned char {}[16];",
+            dec_global_name(*address)
+        );
+    }
+
     // A relocation-proven table is source-level data, not a raw image address
     // and not a set of guessed direct calls. Materialise it as a function-local
     // static object so standalone C preserves pointer-table indexing and storage
@@ -7652,25 +7711,47 @@ fn write_addr_arith_dec(
     out.push(')');
 }
 
+/// The C spelling of the *double-width* intermediate a `width`-byte
+/// multiply-high or wide divide computes in.
+///
+/// `__int128` is a 64-bit-target extension: naming it for 32-bit operands makes
+/// the fragment unbuildable for i386/ARM32/PE32 even though those are exactly
+/// the targets where a 32x32 multiply-high is most common. The intermediate is
+/// a property of the operand width, not of the host, so derive it.
+fn double_width_ctype(signed: bool, width: u8) -> &'static str {
+    match (signed, width) {
+        (true, 1) => "short",
+        (false, 1) => "unsigned short",
+        (true, 2) => "int",
+        (false, 2) => "unsigned int",
+        (true, 4) => "long long",
+        (false, 4) => "unsigned long long",
+        (true, _) => "__int128",
+        (false, _) => "unsigned __int128",
+    }
+}
+
 fn write_wide_arithmetic_dec(op: WideArithmetic, args: &[Expr], width: u8, out: &mut String) {
     let signed = int_ctype(true, width);
     let unsigned = int_ctype(false, width);
+    let wide_signed = double_width_ctype(true, width);
+    let wide_unsigned = double_width_ctype(false, width);
     let bits = u16::from(width) * 8;
     match (op, args) {
         (WideArithmetic::UnsignedMulHigh, [lhs, rhs]) => {
-            let _ = write!(out, "(({unsigned})(((unsigned __int128)({unsigned})(");
+            let _ = write!(out, "(({unsigned})((({wide_unsigned})({unsigned})(");
             write_expr_dec(lhs, out);
-            let _ = write!(out, ") * (unsigned __int128)({unsigned})(");
+            let _ = write!(out, ") * ({wide_unsigned})({unsigned})(");
             write_expr_dec(rhs, out);
             let _ = write!(out, ")) >> {bits}))");
         }
         (WideArithmetic::SignedMulHigh, [lhs, rhs]) => {
             let _ = write!(
                 out,
-                "(({signed})(((unsigned __int128)((__int128)({signed})("
+                "(({signed})((({wide_unsigned})(({wide_signed})({signed})("
             );
             write_expr_dec(lhs, out);
-            let _ = write!(out, ") * (__int128)({signed})(");
+            let _ = write!(out, ") * ({wide_signed})({signed})(");
             write_expr_dec(rhs, out);
             let _ = write!(out, "))) >> {bits}))");
         }
@@ -7684,7 +7765,7 @@ fn write_wide_arithmetic_dec(op: WideArithmetic, args: &[Expr], width: u8, out: 
             } else {
                 "%"
             };
-            let _ = write!(out, "(({unsigned})(((((unsigned __int128)({unsigned})(");
+            let _ = write!(out, "(({unsigned})((((({wide_unsigned})({unsigned})(");
             write_expr_dec(hi, out);
             let _ = write!(out, ") << {bits}) | ({unsigned})(");
             write_expr_dec(lo, out);
@@ -7701,12 +7782,41 @@ fn write_wide_arithmetic_dec(op: WideArithmetic, args: &[Expr], width: u8, out: 
             } else {
                 "%"
             };
-            let _ = write!(out, "(({signed})((((__int128)({signed})(");
+            let _ = write!(out, "(({signed})(((({wide_signed})({signed})(");
             write_expr_dec(hi, out);
-            let _ = write!(out, ") * (((__int128)1) << {bits})) + ({unsigned})(");
+            let _ = write!(out, ") * ((({wide_signed})1) << {bits})) + ({unsigned})(");
             write_expr_dec(lo, out);
             let _ = write!(out, ")) {symbol} ({signed})(");
             write_expr_dec(divisor, out);
+            out.push_str(")))");
+        }
+        (WideArithmetic::CountLeadingZeros, [value]) => {
+            // `clz(0)` is architecturally the operand's width in bits, and
+            // `__builtin_clz` is UNDEFINED there — so the zero case is spelled
+            // out rather than left to the builtin. The `({unsigned})` cast is
+            // the other half of the exactness: the IR keeps a 32-bit machine
+            // register at its canonical 64-bit width, and counting a 64-bit
+            // quantity's leading zeros would answer 32 too high.
+            //
+            // The operand is written twice. It is a pure value expression here
+            // (`can_eagerly_evaluate` governs what may reach an operand
+            // position), so the duplication costs width in the output and
+            // nothing in semantics — the same shape a compiler emits for this
+            // idiom.
+            let builtin = if bits >= 64 {
+                "__builtin_clzll"
+            } else {
+                "__builtin_clz"
+            };
+            let operand = if bits >= 64 {
+                "unsigned long long"
+            } else {
+                "unsigned int"
+            };
+            let _ = write!(out, "((({operand})(");
+            write_expr_dec(value, out);
+            let _ = write!(out, ") == 0) ? {bits} : {builtin}(({operand})(");
+            write_expr_dec(value, out);
             out.push_str(")))");
         }
         _ => out.push_str("__unknown(0)"),
@@ -8080,6 +8190,22 @@ fn call_argument_renders_as_pointer(arg: &Expr) -> bool {
     }
 }
 
+/// The exact C pointer type a call argument renders as, when it is known.
+///
+/// Two different pointer types are still a type error, so "renders as a
+/// pointer" is not enough to skip the boundary cast: the rendered type has to
+/// be the declared parameter type. Only register arguments have an exact
+/// declared spelling; everything else answers `None` and keeps the cast.
+fn call_argument_pointer_ctype(arg: &Expr) -> Option<String> {
+    match arg {
+        Expr::Reg(register @ VReg::Phys(_)) => {
+            let declared = declared_reg_ctype(register);
+            declared.ends_with('*').then_some(declared)
+        }
+        _ => None,
+    }
+}
+
 /// Render a value proven to flow through scalar floating-point storage.
 ///
 /// AAPCS-VFP commonly materialises a float field as `ldr r3, [base, #off]`
@@ -8302,7 +8428,13 @@ fn write_call_dec(
                 // when its base has pointer representation. Reassert every
                 // recovered pointer parameter at the consuming boundary so C
                 // sees the ABI pointer rather than an implicit integer cast.
-                || (parameter_type.ends_with('*') && !call_argument_renders_as_pointer(a))
+                || (parameter_type.ends_with('*')
+                    && (!call_argument_renders_as_pointer(a)
+                        // A pointer argument of a DIFFERENT pointer type is
+                        // still incompatible with the declaration this call
+                        // emits, so reassert the declared parameter type.
+                        || call_argument_pointer_ctype(a)
+                            .is_some_and(|rendered| &rendered != parameter_type)))
                 || representation_mismatch
                 // A recovered AAPCS-VFP parameter still proves the consuming
                 // storage class.  Render its complete expression in float
@@ -8417,10 +8549,15 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
                         || dec_is_stack_object(name))
                 })
         }
+        // A direct image address that was proven to be writable static storage
+        // is spelled `&glaurung_global_X[0]` — a real C pointer, not the
+        // integer literal the address used to render as. The classifier has to
+        // agree with the printer or every integer-typed consumer receives a
+        // pointer without a conversion.
+        Expr::Addr(address) => dec_is_global_addr(*address),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }
-        | Expr::Addr(_)
         | Expr::Bin { .. }
         | Expr::Un { .. }
         | Expr::Cmp { .. }
@@ -8580,7 +8717,11 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
                     out.push_str("__builtin_memcpy(");
                     write_reg_lvalue_dec(dst, out);
                     out.push_str(", ");
-                    write_expr_dec(source, out);
+                    // The builtin takes `void *`; the middle layer keeps the
+                    // machine address as an ordinary word, so it needs the same
+                    // representation conversion as every other pointer
+                    // boundary rather than an invalid implicit one.
+                    write_representation_value_dec("void *", source, out);
                     out.push_str(", 16);\n");
                     return;
                 }
@@ -8611,9 +8752,17 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
                 };
                 if let Some(source) = source {
                     out.push_str("__builtin_memmove(");
-                    write_expr_dec(addr, out);
+                    write_representation_value_dec("void *", addr, out);
                     out.push_str(", ");
-                    write_expr_dec(source, out);
+                    // A wide local is declared as a byte array and already
+                    // decays to `void *`; only machine-word addresses need the
+                    // representation conversion.
+                    match source {
+                        Expr::Reg(register) if dec_is_wide_local(register) => {
+                            write_reg_lvalue_dec(register, out)
+                        }
+                        _ => write_representation_value_dec("void *", source, out),
+                    }
                     out.push_str(", 16);\n");
                     return;
                 }
@@ -8623,7 +8772,7 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             // machine write instead of silently narrowing it to one `long`.
             if *size == 16 && matches!(src, Expr::Const(0)) {
                 out.push_str("__builtin_memset(");
-                write_expr_dec(addr, out);
+                write_representation_value_dec("void *", addr, out);
                 out.push_str(", 0, 16);\n");
                 return;
             }
@@ -9064,6 +9213,62 @@ mod tests {
                 "a nested assignment to `i` must block the hoist: {body:?}"
             );
         }
+    }
+
+    /// The preamble is part of the loop, so a register IT assigns is loop-carried
+    /// too. `newton_isqrt` at `gcc -O2` is the measured case: once value-number
+    /// coalescing removed the out-of-SSA copies that had been hiding the shape,
+    /// the whole Newton step sat in the header reading `estimate` and then
+    /// rewriting it, with only the iteration counter left in the body. Hoisting it
+    /// ran the recurrence exactly once and the function returned the first
+    /// estimate.
+    #[test]
+    fn a_preamble_reading_a_register_it_later_assigns_is_not_hoistable() {
+        let pre = vec![
+            Stmt::Assign {
+                dst: VReg::phys("cursor"),
+                src: Expr::Reg(VReg::phys("estimate")),
+            },
+            Stmt::Assign {
+                dst: VReg::phys("estimate"),
+                src: Expr::Bin {
+                    op: crate::ir::types::BinOp::Add,
+                    lhs: Box::new(Expr::Reg(VReg::phys("cursor"))),
+                    rhs: Box::new(Expr::Const(1)),
+                },
+            },
+        ];
+        // The body only decrements the trip counter — it never touches `estimate`,
+        // which is exactly why checking the body alone said "safe".
+        let body = vec![Stmt::Assign {
+            dst: VReg::phys("counter"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Sub,
+                lhs: Box::new(Expr::Reg(VReg::phys("counter"))),
+                rhs: Box::new(Expr::Const(1)),
+            },
+        }];
+        assert!(
+            !super::hoisting_the_header_is_safe(&pre, &body),
+            "`cursor = estimate` reads the value the next preamble statement \
+             produces, so the chain is loop-carried through the header itself"
+        );
+        // Reading a register the preamble assigns EARLIER is still fine: that is
+        // this chain's own value, not the previous iteration's.
+        let forward = vec![
+            Stmt::Assign {
+                dst: VReg::phys("scratch"),
+                src: Expr::Const(4),
+            },
+            Stmt::Assign {
+                dst: VReg::phys("limit"),
+                src: Expr::Reg(VReg::phys("scratch")),
+            },
+        ];
+        assert!(
+            super::hoisting_the_header_is_safe(&forward, &body),
+            "a forward-only preamble chain is invariant and must still hoist"
+        );
     }
 
     use super::*;
@@ -10540,6 +10745,7 @@ function f @ 0x1000 {
                 max_blocks: 128,
                 max_instructions: 2000,
                 timeout_ms: 500,
+                total_timeout_ms: 0,
             },
         );
         for f in &funcs {
@@ -10595,6 +10801,288 @@ function f @ 0x1000 {
         assert!(
             !rendered.contains("*(int *)(0x4024)"),
             "the original image VA cannot survive recompilation:\n{rendered}"
+        );
+    }
+
+    /// The portable object is a file-scope definition, but DecBench scores one
+    /// *function definition* sliced out of the submitted translation unit. A
+    /// reference whose only declaration lives above the signature is undeclared
+    /// in every consumer that slices, so the function body must declare it too.
+    #[test]
+    fn decbench_portable_static_storage_is_declared_inside_the_function() {
+        let function = Function {
+            name: "read_counter".to_string(),
+            entry_va: 0x1150,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Deref {
+                    addr: Box::new(Expr::Addr(0x4024)),
+                    size: 4,
+                }),
+            }],
+        };
+
+        let rendered = render_decbench(&function);
+        let body = rendered
+            .split_once('{')
+            .expect("a rendered function has a body")
+            .1;
+
+        assert!(
+            body.contains("extern unsigned char glaurung_global_4024[16];"),
+            "the sliced function body must declare the object it reads:\n{rendered}"
+        );
+    }
+
+    /// A direct image address that became a portable object now renders as a C
+    /// pointer (`&g[0]`). Every integer-typed consumer therefore needs the
+    /// explicit machine-word conversion the classifier is responsible for.
+    #[test]
+    fn decbench_portable_static_storage_converts_into_integer_slots() {
+        let function = Function {
+            name: "use_counter".to_string(),
+            entry_va: 0x1150,
+            body: vec![
+                // A dereference is what proves the VA denotes writable static
+                // storage; the bare address uses below then denote its object.
+                Stmt::Store {
+                    addr: Expr::Addr(0x32300),
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::Addr(0x5c620),
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var14"),
+                    src: Expr::Addr(0x32300),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x35100,
+                        name: "sub_35100".to_string(),
+                    },
+                    args: vec![Expr::Addr(0x5c620)],
+                    dst: Some(VReg::phys("var85")),
+                    call_spec: None,
+                },
+            ],
+        };
+
+        let rendered = render_decbench(&function);
+
+        assert!(
+            !rendered.contains("var14 = &glaurung_global_32300[0];"),
+            "a pointer cannot be assigned to a machine-word local:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("var14 = (long)(&glaurung_global_32300[0]);"),
+            "the portable object address needs its machine-word conversion:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("sub_35100(&glaurung_global_5c620[0])"),
+            "an integer parameter cannot receive a bare object pointer:\n{rendered}"
+        );
+    }
+
+    /// `clz` is exactly representable, but only if BOTH halves of its meaning
+    /// are stated: the operand's width (this IR keeps a 32-bit machine register
+    /// at 64 bits, so counting the whole register answers 32 too high) and the
+    /// architectural `clz(0) == 32`, which `__builtin_clz` leaves undefined.
+    #[test]
+    fn decbench_count_leading_zeros_states_its_width_and_its_zero_case() {
+        let function = Function {
+            name: "bitscan".to_string(),
+            entry_va: 0x401000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var1"),
+                src: Expr::WideArithmetic {
+                    op: WideArithmetic::CountLeadingZeros,
+                    args: vec![Expr::Reg(VReg::phys("arg0"))],
+                    width: 4,
+                },
+            }],
+        };
+
+        let rendered = render_decbench(&function);
+
+        assert!(
+            rendered.contains("__builtin_clz("),
+            "expected an exact leading-zero count:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("__builtin_clzll"),
+            "a 32-bit clz must not count a 64-bit quantity's zeros:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("(unsigned int)"),
+            "the operand's 32-bit width is part of the operation:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("== 0) ? 32 :"),
+            "clz(0) is 32 on ARM; __builtin_clz(0) is undefined:\n{rendered}"
+        );
+
+        let wide = Function {
+            name: "bitscan64".to_string(),
+            entry_va: 0x401000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var1"),
+                src: Expr::WideArithmetic {
+                    op: WideArithmetic::CountLeadingZeros,
+                    args: vec![Expr::Reg(VReg::phys("arg0"))],
+                    width: 8,
+                },
+            }],
+        };
+        let rendered = render_decbench(&wide);
+        assert!(
+            rendered.contains("__builtin_clzll(") && rendered.contains("== 0) ? 64 :"),
+            "a 64-bit clz counts 64 bits and answers 64 at zero:\n{rendered}"
+        );
+    }
+
+    /// `__int128` exists only on 64-bit targets. The double-width type belongs
+    /// to the *operand* width, so a 32-bit multiply-high must widen to 64 bits
+    /// and a 32-bit divide must not name a type the target cannot spell.
+    #[test]
+    fn decbench_wide_arithmetic_widens_to_the_operand_width() {
+        let function = Function {
+            name: "rand_step".to_string(),
+            entry_va: 0x401000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var18"),
+                    src: Expr::WideArithmetic {
+                        op: WideArithmetic::SignedMulHigh,
+                        args: vec![Expr::Const(-0x7cb1f4a1), Expr::Reg(VReg::phys("var8"))],
+                        width: 4,
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var31"),
+                    src: Expr::WideArithmetic {
+                        op: WideArithmetic::UnsignedDivQuotient,
+                        args: vec![
+                            Expr::Reg(VReg::phys("var27")),
+                            Expr::Reg(VReg::phys("var28")),
+                            Expr::Const(10),
+                        ],
+                        width: 4,
+                    },
+                },
+            ],
+        };
+
+        let rendered = render_decbench(&function);
+
+        assert!(
+            !rendered.contains("__int128"),
+            "32-bit wide arithmetic must not name a 64-bit-only type:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("long long"),
+            "a 32-bit multiply-high still needs a double-width type:\n{rendered}"
+        );
+
+        let wide = Function {
+            name: "wide_step".to_string(),
+            entry_va: 0x401000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var1"),
+                src: Expr::WideArithmetic {
+                    op: WideArithmetic::UnsignedMulHigh,
+                    args: vec![Expr::Reg(VReg::phys("arg0")), Expr::Reg(VReg::phys("arg1"))],
+                    width: 8,
+                },
+            }],
+        };
+        assert!(
+            render_decbench(&wide).contains("unsigned __int128"),
+            "64-bit operands still need the 128-bit intermediate"
+        );
+    }
+
+    /// The 16-byte transport builtins take `void *`. Their address operands are
+    /// ordinary machine-word expressions in the middle layer, so they need the
+    /// same representation conversion every other pointer boundary applies.
+    #[test]
+    fn decbench_wide_copy_addresses_convert_to_object_pointers() {
+        let function = Function {
+            name: "copy_pair".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var47"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(VReg::phys("var41"))),
+                            rhs: Box::new(Expr::Const(0x10)),
+                        }),
+                        size: 16,
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("var13")),
+                    src: Expr::Reg(VReg::phys("var47")),
+                    size: 16,
+                },
+            ],
+        };
+
+        let rendered = render_decbench(&prepare_for_decbench(&function));
+
+        assert!(
+            rendered.contains("__builtin_memcpy(var47, (void *)((var41 + 16)), 16);"),
+            "the copy source is an address, not an integer:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("__builtin_memmove((void *)(var13), var47, 16);"),
+            "the copy destination is an address, not an integer:\n{rendered}"
+        );
+    }
+
+    /// A recovered callee declaration and the argument the call actually passes
+    /// must agree. Two *different* pointer types are still a type error, so the
+    /// call site has to reassert the declared parameter type.
+    #[test]
+    fn decbench_recovered_pointer_parameter_is_reasserted_at_the_call() {
+        let function = Function {
+            name: "sub_801da04".to_string(),
+            entry_va: 0x801da04,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x801d49c,
+                    name: "sub_801d49c".to_string(),
+                },
+                args: vec![Expr::Reg(VReg::phys("arg0"))],
+                dst: Some(VReg::phys("var3")),
+                call_spec: Some(crate::ir::call_contracts::CallSiteSpec {
+                    callee_prototype: Some(CallPrototype {
+                        return_type: "int".into(),
+                        parameter_types: vec!["int *".into()],
+                        variadic: false,
+                        authority: CallPrototypeAuthority::Recovered,
+                    }),
+                    call_prototype: CallPrototype {
+                        return_type: "int".into(),
+                        parameter_types: vec!["int *".into()],
+                        variadic: false,
+                        authority: CallPrototypeAuthority::Recovered,
+                    },
+                }),
+            }],
+        };
+
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(
+            rendered.contains("sub_801d49c((int *)"),
+            "a declared pointer parameter must be reasserted at the call:\n{rendered}"
         );
     }
 
@@ -12276,8 +12764,8 @@ function f @ 0x1000 {
         let text = render_decbench(&prepared);
         assert!(
             text.contains("unsigned char var0[16] __attribute__((aligned(16)));")
-                && text.contains("__builtin_memcpy(var0, arg1, 16);")
-                && text.contains("__builtin_memmove(arg0, var0, 16);"),
+                && text.contains("__builtin_memcpy(var0, (void *)(arg1), 16);")
+                && text.contains("__builtin_memmove((void *)(arg0), var0, 16);"),
             "a 128-bit copy must not degrade to two 64-bit expressions: {text}"
         );
         assert!(!text.contains("long var0;"), "{text}");
@@ -12333,7 +12821,9 @@ function f @ 0x1000 {
         assert_eq!(text.matches("__builtin_memcpy(").count(), 2, "{text}");
         assert_eq!(text.matches("__builtin_memmove(").count(), 2, "{text}");
         let second_load = text.find("__builtin_memcpy(var1").expect("second load");
-        let first_store = text.find("__builtin_memmove(arg0").expect("first store");
+        let first_store = text
+            .find("__builtin_memmove((void *)(arg0)")
+            .expect("first store");
         assert!(
             second_load < first_store,
             "all machine loads must precede the first store: {text}"
