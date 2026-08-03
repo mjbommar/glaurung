@@ -39,6 +39,7 @@ exact state observed when these control documents were created.
 |---|---|
 | Detailed-plan commit | `a374669166288e53d451daefa39e891cc43b21aa` |
 | `origin/master` at worktree creation | `a374669166288e53d451daefa39e891cc43b21aa` |
+| Initial PLAN/STATUS integration | `db5cbe47eeafd444511b0db0c47bab7e32a5fb25`, pushed and verified on `origin/master` |
 | Documentation lane | `docs/agentic-plan-status`, based on `origin/master` |
 | Integration target | `master`, then `origin/master` after validation |
 | Concurrent checkout | `decompiler-gap-phase1` at `a374669`, with extensive unrelated dirty work |
@@ -105,7 +106,7 @@ not evidence for agent implementation or benchmark readiness.
 | G8 full repository tests | NOT RUN for this docs-only change | No production code changed |
 | G9 pilot/freeze | BLOCKED | Earlier gates incomplete |
 | G10 official external run | BLOCKED | Freeze and owner cost authorization absent |
-| G11 Git/remote integration | PENDING for this docs change | Verify after commit and push |
+| G11 Git/remote integration | PASS for initial PLAN/STATUS addition | `db5cbe47eeafd444511b0db0c47bab7e32a5fb25` matched `refs/heads/master` on 2026-08-03 |
 
 Do not infer one evidence state from another. In particular, documentation
 validation is not an implementation, behavioral, benchmark, or full-suite gate.
