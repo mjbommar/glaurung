@@ -111,10 +111,24 @@ def test_verify_diagnostics_are_opt_in():
         "diagnostics leaked into the default render — they would ship inside a "
         "submitted artifact"
     )
-    assert "glaurung-verify" in asked, (
-        "opting in produced no diagnostics; this lane's ratchet would silently stop "
-        "checking def-before-use"
-    )
+    # This used to also assert that opting in PRODUCED diagnostics here, as a
+    # canary that the ratchet had not stopped checking. That anchored the canary
+    # on the corpus staying broken: `06_calling_conventions:fact_mod` and `:fib`
+    # read an undefined `var0`, and when that was fixed the whole fixture corpus
+    # went to zero diagnostics and the assertion became unsatisfiable.
+    #
+    # The canary itself is not lost. `src/ir/verify_defs.rs` owns 29 direct
+    # tests, one of which pins the exact rendered string
+    # `// glaurung-verify: var0 is read but never defined`, so the detector
+    # cannot silently stop working. What this test still owns — and what only an
+    # end-to-end render can show — is that the diagnostics stay OFF by default.
+    #
+    # If a future violation reappears anywhere in the corpus, prefer fixing it to
+    # re-adding an assertion that depends on it existing.
+    #
+    # No assertion is made about `asked` containing diagnostics: on a clean
+    # corpus there are none to find, and a condition written to be satisfiable
+    # either way would be a tautology dressed as a check.
     # Same code either way: the diagnostics are additive comment lines only.
     assert [
         l for l in asked.splitlines() if "glaurung-verify" not in l
@@ -521,8 +535,28 @@ def test_nested_conditional_result_recovers_direct_returns(tmp_path: Path) -> No
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
-def test_classify_collapses_same_destination_diamonds(tmp_path: Path) -> None:
-    """The real GCC O0 return-value diamond must become nested selects."""
+def test_classify_keeps_the_source_if_chain_out_of_a_ternary(tmp_path: Path) -> None:
+    """The real GCC O0 return-value diamond must stay branches, not a ternary.
+
+    This assertion used to demand the opposite (`if (` absent, `?` present). It
+    was added when `select_fold` was introduced to delete *fake* control flow,
+    and collapsing every same-destination diamond was how that was done. But
+    `classify`'s source is an if/else-if/return chain:
+
+        int classify(int a,int b){ if(a>b) return a-b; else if(a<b) return b-a; return 0; }
+
+    and collapsing it produced one nested ternary. DecBench scores structure as
+    graph edit distance against the source CFG, and measured with the same
+    pyjoern the benchmark uses, the nested-ternary spelling is 6 nodes / 7 edges
+    against the source's 5 / 4 — GED 7 — while the branch spelling is an exact
+    match at GED 0. The scoped matrix agrees: `branches:gcc:O0` and
+    `branches:clang:O0` both went 7.0 -> 0.0.
+
+    The transform is NOT disabled — the fake-control-flow removal it exists for
+    still runs. `test_signs_renders_lifted_select_as_pure_ternary` below pins the
+    case where the source really is a ternary, and it is unchanged. What changed
+    is only that a joined result whose sole use is the `return` keeps its branch.
+    """
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
@@ -553,9 +587,9 @@ def test_classify_collapses_same_destination_diamonds(tmp_path: Path) -> None:
         env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
     )
 
-    assert "if (" not in result.stdout, result.stdout
-    assert "else" not in result.stdout, result.stdout
-    assert " ? " in result.stdout, result.stdout
+    assert " ? " not in result.stdout, result.stdout
+    assert result.stdout.count("if (") == 2, result.stdout
+    assert result.stdout.count("return ") == 3, result.stdout
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 

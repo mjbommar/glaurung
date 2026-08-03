@@ -918,6 +918,7 @@ mod tests {
                 max_blocks: 256,
                 max_instructions: 20_000,
                 timeout_ms: 2000,
+                total_timeout_ms: 0,
             },
         );
 
@@ -984,6 +985,7 @@ mod tests {
                 max_blocks: 256,
                 max_instructions: 20_000,
                 timeout_ms: 2000,
+                total_timeout_ms: 0,
             },
         );
 

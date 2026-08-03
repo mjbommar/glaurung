@@ -558,14 +558,10 @@
     "02_integer_widths:sar_signed": [],
     "02_integer_widths:sext_i8": [],
     "02_integer_widths:shr_unsigned": [],
-    "02_integer_widths:smul_high64": [
-      "var0 is read but never defined"
-    ],
+    "02_integer_widths:smul_high64": [],
     "02_integer_widths:srem64": [],
     "02_integer_widths:trunc_u8": [],
-    "02_integer_widths:umul_high64": [
-      "var0 is read but never defined"
-    ],
+    "02_integer_widths:umul_high64": [],
     "02_integer_widths:urem64": [],
     "02_integer_widths:zext_u32_to_u64": [],
     "03_loop_shapes:dowhile_atleastonce": [],
@@ -582,12 +578,8 @@
     "04_switch_shapes:sparse_switch": [],
     "05_cleanup_and_state_machine:fsm": [],
     "05_cleanup_and_state_machine:process": [],
-    "06_calling_conventions:fact_mod": [
-      "var0 is read but never defined"
-    ],
-    "06_calling_conventions:fib": [
-      "var0 is read but never defined"
-    ],
+    "06_calling_conventions:fact_mod": [],
+    "06_calling_conventions:fib": [],
     "06_calling_conventions:sum_arg0": [],
     "06_calling_conventions:sum_arg1": [],
     "06_calling_conventions:sum_arg10": [],
@@ -614,17 +606,13 @@
     "10_cpp_runtime_shapes:cpp_lambda_capture": [],
     "10_cpp_runtime_shapes:cpp_move": [],
     "10_cpp_runtime_shapes:cpp_raii_guard": [],
-    "10_cpp_runtime_shapes:cpp_virtual_dispatch": [
-      "var0 is read but never defined"
-    ],
+    "10_cpp_runtime_shapes:cpp_virtual_dispatch": [],
     "11_call_shapes:call_accumulate_bytes": [],
     "11_call_shapes:call_chain_in_loop": [],
     "11_call_shapes:call_fold_wide_result": [],
     "11_call_shapes:call_forward_result": [],
     "11_call_shapes:call_into_spill": [],
-    "11_call_shapes:call_nested": [
-      "var0 is read but never defined"
-    ],
+    "11_call_shapes:call_nested": [],
     "11_call_shapes:call_result_drives_branch": [],
     "11_call_shapes:call_result_unused": [],
     "11_call_shapes:call_twice_and_combine": [],

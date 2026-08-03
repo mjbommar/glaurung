@@ -319,7 +319,21 @@ def run_lanes(
     return result
 
 
-STATUS_KINDS = ("pass", "fail", "structural", "missing", "nocases", "timeout")
+#: Every verdict `diff_decompile` can return. `incomparable` and `nonportable`
+#: are produced only for cross-architecture lanes (`tools/arch_roundtrip.py`) and
+#: never appear in this gate's own x86-64 matrix, but they are declared here
+#: because both gates share this vocabulary and `schema_problems` rejects
+#: anything outside it.
+STATUS_KINDS = (
+    "pass",
+    "fail",
+    "structural",
+    "missing",
+    "nocases",
+    "timeout",
+    "incomparable",
+    "nonportable",
+)
 
 
 def summarize(result: dict) -> dict:
@@ -477,7 +491,11 @@ def main() -> int:
     )
     # Fail-closed: any real lane error or infra status fails the run (env-missing
     # is a declared, probed gap and does not).
-    return 1 if (c["fail"] or c["lane"] or c["missing"] or c["nocases"]) else 0
+    return (
+        1
+        if (c["fail"] or c["nonportable"] or c["lane"] or c["missing"] or c["nocases"])
+        else 0
+    )
 
 
 if __name__ == "__main__":

@@ -21,6 +21,16 @@ Harness workers also need the synced Python dependencies (notably
 ``pyelftools``).  An executable runner may itself start under system Python, so
 workers resolve `GLAURUNG_PYTHON`, then `.venv/bin/python`, then PATH rather
 than inheriting `sys.executable` blindly.
+
+**3. The execution worker must see a fixed address space and a fixed environment.**
+A recovered function that reads an uninitialised local dereferences whatever the
+stack happened to hold. With ASLR on that is a coin flip (`aslr_mode`); and even
+with ASLR off, the environment block sits at the top of the initial stack, so its
+*size* shifts every frame beneath it and the same build gives one answer in an
+interactive shell and another under the pre-push gate's `env -i` (`worker_env`).
+Both rules live here rather than in `tools/diff_decompile.py` because
+`tools/arch_roundtrip.py` records them in its baseline fingerprint, and this
+module is the one both can import without pulling in the native extension.
 """
 
 from __future__ import annotations
@@ -175,6 +185,76 @@ def export_bin_to_path(env: dict | None = None) -> dict:
     bindir = str(Path(glaurung_bin()).parent)
     if bindir not in env.get("PATH", "").split(os.pathsep):
         env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def aslr_mode() -> str:
+    """Whether the execution worker runs with address randomization disabled.
+
+    This changes what a verdict MEANS. A recovery that reads an uninitialised
+    local dereferences whatever the stack happened to contain, and with ASLR on
+    that is a coin flip: `09_memory_effects:armv7:O2:read_counter` recovers as
+    `*(int *)(*(int *)(var1 + 4) + var1)` over an uninitialised `var1` and
+    segfaulted on 4 of 8 identical runs, passing on the other 4 — one flapping
+    function is enough to make a ratchet unusable. With randomization off it
+    fails 6 of 6, which is the correct verdict.
+
+    Fail-soft here and fail-LOUD in the consumer: a host without `setarch`
+    (util-linux) still runs, but `tools/arch_roundtrip.py` records `RANDOMIZED`
+    in its baseline's `__toolchain__` and `--check` then refuses to compare
+    against a baseline recorded the other way, rather than silently reporting
+    phantom regressions and improvements.
+    """
+    return "no-randomize (setarch)" if shutil.which("setarch") else "RANDOMIZED"
+
+
+def worker_launch_prefix() -> list[str]:
+    """Argv prefix that disables address randomization — see `aslr_mode`."""
+    setarch = shutil.which("setarch")
+    return [setarch, "--addr-no-randomize"] if setarch else []
+
+
+#: Variables the execution worker genuinely needs. Everything else is dropped by
+#: `worker_env`.
+_WORKER_ENV_KEEP = (
+    "GLAURUNG_BIN",
+    "GLAURUNG_PYTHON",
+    "GLAURUNG_FIXTURE_TMPDIR",
+)
+
+
+def worker_env() -> dict:
+    """A FIXED environment for the execution worker.
+
+    Disabling randomization is not enough to make a verdict reproducible. The
+    environment block sits at the top of the initial stack, so its *size* shifts
+    every frame beneath it — and a recovered function that reads an uninitialised
+    local therefore returns different garbage depending on how many variables the
+    invoking shell happened to export. `09_memory_effects:armv7:O2:read_counter`
+    passed under an interactive shell and failed under the pre-push gate's
+    `env -i`, from one identical build.
+
+    So the worker gets a canonical environment: the handful of variables it
+    actually reads, plus a fixed `PATH`/locale/timezone. A verdict is then a
+    property of the decompilation, not of the shell that launched the gate.
+    Padding to a fixed total width keeps it stable even as those few values
+    change length.
+    """
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": "/",
+        "LC_ALL": "C",
+        "TZ": "UTC",
+    }
+    for key in _WORKER_ENV_KEEP:
+        if key in os.environ:
+            env[key] = os.environ[key]
+    # A fixed-width block: the values above (notably a repo-specific tmpdir) vary
+    # in length between checkouts, and that alone would move the stack.
+    width = sum(len(k) + len(v) + 2 for k, v in env.items())
+    env["GLAURUNG_STACK_PAD"] = "0" * max(
+        0, 4096 - width - len("GLAURUNG_STACK_PAD") - 2
+    )
     return env
 
 

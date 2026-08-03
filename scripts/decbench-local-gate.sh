@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 # The heavy decompiler gates, in one place.
 #
-# Hosted CI runs the light lanes; these four are too slow or need tools the
+# Hosted CI runs the light lanes; these five are too slow or need tools the
 # runners do not have, so they live here and are expected before a push that
 # touches decompilation:
 #
 #   1. cargo test           — fast, and the only lane that gates the Rust logic
-#   2. fixture matrix       — execution-differential, 4 lanes, ~3 min with jobs
-#   3. behavior matrices    — legacy + curriculum round trips, run concurrently
-#   4. decbench matrix      — per-cell metric ratchet; needs the DecBench fork
+#   2. fixture matrix       — execution-differential, x86-64, 4 lanes, ~3 min
+#   3. arch round trip      — the SAME differential for aarch64 / armv7 / i386
+#   4. behavior matrices    — legacy + curriculum round trips, run concurrently
+#   5. decbench matrix      — per-cell metric ratchet; needs the DecBench fork
 #
-# Lane 3 is skipped with a clear message when DECBENCH_DIR is unset, because it
-# cannot run without `decbench evaluate`. It is skipped LOUDLY: a silently absent
-# gate is how a metric regression reaches a submission.
+# Lane 3 exists because every lane of lane 2 — all 656 cases — is x86-64. Two of
+# the three lifted architecture families, and the 32-bit half of the third, had
+# no execution coverage at all: a change inverting a branch in every ARM binary
+# left the whole gate green. A missing cross compiler there is a FAILURE for the
+# same reason lane 5's missing metrics are.
+#
+# Lanes 4 and 5 are skipped with a clear message when DECBENCH_DIR is unset,
+# because they cannot run without `decbench evaluate`. They are skipped LOUDLY: a
+# silently absent gate is how a metric regression reaches a submission.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -41,9 +48,9 @@ if ! python tools/build_guard.py >/dev/null; then
   exit 1
 fi
 # Default to the durable DecBench checkout. It previously lived in a per-session
-# scratchpad, so DECBENCH_DIR came up unset, lane 3 skipped on every run, and ~25
-# metric cells regressed unnoticed across a whole session. Defaulting it means the
-# normal path needs no environment setup at all.
+# scratchpad, so DECBENCH_DIR came up unset, the DecBench lanes skipped on every
+# run, and ~25 metric cells regressed unnoticed across a whole session. Defaulting
+# it means the normal path needs no environment setup at all.
 : "${DECBENCH_DIR:=/nas4/data/workspace-infosec/decbench}"
 export CARGO_TARGET_DIR GLAURUNG_FIXTURE_JOBS GLAURUNG_DECBENCH_JOBS DECBENCH_DIR NO_COLOR=1 TERM=dumb
 unset FORCE_COLOR
@@ -52,14 +59,14 @@ fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
 note() { printf '  %s\n' "$1"; }
 
-step "1/4  cargo test"
+step "1/5  cargo test"
 if cargo test --lib --tests 2>&1 | tail -3; then
   note "ok"
 else
   note "FAILED"; fail=1
 fi
 
-step "2/4  decompiler fixture matrix + structural ratchet"
+step "2/5  decompiler fixture matrix + structural ratchet (x86-64)"
 note "exec tmpdir: $GLAURUNG_FIXTURE_TMPDIR"
 if python -m pytest -p no:cacheprovider -m slow -q \
      python/tests/test_decompiler_fixture_matrix.py \
@@ -69,11 +76,29 @@ else
   note "FAILED"; fail=1
 fi
 
+# Lane 2 is x86-64 in EVERY lane. This one is the only thing that executes a
+# single instruction lifted by src/ir/lift_arm64.rs, src/ir/lift_arm32.rs, or the
+# 32-bit half of src/ir/lift_x86.rs. It cross-builds the same 30-fixture corpus
+# for four architectures, decompiles it, rebuilds the recovered C for the host,
+# and diffs returns and mutated buffers against the same source built natively.
+# No qemu is in the loop deliberately: an emulator bug must never be mistakable
+# for a decompiler bug.
+#
+# A missing cross compiler FAILS rather than skips, exactly like lane 5's absent
+# metrics. Provision with:
+#   sudo apt install gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf gcc-multilib
+step "3/5  cross-architecture round trip (aarch64 / armv7 / i386 + control)"
+if tools/arch_roundtrip.py --check 2>&1 | tail -40; then
+  note "ok"
+else
+  note "FAILED"; fail=1
+fi
+
 # Behavior and metrics are intentionally separate. Run the two disjoint semantic
 # corpora concurrently: they use isolated cell directories and comparing original
 # vs rebuilt execution does not need Joern. A green metric matrix cannot substitute
 # for either of these source -> binary -> C -> rebuilt-binary checks.
-step "3/4  legacy + curriculum executable round trips"
+step "4/5  legacy + curriculum executable round trips"
 if [ ! -d "$DECBENCH_DIR" ]; then
   note "DECBENCH_DIR does not exist: $DECBENCH_DIR"
   note "FAILED: the executable matrices require the DecBench Python environment."
@@ -95,7 +120,7 @@ else
   fi
 fi
 
-# Lane 4 is the ONLY lane that scores GED / type_match / byte_match. It used to print
+# Lane 5 is the ONLY lane that scores GED / type_match / byte_match. It used to print
 # "Skipping is a gap, not a pass" and then exit 0 — which is how a session's worth of
 # semantic changes regressed ~25 of 56 cells with a green gate. A gate that can pass
 # while its only metric lane is absent is not a gate, so absence is now a FAILURE.
@@ -106,7 +131,7 @@ fi
 # a skip must not be silent. Set GLAURUNG_ALLOW_NO_METRICS=1 to waive it deliberately;
 # the waiver is then reported in the FINAL line rather than mid-output where it scrolls
 # past.
-step "4/4  decbench per-cell metric ratchet"
+step "5/5  decbench per-cell metric ratchet"
 waived=""
 if [ ! -d "$DECBENCH_DIR" ]; then
   note "DECBENCH_DIR does not exist: $DECBENCH_DIR"
@@ -136,4 +161,4 @@ if [ -n "$waived" ]; then
   echo "HEAVY GATE: passed WITHOUT METRICS (waived) — behavioural only, GED unverified"
   exit 0
 fi
-echo "HEAVY GATE: passed (all four lanes ran)"
+echo "HEAVY GATE: passed (all five lanes ran)"

@@ -27,6 +27,21 @@ use crate::ir::ast::{Expr, Function, Stmt};
 const CANARY_DISP: i64 = 0x28;
 const CANARY_NAME: &str = "__stack_chk_guard";
 
+/// The TLS slots `-fstack-protector` reads the guard from, as
+/// `(segment, displacement)`.
+///
+/// glibc puts the canary at a fixed offset in `tcbhead_t`, and that offset is
+/// per-ABI: x86-64 reads `fs:0x28`, 32-bit x86 reads `gs:0x14`. Both are load-
+/// bearing here — an unrecognised `gs:0x14` renders as a dereference of the
+/// literal address 0x14, which faults the moment the recovered C is executed,
+/// so every i386 fixture built with the distribution's default
+/// `-fstack-protector-strong` crashed rather than merely reading oddly.
+///
+/// The SEGMENT is part of the key, not just the displacement. Win32's TIB has
+/// unrelated fields low in `fs:`, and pairing the two keeps this to the two
+/// shapes glibc actually emits.
+const CANARY_TLS_SLOTS: &[(&str, i64)] = &[("fs", CANARY_DISP), ("gs", CANARY_DISP), ("gs", 0x14)];
+
 /// Additional well-known TLS offsets — stable across glibc versions and
 /// safe to label without risking false positives.
 ///
@@ -208,7 +223,12 @@ fn expr_mentions_slot(e: &Expr, slot: &str) -> bool {
 }
 
 fn expr_mentions_canary_marker(e: &Expr) -> bool {
-    if matches!(e, Expr::Const(CANARY_DISP)) || expr_mentions_guard(e) {
+    // Any of the per-ABI guard displacements, not just x86-64's `0x28` — the
+    // caller has already proved the expression mentions the canary save slot,
+    // which is what keeps this otherwise broad constant match safe.
+    if matches!(e, Expr::Const(c) if CANARY_TLS_SLOTS.iter().any(|(_, off)| off == c))
+        || expr_mentions_guard(e)
+    {
         return true;
     }
     match e {
@@ -390,6 +410,40 @@ fn rewrite_body(body: &mut [Stmt]) {
     }
 }
 
+/// The AArch64 shape: a load of the guard *through its GOT entry*.
+///
+/// There is no TLS segment override to key on. `gcc -fstack-protector` emits
+///
+/// ```text
+///   adrp x0, <got page>
+///   ldr  x0, [x0, #:got_lo12:__stack_chk_guard]   ; the guard's ADDRESS
+///   ldr  x1, [x0]                                 ; the guard's VALUE
+/// ```
+///
+/// so the AST is a dereference of a dereference of the GOT slot. The slot is
+/// named by an `R_AARCH64_GLOB_DAT` relocation that `analysis::elf_got` already
+/// resolves and `name_resolve` has already applied by the time this runs, so the
+/// match is on that *name* — never on the shape alone.
+///
+/// Leaving it unrecognised is not cosmetic. The renderer replaces an
+/// original-image address with a portable zero-filled object, so the recovered C
+/// dereferenced a null pointer: every `-fstack-protector` function with a local
+/// array took SIGSEGV when recompiled and run.
+fn got_indirect_guard(addr: &Expr) -> Option<(u64, &'static str)> {
+    let Expr::Deref { addr: slot, .. } = addr else {
+        return None;
+    };
+    match slot.as_ref() {
+        Expr::Named { va, name } if canary_symbol(name) => Some((*va, CANARY_NAME)),
+        _ => None,
+    }
+}
+
+/// Is this the guard symbol, allowing for a version suffix (`@GLIBC_2.17`)?
+fn canary_symbol(name: &str) -> bool {
+    name.split('@').next() == Some(CANARY_NAME)
+}
+
 fn rewrite_expr(e: &mut Expr) {
     match e {
         // Canonical shape: deref of a base-less/index-less Lea with a known
@@ -398,6 +452,13 @@ fn rewrite_expr(e: &mut Expr) {
             if let Some((disp, name)) = known_tls_load(addr) {
                 *e = Expr::Named {
                     va: disp as u64,
+                    name: name.to_string(),
+                };
+                return;
+            }
+            if let Some((va, name)) = got_indirect_guard(addr) {
+                *e = Expr::Named {
+                    va,
                     name: name.to_string(),
                 };
                 return;
@@ -452,8 +513,11 @@ fn known_tls_load(addr: &Expr) -> Option<(i64, &'static str)> {
         if !matches!(segment.as_deref(), Some("fs") | Some("gs")) {
             return None;
         }
-        if *disp == CANARY_DISP {
-            return Some((CANARY_DISP, CANARY_NAME));
+        if CANARY_TLS_SLOTS
+            .iter()
+            .any(|(seg, off)| segment.as_deref() == Some(*seg) && disp == off)
+        {
+            return Some((*disp, CANARY_NAME));
         }
         for (off, name) in KNOWN_TLS_OFFSETS {
             if *disp == *off {
@@ -466,7 +530,7 @@ fn known_tls_load(addr: &Expr) -> Option<(i64, &'static str)> {
 
 /// True when `addr` is the stack-canary TLS load specifically.
 fn is_canary_addr(addr: &Expr) -> bool {
-    matches!(known_tls_load(addr), Some((CANARY_DISP, _)))
+    matches!(known_tls_load(addr), Some((_, CANARY_NAME)))
 }
 
 #[cfg(test)]
@@ -487,6 +551,73 @@ mod tests {
             disp,
             segment,
         }
+    }
+
+    /// AArch64 reaches the guard through its GOT entry rather than through a
+    /// TLS segment override. Left unrecognised, the renderer substitutes a
+    /// portable zero-filled object for the original-image address and the
+    /// recovered C dereferences a null pointer.
+    #[test]
+    fn aarch64_got_indirect_canary_load_is_renamed() {
+        let guard_slot = Expr::Named {
+            va: 0x1ffd8,
+            name: "__stack_chk_guard".into(),
+        };
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("x1"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Deref {
+                        addr: Box::new(guard_slot),
+                        size: 8,
+                    }),
+                    size: 8,
+                },
+            }],
+        };
+        recognise_canary(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("statement shape changed");
+        };
+        assert_eq!(
+            *src,
+            Expr::Named {
+                va: 0x1ffd8,
+                name: "__stack_chk_guard".into()
+            },
+            "the GOT-indirect guard load was not recognised: {src:?}"
+        );
+    }
+
+    /// The match is on the relocation's SYMBOL, never on the double-deref shape
+    /// alone — an indirect load through any other GOT entry is ordinary code.
+    #[test]
+    fn a_got_indirect_load_of_another_symbol_is_left_alone() {
+        let other = Expr::Deref {
+            addr: Box::new(Expr::Deref {
+                addr: Box::new(Expr::Named {
+                    va: 0x1ffe0,
+                    name: "stdout".into(),
+                }),
+                size: 8,
+            }),
+            size: 8,
+        };
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("x1"),
+                src: other.clone(),
+            }],
+        };
+        recognise_canary(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("statement shape changed");
+        };
+        assert_eq!(*src, other, "an unrelated GOT load was rewritten");
     }
 
     #[test]
@@ -512,6 +643,79 @@ mod tests {
                 }
             );
         }
+    }
+
+    /// glibc's 32-bit x86 `tcbhead_t` puts the guard at `gs:0x14`. Unrecognised,
+    /// it renders as a dereference of the literal address 0x14 and faults.
+    #[test]
+    fn i386_canary_load_at_gs_0x14_is_renamed() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("eax"),
+                src: Expr::Deref {
+                    addr: Box::new(lea_abs_seg(0x14, Some("gs".to_string()))),
+                    size: 4,
+                },
+            }],
+        };
+        recognise_canary(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("statement shape changed");
+        };
+        assert_eq!(
+            *src,
+            Expr::Named {
+                va: 0x14,
+                name: "__stack_chk_guard".to_string(),
+            }
+        );
+    }
+
+    /// The segment is part of the key. Win32's TIB has unrelated fields low in
+    /// `fs:`, and glibc never reads the guard through `fs:` on 32-bit x86.
+    #[test]
+    fn fs_0x14_is_not_the_canary() {
+        let original = Expr::Deref {
+            addr: Box::new(lea_abs_seg(0x14, Some("fs".to_string()))),
+            size: 4,
+        };
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("eax"),
+                src: original.clone(),
+            }],
+        };
+        recognise_canary(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("statement shape changed");
+        };
+        assert_eq!(*src, original);
+    }
+
+    /// An absolute load from 0x14 with no segment override is ordinary memory.
+    #[test]
+    fn unsegmented_0x14_is_not_the_canary() {
+        let original = Expr::Deref {
+            addr: Box::new(lea_abs_seg(0x14, None)),
+            size: 4,
+        };
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("eax"),
+                src: original.clone(),
+            }],
+        };
+        recognise_canary(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("statement shape changed");
+        };
+        assert_eq!(*src, original);
     }
 
     #[test]

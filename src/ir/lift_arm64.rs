@@ -27,7 +27,64 @@ use crate::core::disassembler::{Architecture, Disassembler};
 use crate::core::instruction::{Instruction, Operand, OperandKind};
 use crate::disasm::capstone::CapstoneDisassembler;
 
+use crate::ir::regview;
 use crate::ir::types::*;
+use crate::ir::use_def::def_uses;
+
+/// Does a write through this register name totally overwrite its 64-bit parent
+/// with a zero-extended value? True for exactly the `wN` views (ARM DDI 0487
+/// B1.2.1: "the upper 32 bits of the X register are set to zero").
+fn zero_extends_parent(dst: &VReg) -> bool {
+    matches!(dst, VReg::Phys(name)
+        if regview::view(regview::Arch::AArch64, name).is_some_and(|v| v.zero_extends()))
+}
+
+/// Append the zero-extension every 32-bit register write performs.
+///
+/// [`crate::ir::ssa`] gives `wN` and `xN` one SSA identity, which is the only way
+/// `ldr w0,[sp,#12]` can reach `lsl x1,x0,#32` at all. That merge is only sound
+/// if the 32-bit write is modelled as the TOTAL write the architecture defines:
+/// without this, `and w0,w0,#0xffffff` on a register holding a 64-bit value would
+/// leave bits 32..63 intact and the next `x0` read would see them.
+///
+/// This is the AArch64 mirror of what [`crate::ir::lift_x86`] does for `eax`, and
+/// it deliberately uses the same shared [`regview`] descriptor rather than a
+/// private list of names.
+/// Only the LAST write of a given register within one instruction is widened:
+/// an alias lowered as a multi-step read-modify-write (`movk`, `bfi`) overwrites
+/// its own intermediates, so widening those too would be pure noise.
+fn with_parent_zero_extension(ops: Vec<Op>) -> Vec<Op> {
+    // `ZExt`-to-64 producers are already total writes of the parent.
+    let widened = |op: &Op| {
+        (!matches!(op, Op::ZExt { to: Width::W64, .. }))
+            .then(|| def_uses(op).0)
+            .flatten()
+            .filter(zero_extends_parent)
+    };
+    let mut last_def: Vec<Option<VReg>> = ops.iter().map(widened).collect();
+    if last_def.iter().all(Option::is_none) {
+        return ops;
+    }
+    let mut seen: Vec<VReg> = Vec::new();
+    for slot in last_def.iter_mut().rev() {
+        match slot {
+            Some(dst) if seen.contains(dst) => *slot = None,
+            Some(dst) => seen.push(dst.clone()),
+            None => {}
+        }
+    }
+    let mut out = Vec::with_capacity(ops.len() + seen.len());
+    for (op, widen) in ops.into_iter().zip(last_def) {
+        out.push(op);
+        out.extend(widen.map(|dst| Op::ZExt {
+            src: Value::Reg(dst.clone()),
+            dst,
+            from: Width::W32,
+            to: Width::W64,
+        }));
+    }
+    out
+}
 
 fn operand_reg(op: &Operand) -> Option<VReg> {
     if matches!(op.kind, OperandKind::Register) {
@@ -37,9 +94,23 @@ fn operand_reg(op: &Operand) -> Option<VReg> {
     }
 }
 
+/// `xzr`/`wzr` are not registers with a value — the architecture defines a read
+/// of either as zero (ARM DDI 0487 C1.2.5). Reading them as an ordinary register
+/// name made `str wzr,[sp,#24]` — the ordinary way gcc zeroes a local, 133 sites
+/// across the fixture corpus — store an undefined value instead of 0.
+fn is_zero_register(name: &str) -> bool {
+    matches!(name, "xzr" | "wzr")
+}
+
 fn operand_to_value(op: &Operand) -> Option<Value> {
     match op.kind {
-        OperandKind::Register => op.register.clone().map(|n| Value::Reg(VReg::phys(n))),
+        OperandKind::Register => op.register.clone().map(|n| {
+            if is_zero_register(&n) {
+                Value::Const(0)
+            } else {
+                Value::Reg(VReg::phys(n))
+            }
+        }),
         OperandKind::Immediate => op.immediate.map(Value::Const),
         _ => None,
     }
@@ -64,17 +135,33 @@ fn operand_to_memop(op: &Operand, size: u8) -> Option<MemOp> {
 }
 
 fn scalar_access_size(mnemonic: &str, register: &Operand) -> u8 {
-    match mnemonic {
-        "ldrb" | "ldrsb" | "strb" => 1,
-        "ldrh" | "ldrsh" | "strh" => 2,
-        "ldrsw" => 4,
-        _ => match register.register.as_deref() {
-            Some(name) if name.starts_with('w') || name.starts_with('s') => 4,
-            Some(name) if name.starts_with('h') => 2,
-            Some(name) if name.starts_with('b') => 1,
-            _ => 8,
+    match mnemonic.trim_start_matches("ldu").trim_start_matches("ld") {
+        "rb" | "rsb" | "b" | "sb" => 1,
+        "rh" | "rsh" | "h" | "sh" => 2,
+        "rsw" | "sw" => 4,
+        _ => match mnemonic {
+            "strb" | "sturb" => 1,
+            "strh" | "sturh" => 2,
+            _ => match register.register.as_deref() {
+                Some(name) if name.starts_with('w') || name.starts_with('s') => 4,
+                Some(name) if name.starts_with('h') => 2,
+                Some(name) if name.starts_with('b') => 1,
+                _ => 8,
+            },
         },
     }
+}
+
+/// The load mnemonics whose result is SIGN-extended to the destination register.
+///
+/// Missing this was not a rendering nicety: `ldrsb w0,[sp,#31]` lifted to a plain
+/// byte load, so `sext_i8(0xFF)` decompiled to `(unsigned int)(unsigned char)v`
+/// and returned 255 where the source returns -1.
+fn sign_extending_load(mnemonic: &str) -> bool {
+    matches!(
+        mnemonic,
+        "ldrsb" | "ldrsh" | "ldrsw" | "ldursb" | "ldursh" | "ldursw"
+    )
 }
 
 fn instruction_word(ins: &Instruction) -> Option<u32> {
@@ -102,10 +189,22 @@ fn semantic_intrinsic(name: &str, ins: Vec<Value>) -> Op {
     }
 }
 
+/// A temporary private to one lifted instruction.
+///
+/// The multiplier bounds how many temporaries a single instruction may claim
+/// before it collides with the next one's. It is 32 rather than 4 because
+/// `ccmp` needs a snapshot of its condition plus one temporary per flag it
+/// selects; at the old spacing lane 16 was the *following* instruction's lane 0.
+const TEMP_LANES: u32 = 32;
+
 fn temp_for(ins: &Instruction, lane: u32) -> VReg {
+    debug_assert!(
+        lane < TEMP_LANES,
+        "temp lane {lane} escapes its instruction"
+    );
     VReg::Temp(
         (ins.address.value as u32)
-            .wrapping_mul(4)
+            .wrapping_mul(TEMP_LANES)
             .wrapping_add(lane),
     )
 }
@@ -123,6 +222,172 @@ fn bin_for_mnem(m: &str) -> Option<BinOp> {
         "mul" => BinOp::Mul,
         _ => return None,
     })
+}
+
+/// Which flags a flag-setting arithmetic instruction can be said to define.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlagForm {
+    /// Flags of `cmp lhs, rhs` — what `subs` sets.
+    Compare,
+    /// Only "is the result zero / negative" — what can be claimed for `adds`
+    /// and `ands` without modelling carry and overflow.
+    ResultVsZero,
+}
+
+/// The `S`-suffixed arithmetic forms, mapped to their operation, flag effect,
+/// and whether the last source operand is COMPLEMENTED before the operation.
+///
+/// `bics` is AND-NOT (ARM DDI 0487 C6.2.34: `Rd = Rn AND NOT(shift(Rm))`), not
+/// AND. Mapping it to a plain `BinOp::And` computed `Rn & Rm` — the wrong value
+/// for every bit of `Rm` that is set, and silently, because the mnemonic was
+/// recognised.
+fn flag_setting_arith(m: &str) -> Option<(BinOp, FlagForm, bool)> {
+    Some(match m {
+        "subs" => (BinOp::Sub, FlagForm::Compare, false),
+        "adds" => (BinOp::Add, FlagForm::ResultVsZero, false),
+        "ands" => (BinOp::And, FlagForm::ResultVsZero, false),
+        "bics" => (BinOp::And, FlagForm::ResultVsZero, true),
+        _ => return None,
+    })
+}
+
+/// The machine width at which a value participates in arithmetic: the width of
+/// the register spelling, or 64 bits for a constant or an unnamed temporary.
+fn operand_width(value: &Value) -> Option<Width> {
+    match value {
+        Value::Reg(register) => register.width(),
+        _ => None,
+    }
+}
+
+/// The width an instruction operates at, taken from whichever operand names a
+/// register. `cmp w0,#5` is a 32-bit comparison even though its second operand
+/// carries no width of its own.
+fn machine_width(operands: [&Value; 2]) -> Width {
+    operands
+        .into_iter()
+        .find_map(operand_width)
+        .unwrap_or(Width::W64)
+}
+
+/// Materialise the SIGN-extended 64-bit view of a sub-width operand.
+///
+/// `ssa::parent64` gives `w0` and `x0` one identity, so by the time a consumer
+/// reads the value it is holding the ZERO-extended parent that the 32-bit write
+/// produced. A signed 32-bit comparison of -1 against 0 would then compare
+/// 0x00000000ffffffff against 0 and take the wrong branch. Mirrors
+/// `lift_x86::signed_cmp_value`.
+fn signed_view(value: Value, width: Width, temp: VReg, ops: &mut Vec<Op>) -> Value {
+    if width.bits() >= 64 || !matches!(&value, Value::Reg(_)) {
+        return value;
+    }
+    ops.push(Op::SExt {
+        dst: temp.clone(),
+        src: value,
+        from: width,
+        to: Width::W64,
+    });
+    Value::Reg(temp)
+}
+
+/// Materialise the ZERO-extended 64-bit view of a sub-width operand — the
+/// unsigned word the machine actually compares. The parent's high half is
+/// normally already clear (see [`with_parent_zero_extension`]), but not when the
+/// last write to it was a 64-bit one, as in `ldr x0,[..]` followed by `cbz w0`.
+fn unsigned_view(value: Value, width: Width, temp: VReg, ops: &mut Vec<Op>) -> Value {
+    if width.bits() >= 64 {
+        return value;
+    }
+    match value {
+        value @ Value::Reg(_) => {
+            ops.push(Op::ZExt {
+                dst: temp.clone(),
+                src: value,
+                from: width,
+                to: Width::W64,
+            });
+            Value::Reg(temp)
+        }
+        Value::Const(c) => Value::Const((c as u64 & low_mask(width.bits())) as i64),
+        other => other,
+    }
+}
+
+/// The flag set an AArch64 `cmp lhs, rhs` produces, in the same order and with
+/// the same `VReg::Flag` identities the `"cmp"` arm emits — a reader of ZF must
+/// not care whether the producer was `cmp` or `subs`.
+///
+/// Each predicate is given the operand view it is actually evaluated over: NZCV
+/// is computed on the encoded 32- or 64-bit word, so the signed predicates read
+/// a sign-extended operand and the unsigned ones a zero-extended operand.
+fn compare_flags(ins: &Instruction, lhs: Value, rhs: Value) -> Vec<Op> {
+    let width = machine_width([&lhs, &rhs]);
+    let mut ops = Vec::new();
+    let ulhs = unsigned_view(lhs.clone(), width, temp_for(ins, 8), &mut ops);
+    let urhs = unsigned_view(rhs.clone(), width, temp_for(ins, 9), &mut ops);
+    let slhs = signed_view(lhs, width, temp_for(ins, 10), &mut ops);
+    let srhs = signed_view(rhs, width, temp_for(ins, 11), &mut ops);
+    ops.extend([
+        Op::Cmp {
+            dst: VReg::Flag(Flag::Z),
+            op: CmpOp::Eq,
+            lhs: ulhs.clone(),
+            rhs: urhs.clone(),
+        },
+        Op::Cmp {
+            dst: VReg::Flag(Flag::C),
+            op: CmpOp::Ult,
+            lhs: ulhs.clone(),
+            rhs: urhs.clone(),
+        },
+        Op::Cmp {
+            dst: VReg::Flag(Flag::Ule),
+            op: CmpOp::Ule,
+            lhs: ulhs,
+            rhs: urhs,
+        },
+        Op::Cmp {
+            dst: VReg::Flag(Flag::Slt),
+            op: CmpOp::Slt,
+            lhs: slhs.clone(),
+            rhs: srhs.clone(),
+        },
+        Op::Cmp {
+            dst: VReg::Flag(Flag::Sle),
+            op: CmpOp::Sle,
+            lhs: slhs,
+            rhs: srhs,
+        },
+    ]);
+    ops
+}
+
+/// Zero and sign facts about a computed result. Carry and overflow are omitted
+/// rather than guessed: a wrong flag is worse than an absent one, because a
+/// later branch will read it and render a condition the CPU never evaluates.
+/// `width` is explicit rather than read off `result` because the result may live
+/// in an unnamed temporary, which carries no width at all — and defaulting such
+/// a value to 64 bits would test bit 63 of a 32-bit result and report every
+/// negative number as positive.
+fn result_flags(ins: &Instruction, result: Value, width: Width) -> Vec<Op> {
+    let mut ops = Vec::new();
+    let unsigned = unsigned_view(result.clone(), width, temp_for(ins, 11), &mut ops);
+    let signed = signed_view(result, width, temp_for(ins, 12), &mut ops);
+    ops.extend([
+        Op::Cmp {
+            dst: VReg::Flag(Flag::Z),
+            op: CmpOp::Eq,
+            lhs: unsigned,
+            rhs: Value::Const(0),
+        },
+        Op::Cmp {
+            dst: VReg::Flag(Flag::Slt),
+            op: CmpOp::Slt,
+            lhs: signed,
+            rhs: Value::Const(0),
+        },
+    ]);
+    ops
 }
 
 /// Map a `b.<cond>` mnemonic (e.g. "b.eq") onto the LLIR flag whose truth
@@ -191,6 +456,528 @@ fn conditional_select(dst: VReg, cond_code: u32, if_true: Value, if_false: Value
     })
 }
 
+/// A modifier applied to the last source operand of a data-processing
+/// instruction before the operation sees it.
+///
+/// Capstone's operand list carries the register and the immediate but drops
+/// `lsl #3` and `sxtw` entirely, so `add x0,x1,x2,lsl #3` and `add x0,x1,x2`
+/// arrived here indistinguishable. That is a silent wrong answer wherever an
+/// index is scaled or a 32-bit index widened — 320 sites across the AArch64
+/// fixture corpus — so the modifier is decoded from the instruction word, the
+/// same source the `movk`, `csel` and `ccmp` arms already read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperandModifier {
+    /// `lsl`/`lsr`/`asr`/`ror` by a constant amount.
+    Shift { op: BinOp, amount: u8 },
+    /// `uxtb`/`uxth`/`uxtw`/`sxtb`/`sxth`/`sxtw`, then an optional `lsl`.
+    /// `uxtx`/`sxtx` on a 64-bit operand carry no extension and appear as
+    /// `from: None`.
+    Extend {
+        from: Option<Width>,
+        signed: bool,
+        amount: u8,
+    },
+}
+
+/// Bits 23:22 and 15:10 of the shifted-register data-processing forms
+/// (ARM DDI 0487 C4.1.4): logical shifted register, and add/subtract shifted
+/// register.
+fn shifted_register_modifier(word: u32) -> Option<OperandModifier> {
+    let amount = ((word >> 10) & 0x3f) as u8;
+    let op = match (word >> 22) & 0x3 {
+        0b00 => BinOp::Shl,
+        0b01 => BinOp::Shr,
+        0b10 => BinOp::Sar,
+        // ROR is not a `BinOp`; it is expanded by `rotate_right_ops`, which the
+        // caller reaches through this discriminator.
+        _ => {
+            return Some(OperandModifier::Shift {
+                op: BinOp::Or,
+                amount,
+            })
+        }
+    };
+    Some(OperandModifier::Shift { op, amount })
+}
+
+/// Bits 15:13 (`option`) and 12:10 (`imm3`) of add/subtract (extended register).
+fn extended_register_modifier(word: u32) -> Option<OperandModifier> {
+    let amount = ((word >> 10) & 0x7) as u8;
+    if amount > 4 {
+        return None; // reserved
+    }
+    let option = (word >> 13) & 0x7;
+    let signed = option & 0b100 != 0;
+    let from = match option & 0b011 {
+        0b00 => Some(Width::W8),
+        0b01 => Some(Width::W16),
+        0b10 => Some(Width::W32),
+        _ => None, // UXTX / SXTX: already the full 64-bit operand
+    };
+    Some(OperandModifier::Extend {
+        from,
+        signed,
+        amount,
+    })
+}
+
+/// The modifier a data-processing instruction applies to its last source
+/// operand, or `None` when the encoding has no modifier field at all.
+fn data_processing_modifier(word: u32) -> Option<OperandModifier> {
+    match ((word >> 24) & 0x1f, (word >> 21) & 1, (word >> 22) & 0x3) {
+        // Logical (shifted register). Bit 21 is the N bit here (BIC/ORN/EON),
+        // not a form selector.
+        (0b01010, _, _) => shifted_register_modifier(word),
+        // Add/subtract (shifted register).
+        (0b01011, 0, _) => shifted_register_modifier(word),
+        // Add/subtract (extended register).
+        (0b01011, 1, 0b00) => extended_register_modifier(word),
+        _ => None,
+    }
+}
+
+/// The extension and scale a load/store register-offset form applies to its
+/// index (ARM DDI 0487 C4.1.5): `option` in bits 15:13, `S` in bit 12, and the
+/// access size in bits 31:30 — `S` selects a shift *by the access size*, which
+/// is what makes `[x1, x2, lsl #3]` an 8-byte-element array index.
+fn load_store_index_modifier(word: u32) -> Option<OperandModifier> {
+    let shape = (
+        (word >> 27) & 0x7,
+        (word >> 26) & 1,
+        (word >> 24) & 0x3,
+        (word >> 21) & 1,
+        (word >> 10) & 0x3,
+    );
+    if shape != (0b111, 0, 0b00, 1, 0b10) {
+        return None;
+    }
+    let amount = if (word >> 12) & 1 == 1 {
+        ((word >> 30) & 0x3) as u8
+    } else {
+        0
+    };
+    let option = (word >> 13) & 0x7;
+    Some(OperandModifier::Extend {
+        from: (option & 0b011 == 0b10).then_some(Width::W32),
+        signed: option & 0b100 != 0,
+        amount,
+    })
+}
+
+/// Materialise `modifier(value)` into a temporary, at `width`.
+fn apply_modifier(
+    ins: &Instruction,
+    modifier: OperandModifier,
+    value: Value,
+    width: Width,
+    out: &mut Vec<Op>,
+) -> Value {
+    match modifier {
+        OperandModifier::Shift { amount: 0, op } if op != BinOp::Or => value,
+        OperandModifier::Shift {
+            op: BinOp::Or,
+            amount,
+        } => {
+            // ROR: the only form that is not a single `Op::Bin`.
+            let rotated = temp_for(ins, 20);
+            let mut rotate = rotate_right_ops(
+                ins,
+                rotated.clone(),
+                value.clone(),
+                Value::Const(i64::from(amount)),
+            );
+            if rotate.iter().any(|op| matches!(op, Op::Unknown { .. })) {
+                return value;
+            }
+            out.append(&mut rotate);
+            Value::Reg(rotated)
+        }
+        OperandModifier::Shift { op, amount } => {
+            let shifted = temp_for(ins, 21);
+            // The same rule as a bare `lsr`/`asr`: a right shift's answer
+            // depends on bits outside the operand width.
+            let value = match op {
+                BinOp::Sar => signed_view(value, width, temp_for(ins, 22), out),
+                BinOp::Shr => unsigned_view(value, width, temp_for(ins, 22), out),
+                _ => value,
+            };
+            out.push(bin_temp(
+                shifted.clone(),
+                op,
+                value,
+                Value::Const(i64::from(amount)),
+            ));
+            Value::Reg(shifted)
+        }
+        OperandModifier::Extend {
+            from,
+            signed,
+            amount,
+        } => {
+            let value = match from {
+                None => value,
+                Some(from) => {
+                    let extended = temp_for(ins, 23);
+                    out.push(if signed {
+                        Op::SExt {
+                            dst: extended.clone(),
+                            src: value,
+                            from,
+                            to: width,
+                        }
+                    } else {
+                        Op::ZExt {
+                            dst: extended.clone(),
+                            src: value,
+                            from,
+                            to: width,
+                        }
+                    });
+                    Value::Reg(extended)
+                }
+            };
+            if amount == 0 {
+                return value;
+            }
+            let shifted = temp_for(ins, 24);
+            out.push(bin_temp(
+                shifted.clone(),
+                BinOp::Shl,
+                value,
+                Value::Const(i64::from(amount)),
+            ));
+            Value::Reg(shifted)
+        }
+    }
+}
+
+/// Rewrite the LAST source operand of a data-processing instruction through its
+/// encoded modifier. Every shifted/extended form places it there: `add Rd,Rn,Rm,
+/// <mod>`, and equally the two-operand aliases `neg Rd,Rm,<mod>`,
+/// `cmp Rn,Rm,<mod>` and `mvn Rd,Rm,<mod>`.
+fn modified_last_operand(ins: &Instruction, last: Value, width: Width, out: &mut Vec<Op>) -> Value {
+    // A modifier only ever applies to a register operand; the immediate forms
+    // occupy different encodings entirely.
+    if !matches!(last, Value::Reg(_)) {
+        return last;
+    }
+    let Some(modifier) = instruction_word(ins).and_then(data_processing_modifier) else {
+        return last;
+    };
+    apply_modifier(ins, modifier, last, width, out)
+}
+
+/// Give a register-offset memory operand the index extension and scale its
+/// encoding specifies.
+///
+/// `[x1, x2, lsl #3]` and `[x1, x2]` reach the lifter identically, and the scale
+/// arrived as `Some(0)`, which every consumer reads as 1 — so every scaled array
+/// index was off by its element size. A 32-bit index (`[x1, w2, sxtw #2]`)
+/// additionally needs widening before it can be added to a 64-bit base, which is
+/// done into a temporary because `MemOp::index` holds a register, not an
+/// expression.
+fn scaled_memop(ins: &Instruction, mut addr: MemOp, out: &mut Vec<Op>) -> MemOp {
+    let Some(OperandModifier::Extend {
+        from,
+        signed,
+        amount,
+    }) = instruction_word(ins).and_then(load_store_index_modifier)
+    else {
+        return addr;
+    };
+    addr.scale = 1u8 << amount;
+    let (Some(index), Some(from)) = (addr.index.clone(), from) else {
+        return addr;
+    };
+    let widened = temp_for(ins, 25);
+    out.push(if signed {
+        Op::SExt {
+            dst: widened.clone(),
+            src: Value::Reg(index),
+            from,
+            to: Width::W64,
+        }
+    } else {
+        Op::ZExt {
+            dst: widened.clone(),
+            src: Value::Reg(index),
+            from,
+            to: Width::W64,
+        }
+    });
+    addr.index = Some(widened);
+    addr
+}
+
+/// The condition an `S`-less conditional instruction tests, from bits 15:12 of
+/// the encoding. Capstone surfaces the condition as a printed suffix rather than
+/// an operand, so it is read from the word — which is also what the `csel`,
+/// `cset` and `cinc` arms already do.
+fn cond_field(ins: &Instruction) -> Option<u32> {
+    instruction_word(ins).map(|word| (word >> 12) & 0xf)
+}
+
+/// `Op::Bin` on a fresh temporary, the shape most of the composite lowerings
+/// below are built from.
+fn bin_temp(dst: VReg, op: BinOp, lhs: Value, rhs: Value) -> Op {
+    Op::Bin { dst, op, lhs, rhs }
+}
+
+/// `dst = (src >>u amount) | (src <<(width-amount))`, the exact rotate for both
+/// the immediate and the register forms.
+///
+/// `(width - amount) & (width - 1)` rather than `width - amount` is deliberate:
+/// with a register amount of zero the naive form shifts by the full width, which
+/// is undefined in C and would silently produce a different answer than the CPU.
+fn rotate_right_ops(ins: &Instruction, dst: VReg, src: Value, amount: Value) -> Vec<Op> {
+    let Some(width) = dst.width() else {
+        return vec![Op::Unknown {
+            mnemonic: "ror".into(),
+        }];
+    };
+    let bits = i64::from(width.bits());
+    let mut out = Vec::new();
+    let src = unsigned_view(src, width, temp_for(ins, 0), &mut out);
+    let masked = match &amount {
+        Value::Const(c) => Value::Const(c & (bits - 1)),
+        other => {
+            let temp = temp_for(ins, 1);
+            out.push(bin_temp(
+                temp.clone(),
+                BinOp::And,
+                other.clone(),
+                Value::Const(bits - 1),
+            ));
+            Value::Reg(temp)
+        }
+    };
+    let complement = match &masked {
+        Value::Const(c) => Value::Const((bits - c) & (bits - 1)),
+        other => {
+            let raw = temp_for(ins, 2);
+            let temp = temp_for(ins, 3);
+            out.push(bin_temp(
+                raw.clone(),
+                BinOp::Sub,
+                Value::Const(bits),
+                other.clone(),
+            ));
+            out.push(bin_temp(
+                temp.clone(),
+                BinOp::And,
+                Value::Reg(raw),
+                Value::Const(bits - 1),
+            ));
+            Value::Reg(temp)
+        }
+    };
+    let low = temp_for(ins, 4);
+    let high = temp_for(ins, 5);
+    out.push(bin_temp(low.clone(), BinOp::Shr, src.clone(), masked));
+    out.push(bin_temp(high.clone(), BinOp::Shl, src, complement));
+    out.push(bin_temp(dst, BinOp::Or, Value::Reg(low), Value::Reg(high)));
+    out
+}
+
+/// `dst = extend(src[field-1:0]) << lsb` — the `UBFIZ`/`SBFIZ` aliases.
+fn bitfield_insert_in_zero_ops(ins: &Instruction, signed: bool) -> Option<Vec<Op>> {
+    if ins.operands.len() != 4 {
+        return None;
+    }
+    let dst = operand_reg(&ins.operands[0])?;
+    let src = operand_to_value(&ins.operands[1])?;
+    let lsb = u16::try_from(ins.operands[2].immediate?).ok()?;
+    let field = u16::try_from(ins.operands[3].immediate?).ok()?;
+    let dst_width = dst.width()?;
+    if field == 0 || lsb.checked_add(field)? > dst_width.bits() {
+        return None;
+    }
+    let fragment = temp_for(ins, 0);
+    let extended = temp_for(ins, 1);
+    let widen = if signed {
+        Op::SExt {
+            dst: extended.clone(),
+            src: Value::Reg(fragment.clone()),
+            from: Width(field),
+            to: dst_width,
+        }
+    } else {
+        Op::ZExt {
+            dst: extended.clone(),
+            src: Value::Reg(fragment.clone()),
+            from: Width(field),
+            to: dst_width,
+        }
+    };
+    Some(vec![
+        Op::Extract {
+            dst: fragment,
+            src,
+            hi: field,
+            lo: 0,
+        },
+        widen,
+        bin_temp(
+            dst,
+            BinOp::Shl,
+            Value::Reg(extended),
+            Value::Const(i64::from(lsb)),
+        ),
+    ])
+}
+
+/// The widening multiply forms: `Xd = Xa ± extend(Wn) * extend(Wm)`.
+fn long_multiply_ops(ins: &Instruction, signed: bool, subtract: bool) -> Option<Vec<Op>> {
+    let dst = operand_reg(&ins.operands[0])?;
+    let lhs = operand_to_value(&ins.operands[1])?;
+    let rhs = operand_to_value(&ins.operands[2])?;
+    // The 3-operand `smull`/`umull`/`smnegl` forms are the 4-operand ones with
+    // XZR as the accumulator.
+    let addend = match ins.operands.len() {
+        3 => Value::Const(0),
+        4 => operand_to_value(&ins.operands[3])?,
+        _ => return None,
+    };
+    let mut out = Vec::new();
+    let widen = |value: Value, temp: VReg, out: &mut Vec<Op>| {
+        if signed {
+            signed_view(value, Width::W32, temp, out)
+        } else {
+            unsigned_view(value, Width::W32, temp, out)
+        }
+    };
+    let lhs = widen(lhs, temp_for(ins, 0), &mut out);
+    let rhs = widen(rhs, temp_for(ins, 1), &mut out);
+    let product = temp_for(ins, 2);
+    out.push(bin_temp(product.clone(), BinOp::Mul, lhs, rhs));
+    out.push(bin_temp(
+        dst,
+        if subtract { BinOp::Sub } else { BinOp::Add },
+        addend,
+        Value::Reg(product),
+    ));
+    Some(out)
+}
+
+/// AArch64 division is a plain two-operand quotient, but C decides signedness
+/// from the operand *types*, which the renderer cannot be relied on to have
+/// recovered. Route it through the shared wide-division lowering instead, whose
+/// `__int128` form states the signedness explicitly: the high word is zero for
+/// `udiv`, and the replicated sign bit for `sdiv`, which makes the 128-bit
+/// dividend numerically equal to the 64-bit one in both cases.
+fn division_ops(ins: &Instruction, signed: bool) -> Option<Vec<Op>> {
+    if ins.operands.len() != 3 {
+        return None;
+    }
+    let dst = operand_reg(&ins.operands[0])?;
+    let dividend = operand_to_value(&ins.operands[1])?;
+    let divisor = operand_to_value(&ins.operands[2])?;
+    let width = dst.width()?;
+    let mut out = Vec::new();
+    let high = if signed {
+        let signed_dividend = signed_view(dividend.clone(), width, temp_for(ins, 0), &mut out);
+        let temp = temp_for(ins, 1);
+        out.push(bin_temp(
+            temp.clone(),
+            BinOp::Sar,
+            signed_dividend,
+            Value::Const(i64::from(width.bits()) - 1),
+        ));
+        Value::Reg(temp)
+    } else {
+        Value::Const(0)
+    };
+    let stem = if signed { "sdiv" } else { "udiv" };
+    out.push(Op::Intrinsic {
+        name: format!("aarch64.{stem}_quot.{}", width.bits()),
+        ins: vec![high, dividend, divisor],
+        outs: vec![(dst, width)],
+        reads_mem: false,
+        writes_mem: false,
+    });
+    Some(out)
+}
+
+/// `ccmp`: the flags become those of a comparison when `cond` holds, and the
+/// literal NZCV immediate when it does not. gcc emits it for every short-circuit
+/// `&&`/`||` at -O2 — 58 of the AArch64 fixture functions contain one.
+///
+/// The condition is snapshotted first because every flag this writes is also a
+/// flag the condition may read.
+fn conditional_compare_ops(ins: &Instruction, negate_rhs: bool) -> Option<Vec<Op>> {
+    if ins.operands.len() != 3 {
+        return None;
+    }
+    let lhs = operand_to_value(&ins.operands[0])?;
+    let rhs = operand_to_value(&ins.operands[1])?;
+    // `ccmn Rn, #imm` is `ccmp Rn, #-imm`: SUBS(Rn, -imm) and ADDS(Rn, imm) are
+    // the same operation, flag for flag. The register form would need a negated
+    // temporary and is left unlifted rather than approximated.
+    let rhs = match (negate_rhs, rhs) {
+        (false, rhs) => rhs,
+        (true, Value::Const(c)) => Value::Const(c.checked_neg()?),
+        (true, _) => return None,
+    };
+    let nzcv = u32::try_from(ins.operands[2].immediate?).ok()?;
+    let (cond, inverted) = cond_flag_for_code(cond_field(ins)?)?;
+    let arm_n = (nzcv >> 3) & 1 == 1;
+    let arm_z = (nzcv >> 2) & 1 == 1;
+    let arm_c = (nzcv >> 1) & 1 == 1;
+    let arm_v = nzcv & 1 == 1;
+    // Our flag identities are predicates, not raw NZCV bits: `Flag::C` is
+    // "unsigned lower", which is ARM's C *clear*.
+    let literal = |flag: Flag| {
+        let value = match flag {
+            Flag::Z => arm_z,
+            Flag::C => !arm_c,
+            Flag::Ule => !arm_c || arm_z,
+            Flag::Slt => arm_n != arm_v,
+            Flag::Sle => arm_z || (arm_n != arm_v),
+            _ => return None,
+        };
+        Some(Value::Const(i64::from(value)))
+    };
+    let predicate = temp_for(ins, 15);
+    let mut out = vec![Op::Assign {
+        dst: predicate.clone(),
+        src: Value::Reg(cond),
+    }];
+    // Reuse the one definition of what a comparison sets, then redirect each
+    // write into a temporary so the select can choose between it and the
+    // literal.
+    for (lane, op) in compare_flags(ins, lhs, rhs).into_iter().enumerate() {
+        let Op::Cmp { dst, op, lhs, rhs } = op else {
+            out.push(op);
+            continue;
+        };
+        let VReg::Flag(flag) = dst else {
+            out.push(Op::Cmp { dst, op, lhs, rhs });
+            continue;
+        };
+        let computed = temp_for(ins, 16 + lane as u32);
+        let literal = literal(flag)?;
+        let (t, e) = if inverted {
+            (literal, Value::Reg(computed.clone()))
+        } else {
+            (Value::Reg(computed.clone()), literal)
+        };
+        out.push(Op::Cmp {
+            dst: computed,
+            op,
+            lhs,
+            rhs,
+        });
+        out.push(Op::Ite {
+            dst: VReg::Flag(flag),
+            cond: predicate.clone(),
+            t,
+            e,
+            width: Width::W1,
+        });
+    }
+    Some(out)
+}
+
 fn low_mask(bits: u16) -> u64 {
     if bits >= 64 {
         u64::MAX
@@ -231,7 +1018,91 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             ) else {
                 return vec![Op::Unknown { mnemonic: mnem }];
             };
-            return vec![Op::Bin { dst, op, lhs, rhs }];
+            // A right shift is the one binary form whose result depends on bits
+            // OUTSIDE the operand width: at 32 bits `asr` must shift a
+            // sign-extended word and `lsr` a zero-extended one. Every other
+            // operation here (add/sub/and/orr/eor/lsl/mul) is determined by the
+            // low bits alone, so the trailing parent zero-extension is enough.
+            let width = machine_width([&Value::Reg(dst.clone()), &lhs]);
+            let mut out = Vec::new();
+            // `lsl`/`lsr`/`asr` are themselves the shifted-register encoding of
+            // `orr`, so a modifier must not be applied on top of them.
+            let rhs = if matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar) {
+                rhs
+            } else {
+                modified_last_operand(ins, rhs, width, &mut out)
+            };
+            let lhs = match op {
+                BinOp::Sar => signed_view(lhs, width, temp_for(ins, 13), &mut out),
+                BinOp::Shr => unsigned_view(lhs, width, temp_for(ins, 13), &mut out),
+                _ => lhs,
+            };
+            out.push(Op::Bin { dst, op, lhs, rhs });
+            return out;
+        }
+    }
+
+    // Flag-setting arithmetic: `adds`/`subs`/`ands` are the plain operation
+    // plus the flag write that `cmp`/`tst` would have produced.
+    //
+    // Leaving these unlifted did more damage than losing one instruction. A
+    // dropped flag write breaks the flag's def-use chain, so the reader of that
+    // flag binds to a *stale* earlier definition — in a stripped AArch64
+    // `parsenum`, `subs` before the epilogue was dropped and the stack-canary
+    // branch bound to a comparison from the top of the function. `subs` and
+    // `adds` alone accounted for 50 of the 302 unlifted-instruction markers
+    // across the AArch64 corpus.
+    if let Some((op, flag_form, complement_rhs)) = flag_setting_arith(&mnem) {
+        if ins.operands.len() == 3 {
+            let (Some(dst), Some(lhs), Some(rhs)) = (
+                operand_reg(&ins.operands[0]),
+                operand_to_value(&ins.operands[1]),
+                operand_to_value(&ins.operands[2]),
+            ) else {
+                return vec![Op::Unknown { mnemonic: mnem }];
+            };
+            let width = machine_width([&Value::Reg(dst.clone()), &lhs]);
+            let mut out = Vec::new();
+            let mut rhs = modified_last_operand(ins, rhs, width, &mut out);
+            if complement_rhs {
+                // `bics Rd, Rn, Rm` is `Rn AND NOT(Rm)`; materialise the
+                // complement rather than pretending the operation is a plain
+                // AND.
+                let inverted = temp_for(ins, 26);
+                out.push(Op::Un {
+                    dst: inverted.clone(),
+                    op: UnOp::Not,
+                    src: rhs,
+                });
+                rhs = Value::Reg(inverted);
+            }
+            // The comparison flags are a function of the PRE-operation operands,
+            // so they are emitted before the write that may destroy one of them.
+            // `subs x3, x3, x2` — the shape gcc's stack-canary epilogue uses —
+            // otherwise compared the already-updated `x3` against `x2` and
+            // rendered `(saved - current) == current`, a condition the CPU never
+            // evaluates. It made every canary check take the failure branch.
+            let compare = match flag_form {
+                // `subs Xd, Xn, Xm` sets exactly the flags of `cmp Xn, Xm`, and
+                // `cmp` is architecturally `subs XZR, Xn, Xm`.
+                FlagForm::Compare => compare_flags(ins, lhs.clone(), rhs.clone()),
+                FlagForm::ResultVsZero => Vec::new(),
+            };
+            out.extend(compare);
+            out.push(Op::Bin {
+                dst: dst.clone(),
+                op,
+                lhs: lhs.clone(),
+                rhs: rhs.clone(),
+            });
+            match flag_form {
+                FlagForm::Compare => {}
+                // For `adds`/`ands` the useful, provable fact is whether the
+                // result is zero or negative — which, unlike the comparison
+                // flags, is read from the destination AFTER the write.
+                FlagForm::ResultVsZero => out.extend(result_flags(ins, Value::Reg(dst), width)),
+            }
+            return out;
         }
     }
 
@@ -326,14 +1197,24 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 ) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
-                return vec![Op::Un {
+                let width = dst.width().unwrap_or(Width::W64);
+                let mut out = Vec::new();
+                let src = modified_last_operand(ins, src, width, &mut out);
+                out.push(Op::Un {
                     dst,
                     op: UnOp::Neg,
                     src,
-                }];
+                });
+                return out;
             }
             vec![Op::Unknown { mnemonic: mnem }]
         }
+        // `cmn` and `tst` are `adds`/`ands` with a discarded destination, and
+        // they must DEFINE the flags they set. Emitting only an opaque intrinsic
+        // is modelled by the execution engine (`exec::helpers`) but is invisible
+        // on the decompile path: the following `cset`/`csinv`/`b.<cond>` then
+        // binds to a stale earlier definition, which is how `and_is_zero` and
+        // `add_then_negative` returned a condition the CPU never evaluated.
         "cmn" | "tst" => {
             if ins.operands.len() == 2 {
                 let (Some(lhs), Some(rhs)) = (
@@ -342,14 +1223,61 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 ) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
-                let width = match &lhs {
-                    Value::Reg(register) => register.width(),
-                    _ => None,
+                let Some(width) = operand_width(&lhs) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
                 };
-                if let Some(width) = width {
-                    let name = format!("aarch64_{}{}", mnem, width.bits());
-                    return vec![semantic_intrinsic(&name, vec![lhs, rhs])];
+                let mut out = Vec::new();
+                let rhs = modified_last_operand(ins, rhs, width, &mut out);
+                // `cmn Rn,#imm` is exactly `cmp Rn,#-imm`: SUBS(Rn,-imm) and
+                // ADDS(Rn,imm) are the same operation, flag for flag. That form
+                // therefore gets the FULL comparison flag set, carry included.
+                if mnem == "cmn" {
+                    if let Value::Const(imm) = rhs {
+                        if let Some(negated) = imm.checked_neg() {
+                            out.extend(compare_flags(ins, lhs, Value::Const(negated)));
+                            return out;
+                        }
+                    }
                 }
+                let result = temp_for(ins, 0);
+                out.push(bin_temp(
+                    result.clone(),
+                    if mnem == "cmn" {
+                        BinOp::Add
+                    } else {
+                        BinOp::And
+                    },
+                    lhs.clone(),
+                    rhs.clone(),
+                ));
+                // The register `cmn` claims only zero and sign, for the same
+                // reason `adds` does: carry and overflow are not modelled, and a
+                // guessed flag is worse than an absent one.
+                out.extend(result_flags(ins, Value::Reg(result), width));
+                // A logical operation clears ARM's C and V unconditionally, so
+                // our "unsigned lower" and "lower or same" predicates are both
+                // provably true — provable, therefore stated, so a following
+                // `b.ls` cannot bind to a stale comparison.
+                if mnem == "tst" {
+                    out.extend([
+                        Op::Assign {
+                            dst: VReg::Flag(Flag::C),
+                            src: Value::Const(1),
+                        },
+                        Op::Assign {
+                            dst: VReg::Flag(Flag::Ule),
+                            src: Value::Const(1),
+                        },
+                    ]);
+                }
+                // Keep the fully-modelled intrinsic alongside the explicit flag
+                // writes: `exec::helpers` computes NZCV exactly, including the
+                // carry and overflow the explicit form declines to claim.
+                out.push(semantic_intrinsic(
+                    &format!("aarch64_{}{}", mnem, width.bits()),
+                    vec![lhs, rhs],
+                ));
+                return out;
             }
             vec![Op::Unknown { mnemonic: mnem }]
         }
@@ -614,6 +1542,290 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             ]);
             out
         }
+        // Everything left in the HINT space after capstone has named the
+        // pointer-authentication forms (`bti`, `yield`, `sevl`, …) is
+        // architecturally a no-op for data flow.
+        "hint" | "bti" | "yield" | "sev" | "sevl" | "wfe" | "wfi" | "isb" | "dsb" | "esb" => {
+            vec![Op::Nop]
+        }
+        "ccmp" | "ccmn" => conditional_compare_ops(ins, mnem == "ccmn")
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
+        "sdiv" | "udiv" => division_ops(ins, mnem == "sdiv")
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
+        // `smulh`/`umulh` are the high half of the 64x64 product — exactly the
+        // shared wide-multiply lowering, whose `__int128` rendering is already
+        // exercised by the x86-64 gate.
+        "smulh" | "umulh" => {
+            if ins.operands.len() == 3 {
+                let (Some(dst), Some(lhs), Some(rhs)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                    operand_to_value(&ins.operands[2]),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                let stem = if mnem == "smulh" {
+                    "smul_hi"
+                } else {
+                    "umul_hi"
+                };
+                let width = dst.width().unwrap_or(Width::W64);
+                return vec![Op::Intrinsic {
+                    name: format!("aarch64.{stem}.{}", width.bits()),
+                    ins: vec![lhs, rhs],
+                    outs: vec![(dst, width)],
+                    reads_mem: false,
+                    writes_mem: false,
+                }];
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        "smull" | "smaddl" | "umull" | "smsubl" | "umsubl" | "smnegl" | "umnegl" => {
+            long_multiply_ops(
+                ins,
+                mnem.starts_with('s'),
+                matches!(mnem.as_str(), "smsubl" | "umsubl" | "smnegl" | "umnegl"),
+            )
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }])
+        }
+        "ubfiz" | "sbfiz" => bitfield_insert_in_zero_ops(ins, mnem == "sbfiz")
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
+        "sbfx" => {
+            let Some((dst, src, lsb, field, dst_width)) = bitfield_operands(ins) else {
+                return vec![Op::Unknown { mnemonic: mnem }];
+            };
+            let fragment = temp_for(ins, 0);
+            vec![
+                Op::Extract {
+                    dst: fragment.clone(),
+                    src,
+                    hi: lsb + field,
+                    lo: lsb,
+                },
+                Op::SExt {
+                    dst,
+                    src: Value::Reg(fragment),
+                    from: Width(field),
+                    to: dst_width,
+                },
+            ]
+        }
+        "ror" => {
+            if ins.operands.len() == 3 {
+                let (Some(dst), Some(src), Some(amount)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                    operand_to_value(&ins.operands[2]),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                return rotate_right_ops(ins, dst, src, amount);
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        // `extr Rd, Rn, Rm, #lsb` takes the low `lsb` bits of Rn as the high
+        // part and the high `width-lsb` bits of Rm as the low part. It is only
+        // lifted where Rn == Rm, which is the rotate the assembler also spells
+        // `ror`; the general double-word extract would need a wider temporary
+        // than this IR models and is left unlifted rather than approximated.
+        "extr" => {
+            if ins.operands.len() == 4 {
+                let (Some(dst), Some(high), Some(low), Some(lsb)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                    operand_to_value(&ins.operands[2]),
+                    operand_to_value(&ins.operands[3]),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                if high == low {
+                    return rotate_right_ops(ins, dst, high, lsb);
+                }
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        "sxtb" | "sxth" | "uxtb" | "uxth" | "uxtw" => {
+            if ins.operands.len() == 2 {
+                let (Some(dst), Some(src)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                let from = match mnem.as_str() {
+                    "sxtb" | "uxtb" => Width::W8,
+                    "sxth" | "uxth" => Width::W16,
+                    _ => Width::W32,
+                };
+                let to = dst.width().unwrap_or(Width::W64);
+                return vec![if mnem.starts_with('s') {
+                    Op::SExt { dst, src, from, to }
+                } else {
+                    Op::ZExt { dst, src, from, to }
+                }];
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        "mvn" => {
+            if ins.operands.len() == 2 {
+                let (Some(dst), Some(src)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                let width = dst.width().unwrap_or(Width::W64);
+                let mut out = Vec::new();
+                let src = modified_last_operand(ins, src, width, &mut out);
+                out.push(Op::Un {
+                    dst,
+                    op: UnOp::Not,
+                    src,
+                });
+                return out;
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        // `csinc`/`csinv`/`csneg Rd, Rn, Rm, cond` = cond ? Rn : f(Rm). Unlike
+        // the `cset`/`cinc`/`cneg` aliases the condition is NOT inverted here —
+        // the inversion those aliases carry is part of the alias, not the
+        // instruction.
+        "csinc" | "csinv" | "csneg" => {
+            if ins.operands.len() == 3 {
+                let (Some(dst), Some(if_true), Some(other), Some(code)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                    operand_to_value(&ins.operands[2]),
+                    cond_field(ins),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                let modified = temp_for(ins, 0);
+                let transform = match mnem.as_str() {
+                    "csinc" => bin_temp(modified.clone(), BinOp::Add, other, Value::Const(1)),
+                    "csinv" => Op::Un {
+                        dst: modified.clone(),
+                        op: UnOp::Not,
+                        src: other,
+                    },
+                    _ => Op::Un {
+                        dst: modified.clone(),
+                        op: UnOp::Neg,
+                        src: other,
+                    },
+                };
+                let Some(select) =
+                    conditional_select(dst, code, if_true, Value::Reg(modified.clone()))
+                else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                return vec![transform, select];
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        // `cneg Rd, Rn, cond` = CSNEG Rd,Rn,Rn,invert(cond) = cond ? -Rn : Rn.
+        "cneg" => {
+            if ins.operands.len() == 2 {
+                let (Some(dst), Some(src), Some(code)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                    cond_field(ins),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                let negated = temp_for(ins, 0);
+                let Some(select) =
+                    conditional_select(dst, code ^ 1, Value::Reg(negated.clone()), src.clone())
+                else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                return vec![
+                    Op::Un {
+                        dst: negated,
+                        op: UnOp::Neg,
+                        src,
+                    },
+                    select,
+                ];
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        // `csetm Rd, cond` = CSINV Rd,ZR,ZR,invert(cond) = cond ? -1 : 0.
+        "csetm" => {
+            if ins.operands.len() == 1 {
+                let (Some(dst), Some(code)) = (operand_reg(&ins.operands[0]), cond_field(ins))
+                else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                if let Some(op) =
+                    conditional_select(dst, code ^ 1, Value::Const(-1), Value::Const(0))
+                {
+                    return vec![op];
+                }
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        "rev" => {
+            if ins.operands.len() == 2 {
+                let (Some(dst), Some(src)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                let width = dst.width().unwrap_or(Width::W64);
+                if matches!(width, Width::W32 | Width::W64) {
+                    return vec![Op::Intrinsic {
+                        name: "bswap".into(),
+                        ins: vec![src],
+                        outs: vec![(dst, width)],
+                        reads_mem: false,
+                        writes_mem: false,
+                    }];
+                }
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        "adr" => {
+            if ins.operands.len() == 2 {
+                let Some(dst) = operand_reg(&ins.operands[0]) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                if let Some(imm) = ins.operands[1].immediate {
+                    return vec![Op::Assign {
+                        dst,
+                        src: Value::Addr(imm as u64),
+                    }];
+                }
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        "msub" | "mneg" => {
+            let mut operands = vec![
+                operand_reg(&ins.operands[0]).map(Value::Reg),
+                operand_to_value(&ins.operands[1]),
+                operand_to_value(&ins.operands[2]),
+            ];
+            // `mneg Rd,Rn,Rm` is `msub Rd,Rn,Rm,ZR`.
+            operands.push(if ins.operands.len() == 4 {
+                operand_to_value(&ins.operands[3])
+            } else {
+                Some(Value::Const(0))
+            });
+            let [Some(Value::Reg(dst)), Some(lhs), Some(rhs), Some(minuend)] = &operands[..] else {
+                return vec![Op::Unknown { mnemonic: mnem }];
+            };
+            let product = temp_for(ins, 0);
+            vec![
+                bin_temp(product.clone(), BinOp::Mul, lhs.clone(), rhs.clone()),
+                bin_temp(
+                    dst.clone(),
+                    BinOp::Sub,
+                    minuend.clone(),
+                    Value::Reg(product),
+                ),
+            ]
+        }
         "paciasp" | "autiasp" | "dmb" | "csdb" => vec![intrinsic(&mnem, Vec::new())],
         "mrs" => {
             // MRS Xt,SP_EL0 has fixed sysreg bits 0xd5384100; Rt is bits 4:0.
@@ -652,50 +1864,43 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 let Some(rhs) = operand_to_value(&ins.operands[1]) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
-                return vec![
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Z),
-                        op: CmpOp::Eq,
-                        lhs: lhs.clone(),
-                        rhs: rhs.clone(),
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::C),
-                        op: CmpOp::Ult,
-                        lhs: lhs.clone(),
-                        rhs: rhs.clone(),
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Ule),
-                        op: CmpOp::Ule,
-                        lhs: lhs.clone(),
-                        rhs: rhs.clone(),
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Slt),
-                        op: CmpOp::Slt,
-                        lhs: lhs.clone(),
-                        rhs: rhs.clone(),
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Sle),
-                        op: CmpOp::Sle,
-                        lhs,
-                        rhs,
-                    },
-                ];
+                let width = machine_width([&lhs, &rhs]);
+                let mut out = Vec::new();
+                let rhs = modified_last_operand(ins, rhs, width, &mut out);
+                out.extend(compare_flags(ins, lhs, rhs));
+                return out;
             }
             vec![Op::Unknown { mnemonic: mnem }]
         }
-        "ldr" | "ldrb" | "ldrh" | "ldrsb" | "ldrsh" | "ldrsw" | "ldur" => {
+        "ldr" | "ldrb" | "ldrh" | "ldrsb" | "ldrsh" | "ldrsw" | "ldur" | "ldurb" | "ldurh"
+        | "ldursb" | "ldursh" | "ldursw" => {
             if ins.operands.len() >= 2 {
                 let Some(dst) = operand_reg(&ins.operands[0]) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
                 let size = scalar_access_size(&mnem, &ins.operands[0]);
+                // A sign-extending load reads `size` bytes and sign-fills the
+                // whole destination register, so the load lands in a temporary
+                // and the widening is an explicit `SExt`. Writing it straight
+                // into `dst` would claim a zero-extension the CPU never did.
+                let signed = sign_extending_load(&mnem);
+                let loaded = if signed {
+                    temp_for(ins, 14)
+                } else {
+                    dst.clone()
+                };
+                let widen = signed.then(|| Op::SExt {
+                    src: Value::Reg(loaded.clone()),
+                    dst: dst.clone(),
+                    from: Width(u16::from(size) * 8),
+                    to: dst.width().unwrap_or(Width::W64),
+                });
                 if let Some(addr) = operand_to_memop(&ins.operands[1], size) {
                     let base_reg = addr.base.clone();
-                    let mut out = vec![Op::Load { dst, addr }];
+                    let mut out = Vec::new();
+                    let addr = scaled_memop(ins, addr, &mut out);
+                    out.push(Op::Load { dst: loaded, addr });
+                    out.extend(widen);
                     // Post-indexed: 3rd operand is the writeback amount.
                     if ins.operands.len() == 3 {
                         if let (Some(base), Some(off)) = (base_reg, ins.operands[2].immediate) {
@@ -712,14 +1917,8 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 // PC-relative literal (2-operand form).
                 if ins.operands.len() == 2 {
                     if let Some(abs) = ins.operands[1].immediate {
-                        let size: u8 = match mnem.as_str() {
-                            "ldrb" | "ldrsb" => 1,
-                            "ldrh" | "ldrsh" => 2,
-                            "ldrsw" => 4,
-                            _ => 8,
-                        };
-                        return vec![Op::Load {
-                            dst,
+                        let mut out = vec![Op::Load {
+                            dst: loaded,
                             addr: MemOp {
                                 base: None,
                                 index: None,
@@ -730,12 +1929,14 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                                 endian: Endian::Little,
                             },
                         }];
+                        out.extend(widen);
+                        return out;
                     }
                 }
             }
             vec![Op::Unknown { mnemonic: mnem }]
         }
-        "str" | "strb" | "strh" | "stur" => {
+        "str" | "strb" | "strh" | "stur" | "sturb" | "sturh" => {
             if ins.operands.len() >= 2 {
                 let Some(src) = operand_to_value(&ins.operands[0]) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
@@ -743,7 +1944,9 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 let size = scalar_access_size(&mnem, &ins.operands[0]);
                 if let Some(addr) = operand_to_memop(&ins.operands[1], size) {
                     let base_reg = addr.base.clone();
-                    let mut out = vec![Op::Store { addr, src }];
+                    let mut out = Vec::new();
+                    let addr = scaled_memop(ins, addr, &mut out);
+                    out.push(Op::Store { addr, src });
                     if ins.operands.len() == 3 {
                         if let (Some(base), Some(off)) = (base_reg, ins.operands[2].immediate) {
                             out.push(Op::Bin {
@@ -850,7 +2053,12 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
                 if let Some(target) = ins.operands[1].immediate {
-                    return vec![
+                    // `cbz w0` tests the low 32 bits only; the parent may still
+                    // carry the high half of an earlier 64-bit write.
+                    let width = machine_width([&reg_val, &Value::Const(0)]);
+                    let mut out = Vec::new();
+                    let reg_val = unsigned_view(reg_val, width, temp_for(ins, 8), &mut out);
+                    out.extend([
                         Op::Cmp {
                             dst: VReg::Flag(Flag::Z),
                             op: CmpOp::Eq,
@@ -862,7 +2070,8 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                             target: target as u64,
                             inverted,
                         },
-                    ];
+                    ]);
+                    return out;
                 }
             }
             vec![Op::Unknown { mnemonic: mnem }]
@@ -960,7 +2169,7 @@ pub fn lift_bytes(bytes: &[u8], start_va: u64) -> Vec<LlirInstr> {
         if ins.length == 0 {
             break;
         }
-        for op in lift_one(&ins) {
+        for op in with_parent_zero_extension(lift_one(&ins)) {
             out.push(LlirInstr { va, op });
         }
         off += ins.length as usize;
@@ -983,6 +2192,47 @@ mod tests {
             Op::Unknown { mnemonic } => mnemonic.clone(),
             other => format!("{:?}", other),
         }
+    }
+
+    /// `bics Rd, Rn, Rm` is AND-**NOT** (ARM DDI 0487 C6.2.34), not AND.
+    ///
+    /// `flag_setting_arith` mapped it to a plain `BinOp::And`, so the recovered
+    /// value was `Rn & Rm` — wrong for every set bit of `Rm`, and silently,
+    /// because the mnemonic was recognised and never showed up as unlifted.
+    #[test]
+    fn bics_is_and_not() {
+        // bics x0, x1, x2 = 0xea220020
+        let out = lift_bytes(&0xea220020u32.to_le_bytes(), 0x1000);
+        let complement = out
+            .iter()
+            .find_map(|instruction| match &instruction.op {
+                Op::Un {
+                    dst,
+                    op: UnOp::Not,
+                    src,
+                } if src == &Value::Reg(VReg::phys("x2")) => Some(dst.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("bics did not complement its operand: {out:#?}"));
+        assert!(
+            out.iter().any(|instruction| matches!(&instruction.op,
+                Op::Bin { dst, op: BinOp::And, lhs, rhs }
+                    if dst == &VReg::phys("x0")
+                        && lhs == &Value::Reg(VReg::phys("x1"))
+                        && rhs == &Value::Reg(complement.clone()))),
+            "bics did not AND against the complement: {out:#?}"
+        );
+        // ...and it still reports whether that result is zero.
+        assert!(
+            out.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Z),
+                    ..
+                }
+            )),
+            "bics wrote no zero flag: {out:#?}"
+        );
     }
 
     #[test]
@@ -1149,7 +2399,8 @@ mod tests {
     fn movk_preserves_other_bits_with_a_masked_update() {
         // MOVK W8,#0x4004,LSL#16 = 0x72a80088.
         let out = lift_bytes(&[0x88, 0x00, 0xa8, 0x72], 0x1000);
-        assert_eq!(out.len(), 2, "movk should be an and/or update: {out:#?}");
+        // and / or, then the zero-extension every 32-bit write performs.
+        assert_eq!(out.len(), 3, "movk should be an and/or update: {out:#?}");
         assert!(matches!(
             &out[0].op,
             Op::Bin {
@@ -1181,13 +2432,13 @@ mod tests {
                 addr: MemOp { disp: -0x28, size: 4, .. },
             } if *dst == VReg::phys("w22")
         ));
-        assert!(matches!(
-            &out[1].op,
+        assert!(out.iter().any(|instruction| matches!(
+            &instruction.op,
             Op::Store {
                 src: Value::Reg(src),
                 addr: MemOp { disp: -0x30, size: 4, .. },
             } if *src == VReg::phys("w9")
-        ));
+        )));
     }
 
     #[test]
@@ -1245,10 +2496,15 @@ mod tests {
                 .all(|instruction| !matches!(instruction.op, Op::Unknown { .. })),
             "residual alias hole: {out:#?}"
         );
-        assert!(matches!(
-            &out[0].op,
-            Op::Intrinsic { name, ins, .. } if name == "aarch64_cmn64" && ins.len() == 2
-        ));
+        // `cmn X0,#1` is exactly `cmp X0,#-1`, so it lifts to the full
+        // comparison flag set rather than to an opaque intrinsic.
+        assert!(out.iter().any(|instruction| matches!(
+            &instruction.op,
+            Op::Cmp {
+                rhs: Value::Const(-1),
+                ..
+            }
+        )));
         assert!(out.iter().any(|instruction| matches!(
             &instruction.op,
             Op::Intrinsic { name, ins, .. } if name == "aarch64_tst64" && ins.len() == 2
@@ -1286,15 +2542,15 @@ mod tests {
                 ..
             } if *src == VReg::phys("w10")
         )));
-        assert!(matches!(
-            &out.last().expect("ubfx output").op,
+        assert!(out.iter().any(|instruction| matches!(
+            &instruction.op,
             Op::ZExt {
                 dst,
                 from: Width(4),
                 to: Width::W32,
                 ..
             } if *dst == VReg::phys("w2")
-        ));
+        )));
     }
 
     #[test]
@@ -1411,5 +2667,731 @@ mod tests {
             "expected some control-flow op in {:#?}",
             ops
         );
+    }
+
+    /// `subs` must produce the arithmetic *and* the flags of `cmp`.
+    ///
+    /// Dropping it did more damage than losing one instruction: the flag it
+    /// fails to define leaves its reader bound to a stale earlier definition,
+    /// so a stack-canary branch in a stripped AArch64 function tested a
+    /// comparison from the top of the body.
+    #[test]
+    fn subs_sets_both_the_result_and_the_compare_flags() {
+        // subs x0, x1, x2  ->  0xeb020020
+        let out = lift_bytes(&0xeb020020u32.to_le_bytes(), 0x1000);
+        assert!(
+            !out.iter().any(|i| matches!(&i.op, Op::Unknown { .. })),
+            "subs still lifts to Unknown: {:?}",
+            out.iter().map(|i| &i.op).collect::<Vec<_>>()
+        );
+        assert!(
+            out.iter()
+                .any(|i| matches!(&i.op, Op::Bin { op: BinOp::Sub, .. })),
+            "subs lost its subtraction"
+        );
+        let z = out.iter().any(|i| {
+            matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Z),
+                    op: CmpOp::Eq,
+                    ..
+                }
+            )
+        });
+        assert!(z, "subs did not define ZF as an equality compare");
+        // The flags must be the *operand* comparison, exactly as `cmp` emits,
+        // so a reader cannot tell which instruction produced them.
+        let carry = out.iter().any(|i| {
+            matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::C),
+                    op: CmpOp::Ult,
+                    ..
+                }
+            )
+        });
+        assert!(carry, "subs did not define CF");
+    }
+
+    /// `adds` claims only zero/sign, never carry or overflow — those depend on
+    /// width and signedness this lifter does not model, and a wrong flag is
+    /// worse than an absent one because a branch will render it.
+    #[test]
+    fn adds_claims_only_the_flags_it_can_prove() {
+        // adds x0, x1, x2  ->  0xab020020
+        let out = lift_bytes(&0xab020020u32.to_le_bytes(), 0x1000);
+        assert!(
+            out.iter()
+                .any(|i| matches!(&i.op, Op::Bin { op: BinOp::Add, .. })),
+            "adds lost its addition"
+        );
+        assert!(
+            out.iter().any(|i| matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Z),
+                    ..
+                }
+            )),
+            "adds did not define ZF"
+        );
+        assert!(
+            !out.iter().any(|i| matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::C),
+                    ..
+                }
+            )),
+            "adds must not claim a carry flag it cannot compute"
+        );
+    }
+
+    /// A 32-bit destination totally overwrites its 64-bit parent with a
+    /// zero-extended value. `ssa::parent64` merges `wN` with `xN`, so without
+    /// this the merge would silently claim that `and w0,w0,#0xffffff` preserves
+    /// bits 32..63 of `x0` — it does not.
+    #[test]
+    fn a_32_bit_destination_zero_extends_its_64_bit_parent() {
+        // add w0, w1, w2  ->  0x0b020020
+        let out = lift_bytes(&0x0b020020u32.to_le_bytes(), 0x1000);
+        assert!(
+            matches!(&out[0].op, Op::Bin { dst, op: BinOp::Add, .. } if *dst == VReg::phys("w0")),
+            "lost the addition: {out:#?}"
+        );
+        assert_eq!(
+            out[1].op,
+            Op::ZExt {
+                dst: VReg::phys("w0"),
+                src: Value::Reg(VReg::phys("w0")),
+                from: Width::W32,
+                to: Width::W64,
+            },
+            "a w-destination must zero-extend its x parent: {out:#?}"
+        );
+        // A 64-bit destination is already a total write and gains nothing.
+        // add x0, x1, x2  ->  0x8b020020
+        let wide = lift_bytes(&0x8b020020u32.to_le_bytes(), 0x1000);
+        assert_eq!(
+            wide.len(),
+            1,
+            "x-destination must not be widened: {wide:#?}"
+        );
+    }
+
+    /// Because `wN` and `xN` are one SSA value, a 32-bit consumer reads the
+    /// ZERO-extended parent. Any predicate or shift whose answer depends on bits
+    /// above the operand width must therefore re-establish the view it needs, or
+    /// `cmp w0,w1` with w0 = -1 compares 0xffffffff against w1 and branches the
+    /// wrong way.
+    #[test]
+    fn sub_width_consumers_re_establish_the_view_they_evaluate_over() {
+        // cmp w0, w1  ->  0x6b01001f
+        let out = lift_bytes(&0x6b01001fu32.to_le_bytes(), 0x1000);
+        let signed_sources: Vec<&Value> = out
+            .iter()
+            .filter_map(|i| match &i.op {
+                Op::SExt {
+                    src,
+                    from: Width::W32,
+                    to: Width::W64,
+                    ..
+                } => Some(src),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            signed_sources.len(),
+            2,
+            "both operands of a 32-bit compare need a signed view: {out:#?}"
+        );
+        for (cmp_op, want_signed) in [
+            (CmpOp::Slt, true),
+            (CmpOp::Sle, true),
+            (CmpOp::Ult, false),
+            (CmpOp::Ule, false),
+            (CmpOp::Eq, false),
+        ] {
+            let operand = out
+                .iter()
+                .find_map(|i| match &i.op {
+                    Op::Cmp { op, lhs, .. } if *op == cmp_op => Some(lhs.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {cmp_op:?} flag write in {out:#?}"));
+            let widener = out.iter().find(|i| {
+                matches!(&i.op, Op::SExt { dst, .. } | Op::ZExt { dst, .. }
+                    if Value::Reg(dst.clone()) == operand)
+            });
+            let is_signed = matches!(widener.map(|i| &i.op), Some(Op::SExt { .. }));
+            assert_eq!(
+                is_signed, want_signed,
+                "{cmp_op:?} reads the wrong operand view: {out:#?}"
+            );
+        }
+        // A 64-bit compare is already the full word and gains no widening.
+        // cmp x0, x1  ->  0xeb01001f
+        let wide = lift_bytes(&0xeb01001fu32.to_le_bytes(), 0x1000);
+        assert_eq!(wide.len(), 5, "64-bit cmp must not widen: {wide:#?}");
+    }
+
+    /// `asr` at 32 bits must shift a SIGN-extended word and `lsr` a
+    /// ZERO-extended one — the two forms are the whole point of having both.
+    #[test]
+    fn thirty_two_bit_right_shifts_extend_before_shifting() {
+        // asr w0, w1, #4  ->  0x13047c20 ; lsr w0, w1, #4  ->  0x53047c20
+        for (word, signed) in [(0x13047c20u32, true), (0x53047c20u32, false)] {
+            let out = lift_bytes(&word.to_le_bytes(), 0x1000);
+            let widened = out.iter().find_map(|i| match &i.op {
+                Op::SExt {
+                    dst,
+                    from: Width::W32,
+                    ..
+                } => Some((dst.clone(), true)),
+                Op::ZExt {
+                    dst,
+                    from: Width::W32,
+                    to: Width::W64,
+                    ..
+                } => Some((dst.clone(), false)),
+                _ => None,
+            });
+            let (temp, was_signed) =
+                widened.unwrap_or_else(|| panic!("no widening before the shift: {out:#?}"));
+            assert_eq!(was_signed, signed, "wrong shift operand view: {out:#?}");
+            assert!(
+                out.iter().any(|i| matches!(&i.op,
+                    Op::Bin { lhs: Value::Reg(lhs), .. } if *lhs == temp)),
+                "the shift did not consume the widened operand: {out:#?}"
+            );
+        }
+        // asr x0, x1, #4 -> 0x9344fc20: already the full word, nothing to widen.
+        let wide = lift_bytes(&0x9344fc20u32.to_le_bytes(), 0x1000);
+        assert_eq!(wide.len(), 1, "64-bit asr must not widen: {wide:#?}");
+    }
+
+    /// A sign-extending load must sign-fill its destination. Lifting `ldrsb` as
+    /// a plain byte load is a silent zero-extension: `sext_i8(0xFF)` returned
+    /// 255 instead of -1.
+    #[test]
+    fn sign_extending_loads_sign_fill_their_destination() {
+        // ldrsb w0,[sp,#31] -> 0x39c07fe0 ; ldrsh w0,[sp,#30] -> 0x79c03fe0
+        // ldrsw x0,[sp,#28] -> 0xb9801fe0   (assembled, not hand-derived)
+        for (word, bytes, to) in [
+            (0x39c07fe0u32, 8u16, Width::W32),
+            (0x79c03fe0u32, 16, Width::W32),
+            (0xb9801fe0u32, 32, Width::W64),
+        ] {
+            let out = lift_bytes(&word.to_le_bytes(), 0x1000);
+            let Op::Load { dst: loaded, addr } = &out[0].op else {
+                panic!("expected a load: {out:#?}");
+            };
+            assert_eq!(
+                u16::from(addr.size) * 8,
+                bytes,
+                "wrong access size: {out:#?}"
+            );
+            assert!(
+                out.iter().any(|i| matches!(&i.op,
+                    Op::SExt { src: Value::Reg(src), from, to: t, .. }
+                        if src == loaded && from.bits() == bytes && *t == to)),
+                "no sign extension after a signed load: {out:#?}"
+            );
+        }
+        // The unsigned sibling must NOT sign-extend.
+        // ldrb w0,[sp,#31] -> 0x39407fe0
+        let unsigned = lift_bytes(&0x39407fe0u32.to_le_bytes(), 0x1000);
+        assert!(
+            !unsigned.iter().any(|i| matches!(&i.op, Op::SExt { .. })),
+            "ldrb must not sign-extend: {unsigned:#?}"
+        );
+    }
+
+    /// `xzr`/`wzr` read as zero. Treating them as ordinary registers made
+    /// `str wzr,[sp,#24]` — how gcc zeroes a local — store an undefined value.
+    #[test]
+    fn the_zero_register_reads_as_a_constant_zero() {
+        // str wzr,[sp,#24] -> 0xb9001bff
+        let out = lift_bytes(&0xb9001bffu32.to_le_bytes(), 0x1000);
+        assert!(
+            matches!(
+                &out[0].op,
+                Op::Store {
+                    src: Value::Const(0),
+                    ..
+                }
+            ),
+            "wzr must store a literal zero: {out:#?}"
+        );
+    }
+
+    /// Every mnemonic below appears in the AArch64 fixture corpus and used to
+    /// lift to `Op::Unknown`, which severs the def-use chain of whatever it
+    /// wrote. The words are what `aarch64-linux-gnu-as` assembles, not
+    /// hand-derived encodings.
+    #[test]
+    fn the_scalar_mnemonics_the_corpus_uses_all_lift() {
+        let program: &[(u32, &str)] = &[
+            (0xd503245f, "bti c"),
+            (0x7a40c824, "ccmp w1,#0,#4,gt"),
+            (0x7a42a024, "ccmp w1,w2,#4,ge"),
+            (0xba401822, "ccmn x1,#0,#2,ne"),
+            (0x9ac20c20, "sdiv x0,x1,x2"),
+            (0x1ac20820, "udiv w0,w1,w2"),
+            (0x9b028c20, "msub x0,x1,x2,x3"),
+            (0x1b02fc20, "mneg w0,w1,w2"),
+            (0x9b427c20, "smulh x0,x1,x2"),
+            (0x9bc27c20, "umulh x0,x1,x2"),
+            (0x9ba27c20, "umull x0,w1,w2"),
+            (0x9b227c20, "smull x0,w1,w2"),
+            (0x9b220c20, "smaddl x0,w1,w2,x3"),
+            (0x9ba28c20, "umsubl x0,w1,w2,x3"),
+            (0x9b228c20, "smsubl x0,w1,w2,x3"),
+            (0x531d3020, "ubfiz w0,w1,#3,#13"),
+            (0x131d3020, "sbfiz w0,w1,#3,#13"),
+            (0x13042c20, "sbfx w0,w1,#4,#8"),
+            (0x13811c20, "ror w0,w1,#7"),
+            (0x1ac22c20, "ror w0,w1,w2"),
+            // `extr Rd,Rn,Rn,#lsb` IS the rotate — the assembler emits this very
+            // word for it, and capstone spells it `ror`.
+            (0x93c11c20, "ror x0,x1,#7"),
+            (0x13001c20, "sxtb w0,w1"),
+            (0x13003c20, "sxth w0,w1"),
+            (0x93401c20, "sxtb x0,w1"),
+            (0x53001c20, "uxtb w0,w1"),
+            (0x53003c20, "uxth w0,w1"),
+            (0xaa2103e0, "mvn x0,x1"),
+            (0x9a820420, "csinc x0,x1,x2,eq"),
+            (0xda820020, "csinv x0,x1,x2,eq"),
+            (0xda820420, "csneg x0,x1,x2,eq"),
+            (0x5a811420, "cneg w0,w1,eq"),
+            (0x5a9f03e0, "csetm w0,ne"),
+            (0xdac00c20, "rev x0,x1"),
+            (0x10000000, "adr x0,."),
+        ];
+        for (word, text) in program {
+            let out = lift_bytes(&word.to_le_bytes(), 0x1000);
+            assert!(!out.is_empty(), "{text} produced nothing");
+            let holes: Vec<&str> = out
+                .iter()
+                .filter_map(|i| match &i.op {
+                    Op::Unknown { mnemonic } => Some(mnemonic.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert!(holes.is_empty(), "{text} still lifts to Unknown: {holes:?}");
+        }
+        // `extr` with two DIFFERENT sources is a double-word extract this IR
+        // cannot express, and must stay unlifted rather than be approximated.
+        let general = lift_bytes(&0x93c21c20u32.to_le_bytes(), 0x1000); // extr x0,x1,x2,#7
+        assert!(
+            general.iter().any(|i| matches!(&i.op, Op::Unknown { .. })),
+            "extr with distinct sources must not be guessed at: {general:#?}"
+        );
+    }
+
+    /// A rotate has to be exact at both ends: the amount is masked to the
+    /// operand width, and the complementary shift is masked too, or a
+    /// register-form rotate by zero shifts by the full width — undefined in C
+    /// and a different answer than the CPU gives.
+    #[test]
+    fn rotate_right_is_exact_including_a_zero_amount() {
+        // ror w0, w1, #7  ->  0x13811c20
+        let immediate = lift_bytes(&0x13811c20u32.to_le_bytes(), 0x1000);
+        let shifts: Vec<(BinOp, i64)> = immediate
+            .iter()
+            .filter_map(|i| match &i.op {
+                Op::Bin {
+                    op: op @ (BinOp::Shr | BinOp::Shl),
+                    rhs: Value::Const(c),
+                    ..
+                } => Some((*op, *c)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            shifts.contains(&(BinOp::Shr, 7)) && shifts.contains(&(BinOp::Shl, 25)),
+            "32-bit ror #7 must be >>7 | <<25: {immediate:#?}"
+        );
+        // ror w0, w1, w2 -> 0x1ac22c20: both the amount and its complement are
+        // masked to 31 so an amount of zero stays a shift of zero.
+        let register = lift_bytes(&0x1ac22c20u32.to_le_bytes(), 0x1000);
+        let masks: Vec<i64> = register
+            .iter()
+            .filter_map(|i| match &i.op {
+                Op::Bin {
+                    op: BinOp::And,
+                    rhs: Value::Const(c),
+                    ..
+                } => Some(*c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            masks.iter().filter(|c| **c == 31).count(),
+            2,
+            "both the rotate amount and its complement need masking: {register:#?}"
+        );
+    }
+
+    /// `ccmp` must produce the comparison's flags when its condition holds and
+    /// the literal NZCV immediate when it does not — and it must snapshot the
+    /// condition first, because every flag it writes is one the condition may
+    /// read.
+    #[test]
+    fn conditional_compare_selects_between_a_comparison_and_its_nzcv_literal() {
+        // ccmp w1, #0, #4, gt  ->  0x7a40c824. #4 = NZCV 0b0100, i.e. Z set,
+        // C/N/V clear: the false arm is "equal", which is what makes gcc's
+        // `a > 0 && b > 0` fail closed.
+        let out = lift_bytes(&0x7a40c824u32.to_le_bytes(), 0x1000);
+        assert!(
+            !out.iter().any(|i| matches!(&i.op, Op::Unknown { .. })),
+            "ccmp did not lift: {out:#?}"
+        );
+        // The condition (`gt` reads Sle inverted) is read before anything is
+        // written to a flag.
+        let first_flag_write = out
+            .iter()
+            .position(|i| matches!(def_uses(&i.op).0, Some(VReg::Flag(_))));
+        let snapshot = out.iter().position(|i| {
+            matches!(
+                &i.op,
+                Op::Assign {
+                    src: Value::Reg(VReg::Flag(Flag::Sle)),
+                    ..
+                }
+            )
+        });
+        assert!(
+            snapshot.is_some() && snapshot < first_flag_write,
+            "ccmp must snapshot its condition before overwriting flags: {out:#?}"
+        );
+        let selected: Vec<(Flag, Value, Value)> = out
+            .iter()
+            .filter_map(|i| match &i.op {
+                Op::Ite {
+                    dst: VReg::Flag(f),
+                    t,
+                    e,
+                    ..
+                } => Some((*f, t.clone(), e.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(selected.len(), 5, "all five predicates: {out:#?}");
+        // `gt` is Sle INVERTED, so the taken arm is `e`. NZCV=4 gives ARM
+        // Z=1, C=0, N=0, V=0 -> our Z=1, C(unsigned lower)=1, Ule=1, Slt=0,
+        // Sle=1.
+        for (flag, want) in [
+            (Flag::Z, 1),
+            (Flag::C, 1),
+            (Flag::Ule, 1),
+            (Flag::Slt, 0),
+            (Flag::Sle, 1),
+        ] {
+            let (_, literal, computed) = selected
+                .iter()
+                .find(|(f, _, _)| *f == flag)
+                .unwrap_or_else(|| panic!("no select for {flag:?}: {out:#?}"));
+            assert_eq!(
+                *literal,
+                Value::Const(want),
+                "{flag:?} takes the wrong NZCV literal when `gt` is false"
+            );
+            assert!(
+                matches!(computed, Value::Reg(VReg::Temp(_))),
+                "{flag:?} must take the comparison when `gt` holds"
+            );
+        }
+    }
+
+    /// A shifted or extended register operand must reach the operation
+    /// transformed. Capstone drops `lsl #3` and `sxtw` from its operand list, so
+    /// `add x0,x1,x2,lsl #3` and `add x0,x1,x2` were the same instruction to
+    /// this lifter — every scaled array index was off by its element size.
+    #[test]
+    fn shifted_and_extended_register_operands_reach_the_operation() {
+        // add x0, x1, x2, lsl #3  ->  0x8b020c20 (assembled)
+        let shifted = lift_bytes(&0x8b020c20u32.to_le_bytes(), 0x1000);
+        let scaled = shifted
+            .iter()
+            .find_map(|i| match &i.op {
+                Op::Bin {
+                    dst,
+                    op: BinOp::Shl,
+                    lhs: Value::Reg(lhs),
+                    rhs: Value::Const(3),
+                } if *lhs == VReg::phys("x2") => Some(dst.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("lsl #3 was dropped: {shifted:#?}"));
+        assert!(
+            shifted.iter().any(|i| matches!(&i.op,
+                Op::Bin { op: BinOp::Add, rhs: Value::Reg(rhs), .. } if *rhs == scaled)),
+            "the addition did not consume the shifted operand: {shifted:#?}"
+        );
+        // The unshifted sibling must stay a single op.
+        // add x0, x1, x2  ->  0x8b020020
+        let plain = lift_bytes(&0x8b020020u32.to_le_bytes(), 0x1000);
+        assert_eq!(plain.len(), 1, "lsl #0 must add nothing: {plain:#?}");
+
+        // add x0, x1, w2, sxtw #2  ->  0x8b22c820
+        let extended = lift_bytes(&0x8b22c820u32.to_le_bytes(), 0x1000);
+        let widened = extended
+            .iter()
+            .find_map(|i| match &i.op {
+                Op::SExt {
+                    dst,
+                    src: Value::Reg(src),
+                    from: Width::W32,
+                    to: Width::W64,
+                } if *src == VReg::phys("w2") => Some(dst.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("sxtw was dropped: {extended:#?}"));
+        assert!(
+            extended.iter().any(|i| matches!(&i.op,
+                Op::Bin { op: BinOp::Shl, lhs: Value::Reg(lhs), rhs: Value::Const(2), .. }
+                    if *lhs == widened)),
+            "the extend's `lsl #2` was dropped: {extended:#?}"
+        );
+        // sub x0, x1, w2, uxth  ->  0xcb222020: unsigned, from 16 bits, no shift.
+        let unsigned = lift_bytes(&0xcb222020u32.to_le_bytes(), 0x1000);
+        assert!(
+            unsigned.iter().any(|i| matches!(
+                &i.op,
+                Op::ZExt {
+                    from: Width::W16,
+                    to: Width::W64,
+                    ..
+                }
+            )),
+            "uxth was dropped or claimed signed: {unsigned:#?}"
+        );
+        // cmp x1, w2, sxtw  ->  0xeb22c03f: the alias carries a modifier too.
+        let compare = lift_bytes(&0xeb22c03fu32.to_le_bytes(), 0x1000);
+        assert!(
+            compare.iter().any(|i| matches!(
+                &i.op,
+                Op::SExt {
+                    from: Width::W32,
+                    ..
+                }
+            )),
+            "cmp dropped its extended operand: {compare:#?}"
+        );
+    }
+
+    /// A register-offset load scales its index by the access size when the `S`
+    /// bit is set, and widens a 32-bit index first. Both were dropped: the scale
+    /// arrived as 0, which every consumer reads as 1.
+    #[test]
+    fn register_offset_addressing_keeps_its_scale_and_index_extension() {
+        // ldr x0, [x1, x2, lsl #3]  ->  0xf8627820 (assembled)
+        let scaled = lift_bytes(&0xf8627820u32.to_le_bytes(), 0x1000);
+        assert!(
+            scaled.iter().any(|i| matches!(&i.op,
+                Op::Load { addr: MemOp { scale: 8, index: Some(index), size: 8, .. }, .. }
+                    if *index == VReg::phys("x2"))),
+            "the 8-byte element scale was dropped: {scaled:#?}"
+        );
+        // ldr x0, [x1, x2]  ->  0xf8626820: S clear, so no scaling.
+        let unscaled = lift_bytes(&0xf8626820u32.to_le_bytes(), 0x1000);
+        assert!(
+            unscaled.iter().any(|i| matches!(
+                &i.op,
+                Op::Load {
+                    addr: MemOp { scale: 1, .. },
+                    ..
+                }
+            )),
+            "an unscaled index must not be scaled: {unscaled:#?}"
+        );
+        // ldr w0, [x1, w2, sxtw #2]  ->  0xb862d820
+        let widened = lift_bytes(&0xb862d820u32.to_le_bytes(), 0x1000);
+        let index = widened
+            .iter()
+            .find_map(|i| match &i.op {
+                Op::SExt {
+                    dst,
+                    src: Value::Reg(src),
+                    from: Width::W32,
+                    to: Width::W64,
+                } if *src == VReg::phys("w2") => Some(dst.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("sxtw index was dropped: {widened:#?}"));
+        assert!(
+            widened.iter().any(|i| matches!(&i.op,
+                Op::Load { addr: MemOp { scale: 4, index: Some(used), .. }, .. }
+                    if *used == index)),
+            "the load did not use the widened index: {widened:#?}"
+        );
+        // str x0, [x1, x2, lsl #3]  ->  0xf8227820
+        let store = lift_bytes(&0xf8227820u32.to_le_bytes(), 0x1000);
+        assert!(
+            store.iter().any(|i| matches!(
+                &i.op,
+                Op::Store {
+                    addr: MemOp { scale: 8, .. },
+                    ..
+                }
+            )),
+            "stores need the same scaling as loads: {store:#?}"
+        );
+    }
+
+    /// `cmn` and `tst` must DEFINE the flags they set. Only modelling them as an
+    /// opaque intrinsic left the following `cset`/`csinv` bound to a stale
+    /// earlier comparison — the exact stale-flag failure this file warns about.
+    #[test]
+    fn cmn_and_tst_define_the_flags_they_set() {
+        // tst w0, w1  ->  0x6a01001f
+        let tst = lift_bytes(&0x6a01001fu32.to_le_bytes(), 0x1000);
+        let anded = tst
+            .iter()
+            .find_map(|i| match &i.op {
+                Op::Bin {
+                    dst,
+                    op: BinOp::And,
+                    ..
+                } => Some(dst.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("tst lost its conjunction: {tst:#?}"));
+        assert!(
+            tst.iter().any(|i| matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Z),
+                    op: CmpOp::Eq,
+                    ..
+                }
+            )),
+            "tst did not define ZF: {tst:#?}"
+        );
+        // The sign test must be taken at the OPERAND width. The conjunction
+        // lives in a 64-bit temporary, so testing it directly would report every
+        // negative 32-bit result as positive.
+        assert!(
+            tst.iter().any(|i| matches!(&i.op,
+                Op::SExt { src: Value::Reg(src), from: Width::W32, to: Width::W64, .. }
+                    if *src == anded)),
+            "tst tested the sign of a 64-bit container: {tst:#?}"
+        );
+        // A logical operation provably clears ARM's C and V.
+        for flag in [Flag::C, Flag::Ule] {
+            assert!(
+                tst.iter().any(|i| matches!(&i.op,
+                    Op::Assign { dst: VReg::Flag(f), src: Value::Const(1) } if *f == flag)),
+                "tst left {flag:?} to a stale definition: {tst:#?}"
+            );
+        }
+
+        // cmn w0, #1  ->  0x3100041f is `cmp w0, #-1`, and gets the FULL
+        // comparison flag set because the two are the same operation.
+        let immediate = lift_bytes(&0x3100041fu32.to_le_bytes(), 0x1000);
+        let flags: Vec<Flag> = immediate
+            .iter()
+            .filter_map(|i| match &i.op {
+                Op::Cmp {
+                    dst: VReg::Flag(f), ..
+                } => Some(*f),
+                _ => None,
+            })
+            .collect();
+        for want in [Flag::Z, Flag::C, Flag::Ule, Flag::Slt, Flag::Sle] {
+            assert!(
+                flags.contains(&want),
+                "cmn #imm must set {want:?} exactly: {immediate:#?}"
+            );
+        }
+        assert!(
+            immediate.iter().any(|i| matches!(
+                &i.op,
+                Op::Cmp {
+                    rhs: Value::Const(-1),
+                    ..
+                }
+            )),
+            "cmn #1 must compare against -1: {immediate:#?}"
+        );
+        // The register form claims only what `adds` claims — never a carry.
+        // cmn w0, w1 -> 0x2b01001f
+        let register = lift_bytes(&0x2b01001fu32.to_le_bytes(), 0x1000);
+        assert!(
+            !register.iter().any(|i| matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::C),
+                    ..
+                }
+            )),
+            "the register cmn must not claim a carry it cannot compute: {register:#?}"
+        );
+    }
+
+    /// `subs Rd, Rn, Rm` where Rd IS Rn must compare the operands the CPU
+    /// compared, not the value it just wrote over one of them.
+    ///
+    /// This is gcc's stack-canary epilogue (`subs x3, x3, x2; b.eq ok`). Reading
+    /// the flags off the updated register turned it into
+    /// `(saved - current) == current`, so every protected function took the
+    /// `__stack_chk_fail` branch.
+    #[test]
+    fn a_flag_setting_subtract_compares_its_operands_not_its_result() {
+        // subs x3, x3, x2  ->  0xeb020063
+        let out = lift_bytes(&0xeb020063u32.to_le_bytes(), 0x1000);
+        let write = out
+            .iter()
+            .position(|i| {
+                matches!(&i.op, Op::Bin { dst, op: BinOp::Sub, .. }
+                if *dst == VReg::phys("x3"))
+            })
+            .expect("subs lost its subtraction");
+        let equality = out
+            .iter()
+            .position(|i| {
+                matches!(
+                    &i.op,
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        ..
+                    }
+                )
+            })
+            .expect("subs did not define ZF");
+        assert!(
+            equality < write,
+            "the flags must be taken before the destination is overwritten: {out:#?}"
+        );
+        assert!(
+            out.iter().any(|i| matches!(&i.op,
+                Op::Cmp { dst: VReg::Flag(Flag::Z), lhs: Value::Reg(l), rhs: Value::Reg(r), .. }
+                    if *l == VReg::phys("x3") && *r == VReg::phys("x2"))),
+            "ZF must compare the two source operands: {out:#?}"
+        );
+    }
+
+    /// Pointer authentication is already modelled as a zero-output intrinsic,
+    /// so it is transparent to dataflow. Pinned here because the `/* asm: */`
+    /// text it renders reads like an unlifted instruction and was miscounted as
+    /// one — 85 of 302 apparent AArch64 gaps were this rendering, not a gap.
+    #[test]
+    fn pointer_authentication_is_dataflow_transparent() {
+        for (name, word) in [("paciasp", 0xd503233fu32), ("autiasp", 0xd50323bfu32)] {
+            let out = lift_bytes(&word.to_le_bytes(), 0x1000);
+            assert!(
+                out.iter().all(|i| !matches!(&i.op, Op::Unknown { .. })),
+                "{name} lifts to Unknown"
+            );
+            assert!(
+                out.iter()
+                    .all(|i| !matches!(&i.op, Op::Intrinsic { outs, .. } if !outs.is_empty())),
+                "{name} must not claim to define a value"
+            );
+        }
     }
 }

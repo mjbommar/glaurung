@@ -23,6 +23,7 @@ fn pac_prologue_scan_recovers_stripped_functions() {
         max_blocks: 8192,
         max_instructions: 200_000,
         timeout_ms: 2000,
+        total_timeout_ms: 0,
     };
     let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
 

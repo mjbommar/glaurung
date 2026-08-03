@@ -28,6 +28,11 @@ class WindowsAnalysisConfig:
     max_blocks: int = 1_000_000
     max_instructions: int = 30_000_000
     timeout_ms: int = 600_000
+    #: Wall clock for the WHOLE analysis, not one function's walk (`timeout_ms`
+    #: restarts per function, so it has never bounded a run). `0` means no
+    #: ceiling. When it is exceeded the result is a TRUNCATION: discovery stops
+    #: with functions still unseeded, and `hit_total_timeout` says so.
+    total_timeout_ms: int = 0
     pdb_cache_dir: str | None = None
     symbol_cache_dir: str | None = None
     symbol_server: str | None = None
@@ -68,5 +73,7 @@ def _resolve_config_path(path: str | Path | None) -> Path | None:
     return None
 
 
-def load_windows_analysis_config(path: str | Path | None = None) -> WindowsAnalysisConfig:
+def load_windows_analysis_config(
+    path: str | Path | None = None,
+) -> WindowsAnalysisConfig:
     return WindowsAnalysisConfig.load(path)

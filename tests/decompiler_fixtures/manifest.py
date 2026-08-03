@@ -14,6 +14,7 @@ Per-function pass/fail expectations are NOT here — they live in the generated,
 committed `baseline.json`, so the gate fails only on NEW regressions while known
 bugs stay visible. Everything here is data, read by `tools/diff_decompile.py`.
 """
+
 from __future__ import annotations
 
 import os
@@ -92,9 +93,7 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
             1: [-1000000, -1, 0, 1, 1000000],
         }
     },
-    ("branches", "nested"): {
-        "arg_values": {2: [-1000000, -1, 0, 1, 1000000]}
-    },
+    ("branches", "nested"): {"arg_values": {2: [-1000000, -1, 0, 1, 1000000]}},
     ("arrays", "sum_array"): {"len_args": [1]},
     ("arrays", "max_array"): {"len_args": [1]},
     ("arrays", "reverse"): {"len_args": [1]},
@@ -147,12 +146,8 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
     # These loops are finite for every integer but the generic INT_MAX boundary
     # would make the gate spend billions of iterations.  factorial additionally
     # has signed overflow above 20 on this 64-bit source type.
-    ("loops", "sum_to"): {
-        "arg_values": {0: [-2, -1, 0, 1, 2, 3, 7, 10, 100, 1000]}
-    },
-    ("loops", "factorial"): {
-        "arg_values": {0: [-2, -1, 0, 1, 2, 3, 7, 10, 15, 20]}
-    },
+    ("loops", "sum_to"): {"arg_values": {0: [-2, -1, 0, 1, 2, 3, 7, 10, 100, 1000]}},
+    ("loops", "factorial"): {"arg_values": {0: [-2, -1, 0, 1, 2, 3, 7, 10, 15, 20]}},
     # A random signed 32-bit opcode reaches the default arm almost every time.
     # Pin every jump-table arm, including the negative case-7 operand that caught
     # `sar eax,1` being rendered as a 64-bit logical shift. Values stay small so
@@ -179,9 +174,7 @@ DECBENCH_OVERRIDES: dict[tuple[str, str], dict] = {
     # Recursive node links are materialized as bounded acyclic chains. list_find's
     # pointer result is meaningful only relative to its input graph, so compare the
     # returned node index rather than unrelated process addresses.
-    ("linkedlist", "list_sum"): {
-        "extra_vectors": [[[[1, 10], [2, -20], [-1, 30]]]]
-    },
+    ("linkedlist", "list_sum"): {"extra_vectors": [[[[1, 10], [2, -20], [-1, 30]]]]},
     ("linkedlist", "list_find"): {
         "pointer_return_arg": 0,
         "non_length_args": [1],
@@ -283,27 +276,37 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # the differential can call our version. Retain negative/base cases, every GCC
     # unrolled prefix, and values large enough to exercise repeated modulo lowering.
     ("06_calling_conventions", "fact_mod"): {
-        "arg_values": {
-            0: [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 10, 20, 50, 100, 500, 1000]
-        },
+        "arg_values": {0: [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 10, 20, 50, 100, 500, 1000]},
     },
     # 12: drive each trip count across its masked range, including the zero-trip
     # case a wrongly-polarised loop condition turns into a full run (and back).
-    ("12_loop_rotation", "factorial_while"): {"extra_vectors": [[0], [1], [2], [15], [16], [-1]]},
+    ("12_loop_rotation", "factorial_while"): {
+        "extra_vectors": [[0], [1], [2], [15], [16], [-1]]
+    },
     ("12_loop_rotation", "count_up"): {"extra_vectors": [[0], [1], [15], [16], [-1]]},
     ("12_loop_rotation", "for_accumulate"): {"extra_vectors": [[0], [1], [15], [-1]]},
     ("12_loop_rotation", "do_while_control"): {"extra_vectors": [[0], [1], [15], [-1]]},
-    ("12_loop_rotation", "find_first_set"): {"extra_vectors": [[0], [1], [0x80000000], [0xFFFFFFFF]]},
+    ("12_loop_rotation", "find_first_set"): {
+        "extra_vectors": [[0], [1], [0x80000000], [0xFFFFFFFF]]
+    },
     ("12_loop_rotation", "skip_odd_sum"): {"extra_vectors": [[0], [1], [2], [15]]},
-    ("12_loop_rotation", "nested_rotated"): {"extra_vectors": [[0, 0], [1, 1], [7, 7], [0, 7], [7, 0]]},
-    ("12_loop_rotation", "down_by_negative_imm"): {"extra_vectors": [[0], [1], [15], [-1]]},
+    ("12_loop_rotation", "nested_rotated"): {
+        "extra_vectors": [[0, 0], [1, 1], [7, 7], [0, 7], [7, 0]]
+    },
+    ("12_loop_rotation", "down_by_negative_imm"): {
+        "extra_vectors": [[0], [1], [15], [-1]]
+    },
     # 11: drive the boundaries where a wrong width is visible — the 8-bit wrap,
     # the 32-bit product that needs 64 bits, and the sign flip in the callee.
     ("11_call_shapes", "wrap_byte"): {
         "extra_vectors": [[0], [8], [0xFF], [0x100], [0xFFFFFFFF]],
     },
     ("11_call_shapes", "widen_mul"): {
-        "extra_vectors": [[0xFFFFFFFF, 0xFFFFFFFF], [0x10000, 0x10000], [1, 0xFFFFFFFF]],
+        "extra_vectors": [
+            [0xFFFFFFFF, 0xFFFFFFFF],
+            [0x10000, 0x10000],
+            [1, 0xFFFFFFFF],
+        ],
     },
     ("11_call_shapes", "call_fold_wide_result"): {
         "extra_vectors": [[0xFFFFFFFF, 0xFFFFFFFF], [0x10000, 0x10000], [0, 5]],
@@ -344,26 +347,50 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # up as a wrong error code or an OOB access. Header is 8 bytes, big-endian:
     #   magic=0xC0DE, ver_type=(ver<<4|type), flags, length(be16), reserved(be16).
     ("07_packet_parser", "validate_header"): {
-        "ptr_elem": "u8", "ptr_len": 32, "len_args": [1],
+        "ptr_elem": "u8",
+        "ptr_len": 32,
+        "len_args": [1],
         "extra_vectors": [
             ([0xC0, 0xDE, 0x13, 0x00, 0x00, 0x04, 0x00, 0x00], 12),  # ok -> 0
             ([0x00, 0x00, 0x13, 0x00, 0x00, 0x04, 0x00, 0x00], 12),  # bad magic -> -3
-            ([0xC0, 0xDE, 0x23, 0x00, 0x00, 0x00, 0x00, 0x00], 8),   # bad version -> -4
-            ([0xC0, 0xDE, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00], 8),   # type 0 -> -5
-            ([0xC0, 0xDE, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00], 8),   # type 8 -> -5
-            ([0xC0, 0xDE, 0x13, 0x00, 0x00, 0xFF, 0x00, 0x00], 8),   # len overrun -> -6
-            ([0xC0, 0xDE], 4),                                        # too short -> -2
+            ([0xC0, 0xDE, 0x23, 0x00, 0x00, 0x00, 0x00, 0x00], 8),  # bad version -> -4
+            ([0xC0, 0xDE, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00], 8),  # type 0 -> -5
+            ([0xC0, 0xDE, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00], 8),  # type 8 -> -5
+            ([0xC0, 0xDE, 0x13, 0x00, 0x00, 0xFF, 0x00, 0x00], 8),  # len overrun -> -6
+            ([0xC0, 0xDE], 4),  # too short -> -2
         ],
     },
-    ("07_packet_parser", "decode_header"): {"ptr_elem": "u8", "ptr_len": 32, "len_args": [1]},
+    ("07_packet_parser", "decode_header"): {
+        "ptr_elem": "u8",
+        "ptr_len": 32,
+        "len_args": [1],
+    },
     ("07_packet_parser", "parse_packet"): {
-        "ptr_elem": "u8", "ptr_len": 32, "len_args": [1],
+        "ptr_elem": "u8",
+        "ptr_len": 32,
+        "len_args": [1],
         "extra_vectors": [
-            ([0xC0, 0xDE, 0x13, 0x00, 0x00, 0x04, 0x00, 0x00, 0x11, 0x22, 0x33, 0x44], 12),  # ok
-            ([0xC0, 0xDE, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00], 8),   # ok, empty payload
+            (
+                [
+                    0xC0,
+                    0xDE,
+                    0x13,
+                    0x00,
+                    0x00,
+                    0x04,
+                    0x00,
+                    0x00,
+                    0x11,
+                    0x22,
+                    0x33,
+                    0x44,
+                ],
+                12,
+            ),  # ok
+            ([0xC0, 0xDE, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00], 8),  # ok, empty payload
             ([0x00, 0x00, 0x13, 0x00, 0x00, 0x04, 0x00, 0x00], 12),  # bad magic -> -3
             ([0xC0, 0xDE, 0x13, 0x00, 0x00, 0xFF, 0x00, 0x00], 10),  # len overrun -> -6
-            ([0xC0, 0xDE], 4),                                        # too short -> -2
+            ([0xC0, 0xDE], 4),  # too short -> -2
         ],
     },
     # 09: buffer transforms — the count arg indexes the buffer.
@@ -409,42 +436,81 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # example alongside the deterministic boundary sweep and seeded fuzz.
     ("15_binary_search_tree", "bst_search"): {
         "arg_values": {1: [0, 1, 4, 7, 16], 2: [-1, 0, 1, 6, 15, 16]},
-        "extra_vectors": [[
-            [[8, 1, 2], [4, 3, 4], [12, 5, 6], [2, -1, -1],
-             [6, -1, -1], [10, -1, -1], [14, -1, -1]],
-            7, 0, 10,
-        ]],
+        "extra_vectors": [
+            [
+                [
+                    [8, 1, 2],
+                    [4, 3, 4],
+                    [12, 5, 6],
+                    [2, -1, -1],
+                    [6, -1, -1],
+                    [10, -1, -1],
+                    [14, -1, -1],
+                ],
+                7,
+                0,
+                10,
+            ]
+        ],
     },
     ("15_binary_search_tree", "bst_inorder_checksum"): {
         "arg_values": {1: [0, 1, 4, 7, 16], 2: [-1, 0, 1, 6, 15, 16]},
-        "extra_vectors": [[
-            [[8, 1, 2], [4, 3, 4], [12, 5, 6], [2, -1, -1],
-             [6, -1, -1], [10, -1, -1], [14, -1, -1]],
-            7, 0,
-        ]],
+        "extra_vectors": [
+            [
+                [
+                    [8, 1, 2],
+                    [4, 3, 4],
+                    [12, 5, 6],
+                    [2, -1, -1],
+                    [6, -1, -1],
+                    [10, -1, -1],
+                    [14, -1, -1],
+                ],
+                7,
+                0,
+            ]
+        ],
     },
     ("16_red_black_tree", "rb_validate"): {
         "arg_values": {1: [0, 1, 3, 7, 16], 2: [-1, 0, 1, 6, 15, 16]},
-        "extra_vectors": [[
-            [[8, 1, 2, 0], [4, 3, 4, 1], [12, 5, 6, 1],
-             [2, -1, -1, 0], [6, -1, -1, 0], [10, -1, -1, 0],
-             [14, -1, -1, 0]],
-            7, 0,
-        ]],
+        "extra_vectors": [
+            [
+                [
+                    [8, 1, 2, 0],
+                    [4, 3, 4, 1],
+                    [12, 5, 6, 1],
+                    [2, -1, -1, 0],
+                    [6, -1, -1, 0],
+                    [10, -1, -1, 0],
+                    [14, -1, -1, 0],
+                ],
+                7,
+                0,
+            ]
+        ],
     },
     ("17_hash_table", "hash_lookup"): {
         "len_args": [2],
-        "extra_vectors": [[
-            [INT_MIN, 9, 17, 1, INT_MIN, INT_MIN, INT_MIN, INT_MIN],
-            [0, 90, 170, 10, 0, 0, 0, 0], 8, 17,
-        ]],
+        "extra_vectors": [
+            [
+                [INT_MIN, 9, 17, 1, INT_MIN, INT_MIN, INT_MIN, INT_MIN],
+                [0, 90, 170, 10, 0, 0, 0, 0],
+                8,
+                17,
+            ]
+        ],
     },
     ("17_hash_table", "hash_insert"): {
         "len_args": [2],
-        "extra_vectors": [[
-            [INT_MIN, 9, 17, 1, INT_MIN, INT_MIN, INT_MIN, INT_MIN],
-            [0, 90, 170, 10, 0, 0, 0, 0], 8, 25, 250,
-        ]],
+        "extra_vectors": [
+            [
+                [INT_MIN, 9, 17, 1, INT_MIN, INT_MIN, INT_MIN, INT_MIN],
+                [0, 90, 170, 10, 0, 0, 0, 0],
+                8,
+                25,
+                250,
+            ]
+        ],
     },
     ("18_binary_heap", "heap_push"): {
         "len_args": [1, 2],
@@ -464,31 +530,46 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     },
     ("20_graph_bfs", "graph_bfs"): {
         "arg_values": {1: [0, 1, 2, 3, 4], 2: [-1, 0, 1, 3, 4]},
-        "extra_vectors": [[
-            [0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0],
-            4, 0, [0],
-        ]],
+        "extra_vectors": [
+            [
+                [0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0],
+                4,
+                0,
+                [0],
+            ]
+        ],
     },
     ("21_graph_dfs", "graph_dfs"): {
         "arg_values": {1: [0, 1, 2, 3, 4], 2: [-1, 0, 1, 3, 4]},
-        "extra_vectors": [[
-            [0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0],
-            4, 0, [0],
-        ]],
+        "extra_vectors": [
+            [
+                [0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0],
+                4,
+                0,
+                [0],
+            ]
+        ],
     },
     ("22_dijkstra", "dijkstra_dense"): {
         "arg_values": {1: [0, 1, 2, 3, 4], 2: [-1, 0, 1, 3, 4]},
-        "extra_vectors": [[
-            [0, 4, 1, 0, 4, 0, 2, 5, 1, 2, 0, 8, 0, 5, 8, 0],
-            4, 0, [0],
-        ]],
+        "extra_vectors": [
+            [
+                [0, 4, 1, 0, 4, 0, 2, 5, 1, 2, 0, 8, 0, 5, 8, 0],
+                4,
+                0,
+                [0],
+            ]
+        ],
     },
     ("23_topological_sort", "topological_sort"): {
         "arg_values": {1: [0, 1, 2, 3, 4]},
-        "extra_vectors": [[
-            [0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0],
-            4, [0],
-        ]],
+        "extra_vectors": [
+            [
+                [0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0],
+                4,
+                [0],
+            ]
+        ],
     },
     ("24_merge_sort", "merge_sort_i32"): {
         "len_args": [1],
@@ -505,10 +586,18 @@ OVERRIDES: dict[tuple[str, str], dict] = {
             6: [0, 1, 2, 4, 16],
             7: [0, 1, 4, 7, 16],
         },
-        "extra_vectors": [[
-            [0, 2, 3, 5, 7], [0, 3, 1, 0, 2, 1, 3],
-            [10, 2, 3, 4, 5, 6, 7], [1, 2, 3, 4], [0], 4, 4, 7,
-        ]],
+        "extra_vectors": [
+            [
+                [0, 2, 3, 5, 7],
+                [0, 3, 1, 0, 2, 1, 3],
+                [10, 2, 3, 4, 5, 6, 7],
+                [1, 2, 3, 4],
+                [0],
+                4,
+                4,
+                7,
+            ]
+        ],
     },
     ("28_euler_ode", "euler_decay_q16"): {
         "arg_values": {
@@ -549,12 +638,21 @@ STRUCTURAL: dict[tuple[str, str], dict] = {
     ("09_memory_effects", "vec_transform"): {"memory_store": True},
     ("09_memory_effects", "tick"): {"memory_store": True, "void_signature": True},
     ("09_memory_effects", "tick_n"): {"memory_store": True, "void_signature": True},
-    ("09_memory_effects", "reset_counter"): {"memory_store": True, "void_signature": True},
+    ("09_memory_effects", "reset_counter"): {
+        "memory_store": True,
+        "void_signature": True,
+    },
     # C++ runtime shapes — initial vtable/EH assertions (ratchet upward).
-    ("10_cpp_runtime_shapes", "cpp_virtual_dispatch"): {"indirect_call": True},  # vtable dispatch
-    ("10_cpp_runtime_shapes", "cpp_ctor_dtor"): {"memory_store": True},          # ctor/dtor markers
-    ("10_cpp_runtime_shapes", "cpp_raii_guard"): {"memory_store": True},         # cleanup write
-    ("10_cpp_runtime_shapes", "cpp_exception"): {"nonempty": True},              # EH body recovered
+    ("10_cpp_runtime_shapes", "cpp_virtual_dispatch"): {
+        "indirect_call": True
+    },  # vtable dispatch
+    ("10_cpp_runtime_shapes", "cpp_ctor_dtor"): {
+        "memory_store": True
+    },  # ctor/dtor markers
+    ("10_cpp_runtime_shapes", "cpp_raii_guard"): {
+        "memory_store": True
+    },  # cleanup write
+    ("10_cpp_runtime_shapes", "cpp_exception"): {"nonempty": True},  # EH body recovered
 }
 
 
@@ -589,26 +687,58 @@ CURRICULUM_PROJECTS: dict[str, list[str]] = {
 # the gate). Not exhaustive — enough to catch a dropped/renamed symbol.
 REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     "01_conditional_polarity": [
-        "cmp_signed", "cmp_unsigned", "early_return", "early_return_ge",
-        "nested", "elseif", "ternary", "sc_and", "sc_or", "classify",
+        "cmp_signed",
+        "cmp_unsigned",
+        "early_return",
+        "early_return_ge",
+        "nested",
+        "elseif",
+        "ternary",
+        "sc_and",
+        "sc_or",
+        "classify",
     ],
     "02_integer_widths": [
-        "rt_u8", "rt_u16", "rt_u32", "rt_u64", "sext_i8", "zext_u32_to_u64",
-        "trunc_u8", "sar_signed", "shr_unsigned", "umul_high64", "smul_high64",
-        "urem64", "srem64",
+        "rt_u8",
+        "rt_u16",
+        "rt_u32",
+        "rt_u64",
+        "sext_i8",
+        "zext_u32_to_u64",
+        "trunc_u8",
+        "sar_signed",
+        "shr_unsigned",
+        "umul_high64",
+        "smul_high64",
+        "urem64",
+        "srem64",
     ],
     "03_loop_shapes": [
-        "for_sum", "dowhile_atleastonce", "while_reload_header", "loop_break",
-        "loop_continue", "nested_pairs",
+        "for_sum",
+        "dowhile_atleastonce",
+        "while_reload_header",
+        "loop_break",
+        "loop_continue",
+        "nested_pairs",
     ],
     "04_switch_shapes": [
-        "dense_jumptable", "sparse_switch", "negative_cases", "shared_bodies",
-        "explicit_fallthrough", "no_default",
+        "dense_jumptable",
+        "sparse_switch",
+        "negative_cases",
+        "shared_bodies",
+        "explicit_fallthrough",
+        "no_default",
     ],
     "05_cleanup_and_state_machine": ["fsm", "process"],
     "06_calling_conventions": [
-        "sum_arg0", "sum_arg1", "sum_arg2", "sum_arg6", "sum_arg7", "sum_arg10",
-        "fib", "fact_mod",
+        "sum_arg0",
+        "sum_arg1",
+        "sum_arg2",
+        "sum_arg6",
+        "sum_arg7",
+        "sum_arg10",
+        "fib",
+        "fact_mod",
     ],
     # Only exported (non-static) functions — read_be16/read_be32/decode_header are
     # `static` (inlined away at O2, never dynamically loadable) so they are not
@@ -616,35 +746,69 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     "07_packet_parser": ["validate_header", "parse_packet"],
     "08_indirect_dispatch": ["dispatch", "dispatch_switch", "tail_dispatch", "apply"],
     "09_memory_effects": [
-        "tick", "tick_n", "read_counter", "reset_counter", "cas_update", "mem_copy", "mem_set", "vec_sum",
+        "tick",
+        "tick_n",
+        "read_counter",
+        "reset_counter",
+        "cas_update",
+        "mem_copy",
+        "mem_set",
+        "vec_sum",
         "vec_transform",
     ],
     "10_cpp_runtime_shapes": [
-        "cpp_virtual_dispatch", "cpp_ctor_dtor", "cpp_raii_guard", "cpp_exception",
-        "cpp_lambda_capture", "cpp_move",
+        "cpp_virtual_dispatch",
+        "cpp_ctor_dtor",
+        "cpp_raii_guard",
+        "cpp_exception",
+        "cpp_lambda_capture",
+        "cpp_move",
     ],
     # Every function is a loop SHAPE; a decompiler that drops the back-edge returns
     # the first iteration's value, which every one of these makes visible.
     "12_loop_rotation": [
-        "factorial_while", "count_up", "for_accumulate", "do_while_control",
-        "find_first_set", "skip_odd_sum", "nested_rotated",
+        "factorial_while",
+        "count_up",
+        "for_accumulate",
+        "do_while_control",
+        "find_first_set",
+        "skip_odd_sum",
+        "nested_rotated",
         "down_by_negative_imm",
     ],
     "13_loop_early_exit": [
-        "find_first", "bisect", "classify_run", "has_pair", "sum_until_zero",
+        "find_first",
+        "bisect",
+        "classify_run",
+        "has_pair",
+        "sum_until_zero",
         "sum_positive",
     ],
     "14_flag_effects": [
-        "dec_loop", "countdown", "sub_then_sign", "and_is_zero",
-        "add_then_negative", "shift_until_zero", "dec_preserves_carry",
+        "dec_loop",
+        "countdown",
+        "sub_then_sign",
+        "and_is_zero",
+        "add_then_negative",
+        "shift_until_zero",
+        "dec_preserves_carry",
     ],
     # Callees are required too: a callee whose own recovery is wrong makes every
     # caller's verdict meaningless.
     "11_call_shapes": [
-        "widen_mul", "wrap_byte", "signed_step", "spill_combine",
-        "call_fold_wide_result", "call_accumulate_bytes", "call_result_drives_branch",
-        "call_nested", "call_twice_and_combine", "call_into_spill",
-        "call_chain_in_loop", "call_forward_result", "call_result_unused",
+        "widen_mul",
+        "wrap_byte",
+        "signed_step",
+        "spill_combine",
+        "call_fold_wide_result",
+        "call_accumulate_bytes",
+        "call_result_drives_branch",
+        "call_nested",
+        "call_twice_and_combine",
+        "call_into_spill",
+        "call_chain_in_loop",
+        "call_forward_result",
+        "call_result_unused",
     ],
     **CURRICULUM_PROJECTS,
 }
@@ -689,7 +853,10 @@ def scalar_boundaries(width: int = 4, signed: bool = True) -> list[int]:
         vals += [-1, -2]
     if width >= 8:
         # values whose high 32 bits are non-zero — expose truncated 64-bit paths
-        vals += [0x1_0000_0007, 0x7FFF_FFFF_8000_0001 if signed else 0xFFFF_FFFF_0000_0001]
+        vals += [
+            0x1_0000_0007,
+            0x7FFF_FFFF_8000_0001 if signed else 0xFFFF_FFFF_0000_0001,
+        ]
     # de-dupe preserving order
     seen, out = set(), []
     for v in vals:
@@ -718,7 +885,10 @@ def assert_fixtures_declared() -> None:
     Both refreshers call this now. A guard that only one writer honours is not a
     guard; it is a way of finding out later.
     """
-    on_disk = {p.stem for p in sorted(FIXTURE_SRC.glob("*.c")) + sorted(FIXTURE_SRC.glob("*.cpp"))}
+    on_disk = {
+        p.stem
+        for p in sorted(FIXTURE_SRC.glob("*.c")) + sorted(FIXTURE_SRC.glob("*.cpp"))
+    }
     declared = set(REQUIRED_FUNCTIONS)
     if on_disk != declared:
         raise AssertionError(

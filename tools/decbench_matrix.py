@@ -220,9 +220,7 @@ def parse_decompiled_functions(combined_c: str) -> dict[int, str]:
         if address in parsed:
             raise ValueError(f"duplicate decompiled address 0x{address:x}")
         end = (
-            matches[index + 1].start()
-            if index + 1 < len(matches)
-            else len(combined_c)
+            matches[index + 1].start() if index + 1 < len(matches) else len(combined_c)
         )
         code = combined_c[match.end() : end].strip()
         if not code:
@@ -298,9 +296,7 @@ def run_behavior(
         only=set(required),
         decompiled_by_va=decompiled,
     )
-    return verdicts, behavior_problems(
-        verdicts, required, fixture, differential.M
-    )
+    return verdicts, behavior_problems(verdicts, required, fixture, differential.M)
 
 
 def evaluate_behavior(
@@ -371,7 +367,10 @@ def decompile_backend(
         return {}, f"{backend}: decompilation timeout"
     if process.returncode != 0:
         diagnostic = " ".join((process.stderr or process.stdout or "no output").split())
-        return {}, f"{backend}: decompilation exit {process.returncode}: {diagnostic[-500:]}"
+        return (
+            {},
+            f"{backend}: decompilation exit {process.returncode}: {diagnostic[-500:]}",
+        )
     payload_line = next(
         (
             line[len(DECOMPILE_JSON_PREFIX) :]
@@ -566,9 +565,7 @@ def print_cell(key: str, cell: dict) -> None:
         print(f"  {key:34s} ERROR {error}", flush=True)
         return
     if behavior := cell.get("behavior"):
-        passed = sum(
-            verdict.get("status") == "pass" for verdict in behavior.values()
-        )
+        passed = sum(verdict.get("status") == "pass" for verdict in behavior.values())
         structural = sum(
             verdict.get("status") == "structural" for verdict in behavior.values()
         )

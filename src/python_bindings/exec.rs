@@ -65,6 +65,7 @@ fn emulate_function_py(
             max_blocks: 1024,
             max_instructions: 100_000,
             timeout_ms: 5000,
+            total_timeout_ms: 0,
         },
     );
     let func = funcs

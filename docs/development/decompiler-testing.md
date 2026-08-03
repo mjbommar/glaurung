@@ -22,8 +22,25 @@ cost barely more than 4.
 | did I break this lane | `tools/dectest.py FIX:cc:opt` | 13 s |
 | did I break this shape family | `tools/dectest.py @switch` / `@loops` | 48 s / 54 s |
 | did I break anything, behaviourally | `pytest -m slow python/tests/test_decompiler_fixture_matrix.py` | ~2 min |
+| did I break a NON-x86-64 lifter | `tools/arch_roundtrip.py --check` | **4.4 min** |
+| does recovered C still build for a 32-bit target | `pytest -m slow python/tests/test_decompiler_wide_arithmetic_width.py` | ~25 s |
 | did I move the metrics on this program | `tools/decbench_matrix.py --check --only statemachine` | ~3 min |
-| is it safe to push | `scripts/decbench-local-gate.sh` | ~40 min |
+| is it safe to push | `scripts/decbench-local-gate.sh` | ~45 min |
+
+Note the `arch_roundtrip` row. Every lane of `fixture_harness` — all 656 cases —
+is x86-64 on the host, so it says nothing whatever about `src/ir/lift_arm32.rs`,
+`src/ir/lift_arm64.rs`, or the 32-bit half of `src/ir/lift_x86.rs`. Only
+`tools/arch_roundtrip.py` executes those, and it costs less than the behavioural
+matrix does.
+
+Note also the row under it, and why it is separate. `arch_roundtrip` rebuilds
+recovered C **at the host pointer width**, and it declares `__int128` an
+*unsupported source* on its 32-bit lanes, so its green i386/armv7 lanes are
+compatible with the renderer emitting `__int128` — a type that does not exist on
+a 32-bit target — for every 32-bit binary in the corpus. That is not
+hypothetical: it shipped, and it cost two DecBench functions their compile. The
+wide-arithmetic test recompiles the recovered C **for its own 32-bit target**,
+which is the only compile that can reject the type.
 
 ## `tools/dectest.py` — the iteration loop
 
@@ -106,6 +123,137 @@ STALE BUILD: src/ir/structure.rs is newer than the built extension.
   Override: --allow-stale (or GLAURUNG_ALLOW_STALE=1)
 ```
 
+## `tools/arch_roundtrip.py` — the other three architectures
+
+The gate above is x86-64 in every lane. Glaurung lifts three architecture
+families, so two of them — plus 32-bit x86 — had **no execution coverage at
+all**: a change that inverted a branch in every ARM binary would have left all
+656 cases green. That is not hypothetical; it is how the gap was found.
+
+```bash
+tools/arch_roundtrip.py                             # the 8-lane matrix, summary
+tools/arch_roundtrip.py --check                     # ratchet against the baseline
+tools/arch_roundtrip.py --write-baseline            # refresh it
+tools/arch_roundtrip.py --arch aarch64 --opt O0 03_loop_shapes   # one cell
+```
+
+Matrix: `{x86_64, i386, aarch64, armv7} x {O0, O2}` over the same 30-fixture
+corpus, keyed `fixture:arch:opt` and baselined in
+`tests/decompiler_fixtures/arch_baseline.json`.
+
+### No emulator, deliberately
+
+The recovered artifact is portable C, so it does not have to run on the target:
+
+```
+fixture.c --(cross cc)--> target .so --(glaurung)--> recovered.c --(cc)--> B
+fixture.c ---------------------(cc)-------------------------------------> A
+```
+
+A and B are then called with identical seeded vectors and every full-width return
+and mutated buffer compared — the same `tools/diff_decompile.py` judgement the
+x86-64 gate uses, invoked with `--reference-so` naming the host build.
+`qemu-aarch64`/`qemu-arm` are installed on this host and are **not** in the loop:
+an emulator bug must never be mistakable for a decompiler bug.
+
+### The control lane is not optional
+
+`x86_64` decompiles a host-architecture object and diffs it against a
+host-architecture reference, so nothing about a foreign lifter is involved. It is
+always run (adding `--arch aarch64` re-adds it), and `--check`/`--write-baseline`
+refuse any run whose control lane is not clean.
+
+Stronger than "clean": the control lane builds the fixture with the same pinned
+compiler and byte-identical flags as `fixture_harness.compile_fixture`, so
+`fixture:x86_64:{opt}` and the committed `fixture:gcc:{opt}` are the same
+question asked through a different code path. `control_gate_disagreements`
+requires them to match **function for function** against `baseline.json`, which
+costs nothing (those 656 verdicts are already committed) and catches any bug in
+the cross-compile plumbing, `--reference-so`, `--lane`, or the export filter.
+Measured: 328 executed, 328 pass, **0 disagreements**.
+
+This is the check that matters. The first prototype reported "AArch64 is 37%
+correct"; 11 of those failures were the harness executing file-local `static`
+roots, and the control lane reproduced the same 11, which is what gave it away.
+
+### Three harness artifacts it caught
+
+1. **File-local `static` roots were executed.** No dynamic symbol, so the
+   reference cannot be called at all — and being local, the round-trip closure
+   matched their own definition line and prepended the body under test, so the
+   rebuild died with `redefinition of ...`. `diff_decompile.run` now executes
+   exported functions only.
+2. **The rebuilt C was linked against the foreign-architecture object.** That
+   link silently fails, the rebuild falls back to unlinked, and every recovered
+   body calling an exported sibling dies at load with `undefined symbol` — 44
+   cases across the two ARM lanes. It now links against the host reference.
+3. **Verdicts were a property of where the gate was run from, not of the
+   decompilation.** A recovery that reads an uninitialised local dereferences
+   whatever the stack held, and three separate channels fed that residue. Each
+   was found by fixing the previous one:
+
+   * *address randomization* — `09_memory_effects:armv7:O2:read_counter`,
+     recovered as `*(int *)(*(int *)(var1 + 4) + var1)`, segfaulted on 4 of 8
+     identical runs and passed on the other 4;
+   * *the caller's environment block*, which sits at the top of the initial stack
+     so its size shifts every frame beneath it — the same build then passed in an
+     interactive shell and failed under this gate's `env -i`;
+   * *the length of the scratch directory's path*, because the dynamic loader's
+     own stack use scales with what it is handed —
+     `04_switch_shapes:armv7:O0:dense_compute` (a switch whose compare temporary
+     is never assigned) said `fail` from `/tmp/aa` and `pass` from a
+     65-character sibling.
+
+   Fixed by `setarch --addr-no-randomize`, a canonical fixed-width worker
+   environment, and running the worker with `cwd=workdir` so every path in its
+   spec is a short relative name (`build_guard.aslr_mode` / `worker_env`,
+   `diff_decompile._fixed_name_sibling`). Verified afterwards: the baseline was
+   written from an interactive shell and `--check` then reproduced it **exactly**
+   from a bare `env -i` with a different scratch root. The x86-64 gate is
+   unaffected — 656 pass / 0 fail under both a short and a long scratch root.
+
+### What it currently measures
+
+| lane | executed | pass | fail | structural | skip | correctness |
+|---|---|---|---|---|---|---|
+| x86-64 (control) | 328 | 328 | 0 | 38 | 0 | **100%** |
+| i386 | 272 | 160 | 112 | 38 | 2 | **59%** |
+| AArch64 | 317 | 107 | 210 | 9 | 2 | **34%** |
+| ARMv7 | 262 | 102 | 160 | 8 | 4 | **39%** |
+
+### Fail-closed, and one declared gap
+
+A missing cross compiler, a failed cross build, a failed reference build, zero
+recovered DWARF signatures and a lane that executed no functions are all lane
+ERRORS. None can be written into a baseline; an unverified architecture must
+never read as "passed".
+
+The single exemption is a source that **cannot exist** for a target: `__int128`
+is not a type on a 32-bit machine, and Debian ships `aarch64-linux-gnu-gcc`
+without a matching `g++`. Both are derived from a compile probe plus the source
+text rather than a hardcoded fixture list, and the lane asserts the build
+genuinely fails before recording the gap — a stale exemption is an assertion
+failure, not a silent skip.
+
+### Known confound on the 32-bit lanes
+
+`i386` and `armv7` recoveries are rebuilt for the 64-bit host, so a recovery that
+hard-codes a 32-bit machine word where an address flows will diverge. That
+divergence is real (the C is not portable) but it is *not* evidence about the
+lifter's flag or branch semantics. Confirm which before acting on a 32-bit
+`fail`. The 64-bit lanes carry no such caveat.
+
+### Toolchain
+
+The reference build and the rebuild of our own decompiled C always run under the
+pinned image, exactly as the x86-64 gate does. So does the FIXTURE build for
+`x86_64` — that is what makes the control lane comparable to `baseline.json`. The
+image ships no cross toolchains and no multilib, so the other three
+architectures are built by host compilers; each version string is recorded
+per-arch in `__toolchain__`, tagged `pinned:`/`host:`, alongside the ASLR
+setting, and all of it is asserted by `--check`. Drift fails loudly with a
+refresh instruction instead of producing phantom regressions.
+
 ## Metrics, scoped
 
 `tools/decbench_matrix.py` scores GED / `type_match` / `byte_match` over 56
@@ -165,21 +313,31 @@ tools/decbench_matrix.py --backend angr --corpus curriculum --behavior-only \
 scripts/decbench-local-gate.sh
 ```
 
-Three lanes: `cargo test`, the fixture matrix + structural ratchet, and the
-per-cell metric ratchet. It now sets up its own PATH and exec tmpdir and checks
-the build first, so it runs from a fresh shell.
+Five lanes: `cargo test`, the x86-64 fixture matrix + structural ratchet, the
+cross-architecture ratchet, the legacy/curriculum executable round trips, and the
+per-cell metric ratchet. It sets up its own PATH and exec tmpdir and checks the
+build first, so it runs from a fresh shell.
 
-Lane 3 is a **failure** when `DECBENCH_DIR` is absent, not a skip — a session's
-worth of semantic changes once regressed ~25 of 56 cells behind a green gate
-because it printed a note and exited 0. `GLAURUNG_ALLOW_NO_METRICS=1` waives it
-deliberately, and the waiver is reported in the final line.
+The metric lane is a **failure** when `DECBENCH_DIR` is absent, not a skip — a
+session's worth of semantic changes once regressed ~25 of 56 cells behind a green
+gate because it printed a note and exited 0. `GLAURUNG_ALLOW_NO_METRICS=1` waives
+it deliberately, and the waiver is reported in the final line.
+
+Lane 3 (`tools/arch_roundtrip.py --check`) is a failure when a cross compiler is
+missing, for the same reason: a lane nobody can run is a gap, not a pass. On
+Debian/Ubuntu:
+
+```bash
+sudo apt install gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf gcc-multilib
+```
 
 ## Refreshing baselines
 
 Only from full runs:
 
 ```bash
-tools/fixture_harness.py --write-baseline      # behaviour, all 56 lanes
+tools/fixture_harness.py --write-baseline      # behaviour, x86-64, all 56 lanes
+tools/arch_roundtrip.py --write-baseline       # behaviour, 4 arches x {O0,O2}
 tools/gen_structural_baseline.py               # structural facts
 tools/decbench_matrix.py --write-baseline      # metrics, all 56 cells
 ```

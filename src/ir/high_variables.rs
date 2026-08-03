@@ -89,12 +89,15 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
     }
 }
 
-/// Refine direct source parameters from locked library call boundaries.
+/// Refine direct source parameters from authoritative callee boundaries.
 ///
 /// A function argument passed unchanged to `strcmp(const char *, ...)` is
 /// stronger pointer evidence than the integer width of the ABI register that
-/// transported it.  Conflicting pointee types, indirect expressions, and any
-/// integer/arithmetic use remain fail-closed.
+/// transported it.  The same is true for a project-local direct callee whose
+/// body recovered a pointer parameter: the caller may only forward that value,
+/// so the callee is the sole intraprocedural source of its type. Conflicting
+/// pointee types, indirect expressions, and any integer/arithmetic use remain
+/// fail-closed.
 fn refine_authoritative_pointer_parameters(
     body: &[Stmt],
     unsafe_uses: &HashSet<String>,
@@ -104,21 +107,35 @@ fn refine_authoritative_pointer_parameters(
         for statement in body {
             match statement {
                 Stmt::Call {
-                    target: Expr::Named { name, .. },
+                    target,
                     args,
+                    call_spec,
                     ..
                 } => {
-                    let Some(contract) = crate::ir::call_contracts::lookup(name) else {
-                        continue;
+                    let recovered = call_spec
+                        .as_ref()
+                        .and_then(|spec| spec.callee_prototype.as_ref());
+                    let catalog = match target {
+                        Expr::Named { name, .. } => crate::ir::call_contracts::lookup(name),
+                        _ => None,
                     };
-                    for (argument, parameter) in args.iter().zip(&contract.params) {
+                    for (index, argument) in args.iter().enumerate() {
                         let Expr::Reg(VReg::Phys(argument_name)) = argument else {
                             continue;
                         };
                         if crate::ir::ast::parse_arg_index(argument_name).is_none() {
                             continue;
                         }
-                        if let Some(width) = pointer_width_from_c_type(&parameter.c_type) {
+                        let c_type = recovered
+                            .and_then(|prototype| prototype.parameter_types.get(index))
+                            .map(String::as_str)
+                            .or_else(|| {
+                                catalog
+                                    .as_ref()
+                                    .and_then(|contract| contract.params.get(index))
+                                    .map(|parameter| parameter.c_type.as_str())
+                            });
+                        if let Some(width) = c_type.and_then(pointer_width_from_c_type) {
                             out.entry(argument_name.clone()).or_default().push(width);
                         }
                     }
@@ -520,6 +537,9 @@ fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashS
 mod tests {
     use super::refine_pointer_high_variables;
     use crate::ir::ast::{Expr, Function, Stmt};
+    use crate::ir::call_contracts::{
+        CallPrototype, CallPrototypeAuthority, CallSiteSpec,
+    };
     use crate::ir::types::{BinOp, VReg};
     use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -661,6 +681,37 @@ mod tests {
         refine_pointer_high_variables(&function, &mut types);
 
         assert_eq!(pointer_width(&types, "arg0"), Some(1));
+    }
+
+    #[test]
+    fn recovered_direct_callee_parameter_refines_a_forwarded_argument() {
+        let recovered = CallPrototype {
+            return_type: "int".into(),
+            parameter_types: vec!["int *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let function = Function {
+            name: "forward_pointer".into(),
+            entry_va: 0,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "read_first".into(),
+                },
+                args: vec![Expr::Reg(VReg::phys("arg0"))],
+                dst: Some(VReg::phys("ret")),
+                call_spec: Some(CallSiteSpec {
+                    call_prototype: recovered.clone(),
+                    callee_prototype: Some(recovered),
+                }),
+            }],
+        };
+        let mut types = TypeMap::default();
+
+        refine_pointer_high_variables(&function, &mut types);
+
+        assert_eq!(pointer_width(&types, "arg0"), Some(4));
     }
 
     #[test]

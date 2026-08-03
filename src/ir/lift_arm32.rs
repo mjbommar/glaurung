@@ -99,6 +99,345 @@ fn load_extension_for(mnem: &str) -> Option<(bool, Width)> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PC reads and the literal pool
+// ---------------------------------------------------------------------------
+
+/// The window of machine code being lifted, and the state it decodes under.
+///
+/// ARM32 has no `adrp`. Every address, every constant wider than the encoding
+/// allows, and every GOT offset is materialised by reading the *literal pool* —
+/// a block of constants the assembler drops inside the function body — with
+/// `ldr Rd,[pc,#imm]`, usually followed by `add Rd,pc`. The pool is therefore
+/// part of the very byte window being lifted, which is what makes resolving it
+/// here both possible and exact.
+///
+/// Modelling `pc` as an ordinary register instead left the whole family reading
+/// an undefined value: the recovered `-fstack-protector` preamble became
+/// `*(int *)(*(int *)((var3 + 0x118) + var3 + ...))` over an unassigned `var3`,
+/// and every function with a local array took SIGSEGV when the recovered C was
+/// recompiled and run.
+struct LiftCtx<'a> {
+    thumb: bool,
+    bytes: &'a [u8],
+    start_va: u64,
+    /// The whole image, when the caller has it.
+    ///
+    /// [`crate::ir::lift_function`] lifts one BASIC BLOCK at a time, and a
+    /// function's literal pool sits after its last block — so `bytes` alone
+    /// resolves the pool in a unit test and essentially never in production.
+    image: Option<&'a [u8]>,
+}
+
+impl LiftCtx<'_> {
+    /// The value a read of `pc` yields: the instruction's own address plus 4 in
+    /// Thumb state and plus 8 in ARM state (ARM DDI 0406C A2.3.1). Not "the next
+    /// instruction" — in Thumb the increment is 4 even for a 2-byte instruction.
+    fn pc_at(&self, ins: &Instruction) -> i64 {
+        ins.address.value as i64 + if self.thumb { 4 } else { 8 }
+    }
+
+    /// Effective address of a PC-relative literal load: `Align(PC,4) + offset`.
+    fn literal_va(&self, ins: &Instruction, offset: i64) -> u64 {
+        ((self.pc_at(ins) & !3).wrapping_add(offset)) as u64
+    }
+
+    /// The 32-bit little-endian word at `va`, read from the image where one was
+    /// supplied and otherwise from the lifted window. `None` means the address
+    /// is not resolvable, and the caller must keep the load — with its exact
+    /// absolute address, which a later pass can still resolve.
+    ///
+    /// The image lookup is restricted to EXECUTABLE sections. Reading executable
+    /// memory as data is only ever a literal pool, and it is constant; a `[pc,
+    /// #imm]` that resolved into `.data` would be a decode error, and freezing a
+    /// mutable word into a constant is exactly the wrong answer.
+    fn literal(&self, va: u64) -> Option<i64> {
+        let word = self
+            .image
+            .and_then(|image| text_word(image, va))
+            .or_else(|| {
+                let offset = usize::try_from(va.checked_sub(self.start_va)?).ok()?;
+                let bytes: [u8; 4] = self.bytes.get(offset..offset + 4)?.try_into().ok()?;
+                Some(u32::from_le_bytes(bytes))
+            })?;
+        Some(i64::from(word))
+    }
+}
+
+/// The little-endian word at `va` in an executable section of `image`.
+fn text_word(image: &[u8], va: u64) -> Option<u32> {
+    use object::read::{Object, ObjectSection};
+    let obj = object::read::File::parse(image).ok()?;
+    for section in obj.sections() {
+        if section.kind() != object::SectionKind::Text || section.size() == 0 {
+            continue;
+        }
+        let addr = section.address();
+        if va < addr || va >= addr.saturating_add(section.size()) {
+            continue;
+        }
+        let (start, _) = section.file_range()?;
+        let offset = usize::try_from(start.checked_add(va - addr)?).ok()?;
+        let bytes: [u8; 4] = image.get(offset..offset + 4)?.try_into().ok()?;
+        return Some(u32::from_le_bytes(bytes));
+    }
+    None
+}
+
+/// Substitute a read of `pc` with the value the architecture defines it to be.
+/// Applied to SOURCE operands only; `pc` as a destination is control flow and is
+/// handled by the branch/return arms.
+///
+/// It is a [`Value::Addr`], not a bare constant, because that is what it is —
+/// and because `const_fold` only folds an offset into a base when the base is
+/// already known to be an address. `ldr Rd,[pc,#n]; add Rd,pc` would otherwise
+/// fold to an anonymous integer that `name_resolve` never looks up, and the
+/// GOT slot it names would stay a magic number.
+fn resolve_pc(value: Value, pc: i64) -> Value {
+    match value {
+        Value::Reg(VReg::Phys(ref name)) if name == "pc" => Value::Addr(pc as u64),
+        other => other,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shifted register operands
+// ---------------------------------------------------------------------------
+
+/// A shift applied to a source register *before* the operation sees it.
+///
+/// Capstone's operand list carries the register and the immediate but drops
+/// `lsl #3` and `asr #31` entirely, so `add r0,r1,r2,lsl #3` and `add r0,r1,r2`
+/// arrived at the lifter indistinguishable, and `[r1,r2,lsl #2]` arrived with
+/// `scale: 0`. That is a silent wrong answer wherever an index is scaled or a
+/// divide-by-power-of-two is lowered — 500 sites across the armv7 fixture corpus
+/// — so the modifier is decoded here from the instruction word, the same source
+/// [`crate::ir::lift_arm64`] reads for the AArch64 forms. The two encodings are
+/// unrelated and are decoded separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RegShift {
+    kind: ShiftKind,
+    /// Shift distance in bits: 1..=32 for `lsr`/`asr`, 0..=31 otherwise.
+    amount: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShiftKind {
+    Lsl,
+    Lsr,
+    Asr,
+    Ror,
+    /// Rotate-right-with-extend: a 33-bit rotate *through the carry flag*. Not
+    /// representable without a carry this lifter declines to fabricate.
+    Rrx,
+}
+
+/// `DecodeImmShift` (ARM DDI 0406C A8.4.3), shared by A32 and T32: an encoded
+/// shift of zero means "no shift" for `lsl`, 32 for `lsr`/`asr`, and `rrx` for
+/// `ror`.
+fn decode_imm_shift(kind_bits: u32, imm5: u32) -> RegShift {
+    match kind_bits & 0b11 {
+        0b00 => RegShift {
+            kind: ShiftKind::Lsl,
+            amount: imm5 as u8,
+        },
+        0b01 => RegShift {
+            kind: ShiftKind::Lsr,
+            amount: if imm5 == 0 { 32 } else { imm5 as u8 },
+        },
+        0b10 => RegShift {
+            kind: ShiftKind::Asr,
+            amount: if imm5 == 0 { 32 } else { imm5 as u8 },
+        },
+        _ if imm5 == 0 => RegShift {
+            kind: ShiftKind::Rrx,
+            amount: 1,
+        },
+        _ => RegShift {
+            kind: ShiftKind::Ror,
+            amount: imm5 as u8,
+        },
+    }
+}
+
+/// The two halfwords of a 32-bit Thumb-2 instruction, each little-endian.
+fn thumb32_halfwords(ins: &Instruction) -> Option<(u32, u32)> {
+    let b: [u8; 4] = ins.bytes.as_slice().try_into().ok()?;
+    Some((
+        u32::from(u16::from_le_bytes([b[0], b[1]])),
+        u32::from(u16::from_le_bytes([b[2], b[3]])),
+    ))
+}
+
+/// The 32-bit A32 instruction word.
+fn arm32_word(ins: &Instruction) -> Option<u32> {
+    let b: [u8; 4] = ins.bytes.as_slice().try_into().ok()?;
+    Some(u32::from_le_bytes(b))
+}
+
+/// The shift a data-processing instruction applies to its last source register.
+///
+/// T32: "Data-processing (shifted register)", `hw1[15:9] == 0b1110101` — the
+/// whole `0xEA00..=0xEBFF` block (ARM DDI 0406C A6.3, table A6-9) and nothing
+/// else. The distance is `imm3:imm2` and the kind is `type` (A6.3.11).
+///
+/// A32: the register forms of data processing, `word[27:25] == 0b000` with
+/// `word[4] == 0` (an immediate shift; `word[4] == 1` is the far rarer
+/// register-shifted-register form, which is left alone rather than guessed at).
+fn data_processing_shift(ins: &Instruction, ctx: &LiftCtx) -> Option<RegShift> {
+    if ctx.thumb {
+        let (hw1, hw2) = thumb32_halfwords(ins)?;
+        if hw1 >> 9 != 0b111_0101 {
+            return None;
+        }
+        let imm5 = ((hw2 >> 12) & 0x7) << 2 | ((hw2 >> 6) & 0x3);
+        Some(decode_imm_shift((hw2 >> 4) & 0x3, imm5))
+    } else {
+        let word = arm32_word(ins)?;
+        if (word >> 25) & 0x7 != 0b000 || word & (1 << 4) != 0 {
+            return None;
+        }
+        Some(decode_imm_shift((word >> 5) & 0x3, (word >> 7) & 0x1f))
+    }
+}
+
+/// The `lsl` distance a register-offset load/store applies to its index, or
+/// `None` when this is not a register-offset form.
+///
+/// T32: the register forms of "Load/store single data item"
+/// (`hw1[15:9] == 0b1111100`) are picked out by `hw1[7] == 0` (not an `imm12`
+/// form) together with `hw2[11:6] == 0`, which is what separates the register
+/// offset from the T4 `imm8` post/pre-indexed forms. The scale is `hw2[5:4]`.
+///
+/// A32: `word[27:25] == 0b011` with `word[4] == 0`; the shift sits where the
+/// data-processing forms keep it. Only `lsl` can scale an index usefully — the
+/// architecture allows any shift here, so anything else is declined rather than
+/// approximated.
+fn index_shift(ins: &Instruction, ctx: &LiftCtx) -> Option<u8> {
+    if ctx.thumb {
+        let (hw1, hw2) = thumb32_halfwords(ins)?;
+        if hw1 >> 9 != 0b111_1100 || hw1 & (1 << 7) != 0 || hw2 & 0x0fc0 != 0 {
+            return None;
+        }
+        Some(((hw2 >> 4) & 0x3) as u8)
+    } else {
+        let word = arm32_word(ins)?;
+        if (word >> 25) & 0x7 != 0b011 || word & (1 << 4) != 0 {
+            return None;
+        }
+        match decode_imm_shift((word >> 5) & 0x3, (word >> 7) & 0x1f) {
+            RegShift {
+                kind: ShiftKind::Lsl,
+                amount,
+            } if amount <= 3 => Some(amount),
+            _ => None,
+        }
+    }
+}
+
+/// Does this load/store use the PRE-indexed writeback form (`[Rn, #imm]!`)?
+///
+/// The address is `Rn + imm` and `Rn` is then updated to it. Capstone reports
+/// the same two operands as the plain offset form and keeps the writeback flag
+/// in a field the shared [`Operand`] model has no room for, so the two arrived
+/// here indistinguishable — and the induction variable of every pointer-walking
+/// `-O2` loop never advanced. `for_sum`'s `ldr r1,[r3,#4]!` latch decompiled to
+/// `while (p != end)` over a `p` that was never incremented.
+///
+/// T32: the `imm8` forms of "Load/store single data item"
+/// (`hw1[15:9] == 0b1111100`, `hw1[7] == 0`) are marked by `hw2[11] == 1`, and
+/// carry `P` at `hw2[10]` and `W` at `hw2[8]`; pre-indexed writeback is `P=1,
+/// W=1`. A32: `word[27:26] == 0b01` with `P` at bit 24 and `W` at bit 21.
+///
+/// The POST-indexed form (`P=0`) is deliberately not matched: capstone reports
+/// it as three operands with the offset separate, and the caller already has a
+/// path for it.
+fn is_preindexed_writeback(ins: &Instruction, ctx: &LiftCtx) -> bool {
+    if ctx.thumb {
+        let Some((hw1, hw2)) = thumb32_halfwords(ins) else {
+            return false;
+        };
+        hw1 >> 9 == 0b111_1100
+            && hw1 & (1 << 7) == 0
+            && hw2 & (1 << 11) != 0
+            && hw2 & (1 << 10) != 0
+            && hw2 & (1 << 8) != 0
+    } else {
+        let Some(word) = arm32_word(ins) else {
+            return false;
+        };
+        (word >> 26) & 0x3 == 0b01 && word & (1 << 24) != 0 && word & (1 << 21) != 0
+    }
+}
+
+/// The IR temporary a shifted operand is materialised into. Fixed lanes, in the
+/// style of the rest of this file: the temporary is consumed by the very next op
+/// the same instruction emits, so SSA renaming separates one instruction's from
+/// the next's. Lanes 0 and 1 are already claimed (`bic`, `umull`, the load
+/// extensions, and `make_conditional`).
+const SHIFT_TEMP: u32 = 6;
+
+/// Materialise `value <shift>` and return the shifted value, or `None` when the
+/// shift cannot be modelled (`rrx` reads the carry flag, which this lifter
+/// deliberately does not fabricate — see [`flags_for_arith`]).
+///
+/// `ror` is expanded as `(x >> n) | (x << (32-n))` over the 32-bit value; every
+/// ARM32 core register is exactly 32 bits wide, so the width is not inferred.
+fn apply_shift(shift: RegShift, value: Value, out: &mut Vec<Op>) -> Option<Value> {
+    if !matches!(value, Value::Reg(_)) {
+        // The shifted forms only ever shift a register; an immediate operand
+        // belongs to a different encoding and must not be touched.
+        return Some(value);
+    }
+    let amount = i64::from(shift.amount);
+    let bin = |op: BinOp, lhs: Value, rhs: Value, out: &mut Vec<Op>| -> Value {
+        let dst = VReg::Temp(SHIFT_TEMP);
+        out.push(Op::Bin {
+            dst: dst.clone(),
+            op,
+            lhs,
+            rhs,
+        });
+        Value::Reg(dst)
+    };
+    match shift.kind {
+        ShiftKind::Lsl if shift.amount == 0 => Some(value),
+        ShiftKind::Lsl => Some(bin(BinOp::Shl, value, Value::Const(amount), out)),
+        ShiftKind::Lsr => Some(bin(BinOp::Shr, value, Value::Const(amount), out)),
+        ShiftKind::Asr => Some(bin(BinOp::Sar, value, Value::Const(amount), out)),
+        ShiftKind::Ror => {
+            let low = VReg::Temp(SHIFT_TEMP + 1);
+            let high = VReg::Temp(SHIFT_TEMP + 2);
+            out.push(Op::Bin {
+                dst: low.clone(),
+                op: BinOp::Shr,
+                lhs: value.clone(),
+                rhs: Value::Const(amount),
+            });
+            out.push(Op::Bin {
+                dst: high.clone(),
+                op: BinOp::Shl,
+                lhs: value,
+                rhs: Value::Const(32 - amount),
+            });
+            Some(bin(BinOp::Or, Value::Reg(low), Value::Reg(high), out))
+        }
+        ShiftKind::Rrx => None,
+    }
+}
+
+/// Read operand `i` as a value and apply whatever shift the instruction word
+/// encodes for it. `None` means the operand is not a value, or its shift is not
+/// representable — either way the caller must fall back to [`Op::Unknown`]
+/// rather than silently drop the modifier.
+fn shifted_operand(ins: &Instruction, ctx: &LiftCtx, i: usize, out: &mut Vec<Op>) -> Option<Value> {
+    let value = resolve_pc(operand_to_value(ins.operands.get(i)?)?, ctx.pc_at(ins));
+    match data_processing_shift(ins, ctx) {
+        Some(shift) => apply_shift(shift, value, out),
+        None => Some(value),
+    }
+}
+
 /// The three-operand (and two-operand accumulate) data-processing mnemonics.
 /// The optional `s` flag-setting suffix is stripped by the caller.
 fn bin_for_mnem(m: &str) -> Option<BinOp> {
@@ -135,8 +474,8 @@ fn cond_flag_for(suffix: &str) -> Option<(VReg, bool)> {
         "ge" => (VReg::Flag(Flag::Slt), true),
         "le" => (VReg::Flag(Flag::Sle), false),
         "gt" => (VReg::Flag(Flag::Sle), true),
-        "mi" => (VReg::Flag(Flag::Slt), false),
-        "pl" => (VReg::Flag(Flag::Slt), true),
+        "mi" => (VReg::Flag(Flag::S), false),
+        "pl" => (VReg::Flag(Flag::S), true),
         "vs" => (VReg::Flag(Flag::O), false),
         "vc" => (VReg::Flag(Flag::O), true),
         _ => return None,
@@ -144,33 +483,384 @@ fn cond_flag_for(suffix: &str) -> Option<(VReg, bool)> {
 }
 
 /// The four flag writes an ARM `cmp a, b` performs — identical to x86/AArch64.
+/// Flags written by an `S`-suffixed data-processing instruction.
+///
+/// `subs Rd, Rn, Op2` sets exactly the flags of `cmp Rn, Op2` — `cmp` is
+/// architecturally `subs` discarding its result — so the operand comparison is
+/// reused verbatim and a reader of ZF cannot tell which instruction produced it.
+///
+/// Every other form claims only zero and sign, computed from the result. Carry
+/// and overflow depend on width and signedness this lifter does not model, and
+/// a *wrong* flag is worse than an absent one: a later branch will read it and
+/// render a condition the CPU never evaluated.
+fn flags_for_arith(op: BinOp, dst: &VReg, lhs: Value, rhs: Value) -> (Vec<Op>, Vec<Op>) {
+    if matches!(op, BinOp::Sub) {
+        // Read the OPERANDS, so these must run before the result is written:
+        // `subs r3,#1` has `Rd == Rn`, and taking the comparison from the
+        // already-updated `r3` made the zero flag mean `r3_old == 2` instead of
+        // `r3_old == 1`. The real `dec_loop` countdown then decompiled to
+        // `while (i != 1)` and never terminated.
+        return (cmp_flag_ops(lhs, rhs), Vec::new());
+    }
+    // Read the RESULT, so these must run after it exists.
+    (
+        Vec::new(),
+        vec![
+            Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(dst.clone()),
+                rhs: Value::Const(0),
+            },
+            Op::Cmp {
+                dst: VReg::Flag(Flag::S),
+                op: CmpOp::Slt,
+                lhs: Value::Reg(dst.clone()),
+                rhs: Value::Const(0),
+            },
+        ],
+    )
+}
+
+/// The flag set an ARM `cmp lhs, rhs` produces.
+///
+/// [`Flag::Ule`] is here because `cond_flag_for` binds `ls`/`hi` to it: without
+/// a definition, every `bls`/`bhi` in the corpus — 22 sites — read an undefined
+/// flag, so the recovered branch was decided by whatever the uninitialised
+/// variable happened to hold.
 fn cmp_flag_ops(lhs: Value, rhs: Value) -> Vec<Op> {
-    vec![
-        Op::Cmp {
-            dst: VReg::Flag(Flag::Z),
-            op: CmpOp::Eq,
-            lhs: lhs.clone(),
-            rhs: rhs.clone(),
-        },
-        Op::Cmp {
-            dst: VReg::Flag(Flag::C),
-            op: CmpOp::Ult,
-            lhs: lhs.clone(),
-            rhs: rhs.clone(),
-        },
-        Op::Cmp {
-            dst: VReg::Flag(Flag::Slt),
-            op: CmpOp::Slt,
-            lhs: lhs.clone(),
-            rhs: rhs.clone(),
-        },
-        Op::Cmp {
-            dst: VReg::Flag(Flag::Sle),
-            op: CmpOp::Sle,
+    let mut ops: Vec<Op> = [
+        (Flag::Z, CmpOp::Eq),
+        (Flag::C, CmpOp::Ult),
+        (Flag::Ule, CmpOp::Ule),
+        (Flag::Slt, CmpOp::Slt),
+        (Flag::Sle, CmpOp::Sle),
+    ]
+    .into_iter()
+    .map(|(flag, op)| Op::Cmp {
+        dst: VReg::Flag(flag),
+        op,
+        lhs: lhs.clone(),
+        rhs: rhs.clone(),
+    })
+    .collect();
+    // Raw N and V are also architectural outputs. The direct signed-less
+    // predicate above is N xor V, so after materialising the wrapped result's
+    // sign, V is exactly N xor signed-less.
+    let result = VReg::Temp(40);
+    let signed_result = VReg::Temp(41);
+    ops.extend([
+        Op::Bin {
+            dst: result.clone(),
+            op: BinOp::Sub,
             lhs,
             rhs,
         },
-    ]
+        Op::Trunc {
+            dst: result.clone(),
+            src: Value::Reg(result.clone()),
+            from: Width::W64,
+            to: Width::W32,
+        },
+        Op::SExt {
+            dst: signed_result.clone(),
+            src: Value::Reg(result),
+            from: Width::W32,
+            to: Width::W64,
+        },
+        Op::Cmp {
+            dst: VReg::Flag(Flag::S),
+            op: CmpOp::Slt,
+            lhs: Value::Reg(signed_result),
+            rhs: Value::Const(0),
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::O),
+            op: BinOp::Xor,
+            lhs: Value::Reg(VReg::Flag(Flag::S)),
+            rhs: Value::Reg(VReg::Flag(Flag::Slt)),
+        },
+    ]);
+    ops
+}
+
+fn arm_unsigned32(value: Value, temp: VReg, out: &mut Vec<Op>) -> Value {
+    match value {
+        value @ Value::Reg(_) => {
+            out.push(Op::ZExt {
+                dst: temp.clone(),
+                src: value,
+                from: Width::W32,
+                to: Width::W64,
+            });
+            Value::Reg(temp)
+        }
+        Value::Const(value) => Value::Const((value as u32) as i64),
+        value => value,
+    }
+}
+
+fn arm_signed32(value: Value, temp: VReg, out: &mut Vec<Op>) -> Value {
+    match value {
+        value @ Value::Reg(_) => {
+            out.push(Op::SExt {
+                dst: temp.clone(),
+                src: value,
+                from: Width::W32,
+                to: Width::W64,
+            });
+            Value::Reg(temp)
+        }
+        Value::Const(value) => Value::Const((value as u32 as i32) as i64),
+        value => value,
+    }
+}
+
+/// ARM32 ADD/SUB with optional architectural carry input.
+///
+/// This backend intentionally stores `Flag::C` in *borrow/no-carry* polarity:
+/// `lo/cc` read it directly and `hs/cs` invert it. Therefore ADC first converts
+/// the stored bit back to architectural carry (`C_arch = !Flag::C`), while SBC
+/// subtracts the stored borrow directly (`lhs - rhs - Flag::C`). The output is
+/// kept in the same convention so the existing 22 `bls`/`bhi` sites retain
+/// their polarity.
+fn arm_carry_arithmetic(
+    dst: VReg,
+    lhs: Value,
+    rhs: Value,
+    add: bool,
+    with_carry: bool,
+    sets_flags: bool,
+) -> Vec<Op> {
+    let arithmetic = if add { BinOp::Add } else { BinOp::Sub };
+    let old_borrow = VReg::Temp(20);
+    let saved_lhs = VReg::Temp(21);
+    let saved_rhs = VReg::Temp(22);
+    let partial = VReg::Temp(23);
+    let mut out = Vec::new();
+    if with_carry {
+        out.push(Op::Assign {
+            dst: old_borrow.clone(),
+            src: Value::Reg(VReg::Flag(Flag::C)),
+        });
+    }
+    out.extend([
+        Op::Assign {
+            dst: saved_lhs.clone(),
+            src: lhs,
+        },
+        Op::Assign {
+            dst: saved_rhs.clone(),
+            src: rhs,
+        },
+    ]);
+    let unsigned_lhs = arm_unsigned32(
+        Value::Reg(saved_lhs.clone()),
+        VReg::Temp(24),
+        &mut out,
+    );
+    let unsigned_rhs = arm_unsigned32(
+        Value::Reg(saved_rhs.clone()),
+        VReg::Temp(25),
+        &mut out,
+    );
+    let signed_lhs = arm_signed32(
+        Value::Reg(saved_lhs.clone()),
+        VReg::Temp(26),
+        &mut out,
+    );
+    let signed_rhs = arm_signed32(
+        Value::Reg(saved_rhs.clone()),
+        VReg::Temp(27),
+        &mut out,
+    );
+    let lhs_negative = VReg::Temp(28);
+    let rhs_negative = VReg::Temp(29);
+    out.extend([
+        Op::Cmp {
+            dst: lhs_negative.clone(),
+            op: CmpOp::Slt,
+            lhs: signed_lhs,
+            rhs: Value::Const(0),
+        },
+        Op::Cmp {
+            dst: rhs_negative.clone(),
+            op: CmpOp::Slt,
+            lhs: signed_rhs,
+            rhs: Value::Const(0),
+        },
+        Op::Bin {
+            dst: dst.clone(),
+            op: arithmetic,
+            lhs: Value::Reg(saved_lhs),
+            rhs: Value::Reg(saved_rhs),
+        },
+        Op::Trunc {
+            dst: dst.clone(),
+            src: Value::Reg(dst.clone()),
+            from: Width::W64,
+            to: Width::W32,
+        },
+        Op::Assign {
+            dst: partial.clone(),
+            src: Value::Reg(dst.clone()),
+        },
+    ]);
+
+    if with_carry {
+        let adjustment = if add {
+            let architectural_carry = VReg::Temp(30);
+            out.push(Op::Cmp {
+                dst: architectural_carry.clone(),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(VReg::Flag(Flag::C)),
+                rhs: Value::Const(0),
+            });
+            Value::Reg(architectural_carry)
+        } else {
+            Value::Reg(VReg::Flag(Flag::C))
+        };
+        out.extend([
+            Op::Bin {
+                dst: dst.clone(),
+                op: arithmetic,
+                lhs: Value::Reg(dst.clone()),
+                rhs: adjustment,
+            },
+            Op::Trunc {
+                dst: dst.clone(),
+                src: Value::Reg(dst.clone()),
+                from: Width::W64,
+                to: Width::W32,
+            },
+        ]);
+    }
+
+    if !sets_flags {
+        return out;
+    }
+
+    let unsigned_partial =
+        arm_unsigned32(Value::Reg(partial), VReg::Temp(31), &mut out);
+    let unsigned_result =
+        arm_unsigned32(Value::Reg(dst.clone()), VReg::Temp(32), &mut out);
+    let signed_result = arm_signed32(Value::Reg(dst), VReg::Temp(33), &mut out);
+    out.extend([
+        Op::Cmp {
+            dst: VReg::Flag(Flag::Z),
+            op: CmpOp::Eq,
+            lhs: unsigned_result.clone(),
+            rhs: Value::Const(0),
+        },
+        Op::Cmp {
+            dst: VReg::Flag(Flag::S),
+            op: CmpOp::Slt,
+            lhs: signed_result,
+            rhs: Value::Const(0),
+        },
+    ]);
+
+    let first = VReg::Temp(34);
+    let second = VReg::Temp(35);
+    if add {
+        out.push(Op::Cmp {
+            dst: first.clone(),
+            op: CmpOp::Ule,
+            lhs: unsigned_lhs,
+            rhs: unsigned_partial.clone(),
+        });
+        if with_carry {
+            out.extend([
+                Op::Cmp {
+                    dst: second.clone(),
+                    op: CmpOp::Ule,
+                    lhs: unsigned_partial,
+                    rhs: unsigned_result,
+                },
+                Op::Bin {
+                    dst: VReg::Flag(Flag::C),
+                    op: BinOp::And,
+                    lhs: Value::Reg(first),
+                    rhs: Value::Reg(second),
+                },
+            ]);
+        } else {
+            out.push(Op::Assign {
+                dst: VReg::Flag(Flag::C),
+                src: Value::Reg(first),
+            });
+        }
+    } else {
+        out.push(Op::Cmp {
+            dst: first.clone(),
+            op: CmpOp::Ult,
+            lhs: unsigned_lhs,
+            rhs: unsigned_rhs,
+        });
+        if with_carry {
+            out.extend([
+                Op::Cmp {
+                    dst: second.clone(),
+                    op: CmpOp::Ult,
+                    lhs: unsigned_partial,
+                    rhs: Value::Reg(old_borrow),
+                },
+                Op::Bin {
+                    dst: VReg::Flag(Flag::C),
+                    op: BinOp::Or,
+                    lhs: Value::Reg(first),
+                    rhs: Value::Reg(second),
+                },
+            ]);
+        } else {
+            out.push(Op::Assign {
+                dst: VReg::Flag(Flag::C),
+                src: Value::Reg(first),
+            });
+        }
+    }
+
+    let operand_sign_relation = VReg::Temp(36);
+    let result_sign_changed = VReg::Temp(37);
+    out.extend([
+        Op::Cmp {
+            dst: operand_sign_relation.clone(),
+            op: if add { CmpOp::Eq } else { CmpOp::Ne },
+            lhs: Value::Reg(lhs_negative.clone()),
+            rhs: Value::Reg(rhs_negative),
+        },
+        Op::Cmp {
+            dst: result_sign_changed.clone(),
+            op: CmpOp::Ne,
+            lhs: Value::Reg(VReg::Flag(Flag::S)),
+            rhs: Value::Reg(lhs_negative),
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::O),
+            op: BinOp::And,
+            lhs: Value::Reg(operand_sign_relation),
+            rhs: Value::Reg(result_sign_changed),
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::Slt),
+            op: BinOp::Xor,
+            lhs: Value::Reg(VReg::Flag(Flag::S)),
+            rhs: Value::Reg(VReg::Flag(Flag::O)),
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::Sle),
+            op: BinOp::Or,
+            lhs: Value::Reg(VReg::Flag(Flag::Z)),
+            rhs: Value::Reg(VReg::Flag(Flag::Slt)),
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::Ule),
+            op: BinOp::Or,
+            lhs: Value::Reg(VReg::Flag(Flag::C)),
+            rhs: Value::Reg(VReg::Flag(Flag::Z)),
+        },
+    ]);
+    out
 }
 
 /// Architectural storage width of one ARM push/pop register-list entry.
@@ -255,10 +945,35 @@ fn lift_pop(regs: &[String]) -> Vec<Op> {
     out
 }
 
+/// Give a register-offset memory operand the scale its encoding specifies.
+///
+/// `[r1, r2, lsl #2]` and `[r1, r2]` reach the lifter identically, and the scale
+/// arrived as 0, which every consumer reads as 1 — so every scaled array index
+/// was off by its element size.
+fn scaled_memop(ins: &Instruction, ctx: &LiftCtx, mut addr: MemOp) -> MemOp {
+    if addr.index.is_some() {
+        if let Some(amount) = index_shift(ins, ctx) {
+            addr.scale = 1u8 << amount;
+        }
+    }
+    // A PC-relative address is fully known at lift time: fold it to an absolute
+    // displacement so nothing downstream sees a read of a register that has no
+    // definition. `[pc, Rm]` is not a literal-pool form and is left alone.
+    if addr.base.as_ref() == Some(&VReg::phys("pc")) && addr.index.is_none() {
+        addr.disp = ctx.literal_va(ins, addr.disp) as i64;
+        addr.base = None;
+    }
+    addr
+}
+
 /// Lift a single instruction whose base mnemonic (already lowercased, with the
 /// `.w`/`.n` qualifier and any IT-block condition suffix stripped) is `mnem`.
 /// Predication is applied by the caller in [`lift_bytes`].
-fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
+///
+/// `thumb` says which instruction set the bytes were decoded under; the shifted-
+/// operand encodings differ completely between the two and cannot be recovered
+/// from the operand list.
+fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
     let ops = &ins.operands;
 
     // Scalar VFP arithmetic has IEEE semantics that integer `Op::Bin` cannot
@@ -483,24 +1198,295 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                         rhs: Value::Const(!imm),
                     }];
                 }
-                // Register operand: t = ~Rm ; Rd = Rn & t.
-                if let Some(rm) = operand_reg(&ops[2]) {
+                // Register operand: t = ~(Rm <shift>) ; Rd = Rn & t.
+                let mut out = Vec::new();
+                if let Some(rm) = shifted_operand(ins, ctx, 2, &mut out) {
                     let t = VReg::Temp(0);
+                    out.push(Op::Un {
+                        dst: t.clone(),
+                        op: UnOp::Not,
+                        src: rm,
+                    });
+                    out.push(Op::Bin {
+                        dst: dst.clone(),
+                        op: BinOp::And,
+                        lhs,
+                        rhs: Value::Reg(t),
+                    });
+                    // `bics` reports whether the AND-NOT RESULT is zero or
+                    // negative. This arm returned before ever writing them, so
+                    // the `S` suffix was recognised and then discarded — the
+                    // same silent drop `flags_for_arith` exists to prevent.
+                    if mnem == "bics" {
+                        let (_, after) = flags_for_arith(
+                            BinOp::And,
+                            &dst,
+                            Value::Reg(dst.clone()),
+                            Value::Const(0),
+                        );
+                        out.extend(after);
+                    }
+                    return out;
+                }
+            }
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
+    // --- bitfield extract: ubfx/sbfx Rd, Rn, #lsb, #width ---------------
+    // `Rd = (Rn >> lsb) & mask` unsigned; the signed form re-broadcasts the
+    // field's top bit by shifting it to bit 31 and back arithmetically. Both are
+    // exact, so they are lowered rather than left as opaque intrinsics.
+    if matches!(mnem, "ubfx" | "sbfx") && ops.len() == 4 {
+        if let (Some(dst), Some(src), Some(lsb), Some(width)) = (
+            operand_reg(&ops[0]),
+            operand_to_value(&ops[1]),
+            ops[2].immediate,
+            ops[3].immediate,
+        ) {
+            if (0..32).contains(&lsb) && (1..=32).contains(&width) && lsb + width <= 32 {
+                let t = VReg::Temp(0);
+                if mnem == "ubfx" {
+                    let mask = ((1i64 << width) - 1) as i64;
                     return vec![
-                        Op::Un {
+                        Op::Bin {
                             dst: t.clone(),
-                            op: UnOp::Not,
-                            src: Value::Reg(rm),
+                            op: BinOp::Shr,
+                            lhs: src,
+                            rhs: Value::Const(lsb),
                         },
                         Op::Bin {
                             dst,
                             op: BinOp::And,
-                            lhs,
-                            rhs: Value::Reg(t),
+                            lhs: Value::Reg(t),
+                            rhs: Value::Const(mask),
                         },
                     ];
                 }
+                return vec![
+                    Op::Bin {
+                        dst: t.clone(),
+                        op: BinOp::Shl,
+                        lhs: src,
+                        rhs: Value::Const(32 - lsb - width),
+                    },
+                    Op::Bin {
+                        dst,
+                        op: BinOp::Sar,
+                        lhs: Value::Reg(t),
+                        rhs: Value::Const(32 - width),
+                    },
+                ];
             }
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
+    // --- or-not: orn Rd, Rn, Op2  ==>  Rd = Rn | ~Op2 -------------------
+    if matches!(mnem, "orn" | "orns") && ops.len() == 3 {
+        if let (Some(dst), Some(lhs)) = (operand_reg(&ops[0]), operand_to_value(&ops[1])) {
+            if let Some(imm) = ops[2].immediate {
+                return vec![Op::Bin {
+                    dst,
+                    op: BinOp::Or,
+                    lhs,
+                    rhs: Value::Const(!imm),
+                }];
+            }
+            let mut out = Vec::new();
+            if let Some(rm) = shifted_operand(ins, ctx, 2, &mut out) {
+                let t = VReg::Temp(0);
+                out.push(Op::Un {
+                    dst: t.clone(),
+                    op: UnOp::Not,
+                    src: rm,
+                });
+                out.push(Op::Bin {
+                    dst,
+                    op: BinOp::Or,
+                    lhs,
+                    rhs: Value::Reg(t),
+                });
+                return out;
+            }
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
+    // --- rotate right: ror Rd, Rn, #imm | Rd, Rm ------------------------
+    // Expanded as `(x >> n) | (x << (32-n))` over the 32-bit register. The
+    // register-amount form is left unmodelled: the complement `32-n` would need
+    // a second dynamic computation this arm does not have operands for.
+    if matches!(mnem, "ror" | "rors") && ops.len() == 3 {
+        if let (Some(dst), Some(src), Some(amount)) = (
+            operand_reg(&ops[0]),
+            operand_to_value(&ops[1]),
+            ops[2].immediate,
+        ) {
+            if (1..32).contains(&amount) {
+                let mut out = Vec::new();
+                let rotated = apply_shift(
+                    RegShift {
+                        kind: ShiftKind::Ror,
+                        amount: amount as u8,
+                    },
+                    src,
+                    &mut out,
+                );
+                if let Some(value) = rotated {
+                    out.push(Op::Assign { dst, src: value });
+                    return out;
+                }
+            }
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
+    // --- extend-and-add: uxtab/uxtah/sxtab/sxtah Rd, Rn, Rm -------------
+    // `Rd = Rn + extend(Rm)`. The extension is materialised explicitly so the
+    // narrowing is visible to type recovery, exactly as `uxtb` does.
+    if matches!(mnem, "uxtab" | "uxtah" | "sxtab" | "sxtah") && ops.len() == 3 {
+        if let (Some(dst), Some(lhs), Some(rm)) = (
+            operand_reg(&ops[0]),
+            operand_to_value(&ops[1]),
+            operand_to_value(&ops[2]),
+        ) {
+            let from = if mnem.ends_with('b') {
+                Width::W8
+            } else {
+                Width::W16
+            };
+            let t = VReg::Temp(0);
+            let extend = if mnem.starts_with('s') {
+                Op::SExt {
+                    dst: t.clone(),
+                    src: rm,
+                    from,
+                    to: Width::W32,
+                }
+            } else {
+                Op::ZExt {
+                    dst: t.clone(),
+                    src: rm,
+                    from,
+                    to: Width::W32,
+                }
+            };
+            return vec![
+                extend,
+                Op::Bin {
+                    dst,
+                    op: BinOp::Add,
+                    lhs,
+                    rhs: Value::Reg(t),
+                },
+            ];
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
+    // --- byte reverse: rev / rev16 Rd, Rm -------------------------------
+    // `rev` reverses the four bytes of the word; `rev16` reverses the bytes
+    // within each halfword. Both are pure shift/mask arithmetic, so they lower
+    // exactly — and a packet parser that byte-swaps its header is precisely the
+    // code an opaque intrinsic here would silence.
+    if matches!(mnem, "rev" | "rev16") && ops.len() == 2 {
+        if let (Some(dst), Some(src)) = (operand_reg(&ops[0]), operand_to_value(&ops[1])) {
+            //: (shift-left amount, post-shift mask) per contributing byte lane.
+            let lanes: &[(i64, i64)] = if mnem == "rev" {
+                &[
+                    (24, 0xff00_0000),
+                    (8, 0x00ff_0000),
+                    (-8, 0x0000_ff00),
+                    (-24, 0xff),
+                ]
+            } else {
+                &[
+                    (8, 0xff00_0000),
+                    (-8, 0x00ff_0000),
+                    (8, 0x0000_ff00),
+                    (-8, 0xff),
+                ]
+            };
+            let mut out = Vec::new();
+            let mut accumulated: Option<VReg> = None;
+            for (index, (shift, mask)) in lanes.iter().enumerate() {
+                let shifted = VReg::Temp(10 + index as u32 * 2);
+                out.push(Op::Bin {
+                    dst: shifted.clone(),
+                    op: if *shift > 0 { BinOp::Shl } else { BinOp::Shr },
+                    lhs: src.clone(),
+                    rhs: Value::Const(shift.abs()),
+                });
+                let lane = VReg::Temp(11 + index as u32 * 2);
+                out.push(Op::Bin {
+                    dst: lane.clone(),
+                    op: BinOp::And,
+                    lhs: Value::Reg(shifted),
+                    rhs: Value::Const(*mask),
+                });
+                accumulated = Some(match accumulated {
+                    None => lane,
+                    Some(previous) => {
+                        let joined = VReg::Temp(20 + index as u32);
+                        out.push(Op::Bin {
+                            dst: joined.clone(),
+                            op: BinOp::Or,
+                            lhs: Value::Reg(previous),
+                            rhs: Value::Reg(lane),
+                        });
+                        joined
+                    }
+                });
+            }
+            if let Some(result) = accumulated {
+                out.push(Op::Assign {
+                    dst,
+                    src: Value::Reg(result),
+                });
+                return out;
+            }
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
+    // --- count leading zeros: clz Rd, Rm --------------------------------
+    // ARM DDI 0487 defines `clz` on the 32-bit value with `clz(0) == 32`, and
+    // the AST renders that exactly (`ast::write_wide_arithmetic_dec`) as
+    // `((unsigned int)x == 0 ? 32 : __builtin_clz((unsigned int)x))`.
+    //
+    // The `(unsigned int)` is not decoration. This IR models `r0` at its
+    // canonical 64-bit width and never truncates it, so `__builtin_clzll` on the
+    // raw value would count the zeros of a 64-bit quantity and return a number
+    // 32 too large. Naming the operand's real width here is what makes the
+    // lowering exact — and it is exact whenever the low 32 bits hold the
+    // machine's value, which is all the lifter's congruent arithmetic
+    // guarantees.
+    //
+    // Left unmodelled this was an opaque comment whose destination was never
+    // defined, so `-O2` bit-scan idioms (`31 - clz(x)`, `32 - clz(x)`) read an
+    // undefined local: eight armv7 `-O2` measurements in the fixture corpus.
+    if mnem == "clz" && ops.len() == 2 {
+        if let (Some(dst), Some(src)) = (operand_reg(&ops[0]), operand_to_value(&ops[1])) {
+            return vec![Op::Intrinsic {
+                name: "arm.clz.32".to_string(),
+                ins: vec![src],
+                outs: vec![(dst, Width::W32)],
+                reads_mem: false,
+                writes_mem: false,
+            }];
         }
         return vec![Op::Unknown {
             mnemonic: mnem.to_string(),
@@ -633,27 +1619,123 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
         }];
     }
 
-    // --- data processing: <op>{s} Rd, Rn, <reg|imm>  (or 2-operand form) --
-    if let Some(op) = bin_for_mnem(mnem) {
-        // Three-operand: Rd, Rn, Op2
+    // --- add/sub with carry: adc/adcs/sbc/sbcs ----------------------------
+    if matches!(mnem, "adc" | "adcs" | "sbc" | "sbcs") {
+        let add = mnem.starts_with("adc");
+        let sets_flags = mnem.ends_with('s');
+        let operand = |i: usize, out: &mut Vec<Op>| shifted_operand(ins, ctx, i, out);
         if ops.len() == 3 {
+            let mut prefix = Vec::new();
             if let (Some(dst), Some(lhs), Some(rhs)) = (
                 operand_reg(&ops[0]),
-                operand_to_value(&ops[1]),
-                operand_to_value(&ops[2]),
+                operand_to_value(&ops[1]).map(|value| resolve_pc(value, ctx.pc_at(ins))),
+                operand(2, &mut prefix),
             ) {
-                return vec![Op::Bin { dst, op, lhs, rhs }];
+                prefix.extend(arm_carry_arithmetic(
+                    dst, lhs, rhs, add, true, sets_flags,
+                ));
+                return prefix;
+            }
+        }
+        if ops.len() == 2 {
+            let mut prefix = Vec::new();
+            if let (Some(dst), Some(rhs)) = (operand_reg(&ops[0]), operand(1, &mut prefix)) {
+                prefix.extend(arm_carry_arithmetic(
+                    dst.clone(),
+                    Value::Reg(dst),
+                    rhs,
+                    add,
+                    true,
+                    sets_flags,
+                ));
+                return prefix;
+            }
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
+    // --- data processing: <op>{s} Rd, Rn, <reg|imm>  (or 2-operand form) --
+    if let Some(op) = bin_for_mnem(mnem) {
+        // The `S` suffix means the instruction also writes the condition flags.
+        // `bin_for_mnem` maps `subs` and `sub` to the same `BinOp`, so without
+        // this the flag write was dropped *silently* — the mnemonic is
+        // recognised, so it never even showed up as an unlifted instruction.
+        // A dropped flag write leaves its later reader bound to a stale
+        // definition, which is how ARMv7 output ended up carrying 6.19 leaked
+        // flag temporaries per function against AArch64's 1.45.
+        let sets_flags =
+            mnem.ends_with('s') && mnem != "rsb" && bin_for_mnem(&mnem[..mnem.len() - 1]).is_some();
+        // A shift written as its own instruction (`lsl.w Rd,Rn,#n`) is encoded
+        // as `mov` WITH a shift, so it sits in the very same instruction family
+        // the modifier is decoded from; applying the modifier there would square
+        // the scale. Its shift is already an explicit operand.
+        let carries_own_shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
+        let operand = |i: usize, out: &mut Vec<Op>| {
+            if carries_own_shift {
+                ops.get(i).and_then(operand_to_value)
+            } else {
+                shifted_operand(ins, ctx, i, out)
+            }
+        };
+        // Three-operand: Rd, Rn, Op2
+        if ops.len() == 3 {
+            let mut out = Vec::new();
+            if let (Some(dst), Some(lhs), Some(rhs)) = (
+                operand_reg(&ops[0]),
+                operand_to_value(&ops[1]).map(|v| resolve_pc(v, ctx.pc_at(ins))),
+                operand(2, &mut out),
+            ) {
+                if sets_flags && matches!(op, BinOp::Add | BinOp::Sub) {
+                    out.extend(arm_carry_arithmetic(dst, lhs, rhs, op == BinOp::Add, false, true));
+                    return out;
+                }
+                let (before, after) = if sets_flags {
+                    flags_for_arith(op, &dst, lhs.clone(), rhs.clone())
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+                out.extend(before);
+                out.push(Op::Bin {
+                    dst: dst.clone(),
+                    op,
+                    lhs,
+                    rhs,
+                });
+                out.extend(after);
+                return out;
             }
         }
         // Two-operand accumulate: Rd, Op2  ==>  Rd = Rd <op> Op2
         if ops.len() == 2 {
-            if let (Some(dst), Some(rhs)) = (operand_reg(&ops[0]), operand_to_value(&ops[1])) {
-                return vec![Op::Bin {
+            let mut out = Vec::new();
+            if let (Some(dst), Some(rhs)) = (operand_reg(&ops[0]), operand(1, &mut out)) {
+                if sets_flags && matches!(op, BinOp::Add | BinOp::Sub) {
+                    out.extend(arm_carry_arithmetic(
+                        dst.clone(),
+                        Value::Reg(dst),
+                        rhs,
+                        op == BinOp::Add,
+                        false,
+                        true,
+                    ));
+                    return out;
+                }
+                let (before, after) = if sets_flags {
+                    flags_for_arith(op, &dst, Value::Reg(dst.clone()), rhs.clone())
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+                out.extend(before);
+                out.push(Op::Bin {
                     dst: dst.clone(),
                     op,
-                    lhs: Value::Reg(dst),
+                    lhs: Value::Reg(dst.clone()),
                     rhs,
-                }];
+                });
+                out.extend(after);
+                return out;
             }
         }
         return vec![Op::Unknown {
@@ -664,18 +1746,20 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
     // --- reverse subtract: rsb Rd, Rn, #imm  ==>  Rd = imm - Rn ----------
     if mnem == "rsb" || mnem == "rsbs" || mnem == "neg" || mnem == "negs" {
         if ops.len() == 3 {
+            let mut out = Vec::new();
             if let (Some(dst), Some(lhs), Some(rhs)) = (
                 operand_reg(&ops[0]),
-                operand_to_value(&ops[1]),
-                operand_to_value(&ops[2]),
+                operand_to_value(&ops[1]).map(|v| resolve_pc(v, ctx.pc_at(ins))),
+                shifted_operand(ins, ctx, 2, &mut out),
             ) {
                 // Rd = rhs - lhs  (reverse)
-                return vec![Op::Bin {
+                out.push(Op::Bin {
                     dst,
                     op: BinOp::Sub,
                     lhs: rhs,
                     rhs: lhs,
-                }];
+                });
+                return out;
             }
         }
         // neg Rd, Rn  ==>  Rd = 0 - Rn
@@ -719,7 +1803,10 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
         "mov" | "movs" | "movw" | "mov.w" => {
             if ops.len() == 2 {
                 if let (Some(dst), Some(src)) = (operand_reg(&ops[0]), operand_to_value(&ops[1])) {
-                    return vec![Op::Assign { dst, src }];
+                    return vec![Op::Assign {
+                        dst,
+                        src: resolve_pc(src, ctx.pc_at(ins)),
+                    }];
                 }
             }
             vec![Op::Unknown {
@@ -744,12 +1831,16 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
         }
         "mvn" | "mvns" => {
             if ops.len() == 2 {
-                if let (Some(dst), Some(src)) = (operand_reg(&ops[0]), operand_to_value(&ops[1])) {
-                    return vec![Op::Un {
+                let mut out = Vec::new();
+                if let (Some(dst), Some(src)) =
+                    (operand_reg(&ops[0]), shifted_operand(ins, ctx, 1, &mut out))
+                {
+                    out.push(Op::Un {
                         dst,
                         op: UnOp::Not,
                         src,
-                    }];
+                    });
+                    return out;
                 }
             }
             vec![Op::Unknown {
@@ -757,31 +1848,101 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
             }]
         }
 
-        // Compares set flags (cmn compares against the negation, approximated).
-        "cmp" | "cmn" => {
+        // `cmp Rn, Op2` is `subs` discarding its result, so it writes exactly
+        // the flags `flags_for_arith` gives a subtraction.
+        "cmp" => {
             if ops.len() == 2 {
-                if let (Some(lhs), Some(rhs)) =
-                    (operand_to_value(&ops[0]), operand_to_value(&ops[1]))
-                {
-                    return cmp_flag_ops(lhs, rhs);
+                let mut out = Vec::new();
+                if let (Some(lhs), Some(rhs)) = (
+                    operand_to_value(&ops[0]).map(|v| resolve_pc(v, ctx.pc_at(ins))),
+                    shifted_operand(ins, ctx, 1, &mut out),
+                ) {
+                    out.extend(cmp_flag_ops(lhs, rhs));
+                    return out;
                 }
             }
             vec![Op::Unknown {
                 mnemonic: mnem.to_string(),
             }]
         }
-        "tst" => {
-            // tst a, b sets Z from (a & b). Approximate with an equality flag.
+        // `cmn Rn, Op2` is `adds` discarding its result: it compares Rn against
+        // MINUS Op2, so only the zero and sign facts of `Rn + Op2` can be
+        // claimed. Reusing the `cmp` flag set here (as this arm used to) wrote a
+        // borrow-carry and a signed ordering the CPU never evaluated, and the
+        // following `b<cond>` rendered that fabricated condition.
+        "cmn" => {
             if ops.len() == 2 {
-                if let (Some(lhs), Some(rhs)) =
-                    (operand_to_value(&ops[0]), operand_to_value(&ops[1]))
-                {
-                    return vec![Op::Cmp {
-                        dst: VReg::Flag(Flag::Z),
-                        op: CmpOp::Eq,
+                let mut out = Vec::new();
+                if let (Some(lhs), Some(rhs)) = (
+                    operand_to_value(&ops[0]).map(|v| resolve_pc(v, ctx.pc_at(ins))),
+                    shifted_operand(ins, ctx, 1, &mut out),
+                ) {
+                    let sum = VReg::Temp(3);
+                    out.push(Op::Bin {
+                        dst: sum.clone(),
+                        op: BinOp::Add,
                         lhs,
                         rhs,
-                    }];
+                    });
+                    // ARM's `lt`/`le` after `cmn` are `N != V` and
+                    // `Z || N != V`, which are exactly "the mathematical sum is
+                    // negative / non-positive" — and this IR's `Add` does not
+                    // wrap, so the sum IS the mathematical one. The unsigned
+                    // pair (C, Ule) would need the 32-bit carry-out and is left
+                    // undefined rather than guessed.
+                    for (flag, op) in [
+                        (Flag::Z, CmpOp::Eq),
+                        (Flag::Slt, CmpOp::Slt),
+                        (Flag::Sle, CmpOp::Sle),
+                    ] {
+                        out.push(Op::Cmp {
+                            dst: VReg::Flag(flag),
+                            op,
+                            lhs: Value::Reg(sum.clone()),
+                            rhs: Value::Const(0),
+                        });
+                    }
+                    return out;
+                }
+            }
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
+        }
+        // `tst a, b` sets Z from `a & b`; `teq a, b` from `a ^ b`. The result
+        // itself is discarded, so it is computed into a temporary and Z taken
+        // from that.
+        //
+        // Reporting Z as `a == b` — which this arm used to do — is a DIFFERENT
+        // predicate, and not a conservative one: `tst r0,#4` with r0 == 4 sets
+        // Z=0 ("bit 2 is set"), while `4 == 4` reports Z=1. Only Z is claimed;
+        // N would need the sign bit of the 32-bit result, and ARM32 registers
+        // carry no width in this IR (see `flags_for_arith`).
+        "tst" | "teq" => {
+            if ops.len() == 2 {
+                let mut out = Vec::new();
+                if let (Some(lhs), Some(rhs)) = (
+                    operand_to_value(&ops[0]).map(|v| resolve_pc(v, ctx.pc_at(ins))),
+                    shifted_operand(ins, ctx, 1, &mut out),
+                ) {
+                    let result = VReg::Temp(3);
+                    out.push(Op::Bin {
+                        dst: result.clone(),
+                        op: if mnem == "teq" {
+                            BinOp::Xor
+                        } else {
+                            BinOp::And
+                        },
+                        lhs,
+                        rhs,
+                    });
+                    out.push(Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(result),
+                        rhs: Value::Const(0),
+                    });
+                    return out;
                 }
             }
             vec![Op::Unknown {
@@ -798,7 +1959,9 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     }];
                 };
                 let size = mem_size_for(m);
-                if let Some(addr) = operand_to_memop(&ops[1], size) {
+                if let Some(addr) =
+                    operand_to_memop(&ops[1], size).map(|a| scaled_memop(ins, ctx, a))
+                {
                     if dst == VReg::phys("pc") && addr.base == Some(VReg::phys("sp")) {
                         let mut out = Vec::new();
                         if let Some(off) = ops.get(2).and_then(|operand| operand.immediate) {
@@ -813,7 +1976,28 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                         out.push(Op::Return);
                         return out;
                     }
+                    // A whole-word load from an address `scaled_memop` resolved
+                    // out of `[pc, #imm]` is a literal-pool read: the pool is
+                    // constant data inside the very window being lifted, so the
+                    // value is known exactly and becomes a constant. That is
+                    // what turns the armhf `-fPIC` idiom
+                    // (`ldr Rd,[pc,#n]; add Rd,pc`) into a real address instead
+                    // of arithmetic on an undefined register.
+                    if let Some(word) = (addr.base.is_none()
+                        && addr.index.is_none()
+                        && size == 4
+                        && load_extension_for(m).is_none()
+                        && ops.len() == 2)
+                        .then(|| ctx.literal(addr.disp as u64))
+                        .flatten()
+                    {
+                        return vec![Op::Assign {
+                            dst,
+                            src: Value::Const(word),
+                        }];
+                    }
                     let base_reg = addr.base.clone();
+                    let writeback = addr.disp;
                     let mut out = if let Some((signed, from)) = load_extension_for(m) {
                         let loaded = VReg::Temp(0);
                         let extension = if signed {
@@ -836,15 +2020,22 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                         vec![Op::Load { dst, addr }]
                     };
                     // Post-indexed writeback: 3rd operand is the offset.
-                    if ops.len() == 3 {
-                        if let (Some(base), Some(off)) = (base_reg, ops[2].immediate) {
-                            out.push(Op::Bin {
-                                dst: base.clone(),
-                                op: BinOp::Add,
-                                lhs: Value::Reg(base),
-                                rhs: Value::Const(off),
-                            });
-                        }
+                    // Pre-indexed writeback: the base becomes the address the
+                    // access just used, i.e. it advances by the displacement.
+                    let update = if ops.len() == 3 {
+                        ops[2].immediate
+                    } else if is_preindexed_writeback(ins, ctx) {
+                        Some(writeback)
+                    } else {
+                        None
+                    };
+                    if let (Some(base), Some(off)) = (base_reg, update) {
+                        out.push(Op::Bin {
+                            dst: base.clone(),
+                            op: BinOp::Add,
+                            lhs: Value::Reg(base),
+                            rhs: Value::Const(off),
+                        });
                     }
                     return out;
                 }
@@ -895,18 +2086,28 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     }];
                 };
                 let size = mem_size_for(m);
-                if let Some(addr) = operand_to_memop(&ops[1], size) {
+                if let Some(addr) =
+                    operand_to_memop(&ops[1], size).map(|a| scaled_memop(ins, ctx, a))
+                {
                     let base_reg = addr.base.clone();
+                    let writeback = addr.disp;
                     let mut out = vec![Op::Store { addr, src }];
-                    if ops.len() == 3 {
-                        if let (Some(base), Some(off)) = (base_reg, ops[2].immediate) {
-                            out.push(Op::Bin {
-                                dst: base.clone(),
-                                op: BinOp::Add,
-                                lhs: Value::Reg(base),
-                                rhs: Value::Const(off),
-                            });
-                        }
+                    // See the load arm: post-indexed carries its offset as a
+                    // third operand, pre-indexed advances by the displacement.
+                    let update = if ops.len() == 3 {
+                        ops[2].immediate
+                    } else if is_preindexed_writeback(ins, ctx) {
+                        Some(writeback)
+                    } else {
+                        None
+                    };
+                    if let (Some(base), Some(off)) = (base_reg, update) {
+                        out.push(Op::Bin {
+                            dst: base.clone(),
+                            op: BinOp::Add,
+                            lhs: Value::Reg(base),
+                            rhs: Value::Const(off),
+                        });
                     }
                     return out;
                 }
@@ -982,6 +2183,52 @@ fn lift_one(ins: &Instruction, mnem: &str) -> Vec<Op> {
                     target: CallTarget::Indirect(Value::Reg(reg)),
                     effects: None,
                 }];
+            }
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
+        }
+
+        // Thumb-2 table branch: `tbb [pc, Rm]` / `tbh [pc, Rm, lsl #1]`.
+        //
+        // `pc` reads as this instruction's address + 4 in Thumb state, and the
+        // encoding is always 4 bytes, so the table starts at the byte right
+        // after it and the load is `[table_va + Rm * entry_size]`. The branch
+        // target is `table_va + 2 * loaded`, which the CFG has already resolved
+        // into real successors (`analysis::dispatch::thumb_table_branch`); this
+        // is an `IndirectJump` rather than a `Call` so the structurer recognises
+        // it as the dispatch to replace with a `switch`.
+        //
+        // `index` carries the switch value straight from the addressing mode,
+        // which is what lets the recovered `switch` name it. On x86 that has to
+        // be reconstructed by `lift_function::annotate_resolved_switch_indices`
+        // from a scale-four load; here the encoding states it outright.
+        "tbb" | "tbh" => {
+            let entry_size: u8 = if mnem == "tbb" { 1 } else { 2 };
+            let table_va = ctx.pc_at(ins);
+            let index = ops
+                .first()
+                .filter(|operand| operand.base.as_deref() == Some("pc"))
+                .and_then(|operand| operand.index.as_deref())
+                .map(VReg::phys);
+            if let Some(index) = index {
+                let offset = VReg::Temp(0);
+                return vec![
+                    Op::Load {
+                        dst: offset.clone(),
+                        addr: MemOp::plain(
+                            None,
+                            Some(index.clone()),
+                            entry_size,
+                            table_va,
+                            entry_size,
+                        ),
+                    },
+                    Op::IndirectJump {
+                        target: Value::Reg(offset),
+                        index: Some(Value::Reg(index)),
+                    },
+                ];
             }
             vec![Op::Unknown {
                 mnemonic: mnem.to_string(),
@@ -1131,12 +2378,34 @@ fn make_conditional(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
 /// a fixed stride. Returns an empty vector if the backend cannot be built or the
 /// first instruction fails to decode.
 pub fn lift_bytes(bytes: &[u8], start_va: u64, thumb: bool) -> Vec<LlirInstr> {
+    lift_bytes_in_image(bytes, start_va, thumb, None)
+}
+
+/// [`lift_bytes`], additionally given the whole image the window came from.
+///
+/// ARM32 constants live in a literal pool that `ldr Rd,[pc,#imm]` reads, and the
+/// pool sits after the function's last basic block — outside the per-block
+/// window [`crate::ir::lift_function`] lifts. Passing the image is what lets
+/// those loads resolve to the constants they are, instead of to synthetic
+/// globals over an address the recovered C then dereferences.
+pub fn lift_bytes_in_image(
+    bytes: &[u8],
+    start_va: u64,
+    thumb: bool,
+    image: Option<&[u8]>,
+) -> Vec<LlirInstr> {
     let Some(mut cs) = CapstoneDisassembler::new(Architecture::ARM, Endianness::Little) else {
         return vec![];
     };
     if cs.set_thumb_mode(thumb).is_err() {
         return vec![];
     }
+    let ctx = LiftCtx {
+        thumb,
+        bytes,
+        start_va,
+        image,
+    };
     let mut out = Vec::new();
     let mut off = 0usize;
     let mut va = start_va;
@@ -1168,12 +2437,12 @@ pub fn lift_bytes(bytes: &[u8], start_va: u64, thumb: bool) -> Vec<LlirInstr> {
             it_queue = it_conditions(mnem, cond_name).into();
             out.push(LlirInstr { va, op: Op::Nop });
         } else if let Some((flag, inverted)) = it_queue.pop_front() {
-            let lifted = lift_one(&ins, mnem);
+            let lifted = lift_one(&ins, mnem, &ctx);
             for op in make_conditional(lifted, flag, inverted) {
                 out.push(LlirInstr { va, op });
             }
         } else {
-            for op in lift_one(&ins, mnem) {
+            for op in lift_one(&ins, mnem, &ctx) {
                 out.push(LlirInstr { va, op });
             }
         }
@@ -1585,6 +2854,21 @@ mod tests {
             }]
         );
 
+        // clz r0, r1 = fab1 f081 -> a typed intrinsic naming the 32-bit width,
+        // not an opaque comment whose destination is never defined.
+        let clz = ops(&[0xb1, 0xfa, 0x81, 0xf0]);
+        assert_eq!(
+            clz,
+            vec![Op::Intrinsic {
+                name: "arm.clz.32".to_string(),
+                ins: vec![Value::Reg(VReg::phys("r1"))],
+                outs: vec![(VReg::phys("r0"), Width::W32)],
+                reads_mem: false,
+                writes_mem: false,
+            }],
+            "clz must lift to an exactly-renderable 32-bit intrinsic"
+        );
+
         // umull r0, r1, r2, r3 = fba2 0103  ->  {r1:r0} = r2*r3
         let umull = ops(&[0xa2, 0xfb, 0x03, 0x01]);
         assert!(
@@ -1796,5 +3080,693 @@ mod tests {
         );
         // The IT prefixes themselves carry no data effect.
         assert!(out.iter().any(|o| matches!(o, Op::Nop)));
+    }
+
+    /// `subs` must write the flags of `cmp`, not just the subtraction.
+    ///
+    /// `bin_for_mnem` maps `sub` and `subs` to the same `BinOp`, so before this
+    /// the `S` suffix was recognised and then discarded — the flag write
+    /// vanished without ever appearing as an unlifted instruction, and later
+    /// readers bound to stale definitions.
+    #[test]
+    fn s_suffixed_arithmetic_writes_condition_flags() {
+        // subs r0, r1, r2  (ARM, A1 encoding) = 0xe0510002
+        let out = lift_bytes(&0xe0510002u32.to_le_bytes(), 0x1000, false);
+        assert!(
+            out.iter()
+                .any(|i| matches!(&i.op, Op::Bin { op: BinOp::Sub, .. })),
+            "subs lost its subtraction"
+        );
+        assert!(
+            out.iter().any(|i| matches!(
+                &i.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Z),
+                    op: CmpOp::Eq,
+                    ..
+                }
+            )),
+            "subs did not write ZF: {:?}",
+            out.iter().map(|i| &i.op).collect::<Vec<_>>()
+        );
+    }
+
+    /// `Rm, lsl #n` must reach the operation.
+    ///
+    /// Capstone's operand list carries the register and drops the modifier, so
+    /// `add.w r0,r0,r1,lsl #1` and `add r0,r0,r1` arrived here indistinguishable.
+    /// That is a silent wrong answer, not a rendering nicety: `sum_arg2(1,1)`
+    /// returned 4 where the source returns 5.
+    #[test]
+    fn thumb_shifted_register_operand_reaches_the_operation() {
+        // The real `sum_arg2` body from the armv7 fixture build:
+        //     add.w r0, r0, r1, lsl #1     eb00 0041
+        let out = ops(&[0x00, 0xeb, 0x41, 0x00]);
+        assert!(
+            !out.iter().any(|o| matches!(o, Op::Unknown { .. })),
+            "shifted add became Unknown: {out:#?}"
+        );
+        let shifted = out
+            .iter()
+            .find_map(|o| match o {
+                Op::Bin {
+                    dst,
+                    op: BinOp::Shl,
+                    lhs,
+                    rhs: Value::Const(1),
+                } if lhs == &Value::Reg(VReg::phys("r1")) => Some(dst.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("lsl #1 was dropped: {out:#?}"));
+        assert!(
+            out.iter().any(|o| matches!(o,
+                Op::Bin { dst, op: BinOp::Add, lhs, rhs: Value::Reg(r) }
+                    if dst == &VReg::phys("r0")
+                        && lhs == &Value::Reg(VReg::phys("r0"))
+                        && r == &shifted)),
+            "the add did not consume the shifted operand: {out:#?}"
+        );
+    }
+
+    /// Every shift type the encoding can express, at both instruction widths.
+    /// `asr #31` is the sign-broadcast half of a divide-by-power-of-two, so
+    /// dropping it does not merely lose a factor — it loses the rounding.
+    #[test]
+    fn thumb_and_arm_shifted_operands_use_the_encoded_shift_kind() {
+        for (bytes, thumb, want_op, want_amount) in [
+            // sub.w r0, r1, r2, lsr #3      eba1 00d2
+            (&[0xa1u8, 0xeb, 0xd2, 0x00][..], true, BinOp::Shr, 3i64),
+            // add.w r0, r1, r2, asr #31     eb01 70e2
+            (&[0x01, 0xeb, 0xe2, 0x70][..], true, BinOp::Sar, 31),
+            // rsb   r0, r1, r2, lsl #3      ebc1 00c2
+            (&[0xc1, 0xeb, 0xc2, 0x00][..], true, BinOp::Shl, 3),
+            // A32: add r0, r1, r2, lsl #3   e0810182
+            (&[0x82, 0x01, 0x81, 0xe0][..], false, BinOp::Shl, 3),
+            // A32: add r0, r1, r2, asr #31  e0810fc2
+            (&[0xc2, 0x0f, 0x81, 0xe0][..], false, BinOp::Sar, 31),
+        ] {
+            let out: Vec<Op> = lift_bytes(bytes, 0x1000, thumb)
+                .into_iter()
+                .map(|i| i.op)
+                .collect();
+            assert!(
+                out.iter().any(|o| matches!(o,
+                    Op::Bin { op, lhs, rhs: Value::Const(n), .. }
+                        if *op == want_op
+                            && lhs == &Value::Reg(VReg::phys("r2"))
+                            && *n == want_amount)),
+                "{bytes:x?} lost its {want_op:?} #{want_amount}: {out:#?}"
+            );
+        }
+    }
+
+    /// A shift written as its own instruction must NOT be shifted twice.
+    ///
+    /// `lsl.w r0,r1,#2` is encoded as `mov` with a shift, so it lives in the very
+    /// same instruction family the modifier is decoded from; applying the
+    /// modifier there would square the scale.
+    #[test]
+    fn a_standalone_shift_instruction_is_not_shifted_again() {
+        // lsl.w r0, r1, #2   ea4f 0081
+        let out = ops(&[0x4f, 0xea, 0x81, 0x00]);
+        assert_eq!(
+            out,
+            vec![Op::Bin {
+                dst: VReg::phys("r0"),
+                op: BinOp::Shl,
+                lhs: Value::Reg(VReg::phys("r1")),
+                rhs: Value::Const(2),
+            }],
+            "standalone lsl was re-shifted: {out:#?}"
+        );
+    }
+
+    /// A register-offset load/store scales its index by the encoded `lsl`.
+    ///
+    /// `[r1, r2, lsl #2]` arrived with `scale: 0`, which every consumer reads as
+    /// 1 — so every scaled array index was off by its element size.
+    #[test]
+    fn register_offset_memory_operands_carry_their_index_scale() {
+        for (bytes, thumb, want_scale) in [
+            // ldr.w  r3, [r1, r2, lsl #2]   f851 3022
+            (&[0x51u8, 0xf8, 0x22, 0x30][..], true, 4u8),
+            // ldrb.w r0, [r1, r2, lsl #1]   f811 0012
+            (&[0x11, 0xf8, 0x12, 0x00][..], true, 2),
+            // A32: ldr r3, [r1, r2, lsl #2] e7913102
+            (&[0x02, 0x31, 0x91, 0xe7][..], false, 4),
+        ] {
+            let out: Vec<Op> = lift_bytes(bytes, 0x1000, thumb)
+                .into_iter()
+                .map(|i| i.op)
+                .collect();
+            let scale = out
+                .iter()
+                .find_map(|o| match o {
+                    Op::Load { addr, .. } | Op::Store { addr, .. } => Some(addr.scale),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{bytes:x?} produced no memory op: {out:#?}"));
+            assert_eq!(scale, want_scale, "{bytes:x?} index scale: {out:#?}");
+        }
+
+        // str.w r0, [r1, r2, lsl #2]   f841 0022
+        let stored = ops(&[0x41, 0xf8, 0x22, 0x00]);
+        assert!(
+            matches!(stored.as_slice(), [Op::Store { addr, .. }] if addr.scale == 4
+                && addr.index == Some(VReg::phys("r2"))),
+            "store index scale: {stored:#?}"
+        );
+    }
+
+    /// An unscaled register-offset access must stay unscaled — the fix must not
+    /// invent a factor where the encoding has none.
+    #[test]
+    fn an_unshifted_register_offset_keeps_scale_one() {
+        // ldr r3, [r1, r2]   (16-bit Thumb) = 5889
+        let out = ops(&[0x89, 0x58]);
+        assert!(
+            matches!(out.as_slice(), [Op::Load { addr, .. }]
+                if addr.index == Some(VReg::phys("r2")) && addr.scale <= 1),
+            "unshifted index was scaled: {out:#?}"
+        );
+    }
+
+    /// A read of `pc` is a CONSTANT, not a live register.
+    ///
+    /// ARM32 has no `adrp`: every address, every large constant and every GOT
+    /// offset is materialised as `ldr Rd,[pc,#imm]` from a literal pool, usually
+    /// followed by `add Rd,pc`. Modelling `pc` as an ordinary register left
+    /// those reading an undefined value, and the recovered C dereferenced it.
+    #[test]
+    fn a_read_of_pc_is_the_architectural_constant() {
+        // add r2, pc = 447a. In Thumb state a read of PC is `addr + 4`.
+        assert_eq!(
+            lift_bytes(&[0x7a, 0x44], 0x44c, true)
+                .into_iter()
+                .map(|i| i.op)
+                .collect::<Vec<_>>(),
+            vec![Op::Bin {
+                dst: VReg::phys("r2"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("r2")),
+                rhs: Value::Addr(0x450),
+            }],
+        );
+        // A32: add r2, r2, pc = e082200f. In ARM state a read of PC is `addr+8`.
+        assert_eq!(
+            lift_bytes(&0xe082200fu32.to_le_bytes(), 0x1000, false)
+                .into_iter()
+                .map(|i| i.op)
+                .collect::<Vec<_>>(),
+            vec![Op::Bin {
+                dst: VReg::phys("r2"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("r2")),
+                rhs: Value::Addr(0x1008),
+            }],
+        );
+    }
+
+    /// A PC-relative load reads the literal pool, which is part of the function
+    /// body being lifted — so its word is known here and becomes a constant.
+    #[test]
+    fn pc_relative_loads_resolve_against_the_literal_pool() {
+        // ldr r0, [pc, #4] = 4801, at 0x1000: Align(0x1004,4) + 4 = 0x1008.
+        let window = [
+            0x01, 0x48, // ldr r0, [pc, #4]
+            0x00, 0xbf, // nop
+            0x00, 0xbf, // nop
+            0x00, 0xbf, // nop
+            0xef, 0xbe, 0xad, 0xde, // the literal at 0x1008
+        ];
+        let out = lift_bytes(&window, 0x1000, true);
+        assert_eq!(
+            out.first().map(|i| i.op.clone()),
+            Some(Op::Assign {
+                dst: VReg::phys("r0"),
+                src: Value::Const(0xdead_beef),
+            }),
+            "PC-relative load did not resolve: {out:#?}"
+        );
+
+        // A32: ldr r0, [pc, #4] = e59f0004, at 0x1000: 0x1008 + 4 = 0x100c.
+        let mut a32 = Vec::new();
+        a32.extend_from_slice(&0xe59f0004u32.to_le_bytes());
+        a32.extend_from_slice(&[0x00; 8]);
+        a32.extend_from_slice(&0x1234_5678u32.to_le_bytes());
+        let out = lift_bytes(&a32, 0x1000, false);
+        assert_eq!(
+            out.first().map(|i| i.op.clone()),
+            Some(Op::Assign {
+                dst: VReg::phys("r0"),
+                src: Value::Const(0x1234_5678),
+            }),
+            "A32 PC-relative load did not resolve: {out:#?}"
+        );
+    }
+
+    /// A literal outside the lifted window must become an ABSOLUTE load, never
+    /// a load through an undefined `pc` register — the address is still exactly
+    /// known, and a later pass can resolve it against the image.
+    #[test]
+    fn an_out_of_window_literal_load_keeps_its_absolute_address() {
+        // ldr r3, [pc, #0x118] = 4b46 at 0x44e -> Align(0x452,4) + 0x118 = 0x568.
+        let out = lift_bytes(&[0x46, 0x4b], 0x44e, true);
+        assert!(
+            matches!(out.as_slice(), [LlirInstr { op: Op::Load { dst, addr }, .. }]
+                if dst == &VReg::phys("r3")
+                    && addr.base.is_none()
+                    && addr.index.is_none()
+                    && addr.disp == 0x568),
+            "out-of-window literal load: {out:#?}"
+        );
+    }
+
+    /// The exact `-fstack-protector` preamble GCC emits for armhf `-fPIC`, from
+    /// the real `20_graph_bfs` fixture build. It must reduce to a load of the
+    /// guard's known GOT slot (`0x20020`), not to arithmetic on a live `pc`.
+    ///
+    /// Left unresolved, `canary::recognise_canary` cannot see the guard, the
+    /// renderer substitutes a portable zero-filled object for the original-image
+    /// address, and every `-fstack-protector` function took SIGSEGV when the
+    /// recovered C was recompiled and run.
+    #[test]
+    fn the_armhf_pic_stack_guard_preamble_resolves_to_its_got_slot() {
+        // 0x44a: ldr r2, [pc, #0x118]   4a46   -> literal at 0x564 = 0x0001fbb0
+        // 0x44c: add r2, pc             447a   -> 0x1fbb0 + 0x450 = 0x20000
+        // 0x44e: ldr r3, [pc, #0x118]   4b46   -> literal at 0x568 = 0x20
+        // 0x450: ldr r3, [r2, r3]       58d3
+        // 0x452: ldr r3, [r3]           681b
+        let mut window = vec![0x46, 0x4a, 0x7a, 0x44, 0x46, 0x4b, 0xd3, 0x58, 0x1b, 0x68];
+        window.resize(0x564 - 0x44a, 0x00); // pad out to the pool
+        window.extend_from_slice(&0x0001_fbb0u32.to_le_bytes()); // 0x564
+        window.extend_from_slice(&0x0000_0020u32.to_le_bytes()); // 0x568
+        let out: Vec<Op> = lift_bytes(&window, 0x44a, true)
+            .into_iter()
+            .take(4)
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(
+            out[0],
+            Op::Assign {
+                dst: VReg::phys("r2"),
+                src: Value::Const(0x0001_fbb0),
+            },
+            "GOT-base literal: {out:#?}"
+        );
+        assert_eq!(
+            out[1],
+            Op::Bin {
+                dst: VReg::phys("r2"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("r2")),
+                rhs: Value::Addr(0x450),
+            },
+            "PC add: {out:#?}"
+        );
+        assert_eq!(
+            out[2],
+            Op::Assign {
+                dst: VReg::phys("r3"),
+                src: Value::Const(0x20),
+            },
+            "GOT-offset literal: {out:#?}"
+        );
+    }
+
+    /// `subs Rd, #imm` sets the flags from `Rd_OLD - imm`, so the old operands
+    /// must be captured before the subtraction overwrites `Rd`.
+    ///
+    /// Emitting the `Op::Bin` first and then reading `Value::Reg(dst)` made the
+    /// zero flag mean `Rd_new == imm`, i.e. `Rd_old == 2*imm`. The real
+    /// `dec_loop` countdown `subs r3,#1; bne` therefore decompiled to
+    /// `while (i != 1)` and never terminated — which is the whole reason
+    /// `14_flag_effects` exists.
+    #[test]
+    fn s_suffixed_flags_capture_operands_before_the_result_overwrite() {
+        // subs r3, #1 = 3b01, the exact latch of the real `dec_loop` fixture.
+        let out = ops(&[0x01, 0x3b]);
+        let subtract = out
+            .iter()
+            .position(|o| matches!(o, Op::Bin { op: BinOp::Sub, .. }))
+            .unwrap_or_else(|| panic!("no subtraction: {out:#?}"));
+        let zero = out
+            .iter()
+            .position(|o| {
+                matches!(
+                    o,
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_else(|| panic!("no zero flag: {out:#?}"));
+        let saved_lhs = out
+            .iter()
+            .position(|op| matches!(
+                op,
+                Op::Assign {
+                    dst: VReg::Temp(21),
+                    src: Value::Reg(VReg::Phys(source)),
+                } if source == "r3"
+            ))
+            .unwrap_or_else(|| panic!("old lhs was not captured: {out:#?}"));
+        assert!(saved_lhs < subtract, "lhs capture must precede overwrite: {out:#?}");
+        assert!(subtract < zero, "result-derived zero flag must follow subtraction: {out:#?}");
+
+        // The three-operand form with `Rd == Rn` has the same hazard:
+        // subs r0, r0, r1 (A1) = 0xe0500001.
+        let out: Vec<Op> = lift_bytes(&0xe0500001u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        let subtract = out
+            .iter()
+            .position(|o| matches!(o, Op::Bin { op: BinOp::Sub, .. }))
+            .unwrap();
+        let saved_lhs = out
+            .iter()
+            .position(|o| {
+                matches!(
+                    o,
+                    Op::Assign {
+                        dst: VReg::Temp(21),
+                        src: Value::Reg(VReg::Phys(source)),
+                    } if source == "r0"
+                )
+            })
+            .unwrap();
+        assert!(saved_lhs < subtract, "three-operand form: {out:#?}");
+    }
+
+    /// A result-derived flag is the mirror case: `adds` reports whether its
+    /// RESULT is zero, so those writes must come after the operation.
+    #[test]
+    fn result_derived_flags_follow_the_operation_they_describe() {
+        // adds r0, r1, r2 (A1) = 0xe0910002
+        let out: Vec<Op> = lift_bytes(&0xe0910002u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        let add = out
+            .iter()
+            .position(|o| matches!(o, Op::Bin { op: BinOp::Add, .. }))
+            .unwrap_or_else(|| panic!("no addition: {out:#?}"));
+        let zero = out
+            .iter()
+            .position(|o| {
+                matches!(
+                    o,
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_else(|| panic!("no zero flag: {out:#?}"));
+        assert!(add < zero, "adds flags must follow the add: {out:#?}");
+    }
+
+    #[test]
+    fn carry_arithmetic_uses_the_existing_borrow_polarity() {
+        // A32 encodings, chosen so Capstone exposes the unqualified mnemonics:
+        // adds/adcs/subs/sbcs r0, r1, r2.
+        let cases = [
+            (0xe0910002u32, "adds"),
+            (0xe0b10002u32, "adcs"),
+            (0xe0510002u32, "subs"),
+            (0xe0d10002u32, "sbcs"),
+        ];
+        for (word, name) in cases {
+            let out: Vec<Op> = lift_bytes(&word.to_le_bytes(), 0x1000, false)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            assert!(
+                !out.iter().any(|op| matches!(op, Op::Unknown { .. })),
+                "{name} did not lift: {out:#?}"
+            );
+            assert!(
+                out.iter().any(|op| matches!(
+                    op,
+                    Op::Cmp { dst: VReg::Flag(Flag::C), .. }
+                        | Op::Bin { dst: VReg::Flag(Flag::C), .. }
+                        | Op::Assign { dst: VReg::Flag(Flag::C), .. }
+                )),
+                "{name} did not define the carry/borrow convention: {out:#?}"
+            );
+        }
+
+        let adcs: Vec<Op> = lift_bytes(&0xe0b10002u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(adcs.iter().any(|op| matches!(
+            op,
+            Op::Cmp {
+                op: CmpOp::Eq,
+                lhs: Value::Reg(VReg::Flag(Flag::C)),
+                rhs: Value::Const(0),
+                ..
+            }
+        )), "ADCS must invert stored borrow/no-carry into architectural carry-in: {adcs:#?}");
+
+        let sbcs: Vec<Op> = lift_bytes(&0xe0d10002u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|instruction| instruction.op)
+            .collect();
+        assert!(sbcs.iter().any(|op| matches!(
+            op,
+            Op::Bin {
+                op: BinOp::Sub,
+                rhs: Value::Reg(VReg::Flag(Flag::C)),
+                ..
+            }
+        )), "SBCS must subtract the stored incoming borrow directly: {sbcs:#?}");
+
+        assert_eq!(cond_flag_for("ls"), Some((VReg::Flag(Flag::Ule), false)));
+        assert_eq!(cond_flag_for("hi"), Some((VReg::Flag(Flag::Ule), true)));
+        assert_eq!(cond_flag_for("lo"), Some((VReg::Flag(Flag::C), false)));
+        assert_eq!(cond_flag_for("hs"), Some((VReg::Flag(Flag::C), true)));
+    }
+
+    /// `[Rn, #imm]!` advances `Rn`; `[Rn, #imm]` does not.
+    ///
+    /// Capstone reports both as the same two operands, so the writeback was
+    /// silently lost and the induction variable of every pointer-walking `-O2`
+    /// loop stood still. `for_sum`'s real latch is `ldr r1,[r3,#4]!` followed by
+    /// `cmp r3,r0; bne` — without the update that is an infinite loop.
+    #[test]
+    fn preindexed_writeback_advances_the_base_register() {
+        // ldr r1, [r3, #4]!   f853 1f04   (the real `for_sum` latch)
+        let out = ops(&[0x53, 0xf8, 0x04, 0x1f]);
+        assert!(
+            matches!(out.as_slice(), [
+                Op::Load { dst, addr },
+                Op::Bin { dst: base, op: BinOp::Add, lhs, rhs: Value::Const(4) },
+            ] if dst == &VReg::phys("r1")
+                && addr.base == Some(VReg::phys("r3"))
+                && addr.disp == 4
+                && base == &VReg::phys("r3")
+                && lhs == &Value::Reg(VReg::phys("r3"))),
+            "pre-indexed load: {out:#?}"
+        );
+
+        // str r1, [r3, #8]!   f843 1f08
+        let out = ops(&[0x43, 0xf8, 0x08, 0x1f]);
+        assert!(
+            matches!(out.as_slice(), [
+                Op::Store { addr, .. },
+                Op::Bin { dst: base, op: BinOp::Add, rhs: Value::Const(8), .. },
+            ] if addr.disp == 8 && base == &VReg::phys("r3")),
+            "pre-indexed store: {out:#?}"
+        );
+
+        // A32: ldr r1, [r3, #4]!  = 0xe5b31004
+        let out: Vec<Op> = lift_bytes(&0xe5b31004u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(out.len(), 2, "A32 pre-indexed load: {out:#?}");
+        assert!(
+            matches!(&out[1], Op::Bin { dst, op: BinOp::Add, rhs: Value::Const(4), .. }
+                if dst == &VReg::phys("r3")),
+            "A32 pre-indexed load: {out:#?}"
+        );
+    }
+
+    /// The plain offset form must NOT be given a writeback the encoding does not
+    /// have — inventing one corrupts the base on every iteration.
+    #[test]
+    fn a_plain_offset_access_leaves_its_base_alone() {
+        for (bytes, thumb) in [
+            // ldr r1, [r3, #4]  (16-bit Thumb) = 6859
+            (&[0x59u8, 0x68][..], true),
+            // A32: ldr r1, [r3, #4] = 0xe5931004
+            (&0xe5931004u32.to_le_bytes()[..], false),
+        ] {
+            let out: Vec<Op> = lift_bytes(bytes, 0x1000, thumb)
+                .into_iter()
+                .map(|i| i.op)
+                .collect();
+            assert!(
+                matches!(out.as_slice(), [Op::Load { .. }]),
+                "{bytes:x?} gained a writeback: {out:#?}"
+            );
+        }
+    }
+
+    /// Mnemonics whose meaning is exact arithmetic must be lowered, not left as
+    /// `Op::Unknown` — an unknown is a BARRIER that stops values and flags
+    /// propagating across it, so one unmodelled instruction silences the whole
+    /// expression it sits in.
+    #[test]
+    fn exactly_lowerable_mnemonics_do_not_become_unknown() {
+        for (bytes, what) in [
+            (&[0xc1u8, 0xf3, 0x07, 0x10][..], "ubfx r0,r1,#4,#8"),
+            (&[0x41, 0xf3, 0x07, 0x10][..], "sbfx r0,r1,#4,#8"),
+            (&[0x61, 0xea, 0x02, 0x00][..], "orn r0,r1,r2"),
+            (&[0x4f, 0xea, 0x71, 0x10][..], "ror.w r0,r1,#5"),
+            (&[0x51, 0xfa, 0x82, 0xf0][..], "uxtab r0,r1,r2"),
+            (&[0x11, 0xfa, 0x82, 0xf0][..], "uxtah r0,r1,r2"),
+            (&[0x41, 0xfa, 0x82, 0xf0][..], "sxtab r0,r1,r2"),
+            (&[0x08, 0xba][..], "rev r0,r1"),
+            (&[0x48, 0xba][..], "rev16 r0,r1"),
+        ] {
+            let out = ops(bytes);
+            assert!(
+                !out.is_empty() && !out.iter().any(|o| matches!(o, Op::Unknown { .. })),
+                "{what} did not lower: {out:#?}"
+            );
+        }
+    }
+
+    /// `ubfx r0, r1, #4, #8` extracts bits 4..11 zero-extended; `sbfx` the same
+    /// field sign-extended.
+    #[test]
+    fn bitfield_extract_lowers_to_its_exact_shift_and_mask() {
+        assert_eq!(
+            ops(&[0xc1, 0xf3, 0x07, 0x10]),
+            vec![
+                Op::Bin {
+                    dst: VReg::Temp(0),
+                    op: BinOp::Shr,
+                    lhs: Value::Reg(VReg::phys("r1")),
+                    rhs: Value::Const(4),
+                },
+                Op::Bin {
+                    dst: VReg::phys("r0"),
+                    op: BinOp::And,
+                    lhs: Value::Reg(VReg::Temp(0)),
+                    rhs: Value::Const(0xff),
+                },
+            ]
+        );
+        // sbfx: shift the field's top bit to bit 31, then bring it back with an
+        // ARITHMETIC shift so the sign is broadcast.
+        assert_eq!(
+            ops(&[0x41, 0xf3, 0x07, 0x10]),
+            vec![
+                Op::Bin {
+                    dst: VReg::Temp(0),
+                    op: BinOp::Shl,
+                    lhs: Value::Reg(VReg::phys("r1")),
+                    rhs: Value::Const(20),
+                },
+                Op::Bin {
+                    dst: VReg::phys("r0"),
+                    op: BinOp::Sar,
+                    lhs: Value::Reg(VReg::Temp(0)),
+                    rhs: Value::Const(24),
+                },
+            ]
+        );
+    }
+
+    /// `uxtab Rd, Rn, Rm` is `Rn + (Rm & 0xff)`, with the narrowing explicit so
+    /// type recovery can see the byte.
+    #[test]
+    fn extend_and_add_narrows_before_it_adds() {
+        assert_eq!(
+            ops(&[0x51, 0xfa, 0x82, 0xf0]),
+            vec![
+                Op::ZExt {
+                    dst: VReg::Temp(0),
+                    src: Value::Reg(VReg::phys("r2")),
+                    from: Width::W8,
+                    to: Width::W32,
+                },
+                Op::Bin {
+                    dst: VReg::phys("r0"),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("r1")),
+                    rhs: Value::Reg(VReg::Temp(0)),
+                },
+            ]
+        );
+    }
+
+    /// `bic`/`bics` are AND-**NOT**, and the `S` form reports whether that
+    /// result is zero. The flag write was previously dropped: this arm returned
+    /// before `flags_for_arith` was ever consulted, so the `S` suffix was
+    /// recognised and then discarded exactly as `subs` once was.
+    #[test]
+    fn bics_is_and_not_and_writes_its_result_flags() {
+        // bic.w r0, r1, r2 = ea21 0002 — no flags.
+        let plain = ops(&[0x21, 0xea, 0x02, 0x00]);
+        assert!(
+            !plain.iter().any(|o| matches!(o, Op::Cmp { .. })),
+            "bic fabricated flags: {plain:#?}"
+        );
+        // bics.w r0, r1, r2 = ea31 0002 — AND-NOT plus zero/sign of the result.
+        let flagged = ops(&[0x31, 0xea, 0x02, 0x00]);
+        assert!(
+            flagged
+                .iter()
+                .any(|o| matches!(o, Op::Un { op: UnOp::Not, .. }))
+                && flagged
+                    .iter()
+                    .any(|o| matches!(o, Op::Bin { op: BinOp::And, .. })),
+            "bics is not AND-NOT: {flagged:#?}"
+        );
+        let zero = flagged
+            .iter()
+            .position(|o| {
+                matches!(
+                    o,
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_else(|| panic!("bics wrote no zero flag: {flagged:#?}"));
+        let and = flagged
+            .iter()
+            .position(|o| matches!(o, Op::Bin { op: BinOp::And, .. }))
+            .unwrap();
+        assert!(and < zero, "the flag must follow the result: {flagged:#?}");
+        assert_eq!(
+            flagged[zero],
+            Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(VReg::phys("r0")),
+                rhs: Value::Const(0),
+            }
+        );
+    }
+
+    /// The non-`S` form must NOT invent flags — claiming a flag the CPU did not
+    /// write is worse than claiming none, because a branch will render it.
+    #[test]
+    fn plain_arithmetic_writes_no_flags() {
+        // sub r0, r1, r2 = 0xe0410002
+        let out = lift_bytes(&0xe0410002u32.to_le_bytes(), 0x1000, false);
+        assert!(
+            !out.iter().any(|i| matches!(&i.op, Op::Cmp { .. })),
+            "plain sub fabricated condition flags"
+        );
     }
 }

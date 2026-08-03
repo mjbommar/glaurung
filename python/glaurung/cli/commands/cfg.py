@@ -1,6 +1,7 @@
 """Control Flow Graph command implementation."""
 
 import argparse
+import sys
 from typing import List, Optional
 
 import glaurung as g
@@ -57,7 +58,16 @@ class CFGCommand(BaseCommand):
             "--timeout-ms",
             type=int,
             default=None,
-            help="Analysis timeout in milliseconds",
+            help="Per-function CFG walk timeout in milliseconds (restarts for "
+            "every function; see --total-timeout-ms to bound the whole run)",
+        )
+        parser.add_argument(
+            "--total-timeout-ms",
+            type=int,
+            default=None,
+            help="Wall clock for the WHOLE analysis in milliseconds; 0 means no "
+            "ceiling. Exceeding it truncates discovery and says so on stderr "
+            "rather than running unbounded",
         )
         parser.add_argument(
             "--dot",
@@ -95,6 +105,7 @@ class CFGCommand(BaseCommand):
                 max_blocks=args.max_blocks,
                 max_instructions=args.max_instructions,
                 timeout_ms=args.timeout_ms,
+                total_timeout_ms=args.total_timeout_ms,
             )
         except Exception as e:
             formatter.output_plain(f"Error loading analysis config: {e}")
@@ -102,7 +113,7 @@ class CFGCommand(BaseCommand):
 
         # Perform CFG analysis
         try:
-            funcs, callgraph = g.analysis.analyze_functions_path(
+            funcs, callgraph, stats = g.analysis.analyze_functions_path_with_stats(
                 str(path),
                 config.max_read_bytes,
                 config.max_file_size,
@@ -110,10 +121,31 @@ class CFGCommand(BaseCommand):
                 config.max_blocks,
                 config.max_instructions,
                 config.timeout_ms,
+                config.total_timeout_ms,
             )
+        except KeyboardInterrupt:
+            # The analysis is now interruptible (the Rust side polls a
+            # cancellation flag the binding sets from `Python::check_signals`).
+            # Say so rather than dumping a traceback from inside the extension.
+            print("Interrupted by user", file=sys.stderr)
+            return 130
         except Exception as e:
             formatter.output_plain(f"Error during analysis: {e}")
             return 3
+
+        # A whole-analysis timeout stops SEED DISCOVERY, so the function list
+        # below is short by an unknown amount. Reporting it is the whole point of
+        # having a budget: a truncated answer that looks like a complete one is
+        # worse than an unbounded run.
+        if stats.get("hit_total_timeout"):
+            print(
+                f"WARNING: analysis budget exceeded "
+                f"({config.total_timeout_ms} ms, used {stats.get('elapsed_ms')} ms) "
+                f"- discovery was TRUNCATED with {stats.get('seeds_remaining', 0)} "
+                f"seed(s) never analysed; {len(funcs)} function(s) below are a "
+                f"partial result. Raise --total-timeout-ms (0 = no ceiling).",
+                file=sys.stderr,
+            )
 
         # If annotation requested, build and emit it directly
         if args.annotate or args.annotate_json:
@@ -168,7 +200,11 @@ class CFGCommand(BaseCommand):
                 "max_blocks": config.max_blocks,
                 "max_instructions": config.max_instructions,
                 "timeout_ms": config.timeout_ms,
+                "total_timeout_ms": config.total_timeout_ms,
             },
+            "truncated": bool(stats.get("truncated")),
+            "hit_total_timeout": bool(stats.get("hit_total_timeout")),
+            "elapsed_ms": stats.get("elapsed_ms"),
         }
 
         # Convert functions to dict format

@@ -447,9 +447,7 @@ def test_real_arm_hard_float_call_round_trip(tmp_path: Path) -> None:
         "}\n"
     )
     rebuilt_source = tmp_path / "hard_float_call_rebuilt.c"
-    rebuilt_source.write_text(
-        "float arm_hf_callee(float, float);\n" + generated
-    )
+    rebuilt_source.write_text("float arm_hf_callee(float, float);\n" + generated)
     reference = tmp_path / "hard_float_call_reference"
     rebuilt = tmp_path / "hard_float_call_rebuilt"
     compile_inputs = (
@@ -656,10 +654,9 @@ def test_real_arm_mixed_hard_float_spills_preserve_source_parameter_order(
         timeout_ms=8000,
     )
 
-    assert (
-        "float arm_mixed_storage(int arg0, float arg1, int arg2)"
-        in generated
-    ), generated
+    assert "float arm_mixed_storage(int arg0, float arg1, int arg2)" in generated, (
+        generated
+    )
     assert "asm:" not in generated, generated
 
     driver = tmp_path / "mixed_driver.c"
@@ -926,6 +923,116 @@ def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> Non
     assert "unsigned int arg1" in scalar_signature, scalar_text
     assert "* arg0" not in scalar_signature, scalar_text
     assert "* arg1" not in scalar_signature, scalar_text
+
+
+def test_real_stripped_arm64_loop_does_not_invent_trailing_parameters(
+    tmp_path: Path,
+) -> None:
+    """A call's ABI may-use must not reach the arity through a phi copy.
+
+    ``abi::annotate_calls`` hangs the whole AAPCS64 argument list on every call
+    so liveness and DCE stay sound. In a loop that calls a three-argument
+    function and later uses ``w3`` as a scratch register, that may-use is enough
+    to keep the loop header's ``x3`` phi alive; value numbering then materialises
+    it as ``x3#1 = x3`` in the entry block, and a first-touch arity scan reads
+    that SSA plumbing as a fourth incoming argument.
+
+    This is the shape of ``main`` in a stripped distro ``getconf``/``iconv``,
+    reduced to one translation unit: ``next_option`` takes three arguments (so
+    the header never writes ``x3``), and the post-loop block loads four globals,
+    which is enough register pressure for GCC to pick ``w3``.
+    """
+    compiler = shutil.which("aarch64-linux-gnu-gcc")
+    strip = shutil.which("aarch64-linux-gnu-strip")
+    if compiler is None or strip is None:
+        pytest.skip("aarch64-linux-gnu toolchain is unavailable")
+
+    source = tmp_path / "arm64_option_loop.c"
+    binary = tmp_path / "arm64_option_loop.elf"
+    source.write_text(
+        "#include <stdio.h>\n"
+        "int flag_a, flag_b, flag_c, flag_d;\n"
+        "__attribute__((noipa)) int next_option(\n"
+        "    int argc, char **argv, const char *opts) {\n"
+        "    return argc > 1 && argv != 0 ? opts[0] : -1;\n"
+        "}\n"
+        "__attribute__((noipa)) void mark(int a, int b, int c) {\n"
+        '    printf("%d %d %d\\n", a, b, c);\n'
+        "    flag_b = 0;\n"
+        "}\n"
+        "__attribute__((noinline)) int scan_arguments(int argc, char **argv) {\n"
+        "    for (;;) {\n"
+        '        int c = next_option(argc, argv, "abc");\n'
+        "        if (c == -1) {\n"
+        "            int a = flag_a, b = flag_b, d = flag_c, e = flag_d;\n"
+        "            if (a != 0 && b != 0 && d != 0 && e != 0) {\n"
+        "                mark(a + e, b, d);\n"
+        "                continue;\n"
+        "            }\n"
+        "            return a + b + d + e;\n"
+        "        }\n"
+        "        if (c == 'a') {\n"
+        "            flag_a = 1;\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+        "int main(int argc, char **argv) { return scan_arguments(argc, argv); }\n"
+    )
+    built = subprocess.run(
+        [compiler, "-O2", "-g", "-o", str(binary), str(source)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=64)
+    target = next(
+        (function for function in functions if function.name == "scan_arguments"),
+        None,
+    )
+    assert target is not None, [function.name for function in functions]
+    entry_va = int(target.entry_point.value)
+
+    stripped = tmp_path / "arm64_option_loop.stripped"
+    shutil.copy2(binary, stripped)
+    stripped_result = subprocess.run(
+        [strip, "--strip-all", str(stripped)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert stripped_result.returncode == 0, stripped_result.stderr
+
+    # Non-vacuity: the assertions below only mean something if this build really
+    # did pick an argument register beyond the true arity as a scratch. Register
+    # allocation is the compiler's choice, so check the machine code rather than
+    # trusting that a future GCC keeps making it.
+    import json
+
+    lifted = json.dumps(g.ir.lift_window_at(str(binary), entry_va, 256, 64, "arm64"))
+    assert '"w3"' in lifted or '"x3"' in lifted, (
+        "this GCC did not allocate x3 as a scratch register in scan_arguments, "
+        "so the fixture no longer reproduces the phi-copy shape"
+    )
+
+    results = g.ir.decompile_many(
+        str(stripped),
+        [entry_va],
+        style="decbench",
+        timeout_ms=8000,
+    )
+    assert len(results) == 1
+    _, _, text = results[0]
+    signature = next(line for line in text.splitlines() if f"sub_{entry_va:x}(" in line)
+    parameters = signature.split("(", 1)[1].rsplit(")", 1)[0].split(",")
+    assert len(parameters) == 2, signature
+    # `argc` and `argv` — x2 and x3 are scratch, and the loop's three-argument
+    # callee is what made them look live-in.
+    assert "arg0" in parameters[0], signature
+    assert "arg1" in parameters[1], signature
+    assert "arg2" not in signature, signature
+    assert "arg3" not in signature, signature
 
 
 @pytest.mark.skipif(not ARM32_SAMPLE.exists(), reason="armhf sample missing")

@@ -32,6 +32,25 @@ pub struct VtableEntry {
     pub target_va: u64,
 }
 
+/// Sections whose contents are relocation targets, not program data.
+///
+/// A lazily-bound ELF stores, in each `.got`/`.got.plt` slot for an imported
+/// function, a back-pointer into that function's own PLT stub — the address the
+/// dynamic linker patches on first call. Read as an array of code pointers this
+/// looks exactly like a vtable: a dense run of executable addresses. It is not
+/// one, and its entries are not function starts. On musl/lld the back-pointers
+/// land six bytes into the stub, so seeding from them produces a "function" per
+/// import at an address that is mid-stub.
+///
+/// PE's `.idata`/import address table is the same shape for the same reason.
+fn is_relocation_table(name: &str) -> bool {
+    matches!(
+        name,
+        ".got" | ".got.plt" | ".plt.got" | ".plt.sec" | ".plt" | ".idata" | ".iat"
+    ) || name.starts_with(".got.")
+        || name.starts_with(".idata$")
+}
+
 /// Scan `data` for vtables. `is_executable_va` should return true for
 /// any VA inside an executable region; the caller already has this
 /// information from `parse_exec_regions`. We pass it as a closure so
@@ -57,15 +76,22 @@ where
     for sec in obj.sections() {
         let kind = sec.kind();
         let sec_name = sec.name().unwrap_or("");
-        // Read-only data, GOT, or relocatable data sections — anywhere a
-        // toolchain could have parked a vtable.
+        if is_relocation_table(sec_name) || sec_name.contains(".gcc_except_table") {
+            continue;
+        }
+        // Read-only data or relocatable data sections — anywhere a toolchain
+        // could have parked a vtable.
+        //
+        // This used to end in `|| sec_name.contains(".gcc_except_table") == false`,
+        // which is true for every section that is *not* the EH table, so the
+        // whole disjunction was true for essentially everything and the filter
+        // did nothing. The exclusion is now a guard above, where it belongs.
         let interesting = matches!(
             kind,
             SectionKind::ReadOnlyData | SectionKind::ReadOnlyDataWithRel | SectionKind::Data
         ) || sec_name.starts_with(".rodata")
             || sec_name.starts_with(".data.rel")
-            || sec_name.contains("vtable")
-            || sec_name.contains(".gcc_except_table") == false; // exclude EH
+            || sec_name.contains("vtable");
         if !interesting {
             continue;
         }
@@ -117,6 +143,81 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The GOT is not a vtable, and its pre-relocation contents are not
+    /// function entry points.
+    ///
+    /// On a lazily-bound ELF every `.got` slot for an imported function holds a
+    /// back-pointer into its own PLT stub, so a scanner that reads `.got` as an
+    /// array of code pointers "discovers" one function per import at an address
+    /// that is not a function start. On musl/lld those back-pointers land six
+    /// bytes into the stub — at `push $index`, mid-instruction-sequence — and
+    /// on a stripped `getent` that produced 64 phantom functions and zero real
+    /// ones: every entry `glaurung cfg` reported was one of these.
+    ///
+    /// The fixture is glibc/BFD, where the back-pointers land on `.plt` entry
+    /// starts and so look superficially plausible; the section they came from
+    /// is what makes them wrong either way.
+    #[test]
+    fn got_slots_are_not_reported_as_vtables() {
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples")
+            .join("containers")
+            .join("hello-cpp-g++-O0");
+        if !path.exists() {
+            eprintln!(
+                "skipping GOT/vtable fixture test: {} absent",
+                path.display()
+            );
+            return;
+        }
+        let data = std::fs::read(&path).expect("read hello-cpp-g++-O0");
+
+        let obj = object::read::File::parse(&*data).expect("parse ELF");
+        let exec: Vec<(u64, u64)> = obj
+            .sections()
+            .filter(|s| s.kind() == SectionKind::Text)
+            .map(|s| (s.address(), s.address() + s.size()))
+            .collect();
+        let is_exec = |va: u64| exec.iter().any(|(lo, hi)| va >= *lo && va < *hi);
+
+        // Address ranges of every pointer-table section that holds relocation
+        // targets rather than user data.
+        let reloc_tables: Vec<(u64, u64, String)> = obj
+            .sections()
+            .filter_map(|s| {
+                let name = s.name().ok()?.to_string();
+                (name == ".got" || name == ".got.plt" || name == ".plt.got")
+                    .then(|| (s.address(), s.address() + s.size(), name))
+            })
+            .collect();
+        assert!(
+            !reloc_tables.is_empty(),
+            "fixture has no .got — it cannot exercise this regression"
+        );
+
+        let entries = discover_vtables(&data, is_exec);
+        let mut offenders: Vec<String> = Vec::new();
+        for e in &entries {
+            for (lo, hi, name) in &reloc_tables {
+                if e.source_va >= *lo && e.source_va < *hi {
+                    offenders.push(format!(
+                        "{name}+{:#x} -> {:#x}",
+                        e.source_va - *lo,
+                        e.target_va
+                    ));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "{} vtable entries were read out of relocation tables: {:?}",
+            offenders.len(),
+            &offenders[..offenders.len().min(6)]
+        );
+    }
 
     /// Synthesize a tiny "binary": a u64 array of 4 code-pointers, all
     /// pointing into a fake `.text` region we declare executable.

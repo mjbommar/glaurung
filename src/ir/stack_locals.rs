@@ -71,6 +71,12 @@ struct SlotVal {
 struct StackContext {
     cc: Option<CallConv>,
     rbp_repurposed: bool,
+    /// Whether the body establishes an x86 frame pointer (`mov %rsp, %rbp`).
+    /// When it does, the function has TWO frame anchors — `rbp` and the entry
+    /// stack pointer — separated by a constant, so `rbp-0x8` and
+    /// `entry_rsp-0x8` are different storage that would want the same
+    /// offset-bearing name.
+    frame_pointer_established: bool,
     /// Exact source-level arity when debug/prototype evidence locks it.
     /// Candidate stack arguments at or beyond this bound are frame storage,
     /// never additional parameters invented from a recovered displacement.
@@ -99,6 +105,25 @@ fn rbp_is_repurposed(body: &[Stmt], cc: Option<CallConv>) -> bool {
     ) {
         return false;
     }
+    frame_pointer_assignment(body).is_some_and(|establishes| !establishes)
+}
+
+/// Whether the body establishes an x86 frame pointer.
+///
+/// This is NOT `!rbp_is_repurposed`: a function that never writes `rbp` at all
+/// (the ordinary frame-pointer-omitted `-O2` shape) repurposes nothing and
+/// establishes nothing.
+fn frame_pointer_is_established(body: &[Stmt], cc: Option<CallConv>) -> bool {
+    matches!(
+        cc,
+        Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32)
+    ) && frame_pointer_assignment(body) == Some(true)
+}
+
+/// `Some(true)` when the first assignment to x86's nominal frame register comes
+/// from the stack pointer, `Some(false)` when it comes from anything else, and
+/// `None` when the register is never assigned.
+fn frame_pointer_assignment(body: &[Stmt]) -> Option<bool> {
     for statement in body {
         let Stmt::Assign {
             dst: VReg::Phys(dst),
@@ -110,13 +135,13 @@ fn rbp_is_repurposed(body: &[Stmt], cc: Option<CallConv>) -> bool {
         if !matches!(crate::ir::abi::ssa_base(dst), "rbp" | "ebp" | "bp") {
             continue;
         }
-        return !matches!(
+        return Some(matches!(
             src,
             Expr::Reg(VReg::Phys(stack))
                 if matches!(crate::ir::abi::ssa_base(stack), "rsp" | "esp" | "sp")
-        );
+        ));
     }
-    false
+    None
 }
 
 /// Rewrite stack-relative memory accesses to named locals.
@@ -156,11 +181,11 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
     object_hints: &[StackObjectHint],
 ) -> HashMap<String, u8> {
     let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
-    let mut stack_counter = 0usize;
-    let mut local_counter = 0usize;
+    let mut names = SlotNames::default();
     let ctx = StackContext {
         cc,
         rbp_repurposed: rbp_is_repurposed(&f.body, cc),
+        frame_pointer_established: frame_pointer_is_established(&f.body, cc),
         parameter_count,
     };
     for hint in object_hints {
@@ -171,13 +196,7 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
             base: hint.base.clone(),
             disp: hint.disp,
         };
-        let name = alloc_name(
-            &hint.base,
-            hint.disp,
-            &mut stack_counter,
-            &mut local_counter,
-            ctx,
-        );
+        let name = alloc_name(&hint.base, hint.disp, &mut names, ctx);
         map.entry(key)
             .and_modify(|slot| {
                 slot.object_size = Some(slot.object_size.unwrap_or(0).max(hint.size));
@@ -194,8 +213,7 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
     seed_indexed_stack_objects(
         &f.body,
         &mut map,
-        &mut stack_counter,
-        &mut local_counter,
+        &mut names,
         ctx,
         &address_defs,
         &label_deltas,
@@ -204,8 +222,7 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
     rewrite_body(
         &mut f.body,
         &mut map,
-        &mut stack_counter,
-        &mut local_counter,
+        &mut names,
         ctx,
         &mut sp_delta,
         &address_defs,
@@ -495,8 +512,7 @@ fn collect_label_stack_deltas(
 fn seed_indexed_stack_objects(
     body: &[Stmt],
     map: &mut HashMap<SlotKey, SlotVal>,
-    stack_counter: &mut usize,
-    local_counter: &mut usize,
+    names: &mut SlotNames,
     ctx: StackContext,
     address_defs: &HashMap<VReg, (String, i64)>,
     label_deltas: &HashMap<u64, Option<i64>>,
@@ -773,7 +789,7 @@ fn seed_indexed_stack_objects(
             base: base.clone(),
             disp: *start,
         };
-        let name = alloc_name(base, *start, stack_counter, local_counter, ctx);
+        let name = alloc_name(base, *start, names, ctx);
         map.insert(
             key,
             SlotVal {
@@ -789,8 +805,7 @@ fn seed_indexed_stack_objects(
 fn rewrite_body(
     body: &mut [Stmt],
     map: &mut HashMap<SlotKey, SlotVal>,
-    stack_counter: &mut usize,
-    local_counter: &mut usize,
+    names: &mut SlotNames,
     ctx: StackContext,
     sp_delta: &mut Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
@@ -799,27 +814,11 @@ fn rewrite_body(
     for s in body.iter_mut() {
         match s {
             Stmt::IndirectGoto { target } => {
-                rewrite_expr(
-                    target,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                rewrite_expr(target, map, names, ctx, *sp_delta, address_defs);
                 *sp_delta = None;
             }
             Stmt::Assign { dst, src } => {
-                rewrite_expr(
-                    src,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                rewrite_expr(src, map, names, ctx, *sp_delta, address_defs);
                 if !is_stack_pointer_reg(dst, ctx) {
                     if let Some(object_addr) =
                         stack_assignment_object_address(src, map, *sp_delta, ctx, address_defs)
@@ -833,84 +832,40 @@ fn rewrite_body(
                 }
             }
             Stmt::Store { addr, src, size } => {
+                // Whether this store addressed MEMORY before promotion. A store
+                // whose address is already a bare register is a pointer write
+                // (`*p = v`) and must never be mistaken for a slot assignment —
+                // see `argument_slot_assignment`.
+                let addressed_memory = matches!(addr, Expr::Lea { .. });
                 // Store's addr is an Lea — we need to rewrite the Lea itself
                 // into a Reg reference when the lea points to a stack slot.
-                try_promote_lea_to_local(
-                    addr,
-                    *size,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
-                rewrite_expr(
-                    src,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                try_promote_lea_to_local(addr, *size, map, names, ctx, *sp_delta, address_defs);
+                rewrite_expr(src, map, names, ctx, *sp_delta, address_defs);
                 // A by-reference closure capture stores a frame address into a
                 // field before the closure is called. This escape is every bit
                 // as strong as passing the address directly to a callee: the
                 // pointee must retain storage identity instead of rendering as
                 // arithmetic on an uninitialised frame register.
-                promote_address_taken_stack_object(
-                    src,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                promote_address_taken_stack_object(src, map, names, ctx, *sp_delta, address_defs);
+                if addressed_memory {
+                    if let Some(parameter) = argument_slot_assignment(addr, *size, ctx) {
+                        *s = Stmt::Assign {
+                            dst: parameter,
+                            src: src.clone(),
+                        };
+                    }
+                }
             }
             Stmt::Call { target, args, .. } => {
-                rewrite_expr(
-                    target,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                rewrite_expr(target, map, names, ctx, *sp_delta, address_defs);
                 for a in args {
-                    rewrite_expr(
-                        a,
-                        map,
-                        stack_counter,
-                        local_counter,
-                        ctx,
-                        *sp_delta,
-                        address_defs,
-                    );
-                    promote_address_taken_stack_object(
-                        a,
-                        map,
-                        stack_counter,
-                        local_counter,
-                        ctx,
-                        *sp_delta,
-                        address_defs,
-                    );
+                    rewrite_expr(a, map, names, ctx, *sp_delta, address_defs);
+                    promote_address_taken_stack_object(a, map, names, ctx, *sp_delta, address_defs);
                 }
             }
             Stmt::Return { value } => {
                 if let Some(e) = value {
-                    rewrite_expr(
-                        e,
-                        map,
-                        stack_counter,
-                        local_counter,
-                        ctx,
-                        *sp_delta,
-                        address_defs,
-                    );
+                    rewrite_expr(e, map, names, ctx, *sp_delta, address_defs);
                 }
                 *sp_delta = None;
             }
@@ -919,22 +874,13 @@ fn rewrite_body(
                 then_body,
                 else_body,
             } => {
-                rewrite_expr(
-                    cond,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                rewrite_expr(cond, map, names, ctx, *sp_delta, address_defs);
                 let incoming = *sp_delta;
                 let mut then_delta = incoming;
                 rewrite_body(
                     then_body,
                     map,
-                    stack_counter,
-                    local_counter,
+                    names,
                     ctx,
                     &mut then_delta,
                     address_defs,
@@ -945,8 +891,7 @@ fn rewrite_body(
                     rewrite_body(
                         eb,
                         map,
-                        stack_counter,
-                        local_counter,
+                        names,
                         ctx,
                         &mut else_delta,
                         address_defs,
@@ -963,22 +908,13 @@ fn rewrite_body(
                 };
             }
             Stmt::While { cond, body } => {
-                rewrite_expr(
-                    cond,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                rewrite_expr(cond, map, names, ctx, *sp_delta, address_defs);
                 let incoming = *sp_delta;
                 let mut body_delta = incoming;
                 rewrite_body(
                     body,
                     map,
-                    stack_counter,
-                    local_counter,
+                    names,
                     ctx,
                     &mut body_delta,
                     address_defs,
@@ -995,29 +931,19 @@ fn rewrite_body(
                 rewrite_body(
                     std::slice::from_mut(init.as_mut()),
                     map,
-                    stack_counter,
-                    local_counter,
+                    names,
                     ctx,
                     sp_delta,
                     address_defs,
                     label_deltas,
                 );
-                rewrite_expr(
-                    cond,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                rewrite_expr(cond, map, names, ctx, *sp_delta, address_defs);
                 let loop_entry = *sp_delta;
                 let mut body_delta = loop_entry;
                 rewrite_body(
                     body,
                     map,
-                    stack_counter,
-                    local_counter,
+                    names,
                     ctx,
                     &mut body_delta,
                     address_defs,
@@ -1026,8 +952,7 @@ fn rewrite_body(
                 rewrite_body(
                     std::slice::from_mut(step.as_mut()),
                     map,
-                    stack_counter,
-                    local_counter,
+                    names,
                     ctx,
                     &mut body_delta,
                     address_defs,
@@ -1041,34 +966,17 @@ fn rewrite_body(
                 rewrite_body(
                     body,
                     map,
-                    stack_counter,
-                    local_counter,
+                    names,
                     ctx,
                     &mut body_delta,
                     address_defs,
                     label_deltas,
                 );
-                rewrite_expr(
-                    cond,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    body_delta,
-                    address_defs,
-                );
+                rewrite_expr(cond, map, names, ctx, body_delta, address_defs);
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
             }
             Stmt::Push { value } => {
-                rewrite_expr(
-                    value,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                rewrite_expr(value, map, names, ctx, *sp_delta, address_defs);
                 *sp_delta = sp_delta.map(|delta| delta - stack_word_size(ctx));
             }
             Stmt::Switch {
@@ -1076,15 +984,7 @@ fn rewrite_body(
                 cases,
                 default,
             } => {
-                rewrite_expr(
-                    discriminant,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    *sp_delta,
-                    address_defs,
-                );
+                rewrite_expr(discriminant, map, names, ctx, *sp_delta, address_defs);
                 let incoming = *sp_delta;
                 let mut merged: Option<Option<i64>> = None;
                 for (_, body) in cases.iter_mut() {
@@ -1092,8 +992,7 @@ fn rewrite_body(
                     rewrite_body(
                         body,
                         map,
-                        stack_counter,
-                        local_counter,
+                        names,
                         ctx,
                         &mut case_delta,
                         address_defs,
@@ -1109,8 +1008,7 @@ fn rewrite_body(
                     rewrite_body(
                         b,
                         map,
-                        stack_counter,
-                        local_counter,
+                        names,
                         ctx,
                         &mut default_delta,
                         address_defs,
@@ -1224,8 +1122,7 @@ fn body_falls_through(body: &[Stmt]) -> bool {
 fn rewrite_expr(
     e: &mut Expr,
     map: &mut HashMap<SlotKey, SlotVal>,
-    stack_counter: &mut usize,
-    local_counter: &mut usize,
+    names: &mut SlotNames,
     ctx: StackContext,
     sp_delta: Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
@@ -1233,15 +1130,7 @@ fn rewrite_expr(
     match e {
         Expr::Deref { addr, size } => {
             let size_val = *size;
-            rewrite_expr(
-                addr,
-                map,
-                stack_counter,
-                local_counter,
-                ctx,
-                sp_delta,
-                address_defs,
-            );
+            rewrite_expr(addr, map, names, ctx, sp_delta, address_defs);
             if let Some(object_addr) =
                 stack_object_address(addr.as_ref(), size_val, map, sp_delta, ctx, address_defs)
             {
@@ -1301,7 +1190,7 @@ fn rewrite_expr(
                         return;
                     }
                 }
-                let alias = alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx);
+                let alias = alloc_name(&key_base, key_disp, names, ctx);
                 map.insert(
                     key,
                     SlotVal {
@@ -1316,24 +1205,8 @@ fn rewrite_expr(
             }
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            rewrite_expr(
-                lhs,
-                map,
-                stack_counter,
-                local_counter,
-                ctx,
-                sp_delta,
-                address_defs,
-            );
-            rewrite_expr(
-                rhs,
-                map,
-                stack_counter,
-                local_counter,
-                ctx,
-                sp_delta,
-                address_defs,
-            );
+            rewrite_expr(lhs, map, names, ctx, sp_delta, address_defs);
+            rewrite_expr(rhs, map, names, ctx, sp_delta, address_defs);
         }
         Expr::Select {
             cond,
@@ -1341,72 +1214,18 @@ fn rewrite_expr(
             if_false,
             ..
         } => {
-            rewrite_expr(
-                cond,
-                map,
-                stack_counter,
-                local_counter,
-                ctx,
-                sp_delta,
-                address_defs,
-            );
-            rewrite_expr(
-                if_true,
-                map,
-                stack_counter,
-                local_counter,
-                ctx,
-                sp_delta,
-                address_defs,
-            );
-            rewrite_expr(
-                if_false,
-                map,
-                stack_counter,
-                local_counter,
-                ctx,
-                sp_delta,
-                address_defs,
-            );
+            rewrite_expr(cond, map, names, ctx, sp_delta, address_defs);
+            rewrite_expr(if_true, map, names, ctx, sp_delta, address_defs);
+            rewrite_expr(if_false, map, names, ctx, sp_delta, address_defs);
         }
-        Expr::Un { src, .. } => rewrite_expr(
-            src,
-            map,
-            stack_counter,
-            local_counter,
-            ctx,
-            sp_delta,
-            address_defs,
-        ),
-        Expr::Cast { expr, .. } => rewrite_expr(
-            expr,
-            map,
-            stack_counter,
-            local_counter,
-            ctx,
-            sp_delta,
-            address_defs,
-        ),
-        Expr::FunctionTableEntry { index, .. } => rewrite_expr(
-            index,
-            map,
-            stack_counter,
-            local_counter,
-            ctx,
-            sp_delta,
-            address_defs,
-        ),
+        Expr::Un { src, .. } => rewrite_expr(src, map, names, ctx, sp_delta, address_defs),
+        Expr::Cast { expr, .. } => rewrite_expr(expr, map, names, ctx, sp_delta, address_defs),
+        Expr::FunctionTableEntry { index, .. } => {
+            rewrite_expr(index, map, names, ctx, sp_delta, address_defs)
+        }
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
-                rewrite_expr(
-                    argument,
-                    map,
-                    stack_counter,
-                    local_counter,
-                    ctx,
-                    sp_delta,
-                    address_defs,
-                );
+                rewrite_expr(argument, map, names, ctx, sp_delta, address_defs);
             }
         }
         Expr::Reg(_)
@@ -1640,8 +1459,7 @@ fn reconcile_late_address_taken_objects(body: &mut [Stmt], map: &HashMap<SlotKey
 fn promote_address_taken_stack_object(
     expr: &mut Expr,
     map: &mut HashMap<SlotKey, SlotVal>,
-    stack_counter: &mut usize,
-    local_counter: &mut usize,
+    names: &mut SlotNames,
     ctx: StackContext,
     sp_delta: Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
@@ -1688,7 +1506,7 @@ fn promote_address_taken_stack_object(
         Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64) | None => 8,
     };
     let entry = map.entry(key).or_insert_with(|| SlotVal {
-        name: alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx),
+        name: alloc_name(&key_base, key_disp, names, ctx),
         declared_size: pointer_size,
         span_size: pointer_size,
         object_size: None,
@@ -2295,12 +2113,39 @@ fn extract_little_endian_subvalue(parent: String, byte_offset: u8, size: u8) -> 
 }
 
 /// Store-address Lea: turn the full `&[base+disp]` into a `Reg(local)`.
+/// The parameter a just-promoted store address names, when the store writes an
+/// incoming argument's HOME SLOT.
+///
+/// A write to that slot is an assignment to the parameter, not a store through
+/// it. On SysV AMD64 and AArch64 the first several arguments arrive in
+/// registers, so the shape barely occurs; cdecl32 passes EVERY argument on the
+/// stack, so a plain `x = f(x);` on a parameter compiles to exactly this store.
+/// Left as a store it rendered `*(int *)(arg2) = v` — a dereference of the
+/// parameter's VALUE, which faults on a scalar parameter and silently corrupts
+/// memory through a pointer one.
+///
+/// Two guards keep this exact rather than approximate:
+///
+/// * the caller only asks when the address was an `Expr::Lea` before promotion,
+///   so a genuine `*p = v` (whose address is already a register) can never
+///   arrive here;
+/// * the write must cover the WHOLE slot. A narrower write is a byte-level
+///   effect on the argument's memory that a scalar assignment cannot express,
+///   and keeps its store form.
+fn argument_slot_assignment(addr: &Expr, size: u8, ctx: StackContext) -> Option<VReg> {
+    let Expr::Reg(register @ VReg::Phys(name)) = addr else {
+        return None;
+    };
+    crate::ir::ast::parse_arg_index(name)?;
+    let (_reg_args, _first, stride) = ctx.cc.and_then(stack_arg_layout)?;
+    (i64::from(size) == stride).then(|| register.clone())
+}
+
 fn try_promote_lea_to_local(
     addr: &mut Expr,
     size: u8,
     map: &mut HashMap<SlotKey, SlotVal>,
-    stack_counter: &mut usize,
-    local_counter: &mut usize,
+    names: &mut SlotNames,
     ctx: StackContext,
     sp_delta: Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
@@ -2319,7 +2164,7 @@ fn try_promote_lea_to_local(
         disp: key_disp,
     };
     let entry = map.entry(key).or_insert_with(|| SlotVal {
-        name: alloc_name(&key_base, key_disp, stack_counter, local_counter, ctx),
+        name: alloc_name(&key_base, key_disp, names, ctx),
         declared_size: size,
         span_size: size,
         object_size: None,
@@ -2339,31 +2184,113 @@ fn normalized_stack_slot(
     sp_delta: Option<i64>,
     ctx: StackContext,
 ) -> (String, i64) {
-    if base == "rsp" || (base == "esp" && ctx.cc == Some(CallConv::Cdecl32)) {
+    // `sp` is normalised unconditionally for ARM32, whose whole frame model this
+    // already describes. AArch64 was deliberately excluded: `resolve_stack_address`
+    // gives it an `entry_sp` identity through a different path, and unifying them
+    // here moves a lane that is already 82% correct.
+    //
+    // That exclusion is kept for the callee's OWN frame and lifted only at or
+    // above the entry stack pointer, which is the caller's territory and the only
+    // place an AAPCS64 stacked argument can live. A frame-pointer-omitted
+    // `ldr w9, [sp]` is exactly how `sum_arg9`/`sum_arg10` read their ninth and
+    // tenth arguments, and without the entry-relative spelling those promoted to
+    // an undefined `stack_top`.
+    //
+    // The `disp + delta >= 0` bound is not cosmetic and was not reasoned into
+    // existence: normalising AArch64's negative (own-frame) offsets too renamed
+    // `24_merge_sort:aarch64:O2:merge_sort_i32`'s locals, split its scratch buffer,
+    // and turned a passing execution differential into a failing one. See
+    // `tools/arch_roundtrip.py --check`.
+    let architectural_sp = base == "rsp" || (base == "esp" && ctx.cc == Some(CallConv::Cdecl32));
+    let aapcs_sp = base == "sp"
+        && matches!(
+            ctx.cc,
+            Some(CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64)
+        );
+    if architectural_sp || aapcs_sp {
         if let Some(delta) = sp_delta {
-            return ("entry_rsp".to_string(), disp + delta);
+            let normalized = disp + delta;
+            let own_frame_of_aarch64 = ctx.cc == Some(CallConv::Aarch64) && normalized < 0;
+            if !own_frame_of_aarch64 {
+                return (entry_stack_base(ctx).to_string(), normalized);
+            }
         }
     }
     (base.to_string(), disp)
 }
 
-fn alloc_name(
-    base: &str,
-    disp: i64,
-    stack_counter: &mut usize,
-    local_counter: &mut usize,
-    ctx: StackContext,
-) -> String {
+fn alloc_name(base: &str, disp: i64, names: &mut SlotNames, ctx: StackContext) -> String {
+    // Both AAPCS variants stack the arguments that do not fit in registers
+    // directly at the ENTRY stack pointer. `lr`/`x30` is a register, so unlike
+    // x86 there is no return-address word in front of them; the AArch64
+    // `{fp, lr}` frame record is pushed BELOW entry_sp by the callee's own
+    // prologue and so does not sit in front of them either. That puts the first
+    // stacked argument at `entry_sp+0` — which the `disp == 0` shortcut below
+    // would otherwise name `stack_top`, leaving `sum_arg5`'s fifth argument
+    // (ARM32) and `sum_arg9`'s ninth (AArch64) undefined locals that the
+    // rebuilt C read as garbage.
+    //
+    // ARM32 passes four integer arguments in `r0`-`r3` and stacks the rest in
+    // four-byte slots; AArch64 passes eight in `x0`-`x7` and stacks the rest in
+    // eight-byte slots (AAPCS64 §5.4.2 rounds every stacked argument up to a
+    // doubleword).
+    //
+    // A KNOWN parameter count is required here, not optional as it is for SysV.
+    // `[rbp+16]` on x86-64 sits above a saved frame pointer and a return
+    // address, which is structural evidence the slot belongs to the caller;
+    // `entry_sp+0` has no such anchor, and without the bound an
+    // outgoing-argument slot would be renamed into a parameter that does not
+    // exist.
+    if base == "entry_sp" {
+        let stacked = match ctx.cc {
+            Some(CallConv::Arm | CallConv::ArmHardFloat) => Some((4usize, 4i64)),
+            Some(CallConv::Aarch64) => Some((8usize, 8i64)),
+            _ => None,
+        };
+        if let Some((register_arguments, stride)) = stacked {
+            if disp >= 0 && disp % stride == 0 {
+                let candidate = register_arguments + (disp / stride) as usize;
+                if ctx.parameter_count.is_some_and(|count| candidate < count) {
+                    return format!("arg{candidate}");
+                }
+            }
+        }
+    }
     if disp == 0 {
         return "stack_top".to_string();
     }
-    if (is_frame_pointer(base) || base == "entry_sp") && disp < 0 {
+    // Below the entry stack pointer is the function's own frame, but only when
+    // that pointer is the frame's ONLY anchor. AAPCS keeps the existing
+    // unconditional `entry_sp` behaviour; on x86 a `mov %rsp, %rbp` prologue
+    // makes `rbp` the anchor and `entry_rsp-0x8` the saved-`rbp` slot, so both
+    // would compete for `local_8`.
+    let own_frame_anchor =
+        base == entry_stack_base(ctx) && (base == "entry_sp" || !ctx.frame_pointer_established);
+    if (is_frame_pointer(base) || own_frame_anchor) && disp < 0 {
         // Name frame locals by their offset (`[rbp-0xc]` -> `local_c`), the
         // Ghidra/IDA convention. The offset is genuine recovered information and
         // lets an offset-aware consumer align our locals to the ground truth,
         // rather than an appearance-order counter that carries no such signal.
-        *local_counter += 1; // keep the counter advancing for any legacy callers
-        return format!("local_{:x}", disp.unsigned_abs());
+        //
+        // Below the ENTRY stack pointer is the function's own frame whether or
+        // not it kept a frame pointer, so a frame-pointer-omitted `-O2` build
+        // gets the same offset-bearing names an `-O0` build does. Only
+        // `entry_sp` (AAPCS) used to qualify; `entry_rsp` fell through to the
+        // appearance-order `stack_N` counter, which is why 55 of the 250
+        // sample-set functions — nearly all of them `-O2`/`-O2-noinline` —
+        // published no offset for any of their frame slots.
+        //
+        // The offset alone is not a unique identity: a function that keeps a
+        // frame pointer AND addresses its outgoing-argument area through the
+        // entry stack pointer has two anchors, and `rbp-0x18` is not the same
+        // storage as `entry_rsp-0x18`. Minting one name for both would splice
+        // two variables into one, so a name already taken falls back to the
+        // conservative appearance-order counter.
+        let candidate = format!("local_{:x}", disp.unsigned_abs());
+        if names.taken.insert(candidate.clone()) {
+            names.local_counter += 1; // keep the counter advancing for legacy callers
+            return candidate;
+        }
     }
     // A positive frame-pointer offset at or above the ABI's first stacked-argument
     // slot IS AN INCOMING PARAMETER, not a local. Naming it `stack_N` invents a
@@ -2404,13 +2331,26 @@ fn alloc_name(
             _ => {}
         }
     }
-    // Positive offsets from rsp are outgoing-arg / scratch slots; negative
-    // offsets from rsp are the function's own frame carved out by `sub
-    // rsp, N`. We still use `stack_N` for both — a future pass can decide
-    // to relabel based on the prologue's sub rsp amount.
-    let n = *stack_counter;
-    *stack_counter += 1;
-    format!("stack_{}", n)
+    // Positive offsets from the entry stack pointer are the caller's
+    // outgoing-argument / scratch area, and anything whose offset-bearing name
+    // was already claimed by another anchor lands here too.
+    let n = names.stack_counter;
+    names.stack_counter += 1;
+    let name = format!("stack_{}", n);
+    names.taken.insert(name.clone());
+    name
+}
+
+/// Frame-slot name allocation state for one function.
+///
+/// Names must be unique within a function: they become the promoted variable's
+/// identity, so two distinct slots sharing one name would merge into a single
+/// variable in the rendered C.
+#[derive(Debug, Default)]
+struct SlotNames {
+    stack_counter: usize,
+    local_counter: usize,
+    taken: std::collections::HashSet<String>,
 }
 
 #[cfg(test)]
@@ -2521,6 +2461,135 @@ mod tests {
         assert!(!sizes.keys().any(|name| name.starts_with("arg")));
     }
 
+    /// AAPCS puts arguments 0..3 in `r0`..`r3` and the rest on the caller's
+    /// stack, starting at the ENTRY stack pointer with no return-address word in
+    /// front of them — `lr` is a register on ARM.
+    ///
+    /// A locked parameter count is required, not optional as it is for SysV:
+    /// `[rbp+16]` on x86-64 sits above a saved frame pointer and a return
+    /// address, which is structural evidence that the slot belongs to the
+    /// caller, and ARM32 has no such anchor at `entry_sp+0`.
+    #[test]
+    fn aapcs_stack_arguments_start_at_the_entry_stack_pointer() {
+        for cc in [CallConv::Arm, CallConv::ArmHardFloat] {
+            let mut f = Function {
+                name: "sum_arg7".into(),
+                entry_va: 0,
+                body: vec![
+                    Stmt::Assign {
+                        dst: reg("r0"),
+                        src: deref_of("sp", 0, 4),
+                    },
+                    Stmt::Assign {
+                        dst: reg("r1"),
+                        src: deref_of("sp", 4, 4),
+                    },
+                    Stmt::Assign {
+                        dst: reg("r2"),
+                        src: deref_of("sp", 8, 4),
+                    },
+                ],
+            };
+            promote_stack_locals_typed_with_parameter_count(&mut f, Some(cc), Some(7));
+            let names: Vec<String> = f
+                .body
+                .iter()
+                .map(|s| match s {
+                    Stmt::Assign {
+                        src: Expr::Reg(VReg::Phys(n)),
+                        ..
+                    } => n.clone(),
+                    other => panic!("expected a promoted register, got {other:?}"),
+                })
+                .collect();
+            assert_eq!(names, ["arg4", "arg5", "arg6"], "{cc:?}");
+        }
+    }
+
+    /// AAPCS64 is the same rule with eight register arguments and eight-byte
+    /// stacked slots. This is what `06_calling_conventions:aarch64:sum_arg9`
+    /// and `sum_arg10` read: `ldr w9, [sp]` / `ldr w8, [sp, #8]` in the `-O2`
+    /// build, which used to promote to an undefined `stack_top`.
+    #[test]
+    fn aapcs64_stack_arguments_start_at_the_entry_stack_pointer() {
+        let mut f = Function {
+            name: "sum_arg10".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("x0"),
+                    src: deref_of("sp", 0, 4),
+                },
+                Stmt::Assign {
+                    dst: reg("x1"),
+                    src: deref_of("sp", 8, 4),
+                },
+            ],
+        };
+        promote_stack_locals_typed_with_parameter_count(&mut f, Some(CallConv::Aarch64), Some(10));
+        let names: Vec<String> = f
+            .body
+            .iter()
+            .map(|s| match s {
+                Stmt::Assign {
+                    src: Expr::Reg(VReg::Phys(n)),
+                    ..
+                } => n.clone(),
+                other => panic!("expected a promoted register, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, ["arg8", "arg9"]);
+    }
+
+    /// The bound applies to AAPCS64 too: an eight-argument function reads
+    /// nothing from the caller's frame, so `[sp]` is ordinary stack storage.
+    #[test]
+    fn aapcs64_never_invents_a_stack_argument_beyond_the_prototype() {
+        for count in [None, Some(8)] {
+            let mut f = Function {
+                name: "sum_arg8".into(),
+                entry_va: 0,
+                body: vec![Stmt::Assign {
+                    dst: reg("x0"),
+                    src: deref_of("sp", 0, 8),
+                }],
+            };
+            promote_stack_locals_typed_with_parameter_count(&mut f, Some(CallConv::Aarch64), count);
+            assert!(
+                matches!(&f.body[0], Stmt::Assign {
+                    src: Expr::Reg(VReg::Phys(name)), ..
+                } if !name.starts_with("arg")),
+                "count {count:?} invented a stack argument: {:?}",
+                f.body[0]
+            );
+        }
+    }
+
+    /// The count is the bound: a four-argument AAPCS function reads nothing
+    /// from the caller's frame, so `[sp]` there is ordinary stack storage and
+    /// must NOT become a fifth parameter.
+    #[test]
+    fn aapcs_never_invents_a_stack_argument_beyond_the_prototype() {
+        for count in [None, Some(4)] {
+            let mut f = Function {
+                name: "sum_arg4".into(),
+                entry_va: 0,
+                body: vec![Stmt::Assign {
+                    dst: reg("r0"),
+                    src: deref_of("sp", 0, 4),
+                }],
+            };
+            promote_stack_locals_typed_with_parameter_count(&mut f, Some(CallConv::Arm), count);
+            assert!(
+                matches!(&f.body[0], Stmt::Assign {
+                    src: Expr::Reg(VReg::Phys(name)), ..
+                } if !name.starts_with("arg")),
+                "count {count:?} invented a stack argument: {:?}",
+                f.body[0]
+            );
+        }
+    }
+
     #[test]
     fn cdecl32_arguments_start_at_ebp_plus_eight_in_four_byte_slots() {
         let cc = Some(CallConv::Cdecl32);
@@ -2570,6 +2639,104 @@ mod tests {
         ));
         assert_eq!(sizes.get("arg6"), Some(&4));
         assert_eq!(sizes.get("arg7"), Some(&8));
+    }
+
+    /// `x = step_index(x);` on a cdecl32 `int` parameter compiles to
+    /// `mov %eax,0x8(%ebp)`. That writes the parameter, and rendering it as a
+    /// store through the parameter (`*(int *)(arg0) = ...`) dereferences the
+    /// argument's VALUE — a wild pointer for a scalar.
+    #[test]
+    fn a_full_width_write_to_a_cdecl32_argument_slot_assigns_the_parameter() {
+        let mut f = Function {
+            name: "writes_its_argument".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: lea("rbp", 8),
+                src: Expr::Reg(reg("eax")),
+                size: 4,
+            }],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::Cdecl32));
+
+        assert!(
+            matches!(
+                &f.body[0],
+                Stmt::Assign { dst: VReg::Phys(name), .. } if name == "arg0"
+            ),
+            "expected an assignment to arg0, got {:?}",
+            f.body[0]
+        );
+    }
+
+    /// A byte-wide write into an argument slot changes one byte of it. A scalar
+    /// assignment would clobber the other three, so the store form is kept.
+    #[test]
+    fn a_narrow_write_to_a_cdecl32_argument_slot_stays_a_store() {
+        let mut f = Function {
+            name: "writes_one_byte".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: lea("rbp", 8),
+                src: Expr::Reg(reg("al")),
+                size: 1,
+            }],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::Cdecl32));
+
+        assert!(
+            matches!(&f.body[0], Stmt::Store { .. }),
+            "expected the store to survive, got {:?}",
+            f.body[0]
+        );
+    }
+
+    /// `*p = v` through a pointer parameter is a memory write, not a redefinition
+    /// of `p`. Its address is already a register when this pass sees it, which is
+    /// exactly what distinguishes it from the home-slot case above.
+    #[test]
+    fn a_store_through_a_pointer_argument_is_not_an_argument_assignment() {
+        let store = Stmt::Store {
+            addr: Expr::Reg(reg("arg0")),
+            src: Expr::Reg(reg("eax")),
+            size: 4,
+        };
+        let mut f = Function {
+            name: "writes_through_its_argument".into(),
+            entry_va: 0,
+            body: vec![store.clone()],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::Cdecl32));
+
+        assert_eq!(f.body[0], store);
+    }
+
+    /// The same rule on SysV AMD64, where the shape only arises for a stacked
+    /// argument (index 6 and up) and the slot is eight bytes wide.
+    #[test]
+    fn a_full_width_write_to_a_sysv_stacked_argument_slot_assigns_the_parameter() {
+        let mut f = Function {
+            name: "writes_arg6".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: lea("rbp", 16),
+                src: Expr::Reg(reg("rax")),
+                size: 8,
+            }],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(
+            matches!(
+                &f.body[0],
+                Stmt::Assign { dst: VReg::Phys(name), .. } if name == "arg6"
+            ),
+            "expected an assignment to arg6, got {:?}",
+            f.body[0]
+        );
     }
 
     #[test]
@@ -2678,6 +2845,9 @@ mod tests {
         // Once a function carves out a frame, a positive displacement from the
         // new rsp can be a local or outgoing-call slot. It is not safe to map it
         // to an incoming parameter without normalising the stack delta.
+        // `[rsp+16]` after `sub rsp, 32` normalises to entry_rsp-16, i.e. the
+        // function's own frame, so it takes the offset-bearing local name -- what
+        // this test forbids is an `argN`, not a particular local spelling.
         let mut f = Function {
             name: "has_frame".into(),
             entry_va: 0,
@@ -2704,7 +2874,7 @@ mod tests {
             Stmt::Assign {
                 src: Expr::Reg(VReg::Phys(name)),
                 ..
-            } if name == "stack_0"
+            } if name == "local_10"
         ));
     }
 
@@ -2743,14 +2913,14 @@ mod tests {
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(name)),
                 ..
-            } if name == "stack_0"
+            } if name == "local_18"
         ));
         assert!(matches!(
             &f.body[3],
             Stmt::Assign {
                 src: Expr::Reg(VReg::Phys(name)),
                 ..
-            } if name == "stack_0"
+            } if name == "local_18"
         ));
     }
 
@@ -2951,7 +3121,7 @@ mod tests {
             Stmt::Assign {
                 src: Expr::Reg(VReg::Phys(name)),
                 ..
-            } if name == "stack_0"
+            } if name == "local_18"
         ));
     }
 
@@ -3098,6 +3268,101 @@ mod tests {
         assert_eq!(promoted("rbp", -0xc, cc), "local_c");
         // Below the first stacked-argument slot ([rbp+8] is the return address).
         assert_eq!(promoted("rbp", 8, cc), "stack_0");
+    }
+
+    #[test]
+    fn a_frame_pointer_omitted_frame_slot_is_still_named_by_its_offset() {
+        let cc = Some(CallConv::SysVAmd64);
+        // `-O2` omits the frame pointer, so the function's own slots are
+        // addressed below the ENTRY stack pointer instead of below `rbp`. They
+        // are the same storage class and carry the same recovered offset, so
+        // they get the same offset-bearing name rather than `stack_N`.
+        let mut f = Function {
+            name: "no_frame_pointer".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(0x20)),
+                    },
+                },
+                // [rsp+8] with rsp = entry_rsp-0x20 is entry_rsp-0x18.
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("rsp", 8, 4),
+                },
+            ],
+        };
+        promote_stack_locals_typed(&mut f, cc);
+        assert!(
+            matches!(
+                &f.body[1],
+                Stmt::Assign {
+                    src: Expr::Reg(VReg::Phys(name)),
+                    ..
+                } if name == "local_18"
+            ),
+            "{:?}",
+            f.body[1]
+        );
+        // At or above the entry stack pointer is the caller's territory (return
+        // address, stacked arguments, outgoing-argument scratch) and keeps the
+        // conservative appearance-order name.
+        assert_eq!(promoted("rbp", 8, cc), "stack_0");
+    }
+
+    #[test]
+    fn two_frame_anchors_at_the_same_offset_get_distinct_names() {
+        // `rbp-0x10` and `entry_rsp-0x10` are different storage. Both want the
+        // name `local_10`; only one may have it, or the two slots would be
+        // spliced into a single variable.
+        let mut f = Function {
+            name: "two_anchors".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Push {
+                    value: Expr::Reg(reg("rbp")),
+                },
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("rsp")),
+                },
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(0x30)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("rbp", -0x10, 4),
+                },
+                // rsp is entry_rsp-0x38 here, so [rsp+0x28] is entry_rsp-0x10.
+                Stmt::Assign {
+                    dst: reg("ecx"),
+                    src: deref_of("rsp", 0x28, 4),
+                },
+            ],
+        };
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+        let name_of = |index: usize| match &f.body[index] {
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } => name.clone(),
+            other => panic!("expected a promoted register, got {other:?}"),
+        };
+        let (first, second) = (name_of(3), name_of(4));
+        assert_ne!(first, second, "distinct slots must not share a name");
+        assert!(
+            first == "local_10" || second == "local_10",
+            "one anchor keeps the offset-bearing name: {first} / {second}"
+        );
     }
 
     #[test]

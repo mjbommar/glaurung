@@ -90,6 +90,117 @@ where
     None
 }
 
+/// Decode the inline table of a Thumb-2 `tbb`/`tbh` table branch.
+///
+/// `tbb [Rn, Rm]` and `tbh [Rn, Rm, lsl #1]` load an unsigned byte/halfword from
+/// a table at `Rn`, double it, and add it to `pc`. Compilers always emit them
+/// with `Rn == pc`, which in Thumb state reads as *this instruction's address +
+/// 4* — i.e. the byte immediately after the 4-byte encoding — so the table is
+/// **inline in `.text`**, not in `.rodata`, and its entries are unsigned
+/// halfword-counts forward from the table's own start:
+///
+/// ```text
+/// cmp   r5, #239
+/// bhi.w default
+/// tbh   [pc, r5, lsl #1]     ; table_va = here + 4
+/// .short (case0 - table_va)/2, (case1 - table_va)/2, ...
+/// ```
+///
+/// This is a different encoding from [`decode_bounded_relative_jump_table`] in
+/// every respect that matters — entry width, signedness, scale, and which
+/// section it lives in — so it gets its own decoder rather than a parameter.
+///
+/// `entry_count` must come from the dispatch's own range check. There is no way
+/// to find the end of the table by scanning: past the last entry lie the case
+/// bodies, whose instruction bytes are perfectly good unsigned offsets and
+/// decode to targets that are still executable.
+///
+/// # Soundness check
+///
+/// Entries are unsigned, so every target is at or after `table_va`. A target
+/// that lands *inside the table* is therefore impossible in real code, and a
+/// count that overruns the table produces exactly that: the first over-read
+/// entry is an instruction byte from the arm that follows the table, which is a
+/// small number and resolves back into the table. Requiring every target to be
+/// at or past the table's end is what makes an over-long bound fail closed.
+pub fn decode_thumb_table_branch<F>(
+    data: &[u8],
+    table_va: u64,
+    entry_size: u8,
+    entry_count: usize,
+    is_executable_va: F,
+) -> Option<JumpTable>
+where
+    F: Fn(u64) -> bool,
+{
+    const MAX_ENTRIES: usize = 4096;
+    if !matches!(entry_size, 1 | 2) || entry_count == 0 || entry_count > MAX_ENTRIES {
+        return None;
+    }
+    let byte_count = entry_count.checked_mul(usize::from(entry_size))?;
+
+    let object = object::read::File::parse(data).ok()?;
+    let little_endian = object.is_little_endian();
+    for section in object.sections() {
+        let Some(section_offset) = table_va.checked_sub(section.address()) else {
+            continue;
+        };
+        let Ok(offset) = usize::try_from(section_offset) else {
+            continue;
+        };
+        let Ok(bytes) = section.data() else {
+            continue;
+        };
+        let Some(end) = offset.checked_add(byte_count) else {
+            continue;
+        };
+        let Some(entries) = bytes.get(offset..end) else {
+            continue;
+        };
+        let targets = decode_thumb_table_entries(
+            entries,
+            table_va,
+            entry_size,
+            little_endian,
+            &is_executable_va,
+        )?;
+        return Some(JumpTable { table_va, targets });
+    }
+    None
+}
+
+/// The entry arithmetic of [`decode_thumb_table_branch`], on the exact bytes.
+///
+/// Separated for the same reason `decode_relative_entries` is: the encoding is
+/// testable against real compiler output without standing up an ELF around it.
+fn decode_thumb_table_entries<F>(
+    entries: &[u8],
+    table_va: u64,
+    entry_size: u8,
+    little_endian: bool,
+    is_executable_va: &F,
+) -> Option<Vec<u64>>
+where
+    F: Fn(u64) -> bool,
+{
+    let table_end = table_va.checked_add(entries.len() as u64)?;
+    let mut targets = Vec::with_capacity(entries.len() / usize::from(entry_size));
+    for entry in entries.chunks_exact(usize::from(entry_size)) {
+        let raw = match entry {
+            [byte] => u64::from(*byte),
+            [low, high] if little_endian => u64::from(u16::from_le_bytes([*low, *high])),
+            [high, low] => u64::from(u16::from_be_bytes([*high, *low])),
+            _ => return None,
+        };
+        let target = table_va.checked_add(raw.checked_mul(2)?)?;
+        if target < table_end || !is_executable_va(target) {
+            return None;
+        }
+        targets.push(target);
+    }
+    Some(targets)
+}
+
 fn decode_relative_entries<F>(
     bytes: &[u8],
     table_va: u64,
@@ -325,6 +436,81 @@ mod tests {
         })
         .expect("the dispatch-proven extent must recover the second table");
         assert_eq!(decoded, second_targets);
+    }
+
+    /// `08_indirect_dispatch.c:dispatch_switch`, built by
+    /// `arm-linux-gnueabihf-gcc -O2 -march=armv7-a -mthumb` (the `armv7` lane of
+    /// `tools/arch_roundtrip.py`). The whole dispatch, verbatim:
+    ///
+    /// ```text
+    /// 434: 2804        cmp  r0, #4
+    /// 436: d81a        bhi.n 46e
+    /// 438: e8df f000   tbb  [pc, r0]
+    /// 43c: 09 0c 0f 14 03
+    /// ```
+    ///
+    /// Bound 4 means five entries; `pc` at the `tbb` is `0x438 + 4 == 0x43c`.
+    #[test]
+    fn decodes_a_real_gcc_thumb_tbb_table() {
+        let table_va = 0x43c;
+        let entries = [0x09u8, 0x0c, 0x0f, 0x14, 0x03];
+        let targets =
+            decode_thumb_table_entries(&entries, table_va, 1, true, &|_target| true).unwrap();
+        assert_eq!(targets, vec![0x44e, 0x454, 0x45a, 0x464, 0x442]);
+    }
+
+    /// `04_switch_shapes.c:shared_bodies` from the same build: four cases over
+    /// two bodies, so entries repeat. The successor ORDER is what carries the
+    /// case labels, so the repeats must survive decoding.
+    ///
+    /// ```text
+    /// 6ac: 2803        cmp  r0, #3
+    /// 6ae: d809        bhi.n 6c4
+    /// 6b0: e8df f000   tbb  [pc, r0]
+    /// 6b4: 05 02 05 02
+    /// ```
+    #[test]
+    fn a_real_tbb_table_with_repeated_bodies_keeps_its_duplicate_targets() {
+        let targets =
+            decode_thumb_table_entries(&[0x05, 0x02, 0x05, 0x02], 0x6b4, 1, true, &|_t| true)
+                .unwrap();
+        assert_eq!(targets, vec![0x6be, 0x6b8, 0x6be, 0x6b8]);
+    }
+
+    /// An entry count larger than the guard proves reads the first case body's
+    /// instruction bytes as offsets. Those are small, so they resolve back INTO
+    /// the table — which is impossible for real code and is what makes the
+    /// over-read fail closed instead of attaching a phantom arm.
+    #[test]
+    fn an_overlong_bound_is_refused_because_its_target_lands_inside_the_table() {
+        // The real 5-entry table above, read as if the guard had proved 6.
+        // Byte 5 is `0x2b`, the first byte of the arm at 0x442 (`cmp r1, r2`
+        // is `4291`; the byte here is whatever follows — anything small).
+        let entries = [0x09u8, 0x0c, 0x0f, 0x14, 0x03, 0x01];
+        assert!(decode_thumb_table_entries(&entries, 0x43c, 1, true, &|_t| true).is_none());
+    }
+
+    /// `tbh` doubles a HALFWORD, which is how a 240-case switch reaches arms
+    /// 6 KB away. betaflight's `mspProcessInCommand` (`bin_166.elf`, DecBench
+    /// holdout) at `0x802818c`: `tbh [pc, r5, lsl #1]`, table at `0x8028190`.
+    /// Entry 0 is `0x0d19`, entry 1 the shared default `0x00f3`.
+    #[test]
+    fn decodes_a_real_thumb_tbh_halfword_table() {
+        let table_va = 0x8028190;
+        let entries = [0x19u8, 0x0d, 0xf3, 0x00];
+        let targets =
+            decode_thumb_table_entries(&entries, table_va, 2, true, &|_target| true).unwrap();
+        assert_eq!(targets, vec![0x8029bc2, 0x8028376]);
+    }
+
+    #[test]
+    fn a_non_executable_thumb_target_refuses_the_whole_table() {
+        assert!(
+            decode_thumb_table_entries(&[0x05, 0x02, 0x05, 0x02], 0x6b4, 1, true, &|target| {
+                target != 0x6be
+            })
+            .is_none()
+        );
     }
 
     #[test]

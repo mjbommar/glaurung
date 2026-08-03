@@ -60,18 +60,7 @@ pub fn collect_function_pointer_tables(data: &[u8]) -> Vec<FunctionPointerTable>
             .or_insert_with(|| name.to_string());
     }
 
-    let mut relocated_targets = HashMap::new();
-    if let Some(relocations) = object.dynamic_relocations() {
-        for (place, relocation) in relocations {
-            if relocation.size() != 0 && relocation.size() != pointer_size.saturating_mul(8) {
-                continue;
-            }
-            let target = relocation_target_va(&object, &relocation);
-            if let Some(target) = target {
-                relocated_targets.insert(place, target);
-            }
-        }
-    }
+    let relocated_targets = relocation_targets(&object, pointer_size);
 
     let mut tables = Vec::new();
     for symbol in object.symbols() {
@@ -130,15 +119,79 @@ pub fn collect_function_pointer_tables(data: &[u8]) -> Vec<FunctionPointerTable>
     tables
 }
 
+/// `relocated place VA -> target VA` for every dynamic relocation whose target
+/// this pass can prove.
+fn relocation_targets(object: &object::read::File<'_>, pointer_size: u8) -> HashMap<u64, u64> {
+    let mut targets = HashMap::new();
+    let Some(relocations) = object.dynamic_relocations() else {
+        return targets;
+    };
+    for (place, relocation) in relocations {
+        if relocation.size() != 0 && relocation.size() != pointer_size.saturating_mul(8) {
+            continue;
+        }
+        if let Some(target) = relocation_target_va(object, &relocation, place, pointer_size) {
+            targets.insert(place, target);
+        }
+    }
+    targets
+}
+
+/// The value an ELF `Rel` (no explicit addend) relocation carries IN PLACE.
+///
+/// ELF32 uses `Rel`, not `Rela`: `R_386_RELATIVE` and `R_ARM_RELATIVE` have no
+/// addend field, and the value to be relocated is stored at the relocated
+/// address itself. `object` reports `addend() == 0` and
+/// `has_implicit_addend() == true` for them, so reading only the explicit addend
+/// saw every 32-bit function-pointer table as a run of null entries and
+/// recovered none of them — the `ops[tag]` dispatch in a 32-bit binary stayed a
+/// load from an input-image VA that is not mapped in the rebuilt C.
+fn implicit_relative_addend(
+    object: &object::read::File<'_>,
+    place: u64,
+    pointer_size: u8,
+) -> Option<u64> {
+    let width = usize::from(pointer_size);
+    for section in object.sections() {
+        if section.address() == 0 {
+            continue; // a non-allocated section: its "address" is not a VA
+        }
+        let Some(offset) = place.checked_sub(section.address()) else {
+            continue;
+        };
+        if offset.saturating_add(width as u64) > section.size() {
+            continue;
+        }
+        let (Ok(data), Ok(offset)) = (section.data(), usize::try_from(offset)) else {
+            continue;
+        };
+        let Some(bytes) = data.get(offset..).and_then(|rest| rest.get(..width)) else {
+            continue; // NOBITS (`.bss`) has a range but no file content
+        };
+        return match (width, object.is_little_endian()) {
+            (4, true) => Some(u64::from(u32::from_le_bytes(bytes.try_into().ok()?))),
+            (4, false) => Some(u64::from(u32::from_be_bytes(bytes.try_into().ok()?))),
+            (8, true) => Some(u64::from_le_bytes(bytes.try_into().ok()?)),
+            (8, false) => Some(u64::from_be_bytes(bytes.try_into().ok()?)),
+            _ => None,
+        };
+    }
+    None
+}
+
 fn relocation_target_va(
     object: &object::read::File<'_>,
     relocation: &object::Relocation,
+    place: u64,
+    pointer_size: u8,
 ) -> Option<u64> {
     match relocation.target() {
         RelocationTarget::Absolute
-            if !relocation.has_implicit_addend()
-                && is_image_relative(object.architecture(), relocation.flags()) =>
+            if is_image_relative(object.architecture(), relocation.flags()) =>
         {
+            if relocation.has_implicit_addend() {
+                return implicit_relative_addend(object, place, pointer_size);
+            }
             u64::try_from(relocation.addend()).ok()
         }
         RelocationTarget::Symbol(index)
@@ -232,15 +285,18 @@ fn resolve_body(
             } => {
                 resolve_expr(cond, tables, &definitions);
                 resolve_body(then_body, tables, &definitions);
-                if let Some(else_body) = else_body {
+                if let Some(else_body) = else_body.as_deref_mut() {
                     resolve_body(else_body, tables, &definitions);
                 }
-                definitions.clear();
+                forget_definitions_written_in(then_body, &mut definitions);
+                if let Some(else_body) = else_body.as_deref() {
+                    forget_definitions_written_in(else_body, &mut definitions);
+                }
             }
             Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
                 resolve_expr(cond, tables, &definitions);
                 resolve_body(body, tables, &definitions);
-                definitions.clear();
+                forget_definitions_written_in(body, &mut definitions);
             }
             Stmt::For {
                 init,
@@ -252,7 +308,15 @@ fn resolve_body(
                 resolve_expr(cond, tables, &definitions);
                 resolve_body(body, tables, &definitions);
                 resolve_body(std::slice::from_mut(step.as_mut()), tables, &definitions);
-                definitions.clear();
+                forget_definitions_written_in(
+                    std::slice::from_ref(init.as_ref()),
+                    &mut definitions,
+                );
+                forget_definitions_written_in(body, &mut definitions);
+                forget_definitions_written_in(
+                    std::slice::from_ref(step.as_ref()),
+                    &mut definitions,
+                );
             }
             Stmt::Switch {
                 discriminant,
@@ -260,13 +324,18 @@ fn resolve_body(
                 default,
             } => {
                 resolve_expr(discriminant, tables, &definitions);
-                for (_, case) in cases {
+                for (_, case) in cases.iter_mut() {
                     resolve_body(case, tables, &definitions);
                 }
-                if let Some(default) = default {
+                if let Some(default) = default.as_deref_mut() {
                     resolve_body(default, tables, &definitions);
                 }
-                definitions.clear();
+                for (_, case) in cases.iter() {
+                    forget_definitions_written_in(case, &mut definitions);
+                }
+                if let Some(default) = default.as_deref() {
+                    forget_definitions_written_in(default, &mut definitions);
+                }
             }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
@@ -287,6 +356,81 @@ fn resolve_body(
             definitions.clear();
         }
     }
+}
+
+/// Drop every definition a nested body could have overwritten, and keep the rest.
+///
+/// A structured statement used to `clear()` the whole table, which is sound but
+/// throws away proofs the branch cannot touch. That mattered: a bounds-checked
+/// dispatcher (`if (tag < 0 || tag >= 5) return -1; return ops[tag](a, b);`)
+/// materialises its table base BEFORE the guards, so after two early-return
+/// `if`s nothing remained to prove the base with and the 32-bit PIC `ops[tag]`
+/// stayed an unresolvable load through an input-image VA.
+///
+/// A definition the nested body never writes still reaches the statements after
+/// it. A call or indirect transfer anywhere inside it can leave any UNVERSIONED
+/// physical register in an unknown state, so those are all forgotten — an
+/// SSA-versioned name is defined exactly once and cannot be one of them.
+fn forget_definitions_written_in(body: &[Stmt], definitions: &mut HashMap<VReg, Expr>) {
+    if definitions.is_empty() {
+        return;
+    }
+    let mut written = Vec::new();
+    let clobbers_registers = collect_written(body, &mut written, 0);
+    for register in written {
+        definitions.remove(&register);
+    }
+    if clobbers_registers {
+        definitions.retain(|register, _| match register {
+            VReg::Phys(name) => name.contains('#'),
+            _ => true,
+        });
+    }
+}
+
+/// Push every register `body` assigns into `out`; return whether it also
+/// contains a transfer that can clobber unversioned physical registers.
+fn collect_written(body: &[Stmt], out: &mut Vec<VReg>, depth: usize) -> bool {
+    if depth >= 32 {
+        return true; // too deep to enumerate: assume the worst
+    }
+    let mut clobbers = false;
+    for statement in body {
+        match statement {
+            Stmt::Assign { dst, .. } => out.push(dst.clone()),
+            Stmt::Call { .. } | Stmt::IndirectGoto { .. } => clobbers = true,
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                clobbers |= collect_written(then_body, out, depth + 1);
+                if let Some(else_body) = else_body {
+                    clobbers |= collect_written(else_body, out, depth + 1);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                clobbers |= collect_written(body, out, depth + 1);
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                clobbers |= collect_written(std::slice::from_ref(init.as_ref()), out, depth + 1);
+                clobbers |= collect_written(body, out, depth + 1);
+                clobbers |= collect_written(std::slice::from_ref(step.as_ref()), out, depth + 1);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    clobbers |= collect_written(case, out, depth + 1);
+                }
+                if let Some(default) = default {
+                    clobbers |= collect_written(default, out, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    clobbers
 }
 
 fn resolve_expr(
@@ -402,6 +546,31 @@ fn indexed_table_address(
             .or_else(|| {
                 table_base_and_index(rhs, 1, lhs, 1, table_va, pointer_size, definitions, depth)
             }),
+        // 32-bit PIC reaches its own data through a materialised
+        // `_GLOBAL_OFFSET_TABLE_` base plus a link-time displacement:
+        // `mov 0x10(%eax,%edx,4),%eax` with `eax` holding the GOT. The base
+        // register alone is therefore NOT the table; base + disp is. Resolve
+        // the register to its constant address and fold the displacement in
+        // before asking whether it names the table.
+        Expr::Lea {
+            base: Some(base),
+            index: Some(index),
+            scale,
+            disp,
+            segment: None,
+        } if *disp != 0 => {
+            let base_va = constant_address(&Expr::Reg(base.clone()), definitions, depth + 1)?;
+            if base_va.checked_add_signed(*disp) != Some(table_va) {
+                return None;
+            }
+            scaled_index(
+                &Expr::Reg(index.clone()),
+                *scale,
+                pointer_size,
+                definitions,
+                depth + 1,
+            )
+        }
         Expr::Lea {
             base: Some(base),
             index: Some(index),
@@ -467,6 +636,38 @@ fn strip_cast(expression: &Expr) -> &Expr {
     match expression {
         Expr::Cast { expr, .. } => strip_cast(expr),
         _ => expression,
+    }
+}
+
+/// The constant image address `expression` denotes, following register copies.
+fn constant_address(
+    expression: &Expr,
+    definitions: &HashMap<VReg, Expr>,
+    depth: usize,
+) -> Option<u64> {
+    if depth >= 16 {
+        return None;
+    }
+    match strip_cast(expression) {
+        Expr::Named { va, .. } | Expr::Addr(va) => Some(*va),
+        Expr::Reg(register) => constant_address(definitions.get(register)?, definitions, depth + 1),
+        // `_GLOBAL_OFFSET_TABLE_` is materialised in two instructions
+        // (`call __x86.get_pc_thunk.bx; add $GOT,%ebx`), and the pair survives
+        // as two statements whenever the intermediate has a second reader — so
+        // the base has to be summed here rather than relying on constant
+        // folding having already collapsed it.
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => {
+            let (base, offset) = match (strip_cast(lhs), strip_cast(rhs)) {
+                (other, Expr::Const(offset)) | (Expr::Const(offset), other) => (other, *offset),
+                _ => return None,
+            };
+            constant_address(base, definitions, depth + 1)?.checked_add_signed(offset)
+        }
+        _ => None,
     }
 }
 
@@ -562,5 +763,252 @@ fn is_zero(expression: &Expr, definitions: &HashMap<VReg, Expr>, depth: usize) -
             .get(register)
             .is_some_and(|definition| is_zero(definition, definitions, depth + 1)),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ELF32 relocations are `Rel`: the value to relocate lives at the relocated
+    /// address, not in an addend field. Read from a real armhf binary whose
+    /// `.data` (`objdump -s -j .data`) holds `c4080000` at 0x11008 under an
+    /// `R_ARM_RELATIVE` entry (`readelf -r`).
+    #[test]
+    fn elf32_rel_relocations_read_their_addend_from_the_relocated_place() {
+        const SAMPLE: &str = "samples/binaries/platforms/linux/amd64/cross/armhf/c2_demo-armhf-gcc";
+        let data = std::fs::read(SAMPLE).unwrap_or_else(|_| panic!("missing sample {SAMPLE}"));
+        let object = object::read::File::parse(&*data).expect("parse armhf sample");
+        assert_eq!(
+            object.architecture().address_size().map(|s| s.bytes()),
+            Some(4)
+        );
+
+        let targets = relocation_targets(&object, 4);
+        assert_eq!(
+            targets.get(&0x11008),
+            Some(&0x8c4),
+            "R_ARM_RELATIVE at 0x11008 carries its addend in place; \
+             resolved targets were {:?}",
+            {
+                let mut sorted: Vec<_> = targets.iter().map(|(k, v)| (*k, *v)).collect();
+                sorted.sort_unstable();
+                sorted
+            }
+        );
+        assert!(
+            targets.values().any(|&target| target != 0),
+            "every relative relocation resolved to 0 — the in-place addend was not read"
+        );
+    }
+
+    fn ops_table() -> FunctionPointerTable {
+        FunctionPointerTable {
+            va: 0x4004,
+            name: "ops".into(),
+            pointer_size: 4,
+            targets: vec![
+                FunctionTableTarget {
+                    va: 0x113d,
+                    name: "h_add".into(),
+                },
+                FunctionTableTarget {
+                    va: 0x1157,
+                    name: "h_sub".into(),
+                },
+            ],
+        }
+    }
+
+    /// `mov 0x10(%eax,%edx,4),%eax` with `eax` holding `_GLOBAL_OFFSET_TABLE_`:
+    /// the base register alone is not the table, base + displacement is. This is
+    /// how EVERY 32-bit PIC binary reaches its own function-pointer tables.
+    #[test]
+    fn a_got_relative_table_load_resolves_through_its_displacement() {
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax#2"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Addr(0x11d0)),
+                        rhs: Box::new(Expr::Const(0x2e24)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("rax#3"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(VReg::phys("rax#2")),
+                            index: Some(VReg::phys("rdx#1")),
+                            scale: 4,
+                            disp: 0x10,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                },
+            ],
+        };
+
+        resolve_function_table_entries(&mut function, &[ops_table()]);
+
+        let Stmt::Assign { src, .. } = &function.body[1] else {
+            panic!("statement shape changed");
+        };
+        assert!(
+            matches!(
+                src,
+                Expr::FunctionTableEntry { table_va: 0x4004, table_name, .. }
+                    if table_name == "ops"
+            ),
+            "expected the ops[] entry, got {src:?}"
+        );
+    }
+
+    /// The wrong displacement names a different object and must not resolve.
+    #[test]
+    fn a_got_relative_load_at_the_wrong_displacement_is_left_alone() {
+        let load = Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                base: Some(VReg::phys("rax#2")),
+                index: Some(VReg::phys("rdx#1")),
+                scale: 4,
+                disp: 0x20,
+                segment: None,
+            }),
+            size: 4,
+        };
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax#2"),
+                    src: Expr::Addr(0x3ff4),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("rax#3"),
+                    src: load.clone(),
+                },
+            ],
+        };
+
+        resolve_function_table_entries(&mut function, &[ops_table()]);
+
+        let Stmt::Assign { src, .. } = &function.body[1] else {
+            panic!("statement shape changed");
+        };
+        assert_eq!(*src, load);
+    }
+
+    /// The table base is materialised BEFORE the bounds guards, so the proof has
+    /// to survive an intervening `if` that never writes it.
+    #[test]
+    fn a_table_base_survives_a_guard_that_does_not_write_it() {
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax#2"),
+                    src: Expr::Addr(0x3ff4),
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Const(-1)),
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("rax#3"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(VReg::phys("rax#2")),
+                            index: Some(VReg::phys("rdx#1")),
+                            scale: 4,
+                            disp: 0x10,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                },
+            ],
+        };
+
+        resolve_function_table_entries(&mut function, &[ops_table()]);
+
+        let Stmt::Assign { src, .. } = &function.body[2] else {
+            panic!("statement shape changed");
+        };
+        assert!(
+            matches!(src, Expr::FunctionTableEntry { .. }),
+            "a guard that never writes the base erased the proof: {src:?}"
+        );
+    }
+
+    /// A guard that DOES redefine the base invalidates it, as before.
+    #[test]
+    fn a_guard_that_rewrites_the_table_base_invalidates_it() {
+        let load = Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                base: Some(VReg::phys("rax#2")),
+                index: Some(VReg::phys("rdx#1")),
+                scale: 4,
+                disp: 0x10,
+                segment: None,
+            }),
+            size: 4,
+        };
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax#2"),
+                    src: Expr::Addr(0x3ff4),
+                },
+                Stmt::If {
+                    cond: Expr::Const(1),
+                    then_body: vec![Stmt::Assign {
+                        dst: VReg::phys("rax#2"),
+                        src: Expr::Const(0),
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("rax#3"),
+                    src: load.clone(),
+                },
+            ],
+        };
+
+        resolve_function_table_entries(&mut function, &[ops_table()]);
+
+        let Stmt::Assign { src, .. } = &function.body[2] else {
+            panic!("statement shape changed");
+        };
+        assert_eq!(*src, load);
+    }
+
+    /// A 64-bit `Rela` image keeps using the explicit addend field.
+    #[test]
+    fn elf64_rela_relocations_still_use_the_explicit_addend() {
+        const SAMPLE: &str =
+            "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-c-gcc-O0";
+        let data = std::fs::read(SAMPLE).unwrap_or_else(|_| panic!("missing sample {SAMPLE}"));
+        let object = object::read::File::parse(&*data).expect("parse amd64 sample");
+        let targets = relocation_targets(&object, 8);
+        assert!(
+            targets.values().any(|&target| target != 0),
+            "no relative relocation resolved on a RELA image"
+        );
     }
 }

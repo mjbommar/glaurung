@@ -44,8 +44,8 @@
     "type_match": 0.47
   },
   "branches:clang:O0": {
-    "byte_match": 0.28,
-    "ged": 7.0,
+    "byte_match": 0.18,
+    "ged": 0.0,
     "type_match": 1.0
   },
   "branches:clang:O2": {
@@ -54,8 +54,8 @@
     "type_match": 1.0
   },
   "branches:gcc:O0": {
-    "byte_match": 0.61,
-    "ged": 7.0,
+    "byte_match": 0.47,
+    "ged": 0.0,
     "type_match": 1.0
   },
   "branches:gcc:O2": {
@@ -100,7 +100,7 @@
   },
   "fixedpoint:gcc:O2": {
     "byte_match": 0.43,
-    "ged": 2.33,
+    "ged": 2.0,
     "type_match": 0.78
   },
   "linkedlist:clang:O0": {
@@ -150,7 +150,7 @@
   },
   "matrix:clang:O2": {
     "byte_match": 0.03,
-    "ged": 24.0,
+    "ged": 21.0,
     "type_match": null
   },
   "matrix:gcc:O0": {
@@ -184,7 +184,7 @@
     "type_match": null
   },
   "sort:clang:O0": {
-    "byte_match": 0.11,
+    "byte_match": 0.12,
     "ged": 1.5,
     "type_match": 0.75
   },
@@ -239,7 +239,7 @@
     "type_match": 1.0
   },
   "strops:gcc:O2": {
-    "byte_match": 0.34,
+    "byte_match": 0.42,
     "ged": 7.67,
     "type_match": 0.61
   },

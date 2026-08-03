@@ -34,6 +34,7 @@ It is never silent — the recorded fingerprint says `mode: host` plus the host
 versions, so a baseline written that way cannot be compared against a pinned run
 without the gate failing and telling you why.
 """
+
 from __future__ import annotations
 
 import functools
@@ -93,8 +94,12 @@ def _rootless() -> bool:
     `--user $(id -u)` would land on an unprivileged subuid that cannot write to
     the mounted work directories. Rootful docker is the opposite: without
     `--user`, output files come back owned by root. Probe rather than guess."""
-    r = subprocess.run([_docker(), "info", "-f", "{{.SecurityOptions}}"],
-                       capture_output=True, text=True, check=False)
+    r = subprocess.run(
+        [_docker(), "info", "-f", "{{.SecurityOptions}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     return "name=rootless" in r.stdout
 
 
@@ -103,11 +108,16 @@ def ensure_image() -> str:
     """Build the pinned image if it is not present. Idempotent and cheap once
     built (an inspect); the build itself is ~35s of apt on a cold cache."""
     dkr = _docker()
-    have = subprocess.run([dkr, "image", "inspect", IMAGE],
-                          capture_output=True, text=True, check=False)
+    have = subprocess.run(
+        [dkr, "image", "inspect", IMAGE], capture_output=True, text=True, check=False
+    )
     if have.returncode != 0:
-        build = subprocess.run([dkr, "build", "-t", IMAGE, str(DOCKERFILE_DIR)],
-                               capture_output=True, text=True, check=False)
+        build = subprocess.run(
+            [dkr, "build", "-t", IMAGE, str(DOCKERFILE_DIR)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         if build.returncode != 0:
             raise ToolchainError(
                 f"failed to build {IMAGE} from {DOCKERFILE_DIR}:\n"
@@ -144,8 +154,9 @@ def _mount_dirs(argv: list[str], cwd: Path) -> list[Path]:
     return out
 
 
-def run(argv: list[str], cwd: Path | None = None, timeout: int | None = None
-        ) -> subprocess.CompletedProcess:
+def run(
+    argv: list[str], cwd: Path | None = None, timeout: int | None = None
+) -> subprocess.CompletedProcess:
     """Run one compiler invocation under the pinned toolchain.
 
     `argv` is an ordinary compiler command line (absolute paths preferred). The
@@ -154,8 +165,14 @@ def run(argv: list[str], cwd: Path | None = None, timeout: int | None = None
     """
     work = (cwd or Path.cwd()).resolve()
     if mode() == "host":
-        return subprocess.run(argv, cwd=str(work), capture_output=True, text=True,
-                              timeout=timeout, check=False)
+        return subprocess.run(
+            argv,
+            cwd=str(work),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
     image = ensure_image()
     cmd = [_docker(), "run", "--rm", "--network", "none"]
     if not _rootless():
@@ -163,8 +180,9 @@ def run(argv: list[str], cwd: Path | None = None, timeout: int | None = None
     for d in _mount_dirs(argv, work):
         cmd += ["-v", f"{d}:{d}"]
     cmd += ["-w", str(work), image, *argv]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                          check=False)
+    return subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout, check=False
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -178,11 +196,17 @@ def fingerprint() -> dict[str, str]:
     """
     script = "; ".join(" ".join(cmd) + " 2>&1 | head -1" for _, cmd in _VERSION_PROBES)
     if mode() == "host":
-        r = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=False)
+        r = subprocess.run(
+            ["sh", "-c", script], capture_output=True, text=True, check=False
+        )
     else:
         image = ensure_image()
-        r = subprocess.run([_docker(), "run", "--rm", "--network", "none", image,
-                            "sh", "-c", script], capture_output=True, text=True, check=False)
+        r = subprocess.run(
+            [_docker(), "run", "--rm", "--network", "none", image, "sh", "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
     if r.returncode != 0 or len(lines) != len(_VERSION_PROBES):
         raise ToolchainError(
@@ -194,7 +218,9 @@ def fingerprint() -> dict[str, str]:
     return fp
 
 
-def fingerprint_problems(recorded: dict | None, current: dict | None = None) -> list[str]:
+def fingerprint_problems(
+    recorded: dict | None, current: dict | None = None
+) -> list[str]:
     """Reasons a baseline's toolchain is not comparable to this run's.
 
     Pure and dict-driven so the fast lane can unit-test the rule without docker.
@@ -219,6 +245,7 @@ def fingerprint_problems(recorded: dict | None, current: dict | None = None) -> 
 def main() -> int:
     import json
     import sys
+
     if "--json" in sys.argv:
         print(json.dumps(fingerprint(), indent=2, sort_keys=True))
         return 0

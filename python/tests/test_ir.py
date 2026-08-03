@@ -259,32 +259,20 @@ def test_cdqe_lifts_to_explicit_sign_extension():
 
 def test_sbb_reg_reg_lifts_to_sub_with_carry_dependency():
     ops = g.ir.lift_bytes(bytes([0x48, 0x19, 0xC8]), 0x1000, 64)
-    assert ops[:2] == [
-        {
-            "va": 0x1000,
-            "kind": "bin",
-            "dst": "rax",
-            "op": "sub",
-            "lhs": {"kind": "reg", "name": "rax"},
-            "rhs": {"kind": "reg", "name": "rcx"},
-        },
-        {
-            "va": 0x1000,
-            "kind": "bin",
-            "dst": "rax",
-            "op": "sub",
-            "lhs": {"kind": "reg", "name": "rax"},
-            "rhs": {"kind": "reg", "name": "%cf"},
-        },
-    ]
-    assert {o["dst"] for o in ops[2:] if o["kind"] == "undef"} == {
-        "%cf",
-        "%of",
-        "%zf",
-        "%sf",
-        "%pf",
-        "%af",
+    assert ops[0] == {
+        "va": 0x1000,
+        "kind": "assign",
+        "dst": "t60",
+        "src": {"kind": "reg", "name": "%cf"},
     }
+    arithmetic = [o for o in ops if o["kind"] == "bin" and o["dst"] == "rax"]
+    assert arithmetic[0]["op"] == "sub"
+    assert arithmetic[0]["rhs"] == {"kind": "reg", "name": "rcx"}
+    assert arithmetic[1]["op"] == "sub"
+    assert arithmetic[1]["rhs"] == {"kind": "reg", "name": "t60"}
+    assert {o["dst"] for o in ops if o["kind"] == "undef"} == {"%pf", "%af"}
+    for flag in ("%cf", "%of", "%zf", "%sf"):
+        assert any(o["dst"] == flag and o["kind"] != "undef" for o in ops)
 
 
 def test_xorps_self_lifts_to_zero_assign():

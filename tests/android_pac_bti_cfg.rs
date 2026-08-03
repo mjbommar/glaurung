@@ -27,6 +27,7 @@ fn discovers_functions_on_pac_bti_binary() {
         max_blocks: 8192,
         max_instructions: 200_000,
         timeout_ms: 2000,
+        total_timeout_ms: 0,
     };
     let (funcs, cg) = analyze_functions_bytes(&data, &budgets);
 

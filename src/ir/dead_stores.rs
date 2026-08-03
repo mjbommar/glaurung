@@ -24,7 +24,7 @@
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
-use crate::ir::types::VReg;
+use crate::ir::types::{BinOp, VReg};
 
 /// Run dead-store elimination for the given calling convention.
 pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
@@ -201,6 +201,183 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
     for i in to_drop.into_iter().rev() {
         body.remove(i);
     }
+}
+
+/// Remove callee-saved register spills that nothing in the function reads.
+///
+/// A function entry emits one store per callee-saved register it uses:
+///
+/// ```text
+///     stack_0 = var0;      // push rbx
+///     stack_1 = var1;      // push r12
+///     stack_2 = rbp;       // push rbp
+/// ```
+///
+/// These are machine-frame bookkeeping, not source-level state. The ABI
+/// guarantees the epilogue restores each one, so nothing in the function ever
+/// reads the slot, and the source they came from has no corresponding
+/// statement. They were the last surviving source of raw register names in
+/// rendered output — `rsp`, `rbp`, `sp`, `lr` and `fp` accounted for every
+/// register token Glaurung emitted, against zero for Ghidra, angr and RetDec.
+///
+/// The proof required is deliberately strong: the slot must not be *read
+/// anywhere* in the body, which also rules out a slot whose address escaped,
+/// and the stored value must be a bare register so deleting the statement
+/// cannot discard a computation. [`eliminate_dead_stores`] cannot make this
+/// call itself — it walks forward and stops at the first nested `If`, and these
+/// stores sit above all of a function's control flow.
+pub fn prune_callee_saved_spills(f: &mut Function) {
+    // A promoted spill appears in either spelling depending on how far stack
+    // promotion got: `Assign` when the slot became a plain local, `Store` when
+    // it is still addressed. Both render identically as `stack_2 = rbp;`, so
+    // matching only one silently left half the spills in place.
+    let spilled_slot = |stmt: &Stmt| -> Option<VReg> {
+        match stmt {
+            Stmt::Assign {
+                dst,
+                src: Expr::Reg(_),
+            } if is_saved_frame_slot(dst) => Some(dst.clone()),
+            Stmt::Store {
+                addr: Expr::Reg(slot),
+                src: Expr::Reg(_),
+                ..
+            } if is_saved_frame_slot(slot) => Some(slot.clone()),
+            _ => None,
+        }
+    };
+
+    // A slot restored by the epilogue reads back into the register it came
+    // from (`rbp = stack_2`), so the spill is not dead on its own — the pair
+    // has to go together, and only when the restored value is itself unused.
+    // That is the whole callee-save idiom: save at entry, restore at exit,
+    // never observe it in between.
+    let restore_of = |stmt: &Stmt, slot: &VReg| -> Option<VReg> {
+        match stmt {
+            Stmt::Assign {
+                dst,
+                src: Expr::Reg(src),
+            } if src == slot => Some(dst.clone()),
+            _ => None,
+        }
+    };
+
+    let candidates: Vec<VReg> = f.body.iter().filter_map(spilled_slot).collect();
+    let mut doomed_slots: Vec<VReg> = Vec::new();
+    for slot in candidates {
+        // Every statement that mentions the slot, other than its own spill.
+        let readers: Vec<&Stmt> = f
+            .body
+            .iter()
+            .filter(|s| spilled_slot(s).as_ref() != Some(&slot))
+            .filter(|s| stmt_reads(s, &slot))
+            .collect();
+        let dead = match readers.as_slice() {
+            // Never observed at all: the spill alone is dead.
+            [] => true,
+            // Observed exactly once, by a restore whose result nothing reads.
+            [only] => match restore_of(only, &slot) {
+                // The spill and the restore both mention the register — the
+                // spill reads it, the restore writes it. Neither counts as an
+                // observation of the restored value, so both are excluded.
+                // Before SSA renaming they share one name, which is exactly the
+                // shape the unit tests pin.
+                Some(restored) => !f
+                    .body
+                    .iter()
+                    .filter(|s| {
+                        restore_of(s, &slot).is_none() && spilled_slot(s).as_ref() != Some(&slot)
+                    })
+                    .any(|s| stmt_reads(s, &restored)),
+                None => false,
+            },
+            _ => false,
+        };
+        if dead {
+            doomed_slots.push(slot);
+        }
+    }
+    if !doomed_slots.is_empty() {
+        f.body.retain(|stmt| {
+            if spilled_slot(stmt).is_some_and(|slot| doomed_slots.contains(&slot)) {
+                return false;
+            }
+            !doomed_slots
+                .iter()
+                .any(|slot| restore_of(stmt, slot).is_some())
+        });
+    }
+
+    prune_orphaned_stack_pointer_arithmetic(f);
+}
+
+/// Drop stack-pointer adjustments that nothing observes.
+///
+/// `push X` lifts to `rsp = rsp - 8; store [rsp] = X`. Once the spill above is
+/// removed the decrement is orphaned, and a function that saved four registers
+/// renders four bare `rsp = (rsp - 8);` lines that correspond to nothing in the
+/// source — `rsp` alone accounted for 80 of the remaining register tokens.
+///
+/// Removal is only safe when the stack pointer is *never read for anything
+/// else*. If any local is addressed relative to it, or it reaches a call or a
+/// return value, every adjustment stays: the frame is then real storage, and
+/// silently deleting the arithmetic would move every local.
+fn prune_orphaned_stack_pointer_arithmetic(f: &mut Function) {
+    let is_sp_adjust = |stmt: &Stmt| -> Option<VReg> {
+        let Stmt::Assign {
+            dst,
+            src: Expr::Bin { op, lhs, rhs },
+        } = stmt
+        else {
+            return None;
+        };
+        if !matches!(op, BinOp::Add | BinOp::Sub) {
+            return None;
+        }
+        // `sp = sp ± constant`, and nothing else.
+        match (lhs.as_ref(), rhs.as_ref()) {
+            (Expr::Reg(base), Expr::Const(_)) if base == dst && is_stack_pointer(dst) => {
+                Some(dst.clone())
+            }
+            _ => None,
+        }
+    };
+
+    let pointers: Vec<VReg> = {
+        let mut seen: Vec<VReg> = Vec::new();
+        for stmt in &f.body {
+            if let Some(p) = is_sp_adjust(stmt) {
+                if !seen.contains(&p) {
+                    seen.push(p);
+                }
+            }
+        }
+        seen
+    };
+    let doomed: Vec<VReg> = pointers
+        .into_iter()
+        .filter(|p| {
+            !f.body
+                .iter()
+                .filter(|s| is_sp_adjust(s).as_ref() != Some(p))
+                .any(|s| stmt_reads(s, p))
+        })
+        .collect();
+    if doomed.is_empty() {
+        return;
+    }
+    f.body
+        .retain(|stmt| !is_sp_adjust(stmt).is_some_and(|p| doomed.contains(&p)));
+}
+
+fn is_stack_pointer(v: &VReg) -> bool {
+    matches!(v, VReg::Phys(name) if matches!(name.as_str(), "rsp" | "esp" | "sp"))
+}
+
+/// A promoted stack slot, which is where a register spill lands after
+/// `stack_locals` promotion. `stack_top` is excluded: it names the frame
+/// boundary rather than a storage location.
+fn is_saved_frame_slot(v: &VReg) -> bool {
+    matches!(v, VReg::Phys(name) if name.starts_with("stack_") && name != "stack_top")
 }
 
 pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
@@ -746,5 +923,103 @@ mod tests {
         };
         eliminate_dead_stores(&mut f, CallConv::Aarch64);
         assert_eq!(f.body.len(), 1);
+    }
+
+    /// A callee-saved spill/restore pair is machine bookkeeping and must go.
+    ///
+    /// `stack_2 = rbp` at entry with `rbp = stack_2` at exit is what `push rbp`
+    /// / `pop rbp` becomes. Neither statement exists in the source, and the
+    /// restored value is never observed — the ABI just requires the register to
+    /// be intact for the caller.
+    #[test]
+    fn callee_saved_spill_and_restore_pair_is_removed() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("stack_2"),
+                    src: Expr::Reg(reg("rbp")),
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Const(1),
+                },
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("stack_2")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax"))),
+                },
+            ],
+        };
+        prune_callee_saved_spills(&mut f);
+        assert_eq!(f.body.len(), 2, "spill/restore pair survived: {:?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("rax")));
+    }
+
+    /// If the restored register IS observed, the pair is real state and must
+    /// stay — removing it would delete a value the function goes on to use.
+    #[test]
+    fn spill_whose_restored_value_is_used_is_kept() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("stack_2"),
+                    src: Expr::Reg(reg("rbp")),
+                },
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("stack_2")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rbp"))),
+                },
+            ],
+        };
+        let before = f.body.len();
+        prune_callee_saved_spills(&mut f);
+        assert_eq!(
+            f.body.len(),
+            before,
+            "removed a spill whose value is returned"
+        );
+    }
+
+    /// A slot read by something other than its restore is live storage, not a
+    /// register save.
+    #[test]
+    fn slot_read_by_ordinary_code_is_kept() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("stack_2"),
+                    src: Expr::Reg(reg("rbp")),
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Reg(reg("stack_2")),
+                },
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: Expr::Reg(reg("rax")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rcx"))),
+                },
+            ],
+        };
+        let before = f.body.len();
+        prune_callee_saved_spills(&mut f);
+        assert_eq!(
+            f.body.len(),
+            before,
+            "removed a spill that ordinary code reads"
+        );
     }
 }

@@ -86,6 +86,28 @@ pub fn collect_string_pool(data: &[u8]) -> HashMap<u64, String> {
             };
             let va = base.saturating_add(start as u64);
             out.entry(va).or_insert(s);
+
+            // Index every suffix of the run as well, because linkers merge a
+            // string that is a suffix of another into the same storage. In a
+            // real `getconf`, `"%s = %lu\n"` sits at 0x3000 and `"%lu\n"` is
+            // *the same bytes* at 0x3005 — there is no separate copy. Indexing
+            // only run starts left every such reference rendering as a bare
+            // integer (`printf((const char *)(0x3005), ...)`), which is most of
+            // why string recovery read 1.52 per function against Ghidra's 5.63
+            // on x86-64, where addresses already arrive complete.
+            //
+            // Suffixes are only indexed down to `MIN_STRING_LEN`, so this adds
+            // at most `run.len()` entries and cannot manufacture one- or
+            // two-character "strings" out of arbitrary integers.
+            let mut offset = 1usize;
+            while offset + MIN_STRING_LEN <= run.len() {
+                let tail = &run[offset..];
+                if let Ok(t) = std::str::from_utf8(tail) {
+                    let tail_va = base.saturating_add((start + offset) as u64);
+                    out.entry(tail_va).or_insert_with(|| t.to_string());
+                }
+                offset += 1;
+            }
         }
     }
     out
@@ -247,6 +269,33 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
             }
         }
         Expr::Deref { addr, .. } => fold_expr(addr, pool),
+        Expr::Bin { op, lhs, rhs } if matches!(op, crate::ir::types::BinOp::Add) => {
+            // AArch64 (and ARM32) build the address of a string in two
+            // instructions: `adrp` supplies the 4 KiB page and a following
+            // `add` supplies the low 12 bits. This pass runs before the
+            // algebraic folder, so at this point the value is still
+            // `Addr(page) + Const(offset)` rather than one address, and every
+            // string reference on those targets used to slip through — measured
+            // as 0.00 string literals per function on both ARM targets against
+            // Ghidra's 5.68.
+            //
+            // x86-64 needs none of this: `lea rax, [rip+disp]` is one
+            // instruction and arrives as a complete `Expr::Addr`.
+            let combined = match (lhs.as_ref(), rhs.as_ref()) {
+                (Expr::Addr(base), Expr::Const(off)) | (Expr::Const(off), Expr::Addr(base)) => {
+                    base.checked_add_signed(*off)
+                }
+                _ => None,
+            };
+            if let Some(va) = combined {
+                if let Some(s) = pool.get(&va) {
+                    *e = Expr::StringLit { value: shorten(s) };
+                    return;
+                }
+            }
+            fold_expr(lhs, pool);
+            fold_expr(rhs, pool);
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             fold_expr(lhs, pool);
             fold_expr(rhs, pool);
@@ -440,6 +489,73 @@ mod tests {
             assert!(v
                 .chars()
                 .all(|c| c == '\t' || c == '\n' || c == '\r' || (' '..='~').contains(&c)));
+        }
+    }
+
+    /// Linkers merge a string that is a suffix of another into shared storage,
+    /// so a reference can legitimately point into the middle of a run.
+    ///
+    /// In this real binary `"%s = %lu\n"` lives at 0x3000 and `"%lu\n"` is the
+    /// same bytes at 0x3005 — there is no second copy. Indexing only run starts
+    /// left every such call rendering as `printf((const char *)(0x3005), ...)`.
+    #[test]
+    fn suffix_merged_strings_are_indexed() {
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples")
+            .join("containers")
+            .join("hello-cpp-g++-O0");
+        if !path.exists() {
+            eprintln!("skipping suffix-string test: {} absent", path.display());
+            return;
+        }
+        let data = std::fs::read(&path).expect("read fixture");
+        let pool = collect_string_pool(&data);
+        assert!(!pool.is_empty(), "fixture produced no strings at all");
+
+        // For every indexed string long enough to have one, its own one-character
+        // suffix must also be indexed and must be exactly that suffix.
+        let mut checked = 0usize;
+        for (va, s) in &pool {
+            if s.len() <= MIN_STRING_LEN || !s.is_char_boundary(1) {
+                continue;
+            }
+            let tail_va = va + 1;
+            if let Some(tail) = pool.get(&tail_va) {
+                assert_eq!(
+                    tail.as_str(),
+                    &s[1..],
+                    "suffix at {tail_va:#x} does not match the tail of {va:#x}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "no suffix entries were indexed; merged-string references cannot resolve"
+        );
+    }
+
+    /// Suffix indexing must not manufacture one- or two-character strings out of
+    /// arbitrary integers that happen to land in rodata.
+    #[test]
+    fn suffix_indexing_respects_the_minimum_length() {
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples")
+            .join("containers")
+            .join("hello-cpp-g++-O0");
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(&path).expect("read fixture");
+        for (va, s) in collect_string_pool(&data) {
+            assert!(
+                s.len() >= MIN_STRING_LEN,
+                "pool holds {s:?} at {va:#x}, shorter than the {MIN_STRING_LEN}-char floor"
+            );
         }
     }
 }

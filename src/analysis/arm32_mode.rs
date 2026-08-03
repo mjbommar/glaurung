@@ -86,9 +86,61 @@ pub(crate) fn mode_at(data: &[u8], va: u64, end: Endianness) -> Arm32Mode {
     }
 }
 
+/// Normalise an externally supplied ARM32 function entry address.
+///
+/// The ARM ELF ABI (IHI 0044, 4.5.3) encodes "this symbol names Thumb code" in
+/// bit 0 of the symbol's *value*, so a Thumb function at `0x37c` has
+/// `st_value == 0x37d`. That is the address every consumer of `.symtab` sees,
+/// including anything that resolves a static callee by name — and passing it
+/// through unchanged starts the decode one byte into the first instruction,
+/// which produces a body with no recovered parameters at all.
+///
+/// The clearing is applied only to ARM32 ELF images: on every other target bit 0
+/// of a function address is a real address bit. [`mode_at`] already reads the
+/// same bit as evidence of Thumb state, so the two agree by construction.
+pub fn normalise_entry(data: &[u8], va: u64) -> u64 {
+    if va & 1 == 0 {
+        return va;
+    }
+    let is_arm32_elf = object::read::File::parse(data).is_ok_and(|object| {
+        object.format() == object::BinaryFormat::Elf
+            && object.architecture() == object::Architecture::Arm
+    });
+    if is_arm32_elf {
+        va & !1
+    } else {
+        va
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Thumb function's `.symtab` value carries the Thumb bit; the entry
+    /// address it denotes is one lower. `main` in the checked-in armhf sample is
+    /// recorded at `0x46d` and begins at `0x46c`.
+    #[test]
+    fn a_thumb_symbol_value_normalises_to_its_real_entry() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/cross/armhf/hello-armhf-gcc");
+        let data = std::fs::read(path).expect("read checked-in armhf sample");
+        assert_eq!(normalise_entry(&data, 0x46d), 0x46c);
+        assert_eq!(normalise_entry(&data, 0x5c5), 0x5c4);
+        // An A32 entry has no Thumb bit and is already exact.
+        assert_eq!(normalise_entry(&data, 0x4c8), 0x4c8);
+    }
+
+    /// Bit 0 is only a mode marker on ARM32. On any other target it is an
+    /// ordinary address bit and clearing it would silently move the request.
+    #[test]
+    fn a_non_arm_image_keeps_every_address_bit() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/cross/arm64/c2_demo-arm64-gcc");
+        let data = std::fs::read(path).expect("read checked-in arm64 sample");
+        assert_eq!(normalise_entry(&data, 0x8d1), 0x8d1);
+        assert_eq!(normalise_entry(&[], 0x1235), 0x1235);
+    }
 
     #[test]
     fn real_mixed_armhf_elf_uses_mapping_symbols_per_function() {

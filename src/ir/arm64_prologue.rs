@@ -89,18 +89,39 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
             _ => break,
         }
     }
-    // Fire when the pattern is unambiguous: saved both fp AND lr to stack
-    // slots and adjusted sp. The `mov fp, sp` step is optional — it's
-    // often DCE'd away when the function doesn't use fp to address locals.
-    if saw_fp_save && saw_lr_save && sp_adjust.is_some() {
-        let _ = saw_fp_set;
+    // Two sufficient shapes, and the second is not a relaxation of the first.
+    //
+    //  * fp-save + lr-save + sp-sub: the canonical pre-indexed STP. The `mov
+    //    fp, sp` step is optional here — it is often DCE'd away when the
+    //    function doesn't use fp to address locals.
+    //  * sp-sub + `mov fp, sp`: what is left once dead-store elimination has
+    //    pruned the fp/lr spills. Pruning them is right — nothing reloads them
+    //    — but it also deletes the evidence this pass was keyed on, and the
+    //    prologue then survived into the output as raw
+    //    `%sp = (%sp - 48); %fp = %sp`.
+    //
+    // A lone sp-sub is still NOT enough — that is an ordinary stack allocation.
+    //
+    // The two cases differ in what may be DELETED, and that difference is the
+    // whole point. With the spills present, the frame pointer is provably dead
+    // and the run can be dropped wholesale. With the spills pruned we have no
+    // such proof — at -O0 AArch64 keeps `fp` live and addresses every local
+    // through it, so draining `%fp = %sp` there left `fp` undefined and broke
+    // 10 execution-differential cases. The pruned shape annotates and deletes
+    // nothing.
+    let saves_seen = saw_fp_save && saw_lr_save;
+    let Some(frame) = sp_adjust else { return };
+    if saves_seen {
         body.drain(0..end);
         body.insert(
             0,
-            Stmt::Comment(format!(
-                "aarch64 prologue: save fp/lr, frame {} bytes",
-                sp_adjust.unwrap()
-            )),
+            Stmt::Comment(format!("aarch64 prologue: save fp/lr, frame {frame} bytes")),
+        );
+    } else if saw_fp_set {
+        // Only claim what was observed: the frame, not the spills.
+        body.insert(
+            0,
+            Stmt::Comment(format!("aarch64 prologue: frame {frame} bytes")),
         );
     }
 }
@@ -260,6 +281,59 @@ mod tests {
             &f.body[0],
             Stmt::Comment(s) if s.contains("aarch64 prologue")
         ));
+    }
+
+    #[test]
+    fn prologue_collapses_after_dead_store_elimination_prunes_the_spills() {
+        // What `prune_callee_saved_spills` leaves behind: the sp adjust and the
+        // frame-pointer copy, with no fp/lr stores at all. This is the shape
+        // real AArch64 output has, and it used to escape the pass entirely —
+        // `%sp = (%sp - 48); %fp = (u64*)%sp;` reached the reader. (The
+        // `(u64*)` there is a print-time type annotation, not an AST cast.)
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                sp_sub(48),
+                Stmt::Assign {
+                    dst: reg("fp"),
+                    src: Expr::Reg(reg("sp")),
+                },
+                Stmt::Nop,
+                Stmt::Return { value: None },
+            ],
+        };
+        recognise_arm64_prologue(&mut f);
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Comment(s) if s.contains("aarch64 prologue") && s.contains("48")
+        ));
+        // It must not claim spills it never saw.
+        assert!(matches!(&f.body[0], Stmt::Comment(s) if !s.contains("fp/lr")));
+        // Nothing may be deleted here: without the spills there is no proof the
+        // frame pointer is dead, and at -O0 AArch64 addresses locals through it.
+        assert!(matches!(&f.body[1], Stmt::Assign { .. }));
+        assert!(matches!(
+            &f.body[2],
+            Stmt::Assign { dst, .. } if matches!(dst, VReg::Phys(n) if n == "fp")
+        ));
+        assert!(matches!(&f.body[3], Stmt::Nop));
+        assert!(matches!(&f.body[4], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn a_bare_stack_allocation_is_not_a_prologue() {
+        // `sp -= N` with no frame-pointer establishment and no spills is an
+        // ordinary alloca-style adjustment. Collapsing it would silently
+        // delete a real statement.
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![sp_sub(48), Stmt::Nop, Stmt::Return { value: None }],
+        };
+        let orig = f.clone();
+        recognise_arm64_prologue(&mut f);
+        assert_eq!(f, orig);
     }
 
     #[test]

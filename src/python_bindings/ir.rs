@@ -294,6 +294,23 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
 }
 
 /// Dispatch lifting to the appropriate per-arch backend.
+/// Replace calls to the compiler's division runtime helpers with the arithmetic
+/// they perform (see [`crate::ir::soft_helpers`]).
+///
+/// Must run on the raw LLIR — before `abi::annotate_calls` and before SSA —
+/// because the expansion is written in terms of the architectural argument
+/// registers. Shared by every decompile entry point for the same reason
+/// `run_ast_passes` is: a pass wired into one of the four and not the others is
+/// a pass that silently does nothing in three of them.
+fn inline_soft_helper_calls_in(
+    lf: &mut crate::ir::types::LlirFunction,
+    addr_map: &std::collections::HashMap<u64, String>,
+) {
+    crate::ir::soft_helpers::inline_soft_helper_calls(&mut lf.blocks, |va| {
+        addr_map.get(&va).cloned()
+    });
+}
+
 /// THE AST pass pipeline. Every public decompile entry point runs exactly this.
 ///
 /// It used to be copy-pasted into four functions — `decompile_at`, `decompile_range_at`,
@@ -303,6 +320,9 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
 /// three, which is exactly how a "fix" gets measured as ineffective.
 ///
 /// Returns the recovered stack-slot sizes, which callers thread into type recovery.
+///
+/// (The sibling of this rule for the LLIR stage is `inline_soft_helper_calls_in`,
+/// just above.)
 ///
 /// The pass-by-pass AST dump (`GLAURUNG_DUMP_PASSES=1`) is read here, so EVERY entry
 /// point gets identical diagnostics rather than only the one that happened to carry the
@@ -444,6 +464,11 @@ fn recognise_machine_frame(f: &mut crate::ir::ast::Function, cc: crate::ir::call
         }
         _ => {}
     }
+    // Whatever the per-architecture recogniser could not attribute to a frame
+    // pattern, the callee-saved spills themselves are still machine bookkeeping.
+    // This runs for every convention, including AArch64, which has no dedicated
+    // recogniser in this match.
+    crate::ir::dead_stores::prune_callee_saved_spills(f);
 }
 
 fn lift_for_arch(data: &[u8], start_va: u64, bits: u32, arch: &str) -> PyResult<Vec<LlirInstr>> {
@@ -574,6 +599,7 @@ fn arm_uses_vfp_arguments(data: &[u8]) -> bool {
 #[pyo3(name = "decompile_at")]
 #[pyo3(signature = (path, func_va, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", pdb_cache="", max_functions=1usize))]
 fn decompile_at_py(
+    py: Python<'_>,
     path: String,
     func_va: u64,
     max_blocks: usize,
@@ -593,6 +619,11 @@ fn decompile_at_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    // An ARM32 Thumb symbol's value carries the Thumb bit; the entry it denotes
+    // is one lower. Anything resolving a callee through `.symtab` hands us that
+    // value verbatim, and decoding one byte in recovers a body with no
+    // parameters at all. See `arm32_mode::normalise_entry`.
+    let func_va = crate::analysis::arm32_mode::normalise_entry(&data, func_va);
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let dwarf_types =
@@ -602,8 +633,14 @@ fn decompile_at_py(
         max_blocks,
         max_instructions,
         timeout_ms,
+        total_timeout_ms: 0,
     };
-    let (funcs, _cg) = analyze_functions_bytes_with_seeds(&data, &budgets, &[func_va]);
+    // Whole-binary function discovery: seconds to minutes on a large image, and
+    // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
+    // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
+    // the closure boundary. See `python_bindings::analysis`.
+    let (funcs, _cg) =
+        py.detach(|| analyze_functions_bytes_with_seeds(&data, &budgets, &[func_va]));
     let func = funcs
         .iter()
         .find(|f| f.entry_point.value == func_va)
@@ -616,6 +653,17 @@ fn decompile_at_py(
         })?;
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let arm_vfp_args = arm_uses_vfp_arguments(&data);
+    // Build the address map first so we can apply a PDB public-symbol name
+    // to the *outer* function header before lowering. The map already
+    // includes PDB symbols when a cache is configured, plus exports / IAT
+    // names that beat the CFG-pass heuristic on stripped Windows binaries.
+    // It is also what tells `soft_helpers` which call targets are libgcc
+    // division helpers, and that has to happen while the IR is still physical.
+    let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
+    let mut addr_map =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
+    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
@@ -623,6 +671,7 @@ fn decompile_at_py(
     // call participates in def/use like any other instruction instead of every later
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
+    inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
     crate::ir::abi::annotate_calls(&mut lf_raw, cc);
     let ssa_graph =
         crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
@@ -662,15 +711,6 @@ fn decompile_at_py(
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
     }
-    // Build the address map first so we can apply a PDB public-symbol name
-    // to the *outer* function header before lowering. The map already
-    // includes PDB symbols when a cache is configured, plus exports / IAT
-    // names that beat the CFG-pass heuristic on stripped Windows binaries.
-    let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    let mut addr_map =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
-    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
-    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let mut callee_layout_cache = std::collections::HashMap::new();
     let callee_facts = recover_direct_callee_layouts(
         &data,
@@ -788,6 +828,7 @@ fn decompile_at_py(
             declared_render.as_ref(),
             dwarf_types.as_deref().unwrap_or(&[]),
             cc,
+            &addr_map,
         )
     } else if style == "c" {
         let body = crate::ir::ast::render_c(&f);
@@ -885,6 +926,9 @@ fn decompile_range_at_py(
         Some(Vec::new()),
     ));
 
+    let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
+    let addr_map =
+        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
@@ -892,6 +936,7 @@ fn decompile_range_at_py(
     // call participates in def/use like any other instruction instead of every later
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
+    inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
     crate::ir::abi::annotate_calls(&mut lf_raw, cc);
     let ssa_graph =
         crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
@@ -932,9 +977,6 @@ fn decompile_range_at_py(
     // is why the four copies could not simply be diffed against each other — the pass
     // list and the local setup were braided together. None of them touch `f`, so
     // hoisting them is order-preserving.
-    let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    let addr_map =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
@@ -1008,6 +1050,7 @@ fn decompile_range_at_py(
             declared_render.as_ref(),
             dwarf_types.as_deref().unwrap_or(&[]),
             cc,
+            &addr_map,
         )
     } else if style == "c" {
         crate::ir::ast::render_c(&f)
@@ -1027,9 +1070,21 @@ fn decompile_range_at_py(
 fn merge_slot_sizes(
     tm: &mut crate::ir::types_recover::TypeMap,
     sizes: &std::collections::HashMap<String, u8>,
+    cc: crate::ir::call_args::CallConv,
 ) {
+    let word = machine_word_bytes(cc);
     for (name, &size) in sizes {
         if size == 0 {
+            continue;
+        }
+        // A machine-word-sized frame slot is a spill slot, and on a 32-bit
+        // target a spilled POINTER lands in one exactly as often as a spilled
+        // `int` does — `-O0` spills every parameter. Declaring it `int` there
+        // truncated the pointer once the recovered C was rebuilt at the host
+        // pointer width. A genuinely narrower slot still states its own width on
+        // every target. Same rule as `merge_exact_definition_widths`, and gated
+        // by the same predicate — see `word_width_implies_int`.
+        if size >= word && !word_width_implies_int(cc) {
             continue;
         }
         tm.upsert_public(
@@ -1212,8 +1267,27 @@ fn decbench_text(
     declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     cc: crate::ir::call_args::CallConv,
+    addr_map: &std::collections::HashMap<u64, String>,
 ) -> String {
     let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
+    // Preparation is also where a PC-relative address arithmetic sequence
+    // finally becomes an absolute address. On AArch64 the stack guard is reached
+    // through its GOT slot (`adrp`/`ldr`/`ldr`), so at the earlier
+    // `resolve_names` the slot was still `%x0 + 0xfd8` and no name could attach;
+    // only now is it the constant an `R_AARCH64_GLOB_DAT` relocation names.
+    // Re-resolve, then let the canary pass recognise it — without this the
+    // guard renders as a portable zero-filled object that the recovered C
+    // dereferences, and every `-fstack-protector` function takes SIGSEGV.
+    //
+    // Folding first is what makes the address a single constant: preparation is
+    // where the `adrp` page and the `add` of the low 12 bits finally meet in one
+    // expression, and until they are folded there is no VA for `resolve_names`
+    // to look up and no address for the renderer to back with a portable object.
+    // `read_counter` emitted `*(int *)(0x20000 + 28)` — a dereference of a raw
+    // original-image address, which is a wild pointer once recompiled.
+    crate::ir::const_fold::fold_constants(&mut prepared);
+    crate::ir::name_resolve::resolve_names(&mut prepared, addr_map);
+    crate::ir::canary::recognise_canary(&mut prepared);
     // Source-level preparation folds GCC's multi-statement reload/sub/flag
     // sequence into a direct comparison of the promoted canary slot. Re-run
     // the idempotent canary pass here so the earlier collapsed save cannot
@@ -1628,10 +1702,12 @@ fn recovered_call_prototype(
 /// Recover the source-ordered physical parameter storage and prototype of direct callees.
 ///
 /// This is intentionally demand-driven and cached. AAPCS-VFP callsites need
-/// cross-function prototype evidence to interleave core and VFP registers, but
-/// lifting every discovered function up front would double the dominant cost
-/// of large-binary decompilation. Only callees of the function currently being
-/// rendered are analyzed, and repeated callees in batch modes reuse the result.
+/// cross-function prototype evidence to interleave core and VFP registers; the
+/// other conventions need the same callee-local evidence for parameter types
+/// that a forwarding caller cannot prove itself. Lifting every discovered
+/// function up front would double the dominant cost of large-binary
+/// decompilation, so only callees of the function currently being rendered are
+/// analyzed and repeated callees in batch modes reuse the result.
 fn recover_direct_callee_layouts(
     data: &[u8],
     functions: &[crate::core::function::Function],
@@ -1654,10 +1730,6 @@ fn recover_direct_callee_layouts(
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::ssa::compute_ssa;
 
-    if cc != crate::ir::call_args::CallConv::ArmHardFloat {
-        return DirectCalleeFacts::default();
-    }
-
     let mut facts = DirectCalleeFacts::default();
     for callee_address in &caller.callees {
         let callee_va = callee_address.value;
@@ -1678,6 +1750,7 @@ fn recover_direct_callee_layouts(
                     }
                 };
                 let mut lifted = lift_function_from_bytes(data, callee, arch)?;
+                inline_soft_helper_calls_in(&mut lifted, &*address_names);
                 crate::ir::abi::annotate_calls(&mut lifted, cc);
                 let ssa = compute_ssa(&lifted);
                 let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lifted, cc);
@@ -1835,12 +1908,73 @@ fn refine_float_copy_types(
 /// needs. Parameter facts are projected from the pre-lowering `RecoveredPrototype`,
 /// which retains exact SSA live-in identity. Only non-parameter roles are remapped
 /// from storage names; both maps are then augmented with promoted-slot sizes.
+/// Bytes in one general-purpose register on the machine this convention runs on.
+///
+/// This is what makes a definition width *evidence*. On x86-64, writing `edi`
+/// rather than `rdi` is a deliberate narrowing and proves the source-level type
+/// was 32-bit. On a 32-bit target there is no wider spelling to choose instead:
+/// `edi` IS the register, so its width proves nothing about the value — it is
+/// equally an `int`, a `long` and a pointer, all of which are four bytes there.
+///
+/// See [`merge_exact_definition_widths`] for why the difference matters.
+fn machine_word_bytes(cc: crate::ir::call_args::CallConv) -> u8 {
+    use crate::ir::call_args::CallConv;
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => 8,
+        CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => 4,
+    }
+}
+
+/// Whether a MACHINE-WORD-sized definition or frame slot should be read as
+/// evidence that the value is an `int` of that width.
+///
+/// True on the 64-bit conventions, where writing `edi` instead of `rdi` is a
+/// narrowing the compiler chose and is *the* -O0 type-recovery signal.
+///
+/// False on cdecl32, where four bytes is the whole register and the same fact is
+/// equally consistent with `int`, `long` and a pointer. Recording it as `int`
+/// truncated every pointer that flowed through a machine register or a spill
+/// slot once the recovered C was rebuilt at the host pointer width, which was
+/// 50 of i386's 110 execution failures.
+///
+/// Deliberately still TRUE for the 32-bit ARM conventions. They have the same
+/// ambiguity but not the same balance: the ARM32 lifter has no sub-register
+/// spellings, so its machine registers are already declared `long` and this rule
+/// would only change FRAME SLOTS. Measured on `tools/arch_roundtrip.py`, doing
+/// that costs armv7 two functions and gains none —
+/// `03_loop_shapes:O0:dowhile_recompute` (`t >>= 8` on a `long` no longer wraps
+/// at 32 bits, so the loop runs eight times instead of four) and
+/// `11_call_shapes:O0:call_result_drives_branch` (a 32-bit call result widened
+/// to `long` acquires the callee's undefined high half, inverting a sign test).
+/// Both are the cost side of the same trade i386 wins on.
+///
+/// The durable fix for both is to propagate POINTER types through copies rather
+/// than inferring a type from storage width at all; until that exists, this
+/// records exactly where the trade has been measured to pay.
+fn word_width_implies_int(cc: crate::ir::call_args::CallConv) -> bool {
+    !matches!(cc, crate::ir::call_args::CallConv::Cdecl32)
+}
+
 fn merge_exact_definition_widths(
     tm: &mut crate::ir::types_recover::TypeMap,
     definition_widths: &std::collections::HashMap<crate::ir::types::VReg, u8>,
     role_names: &std::collections::HashMap<String, String>,
+    cc: crate::ir::call_args::CallConv,
 ) {
+    let word = machine_word_bytes(cc);
     for (storage, &exact_width) in definition_widths {
+        // A full-width machine-register definition on a 32-bit target is not a
+        // narrowing and therefore not evidence of an `int`. Recording it as one
+        // declares every machine word `int`, and the DecBench C is rebuilt at the
+        // HOST pointer width — so a recovered `var = p; var = var + 4;` chain
+        // truncated the pointer to 32 bits and faulted, and an assignment from
+        // such an `int` into a `long` role acquired a `(unsigned long)(unsigned
+        // int)` conversion that did the same. Narrower definitions (a byte or a
+        // halfword) remain genuine narrowing evidence on every target. Gated by
+        // `word_width_implies_int`, which records where the trade measures out.
+        if exact_width >= word && !word_width_implies_int(cc) {
+            continue;
+        }
         let crate::ir::types::VReg::Phys(storage_name) = storage else {
             continue;
         };
@@ -1914,8 +2048,8 @@ fn decbench_type_maps(
             }
         }
     }
-    merge_slot_sizes(&mut decl, slot_sizes);
-    merge_exact_definition_widths(&mut decl, definition_widths, role_names);
+    merge_slot_sizes(&mut decl, slot_sizes, cc);
+    merge_exact_definition_widths(&mut decl, definition_widths, role_names, cc);
     crate::ir::call_contracts::refine_call_result_types(f, &mut decl);
     refine_float_copy_types(&f.body, &mut decl);
     let mut width = remap_type_map_impl(&raw, cc, param_slots, false, Some(role_names));
@@ -1936,8 +2070,8 @@ fn decbench_type_maps(
             }
         }
     }
-    merge_slot_sizes(&mut width, slot_sizes);
-    merge_exact_definition_widths(&mut width, definition_widths, role_names);
+    merge_slot_sizes(&mut width, slot_sizes, cc);
+    merge_exact_definition_widths(&mut width, definition_widths, role_names, cc);
     crate::ir::call_contracts::refine_call_result_types(f, &mut width);
     refine_float_copy_types(&f.body, &mut width);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
@@ -1983,8 +2117,13 @@ fn decompile_all_py(
         max_blocks,
         max_instructions,
         timeout_ms,
+        total_timeout_ms: 0,
     };
-    let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
+    // Whole-binary function discovery: seconds to minutes on a large image, and
+    // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
+    // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
+    // the closure boundary. See `python_bindings::analysis`.
+    let (funcs, _cg) = py.detach(|| analyze_functions_bytes(&data, &budgets));
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let arm_vfp_args = arm_uses_vfp_arguments(&data);
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
@@ -2000,11 +2139,17 @@ fn decompile_all_py(
     let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {
+        // The GIL is held across the per-function lifting work (the loop builds
+        // a `PyList` as it goes), so CPython never re-enters its eval loop and
+        // never notices a signal. This is the supported way to stay
+        // interruptible without releasing: it raises `KeyboardInterrupt` here.
+        py.check_signals()?;
         let Some(lf_raw) = lift_function_from_bytes(&data, func, arch) else {
             continue;
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
         let mut lf_raw = lf_raw;
+        inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         crate::ir::abi::annotate_calls(&mut lf_raw, cc);
         let ssa_graph =
             crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
@@ -2113,6 +2258,7 @@ fn decompile_all_py(
                 declared_render.as_ref(),
                 dwarf_types.as_deref().unwrap_or(&[]),
                 cc,
+                &addr_map,
             )
         } else {
             render(&f)
@@ -2157,6 +2303,11 @@ fn decompile_many_py(
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    // See `decompile_at`: an ARM32 Thumb `.symtab` value carries the Thumb bit.
+    let func_vas: Vec<u64> = func_vas
+        .into_iter()
+        .map(|va| crate::analysis::arm32_mode::normalise_entry(&data, va))
+        .collect();
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
     let dwarf_types =
@@ -2180,9 +2331,14 @@ fn decompile_many_py(
         max_blocks,
         max_instructions,
         timeout_ms,
+        total_timeout_ms: 0,
     };
     // --- one-time analysis + name/field/string maps -----------------------
-    let (funcs, _cg) = analyze_functions_bytes_with_seeds(&data, &budgets, &func_vas);
+    // Whole-binary function discovery: seconds to minutes on a large image, and
+    // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
+    // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
+    // the closure boundary. See `python_bindings::analysis`.
+    let (funcs, _cg) = py.detach(|| analyze_functions_bytes_with_seeds(&data, &budgets, &func_vas));
     let (arch, cc) = detect_arch_and_call_conv(&data);
     let arm_vfp_args = arm_uses_vfp_arguments(&data);
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
@@ -2206,6 +2362,9 @@ fn decompile_many_py(
     let list = PyList::empty(py);
 
     for func in funcs.iter() {
+        // See `decompile_all_py`: keeps a long multi-function decompile
+        // interruptible while the GIL is held for the `PyList` it is building.
+        py.check_signals()?;
         let func_va = func.entry_point.value;
         if !wanted.contains(&func_va) {
             continue;
@@ -2215,6 +2374,7 @@ fn decompile_many_py(
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
         let mut lf_raw = lf_raw;
+        inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         crate::ir::abi::annotate_calls(&mut lf_raw, cc);
         let ssa_graph =
             crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
@@ -2334,6 +2494,7 @@ fn decompile_many_py(
                 declared_render.as_ref(),
                 dwarf_types.as_deref().unwrap_or(&[]),
                 cc,
+                &addr_map,
             )
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);
@@ -2397,7 +2558,12 @@ mod tests {
         let definition_widths = HashMap::from([(VReg::phys("esi"), 4)]);
         let role_names = HashMap::from([("esi".to_string(), "arg1".to_string())]);
 
-        merge_exact_definition_widths(&mut types, &definition_widths, &role_names);
+        merge_exact_definition_widths(
+            &mut types,
+            &definition_widths,
+            &role_names,
+            CallConv::SysVAmd64,
+        );
 
         assert_eq!(
             types.get(&argument),
@@ -2406,6 +2572,133 @@ mod tests {
                 width: 8,
             })
         );
+    }
+
+    /// On x86-64 a 32-bit definition is a deliberate narrowing (`edi`, not
+    /// `rdi`) and remains the -O0 type-recovery signal.
+    #[test]
+    fn a_narrowing_definition_still_types_a_local_on_a_sixty_four_bit_target() {
+        let role = VReg::phys("var0");
+        let mut types = TypeMap::default();
+        let definition_widths = HashMap::from([(VReg::phys("eax#1"), 4)]);
+        let role_names = HashMap::from([("eax#1".to_string(), "var0".to_string())]);
+
+        merge_exact_definition_widths(
+            &mut types,
+            &definition_widths,
+            &role_names,
+            CallConv::SysVAmd64,
+        );
+
+        assert_eq!(
+            types.get(&role),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+
+    /// The same 4-byte definition on i386 is the WHOLE register — there is no
+    /// wider spelling the compiler declined to use — so it proves nothing, and
+    /// declaring the role `int` truncates any pointer that flows through it once
+    /// the recovered C is rebuilt at the host pointer width.
+    #[test]
+    fn a_full_width_definition_is_not_int_evidence_on_a_thirty_two_bit_target() {
+        let role = VReg::phys("var0");
+        let mut types = TypeMap::default();
+        let definition_widths = HashMap::from([(VReg::phys("eax#1"), 4)]);
+        let role_names = HashMap::from([("eax#1".to_string(), "var0".to_string())]);
+
+        merge_exact_definition_widths(
+            &mut types,
+            &definition_widths,
+            &role_names,
+            CallConv::Cdecl32,
+        );
+
+        assert_eq!(types.get(&role), None);
+    }
+
+    /// A byte-wide definition is a narrowing on every target, 32-bit included.
+    #[test]
+    fn a_sub_word_definition_is_still_evidence_on_a_thirty_two_bit_target() {
+        let role = VReg::phys("var0");
+        let mut types = TypeMap::default();
+        let definition_widths = HashMap::from([(VReg::phys("al#1"), 1)]);
+        let role_names = HashMap::from([("al#1".to_string(), "var0".to_string())]);
+
+        merge_exact_definition_widths(
+            &mut types,
+            &definition_widths,
+            &role_names,
+            CallConv::Cdecl32,
+        );
+
+        assert_eq!(
+            types.get(&role),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 1,
+            })
+        );
+    }
+
+    /// A four-byte frame slot on x86-64 is a genuine 32-bit local and keeps
+    /// stating its width; the same slot on i386 is a machine word that a
+    /// spilled pointer occupies just as readily.
+    #[test]
+    fn word_sized_frame_slots_only_declare_int_where_the_word_is_wider() {
+        let slot = VReg::phys("local_c");
+        let sizes = HashMap::from([("local_c".to_string(), 4u8)]);
+
+        let mut sixty_four = TypeMap::default();
+        super::merge_slot_sizes(&mut sixty_four, &sizes, CallConv::SysVAmd64);
+        assert_eq!(
+            sixty_four.get(&slot),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+
+        let mut thirty_two = TypeMap::default();
+        super::merge_slot_sizes(&mut thirty_two, &sizes, CallConv::Cdecl32);
+        assert_eq!(thirty_two.get(&slot), None);
+
+        // A byte-wide slot is narrower than the word on both.
+        let narrow = HashMap::from([("local_1".to_string(), 1u8)]);
+        let mut narrow_map = TypeMap::default();
+        super::merge_slot_sizes(&mut narrow_map, &narrow, CallConv::Cdecl32);
+        assert_eq!(
+            narrow_map.get(&VReg::phys("local_1")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn machine_word_is_four_bytes_on_every_thirty_two_bit_convention() {
+        assert_eq!(super::machine_word_bytes(CallConv::Cdecl32), 4);
+        assert_eq!(super::machine_word_bytes(CallConv::Arm), 4);
+        assert_eq!(super::machine_word_bytes(CallConv::ArmHardFloat), 4);
+        assert_eq!(super::machine_word_bytes(CallConv::SysVAmd64), 8);
+        assert_eq!(super::machine_word_bytes(CallConv::Win64), 8);
+        assert_eq!(super::machine_word_bytes(CallConv::Aarch64), 8);
+    }
+
+    /// The ambiguity rule is applied where it has been MEASURED to pay, and only
+    /// there. See `word_width_implies_int` for the armv7 evidence.
+    #[test]
+    fn word_width_stops_implying_int_only_on_cdecl32() {
+        assert!(!super::word_width_implies_int(CallConv::Cdecl32));
+        assert!(super::word_width_implies_int(CallConv::Arm));
+        assert!(super::word_width_implies_int(CallConv::ArmHardFloat));
+        assert!(super::word_width_implies_int(CallConv::SysVAmd64));
+        assert!(super::word_width_implies_int(CallConv::Win64));
+        assert!(super::word_width_implies_int(CallConv::Aarch64));
     }
 
     #[test]
