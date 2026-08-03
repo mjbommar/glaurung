@@ -3394,8 +3394,8 @@ mod tests {
         );
     }
 
-    /// `subs Rd, #imm` sets the flags of `cmp Rd_OLD, #imm`, so they must be
-    /// computed BEFORE the subtraction overwrites `Rd`.
+    /// `subs Rd, #imm` sets the flags from `Rd_OLD - imm`, so the old operands
+    /// must be captured before the subtraction overwrites `Rd`.
     ///
     /// Emitting the `Op::Bin` first and then reading `Value::Reg(dst)` made the
     /// zero flag mean `Rd_new == imm`, i.e. `Rd_old == 2*imm`. The real
@@ -3403,7 +3403,7 @@ mod tests {
     /// `while (i != 1)` and never terminated — which is the whole reason
     /// `14_flag_effects` exists.
     #[test]
-    fn s_suffixed_flags_read_the_operands_not_the_overwritten_result() {
+    fn s_suffixed_flags_capture_operands_before_the_result_overwrite() {
         // subs r3, #1 = 3b01, the exact latch of the real `dec_loop` fixture.
         let out = ops(&[0x01, 0x3b]);
         let subtract = out
@@ -3422,20 +3422,18 @@ mod tests {
                 )
             })
             .unwrap_or_else(|| panic!("no zero flag: {out:#?}"));
-        assert!(
-            zero < subtract,
-            "the flag write must precede the write it reads: {out:#?}"
-        );
-        assert_eq!(
-            out[zero],
-            Op::Cmp {
-                dst: VReg::Flag(Flag::Z),
-                op: CmpOp::Eq,
-                lhs: Value::Reg(VReg::phys("r3")),
-                rhs: Value::Const(1),
-            },
-            "zero flag operands: {out:#?}"
-        );
+        let saved_lhs = out
+            .iter()
+            .position(|op| matches!(
+                op,
+                Op::Assign {
+                    dst: VReg::Temp(21),
+                    src: Value::Reg(VReg::Phys(source)),
+                } if source == "r3"
+            ))
+            .unwrap_or_else(|| panic!("old lhs was not captured: {out:#?}"));
+        assert!(saved_lhs < subtract, "lhs capture must precede overwrite: {out:#?}");
+        assert!(subtract < zero, "result-derived zero flag must follow subtraction: {out:#?}");
 
         // The three-operand form with `Rd == Rn` has the same hazard:
         // subs r0, r0, r1 (A1) = 0xe0500001.
@@ -3447,19 +3445,19 @@ mod tests {
             .iter()
             .position(|o| matches!(o, Op::Bin { op: BinOp::Sub, .. }))
             .unwrap();
-        let zero = out
+        let saved_lhs = out
             .iter()
             .position(|o| {
                 matches!(
                     o,
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::Z),
-                        ..
-                    }
+                    Op::Assign {
+                        dst: VReg::Temp(21),
+                        src: Value::Reg(VReg::Phys(source)),
+                    } if source == "r0"
                 )
             })
             .unwrap();
-        assert!(zero < subtract, "three-operand form: {out:#?}");
+        assert!(saved_lhs < subtract, "three-operand form: {out:#?}");
     }
 
     /// A result-derived flag is the mirror case: `adds` reports whether its
