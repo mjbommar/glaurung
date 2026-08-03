@@ -1340,7 +1340,11 @@ fn decbench_text(
     // context needs the extension the hardware performed made explicit. Runs before
     // verification and rendering; it changes no definition, use, or value identity.
     if let Some(tm) = decl {
-        crate::ir::widen::insert_widening_casts(&mut prepared, tm);
+        crate::ir::widen::insert_widening_casts_for_machine_width(
+            &mut prepared,
+            tm,
+            machine_word_bytes(cc),
+        );
     }
     // Call specifications belong to concrete AST calls, not to renderer-local
     // symbol guesses. Refresh them after every expression/type refinement so

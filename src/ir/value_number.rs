@@ -1049,6 +1049,15 @@ enum ClassWidth {
 }
 
 impl ClassWidth {
+    fn join(self, other: ClassWidth) -> ClassWidth {
+        match (self, other) {
+            (ClassWidth::Ambiguous, _) | (_, ClassWidth::Ambiguous) => ClassWidth::Ambiguous,
+            (ClassWidth::Open, other) | (other, ClassWidth::Open) => other,
+            (ClassWidth::Known(a), ClassWidth::Known(b)) if a == b => self,
+            _ => ClassWidth::Ambiguous,
+        }
+    }
+
     fn merge(self, other: ClassWidth) -> Option<ClassWidth> {
         match (self, other) {
             (ClassWidth::Ambiguous, _) | (_, ClassWidth::Ambiguous) => None,
@@ -1058,6 +1067,45 @@ impl ClassWidth {
             (ClassWidth::Open, ClassWidth::Open) => Some(ClassWidth::Open),
         }
     }
+}
+
+/// Width constraints that must survive even when several SSA values receive one
+/// source-level name.
+///
+/// A plain assignment, load, comparison or explicit conversion already carries
+/// its value semantics in the expression that lowering emits. The destination's
+/// physical register spelling is only storage, so an eight-byte `mov` of a
+/// four-byte value must not conflict with that value's four-byte arithmetic.
+/// Arithmetic and width-parameterized intrinsics are different: their result
+/// wraps at the recorded destination width, and a shared C declaration has to
+/// preserve it. Join every definition of a name up front so kept-bare names are
+/// no longer attributed by whichever definition happened to be visited last.
+fn coalescing_definition_claims(
+    out: &LlirFunction,
+    definition_widths: &HashMap<VReg, u8>,
+) -> HashMap<VReg, ClassWidth> {
+    let mut claims = HashMap::new();
+    for block in &out.blocks {
+        for instruction in &block.instrs {
+            let Some(destination) = def_uses(&instruction.op).0 else {
+                continue;
+            };
+            let claim = match &instruction.op {
+                Op::Bin { .. } | Op::Un { .. } | Op::Ite { .. } | Op::Intrinsic { .. } => {
+                    definition_widths
+                        .get(&destination)
+                        .copied()
+                        .map_or(ClassWidth::Open, ClassWidth::Known)
+                }
+                _ => ClassWidth::Open,
+            };
+            claims
+                .entry(destination)
+                .and_modify(|existing: &mut ClassWidth| *existing = existing.join(claim))
+                .or_insert(claim);
+        }
+    }
+    claims
 }
 
 /// The starting width claim of every candidate, decided before any merging so
@@ -1085,23 +1133,15 @@ fn class_widths(
     names: &[VReg],
     index: &HashMap<VReg, usize>,
     copies: &[(VReg, VReg)],
-    definition_widths: &HashMap<VReg, u8>,
-    definitions_of: &HashMap<VReg, usize>,
+    definition_claims: &HashMap<VReg, ClassWidth>,
 ) -> Vec<ClassWidth> {
-    fn join(a: ClassWidth, b: ClassWidth) -> ClassWidth {
-        match (a, b) {
-            (ClassWidth::Ambiguous, _) | (_, ClassWidth::Ambiguous) => ClassWidth::Ambiguous,
-            (ClassWidth::Open, other) | (other, ClassWidth::Open) => other,
-            (ClassWidth::Known(x), ClassWidth::Known(y)) if x == y => ClassWidth::Known(x),
-            _ => ClassWidth::Ambiguous,
-        }
-    }
     let mut widths: Vec<ClassWidth> = names
         .iter()
-        .map(|v| {
-            definition_widths
-                .get(v)
-                .map_or(ClassWidth::Open, |&w| ClassWidth::Known(w))
+        .map(|value| {
+            definition_claims
+                .get(value)
+                .copied()
+                .unwrap_or(ClassWidth::Open)
         })
         .collect();
     // Each copy, reduced to (destination candidate, source candidate or a fixed
@@ -1121,24 +1161,13 @@ fn class_widths(
         .iter()
         .filter_map(|(dst, src)| {
             let d = *index.get(dst)?;
-            if definition_widths.contains_key(dst) {
-                return None; // the destination states its own width
-            }
             if let Some(&s) = index.get(src) {
                 return Some((d, Some(s), ClassWidth::Open));
             }
-            let claim = match definitions_of.get(src).copied().unwrap_or(0) {
-                1 => definition_widths
-                    .get(src)
-                    .map_or(ClassWidth::Ambiguous, |&w| ClassWidth::Known(w)),
-                // Zero definitions is a live-in parameter, about which this map
-                // says nothing. Treating that as "no opinion" and letting the
-                // phi take its other edges' width was tried and reverted: it
-                // let the loop-carried phi in `call_chain_in_loop` (`gcc -O2`)
-                // join the entry parameter's class, and every iteration called
-                // `signed_step(seed)` instead of `signed_step(v)`.
-                _ => ClassWidth::Ambiguous,
-            };
+            let claim = definition_claims
+                .get(src)
+                .copied()
+                .unwrap_or(ClassWidth::Open);
             Some((d, None, claim))
         })
         .collect();
@@ -1148,7 +1177,7 @@ fn class_widths(
         let mut changed = false;
         for &(d, source, fixed) in &edges {
             let contribution = source.map_or(fixed, |s| widths[s]);
-            let next = join(widths[d], contribution);
+            let next = widths[d].join(contribution);
             if next != widths[d] {
                 widths[d] = next;
                 changed = true;
@@ -1196,18 +1225,14 @@ const MAX_COALESCE_CANDIDATES: usize = 4096;
 /// correctness of the dataflow:
 ///
 /// * **Only tagged names.** See [`coalescable`] — bare names carry ABI identity.
-/// * **One machine width per class.** `definition_widths` is what proves an
-///   arithmetic definition wraps at 32 bits, and one name can carry only one
-///   width. A phi destination has no recorded width of its own — it is not a
-///   lifted instruction — so its width is taken from its incoming values, and
-///   only when they all agree. When they do not, the value is width-ambiguous
-///   and is not coalesced with anything at all. Deciding this up front is what
-///   makes the result independent of the order the copies are visited in:
-///   `factorial_while` at `gcc -O2` initialises its accumulator with a 4-byte
-///   `mov eax,1` and updates it with an 8-byte `imul rax`, and merging the phi
-///   with whichever of the two came first stamped that width on the loop-carried
-///   variable — the 4-byte case truncated the product every iteration and the
-///   function returned 1.
+/// * **One semantic arithmetic width per class.** Plain moves and loads carry
+///   storage width but preserve their expression's value semantics, so they do
+///   not constrain a source-level declaration. Arithmetic, selects and
+///   width-parameterized intrinsics do: two such definitions that genuinely
+///   wrap at different widths cannot share one declaration. A phi destination
+///   inherits those constraints from all incoming values at a fixed point; a
+///   disagreement is decided before merging so copy order cannot change the
+///   result.
 ///
 /// Liveness restricted to candidates is exact rather than approximate: whether a
 /// value is live at a point does not depend on which other values are.
@@ -1331,18 +1356,8 @@ fn coalesce_phi_copies(
         x
     }
     let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
-    // How many definitions each name has in this body, which is what makes a
-    // name-keyed width entry attributable (or not) — see `class_widths`.
-    let mut definitions_of: HashMap<VReg, usize> = HashMap::new();
-    for block in &out.blocks {
-        for ins in &block.instrs {
-            if let Some(d) = def_uses(&ins.op).0 {
-                *definitions_of.entry(d).or_insert(0) += 1;
-            }
-        }
-    }
-    let mut width: Vec<ClassWidth> =
-        class_widths(&names, &index, copies, definition_widths, &definitions_of);
+    let definition_claims = coalescing_definition_claims(out, definition_widths);
+    let mut width: Vec<ClassWidth> = class_widths(&names, &index, copies, &definition_claims);
     for (d, s) in pairs.iter().copied() {
         let (a, b) = (find(&mut parent, d), find(&mut parent, s));
         if a == b {
@@ -1409,7 +1424,24 @@ fn coalesce_phi_copies(
     let mut merged_widths: HashMap<VReg, u8> = HashMap::new();
     for (value, w) in definition_widths.iter() {
         let key = rename.get(value).cloned().unwrap_or_else(|| value.clone());
-        merged_widths.insert(key, *w);
+        merged_widths
+            .entry(key)
+            .and_modify(|existing| *existing = (*existing).max(*w))
+            .or_insert(*w);
+    }
+    // A width-sensitive definition is the semantic constraint for the merged
+    // name. Width-neutral moves may have contributed a wider storage spelling,
+    // but choosing that spelling would silently change 32-bit arithmetic. Open
+    // classes have no such constraint and keep the widest observed storage.
+    for root in 0..n {
+        if find(&mut parent, root) != root {
+            continue;
+        }
+        let ClassWidth::Known(exact_width) = width[root] else {
+            continue;
+        };
+        let representative_index = representative[&root];
+        merged_widths.insert(names[representative_index].clone(), exact_width);
     }
     *definition_widths = merged_widths;
 }
@@ -2084,13 +2116,70 @@ mod tests {
         );
     }
 
-    /// A class may not mix machine widths: `definition_widths` is the only proof
-    /// that a definition wraps at 32 bits, and one name cannot carry two.
+    /// A class may not mix arithmetic widths: plain moves are width-neutral, but
+    /// two operations that genuinely wrap at 32 and 64 bits cannot share one C
+    /// declaration without explicit per-definition casts.
     #[test]
     fn a_width_disagreement_blocks_the_merge() {
         let mut widths = HashMap::new();
         widths.insert(VReg::phys("rax#1"), 4u8);
         widths.insert(VReg::phys("rax#2"), 8u8);
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1010,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Bin {
+                            dst: VReg::phys("rax#1"),
+                            op: crate::ir::types::BinOp::Add,
+                            lhs: Value::Const(1),
+                            rhs: Value::Const(2),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Assign {
+                            dst: VReg::phys("rax#2"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1008,
+                        op: Op::Bin {
+                            dst: VReg::phys("rax#2"),
+                            op: crate::ir::types::BinOp::Mul,
+                            lhs: Value::Const(3),
+                            rhs: Value::Const(4),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x100c,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx"),
+                            src: Value::Reg(VReg::phys("rax#2")),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        coalesce_phi_copies(
+            &mut lf,
+            &[(VReg::phys("rax#2"), VReg::phys("rax#1"))],
+            &mut widths,
+        );
+        assert!(
+            register_copies(&lf).contains(&("rax#2".to_string(), "rax#1".to_string())),
+            "4-byte and 8-byte arithmetic must not share a name: {lf:#?}"
+        );
+    }
+
+    #[test]
+    fn width_neutral_moves_do_not_block_phi_coalescing() {
+        let mut widths = HashMap::from([(VReg::phys("rax#1"), 4u8), (VReg::phys("rax#2"), 8u8)]);
         let mut lf = LlirFunction {
             entry_va: 0x1000,
             blocks: vec![LlirBlock {
@@ -2127,10 +2216,12 @@ mod tests {
             &[(VReg::phys("rax#2"), VReg::phys("rax#1"))],
             &mut widths,
         );
-        assert!(
-            register_copies(&lf).contains(&("rax#2".to_string(), "rax#1".to_string())),
-            "a 4-byte and an 8-byte definition must not share a name: {lf:#?}"
+        assert_eq!(
+            register_copies(&lf),
+            vec![("rcx".to_string(), "rax#1".to_string())],
+            "storage-width-only moves must not split one value: {lf:#?}"
         );
+        assert_eq!(widths.get(&VReg::phys("rax#1")), Some(&8));
     }
 
     /// A phi destination has no width of its own; it takes the one its incoming
@@ -2151,12 +2242,12 @@ mod tests {
             .enumerate()
             .map(|(i, v)| (v, i))
             .collect();
-        let mut widths = HashMap::new();
-        widths.insert(VReg::phys("rax#1"), 4u8);
-        widths.insert(VReg::phys("rax#2"), 8u8);
+        let mut claims = HashMap::new();
+        claims.insert(VReg::phys("rax#1"), ClassWidth::Known(4));
+        claims.insert(VReg::phys("rax#2"), ClassWidth::Known(8));
         let edge = |d: usize, s: usize| (names[d].clone(), names[s].clone());
         for copies in [vec![edge(0, 1), edge(0, 2)], vec![edge(0, 2), edge(0, 1)]] {
-            let decided = class_widths(&names, &index, &copies, &widths, &HashMap::new());
+            let decided = class_widths(&names, &index, &copies, &claims);
             assert_eq!(
                 decided[0],
                 ClassWidth::Ambiguous,
@@ -2167,39 +2258,31 @@ mod tests {
             assert_eq!(decided[0].merge(decided[2]), None);
         }
 
-        // The same, when the wide incoming value is a KEPT-BARE name with TWO
-        // definitions in the body. Its `definition_widths` entry is keyed by
-        // NAME, so it describes whichever of them was recorded last and proves
-        // nothing about this edge. The phi must come out ambiguous even though
-        // the map claims the same 4 bytes as the other edge — which is exactly
-        // what it claimed for `factorial_while` at `clang -O2`, whose two `rax`
-        // definitions are a 4-byte `mov eax,1` and an 8-byte `imul rax`.
-        let mut with_bare = HashMap::new();
-        with_bare.insert(VReg::phys("rax#1"), 4u8);
-        with_bare.insert(VReg::phys("rax"), 4u8);
+        // Kept-bare names can have several definitions. Their constraints are
+        // joined while the defining operations are still visible, rather than
+        // trusting whichever name-keyed width happened to be recorded last.
         let both = vec![edge(0, 1), (names[0].clone(), VReg::phys("rax"))];
-        let mut two_defs = HashMap::new();
-        two_defs.insert(VReg::phys("rax"), 2usize);
-        let decided = class_widths(&names, &index, &both, &with_bare, &two_defs);
+        let mut with_bare = HashMap::new();
+        with_bare.insert(VReg::phys("rax#1"), ClassWidth::Known(4));
+        with_bare.insert(VReg::phys("rax"), ClassWidth::Ambiguous);
+        let decided = class_widths(&names, &index, &both, &with_bare);
         assert_eq!(
             decided[0],
             ClassWidth::Ambiguous,
-            "a phi edge from a name with several definitions proves nothing \
-             about the phi's width, and believing it truncated a 64-bit product \
-             every iteration"
+            "conflicting definitions of a kept-bare source must remain ambiguous"
         );
-        // With a SINGLE definition the same entry is attributable, so the edge
-        // is ordinary evidence and the phi may still coalesce.
-        let mut one_def = HashMap::new();
-        one_def.insert(VReg::phys("rax"), 1usize);
-        let decided = class_widths(&names, &index, &both, &with_bare, &one_def);
+        with_bare.insert(VReg::phys("rax"), ClassWidth::Known(4));
+        let decided = class_widths(&names, &index, &both, &with_bare);
         assert_eq!(decided[0], ClassWidth::Known(4));
         // A live-in has no definition here at all, so this map says nothing
-        // about it and the phi stays ambiguous. Letting it take its other
-        // edges' width was tried and reverted — see the comment on the zero
-        // case in `class_widths`.
-        let decided = class_widths(&names, &index, &both, &with_bare, &HashMap::new());
-        assert_eq!(decided[0], ClassWidth::Ambiguous);
+        // about it. Missing evidence is Open, not a contradiction: the phi may
+        // take the width proved by its other incoming values. Interference is
+        // responsible for keeping genuinely distinct loop-carried values apart;
+        // using width ambiguity as that guard couples two unrelated proofs and
+        // is what refuses ordinary parameter-fed phi webs at scale.
+        with_bare.remove(&VReg::phys("rax"));
+        let decided = class_widths(&names, &index, &both, &with_bare);
+        assert_eq!(decided[0], ClassWidth::Known(4));
 
         // Agreement is what permits a merge, and it propagates through a chain of
         // phis — the nested-loop shape, where one carried value is copied once per
@@ -2216,7 +2299,7 @@ mod tests {
             .map(|(i, v)| (v, i))
             .collect();
         let mut agreed = HashMap::new();
-        agreed.insert(VReg::phys("rax#1"), 4u8);
+        agreed.insert(VReg::phys("rax#1"), ClassWidth::Known(4));
         let decided = class_widths(
             &chain,
             &chain_index,
@@ -2225,7 +2308,6 @@ mod tests {
                 (chain[1].clone(), chain[0].clone()),
             ],
             &agreed,
-            &HashMap::new(),
         );
         assert_eq!(decided[0], ClassWidth::Known(4));
         assert_eq!(

@@ -891,10 +891,12 @@ fn fold_body_with_context(
 /// Recover the value entering an ABI slot at the top of a structured loop.
 ///
 /// SSA destruction leaves an explicit initialization before the loop and a
-/// same-slot copy at the back edge (`rdi#1 = rdi` ... `rdi#1 = rdi#2`). A call
-/// before that back-edge copy consumes `rdi#1`, not the function-entry `rdi`.
-/// Requiring the exact initialized SSA destination, a same-slot update, and a
-/// preceding call keeps this narrower than generic phi reconstruction.
+/// definition of the same value-numbered name at the back edge (`rdi#1 = rdi`
+/// ... `rdi#1 = next`). A call before that definition consumes `rdi#1`, not the
+/// function-entry `rdi`. Phi-copy coalescing can fold `next` into an arbitrary
+/// computed expression, so the update is not required to remain a register
+/// copy. Requiring the exact initialized SSA destination and a preceding call
+/// keeps this narrower than generic phi reconstruction.
 fn loop_carried_arg_inputs(
     prefix: &[Stmt],
     loop_body: &[Stmt],
@@ -906,7 +908,7 @@ fn loop_carried_arg_inputs(
     for (update_index, statement) in loop_body.iter().enumerate() {
         let Stmt::Assign {
             dst: VReg::Phys(dst),
-            src: Expr::Reg(VReg::Phys(src)),
+            ..
         } = statement
         else {
             continue;
@@ -915,7 +917,6 @@ fn loop_carried_arg_inputs(
             continue;
         };
         if !dst.contains('#')
-            || slot_of(arch, src) != Some(slot)
             || !loop_body[..update_index]
                 .iter()
                 .any(|candidate| matches!(candidate, Stmt::Call { .. }))
@@ -3528,6 +3529,53 @@ mod tests {
                         Stmt::Assign {
                             dst: reg("rdi#1"),
                             src: Expr::Reg(reg("rdi#2")),
+                        },
+                    ],
+                    cond: Expr::Const(1),
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0].into_iter().collect());
+
+        let Stmt::DoWhile { body, .. } = &f.body[1] else {
+            panic!("expected loop: {f:#?}");
+        };
+        let args = body.iter().find_map(|statement| match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                args,
+                ..
+            } if name == "signed_step" => Some(args),
+            _ => None,
+        });
+        assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi#1"))]));
+    }
+
+    #[test]
+    fn call_inside_loop_uses_a_coalesced_computed_loop_value() {
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Reg(reg("rdi")),
+                },
+                Stmt::DoWhile {
+                    body: vec![
+                        call_to("signed_step"),
+                        // Phi-copy coalescing gives the update and loop input
+                        // one name. The update need not remain a copy: normal
+                        // reconstruction folds the call result and induction
+                        // term into the assignment directly.
+                        Stmt::Assign {
+                            dst: reg("rdi#1"),
+                            src: Expr::Bin {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Reg(reg("rax#2"))),
+                                rhs: Box::new(Expr::Reg(reg("rbx#2"))),
+                            },
                         },
                     ],
                     cond: Expr::Const(1),

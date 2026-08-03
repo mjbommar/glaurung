@@ -34,32 +34,40 @@ use crate::ir::types_recover::TypeMap;
 /// "no widening applies here" — recurse, but do not insert casts at this level.
 type Want = Option<u8>;
 
-/// The machine register width every canonicalised LLIR value actually occupies.
-const MACHINE_WIDTH: u8 = 8;
-
 /// Rewrite `f` so every implicitly widened read is an explicit zero-extension.
 ///
 /// Semantics-preserving with respect to the *machine*, not to the C we emitted
 /// before: that is the point. Definitions, uses, control flow and value identities
 /// are unchanged, so `verify_defs` and the structural lane see the same function.
 pub fn insert_widening_casts(f: &mut Function, tm: &TypeMap) {
-    let ret_width = crate::ir::ast::inferred_return_width(&f.body, Some(tm));
-    rewrite_body(&mut f.body, ret_width, tm);
+    insert_widening_casts_for_machine_width(f, tm, 8);
 }
 
-fn rewrite_body(body: &mut [Stmt], ret_width: u8, tm: &TypeMap) {
+/// Rewrite implicit widening using the target's machine-register width.
+///
+/// The compatibility wrapper above retains the 64-bit default for direct AST
+/// callers.  Decompilation entry points know the calling convention and must
+/// pass four for ARM32/i386 so their recovered C is not widened merely because
+/// the differential runner rebuilds it on an LP64 host.
+pub fn insert_widening_casts_for_machine_width(f: &mut Function, tm: &TypeMap, machine_width: u8) {
+    let ret_width = crate::ir::ast::inferred_return_width(&f.body, Some(tm)).min(machine_width);
+    rewrite_body(&mut f.body, ret_width, tm, machine_width);
+}
+
+fn rewrite_body(body: &mut [Stmt], ret_width: u8, tm: &TypeMap, machine_width: u8) {
     for s in body.iter_mut() {
-        rewrite_stmt(s, ret_width, tm);
+        rewrite_stmt(s, ret_width, tm, machine_width);
     }
 }
 
-fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap) {
+fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap, machine_width: u8) {
     match s {
         Stmt::Assign { dst, src } => {
             // The destination's own declaration says how wide this value is kept.
             let want = declared_int(dst_name(dst), tm)
                 .map(|(_, w)| w)
-                .unwrap_or(MACHINE_WIDTH);
+                .unwrap_or(machine_width)
+                .min(machine_width);
             rewrite_expr(src, Some(want), tm);
         }
         Stmt::Store { src, size, .. } => {
@@ -69,7 +77,7 @@ fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap) {
             // scalar integer to widen.  Casting its array temporary to a
             // machine word would narrow the subsequent store back to 8 bytes.
             if *size != 16 {
-                rewrite_expr(src, Some(*size), tm);
+                rewrite_expr(src, Some((*size).min(machine_width)), tm);
             }
         }
         // NOT a blanket 64-bit context: a function declared to return `int`
@@ -81,14 +89,14 @@ fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap) {
             else_body,
         } => {
             rewrite_expr(cond, None, tm);
-            rewrite_body(then_body, ret_width, tm);
+            rewrite_body(then_body, ret_width, tm, machine_width);
             if let Some(b) = else_body {
-                rewrite_body(b, ret_width, tm);
+                rewrite_body(b, ret_width, tm, machine_width);
             }
         }
         Stmt::While { cond, body } => {
             rewrite_expr(cond, None, tm);
-            rewrite_body(body, ret_width, tm);
+            rewrite_body(body, ret_width, tm, machine_width);
         }
         Stmt::For {
             init,
@@ -96,13 +104,13 @@ fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap) {
             step,
             body,
         } => {
-            rewrite_stmt(init, ret_width, tm);
+            rewrite_stmt(init, ret_width, tm, machine_width);
             rewrite_expr(cond, None, tm);
-            rewrite_body(body, ret_width, tm);
-            rewrite_stmt(step, ret_width, tm);
+            rewrite_body(body, ret_width, tm, machine_width);
+            rewrite_stmt(step, ret_width, tm, machine_width);
         }
         Stmt::DoWhile { body, cond } => {
-            rewrite_body(body, ret_width, tm);
+            rewrite_body(body, ret_width, tm, machine_width);
             rewrite_expr(cond, None, tm);
         }
         Stmt::Switch {
@@ -112,10 +120,10 @@ fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap) {
         } => {
             rewrite_expr(discriminant, None, tm);
             for (_, b) in cases.iter_mut() {
-                rewrite_body(b, ret_width, tm);
+                rewrite_body(b, ret_width, tm, machine_width);
             }
             if let Some(b) = default {
-                rewrite_body(b, ret_width, tm);
+                rewrite_body(b, ret_width, tm, machine_width);
             }
         }
         Stmt::Call { target, args, .. } => {
@@ -552,6 +560,28 @@ mod tests {
                 expr: Box::new(reg("arg0")),
             }
         );
+    }
+
+    /// ARM32 and i386 values occupy four-byte machine registers.  A raw
+    /// register local is rendered as `long` for portability, but that spelling
+    /// must not make a logical shift execute at the 64-bit rebuild host's word
+    /// width: `-1 >> 8` would remain `-1` instead of becoming `0x00ffffff`.
+    #[test]
+    fn a_thirty_two_bit_machine_does_not_widen_a_logical_shift_to_host_long() {
+        let tm = tm_of(&[("arg0", true, 4)]);
+        let mut f = func(vec![Stmt::Store {
+            addr: Expr::Const(0),
+            src: bin(BinOp::Shr, reg("arg0"), Expr::Const(8)),
+            // Canonical LLIR still carries an eight-byte parent-register store
+            // width here even though the ARM machine can only consume four.
+            size: 8,
+        }]);
+
+        insert_widening_casts_for_machine_width(&mut f, &tm, 4);
+
+        let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
+        assert!(out.contains("(unsigned int)(arg0) >> 8"), "{out}");
+        assert!(!out.contains("unsigned long"), "{out}");
     }
 
     /// An arithmetic shift keeps its signed operand — that is what `sar` means.

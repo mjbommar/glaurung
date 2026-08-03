@@ -5525,6 +5525,7 @@ pub fn render_decbench(f: &Function) -> String {
 /// rename every `local_X` to `argN` and drop the resulting self-assignment. The
 /// parameter is then used directly, matching the compiler's own `-O0` codegen.
 fn coalesce_param_spills(body: &mut Vec<Stmt>) {
+    coalesce_frame_object_param_spills(body);
     // local name -> the single argument it is spilled from ("" = disqualified).
     let mut home: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     collect_param_homes(body, &mut home);
@@ -5540,6 +5541,249 @@ fn coalesce_param_spills(body: &mut Vec<Stmt>) {
     slot_stores_to_assigns(body, &map);
     rename_phys_in_body(body, &map);
     drop_self_stores(body);
+}
+
+#[derive(Clone)]
+struct FrameParamHome {
+    addr: Expr,
+    size: u8,
+    arg: Option<String>,
+    stores: usize,
+}
+
+/// Coalesce an immutable parameter home that lives at a fixed offset inside a
+/// recovered frame byte-array.
+///
+/// ARM32 `-O0` frames are intentionally represented as one byte object when
+/// saved-register and local ranges overlap. That prevents the ordinary
+/// promoted-local coalescer above from seeing `frame + 4` as a named slot. A
+/// pointer parameter then round-trips through a four-byte C integer in that
+/// byte array and is truncated when the recovered source is executed on LP64.
+/// An address with exactly one store, sourced from an entry argument, is an
+/// immutable home: replace exact same-width reloads by the argument and remove
+/// the redundant store. Any second store disqualifies the address, including a
+/// source-level reassignment, so this cannot erase mutable stack state.
+fn coalesce_frame_object_param_spills(body: &mut Vec<Stmt>) {
+    let mut homes = Vec::new();
+    collect_frame_param_homes(body, &mut homes);
+    homes.retain(|home| home.stores == 1 && home.arg.is_some());
+    if homes.is_empty() {
+        return;
+    }
+    rewrite_frame_param_homes(body, &homes);
+}
+
+fn expression_contains_stack_object(expr: &Expr) -> bool {
+    match expr {
+        Expr::StackAddr { .. } => true,
+        Expr::Deref { addr, .. } => expression_contains_stack_object(addr),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expression_contains_stack_object(lhs) || expression_contains_stack_object(rhs)
+        }
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
+            expression_contains_stack_object(src)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expression_contains_stack_object(cond)
+                || expression_contains_stack_object(if_true)
+                || expression_contains_stack_object(if_false)
+        }
+        Expr::FunctionTableEntry { index, .. } => expression_contains_stack_object(index),
+        Expr::WideArithmetic { args, .. } => args.iter().any(expression_contains_stack_object),
+        _ => false,
+    }
+}
+
+fn parameter_source(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Reg(VReg::Phys(name)) if parse_arg_index(name).is_some() => Some(name.clone()),
+        Expr::Cast { expr, .. } => parameter_source(expr),
+        _ => None,
+    }
+}
+
+fn record_frame_store(addr: &Expr, size: u8, src: &Expr, homes: &mut Vec<FrameParamHome>) {
+    if !expression_contains_stack_object(addr) {
+        return;
+    }
+    if let Some(home) = homes
+        .iter_mut()
+        .find(|home| home.size == size && home.addr == *addr)
+    {
+        home.stores += 1;
+        if home.arg.as_deref() != parameter_source(src).as_deref() {
+            home.arg = None;
+        }
+        return;
+    }
+    homes.push(FrameParamHome {
+        addr: addr.clone(),
+        size,
+        arg: parameter_source(src),
+        stores: 1,
+    });
+}
+
+fn collect_frame_param_homes(body: &[Stmt], homes: &mut Vec<FrameParamHome>) {
+    for statement in body {
+        match statement {
+            Stmt::Store { addr, src, size } => record_frame_store(addr, *size, src, homes),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_frame_param_homes(then_body, homes);
+                if let Some(else_body) = else_body {
+                    collect_frame_param_homes(else_body, homes);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_frame_param_homes(body, homes)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                collect_frame_param_homes(std::slice::from_ref(init.as_ref()), homes);
+                collect_frame_param_homes(body, homes);
+                collect_frame_param_homes(std::slice::from_ref(step.as_ref()), homes);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    collect_frame_param_homes(case, homes);
+                }
+                if let Some(default) = default {
+                    collect_frame_param_homes(default, homes);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collect_frame_param_homes(try_body, homes);
+                for catch in catches {
+                    collect_frame_param_homes(&catch.body, homes);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn rewrite_frame_home_expr(expr: &mut Expr, homes: &[FrameParamHome]) {
+    if let Expr::Deref { addr, size } = expr {
+        if let Some(arg) = homes.iter().find_map(|home| {
+            (home.size == *size && home.addr == **addr)
+                .then(|| home.arg.clone())
+                .flatten()
+        }) {
+            *expr = Expr::Reg(VReg::phys(arg));
+            return;
+        }
+    }
+    match expr {
+        Expr::Deref { addr, .. } => rewrite_frame_home_expr(addr, homes),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            rewrite_frame_home_expr(lhs, homes);
+            rewrite_frame_home_expr(rhs, homes);
+        }
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => rewrite_frame_home_expr(src, homes),
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            rewrite_frame_home_expr(cond, homes);
+            rewrite_frame_home_expr(if_true, homes);
+            rewrite_frame_home_expr(if_false, homes);
+        }
+        Expr::FunctionTableEntry { index, .. } => rewrite_frame_home_expr(index, homes),
+        Expr::WideArithmetic { args, .. } => {
+            for arg in args {
+                rewrite_frame_home_expr(arg, homes);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_frame_param_homes(body: &mut Vec<Stmt>, homes: &[FrameParamHome]) {
+    body.retain(|statement| {
+        !matches!(statement,
+            Stmt::Store { addr, size, .. }
+                if homes.iter().any(|home| home.size == *size && home.addr == *addr))
+    });
+    for statement in body {
+        match statement {
+            Stmt::Assign { src, .. } => rewrite_frame_home_expr(src, homes),
+            Stmt::Store { addr, src, .. } => {
+                rewrite_frame_home_expr(addr, homes);
+                rewrite_frame_home_expr(src, homes);
+            }
+            Stmt::Call { target, args, .. } => {
+                rewrite_frame_home_expr(target, homes);
+                for arg in args {
+                    rewrite_frame_home_expr(arg, homes);
+                }
+            }
+            Stmt::Return { value: Some(value) } => rewrite_frame_home_expr(value, homes),
+            Stmt::Push { value } | Stmt::Throw { value } => rewrite_frame_home_expr(value, homes),
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                rewrite_frame_home_expr(cond, homes);
+                rewrite_frame_param_homes(then_body, homes);
+                if let Some(else_body) = else_body {
+                    rewrite_frame_param_homes(else_body, homes);
+                }
+            }
+            Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+                rewrite_frame_home_expr(cond, homes);
+                rewrite_frame_param_homes(body, homes);
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                let mut init_body = vec![(**init).clone()];
+                rewrite_frame_param_homes(&mut init_body, homes);
+                **init = init_body.pop().unwrap_or(Stmt::Nop);
+                rewrite_frame_home_expr(cond, homes);
+                rewrite_frame_param_homes(body, homes);
+                let mut step_body = vec![(**step).clone()];
+                rewrite_frame_param_homes(&mut step_body, homes);
+                **step = step_body.pop().unwrap_or(Stmt::Nop);
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                rewrite_frame_home_expr(discriminant, homes);
+                for (_, case) in cases {
+                    rewrite_frame_param_homes(case, homes);
+                }
+                if let Some(default) = default {
+                    rewrite_frame_param_homes(default, homes);
+                }
+            }
+            Stmt::IndirectGoto { target } => rewrite_frame_home_expr(target, homes),
+            Stmt::TryCatch { try_body, catches } => {
+                rewrite_frame_param_homes(try_body, homes);
+                for catch in catches {
+                    rewrite_frame_param_homes(&mut catch.body, homes);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Rewrite `Store { addr: Reg(slot), src }` as `Assign { dst: slot, src }` for every
@@ -7469,12 +7713,14 @@ fn signed_shift_operand<'a>(lhs: &'a Expr, rhs: &Expr) -> (&'static str, &'a Exp
 /// from narrow-typed identifiers. Single identifiers read their declared width
 /// from `DEC_INT_WIDTHS`; width-preserving arithmetic (`a - b`, `a & b`, ...)
 /// takes the wider operand, treating a bare constant as width-agnostic. Any
-/// operand of unknown width (a load, an untyped local) yields `None`, so the
-/// shift render conservatively keeps `unsigned long`.
+/// A load carries its exact access width in the AST. Any genuinely unknown
+/// operand (such as an untyped local) yields `None`, so the shift render
+/// conservatively keeps `unsigned long`.
 fn expr_machine_width(e: &Expr) -> Option<u8> {
     match e {
         Expr::Named { name, .. } => dec_int_width(name),
         Expr::Reg(VReg::Phys(n)) => dec_int_width(n),
+        Expr::Deref { size, .. } => Some(*size),
         Expr::Const(_) => None,
         Expr::Select { width, .. } => Some(*width),
         Expr::Bin { op, lhs, rhs } if is_width_preserving_arith(*op) => {
@@ -11310,6 +11556,89 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn prepare_coalesces_an_immutable_parameter_spill_inside_a_frame_object() {
+        let frame_slot = Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::StackAddr {
+                object: VReg::phys("local_18"),
+                size: 24,
+            }),
+            rhs: Box::new(Expr::Const(4)),
+        };
+        let f = Function {
+            name: "arm_o0_pointer_spill".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Store {
+                    addr: frame_slot.clone(),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(frame_slot),
+                        size: 4,
+                    }),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+        let text = render_decbench(&prepared);
+
+        assert!(text.contains("return arg0;"), "{text}");
+        assert!(
+            !text.contains("local_18"),
+            "the immutable frame subslot is the parameter's home, not a second C object:\n{text}"
+        );
+    }
+
+    #[test]
+    fn prepare_keeps_a_mutated_frame_object_parameter_home() {
+        let frame_slot = Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::StackAddr {
+                object: VReg::phys("local_18"),
+                size: 24,
+            }),
+            rhs: Box::new(Expr::Const(4)),
+        };
+        let f = Function {
+            name: "mutated_home".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Store {
+                    addr: frame_slot.clone(),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: frame_slot.clone(),
+                    src: Expr::Const(7),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(frame_slot),
+                        size: 4,
+                    }),
+                },
+            ],
+        };
+
+        let text = render_decbench(&prepare_for_decbench(&f));
+
+        assert!(
+            text.contains("local_18"),
+            "mutable storage was erased:\n{text}"
+        );
+        assert!(
+            text.contains("= 7;"),
+            "the source-level mutation was erased:\n{text}"
+        );
+    }
+
+    #[test]
     fn an_in_place_update_of_a_coalesced_slot_is_an_assignment_not_a_pointer_store() {
         // The `-O0` shape of `n &= 31u` on a spilled parameter: the slot is stored
         // to from the parameter, then updated IN PLACE (a memory read-modify-write).
@@ -13309,6 +13638,31 @@ function f @ 0x1000 {
             text
         );
         assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_logical_shift_uses_the_exact_load_width() {
+        let f = Function {
+            name: "shift_loaded_word".to_string(),
+            entry_va: 0x74,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Bin {
+                    op: BinOp::Shr,
+                    lhs: Box::new(Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        size: 4,
+                    }),
+                    rhs: Box::new(Expr::Const(8)),
+                }),
+            }],
+        };
+
+        let text = render_decbench(&f);
+
+        assert!(
+            text.contains("(unsigned int)(*(int *)(arg0)) >> 8"),
+            "a four-byte load must not be sign-extended to host unsigned long:\n{text}"
+        );
     }
 
     #[test]
