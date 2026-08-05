@@ -249,14 +249,18 @@ pub fn recover_guarded_do_whiles(f: &mut Function) {
 }
 
 fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
-    for statement in body.iter_mut() {
+    // Indices whose `if` became provably redundant and can be spliced away.
+    let mut redundant_guards: Vec<usize> = Vec::new();
+    for (index, statement) in body.iter_mut().enumerate() {
         match statement {
             Stmt::If {
                 cond,
                 then_body,
                 else_body,
             } => {
-                recover_owned_pretested_do_while(cond, then_body, else_body.as_deref());
+                if recover_owned_pretested_do_while(cond, then_body, else_body.as_deref()) {
+                    redundant_guards.push(index);
+                }
                 recover_guarded_do_while_body(then_body);
                 if let Some(else_body) = else_body {
                     recover_guarded_do_while_body(else_body);
@@ -275,6 +279,20 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
             }
             _ => {}
         }
+    }
+
+    // Splice back-to-front so earlier indices stay valid.
+    for index in redundant_guards.into_iter().rev() {
+        let Stmt::If {
+            then_body,
+            else_body: None,
+            ..
+        } = &mut body[index]
+        else {
+            continue;
+        };
+        let inner = std::mem::take(then_body);
+        body.splice(index..=index, inner);
     }
 
     let mut start = 0;
@@ -312,23 +330,25 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
 /// head test is only an extra check on the taken path, and alias substitution
 /// proves it equal to the guard there. Every effect and the latch condition keep
 /// their original order inside the loop.
+/// Returns `true` when the entry guard is now provably redundant, i.e. the
+/// caller may drop the enclosing `if` and splice the body in its place.
 fn recover_owned_pretested_do_while(
     entry_guard: &Expr,
     then_body: &mut [Stmt],
     else_body: Option<&[Stmt]>,
-) {
+) -> bool {
     if else_body.is_some() {
-        return;
+        return false;
     }
     let Some((last, prelude)) = then_body.split_last_mut() else {
-        return;
+        return false;
     };
     let Stmt::DoWhile {
         body: loop_body,
         cond: latch_guard,
     } = last
     else {
-        return;
+        return false;
     };
     let mut aliases = HashMap::<VReg, Expr>::new();
     for statement in prelude {
@@ -337,19 +357,30 @@ fn recover_owned_pretested_do_while(
             Stmt::Assign { dst, src } if stable_value_expr(src) => {
                 aliases.insert(dst.clone(), src.clone());
             }
-            _ => return,
+            _ => return false,
         }
     }
     // The aliases execute only after the entry guard. They may prove that the
     // latch guard names the entry value, but they must never rewrite the entry
     // guard itself.
     if resolve_entry_aliases(latch_guard, &aliases, 0) != *entry_guard {
-        return;
+        return false;
     }
     *last = Stmt::While {
         cond: latch_guard.clone(),
         body: std::mem::take(loop_body),
     };
+    // The equality above is exactly the proof the guard is redundant: with the
+    // prelude's aliases resolved, the new head test IS the entry guard. So when
+    // the guard is false the loop runs zero times either way, and the prelude is
+    // `stable_value_expr` throughout — no load, call or unknown — so hoisting it
+    // out of the guard cannot fault or be observed.
+    //
+    // Keeping the `if` was not wrong, only redundant, and redundancy is not free:
+    // it is an extra branch node and two extra edges against the source CFG,
+    // which is what `linkedlist` at -O2 was paying (GED 0.0 -> 2.5 on both gcc
+    // and clang).
+    true
 }
 
 fn resolve_entry_aliases(expr: &Expr, aliases: &HashMap<VReg, Expr>, depth: usize) -> Expr {
@@ -1647,11 +1678,27 @@ mod tests {
 
         recover_guarded_do_whiles(&mut function);
 
-        let Stmt::If { then_body, .. } = &function.body[0] else {
-            panic!("entry guard was not retained: {function:#?}");
-        };
+        // The entry guard is DROPPED, not retained. Resolving the prelude's
+        // aliases turns the latch test `cursor != 0` into `arg0 != 0`, which IS
+        // the entry guard — so the loop runs zero times for a null argument
+        // whether the guard is there or not, and the prelude is side-effect and
+        // fault free (`stable_value_expr`), so hoisting it out is unobservable.
+        //
+        // An earlier revision kept the `if` deliberately. That was sound but
+        // redundant, and redundancy costs structure: it is one extra branch node
+        // and two extra edges against the source CFG, which is exactly what
+        // `linkedlist` at -O2 was paying (GED 0.0 -> 2.5 on gcc AND clang).
+        assert_eq!(
+            function.body.len(),
+            2,
+            "the redundant entry guard should have been spliced away: {function:#?}"
+        );
+        assert!(
+            matches!(&function.body[0], Stmt::Assign { dst, .. } if dst == &reg("cursor")),
+            "the prelude must survive ahead of the loop: {function:#?}"
+        );
         assert!(matches!(
-            &then_body[1],
+            &function.body[1],
             Stmt::While { cond, .. } if cond == &latch
         ));
     }

@@ -25,10 +25,21 @@
 //!
 //! * Only folds addresses that resolve to a section named `.rodata`,
 //!   `__cstring`, `__TEXT,__cstring`, or `.rdata` on PE.
-//! * Only folds when the recovered string is at least 3 characters and
-//!   contains only printable ASCII / common whitespace.
+//! * Only folds bytes that are printable ASCII / common whitespace.
 //! * Caps the displayed length so enormous strings don't blow up the
 //!   pseudocode; longer strings render as `"prefix..."` with an ellipsis.
+//!
+//! The `MIN_STRING_LEN` floor is a statement about **confidence in an address**,
+//! not about the bytes, so it is enforced at the point of use rather than when
+//! the pool is built:
+//!
+//! * a bare `Addr`/`Named` carries no type evidence, so it must be at least
+//!   `MIN_STRING_LEN` characters — otherwise any integer that happens to point
+//!   at a NUL byte would render as `""`;
+//! * a call argument whose **callee prototype proves the parameter is
+//!   `char *`** may go below the floor, because the type is authoritative.
+//!   `setlocale(LC_ALL, "")` and `getopt(argc, argv, "a")` are real literals
+//!   that the floor was discarding.
 
 use std::collections::HashMap;
 
@@ -73,13 +84,35 @@ pub fn collect_string_pool(data: &[u8]) -> HashMap<u64, String> {
             while cursor < bytes.len() && bytes[cursor] != 0 {
                 cursor += 1;
             }
-            let run = &bytes[start..cursor];
-            if run.len() < MIN_STRING_LEN {
-                continue;
-            }
-            if !is_printable_cstring(run) {
-                continue;
-            }
+            // A run that is not wholly printable is NOT discarded. Data and
+            // strings share `.rodata`, and a compiler will happily place a jump
+            // table immediately before a literal with no NUL between them —
+            // measured in `getfacl`, where the 479-byte run at 0x5688 is a table
+            // of relative offsets whose last three bytes are `"%ld"`. Rejecting
+            // the run threw that literal away, and `snprintf` rendered as
+            // `snprintf(..., (const char *)(0x5864), ...)`.
+            //
+            // Only the TAIL after the final non-printable byte is recoverable.
+            // It is terminated by the run's own NUL, so a pointer into it yields
+            // a genuine C string. A printable segment in the MIDDLE of a run is
+            // followed by binary data, is not NUL-terminated, and must never be
+            // indexed — that would invent a string out of table bytes.
+            let full_run = &bytes[start..cursor];
+            let (run, start) = if is_printable_cstring(full_run) {
+                (full_run, start)
+            } else {
+                match full_run.iter().rposition(|&b| !is_printable_byte(b)) {
+                    Some(last_bad) => {
+                        let tail_at = last_bad + 1;
+                        let tail = &full_run[tail_at..];
+                        if tail.is_empty() || !is_printable_cstring(tail) {
+                            continue;
+                        }
+                        (tail, start + tail_at)
+                    }
+                    None => continue,
+                }
+            };
             let s = match std::str::from_utf8(run) {
                 Ok(s) => s.to_string(),
                 Err(_) => continue,
@@ -96,11 +129,17 @@ pub fn collect_string_pool(data: &[u8]) -> HashMap<u64, String> {
             // why string recovery read 1.52 per function against Ghidra's 5.63
             // on x86-64, where addresses already arrive complete.
             //
-            // Suffixes are only indexed down to `MIN_STRING_LEN`, so this adds
-            // at most `run.len()` entries and cannot manufacture one- or
-            // two-character "strings" out of arbitrary integers.
+            // Suffixes are indexed all the way down to the empty string at the
+            // run's NUL terminator. The `MIN_STRING_LEN` floor is NOT applied
+            // here, because it is a statement about *confidence in an address*,
+            // not about what the bytes are: `setlocale(LC_ALL, "")` and
+            // `getopt(argc, argv, "a")` both pass genuine literals that the
+            // floor discarded, and they rendered as `(const char *)(0x1ca2)`.
+            // The floor now lives at the point of use — `fold_expr` keeps it for
+            // a bare address, and only a callee prototype that proves the
+            // parameter is `char *` may go below it. See `fold_constant_string`.
             let mut offset = 1usize;
-            while offset + MIN_STRING_LEN <= run.len() {
+            while offset <= run.len() {
                 let tail = &run[offset..];
                 if let Ok(t) = std::str::from_utf8(tail) {
                     let tail_va = base.saturating_add((start + offset) as u64);
@@ -113,11 +152,15 @@ pub fn collect_string_pool(data: &[u8]) -> HashMap<u64, String> {
     out
 }
 
+/// A byte that may appear in a recovered C string.
+fn is_printable_byte(b: u8) -> bool {
+    b == b'\t' || b == b'\n' || b == b'\r' || (0x20..=0x7e).contains(&b)
+}
+
 fn is_printable_cstring(bytes: &[u8]) -> bool {
     let mut printable = 0usize;
     for &b in bytes {
-        let ok = b == b'\t' || b == b'\n' || b == b'\r' || (0x20..=0x7e).contains(&b);
-        if !ok {
+        if !is_printable_byte(b) {
             return false;
         }
         if !b.is_ascii_whitespace() {
@@ -143,10 +186,76 @@ pub fn fold_string_literals(f: &mut Function, pool: &HashMap<u64, String>) {
     if pool.is_empty() {
         return;
     }
-    fold_body(&mut f.body, pool);
+    let defs = constant_definitions(&f.body);
+    fold_body(&mut f.body, pool, &defs);
 }
 
-fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
+/// Map each name that is assigned exactly once, to a constant value, back to
+/// that constant.
+///
+/// Names are still SSA-versioned at this point (`%x22#2`), so "assigned once"
+/// is normally structural — but a name assigned twice is recorded as ambiguous
+/// and dropped rather than resolved to whichever definition happened to come
+/// last. Only used from the contract-proven `char *` path, so a wrong answer
+/// here cannot invent a string in an untyped position.
+fn constant_definitions(body: &[Stmt]) -> HashMap<String, i64> {
+    let mut seen: HashMap<String, Option<i64>> = HashMap::new();
+    collect_constant_definitions(body, &mut seen);
+    seen.into_iter()
+        .filter_map(|(name, value)| value.map(|v| (name, v)))
+        .collect()
+}
+
+fn collect_constant_definitions(body: &[Stmt], out: &mut HashMap<String, Option<i64>>) {
+    // Two passes' worth of information in one: `resolved` lets a definition
+    // refer to an earlier constant definition (`%x22#1 = 0x1000` then
+    // `%x22#2 = %x22#1 + 3313`), which is exactly the AArch64 adrp/add shape.
+    for s in body {
+        match s {
+            Stmt::Assign { dst, src } => {
+                let resolved: HashMap<String, i64> = out
+                    .iter()
+                    .filter_map(|(k, v)| v.map(|v| (k.clone(), v)))
+                    .collect();
+                let value = const_address(src, &resolved);
+                out.entry(dst.to_string())
+                    .and_modify(|slot| *slot = None) // assigned more than once
+                    .or_insert(value);
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_constant_definitions(then_body, out);
+                if let Some(eb) = else_body {
+                    collect_constant_definitions(eb, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_constant_definitions(body, out)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                collect_constant_definitions(std::slice::from_ref(init.as_ref()), out);
+                collect_constant_definitions(body, out);
+                collect_constant_definitions(std::slice::from_ref(step.as_ref()), out);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, b) in cases {
+                    collect_constant_definitions(b, out);
+                }
+                if let Some(b) = default {
+                    collect_constant_definitions(b, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>, defs: &HashMap<String, i64>) {
     for s in body.iter_mut() {
         match s {
             Stmt::IndirectGoto { target } => fold_expr(target, pool),
@@ -171,7 +280,7 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 fold_expr(target, pool);
                 for (index, a) in args.iter_mut().enumerate() {
                     if character_pointer_params.get(index) == Some(&true) {
-                        fold_constant_string(a, pool);
+                        fold_constant_string(a, pool, defs);
                     }
                     fold_expr(a, pool);
                 }
@@ -187,14 +296,14 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 else_body,
             } => {
                 fold_expr(cond, pool);
-                fold_body(then_body, pool);
+                fold_body(then_body, pool, defs);
                 if let Some(eb) = else_body {
-                    fold_body(eb, pool);
+                    fold_body(eb, pool, defs);
                 }
             }
             Stmt::While { cond, body } => {
                 fold_expr(cond, pool);
-                fold_body(body, pool);
+                fold_body(body, pool, defs);
             }
             Stmt::For {
                 init,
@@ -202,13 +311,13 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 step,
                 body,
             } => {
-                fold_body(std::slice::from_mut(init.as_mut()), pool);
+                fold_body(std::slice::from_mut(init.as_mut()), pool, defs);
                 fold_expr(cond, pool);
-                fold_body(body, pool);
-                fold_body(std::slice::from_mut(step.as_mut()), pool);
+                fold_body(body, pool, defs);
+                fold_body(std::slice::from_mut(step.as_mut()), pool, defs);
             }
             Stmt::DoWhile { body, cond } => {
-                fold_body(body, pool);
+                fold_body(body, pool, defs);
                 fold_expr(cond, pool);
             }
             Stmt::Push { value } => fold_expr(value, pool),
@@ -219,10 +328,10 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
             } => {
                 fold_expr(discriminant, pool);
                 for (_, body) in cases.iter_mut() {
-                    fold_body(body, pool);
+                    fold_body(body, pool, defs);
                 }
                 if let Some(b) = default {
-                    fold_body(b, pool);
+                    fold_body(b, pool, defs);
                 }
             }
             Stmt::Pop { .. }
@@ -242,11 +351,44 @@ fn is_character_pointer(c_type: &str) -> bool {
     matches!(c_type.trim(), "char *" | "const char *" | "char *const")
 }
 
-fn fold_constant_string(expr: &mut Expr, pool: &HashMap<u64, String>) {
-    let Expr::Const(value) = expr else {
+/// Evaluate an expression that is a compile-time constant address.
+///
+/// AArch64 forms an address as `adrp` + `add`, which arrives here as
+/// `Bin(Add, Const(page), Const(offset))` — never a bare `Const`, because the
+/// two halves are separate instructions and the algebraic folder leaves the sum
+/// alone. Requiring `Expr::Const` therefore discarded every AArch64 literal
+/// before the length floor was even consulted. `defs` resolves a versioned name
+/// back to its single defining constant, which is the other AArch64 shape:
+/// `%x22#2 = (%x22#1 + 3313)` used later as `getopt(..., %x22#2)`.
+fn const_address(e: &Expr, defs: &HashMap<String, i64>) -> Option<i64> {
+    match e {
+        Expr::Const(v) => Some(*v),
+        // `adrp` lifts to `Addr`, not `Const` — it renders as a bare hex number,
+        // which makes the two indistinguishable in a pass dump.
+        Expr::Addr(v) => i64::try_from(*v).ok(),
+        Expr::Reg(r) => defs.get(&r.to_string()).copied(),
+        Expr::Cast { expr, .. } => const_address(expr, defs),
+        Expr::Bin {
+            op: crate::ir::types::BinOp::Add,
+            lhs,
+            rhs,
+        } => const_address(lhs, defs)?.checked_add(const_address(rhs, defs)?),
+        _ => None,
+    }
+}
+
+/// Fold a value in a position a callee prototype proves is `char *`.
+///
+/// This is the only path allowed below `MIN_STRING_LEN`. The floor exists so an
+/// arbitrary small integer cannot become a string; here the parameter's type is
+/// authoritative, so `""`, `"a"` and `"%d"` are recoverable — and they are real
+/// literals (`setlocale(LC_ALL, "")`, `getopt(argc, argv, "a")`) that the floor
+/// was silently discarding.
+fn fold_constant_string(expr: &mut Expr, pool: &HashMap<u64, String>, defs: &HashMap<String, i64>) {
+    let Some(value) = const_address(expr, defs) else {
         return;
     };
-    let Ok(address) = u64::try_from(*value) else {
+    let Ok(address) = u64::try_from(value) else {
         return;
     };
     if let Some(string) = pool.get(&address) {
@@ -256,20 +398,30 @@ fn fold_constant_string(expr: &mut Expr, pool: &HashMap<u64, String>) {
     }
 }
 
+/// A bare address carries no type evidence, so the confidence floor applies:
+/// an address pointing at a NUL byte must not silently become `""`.
+fn confident_string(pool: &HashMap<u64, String>, va: u64) -> Option<&String> {
+    pool.get(&va).filter(|s| s.len() >= MIN_STRING_LEN)
+}
+
 fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
     match e {
         Expr::Addr(v) => {
-            if let Some(s) = pool.get(v) {
+            if let Some(s) = confident_string(pool, *v) {
                 *e = Expr::StringLit { value: shorten(s) };
             }
         }
         Expr::Named { va, .. } => {
-            if let Some(s) = pool.get(va) {
+            if let Some(s) = confident_string(pool, *va) {
                 *e = Expr::StringLit { value: shorten(s) };
             }
         }
         Expr::Deref { addr, .. } => fold_expr(addr, pool),
-        Expr::Bin { op, lhs, rhs } if matches!(op, crate::ir::types::BinOp::Add) => {
+        Expr::Bin {
+            op: crate::ir::types::BinOp::Add,
+            lhs,
+            rhs,
+        } => {
             // AArch64 (and ARM32) build the address of a string in two
             // instructions: `adrp` supplies the 4 KiB page and a following
             // `add` supplies the low 12 bits. This pass runs before the
@@ -288,7 +440,7 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
                 _ => None,
             };
             if let Some(va) = combined {
-                if let Some(s) = pool.get(&va) {
+                if let Some(s) = confident_string(pool, va) {
                     *e = Expr::StringLit { value: shorten(s) };
                     return;
                 }
@@ -483,9 +635,10 @@ mod tests {
         // (glibc init stubs include argv0 reference strings etc.). If this
         // fails we've broken section iteration.
         assert!(!pool.is_empty(), "no strings recovered from hello-gcc-O2");
-        // Every value must be non-empty and purely printable.
+        // Every value must be purely printable. Values may now be short — even
+        // empty, at a run's NUL terminator — because the length floor is
+        // applied where an address is used, not when the pool is built.
         for v in pool.values() {
-            assert!(!v.is_empty());
             assert!(v
                 .chars()
                 .all(|c| c == '\t' || c == '\n' || c == '\r' || (' '..='~').contains(&c)));
@@ -537,10 +690,12 @@ mod tests {
         );
     }
 
-    /// Suffix indexing must not manufacture one- or two-character strings out of
-    /// arbitrary integers that happen to land in rodata.
+    /// An address with no type evidence must never fold below the confidence
+    /// floor, even though the pool now holds short entries. This is the check
+    /// that stops an arbitrary integer landing in rodata from rendering as
+    /// `""` or `"a"`.
     #[test]
-    fn suffix_indexing_respects_the_minimum_length() {
+    fn an_untyped_address_never_folds_below_the_minimum_length() {
         use std::path::Path;
 
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -551,11 +706,155 @@ mod tests {
             return;
         }
         let data = std::fs::read(&path).expect("read fixture");
-        for (va, s) in collect_string_pool(&data) {
+        let pool = collect_string_pool(&data);
+        let short: Vec<_> = pool
+            .iter()
+            .filter(|(_, s)| s.len() < MIN_STRING_LEN)
+            .collect();
+        assert!(
+            !short.is_empty(),
+            "fixture has no short entries, so this test would pass vacuously"
+        );
+        for (va, s) in short {
             assert!(
-                s.len() >= MIN_STRING_LEN,
-                "pool holds {s:?} at {va:#x}, shorter than the {MIN_STRING_LEN}-char floor"
+                confident_string(&pool, *va).is_none(),
+                "untyped address {va:#x} folded to the short string {s:?}"
+            );
+            // ...but the same address IS recoverable where a prototype proves
+            // the parameter is `char *`.
+            let mut e = Expr::Const(*va as i64);
+            fold_constant_string(&mut e, &pool, &HashMap::new());
+            assert_eq!(
+                e,
+                Expr::StringLit {
+                    value: s.to_string()
+                },
+                "proven char* position failed to recover {s:?} at {va:#x}"
             );
         }
+    }
+
+    /// The AArch64 shape: the address never arrives as a bare `Const`. It is
+    /// either an unfolded `adrp`+`add` sum, or a name defined by one.
+    #[test]
+    fn a_proven_char_pointer_resolves_an_aarch64_split_address() {
+        use crate::ir::types::{BinOp, VReg};
+
+        let mut pool = HashMap::new();
+        pool.insert(0x1ca2u64, String::new()); // setlocale(LC_ALL, "")
+        pool.insert(0x1cf1u64, "a".to_string()); // getopt(argc, argv, "a")
+
+        // adrp + add, still unfolded at this point in the pipeline.
+        let mut sum = Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Const(0x1000)),
+            rhs: Box::new(Expr::Const(0xca2)),
+        };
+        fold_constant_string(&mut sum, &pool, &HashMap::new());
+        assert_eq!(
+            sum,
+            Expr::StringLit {
+                value: String::new()
+            }
+        );
+
+        // The same address reaching the call through a single-assignment name.
+        // Key derived from Display so the map cannot drift from the lookup.
+        let defs = HashMap::from([(VReg::phys("x22#2").to_string(), 0x1cf1i64)]);
+        let mut via_reg = Expr::Reg(VReg::phys("x22#2"));
+        fold_constant_string(&mut via_reg, &pool, &defs);
+        assert_eq!(
+            via_reg,
+            Expr::StringLit {
+                value: "a".to_string()
+            }
+        );
+
+        // A name with no constant definition is left alone.
+        let mut unknown = Expr::Reg(VReg::phys("x9#1"));
+        fold_constant_string(&mut unknown, &pool, &defs);
+        assert_eq!(unknown, Expr::Reg(VReg::phys("x9#1")));
+    }
+
+    /// The pool must key on the same address space the AST uses, for every
+    /// container — not just ELF. A PE's `.rdata` is described by an RVA in the
+    /// section header, but the decompiler works in image-based VAs, so a pool
+    /// keyed on RVAs would silently miss every Windows string.
+    #[test]
+    fn the_pool_keys_pe_strings_on_image_based_virtual_addresses() {
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/windows/vendor/realworld/sqfs-amd-clinfo.exe");
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read(&path).expect("read fixture");
+        let pool = collect_string_pool(&data);
+        assert!(!pool.is_empty(), "no strings recovered from a real PE");
+        // This image is based at 0x140000000; `.rdata` sits at RVA 0x2a000.
+        // Keys must be the sum, not the RVA.
+        let lowest = *pool.keys().min().expect("non-empty");
+        assert!(
+            lowest >= 0x1_4000_0000,
+            "pool keyed on RVAs, not image-based VAs: lowest key {lowest:#x}"
+        );
+    }
+
+    /// A name assigned twice is ambiguous and must not resolve to whichever
+    /// definition happened to be seen last.
+    #[test]
+    fn a_name_assigned_twice_is_not_treated_as_constant() {
+        use crate::ir::types::VReg;
+
+        let body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("x0"),
+                src: Expr::Const(0x1ca2),
+            },
+            Stmt::Assign {
+                dst: VReg::phys("x0"),
+                src: Expr::Const(0x9999),
+            },
+        ];
+        assert!(!constant_definitions(&body).contains_key("x0"));
+    }
+
+    /// A literal that abuts binary data with no NUL between them is still a
+    /// genuine C string, and used to be discarded with the whole run.
+    ///
+    /// Measured in `getfacl`: the run at 0x5688 is a 479-byte jump table of
+    /// relative offsets whose final three bytes are `"%ld"`, NUL-terminated.
+    /// `is_printable_cstring` rejected the run, `continue` threw the literal
+    /// away, and `snprintf` rendered its format as `(const char *)(0x5864)`.
+    #[test]
+    fn a_printable_tail_after_binary_data_is_still_indexed() {
+        // <table bytes> "%ld" NUL "?" NUL
+        let mut section = vec![0x65u8, 0xe9, 0xff, 0xff, 0x2f, 0xe7, 0xff, 0xff];
+        let tail_at = section.len();
+        section.extend_from_slice(b"%ld\0?\0");
+
+        let run = &section[..tail_at + 3];
+        assert!(
+            !is_printable_cstring(run),
+            "the run as a whole must NOT look printable, or the test proves nothing"
+        );
+
+        let last_bad = run.iter().rposition(|&b| !is_printable_byte(b)).unwrap();
+        assert_eq!(&run[last_bad + 1..], b"%ld", "the recoverable tail");
+    }
+
+    /// The tail rule must not invent a string out of table bytes. A printable
+    /// segment in the MIDDLE of a run is followed by binary data, is not
+    /// NUL-terminated, and is not a C string at all.
+    #[test]
+    fn a_printable_segment_in_the_middle_of_a_run_is_not_a_string() {
+        let run = b"abc\xe9\xff\xffxyz\xe9\xff";
+        let last_bad = run.iter().rposition(|&b| !is_printable_byte(b)).unwrap();
+        assert_eq!(
+            &run[last_bad + 1..],
+            b"",
+            "nothing printable follows the final binary byte, so nothing is indexed"
+        );
     }
 }

@@ -954,10 +954,20 @@ fn fold_expr(e: &mut Expr) {
         // Clang sometimes lowers a source-level short-circuit guard into a
         // byte-valued SETcc tree, combines it eagerly, then widens and tests the
         // result. The byte view is the crucial provenance: a bare `cmp | cmp`
-        // can just as legitimately be source-level bitwise C, and changing it
-        // globally damages CFG fidelity. Recover only the complete terminal
-        // test, and only when every leaf is side-effect-free.
-        if *op == CmpOp::Ne {
+        // can just as legitimately be source-level bitwise C — and, far more
+        // often here, is our OWN flag model for `jle`/`jbe`, which
+        // `bool_guard` recovers as one inclusive comparison rather than two
+        // short-circuit operands. Dropping the byte-view requirement would turn
+        // every such flag pair into a `||` and invent a basic block the source
+        // never had. Recover only the complete terminal test, and only when
+        // every leaf is side-effect-free.
+        //
+        // Both polarities are accepted. The compiler picks whichever of
+        // `jne`/`je` reaches the arm it wants, so the same eager tree arrives
+        // tested against zero in either direction; `== 0` is De Morgan's exact
+        // negation of the same recovered guard.
+        let zero_test_polarity = *op;
+        if matches!(zero_test_polarity, CmpOp::Ne | CmpOp::Eq) {
             let candidate = match (lhs.as_ref(), rhs.as_ref()) {
                 (candidate, Expr::Const(0)) | (Expr::Const(0), candidate) => {
                     recover_eager_boolean_guard(candidate)
@@ -966,8 +976,15 @@ fn fold_expr(e: &mut Expr) {
             };
             if let Some((logical, leaves, saw_byte_view)) = candidate {
                 if leaves >= 2 && saw_byte_view {
-                    *e = logical;
-                    return;
+                    let recovered = if zero_test_polarity == CmpOp::Ne {
+                        Some(logical)
+                    } else {
+                        negate_logical_tree(&logical)
+                    };
+                    if let Some(recovered) = recovered {
+                        *e = recovered;
+                        return;
+                    }
                 }
             }
         }
@@ -1276,6 +1293,36 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
         lhs: equality_lhs.clone(),
         rhs: equality_rhs.clone(),
     })
+}
+
+/// De Morgan's exact negation of a recovered short-circuit tree.
+///
+/// `!(a && b)` is `!a || !b` and `!(a || b)` is `!a && !b`. Both are exact
+/// whenever every leaf is 0/1-valued, which a tree from
+/// [`recover_eager_boolean_guard`] always is: its leaves are [`Expr::Cmp`] nodes
+/// that passed [`is_short_circuit_safe_boolean`]. Leaf negation goes through
+/// [`invert_comparison`], which swaps operands instead of introducing a bitwise
+/// `~` (always true on a 0/1 boolean) and never reinterprets a signed relation
+/// as an unsigned one. Any leaf that is not a comparison returns `None` rather
+/// than being guessed at, so the caller keeps the eager form.
+fn negate_logical_tree(expr: &Expr) -> Option<Expr> {
+    match expr {
+        Expr::Cmp { op, lhs, rhs } => Some(invert_comparison(*op, lhs, rhs)),
+        Expr::Bin {
+            op: op @ (BinOp::LogicalAnd | BinOp::LogicalOr),
+            lhs,
+            rhs,
+        } => Some(Expr::Bin {
+            op: if *op == BinOp::LogicalAnd {
+                BinOp::LogicalOr
+            } else {
+                BinOp::LogicalAnd
+            },
+            lhs: Box::new(negate_logical_tree(lhs)?),
+            rhs: Box::new(negate_logical_tree(rhs)?),
+        }),
+        _ => None,
+    }
 }
 
 fn invert_comparison(op: CmpOp, lhs: &Expr, rhs: &Expr) -> Expr {
@@ -2095,6 +2142,87 @@ mod tests {
                 ),
             }
         );
+    }
+
+    #[test]
+    fn inverted_pure_boolean_bitwise_tree_recovers_de_morgan_conjunction() {
+        let cmp = |name: &str, value: i64| Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg(name))),
+            rhs: Box::new(Expr::Const(value)),
+        };
+        let first = cmp("arg0", 0);
+        let second = cmp("arg1", 1);
+        // The same SETcc byte tree the compiler tests with `jne`, tested with
+        // `je` instead: `!(a == 0 || b == 1)` is `a != 0 && b != 1`.
+        let mut f = one_stmt(Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(bin(
+                    BinOp::And,
+                    Expr::Cast {
+                        signed: false,
+                        width: 1,
+                        expr: Box::new(bin(BinOp::Or, first, second)),
+                    },
+                    Expr::Const(255),
+                )),
+            }),
+            rhs: Box::new(Expr::Const(0)),
+        });
+
+        fold_constants(&mut f);
+
+        assert_eq!(
+            f.body[0],
+            Stmt::Assign {
+                dst: reg("rax"),
+                src: bin(
+                    BinOp::LogicalAnd,
+                    Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Reg(reg("arg0"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Reg(reg("arg1"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn inverted_boolean_bitwise_tree_without_byte_view_stays_eager() {
+        // Our own `jle` flag model is a bare `cmp | cmp` tested against zero.
+        // Recovering it as `||` would invent a basic block the source never had,
+        // so the byte-view requirement must hold for the inverted polarity too.
+        let original = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(bin(
+                BinOp::Or,
+                Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(reg("arg0"))),
+                    rhs: Box::new(Expr::Const(7)),
+                },
+                Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(reg("arg1"))),
+                    rhs: Box::new(Expr::Const(7)),
+                },
+            )),
+            rhs: Box::new(Expr::Const(0)),
+        };
+        let mut f = one_stmt(original.clone());
+
+        fold_constants(&mut f);
+
+        assert_eq!(f.body[0], one_stmt(original).body[0]);
     }
 
     #[test]
