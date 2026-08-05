@@ -1,82 +1,95 @@
-# Project Structure
+# Project structure
 
-## Overview
+Glaurung is a mixed Rust/Python project. Rust implements the native analysis
+engine; Python exposes the scripting, CLI, knowledge-base, and LLM surfaces.
 
-Glaurung is a modern binary analysis framework written in Rust with Python bindings, designed as a spiritual successor to Ghidra with first-class AI integration.
+## Top-level layout
 
-## Directory Layout
-
-```
+```text
 glaurung/
-├── src/                    # Rust source code
-│   └── lib.rs             # Main Rust library entry point
-├── python/                 # Python source code
-│   └── glaurung/
-│       ├── __init__.py    # Python package initialization
-│       └── cli.py         # Command-line interface
-├── docs/                   # Documentation
-│   ├── Maturin.md         # Maturin build system docs
-│   └── project-structure.md
-├── reference/              # Reference implementations for study
-│   ├── angr/              # Binary analysis platform
-│   ├── ghidra/            # Production decompiler architecture reference
-│   ├── kuna/              # Rust decompiler and DecBench comparator
-│   ├── cle/               # Binary loader
-│   ├── claripy/           # Constraint solver
-│   └── LIEF/              # Binary instrumentation
-├── .claude/                # Claude Code configuration (agents, settings)
-├── target/                 # Rust build artifacts (gitignored)
-├── Cargo.toml             # Rust package configuration
-├── Cargo.lock             # Rust dependency lock file
-├── pyproject.toml         # Python package configuration
-├── README.md              # Project readme
-├── LICENSE                # MIT license
-└── CLAUDE.md              # AI assistant context (hand-maintained)
-
+├── src/                 Rust library and PyO3 bindings
+├── python/glaurung/     Python package
+├── python/tests/        Python test suite
+├── tests/               Rust integration tests and binary fixtures
+├── samples/             Real and synthetic sample binaries
+├── data/                Shipped signatures and type/prototype data
+├── docs/                User, architecture, design, and development docs
+├── scripts/             Repository workflows and regression gates
+├── tools/               Focused developer and decompiler tools
+├── fuzz/                cargo-fuzz targets
+├── reference/           Checked-in projects used for architecture research
+├── Cargo.toml           Rust package and feature definitions
+├── Cargo.lock           Locked Rust dependency graph
+├── pyproject.toml       Python packaging, dependencies, and Maturin settings
+├── uv.lock              Locked Python dependency graph
+├── README.md            User-facing project overview
+├── CLAUDE.md            Hand-maintained development and model policy
+└── LICENSE              Apache-2.0 license
 ```
 
-## Key Components
+Build products such as `.venv/` and `target/` are local and ignored by Git.
+Generated analysis databases normally use the `.glaurung` extension.
 
-### Rust Core (`src/`)
-The core binary analysis engine written in Rust for performance and safety.
+## Rust core
 
-### Python Bindings (`python/glaurung/`)
-Python interface to the Rust core, providing a high-level API for binary analysis tasks.
+`src/lib.rs` is the library entry point. Major subsystems under `src/` include:
 
-### Documentation (`docs/`)
-Technical documentation, guides, and references.
+- `triage/` for bounded first-touch analysis;
+- `formats/`, `disasm/`, `analysis/`, and `symbols/` for binary recovery;
+- `ir/` for LLIR, lifting, optimization, structuring, and pseudocode rendering;
+- `kb/` for native knowledge-base support;
+- `exec/` and `symbolic/` for concrete and opt-in symbolic execution; and
+- `python_bindings/` for the PyO3 surface exposed as `glaurung._native`.
 
-### Reference Implementations (`reference/`)
-Included for study and design inspiration:
-- **angr**: Symbolic execution and binary analysis
-- **ghidra**: Production reverse-engineering and decompiler reference
-- **kuna**: Rust decompiler with a phase-addressed typed SSA pipeline
-- **cle**: Cross-platform binary loading
-- **claripy**: Abstract constraint solving
-- **LIEF**: Binary format instrumentation
+The exact module list evolves; `src/lib.rs` and `Cargo.toml` are authoritative.
 
-### Development Tools
-- **`.claude/`**: Claude Code configuration (custom agents, local settings)
+## Python package
 
-## Build System
+`python/glaurung/` contains:
 
-The project uses Maturin to build Python extensions from Rust code. Key configuration files:
-- `Cargo.toml`: Rust dependencies and package metadata
-- `pyproject.toml`: Python package configuration and Maturin settings
+- `cli/` and `cli/commands/` for the `glaurung` console script;
+- `llm/` for model configuration, agents, tools, and usage controls;
+- `kb/` for persistent project workflows;
+- format- and analysis-specific Python helpers; and
+- `_native.pyi`, `triage.pyi`, and `py.typed` for the native typing surface.
 
-## Getting Started
+The console entry point is declared in `pyproject.toml` as
+`glaurung = "glaurung.cli:main"`.
 
-1. Install dependencies:
-   ```bash
-   pip install maturin
-   ```
+## Tests and fixtures
 
-2. Build the project:
-   ```bash
-   maturin develop
-   ```
+- Rust unit tests live next to their modules; integration tests live in
+  `tests/`.
+- Python tests live in `python/tests/`.
+- `samples/` contains binaries used by examples, tutorials, and benchmarks.
+- `tests/decompiler_fixtures/` and `tests/decbench_corpus/` contain decompiler
+  regression material.
 
-3. Run the CLI:
-   ```bash
-   glaurung --help
-   ```
+Use real checked-in fixtures rather than inventing mock binary data. See
+[`../../samples/README.md`](../../samples/README.md) and
+[`../../tests/decompiler_fixtures/README.md`](../../tests/decompiler_fixtures/README.md)
+for the corpus-specific contracts.
+
+## Build configuration
+
+- `Cargo.toml` defines Rust dependencies and opt-in features.
+- `pyproject.toml` declares Python 3.11+, runtime/development dependencies,
+  the console script, and the `glaurung._native` Maturin module.
+- `uv.lock` and `Cargo.lock` make source builds reproducible.
+- `pytest.ini` contains the active pytest configuration.
+
+## Getting started
+
+```bash
+uv sync --locked --dev
+uv run glaurung --help
+```
+
+After a Rust change:
+
+```bash
+uv run maturin develop
+```
+
+See [setup.md](setup.md) for prerequisites, clean-room validation, build
+profiles, tests, and runtime configuration.

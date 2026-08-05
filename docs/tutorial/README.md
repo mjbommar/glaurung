@@ -80,11 +80,17 @@ Lookup material kept here so chapters can cross-link to it.
 
 - [`cli-cheatsheet.md`](reference/cli-cheatsheet.md) — every `glaurung` subcommand
 - [`repl-keymap.md`](reference/repl-keymap.md) — every REPL keystroke
-- [`set-by-precedence.md`](reference/set-by-precedence.md) — the provenance ladder (manual > dwarf > flirt > ... > stdlib)
-- [`sample-corpus.md`](reference/sample-corpus.md) — every binary in `samples/binaries/` and the chapter that uses it
+- [`set-by-precedence.md`](reference/set-by-precedence.md) — the provenance
+  ladder (manual > dwarf > flirt > ... > stdlib)
+- [`sample-corpus.md`](reference/sample-corpus.md) — every binary in
+  `samples/binaries/` and the chapter that uses it
 
 ## Conventions
 
+- **Environment.** Chapters after §A show the shorter `glaurung ...` form and
+  assume you ran `source .venv/bin/activate` from the repository root. If the
+  environment is not activated, prepend `uv run` to every Glaurung or Python
+  command.
 - **Copy-paste-driven.** Every step is a one-line shell command or
   REPL keystroke. No screenshots; no "right-click this button".
 - **Sample binaries ship in this repo.** Every walkthrough names a

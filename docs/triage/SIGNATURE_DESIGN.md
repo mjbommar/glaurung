@@ -313,6 +313,11 @@ impl LazySignature {
 
 ### Runtime Configuration
 
+> **Design-only schema.** `SignatureConfig` and the directory tree below are a
+> proposal and are not present in the current runtime. Shipped packer controls
+> use `TriageConfig.packers`; see [Packer configuration](packer-config.md).
+> FLIRT-lite library selection uses `GLAURUNG_FLIRT_LIB`.
+
 ```rust
 pub struct SignatureConfig {
     // Signature loading

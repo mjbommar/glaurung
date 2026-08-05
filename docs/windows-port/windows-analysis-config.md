@@ -24,6 +24,7 @@ Supported keys:
 - `max-blocks`
 - `max-instructions`
 - `timeout-ms`
+- `total-timeout-ms` (`0` disables the whole-analysis wall-clock ceiling)
 - `pdb-cache-dir`
 - `symbol-cache-dir`
 - `symbol-server`
@@ -31,22 +32,35 @@ Supported keys:
 
 Hyphenated YAML keys and Python-style underscore keys are both accepted.
 
-The current end-to-end Windows regression flow is:
+The following bounded smoke test uses a PE that is checked into the repository.
+It writes its project database to a new temporary directory:
 
 ```bash
+WINDOWS_SMOKE_DIR=$(mktemp -d)
+WINDOWS_SAMPLE=samples/binaries/platforms/windows/amd64/export/windows/x86_64/O2/hello-c-mingw64-O2.exe
+
 uv run glaurung windows bootstrap-project-facts \
-  --pe-path tests/fixtures/msvc-pdb/ntoskrnl.exe \
-  --project-path .glaurung/windows-regression/ntoskrnl.glaurung \
-  --pdb-cache-dir tests/fixtures/msvc-pdb \
+  --pe-path "$WINDOWS_SAMPLE" \
+  --project-path "$WINDOWS_SMOKE_DIR/hello.glaurung" \
+  --no-import-pdb-facts \
+  --max-functions 128 \
+  --max-blocks 10000 \
+  --max-instructions 200000 \
+  --timeout-ms 2000 \
   --force-reindex
 
-uv run glaurung view tests/fixtures/msvc-pdb/ntoskrnl.exe \
-  --project .glaurung/windows-regression/ntoskrnl.glaurung \
-  --pdb-cache tests/fixtures/msvc-pdb \
-  --pane pseudo 0x140685720
+uv run glaurung view "$WINDOWS_SMOKE_DIR/hello.glaurung" 0x1400079e0 \
+  --binary "$WINDOWS_SAMPLE" \
+  --pane pseudo
 ```
 
-The bootstrap step now imports PDB facts first, scans direct PE `call rel32`
-xrefs independently of full CFG recovery, records confidence-ranked function
-boundaries from PDB/`.pdata`/call targets, and only then runs the more expensive
-callgraph, data-xref, CFG, dominance, and branch-condition passes.
+The Microsoft PE/PDB regression bytes are intentionally not committed. Before
+using examples based on `tests/fixtures/msvc-pdb/ntoskrnl.exe`, populate and
+verify that corpus as described in
+[`../../tests/fixtures/msvc-pdb/README.md`](../../tests/fixtures/msvc-pdb/README.md).
+
+Without `--no-import-pdb-facts`, the bootstrap step imports available PDB facts
+first. It then scans direct PE `call rel32` xrefs independently of full CFG
+recovery, records confidence-ranked function boundaries from PDB/`.pdata`/call
+targets, and runs the more expensive callgraph, data-xref, CFG, dominance, and
+branch-condition passes.

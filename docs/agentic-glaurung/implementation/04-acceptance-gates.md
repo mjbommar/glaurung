@@ -27,7 +27,7 @@ Acceptance:
 ## Gate G1: Contract and validator tests
 
 ```bash
-uvx pytest \
+uv run pytest \
   python/tests/test_source_recovery_models.py \
   python/tests/test_source_recovery_context.py \
   python/tests/test_source_recovery_validation.py \
@@ -40,7 +40,7 @@ evidence, syntax, and repair classification negatives.
 ## Gate G2: Deterministic tool tests
 
 ```bash
-uvx pytest python/tests/test_source_recovery_tools.py -xvs
+uv run pytest python/tests/test_source_recovery_tools.py -xvs
 ```
 
 Acceptance:
@@ -54,7 +54,7 @@ Acceptance:
 ## Gate G3: Controller, tracing, and resume
 
 ```bash
-uvx pytest \
+uv run pytest \
   python/tests/test_source_recovery_trace.py \
   python/tests/test_cli_agent_decompile.py \
   python/tests/test_decbench_external_agent.py \
@@ -102,7 +102,7 @@ and reported separately; do not mass-format unrelated code.
 GLAURUNG_RUN_LIVE_AGENT_TESTS=1 \
 GLAURUNG_LLM_MODEL=openai:gpt-5.4-mini \
 GLAURUNG_OPENAI_SERVICE_TIER=flex \
-uvx pytest python/tests/test_source_recovery_agent_live.py -xvs
+uv run pytest python/tests/test_source_recovery_agent_live.py -xvs
 ```
 
 Acceptance:
@@ -120,7 +120,7 @@ Record estimated maximum cost before running this opt-in gate.
 
 ```bash
 GLAURUNG_RUN_LIVE_AGENT_TESTS=1 \
-uvx pytest \
+uv run pytest \
   python/tests/test_source_recovery_prompt_injection_live.py \
   python/tests/test_source_recovery_security.py \
   -xvs
@@ -152,7 +152,7 @@ Acceptance:
 
 ```bash
 cargo test
-uvx pytest python/tests/
+uv run pytest python/tests/
 ```
 
 Acceptance: terminal results recorded. Do not claim full green while a command

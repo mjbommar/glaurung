@@ -32,7 +32,7 @@ consumers (mitigated by the verifier + the existing test suite).
   existing decompiler tests still pass.
 - **0.9 Migrate consumers.** Update SSA/use-def/dataflow/decompiler/`ioctl_taint`
   construction & match sites for the new shapes. *Test:* the **entire existing
-  suite** (`cargo test` + `uvx pytest`) green.
+  suite** (`cargo test` + `uv run pytest`) green.
 
 ## Deliverables
 
@@ -52,7 +52,7 @@ consumers (mitigated by the verifier + the existing test suite).
 - Every lifted op carries an explicit width; `endian` on memory; no `Op::Unknown`
   emitted by the x86 lifter (only `Intrinsic`).
 - `ir::verify` passes on the whole sample corpus.
-- `cargo test` and `uvx pytest python/tests/` fully green; `ruff`/`ty` clean on any
+- `cargo test` and `uv run pytest python/tests/` fully green; `ruff`/`ty` clean on any
   touched Python.
 
 ## Notes

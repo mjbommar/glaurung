@@ -17,7 +17,7 @@ Phases 2 and 3 may run in parallel. Phase 6 can surface the concrete emulator
 
 ## Global definition of done (every phase)
 
-- `cargo test` (with the phase's features) green; `uvx pytest python/tests/` green
+- `cargo test` (with the phase's features) green; `uv run pytest python/tests/` green
   for any Python touched.
 - `uvx ruff format` + `uvx ruff check` + `uvx ty check` clean on touched Python.
 - Determinism test (run-twice byte-identical) passes for any new entry point.

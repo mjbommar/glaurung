@@ -1,31 +1,35 @@
-Packer Configuration
+# Packer configuration
 
-Overview
-- Controls packer detection scanning bounds and weighting of individual packer signals during triage. Exposed to Python via `TriageConfig.packers` and used by `triage.analyze_bytes` / `triage.analyze_path` when an optional config is supplied.
+`TriageConfig.packers` controls packer-signature scan bounds and confidence
+weights for the Python triage API. These settings do not change file-size or
+overall read limits.
 
-Fields
-- scan_limit: Maximum bytes scanned for packer signatures and heuristics. Keeps packer scans fast on large files. Default: 524_288 (512 KiB).
-- upx_detection_weight: Weight applied when UPX signatures/section names are present. Higher values increase confidence of a “UPX” match.
-- upx_version_weight: Weight applied when a specific UPX version string is identified. Reinforces detection when present.
-- packer_signal_weight: Overall contribution of packer signals to triage confidence. Useful to tune how strongly packer hits influence final verdicts.
+## Fields and defaults
 
-Python Usage
-- Override packer detection limits and weights at runtime by creating a `TriageConfig`, adjusting `packers`, and passing it to `analyze_bytes` or `analyze_path`.
+| Field | Default | Meaning |
+|---|---:|---|
+| `scan_limit` | `524288` | Maximum leading bytes inspected for packer signatures and heuristics |
+| `upx_detection_weight` | `0.6` | Confidence weight for UPX signatures and section names |
+| `upx_version_weight` | `0.2` | Additional weight for a recognized UPX version string |
+| `packer_signal_weight` | `0.30` | Contribution of generic packed-file signals |
 
-Example
+## Python example
+
 ```python
-from glaurung import triage as g
+from glaurung import triage
 
-cfg = g.TriageConfig()
-cfg.packers.scan_limit = 256 * 1024       # 256 KiB
-cfg.packers.upx_detection_weight = 0.7    # emphasize UPX hits
-cfg.packers.upx_version_weight = 0.25
-cfg.packers.packer_signal_weight = 0.35
+config = triage.TriageConfig()
+config.packers.scan_limit = 256 * 1024
+config.packers.upx_detection_weight = 0.7
+config.packers.upx_version_weight = 0.25
+config.packers.packer_signal_weight = 0.35
 
-art = g.analyze_path("/path/to/sample.exe", config=cfg)
-print([p.name for p in (art.packers or [])])
+artifact = triage.analyze_path("/path/to/sample.exe", config=config)
+for match in artifact.packers or []:
+    print(match.name, match.confidence)
 ```
 
-Notes
-- If no `config` is provided, built-in defaults are used.
-- `scan_limit` bounds the bytes considered during detection only; overall read limits are still enforced by I/O settings.
+Pass the complete `TriageConfig` to `analyze_path` or `analyze_bytes`. With no
+config argument, the built-in defaults above are used. `scan_limit` only bounds
+packer detection; use the analysis function's read/file-size arguments for I/O
+limits.

@@ -281,7 +281,7 @@ result = await agent.analyze(question, context, params)
 Run the comprehensive test suite:
 
 ```bash
-uvx pytest python/tests/test_agent_refactor.py -v
+uv run pytest python/tests/test_agent_refactor.py -v
 ```
 
 Key test areas:

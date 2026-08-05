@@ -159,7 +159,7 @@ then-current `origin/master`:
 Expected focused command after the RED test exists:
 
 ```bash
-uvx pytest python/tests/test_decbench_external_llm_pipeline.py -xvs
+uv run pytest python/tests/test_decbench_external_llm_pipeline.py -xvs
 ```
 
 ## Stop conditions for the next action

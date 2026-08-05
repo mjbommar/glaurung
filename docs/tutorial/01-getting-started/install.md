@@ -1,165 +1,106 @@
 # §A — Install
 
-Goal: a working `glaurung` on your `$PATH` and a fresh clone of the
-sample corpus, in under five minutes.
+Goal: build Glaurung from source and verify the native extension with a real
+sample binary.
 
 ## Prerequisites
 
-- **Python ≥ 3.11.** Glaurung ships native bindings via maturin
-  targeting CPython 3.11+.
-- **A C toolchain** (gcc / clang) — needed for some sample-binary
-  rebuild scripts but not for installing Glaurung itself.
-- **Rust toolchain** — only required if you're building from source.
+- CPython 3.11 or newer.
+- Rust 1.88 or newer.
+- Git, a C compiler/linker, and
+  [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
-## Option 1 — From a release wheel (recommended once published)
-
-> Status: PyPI publication is not yet wired up
-> ([#241](../PLAN.md#functionality-requirements-summary-the-gap-list)).
-> For now, build from source via Option 2.
-
-```bash
-pip install glaurung
-glaurung --version
-```
-
-## Option 2 — From source (current path)
+Glaurung is not currently published on PyPI. Do not use
+`pip install glaurung`; use a source checkout:
 
 ```bash
 git clone https://github.com/mjbommar/glaurung.git
 cd glaurung
-uv sync
+uv sync --locked --dev
 ```
 
-`uv sync` installs `glaurung` as an editable install and builds the
-native extension via maturin. Wait for the build to finish (~30s on
-first run).
-
-Sanity check:
-
-```bash
-$ uv run glaurung --version
-```
-
-```text
-glaurung 0.1.0
-```
-
-(Captured: [`_fixtures/01-install/version.out`](../_fixtures/01-install/version.out).)
-
-If you get an `ImportError` instead, the native extension didn't
-build — check that you have a Rust toolchain on `$PATH` and re-run
-`uv sync`.
-
-## Option 3 — Build the wheel manually
-
-If you'd rather work outside `uv`:
-
-```bash
-git clone https://github.com/mjbommar/glaurung.git
-cd glaurung
-pip install maturin
-maturin develop --release
-glaurung --help
-```
+`uv sync` creates `.venv`, installs the locked Python dependencies, builds the
+Rust extension through Maturin, and installs the package as an editable source
+checkout.
 
 ## Verify the install
 
-```bash
-$ uv run glaurung --help | head -3
-```
-
-```text
-usage: glaurung [-h] [--version]
-                {triage,strings,symbols,disasm,cfg,ask,decompile,name-func,repl,graph,detect-packer,diff,kickoff,patch,verify-recovery,export,undo,redo,xrefs,frame,strings-xrefs,view,find,bookmark,journal,classfile,luac} ...
-```
-
-(Captured: [`_fixtures/01-install/help-head.out`](../_fixtures/01-install/help-head.out).)
-
-That's 27 subcommands. Every one is documented in
-[`reference/cli-cheatsheet.md`](../reference/cli-cheatsheet.md).
-
-## Run the kickoff smoke test
-
-This is the one-liner that confirms the full pipeline works:
+Use `uv run` so the command is executed in the project's environment:
 
 ```bash
-$ uv run glaurung kickoff \
-    samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+uv run glaurung --version
+uv run glaurung --help
+uv run python -c "import glaurung; print(glaurung.__file__)"
 ```
 
-```markdown
-# Kickoff analysis — hello-c-clang-debug
+The version command currently prints `glaurung 0.1.0`. The help output is the
+authoritative list of commands; the list changes as the pre-1.0 CLI develops.
 
-- format: **ELF**, arch: **x86_64**, size: **17680** bytes
-- entry: **0x1060**
-
-## Functions
-- discovered: **9** (with blocks: 9, named: 8)
-- callgraph edges: **5**
-- name sources: analyzer=9
-
-## Type system
-- stdlib prototypes loaded: **192**
-- DWARF types imported: **0**
-- stack slots discovered: **36**
-- types propagated: **0**
-- auto-struct candidates: **0**
-
-## IOCs (from string scan)
-- **path_posix**: 6
-- **hostname**: 6
-- **java_path**: 4
-- **ipv4**: 0
-
-_completed in N ms_
-```
-
-(Captured: [`_fixtures/01-install/kickoff-smoketest.out`](../_fixtures/01-install/kickoff-smoketest.out).)
-
-You should see a markdown summary mentioning the format (ELF), arch
-(x86_64), function count, and named-vs-unnamed ratio, finishing in
-under a second. If it does, your install is healthy and you're
-ready for [§B `first-binary.md`](first-binary.md).
-
-If the smoke test errors out, see the [troubleshooting section](#troubleshooting).
-
-## Optional: enable LLM features
-
-Tiers 1-4 of this tutorial are 100% deterministic — no API key
-required. **Tier 5** uses LLM-driven memory tools for chat-style
-analysis. To enable:
+## Run a real smoke test
 
 ```bash
-export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY
-glaurung ask samples/binaries/.../hello-clang-debug "what does this binary do?"
+uv run glaurung kickoff \
+  samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
 ```
 
-The agent has access to 50+ deterministic memory tools and writes
-its findings to a citable evidence log. You can skip this section
-entirely if you want LLM-free analysis only.
+The report should identify an x86-64 ELF and include function-discovery,
+type-system, IOC, and completion sections. Exact function and stack-slot counts
+are analyzer results, not installation invariants, and may change between
+revisions.
+
+For a smaller JSON-producing check:
+
+```bash
+uv run glaurung triage \
+  samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2 \
+  --json
+```
+
+## Optional LLM features
+
+The deterministic tutorial sections need no API key. LLM-backed commands use
+`openai:gpt-5.4-mini` with the `flex` service tier by default:
+
+```bash
+export OPENAI_API_KEY=your-key
+uv run glaurung ask \
+  samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2 \
+  --route -a "What does this binary do?"
+```
+
+You may put the key in a `.env` file in the checkout instead. Do not commit the
+file. To select Anthropic explicitly, set `ANTHROPIC_API_KEY` and pass a model
+such as `--model anthropic:claude-haiku-4-5`.
 
 ## Troubleshooting
 
-**`glaurung: command not found`** — The `uv sync` flow installs into
-the project's `.venv/`. Use `uv run glaurung ...` to invoke it
-without sourcing the venv, or `source .venv/bin/activate` to put
-it on `$PATH`.
+**`glaurung: command not found`** — use `uv run glaurung ...`, or run
+`source .venv/bin/activate` before invoking `glaurung` directly.
 
-**`ImportError: glaurung native extension`** — The Rust extension
-didn't build. Check that `cargo --version` works and `rustc` is at
-least 1.75. Re-run `uv sync` (or `maturin develop --release`).
+**Native extension import/build failure** — confirm that `rustc --version`
+reports 1.88 or newer and that a C compiler/linker is installed. Then rerun
+`uv sync --locked --dev`.
 
-**`samples/binaries/...` doesn't exist** — Make sure you ran
-`git clone` and not `pip install` for the source path. The corpus
-ships with the source tree, not the published wheel.
+**A sample path does not exist** — run commands from the repository root. The
+sample corpus is part of the source checkout.
 
-**Build is slow** — First-time `maturin develop --release` compiles
-the Rust extension in release mode. Expect 1-2 minutes on a slow
-laptop. Subsequent rebuilds are incremental and take seconds.
+**Python still shows behavior from before a Rust change** — rebuild the native
+extension with `uv run maturin develop`.
 
-## Next: §B `first-binary.md`
+The complete prerequisite list, Docker clean-room recipe, wheel commands,
+quality gates, and runtime configuration reference are in
+[Installation, development setup, and configuration](../../development/setup.md).
 
-You're installed. Now load a binary and run the full first-touch
-pipeline.
+## Next: §B — First binary
 
-→ [§B `first-binary.md`](first-binary.md)
+The remaining tutorial chapters use the shorter `glaurung ...` command form.
+Activate the environment once before continuing:
+
+```bash
+source .venv/bin/activate
+glaurung --version
+```
+
+If you prefer not to activate it, prepend `uv run` to each command instead.
+
+Continue to [§B — First binary](first-binary.md).

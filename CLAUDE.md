@@ -30,9 +30,11 @@ re-render), the Windows port (PDB ingestion/naming, `ioctl_taint`,
 ## Build / test / run
 
 ```bash
-# Build the Rust extension into the venv (do this after any Rust change)
-maturin develop                 # or: maturin build --release
-uv sync                         # Python deps
+# Install locked dependencies and build the extension
+uv sync --locked --dev
+
+# Rebuild after any Rust change (wheel: `uv run maturin build --release`)
+uv run maturin develop
 
 # Run the CLI (console script: glaurung = glaurung.cli:main)
 uv run glaurung --help
@@ -40,8 +42,8 @@ uv run glaurung triage <binary>
 uv run glaurung kickoff <binary>        # full analysis → .glaurung KB
 
 # Tests
-uvx pytest python/tests/                # Python suite (~345 test files)
-uvx pytest python/tests/test_x.py -xvs  # one file, stop on first failure
+uv run pytest python/tests/                # Python suite (~345 test files)
+uv run pytest python/tests/test_x.py -xvs  # one file, stop on first failure
 cargo test                              # Rust suite (~125 test modules)
 
 # Decompiler: iterate small, gate big — docs/development/decompiler-testing.md

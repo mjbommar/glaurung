@@ -1,909 +1,313 @@
----
-tags:
-  - rust
-  - python
-  - maturin
----
+# Installation, development setup, and configuration
 
+This is the supported setup reference for a source checkout of Glaurung.
+Commands are written for a POSIX shell and should be run from the repository
+root unless noted otherwise.
 
-This document outlines how to use Maturin to build Python packages with Rust.
+## Installation status
 
-## Project Setup
+Glaurung is not currently published on PyPI. `pip install glaurung` therefore
+is not a supported installation path. Build from a Git checkout with `uv` and
+the Rust toolchain.
 
-- Create a Rust library project:
-  ```bash
-  cargo new --lib --edition 2021 <project-name>
-  ```
-- Alternative quick start:
-  ```bash
-  maturin new -b pyo3 <project-name>
-  ```
-- For mixed Rust/Python projects:
-  ```bash
-  maturin new --mixed --bindings pyo3 <project-name>
-  ```
+The project produces a platform-specific CPython extension. The clean-room
+workflow below was validated on Linux x86-64 with Debian 12, CPython 3.11, and
+Rust 1.88. Native macOS and Windows builds may require the corresponding
+platform compiler tools and are not covered by that Linux validation.
 
-## Project Layout Options
+## Prerequisites
 
-### Pure Rust Layout
-```
-my-rust-project/
-├── Cargo.toml
-├── pyproject.toml
-└── src/
-    └── lib.rs
-```
+- Git.
+- CPython 3.11 or newer, as declared by `pyproject.toml`.
+- Rust 1.88 or newer. `gimli 0.33`, a direct dependency, requires Rust 1.88.
+- A C compiler and linker. On Linux, install the distribution's basic build
+  toolchain (`build-essential` on Debian/Ubuntu).
+- [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
-### Mixed Rust/Python Layout (Option 1)
-```
-my-project/
-├── Cargo.toml
-├── my_project/
-│   ├── __init__.py
-│   └── bar.py
-├── pyproject.toml
-└── src/lib.rs
-```
-
-### Mixed Rust/Python Layout (Option 2)
-```
-my-project/
-├── src/my_project/
-│   ├── __init__.py
-│   └── bar.py
-├── pyproject.toml
-└── rust/
-    ├── Cargo.toml
-    └── src/lib.rs
-```
-
-You can customize the Python source directory in `pyproject.toml`:
-
-```toml
-[tool.maturin]
-python-source = "python"
-module-name = "my_module"
-```
-
-## Configuration Files
-
-### Cargo.toml
-
-Ensure your `Cargo.toml` has the necessary dependencies and metadata:
-
-```toml
-[package]
-name = "your-package-name"
-version = "0.1.0"
-edition = "2021"
-description = "A short description"
-readme = "README.md"
-license = "MIT OR Apache-2.0"  # SPDX license expression
-repository = "https://github.com/yourusername/your-repo"
-keywords = ["python", "extension"]
-authors = ["Your Name <your.email@example.com>"]
-homepage = "https://your-project-homepage.com"
-
-[lib]
-name = "your_module_name"
-crate-type = ["cdylib"]
-
-[dependencies]
-pyo3 = { version = "0.19.0", features = ["extension-module"] }
-```
-
-### pyproject.toml
-
-Configure Python packaging with metadata:
-
-```toml
-[build-system]
-requires = ["maturin>=1.0,<2.0"]
-build-backend = "maturin"
-
-# Full PEP 621 metadata specification
-[project]
-name = "your-package-name"
-version = "0.1.0"  # Or use dynamic = ["version"] to get from Cargo.toml
-description = "A short description of your package"
-authors = [
-    {name = "Your Name", email = "your.email@example.com"}
-]
-readme = "README.md"
-requires-python = ">=3.7"
-license = {text = "MIT OR Apache-2.0"}
-classifiers = [
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
-    "Programming Language :: Python :: 3.7",
-    "License :: OSI Approved :: MIT License",
-]
-dependencies = [
-    "numpy>=1.24.0",
-    "pandas~=2.0.0",
-]
-
-# Create console scripts (CLI entry points)
-[project.scripts]
-your-command = "your_package_name:main_function"
-
-# Define URL mapping for project
-[project.urls]
-Homepage = "https://github.com/yourusername/your-repo"
-Documentation = "https://your-repo.readthedocs.io/"
-"Bug Tracker" = "https://github.com/yourusername/your-repo/issues"
-
-# Maturin-specific configuration
-[tool.maturin]
-# Python source directory (for mixed Python/Rust projects)
-python-source = "python"
-# Override module name if it differs from package name
-module-name = "your_module_name"
-# Binding type: "pyo3", "cffi", "uniffi", or "bin"
-bindings = "pyo3"
-# Set Rust build profile
-profile = "release"
-# Include specific Rust features
-features = ["some-feature", "another-feature"]
-# Control wheel compatibility on Linux
-compatibility = "manylinux2014"
-# Strip debug symbols to reduce binary size
-strip = true
-# Include/exclude specific files
-include = ["path/to/include/**/*"]
-exclude = ["path/to/exclude/**/*"]
-# Pass additional arguments to rustc
-rustc-args = ["--cfg=feature=\"some-feature\""]
-```
-
-## Virtual Environment Setup
+Check the tools that matter:
 
 ```bash
-python3 -m venv .venv
+python3 --version
+rustc --version
+cargo --version
+uv --version
+```
+
+## Source install
+
+```bash
+git clone https://github.com/mjbommar/glaurung.git
+cd glaurung
+uv sync --locked --dev
+uv run glaurung --version
+uv run glaurung --help
+```
+
+`uv sync --locked --dev` does four things:
+
+1. creates or updates `.venv`;
+2. installs the versions in `uv.lock` without changing the lockfile;
+3. builds the Rust extension through Maturin; and
+4. installs Glaurung and its development dependencies into `.venv`.
+
+Use `uv run COMMAND` from the repository root. Alternatively, run
+`source .venv/bin/activate` once and then invoke installed commands directly.
+
+Verify both the native package and a real analysis path:
+
+```bash
+uv run python -c "import glaurung; print(glaurung.__file__)"
+uv run glaurung triage \
+  samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2 \
+  --json
+uv run glaurung kickoff \
+  samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+```
+
+The triage result should identify an x86-64 ELF. The kickoff report should
+contain format, architecture, function-discovery, type-system, and completion
+sections. Exact counts can change as analyzers improve, so they are not an
+installation invariant.
+
+## Building and rebuilding
+
+Python-only changes are visible immediately in the editable install. Rebuild
+after every Rust change:
+
+```bash
+uv run maturin develop
+```
+
+For optimized local behavior:
+
+```bash
+uv run maturin develop --release
+```
+
+Build a release wheel without installing it:
+
+```bash
+uv run maturin build --release
+```
+
+Maturin writes wheels under `target/wheels/`. Wheels are specific to the
+selected OS, CPU architecture, and Python ABI; building one is not equivalent
+to publishing it.
+
+Optional Rust features are off unless selected. For example, the concrete
+execution engine is included by the normal Python build, while symbolic
+execution must be requested explicitly:
+
+```bash
+uv run maturin develop --features python-ext,symbolic
+```
+
+When passing `--features`, include `python-ext`: Maturin treats the CLI feature
+list as a replacement for the `[tool.maturin].features` list rather than an
+addition to it.
+
+Some solver and differential-oracle features require additional native
+libraries. Their authoritative feature definitions are in `Cargo.toml`; see
+[the execution-engine decisions](../design/execution-engine/05-decisions/)
+and [Axeyum integration documentation](../axeyum-integration/README.md) before
+enabling them.
+
+## Tests and quality gates
+
+Use the smallest relevant test while iterating, then run the complete gates
+before claiming a change is finished:
+
+```bash
+# Rust
+cargo test
+
+# Python
+uv run pytest python/tests/
+
+# Formatting, lint, and types
+uvx ruff format --check python/
+uvx ruff check python/
+uvx ty check python/
+```
+
+To apply Python formatting, replace `ruff format --check` with
+`ruff format`. Use `uvx ruff check python/ --fix` only when you have reviewed
+the affected scope.
+
+`pytest-cov` is not part of the locked development group. Run it in an
+isolated, disposable environment when coverage is needed:
+
+```bash
+uv run --isolated --with pytest-cov pytest \
+  -p pytest_cov.plugin \
+  --cov=python/glaurung \
+  python/tests/
+```
+
+After changes to Rust code used by Python, run `uv run maturin develop` before
+Python tests. Decompiler work has additional focused and broad gates in
+[decompiler-testing.md](decompiler-testing.md).
+
+## Reproduce the clean-room install with Docker
+
+The following command copies the checkout into a disposable Debian container,
+excluding host build products, and runs the real locked install plus smoke
+tests. It deliberately mounts the checkout read-only so container work cannot
+modify the host tree.
+
+```bash
+docker run --rm \
+  -v "$PWD:/workspace:ro" \
+  rust:1.88-bookworm \
+  bash -c '
+    set -euxo pipefail
+    export PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin
+    apt-get update
+    apt-get install -y --no-install-recommends \
+      python3 python3-venv ca-certificates curl git build-essential
+    curl -LsSf https://astral.sh/uv/install.sh | \
+      env UV_INSTALL_DIR=/usr/local/bin sh
+    mkdir /work
+    tar -C /workspace \
+      --exclude=.git --exclude=.venv --exclude=target \
+      --exclude=reference --exclude=out \
+      -cf - . | tar -C /work -xf -
+    cd /work
+    uv sync --locked --dev
+    uv run glaurung --version
+    uv run python -c "import glaurung; print(glaurung.__file__)"
+    uv run glaurung triage \
+      samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2 \
+      --json
+    uv run glaurung kickoff \
+      samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+  '
+```
+
+This downloads dependencies and compiles the native extension, so the first
+run is intentionally not an offline test. Use a pinned image digest as well as
+the checked-in `uv.lock` when an immutable CI environment is required.
+
+## Runtime configuration
+
+### Configuration precedence
+
+Most command behavior follows this order, from highest to lowest priority:
+
+1. explicit command-line argument;
+2. a subsystem-specific config file, where supported;
+3. environment variable; and
+4. built-in default.
+
+Always check `uv run glaurung COMMAND --help` for command-specific flags.
+Glaurung does not currently have one global user configuration file.
+
+### LLM providers, models, and budgets
+
+LLM-backed commands are optional. The deterministic CLI does not require an
+API key. `python-dotenv` searches the current directory and its parents for a
+`.env` file when the LLM configuration module loads; existing environment
+variables take precedence over values in that file.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `OPENAI_API_KEY` | OpenAI credential | unset |
+| `ANTHROPIC_API_KEY` | Anthropic credential | unset |
+| `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Google/Gemini credential | unset |
+| `GLAURUNG_LLM_MODEL` | Default `provider:model` | `openai:gpt-5.4-mini` |
+| `GLAURUNG_OPENAI_SERVICE_TIER` | OpenAI tier (`flex`, `default`, or `priority`) | `flex` |
+| `GLAURUNG_LLM_TEMPERATURE` | Model temperature | `0.3` |
+| `GLAURUNG_REQUEST_LIMIT` | Requests per agent run | `12` |
+| `GLAURUNG_INPUT_TOKENS_LIMIT` | Input-token ceiling | `400000` |
+| `GLAURUNG_TOTAL_TOKENS_LIMIT` | Total-token ceiling | `500000` |
+| `GLAURUNG_MAX_OUTPUT_TOKENS` | Per-request output ceiling | `32768` |
+
+Example `.env`:
+
+```dotenv
+OPENAI_API_KEY=replace-me
+GLAURUNG_LLM_MODEL=openai:gpt-5.4-mini
+GLAURUNG_OPENAI_SERVICE_TIER=flex
+```
+
+Do not commit credentials. Where available, a command's `--model` option
+overrides `GLAURUNG_LLM_MODEL`. Invalid numeric budget values are ignored with
+a warning; provider errors remain runtime errors.
+
+Detailed agent-run reproducibility and budget policy is in
+[Model configuration and budgets](../agentic-glaurung/operations/01-model-configuration-and-budgets.md).
+
+### Analysis limits and caches
+
+| Variable | Purpose |
+|---|---|
+| `GLAURUNG_MAX_FILE_SIZE` | Raise the default file-size cap for triage-backed commands |
+| `GLAURUNG_MAX_READ_BYTES` | Raise the default read cap for triage-backed commands |
+| `GLAURUNG_CACHE_DIR` | Append-only decompile/name-function cache when the command supports it |
+| `GLAURUNG_PDB_CACHE` | Microsoft-style PDB cache directory |
+| `_NT_SYMBOL_PATH` | Fallback local PDB cache discovery |
+| `GLAURUNG_TYPES_DIR` | Override the generated type/prototype data directory |
+| `GLAURUNG_FLIRT_LIB` | Override the default FLIRT-lite signature file |
+| `GLAURUNG_JVM_TOOLS_JAR` | Override the optional JVM helper JAR path |
+
+The two global size variables only raise the effective limits; use explicit
+CLI flags to request a smaller bound. The operation cache has no eviction or
+size limit and must be cleared manually if it grows too large.
+
+### Windows analysis YAML
+
+The shared PE/PDB configuration resolves in this order:
+
+1. `--analysis-config PATH`;
+2. `GLAURUNG_WINDOWS_ANALYSIS_CONFIG`;
+3. `.glaurung/windows-analysis.yaml`; and
+4. built-in defaults.
+
+Unknown keys fail closed with `ValueError`. See
+[Windows Analysis Config](../windows-port/windows-analysis-config.md) for the
+schema and current Windows workflow.
+
+### Triage and advanced execution settings
+
+Packer weights are configured through the Python API; see
+[Packer Configuration](../triage/packer-config.md). Symbolic solver, Axeyum,
+decompiler-debug, and benchmark-only environment variables are specialized
+developer controls and are documented with their owning subsystem rather than
+treated as general user configuration.
+
+## Troubleshooting
+
+### `glaurung: command not found`
+
+Run `uv run glaurung ...` from the checkout, or activate `.venv` first:
+
+```bash
 source .venv/bin/activate
-pip install -U pip maturin
+glaurung --version
 ```
 
-## Local Development
+### Native extension import or build failure
 
-Maturin provides several commands to streamline local development:
-
-### Development Installation
-
-For quick development and testing, use `maturin develop`:
+Confirm that Python, Rust, and the linker are available, then rebuild:
 
 ```bash
-# Basic development install
-maturin develop
-
-# With UV package manager integration
-maturin develop --uv
-
-# With specific features
-maturin develop --features feature1,feature2
-
-# Install in release mode
-maturin develop --release
+python3 --version
+rustc --version
+cc --version
+uv sync --locked --dev
+uv run maturin develop
 ```
 
-### Editable Installs (PEP 660)
+Rust older than 1.88 is unsupported by the current dependency graph.
 
-Maturin supports editable installs that allow Python code changes without recompilation:
+### Sample path does not exist
 
-```bash
-# Using pip
-pip install -e .
+The sample corpus is in the Git checkout, not in a future wheel. Run examples
+from the repository root and check `samples/README.md` for corpus layout and
+generation details.
 
-# Using maturin directly
-maturin develop
+### Python behavior does not reflect a Rust change
 
-# Using UV
-uv pip install -e .
-```
-
-### Benefits of Development Mode
-
-- Quick debug builds for faster iteration
-- Automatic detection of Python environment
-- Immediate reflection of Python code changes
-- Optionally install project dependencies
-- Support for multiple binding types
-
-### Skip Installation
-
-To build without installing (useful for debugging):
-
-```bash
-maturin develop --release --no-pip-install
-```
-
-## Binding Options
-
-Maturin supports multiple binding types to interface Rust with Python:
-
-### 1. PyO3 Bindings (Default)
-- Supports CPython, PyPy, and GraalPy
-- Automatically detected when added as a dependency
-- Offers `Py_LIMITED_API`/abi3 support for cross-Python compatibility
-- Good cross-compilation capabilities
-
-### 2. CFFI Bindings
-- Compatible with all Python versions, including PyPy
-- Requires manual specification with `-b cffi` or in `pyproject.toml`
-- Uses cbindgen to generate header files
-- Exposes `ffi` and `lib` objects for Python interaction
-
-### 3. Binary Bindings
-- Packages Rust binaries as Python scripts
-- Requires manual specification
-- Best practice: Expose CLI functions in library instead of shipping separate binary
-
-### 4. UniFFI Bindings
-- Generates Python `ctypes` bindings
-- Compatible with all Python versions, including PyPy
-
-Specify binding type in `pyproject.toml`:
-```toml
-[tool.maturin]
-bindings = "pyo3" # or "cffi", "uniffi", "bin"
-```
-
-## Exposing Rust to Python with PyO3
-
-PyO3 provides several macros and types to expose Rust code to Python:
-
-### 1. Exposing Functions
-
-Use the `#[pyfunction]` attribute to expose Rust functions to Python:
-
-```rust
-use pyo3::prelude::*;
-
-#[pyfunction]
-fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-    Ok((a + b).to_string())
-}
-
-// In the module definition:
-#[pymodule]
-fn your_module_name(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
-    Ok(())
-}
-```
-
-### 2. Exposing Classes and Structs
-
-Use the `#[pyclass]` attribute to expose Rust structs as Python classes:
-
-```rust
-#[pyclass]
-struct MyClass {
-    #[pyo3(get, set)]
-    value: i32,
-    internal_value: String,
-}
-
-#[pymethods]
-impl MyClass {
-    #[new]
-    fn new(value: i32) -> Self {
-        MyClass {
-            value,
-            internal_value: String::from("hidden"),
-        }
-    }
-
-    fn get_internal(&self) -> PyResult<String> {
-        Ok(self.internal_value.clone())
-    }
-
-    fn set_internal(&mut self, value: String) -> PyResult<()> {
-        self.internal_value = value;
-        Ok(())
-    }
-
-    fn calculate(&self, multiplier: i32) -> PyResult<i32> {
-        Ok(self.value * multiplier)
-    }
-
-    // Class method (no self)
-    #[classmethod]
-    fn create_default(_cls: &PyType) -> PyResult<Self> {
-        Ok(MyClass {
-            value: 42,
-            internal_value: String::from("default"),
-        })
-    }
-
-    // Static method (no self or cls)
-    #[staticmethod]
-    fn help() -> PyResult<String> {
-        Ok(String::from("This is a helpful message"))
-    }
-}
-
-// In the module definition:
-#[pymodule]
-fn your_module_name(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<MyClass>()?;
-    Ok(())
-}
-```
-
-### 3. Defining Python Modules
-
-Use the `#[pymodule]` attribute to define a Python module:
-
-```rust
-#[pymodule]
-fn your_module_name(py: Python, m: &PyModule) -> PyResult<()> {
-    // Add functions
-    m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
-    
-    // Add classes
-    m.add_class::<MyClass>()?;
-    
-    // Add constants
-    m.add("VERSION", "1.0.0")?;
-    m.add("PI", 3.14159)?;
-    
-    // Add submodules
-    let submodule = PyModule::new(py, "submodule")?;
-    submodule.add_function(wrap_pyfunction!(another_function, submodule)?)?;
-    m.add_submodule(submodule)?;
-    
-    Ok(())
-}
-```
-
-### 4. Working with Python Types
-
-PyO3 provides wrappers for Python types:
-
-```rust
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
-
-#[pyfunction]
-fn process_dict(py: Python, input: &PyDict) -> PyResult<PyObject> {
-    let result = PyDict::new(py);
-    for (key, value) in input.iter() {
-        result.set_item(key, value)?;
-    }
-    Ok(result.into())
-}
-
-#[pyfunction]
-fn create_list(py: Python, items: Vec<i32>) -> PyResult<PyObject> {
-    let list = PyList::new(py, &items);
-    Ok(list.into())
-}
-```
-
-### 5. Error Handling
-
-Use `PyResult` for error handling:
-
-```rust
-use pyo3::prelude::*;
-use pyo3::exceptions::{PyValueError, PyTypeError};
-
-#[pyfunction]
-fn divide(a: f64, b: f64) -> PyResult<f64> {
-    if b == 0.0 {
-        Err(PyValueError::new_err("Cannot divide by zero"))
-    } else {
-        Ok(a / b)
-    }
-}
-
-#[pyfunction]
-fn process_value(value: &PyAny) -> PyResult<i32> {
-    if let Ok(int_val) = value.extract::<i32>() {
-        Ok(int_val)
-    } else {
-        Err(PyTypeError::new_err("Expected an integer"))
-    }
-}
-```
-
-### 6. The Complete Module Setup
-
-Here's a complete example showing a typical Rust module exposing functions and classes to Python:
-
-```rust
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
-
-// Function with docstring
-/// Adds two numbers and returns the result as a string
-/// 
-/// Args:
-///     a: First number to add
-///     b: Second number to add
-/// 
-/// Returns:
-///     String representation of the sum
-#[pyfunction]
-#[pyo3(text_signature = "(a, b)")]
-fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-    Ok((a + b).to_string())
-}
-
-// Simple class with docstring
-/// A simple class example
-/// 
-/// Attributes:
-///     value: An integer value
-#[pyclass]
-#[pyo3(text_signature = "(value=0)")]
-struct Calculator {
-    #[pyo3(get, set)]
-    value: i32,
-}
-
-#[pymethods]
-impl Calculator {
-    #[new]
-    #[pyo3(text_signature = "(value=0)")]
-    fn new(value: Option<i32>) -> Self {
-        Calculator {
-            value: value.unwrap_or(0),
-        }
-    }
-
-    /// Add a value to the current value
-    /// 
-    /// Args:
-    ///     x: Value to add
-    /// 
-    /// Returns:
-    ///     The result after addition
-    #[pyo3(text_signature = "(x)")]
-    fn add(&mut self, x: i32) -> PyResult<i32> {
-        self.value += x;
-        Ok(self.value)
-    }
-
-    /// Multiply the current value
-    /// 
-    /// Args:
-    ///     x: Value to multiply by
-    /// 
-    /// Returns:
-    ///     The result after multiplication
-    #[pyo3(text_signature = "(x)")]
-    fn multiply(&mut self, x: i32) -> PyResult<i32> {
-        self.value *= x;
-        Ok(self.value)
-    }
-
-    /// Reset the calculator to a specific value
-    /// 
-    /// Args:
-    ///     value: Value to reset to (default: 0)
-    #[pyo3(text_signature = "(value=0)")]
-    fn reset(&mut self, value: Option<i32>) -> PyResult<()> {
-        self.value = value.unwrap_or(0);
-        Ok(())
-    }
-
-    /// Create a calculator with a preset value
-    /// 
-    /// Args:
-    ///     value: The preset value
-    /// 
-    /// Returns:
-    ///     A new Calculator instance
-    #[classmethod]
-    #[pyo3(text_signature = "(cls, value)")]
-    fn with_value(cls: &PyType, value: i32) -> PyResult<Py<Self>> {
-        Py::new(cls.py(), Self { value })
-    }
-}
-
-// Define the Python module with docstring
-/// A sample module demonstrating PyO3 functionality
-/// 
-/// This module contains various utilities for demonstration purposes.
-#[pymodule]
-fn your_module_name(py: Python, m: &PyModule) -> PyResult<()> {
-    // Add module-level documentation
-    m.add("__doc__", "A sample module demonstrating PyO3 functionality")?;
-    
-    // Add functions
-    m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
-    
-    // Add classes
-    m.add_class::<Calculator>()?;
-    
-    // Add constants
-    m.add("VERSION", "1.0.0")?;
-    
-    // Create a utility function dictionary
-    let utils = PyDict::new(py);
-    utils.set_item("name", "utils")?;
-    utils.set_item("description", "Utility functions and constants")?;
-    m.add("UTILS", utils)?;
-    
-    Ok(())
-}
-```
-
-## Type Annotations with .pyi Files
-
-To provide proper type hints for Python IDEs and type checkers, create `.pyi` stub files:
-
-### Basic Structure
-
-Create a file with the same name as your module but with a `.pyi` extension:
-
-```python
-# your_module_name.pyi
-from typing import Dict, List, Optional, Tuple, Union, Any
-
-def sum_as_string(a: int, b: int) -> str:
-    """
-    Adds two numbers and returns the result as a string.
-    
-    Args:
-        a: First number to add
-        b: Second number to add
-    
-    Returns:
-        String representation of the sum
-    """
-    ...
-
-class Calculator:
-    """
-    A simple class example.
-    
-    Attributes:
-        value: An integer value
-    """
-    value: int
-    
-    def __init__(self, value: int = 0) -> None:
-        """
-        Initialize a new Calculator.
-        
-        Args:
-            value: Initial value
-        """
-        ...
-    
-    def add(self, x: int) -> int:
-        """
-        Add a value to the current value.
-        
-        Args:
-            x: Value to add
-        
-        Returns:
-            The result after addition
-        """
-        ...
-    
-    def multiply(self, x: int) -> int:
-        """
-        Multiply the current value.
-        
-        Args:
-            x: Value to multiply by
-        
-        Returns:
-            The result after multiplication
-        """
-        ...
-    
-    def reset(self, value: int = 0) -> None:
-        """
-        Reset the calculator to a specific value.
-        
-        Args:
-            value: Value to reset to (default: 0)
-        """
-        ...
-    
-    @classmethod
-    def with_value(cls, value: int) -> "Calculator":
-        """
-        Create a calculator with a preset value.
-        
-        Args:
-            value: The preset value
-        
-        Returns:
-            A new Calculator instance
-        """
-        ...
-
-# Module constants
-VERSION: str
-UTILS: Dict[str, str]
-```
-
-### Enabling Type Checking
-
-To enable type checking, add a `py.typed` marker file to your package:
-
-```
-your_package/
-├── __init__.py
-├── __init__.pyi  # Type stubs
-├── py.typed     # Empty marker file
-└── ...
-```
-
-Then update your `pyproject.toml` to include it:
-
-```toml
-[tool.maturin]
-include = ["your_package/py.typed"]
-```
-
-## Package Metadata
-
-Maturin supports two approaches for package metadata:
-
-### 1. Full PEP 621 Specification
-Define complete metadata in `pyproject.toml` under `[project]` section as shown above.
-
-### 2. Dynamic Metadata from Cargo.toml
-When `[project]` section is minimal or absent, Maturin will extract metadata from `Cargo.toml`:
-
-```toml
-[project]
-name = "your-package-name"
-requires-python = ">=3.7"
-dynamic = ["version", "description", "classifiers"]
-```
-
-Fields that can be extracted from Cargo.toml:
-- version
-- description
-- license
-- authors
-- keywords (converted to classifiers)
-- homepage
-
-## Required Metadata Fields
-
-At minimum, your package should include these metadata fields:
-
-### In Cargo.toml
-```toml
-[package]
-name = "your-package-name"  # Required
-version = "0.1.0"           # Required
-edition = "2021"            # Required
-description = "..."         # Strongly recommended
-license = "..."             # Strongly recommended
-```
-
-### In pyproject.toml
-```toml
-[build-system]
-requires = ["maturin>=1.0,<2.0"]  # Required
-build-backend = "maturin"          # Required
-
-[project]
-name = "your-package-name"        # Required
-requires-python = ">=3.8"         # Strongly recommended
-```
-
-## Command Line Interface
-
-Define console scripts in pyproject.toml to create command-line tools:
-
-```toml
-[project.scripts]
-your-command = "your_package_name:main_function"
-your-other-cmd = "your_package_name.cli:entry_point"
-```
-
-Implement the entry point in your Python code:
-
-```python
-# your_package_name/cli.py
-def entry_point():
-    """Main entry point for the command line tool."""
-    print("Hello from the CLI!")
-    
-if __name__ == "__main__":
-    entry_point()
-```
-
-## Distribution
-
-### Building Wheels
-
-```bash
-# Basic wheel build
-maturin build
-
-# Release mode build
-maturin build --release
-
-# Build with specific features
-maturin build --release --features feature1,feature2
-
-# Build with UV integration
-maturin build --uv
-
-# Cross-compilation for different target
-maturin build --target aarch64-unknown-linux-gnu
-
-# Include source distribution
-maturin build --sdist
-```
-
-### Platform Compatibility
-
-Maturin handles platform tags for wheels automatically:
-
-- **Linux**: Uses manylinux2014 (default) for broad compatibility
-  ```bash
-  # Specify compatibility level
-  maturin build --compatibility manylinux2014
-  
-  # For Alpine Linux and musl-based systems
-  maturin build --compatibility musllinux_1_1
-  
-  # Use platform-specific tag
-  maturin build --compatibility linux
-  ```
-
-- **macOS**: Creates universal2 wheels for Intel and Apple Silicon
-  ```bash
-  # Specify macOS deployment target
-  MACOSX_DEPLOYMENT_TARGET=10.13 maturin build
-  ```
-
-- **Windows**: Creates wheels for current architecture
-  ```bash
-  # Cross-compilation requires additional setup
-  maturin build --target x86_64-pc-windows-msvc
-  ```
-
-### Publishing to PyPI
-
-```bash
-# Build and upload to PyPI
-maturin publish
-
-# Using UV
-maturin publish --uv
-
-# Upload to test PyPI
-maturin publish --repository testpypi
-
-# Publish with token
-MATURIN_PYPI_TOKEN=pypi-TOKEN maturin publish
-```
-
-### GitHub Actions Integration
-
-Generate CI workflows for automated builds:
-
-```bash
-maturin generate-ci github
-```
-
-## Environment Variables
-
-Maturin can be controlled through several environment variables:
-
-### Python Environment Variables
-- `VIRTUAL_ENV`: Specify Python virtual environment path
-- `CONDA_PREFIX`: Set conda environment path
-- `MATURIN_PYPI_TOKEN`: PyPI token for wheel uploads
-- `MATURIN_PASSWORD`: PyPI password for wheel uploads
-
-### PyO3 Environment Variables
-- `PYO3_CROSS_PYTHON_VERSION`: Specify Python version for cross compilation
-- `PYO3_CROSS_LIB_DIR`: Set directory for target's Python libraries
-- `PYO3_CONFIG_FILE`: Path to PyO3 configuration file
-
-### Platform-Specific Variables
-- `MACOSX_DEPLOYMENT_TARGET`: Minimum macOS version
-- `SOURCE_DATE_EPOCH`: Set timestamp for wheel metadata
-- `ARCHFLAGS`: Control build architecture (e.g., universal2 wheels)
-
-### Network Variables
-- `HTTP_PROXY` / `HTTPS_PROXY`: Configure network proxy
-- `REQUESTS_CA_BUNDLE`: Set CA bundle for HTTPS requests
-
-## Using with UV Package Manager
-
-Maturin offers integration with UV, a fast Python package installer:
-
-```bash
-# Development install with UV
-maturin develop --uv
-
-# Build and install with UV
-maturin build --uv
-
-# Publishing with UV
-maturin publish --uv
-```
-
-Benefits of UV integration:
-- Faster dependency resolution
-- Improved installation performance
-- Better compatibility with modern Python packaging standards
-
-## Target-Specific Configuration
-
-Configure options for specific build targets:
-
-```toml
-[tool.maturin.target.x86_64-apple-darwin]
-macos-deployment-target = "10.13"
-
-[tool.maturin.target.aarch64-apple-darwin]
-macos-deployment-target = "11.0"
-```
-
-## Best Practices
-
-- **Module Organization**:
-  - Keep your public API clean and focused
-  - Use submodules for organizing related functionality
-  - Separate implementation details from public interfaces
-
-- **Type Safety**:
-  - Provide comprehensive `.pyi` type stubs for better IDE integration
-  - Use `PyResult<T>` for all functions that can fail
-  - Include detailed error messages with appropriate exception types
-
-- **Documentation**:
-  - Add docstrings to all public functions, classes, and methods
-  - Include examples in docstrings where appropriate
-  - Use `text_signature` to show parameter lists in Python help()
-
-- **Performance**:
-  - Minimize Python/Rust transitions for performance-critical code
-  - For large datasets, process them in Rust and return only results
-  - Use batch processing where possible for multiple items
-
-- **Testing**:
-  - Include both Rust tests and Python tests
-  - Test the Python API as your users will use it
-  - Consider using pytest for Python testing
-
-- **Compatibility**:
-  - Enable `abi3` for cross-Python version wheels
-  - Set appropriate `requires-python` version in `pyproject.toml`
-  - Test on multiple Python versions
-
-## Key Considerations
-
-- Use `abi3` feature for cross-Python version compatibility
-- Configure minimum Python version in `pyproject.toml`
-- Wheels contain platform-specific compiled binaries
-- Maturin supports multiple Python implementations (CPython, PyPy)
-- Add `.pyi` stubs for better type hints
-- Use data directories with `<module_name>.data` folder for non-code files
-- Strip binaries for reduced wheel size with `strip = true`
-- Use `--sdist` option when building to include source distribution
-- For Linux distribution, ensure at least manylinux2014 compatibility
-- Consider using Docker or Zig for cross-compilation
-- Use GitHub Actions with `maturin generate-ci` for automated builds
-
-## Importing the Module
-
-After installation, import your module:
-
-```python
-import your_module_name
-
-result = your_module_name.sum_as_string(5, 7)
-print(result)  # Outputs: "12"
-```
-
-For more details, visit the [Maturin website](https://www.maturin.rs/).
+The `.so` is stale. Run `uv run maturin develop`, then repeat the Python command.
+For decompiler work, `tools/build_guard.py` performs the repository's explicit
+freshness check.

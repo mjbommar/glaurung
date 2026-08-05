@@ -17,7 +17,7 @@ needed.
     `add_hook(kind, callable)`, `run`, `snapshot`/`restore`.
   - `concolic`/`explore` entry points (feature `symbolic`): `find_inputs(binary,
     va, symbolize, targets, budget) -> list[Witness]`.
-  *Test:* `uvx pytest` round-trips; determinism (call twice, equal results).
+  *Test:* `uv run pytest` round-trips; determinism (call twice, equal results).
 - **6.2 Hook callbacks across the GIL.** Wrap Python callables as `Hook` impls;
   acquire the GIL only when a hook is registered; document the perf cost. *Test:* a
   Python `MemWrite` hook observes the right addresses.
@@ -52,7 +52,7 @@ needed.
   emulate a stub / resolve an indirect target end-to-end.
 - Emulation-derived facts land in the KB with correct `auto` provenance that
   manual edits override.
-- `uvx pytest`, `ruff`, `ty` all green.
+- `uv run pytest`, `ruff`, `ty` all green.
 
 ## Notes
 

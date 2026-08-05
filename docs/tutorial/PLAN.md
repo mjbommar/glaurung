@@ -86,8 +86,8 @@ Everything in this tier is **deterministic only** — no LLM calls.
 
 **Requirements (glaurung must expose):**
 
-- `pip install` (or `uv pip install -e .`) succeeds on a fresh
-  Linux x86_64 / macOS arm64 / WSL Ubuntu environment.
+- `uv sync --locked --dev` succeeds from a fresh source checkout on a
+  supported Linux x86_64 / macOS arm64 / WSL Ubuntu environment.
 - `glaurung --version` prints a semver string.
 - `glaurung --help` lists every subcommand documented in this track.
 - The binary corpus under `samples/binaries/` is reachable from the
@@ -96,7 +96,8 @@ Everything in this tier is **deterministic only** — no LLM calls.
 **Sections to write:**
 
 1. Prerequisites (Python ≥ 3.11, Rust toolchain only if building from source).
-2. `pip install glaurung` (PyPI) and `git clone + uv sync` (source).
+2. `git clone` + `uv sync --locked --dev` (source). Do not advertise a PyPI
+   install until a release is actually published there.
 3. Sanity check: `glaurung kickoff samples/binaries/.../hello-clang-debug`
    completes in under a second and prints a triage summary.
 4. Optional: enable LLM features (env vars / config file).

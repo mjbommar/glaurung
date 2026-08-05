@@ -1,5 +1,11 @@
 # Glaurung Disassembly Architecture
 
+> **Status:** This document began as a broad architecture proposal. Sections
+> describing engines, benchmarks, and future architecture tiers are design
+> context, not a promise that every listed backend is shipped. For current
+> user-facing behavior, use `uv run glaurung disasm --help` and the source under
+> `src/disasm/`.
+
 ## Overview
 
 Glaurung provides a comprehensive, multi-tiered disassembly architecture supporting native machine code, bytecode, and specialized instruction sets. This document outlines our disassembly capabilities, implementation strategy, and integration approach.
@@ -205,25 +211,23 @@ for insn in disasm.disassemble_function(binary, address):
 
 ## Configuration Options
 
-### Global Settings
-```toml
-[disassembly]
-default_engine = "zydis"
-parallel_threads = 8
-cache_size_mb = 256
-syntax = "intel"  # or "att"
+Glaurung does not currently load the proposed `[disassembly]` TOML tables from
+earlier versions of this document. Configure a CLI invocation directly:
+
+```bash
+uv run glaurung disasm BINARY \
+  --engine auto \
+  --arch x86_64 \
+  --addr 0x401000 \
+  --window-bytes 4096 \
+  --max-instructions 200 \
+  --max-time-ms 1000
 ```
 
-### Per-Architecture Settings
-```toml
-[disassembly.x86]
-engine = "zydis"
-decode_features = ["avx512", "apx", "cet"]
-
-[disassembly.arm]
-engine = "capstone"
-mode = "thumb"
-```
+`--engine` accepts `auto`, `iced`, or `capstone`. Architecture, address/window,
+instruction-count, and time bounds are also per-invocation flags. KB-aware
+function disassembly uses `--db PROJECT.glaurung --function NAME_OR_VA`.
+Run `uv run glaurung disasm --help` for the current choices and defaults.
 
 ## Error Handling
 

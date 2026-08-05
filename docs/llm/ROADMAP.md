@@ -7,11 +7,12 @@
 > `agents/memory_agent.py`. Use the status table below, not the section plan
 > in §1, as the source of truth for what actually exists.
 >
-> **Default models (updated):** Anthropic **Claude Opus 4.7** is the primary
-> default; OpenAI **GPT-5.5** is the fallback when the Anthropic key isn't
-> set. Both are wired through `pydantic_ai.Agent(model="provider:name")`.
-> The config layer (`llm/config.py`) exposes `preferred_model()` which picks
-> the right one given the credentials present in the environment.
+> **Current model policy:** `python/glaurung/llm/config.py` and `CLAUDE.md` are
+> authoritative. The default is `openai:gpt-5.4-mini` with OpenAI service tier
+> `flex`; `anthropic:claude-haiku-4-5` is the fallback model. The historical
+> configuration sketch in §5.1 is not implemented and must not be copied as
+> current setup guidance. See
+> [`../development/setup.md`](../development/setup.md#llm-providers-models-and-budgets).
 
 ## Implementation Status
 
@@ -674,6 +675,11 @@ def get_symbol_tool() -> FunctionTool:
 ## 5. Configuration and Model Selection
 
 ### 5.1 Configuration (`config.py`)
+
+> **Historical sketch only.** The YAML loader, fields, defaults, and provider
+> construction below are original roadmap material, not the current
+> `LLMConfig` API. Use `python/glaurung/llm/config.py` and the setup guide linked
+> above for working configuration.
 
 ```python
 from pydantic import BaseModel, Field

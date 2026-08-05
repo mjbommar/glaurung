@@ -30,7 +30,7 @@ testing, which is the backbone here.
 - Rust (`cargo test`): unit semantics, differential oracle, function-level,
   symbolic, determinism. Feature-gated: `--features exec,dev-oracle` and
   `--features symbolic`.
-- Python (`uvx pytest python/tests/`): PyO3 surface, CLI smoke, agent-tool
+- Python (`uv run pytest python/tests/`): PyO3 surface, CLI smoke, agent-tool
   registration, KB writeback/provenance.
 
 ## Solver-dependent tests
@@ -41,7 +41,7 @@ absence never fails the base build or non-symbolic tests.
 
 ## What "done" means for any phase
 
-`cargo test` (with the phase's features) + `uvx pytest` + `ruff` + `ty` all green,
+`cargo test` (with the phase's features) + `uv run pytest` + `ruff` + `ty` all green,
 **and** the phase's differential/scorecard exit criteria met. Surface real results
 faithfully — if the corpus pass-rate is 92%, say 92% and list the divergences as
 open fixtures; never round up.

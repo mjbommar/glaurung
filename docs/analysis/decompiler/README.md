@@ -1,5 +1,11 @@
 # Glaurung Decompiler Architecture
 
+> **Status:** This document contains both implemented architecture and older
+> design targets. Tables that name third-party decompilers, quality scores, or
+> future language tiers are research context rather than shipped Glaurung
+> behavior. The current native path is the LLIR/SSA/AST pipeline under
+> `src/ir/`; use `uv run glaurung decompile --help` for its supported CLI.
+
 ## Overview
 
 Glaurung's decompiler transforms low-level machine code, bytecode, and intermediate representations into high-level source code. This document details our multi-stage decompilation pipeline, supported languages, and integration strategies.
@@ -381,31 +387,25 @@ FUNCTION process_packet(buffer, length):
 
 ## Configuration
 
-### Global Settings
-```toml
-[decompiler]
-default_language = "c"
-optimization_level = 2
-type_inference = true
-ai_enhancement = true
-comment_generation = true
+Glaurung does not currently load the proposed `[decompiler]` TOML tables from
+earlier versions of this document, and the native CLI does not select Ghidra or
+Fernflower as engines. Configure each invocation with CLI flags:
 
-[decompiler.naming]
-style = "snake_case"  # or "camelCase"
-prefix_globals = "g_"
-prefix_locals = "l_"
+```bash
+uv run glaurung decompile BINARY \
+  --func main \
+  --style c \
+  --timeout-ms 5000 \
+  --max-blocks 10000 \
+  --max-instructions 100000
 ```
 
-### Per-Architecture Settings
-```toml
-[decompiler.x86]
-engine = "ghidra"
-calling_conventions = ["cdecl", "stdcall", "fastcall"]
-
-[decompiler.java]
-engine = "fernflower"
-deobfuscate = true
-```
+Use `--no-types` to disable type annotations, `--all --limit N` for a bounded
+multi-function run, or `--vas ...` for an explicit batch. Windows PE analysis
+can additionally load the shared YAML described in
+[`../../windows-port/windows-analysis-config.md`](../../windows-port/windows-analysis-config.md)
+through `--analysis-config`. Run `uv run glaurung decompile --help` for the
+current options.
 
 ## Testing and Validation
 

@@ -286,14 +286,14 @@ assert va == restored
    touch python/tests/test_address.py
    
    # Run test (should fail)
-   uvx pytest python/tests/test_address.py
+   uv run pytest python/tests/test_address.py
    
    # Implement in Rust
    edit src/core/address.rs
    
    # Build and test
    maturin develop
-   uvx pytest python/tests/test_address.py
+   uv run pytest python/tests/test_address.py
    ```
 
 2. **Continuous Integration**
@@ -303,13 +303,13 @@ assert va == restored
    
    # Run Python tests
    maturin develop
-   uvx pytest
+   uv run pytest
    
    # Check types
    uvx mypy python/
    
    # Benchmark
-   uvx pytest --benchmark-only
+   uv run pytest --benchmark-only
    ```
 
 3. **Documentation**
@@ -318,7 +318,7 @@ assert va == restored
    cargo doc --open
    
    # Test Python docstrings
-   uvx pytest --doctest-modules
+   uv run pytest --doctest-modules
    ```
 
 ---

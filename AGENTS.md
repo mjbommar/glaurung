@@ -5,14 +5,13 @@
 policy. It is hand-maintained — edit it directly.
 
 ## Build Commands
-- **Build Rust extension**: `maturin develop` (development) or `maturin build --release` (production)
-- **Install Python deps**: `uv sync`
-- **Full build**: `maturin develop && uv sync`
+- **Install/build from lockfile**: `uv sync --locked --dev`
+- **Rebuild Rust extension**: `uv run maturin develop` (development) or `uv run maturin build --release` (wheel)
 
 ## Test Commands
-- **All tests**: `uvx pytest python/tests/`
-- **Single test**: `uvx pytest python/tests/test_address.py::TestAddressCreation::test_create_va_address -v`
-- **With coverage**: `uvx pytest --cov=python/glaurung python/tests/`
+- **All tests**: `uv run pytest python/tests/`
+- **Single test**: `uv run pytest python/tests/test_address.py::TestAddressCreation::test_create_va_address -v`
+- **With coverage**: `uv run --isolated --with pytest-cov pytest -p pytest_cov.plugin --cov=python/glaurung python/tests/`
 
 ## Lint & Format
 - **Format Python**: `uvx ruff format python/`
@@ -20,10 +19,10 @@ policy. It is hand-maintained — edit it directly.
 - **Type check**: `uvx ty check python/`
 
 ## TDD Workflow (MANDATORY)
-1. **RED**: Write failing test first: `uvx pytest tests/test_feature.py -xvs`
+1. **RED**: Write failing test first: `uv run pytest python/tests/test_feature.py -xvs`
 2. **GREEN**: Write minimal code to pass
 3. **REFACTOR**: Improve code while keeping tests green
-4. **VERIFY**: Run full suite: `uvx pytest && uvx ruff check . && uvx ty check`
+4. **VERIFY**: Run full suite: `uv run pytest && uvx ruff check . && uvx ty check`
 
 ## Code Style Guidelines
 
@@ -87,7 +86,7 @@ Remember:
 **Your code affects real people. Act accordingly.**
 
 ## Before Saying "Done"
-✅ All tests pass: `uvx pytest`
+✅ All tests pass: `uv run pytest`
 ✅ Code formatted: `uvx ruff format .`
 ✅ Code linted: `uvx ruff check .`
 ✅ Types checked: `uvx ty check`
