@@ -8547,35 +8547,54 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
     write_expr_dec(arg, out);
 }
 
-/// Whether the ordinary call-argument writer already emits a C pointer value.
-/// Pointer-shaped arithmetic is deliberately absent: its internal C spelling is
-/// a machine word and therefore still needs a cast at the call boundary.
-fn call_argument_renders_as_pointer(arg: &Expr) -> bool {
-    match arg {
-        Expr::Reg(VReg::Phys(name)) => {
-            dec_ptr_arg_type(name).is_some()
-                || dec_struct_ptr_type(name).is_some()
-                || dec_ptr_width(name).is_some()
-                || dec_is_stack_object(name)
-        }
-        Expr::StringLit { .. } | Expr::StackAddr { .. } => true,
-        _ => false,
-    }
-}
-
 /// The exact C pointer type a call argument renders as, when it is known.
 ///
 /// Two different pointer types are still a type error, so "renders as a
 /// pointer" is not enough to skip the boundary cast: the rendered type has to
-/// be the declared parameter type. Only register arguments have an exact
-/// declared spelling; everything else answers `None` and keeps the cast.
+/// be the declared parameter type. This oracle is consumed as a *proof of
+/// equality* — every arm must answer the spelling `write_call_arg_dec` will
+/// actually print, and anything it cannot name answers `None` so the caller
+/// keeps the cast. Answering a spelling this renderer does not actually print
+/// would suppress a needed cast and emit `-Wincompatible-pointer-types`, which
+/// GCC 14 and later treat as an error.
 fn call_argument_pointer_ctype(arg: &Expr) -> Option<String> {
     match arg {
         Expr::Reg(register @ VReg::Phys(_)) => {
             let declared = declared_reg_ctype(register);
             declared.ends_with('*').then_some(declared)
         }
+        // A string literal has C type `char *` after array-to-pointer decay,
+        // whatever pointee the callee's recovered prototype names.
+        Expr::StringLit { .. } => Some("char *".to_string()),
+        // `write_expr_dec` prints an incoming-argument frame object as
+        // `(void *)(argN)` and every other frame object as `&local_N[0]` over
+        // an `unsigned char local_N[..]` declaration.
+        Expr::StackAddr { object, .. } => Some(
+            if matches!(object, VReg::Phys(name) if parse_arg_index(name).is_some()) {
+                "void *".to_string()
+            } else {
+                "unsigned char *".to_string()
+            },
+        ),
         _ => None,
+    }
+}
+
+/// Whether a pointer parameter needs its argument reasserted with a cast.
+///
+/// C converts between object pointers only through `void *`; every other pair
+/// of pointee types is a constraint violation that GCC 14 reports as an error.
+/// So the cast is skipped exactly when the argument is PROVEN to render as a
+/// pointer that C already accepts here: the same spelling, or a `void *` on
+/// either side. An argument whose rendered spelling is unknown keeps the cast,
+/// because that includes machine-word address arithmetic, which would
+/// otherwise be an implicit integer-to-pointer conversion.
+fn pointer_parameter_needs_cast(parameter_type: &str, arg: &Expr) -> bool {
+    match call_argument_pointer_ctype(arg) {
+        Some(rendered) => {
+            rendered != parameter_type && rendered != "void *" && parameter_type != "void *"
+        }
+        None => true,
     }
 }
 
@@ -8801,13 +8820,15 @@ fn write_call_dec(
                 // when its base has pointer representation. Reassert every
                 // recovered pointer parameter at the consuming boundary so C
                 // sees the ABI pointer rather than an implicit integer cast.
+                //
+                // The cast is skipped only on PROOF that the argument already
+                // renders as this exact pointer spelling. "Renders as some
+                // pointer" is not that proof: a string literal is `char *` and
+                // a frame object is `unsigned char *`, both incompatible with
+                // a recovered `long *`/`int *` parameter, and C rejects the
+                // call outright rather than converting.
                 || (parameter_type.ends_with('*')
-                    && (!call_argument_renders_as_pointer(a)
-                        // A pointer argument of a DIFFERENT pointer type is
-                        // still incompatible with the declaration this call
-                        // emits, so reassert the declared parameter type.
-                        || call_argument_pointer_ctype(a)
-                            .is_some_and(|rendered| &rendered != parameter_type)))
+                    && pointer_parameter_needs_cast(parameter_type, a))
                 || representation_mismatch
                 // A recovered AAPCS-VFP parameter still proves the consuming
                 // storage class.  Render its complete expression in float
@@ -14997,6 +15018,59 @@ function f @ 0x1000 {
         assert!(
             rendered.contains("apply((int *)(((long)arg0 + 64)))"),
             "recovered pointer arithmetic crossed the call boundary as an integer:\n{rendered}"
+        );
+    }
+
+    /// A recovered pointer parameter is only compatible with an argument that
+    /// renders as that same pointer type. A string literal is `char *` and a
+    /// frame object is `unsigned char *`; passing either to a recovered
+    /// `long *`/`int *` is `-Wincompatible-pointer-types`, which is a hard
+    /// error from GCC 14 on. This is exactly the shape that cost 23 of the 250
+    /// DecBench holdout functions their compile.
+    #[test]
+    fn recovered_pointer_parameters_cast_literal_and_frame_arguments() {
+        let recovered = CallPrototype {
+            return_type: "long".into(),
+            parameter_types: vec!["long *".into(), "int *".into(), "void *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let rendered = render_decbench(&Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "record".into(),
+                },
+                args: vec![
+                    Expr::StringLit {
+                        value: "boom".into(),
+                    },
+                    Expr::StackAddr {
+                        object: VReg::phys("local_18"),
+                        size: 24,
+                    },
+                    Expr::StackAddr {
+                        object: VReg::phys("local_28"),
+                        size: 8,
+                    },
+                ],
+                dst: None,
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: Some(recovered.clone()),
+                    call_prototype: recovered,
+                }),
+            }],
+        });
+
+        assert!(
+            rendered.contains(
+                r#"record((long *)("boom"), (int *)(&local_18[0]), &local_28[0])"#
+            ),
+            "a literal or frame argument reached an incompatible pointer parameter \
+             without the reasserting cast, or a `void *` parameter grew a \
+             redundant one:\n{rendered}"
         );
     }
 
