@@ -49,9 +49,9 @@
     "early_return_ge": "pass",
     "elseif": "pass",
     "nested": "pass",
-    "sc_and": "fail",
-    "sc_mixed": "fail",
-    "sc_or": "fail",
+    "sc_and": "pass",
+    "sc_mixed": "pass",
+    "sc_or": "pass",
     "ternary": "pass",
     "ternary_nested": "pass"
   },
@@ -777,9 +777,9 @@
   },
   "08_indirect_dispatch:armv7:O0": {
     "apply": "structural",
-    "dispatch": "fail",
+    "dispatch": "pass",
     "dispatch_switch": "pass",
-    "tail_dispatch": "fail"
+    "tail_dispatch": "pass"
   },
   "08_indirect_dispatch:armv7:O2": {
     "apply": "structural",
@@ -1480,7 +1480,7 @@
     "hash_lookup": "pass"
   },
   "17_hash_table:armv7:O2": {
-    "hash_insert": "fail",
+    "hash_insert": "pass",
     "hash_lookup": "pass"
   },
   "17_hash_table:i386:O0": {
@@ -1717,7 +1717,7 @@
     "csr_matvec": "pass"
   },
   "26_sparse_matrix:armv7:O2": {
-    "csr_matvec": "fail"
+    "csr_matvec": "pass"
   },
   "26_sparse_matrix:i386:O0": {
     "csr_matvec": "pass"

@@ -650,6 +650,9 @@ fn constant_address(
     }
     match strip_cast(expression) {
         Expr::Named { va, .. } | Expr::Addr(va) => Some(*va),
+        // ARM literal-pool values reach this pass as integers. The result is
+        // still checked for exact equality with a relocation-proven table VA.
+        Expr::Const(value) => u64::try_from(*value).ok(),
         Expr::Reg(register) => constant_address(definitions.get(register)?, definitions, depth + 1),
         // `_GLOBAL_OFFSET_TABLE_` is materialised in two instructions
         // (`call __x86.get_pc_thunk.bx; add $GOT,%ebx`), and the pair survives
@@ -661,12 +664,25 @@ fn constant_address(
             lhs,
             rhs,
         } => {
-            let (base, offset) = match (strip_cast(lhs), strip_cast(rhs)) {
-                (other, Expr::Const(offset)) | (Expr::Const(offset), other) => (other, *offset),
+            let (base, offset) = match (
+                literal_displacement(strip_cast(lhs)),
+                literal_displacement(strip_cast(rhs)),
+            ) {
+                (_, Some(offset)) => (strip_cast(lhs), offset),
+                (Some(offset), _) => (strip_cast(rhs), offset),
                 _ => return None,
             };
             constant_address(base, definitions, depth + 1)?.checked_add_signed(offset)
         }
+        _ => None,
+    }
+}
+
+/// Numeric displacement, independent of the lifter's address-vs-integer tag.
+fn literal_displacement(expression: &Expr) -> Option<i64> {
+    match expression {
+        Expr::Const(value) => Some(*value),
+        Expr::Addr(va) => i64::try_from(*va).ok(),
         _ => None,
     }
 }
@@ -680,13 +696,7 @@ fn is_table_base(
     if depth >= 16 {
         return false;
     }
-    match strip_cast(expression) {
-        Expr::Named { va, .. } | Expr::Addr(va) => *va == table_va,
-        Expr::Reg(register) => definitions
-            .get(register)
-            .is_some_and(|definition| is_table_base(definition, table_va, definitions, depth + 1)),
-        _ => false,
-    }
+    constant_address(expression, definitions, depth) == Some(table_va)
 }
 
 fn scaled_index(
@@ -1009,6 +1019,70 @@ mod tests {
         assert!(
             targets.values().any(|&target| target != 0),
             "no relative relocation resolved on a RELA image"
+        );
+    }
+
+    #[test]
+    fn arm32_literal_pool_table_base_resolves_to_the_table() {
+        const TABLE_VA: u64 = 0x20028;
+        let (pool, base, index) = (VReg::phys("r3#3"), VReg::phys("r3#4"), VReg::phys("r2#1"));
+        let mut definitions: HashMap<VReg, Expr> = HashMap::new();
+        definitions.insert(pool.clone(), Expr::Const(0x1fb88));
+        definitions.insert(
+            base.clone(),
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(pool)),
+                rhs: Box::new(Expr::Addr(0x4a0)),
+            },
+        );
+
+        assert_eq!(
+            constant_address(&Expr::Reg(base.clone()), &definitions, 0),
+            Some(TABLE_VA)
+        );
+        assert!(is_table_base(
+            &Expr::Reg(base.clone()),
+            TABLE_VA,
+            &definitions,
+            0
+        ));
+        let address = Expr::Lea {
+            base: Some(base),
+            index: Some(index.clone()),
+            scale: 4,
+            disp: 0,
+            segment: None,
+        };
+        assert_eq!(
+            indexed_table_address(&address, TABLE_VA, 4, &definitions, 0),
+            Some(Expr::Reg(index))
+        );
+    }
+
+    #[test]
+    fn a_constant_base_that_is_not_the_table_does_not_match() {
+        const TABLE_VA: u64 = 0x20028;
+        let base = VReg::phys("r3#4");
+        let mut definitions: HashMap<VReg, Expr> = HashMap::new();
+        definitions.insert(base.clone(), Expr::Const(0x20030));
+
+        assert!(!is_table_base(
+            &Expr::Reg(base.clone()),
+            TABLE_VA,
+            &definitions,
+            0
+        ));
+        let address = Expr::Lea {
+            base: Some(base),
+            index: Some(VReg::phys("r2#1")),
+            scale: 4,
+            disp: 0,
+            segment: None,
+        };
+        assert_eq!(
+            indexed_table_address(&address, TABLE_VA, 4, &definitions, 0),
+            None
         );
     }
 }

@@ -1927,10 +1927,13 @@ fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
 /// True for a frame-relative base register (`rbp`/`rsp` on x86-64,
 /// `x29`/`sp`/`w29` on AArch64) — the anchors `-O0` code spills locals against.
 fn is_frame_base(v: &VReg) -> bool {
+    let VReg::Phys(name) = v else {
+        return false;
+    };
+    let base = name.split_once('#').map_or(name.as_str(), |(base, _)| base);
     matches!(
-        v,
-        VReg::Phys(n)
-            if matches!(n.as_str(), "rbp" | "rsp" | "ebp" | "esp" | "x29" | "sp" | "w29")
+        base,
+        "rbp" | "rsp" | "ebp" | "esp" | "x29" | "sp" | "w29" | "r7" | "r11" | "fp"
     )
 }
 
@@ -3092,6 +3095,29 @@ mod tests {
     use super::*;
     use crate::ir::ssa::{compute_ssa, SsaValue};
     use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
+
+    #[test]
+    fn frame_bases_cover_arm32_and_ignore_the_ssa_suffix() {
+        for name in [
+            "rbp", "rsp", "ebp", "esp", "x29", "w29", "sp", "r7", "r11", "fp",
+        ] {
+            assert!(
+                is_frame_base(&VReg::phys(name)),
+                "{name} should be a frame base"
+            );
+            assert!(
+                is_frame_base(&VReg::phys(format!("{name}#1"))),
+                "{name}#1 should be a frame base"
+            );
+        }
+        for name in ["r0", "r1", "r3", "rax", "rdi", "x0"] {
+            assert!(
+                !is_frame_base(&VReg::phys(name)),
+                "{name} is not a frame base"
+            );
+            assert!(!is_frame_base(&VReg::phys(format!("{name}#2"))));
+        }
+    }
 
     fn mk_block(ops: Vec<Op>) -> LlirFunction {
         LlirFunction {

@@ -167,6 +167,37 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
     (def, uses)
 }
 
+/// Mutable handle to the register an operation defines.
+///
+/// This is the write-side sibling of [`def_uses`]; keeping the operation-shape
+/// knowledge together prevents IR rewrites from growing a divergent def table.
+pub fn def_mut(op: &mut Op) -> Option<&mut VReg> {
+    match op {
+        Op::Assign { dst, .. }
+        | Op::Undef { dst, .. }
+        | Op::CondAssign { dst, .. }
+        | Op::Bin { dst, .. }
+        | Op::Un { dst, .. }
+        | Op::Cmp { dst, .. }
+        | Op::Load { dst, .. }
+        | Op::ZExt { dst, .. }
+        | Op::SExt { dst, .. }
+        | Op::Trunc { dst, .. }
+        | Op::Extract { dst, .. }
+        | Op::Concat { dst, .. }
+        | Op::Ite { dst, .. } => Some(dst),
+        Op::Call { effects, .. } => effects.as_mut().and_then(|effects| effects.result.as_mut()),
+        Op::Intrinsic { outs, .. } => outs.first_mut().map(|(register, _)| register),
+        Op::Store { .. }
+        | Op::IndirectJump { .. }
+        | Op::CondJump { .. }
+        | Op::Jump { .. }
+        | Op::Return
+        | Op::Nop
+        | Op::Unknown { .. } => None,
+    }
+}
+
 /// Build a use-def index for `lf` performing intra-block reaching-definitions.
 pub fn compute_use_def(lf: &LlirFunction) -> UseDefIndex {
     let mut idx = UseDefIndex::default();

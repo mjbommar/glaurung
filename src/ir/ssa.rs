@@ -123,9 +123,18 @@ fn is_ssa_reg(v: &VReg) -> bool {
 /// were two unrelated SSA values and the shift read an undefined live-in.
 /// `reconstruct_64` decompiled to `return 0;`.
 pub fn parent64(n: &str) -> Option<&'static str> {
+    if ARM32_AMBIGUOUS.contains(&n) {
+        return None;
+    }
     regview::ssa_parent(regview::Arch::X86_64, n)
         .or_else(|| regview::ssa_parent(regview::Arch::AArch64, n))
 }
+
+/// Register names that AArch64 and ARM32 spell alike but size differently.
+///
+/// This lookup is architecture-blind, so it must decline ambiguous aliases.
+/// ARM32 has no sub-register views and loses nothing by retaining these names.
+const ARM32_AMBIGUOUS: [&str; 2] = ["lr", "fp"];
 
 /// Canonicalize a GP sub-register VReg to its 64-bit parent (identity otherwise).
 pub fn canon_gpr(v: &VReg) -> VReg {
@@ -909,5 +918,15 @@ mod tests {
         // `sp` is the one name both tables spell. x86-64 declines it (16-bit,
         // bit-preserving); the AArch64 fallback maps it to itself.
         assert_eq!(parent64("sp"), Some("sp"));
+    }
+
+    #[test]
+    fn arch_blind_parent_lookup_does_not_rewrite_arm32_aliases() {
+        assert_eq!(parent64("lr"), None);
+        assert_eq!(parent64("fp"), None);
+        assert_eq!(canon_gpr(&VReg::phys("lr")), VReg::phys("lr"));
+        assert_eq!(canon_gpr(&VReg::phys("fp")), VReg::phys("fp"));
+        assert_eq!(parent64("x29"), Some("x29"));
+        assert_eq!(parent64("x30"), Some("x30"));
     }
 }

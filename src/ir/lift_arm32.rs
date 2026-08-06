@@ -2298,11 +2298,8 @@ fn it_conditions(mnem: &str, cond_name: &str) -> Vec<(VReg, bool)> {
     out
 }
 
-/// Wrap an unconditionally-lifted instruction's ops so its register write only
-/// takes effect when `cond` holds (an IT-block predicated instruction). The
-/// common single-write shapes become an [`Op::Ite`] select (`dst = cond ? new :
-/// dst`); multi-op or store-only lifts fall back to executing unconditionally
-/// (a documented approximation).
+/// Wrap an unconditionally-lifted instruction's ops so its architectural writes
+/// take effect only when `cond` holds (an IT-block predicated instruction).
 fn make_conditional(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
     // Ite is `dst = cond ? t : e`; for `if !cond` we swap the two arms.
     let pick = |new: Value, keep: Value| -> (Value, Value) {
@@ -2313,7 +2310,7 @@ fn make_conditional(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
         }
     };
     if ops.len() != 1 {
-        return ops;
+        return predicate_sequence(ops, cond, inverted);
     }
     match ops.into_iter().next().unwrap() {
         Op::Assign { dst, src } => {
@@ -2376,6 +2373,113 @@ fn make_conditional(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
         // Stores / returns / anything else: keep as-is (unconditional approx).
         other => vec![other],
     }
+}
+
+/// First temporary reserved for predicating multi-operation lifts.
+const PRED_TEMP_BASE: u32 = 64;
+
+/// Compute a multi-operation instruction into scratch and conditionally commit
+/// each architectural write. Stores and control flow retain the old fallback
+/// because LLIR has no predicated-store/control representation.
+fn predicate_sequence(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
+    use crate::ir::use_def::def_mut;
+    use crate::ir::value_number::for_each_vreg_mut;
+
+    let unpredicatable = ops.iter().any(|op| {
+        matches!(
+            op,
+            Op::Store { .. }
+                | Op::Jump { .. }
+                | Op::CondJump { .. }
+                | Op::IndirectJump { .. }
+                | Op::Call { .. }
+                | Op::Return
+                | Op::Unknown { .. }
+        )
+    });
+    if unpredicatable {
+        return ops;
+    }
+
+    fn is_architectural(register: &VReg) -> bool {
+        matches!(register, VReg::Phys(_) | VReg::Flag(_))
+    }
+
+    let mut renamed: Vec<(VReg, VReg)> = Vec::new();
+    let mut current: Vec<(VReg, VReg)> = Vec::new();
+    let mut next_temp = PRED_TEMP_BASE;
+    let mut out = Vec::with_capacity(ops.len() + 5);
+
+    // Snapshot a predicate that the instruction itself writes. Otherwise the
+    // first flag commit can change the condition used by all later commits.
+    let cond_written = ops
+        .iter()
+        .any(|op| crate::ir::use_def::def_uses(op).0.as_ref() == Some(&cond));
+    let commit_cond = if cond_written {
+        let snapshot = VReg::Temp(next_temp);
+        next_temp += 1;
+        out.push(Op::Assign {
+            dst: snapshot.clone(),
+            src: Value::Reg(cond.clone()),
+        });
+        snapshot
+    } else {
+        cond
+    };
+
+    for mut op in ops {
+        let definition = crate::ir::use_def::def_uses(&op).0;
+        for_each_vreg_mut(&mut op, &mut |register| {
+            if let Some((_, temp)) = current.iter().find(|(current, _)| current == register) {
+                *register = temp.clone();
+            }
+        });
+
+        if let Some(definition) = definition.filter(is_architectural) {
+            let temp = VReg::Temp(next_temp);
+            next_temp += 1;
+            if let Some(destination) = def_mut(&mut op) {
+                *destination = temp.clone();
+            }
+            match current
+                .iter_mut()
+                .find(|(register, _)| *register == definition)
+            {
+                Some((_, held)) => *held = temp.clone(),
+                None => current.push((definition.clone(), temp.clone())),
+            }
+            if !renamed.iter().any(|(register, _)| *register == definition) {
+                renamed.push((definition, temp));
+            }
+        }
+        out.push(op);
+    }
+
+    for (register, _) in renamed {
+        let Some((_, temp)) = current.iter().find(|(current, _)| *current == register) else {
+            continue;
+        };
+        let computed = Value::Reg(temp.clone());
+        let retained = Value::Reg(register.clone());
+        let (t, e) = if inverted {
+            (retained, computed)
+        } else {
+            (computed, retained)
+        };
+        let width = if matches!(register, VReg::Flag(_)) {
+            Width::W1
+        } else {
+            Width::W32
+        };
+        out.push(Op::Ite {
+            dst: register,
+            cond: commit_cond.clone(),
+            t,
+            e,
+            width,
+        });
+    }
+    out
 }
 
 /// Lift a byte window of ARM32 machine code into LLIR.
@@ -3088,6 +3192,78 @@ mod tests {
         );
         // The IT prefixes themselves carry no data effect.
         assert!(out.iter().any(|o| matches!(o, Op::Nop)));
+    }
+
+    /// A predicated flag-writing instruction must not execute unconditionally.
+    #[test]
+    fn a_predicated_compare_does_not_clobber_the_flags_it_is_predicated_on() {
+        let body: &[u8] = &[
+            0x00, 0x28, // cmp r0, #0
+            0xc8, 0xbf, // it gt
+            0x00, 0x29, // cmpgt r1, #0
+            0x70, 0x47, // bx lr
+        ];
+        let out = ops(body);
+
+        let committed: Vec<&VReg> = out
+            .iter()
+            .filter_map(|op| match op {
+                Op::Ite { dst, .. } if matches!(dst, VReg::Flag(_)) => Some(dst),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !committed.is_empty(),
+            "the predicated cmp wrote its flags unconditionally: {out:#?}"
+        );
+
+        let mut last_write: Vec<(VReg, &Op)> = Vec::new();
+        for op in &out {
+            if let Some(dst @ VReg::Flag(_)) = crate::ir::use_def::def_uses(op).0 {
+                match last_write.iter_mut().find(|(register, _)| *register == dst) {
+                    Some((_, slot)) => *slot = op,
+                    None => last_write.push((dst, op)),
+                }
+            }
+        }
+        assert!(
+            !last_write.is_empty(),
+            "the compares wrote no flags: {out:#?}"
+        );
+        for (flag, op) in &last_write {
+            assert!(
+                matches!(op, Op::Ite { .. }),
+                "flag {flag:?} ends with an unconditional write ({op:?}): {out:#?}"
+            );
+        }
+    }
+
+    /// Predicate commits must use the flag value from before the instruction.
+    #[test]
+    fn a_predicate_written_by_its_own_instruction_is_snapshotted_first() {
+        let body: &[u8] = &[
+            0x00, 0x28, // cmp r0, #0
+            0x18, 0xbf, // it ne
+            0x00, 0x29, // cmpne r1, #0
+            0x70, 0x47, // bx lr
+        ];
+        let out = ops(body);
+
+        let gated_on_live_z = out.iter().any(|op| {
+            matches!(op, Op::Ite { cond, dst, .. }
+                if matches!(cond, VReg::Flag(Flag::Z)) && matches!(dst, VReg::Flag(_)))
+        });
+        assert!(
+            !gated_on_live_z,
+            "a flag select is gated on the live Z it also rewrites: {out:#?}"
+        );
+        assert!(
+            out.iter().any(|op| matches!(op,
+                Op::Assign { dst, src }
+                    if matches!(dst, VReg::Temp(_))
+                        && matches!(src, Value::Reg(VReg::Flag(Flag::Z))))),
+            "no snapshot of the Z predicate was taken: {out:#?}"
+        );
     }
 
     /// Thumb's narrow add/sub encodings set flags only when they execute outside

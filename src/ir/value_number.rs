@@ -978,7 +978,7 @@ fn insert_phi_copies(
 /// to, because it is threading SSA versions in `def_uses` order. A renaming has
 /// no order to respect, so this walker exists to keep the two concerns apart
 /// rather than overload the tagging traversal with a second mode.
-fn for_each_vreg_mut(op: &mut Op, f: &mut impl FnMut(&mut VReg)) {
+pub(crate) fn for_each_vreg_mut(op: &mut Op, f: &mut impl FnMut(&mut VReg)) {
     fn value(v: &mut Value, f: &mut impl FnMut(&mut VReg)) {
         if let Value::Reg(r) = v {
             f(r);
