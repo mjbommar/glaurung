@@ -1465,13 +1465,22 @@ fn fold_one_call(
                         }
                         let would_dangle =
                             feeds_captured_register_argument && !feeds_balanced_stack_argument;
-                        if proven_aapcs_stack && read_between[slot] {
-                            // The exact layout proves this slot is a call
-                            // input, while an intervening read proves its
-                            // definition cannot be deleted. Keep the statement
-                            // rooted and pass the exact reaching SSA value.
-                            // Abandoning the slot lets an older shadowed r2/r3
-                            // definition masquerade as the call argument.
+                        let later_slot_proves_contiguous_prefix =
+                            found.iter().skip(slot + 1).any(Option::is_some);
+                        if read_between[slot]
+                            && (proven_aapcs_stack
+                                || (arch == CallConv::Aarch64
+                                    && later_slot_proves_contiguous_prefix))
+                        {
+                            // A locked stack layout or an already recovered
+                            // higher register slot proves this slot is a call
+                            // input: ABI argument registers form a contiguous
+                            // prefix. An intervening read means its definition
+                            // cannot be deleted, so keep the statement rooted
+                            // and pass the exact reaching SSA value. Abandoning
+                            // it loses x1 when x3/x5/x7 are derived from x1, or
+                            // lets an older shadowed r2/r3 definition masquerade
+                            // as the call argument.
                             found[slot] = Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())));
                             mark_arg_reads_in_expr(src, arch, &mut read_between);
                             continue;
@@ -1521,6 +1530,19 @@ fn fold_one_call(
                         if !substitutable {
                             opaque_reaching_defs.insert(dst.clone());
                         }
+                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        continue;
+                    }
+                    if found[slot]
+                        .as_ref()
+                        .is_some_and(|(index, _)| *index == KEEP_ARG_SETUP)
+                    {
+                        // The call names a later exact SSA value whose setup
+                        // remains in place. Older definitions of the same
+                        // architectural slot are shadowed; they cannot replace
+                        // that argument and need not block the search for a
+                        // still-missing lower slot (notably x0's preceding-call
+                        // result behind x1#1 -> x1#2 normalisation).
                         mark_arg_reads_in_expr(src, arch, &mut read_between);
                         continue;
                     }
@@ -1589,8 +1611,18 @@ fn fold_one_call(
             // own identity before deleting the register-move setup; otherwise
             // a later `rax = ...` silently becomes the argument's definition.
             let return_register = VReg::phys(return_reg(arch));
-            let forwards_return_to_slot_zero =
-                proven_aapcs_stack && found.first().is_some_and(Option::is_none);
+            // ABI arguments form a contiguous prefix. If the current call has
+            // an explicit slot one, its unwritten slot zero is necessarily the
+            // value left in the return register by this immediately preceding
+            // call. A proven AAPCS stack suffix is the analogous ARM32 proof
+            // even when none of the core slots needed local setup.
+            let shared_result_and_slot_zero = matches!(
+                arch,
+                CallConv::Aarch64 | CallConv::Arm | CallConv::ArmHardFloat
+            );
+            let forwards_return_to_slot_zero = shared_result_and_slot_zero
+                && found.first().is_some_and(Option::is_none)
+                && (proven_aapcs_stack || found.get(1).is_some_and(Option::is_some));
             let consumes_return = found
                 .iter()
                 .flatten()
@@ -1671,21 +1703,21 @@ fn fold_one_call(
         // nonterminal fail-closed case where a parameter is used for unrelated
         // work before a zero-setup call.
         let contiguous_leading_parameter = param_slots.contains(&0) || param_slots.contains(&1);
-        // AAPCS has the same property this rule depends on: integer parameter
-        // slots are contiguous and slot zero is a register the caller already
-        // holds, so `bl callee` with no setup at all forwards this function's
-        // own first parameter. Every armv7 `-O2` one-argument forward
+        // AAPCS32/AAPCS64 have the same property this rule depends on: integer
+        // parameter slots are contiguous and slot zero is a register the
+        // caller already holds, so `bl callee` with no setup at all forwards
+        // this function's own first parameter. Every armv7 `-O2` one-argument forward
         // (`11_call_shapes:call_result_drives_branch`, the inner `wrap_byte(a)`
-        // of `call_nested`) is that shape, and without this they rendered as
-        // `signed_step()` — a call whose argument list contradicts the
-        // prototype the same run recovers for the callee.
+        // of `call_nested`) and AArch64's loop-carried `call_chain_in_loop`
+        // are that shape. Without this they rendered as `signed_step()` — a
+        // call whose argument list contradicts the prototype the same run
+        // recovers for the callee.
         //
         // Deliberately NOT extended to `Cdecl32` (arguments are on the stack,
-        // so a zero-setup call forwards nothing) or to `Aarch64`/`Win64`, which
-        // are unmeasured here.
+        // so a zero-setup call forwards nothing) or to unmeasured `Win64`.
         let first_direct_value_call = matches!(
             arch,
-            CallConv::SysVAmd64 | CallConv::Arm | CallConv::ArmHardFloat
+            CallConv::SysVAmd64 | CallConv::Aarch64 | CallConv::Arm | CallConv::ArmHardFloat
         ) && contiguous_leading_parameter
             && !read_between[0]
             && !blocked_incoming[0]
@@ -3729,6 +3761,56 @@ mod tests {
         assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi#1"))]));
     }
 
+    /// AArch64 reuses x0 for both the first argument and the return value. GCC
+    /// therefore emits no setup instruction for a loop-carried `callee(x0)`:
+    /// the phi value is already in the right storage when `bl` executes.
+    #[test]
+    fn aarch64_call_inside_loop_uses_the_loop_carried_x0_value() {
+        let mut f = Function {
+            name: "call_chain_in_loop".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("x0#1"),
+                    src: Expr::Reg(reg("x0")),
+                },
+                Stmt::DoWhile {
+                    body: vec![
+                        call_to("signed_step"),
+                        Stmt::Assign {
+                            dst: reg("x0#3"),
+                            src: Expr::Bin {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Reg(reg("x0"))),
+                                rhs: Box::new(Expr::Reg(reg("x19#2"))),
+                            },
+                        },
+                        Stmt::Assign {
+                            dst: reg("x0#1"),
+                            src: Expr::Reg(reg("x0#3")),
+                        },
+                    ],
+                    cond: Expr::Const(1),
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::Aarch64, &[0, 1].into_iter().collect());
+
+        let Stmt::DoWhile { body, .. } = &f.body[1] else {
+            panic!("expected loop: {f:#?}");
+        };
+        let args = body.iter().find_map(|statement| match statement {
+            Stmt::Call {
+                target: Expr::Named { name, .. },
+                args,
+                ..
+            } if name == "signed_step" => Some(args),
+            _ => None,
+        });
+        assert_eq!(args, Some(&vec![Expr::Reg(reg("x0#1"))]));
+    }
+
     #[test]
     fn call_inside_loop_uses_a_coalesced_computed_loop_value() {
         let mut f = Function {
@@ -5666,6 +5748,139 @@ mod tests {
                     if dst == &reg("result_copy#1") && source == result
             )),
             "transitive setup computations must read the exact producer result: {:#?}",
+            f.body
+        );
+    }
+
+    /// AArch64 has eight core argument registers, so an optimized call can use
+    /// the preceding call result directly as x0 while populating only x1-x7.
+    /// The contiguous ABI prefix proves x0 is the first consumer argument; it
+    /// must not be backfilled from this function's stale incoming x0.
+    #[test]
+    fn aarch64_register_call_uses_the_immediately_prior_call_result_as_slot_zero() {
+        let mut producer = call_to("signed_step");
+        if let Stmt::Call {
+            target: Expr::Named { va, .. },
+            ..
+        } = &mut producer
+        {
+            *va = 0x1000;
+        }
+        let from_x0 = |addend| Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(reg("x0"))),
+            rhs: Box::new(Expr::Const(addend)),
+        };
+        let from_x1 = |addend| Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(reg("x1#2"))),
+            rhs: Box::new(Expr::Const(addend)),
+        };
+        let widen = |source: &str| Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Reg(reg(source))),
+        };
+        let mut f = Function {
+            name: "call_into_spill".into(),
+            entry_va: 0x800,
+            body: vec![
+                producer,
+                Stmt::Assign {
+                    dst: reg("x1#1"),
+                    src: Expr::Reg(reg("saved_arg1")),
+                },
+                Stmt::Assign {
+                    dst: reg("x1#2"),
+                    src: widen("x1#1"),
+                },
+                Stmt::Assign {
+                    dst: reg("x6#1"),
+                    src: from_x0(5),
+                },
+                Stmt::Assign {
+                    dst: reg("x6#2"),
+                    src: widen("x6#1"),
+                },
+                Stmt::Assign {
+                    dst: reg("x4#1"),
+                    src: from_x0(3),
+                },
+                Stmt::Assign {
+                    dst: reg("x4#2"),
+                    src: widen("x4#1"),
+                },
+                Stmt::Assign {
+                    dst: reg("x2#1"),
+                    src: from_x0(1),
+                },
+                Stmt::Assign {
+                    dst: reg("x2#2"),
+                    src: widen("x2#1"),
+                },
+                Stmt::Assign {
+                    dst: reg("x7#1"),
+                    src: from_x1(6),
+                },
+                Stmt::Assign {
+                    dst: reg("x7#2"),
+                    src: widen("x7#1"),
+                },
+                Stmt::Assign {
+                    dst: reg("x5#1"),
+                    src: from_x1(4),
+                },
+                Stmt::Assign {
+                    dst: reg("x5#2"),
+                    src: widen("x5#1"),
+                },
+                Stmt::Assign {
+                    dst: reg("x3#1"),
+                    src: from_x1(2),
+                },
+                Stmt::Assign {
+                    dst: reg("x3#2"),
+                    src: widen("x3#1"),
+                },
+                call_to("spill_combine"),
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::Aarch64, &[0, 1].into_iter().collect());
+
+        let calls: Vec<_> = f
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Call { args, dst, .. } => Some((args, dst)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 2, "both calls must survive: {:#?}", f.body);
+        let result = calls[0]
+            .1
+            .as_ref()
+            .expect("the consumed producer result needs an exact value");
+        assert_ne!(
+            result,
+            &reg("x0"),
+            "the result needs its own value identity"
+        );
+        assert_eq!(
+            calls[1].0.len(),
+            8,
+            "slot zero must be the reaching call result: {:#?}",
+            f.body
+        );
+        assert_eq!(calls[1].0[0], Expr::Reg(result.clone()));
+        assert_eq!(calls[1].0[1], Expr::Reg(reg("x1#2")));
+        assert!(
+            calls[1]
+                .0
+                .iter()
+                .skip(1)
+                .all(|argument| { !reads_reg_in_expr(argument, &reg("x0")) }),
+            "derived arguments must not read the stale architectural x0: {:#?}",
             f.body
         );
     }

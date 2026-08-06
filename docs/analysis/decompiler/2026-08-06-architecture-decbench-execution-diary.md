@@ -352,3 +352,37 @@ regressions, reclassifications, missing rows, timeouts, or lane errors.
 The post-fix full gates also terminate green: Rust has 1,764 library tests plus
 all integration and documentation targets, and Python has 2,777 passes, 43 skips,
 and the same six existing pytest-mark warnings.
+
+## 14:42 — AArch64 O2 implicit call inputs fixed in shared call-site modeling
+
+`11_call_shapes:aarch64:O2:call_chain_in_loop` and `call_into_spill` both first
+lost meaning in `reconstruct_args`, not in lifting or C rendering. The lifted AST
+still held every register computation. The first call had no setup because the
+loop-carried value was already in x0; the second used a preceding helper result
+directly as x0 while x1-x7 were populated for a terminal eight-argument call.
+
+Two failing Rust regressions and one real cross-compiled execution regression were
+added before the repair. The shared pass now:
+
+- admits a value-producing AAPCS64 zero-setup call only with proven live-in or
+  loop-carried parameter evidence;
+- uses the ABI's contiguous register prefix to keep an x1 definition rooted when
+  higher call arguments also read it; and
+- only on ABIs where the return register is also slot zero, gives the immediately
+  preceding call result a distinct identity and substitutes it through every
+  derived argument.
+
+An initially broader rule correctly failed existing SysV and Win64 safety tests;
+it was narrowed before any matrix claim. All 74 call-argument tests then passed.
+The rebuilt extension executes both target functions correctly over the fixture's
+seeded vectors. The complete architecture matrix changes exactly those two cells:
+1,544 passes, 256 failures, 228 structural rows, and six unsupported rows. The
+unrelated AArch64 O2 `call_fold_wide_result` failure and every control-lane verdict
+remain unchanged. The strict AArch64-only set is now eight functions.
+
+The complete post-fix gates terminate green: Rust passes 1,766 library tests plus
+all integration, example, and benchmark targets; Python reaches 100% with no
+failures and the same six pre-existing pytest-mark warnings. Changed-path Rust
+formatting and Python Ruff checks pass. Repository-wide Ruff/format/type checks
+remain red on pre-existing debt (354 files would be reformatted, 3,830 lint
+errors, and 2,044 type diagnostics); this slice adds none of those diagnostics.
