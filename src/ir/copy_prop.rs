@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::VReg;
+use crate::ir::types::{is_promoted_local_reg, VReg};
 
 /// Run copy propagation then dead-copy elimination over `f`'s body.
 pub fn propagate_copies(f: &mut Function) {
@@ -639,10 +639,6 @@ fn is_repeatable_versioned_flag_expr(dst: &VReg, expression: &Expr) -> bool {
 /// A promoted stack slot is represented as a store whose bare-register address
 /// is the source variable itself (`Store local_x = value`). It is assignment
 /// semantics, not an indirect write through a pointer named `local_x`.
-fn is_promoted_local_reg(v: &VReg) -> bool {
-    matches!(v, VReg::Phys(name) if name.starts_with("local_") || name.starts_with("stack_"))
-}
-
 /// Expressions whose evaluation may be moved from a promoted temporary store
 /// to its sole later use. AST expressions have no calls or writes; memory loads
 /// are still excluded because an intervening store could alias them, and an

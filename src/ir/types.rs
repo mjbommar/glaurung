@@ -117,6 +117,18 @@ pub enum VReg {
     FlagValue { flag: Flag, version: u32 },
 }
 
+/// Whether a physical-register spelling denotes storage promoted from a stack
+/// slot. Keep this convention centralized: AST, type, copy, and field passes
+/// must agree on when a store to a named slot is a local definition.
+pub fn is_promoted_local_name(name: &str) -> bool {
+    name.starts_with("local_") || name.starts_with("stack_")
+}
+
+/// Register form of [`is_promoted_local_name`].
+pub fn is_promoted_local_reg(register: &VReg) -> bool {
+    matches!(register, VReg::Phys(name) if is_promoted_local_name(name))
+}
+
 /// A readable RHS value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {

@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
-use crate::ir::types::VReg;
+use crate::ir::types::{is_promoted_local_name as is_promoted_local, VReg};
 
 /// The argument-register sub-name groups for `cc`, one inner slice per ABI
 /// argument slot (mirrors `naming::arg_slot_tables`).
@@ -279,10 +279,6 @@ impl Splitter {
             }
         }
     }
-}
-
-fn is_promoted_local(name: &str) -> bool {
-    name.starts_with("local_") || name.starts_with("stack_")
 }
 
 #[cfg(test)]

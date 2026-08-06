@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
 use crate::ir::ast::{Expr, Function, PdbFieldHint, Stmt};
 use crate::ir::call_contracts::CallPrototype;
-use crate::ir::types::{BinOp, VReg};
+use crate::ir::types::{is_promoted_local_reg, BinOp, VReg};
 
 /// Attach exact DWARF field identities to memory accesses in `function`.
 pub fn annotate_function_fields(
@@ -118,6 +118,11 @@ fn visit_definitions<'a>(
     for statement in body {
         match statement {
             Stmt::Assign { dst, src } if dst == target => visitor(Some(src)),
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                src,
+                ..
+            } if dst == target && is_promoted_local_reg(dst) => visitor(Some(src)),
             Stmt::Call { dst: Some(dst), .. } if dst == target => visitor(None),
             Stmt::Pop { target: dst } if dst == target => visitor(None),
             Stmt::If {
@@ -208,6 +213,19 @@ fn infer_body(
     for statement in body {
         match statement {
             Stmt::Assign { dst, src } => {
+                if let Some(name) = pointer_source_type(src, layouts, pointer_width, pointer_types)
+                {
+                    if pointer_types.get(dst) != Some(&name) {
+                        pointer_types.insert(dst.clone(), name);
+                        changed = true;
+                    }
+                }
+            }
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                src,
+                ..
+            } if is_promoted_local_reg(dst) => {
                 if let Some(name) = pointer_source_type(src, layouts, pointer_width, pointer_types)
                 {
                     if pointer_types.get(dst) != Some(&name) {
@@ -1093,6 +1111,35 @@ mod tests {
             field_hint(next).map(|hint| hint.field_name.as_str()),
             Some("next")
         );
+    }
+
+    #[test]
+    fn promoted_stack_result_preserves_authoritative_struct_pointer_type() {
+        let local = VReg::phys("local_8");
+        let mut function = Function {
+            name: "list_find".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(local.clone()),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(local.clone()),
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(local.clone())),
+                },
+            ],
+        };
+
+        let pointer_types =
+            annotate_function_fields(&mut function, Some(&node_prototype()), &[node_layout()], 8);
+
+        assert_eq!(pointer_types.get(&local).map(String::as_str), Some("node"));
     }
 
     #[test]

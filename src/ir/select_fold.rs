@@ -1,7 +1,7 @@
 //! Collapse structurally proven assignment diamonds into pure selects.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::{UnOp, VReg};
+use crate::ir::types::{is_promoted_local_name as is_promoted_local, UnOp, VReg};
 
 /// Render exact comparison masks as arithmetic values instead of fake branches.
 ///
@@ -536,10 +536,6 @@ fn assignment_value(statement: &Stmt) -> Option<AssignmentValue<'_>> {
         } if is_promoted_local(name) => Some(AssignmentValue::PromotedLocal(dst, src, *size)),
         _ => None,
     }
-}
-
-fn is_promoted_local(name: &str) -> bool {
-    name.starts_with("local_") || name.starts_with("stack_")
 }
 
 fn make_select(cond: &Expr, if_true: &Expr, if_false: &Expr) -> Expr {

@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::VReg;
+use crate::ir::types::{is_promoted_local_name as is_promoted_local, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -402,10 +402,6 @@ fn is_high_variable(name: &str) -> bool {
     name.strip_prefix("var").is_some_and(|suffix| {
         !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
     })
-}
-
-fn is_promoted_local(name: &str) -> bool {
-    name.starts_with("local_") || name.starts_with("stack_")
 }
 
 fn is_trusted_copy_source(name: &str) -> bool {

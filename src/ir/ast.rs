@@ -16,8 +16,8 @@ use std::fmt::{self, Write};
 use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 use crate::ir::structure::Region;
 use crate::ir::types::{
-    BinOp, CallTarget, CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, UnOp, VReg,
-    Value, Width,
+    is_promoted_local_name as is_promoted_local, BinOp, CallTarget, CmpOp, Flag, LlirBlock,
+    LlirFunction, LlirInstr, MemOp, Op, UnOp, VReg, Value, Width,
 };
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -2670,10 +2670,6 @@ fn is_return_reg(v: &VReg) -> bool {
 /// Whether `name` is a stack slot the promotion pass named — i.e. a real local
 /// variable, so a store *to* it is a plain assignment rather than a pointer
 /// write.
-fn is_promoted_local(name: &str) -> bool {
-    name.starts_with("local_") || name.starts_with("stack_")
-}
-
 /// The C scalar type of a given memory-access byte width, for load/store casts.
 fn width_ctype(size: u8) -> &'static str {
     match size {
