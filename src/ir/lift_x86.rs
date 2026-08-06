@@ -480,16 +480,6 @@ fn unsigned_cmp_value(value: Value, width: Width, temp: VReg, ops: &mut Vec<Op>)
     }
 }
 
-/// ZF for an already-written arithmetic result.
-fn zero_flag_of(result: VReg) -> Op {
-    Op::Cmp {
-        dst: VReg::Flag(Flag::Z),
-        op: CmpOp::Eq,
-        lhs: Value::Reg(result),
-        rhs: Value::Const(0),
-    }
-}
-
 /// Emit LLIR for a reg/reg or reg/imm binary op (`dst = dst <op> src`).
 fn emit_bin(dst: VReg, op: BinOp, src: Value) -> Op {
     Op::Bin {
@@ -3604,20 +3594,12 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     lhs,
                     rhs,
                 });
-                let signed = if width.bits() < 64 {
-                    let widened = VReg::Temp(1);
-                    ops.push(Op::SExt {
-                        dst: widened.clone(),
-                        src: Value::Reg(tmp.clone()),
-                        from: width,
-                        to: Width::W64,
-                    });
-                    widened
-                } else {
-                    tmp.clone()
-                };
+                // TEST observes the encoded byte/word/dword/qword, not the
+                // canonical parent that may carry unrelated high bits. Use the
+                // same width-normalization boundary as every arithmetic flag
+                // producer so ZF and SF describe one machine result.
+                zero_sign_flags(Value::Reg(tmp), width, 1, &mut ops);
                 ops.extend([
-                    zero_flag_of(tmp.clone()),
                     // TEST clears CF and OF. Materialising those architectural
                     // effects prevents a later composite condition from reading
                     // stale values.
@@ -3628,12 +3610,6 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                     Op::Assign {
                         dst: VReg::Flag(Flag::O),
                         src: Value::Const(0),
-                    },
-                    Op::Cmp {
-                        dst: VReg::Flag(Flag::S),
-                        op: CmpOp::Slt,
-                        lhs: Value::Reg(signed.clone()),
-                        rhs: Value::Const(0),
                     },
                     undef_flag(
                         Flag::P,
@@ -4890,6 +4866,93 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_zero_and_sign_flags_observe_the_exact_encoded_width() {
+        // A canonical parent can have high bits even when TEST observes only a
+        // byte, word, or dword view.  ZF and SF must both derive from the same
+        // encoded-width result.  In particular, `rdi = 1 << 32; test edi,edi`
+        // sets ZF, while `test rdi,rdi` clears it.  Pin both register and memory
+        // encodings so neither operand path can silently fall back to host word
+        // width.
+        let cases: &[(&str, &[u8], Width)] = &[
+            ("register byte", &[0x84, 0xc0], Width::W8),
+            ("register word", &[0x66, 0x85, 0xc0], Width::W16),
+            ("register dword", &[0x85, 0xc0], Width::W32),
+            ("register qword", &[0x48, 0x85, 0xc0], Width::W64),
+            ("memory byte", &[0x84, 0x07], Width::W8),
+            ("memory word", &[0x66, 0x85, 0x07], Width::W16),
+            ("memory dword", &[0x85, 0x07], Width::W32),
+            ("memory qword", &[0x48, 0x85, 0x07], Width::W64),
+        ];
+
+        for (label, bytes, width) in cases {
+            let ops = lift64(bytes);
+            let zf_lhs = ops
+                .iter()
+                .find_map(|instruction| match &instruction.op {
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs,
+                        rhs: Value::Const(0),
+                    } => Some(lhs.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{label} did not define ZF: {ops:#?}"));
+            let sf_lhs = ops
+                .iter()
+                .find_map(|instruction| match &instruction.op {
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::S),
+                        op: CmpOp::Slt,
+                        lhs,
+                        rhs: Value::Const(0),
+                    } => Some(lhs.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{label} did not define SF: {ops:#?}"));
+
+            if *width == Width::W64 {
+                assert_eq!(zf_lhs, Value::Reg(VReg::Temp(0)), "{label}: {ops:#?}");
+                assert_eq!(sf_lhs, Value::Reg(VReg::Temp(0)), "{label}: {ops:#?}");
+                continue;
+            }
+
+            let unsigned_view = ops.iter().find_map(|instruction| match &instruction.op {
+                Op::ZExt {
+                    dst,
+                    src: Value::Reg(VReg::Temp(0)),
+                    from,
+                    to: Width::W64,
+                } if from == width => Some(dst.clone()),
+                _ => None,
+            });
+            let signed_view = ops.iter().find_map(|instruction| match &instruction.op {
+                Op::SExt {
+                    dst,
+                    src: Value::Reg(VReg::Temp(0)),
+                    from,
+                    to: Width::W64,
+                } if from == width => Some(dst.clone()),
+                _ => None,
+            });
+            assert_eq!(
+                zf_lhs,
+                Value::Reg(unsigned_view.unwrap_or_else(|| {
+                    panic!("{label} did not normalize the ZF input from {width:?}: {ops:#?}")
+                })),
+                "{label} ZF did not consume its encoded-width view: {ops:#?}"
+            );
+            assert_eq!(
+                sf_lhs,
+                Value::Reg(signed_view.unwrap_or_else(|| {
+                    panic!("{label} did not normalize the SF input from {width:?}: {ops:#?}")
+                })),
+                "{label} SF did not consume its encoded-width view: {ops:#?}"
+            );
+        }
     }
 
     #[test]

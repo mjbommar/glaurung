@@ -40,7 +40,7 @@ remote/integrated state are separate evidence. One never implies another.
 | D-005 | Wrapped 32-bit array indices render as huge unsigned values | FIXED / GATES PENDING | `agent/defect-register` |
 | D-006 | C++ recovery lags across i386, AArch64, and ARMv7 | FIXED / GATES PENDING | `agent/defect-register` |
 | D-007 | Six ARMv7 `getent` string/call discrepancies lack a trustworthy mode oracle | CLOSED | adjudicated on `agent/defect-register` |
-| D-008 | x86 ZF is computed from an untruncated parent register | OPEN | unowned; `agent/x86-flags` is separate BSR/BSF work |
+| D-008 | x86 ZF is computed from an untruncated parent register | FIXED / GATES PENDING | `agent/defect-register`; `agent/x86-flags` remains separate BSR/BSF work |
 
 ## D-001 — per-definition phi-copy width attribution
 
@@ -454,6 +454,34 @@ control lane.
 **Lane note.** The existing `agent/x86-flags` worktree currently implements
 BSR/BSF semantics and changes `shift_until_zero`; it does not implement this ZF
 width fix and must not be mistaken for D-008 evidence.
+
+**Current evidence (2026-08-06, branch `agent/defect-register`).** `TEST` was
+the sole x86 flag producer bypassing the shared width boundary. It materialized
+`lhs & rhs` in a temporary, sign-extended that temporary from the encoded width
+for SF, but compared the raw temporary with zero for ZF. Once register-view
+canonicalization exposed a 64-bit parent, ZF and SF therefore described
+different values.
+
+The `TEST` lifter now sends its one materialized result through the existing
+`zero_sign_flags` helper. Narrow byte, word, and dword forms get explicit
+zero- and sign-extended views from the same encoded width; the qword form keeps
+the unmodified result. The bespoke raw-result ZF helper is removed. No
+consumer, `bool_guard`, comparison-merging, or fixture exception was changed.
+
+- RED/GREEN coverage pins register and memory encodings at 8, 16, 32, and 64
+  bits. It explicitly distinguishes the high-parent-bit behavior of
+  `test edi,edi` from `test rdi,rdi` and requires both ZF and SF to consume the
+  corresponding width view.
+- All 114 `ir::lift_x86::tests` pass, including the existing `jle` and `jg`
+  composite-predicate canaries.
+- A fresh release extension passes all 12 pinned GCC O2
+  `01_conditional_polarity` verdicts, including `sc_mixed`.
+- The complete x86-64 architecture control remains 328/328, with 38 explicit
+  structural verdicts and no failure, incomparable, missing, timeout, or lane
+  result.
+
+**Remaining before closure.** Run the final full Rust/Python/decompiler and
+quality gates with the complete register applied.
 
 ## Overall completion audit
 
