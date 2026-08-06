@@ -15,6 +15,7 @@
 //! Errors are swallowed at section boundaries so a malformed CU never
 //! poisons the whole analysis. The caller gets best-effort coverage.
 
+use std::collections::HashSet;
 use std::convert::TryInto;
 
 use object::{Object, ObjectSection};
@@ -385,33 +386,98 @@ fn referenced_type_info<'a>(
     unit: &Unit<'a>,
     value: gimli::AttributeValue<Slice<'a>, usize>,
 ) -> Option<(u64, bool)> {
-    let gimli::AttributeValue::UnitRef(mut offset) = value else {
+    let gimli::AttributeValue::UnitRef(offset) = value else {
         return None;
     };
-    for _ in 0..32 {
-        let entry = unit.entry(offset).ok()?;
-        let size = _byte_size_of(&entry);
-        if size != 0 {
-            let aggregate = matches!(
-                entry.tag(),
-                gimli::DW_TAG_structure_type
-                    | gimli::DW_TAG_class_type
-                    | gimli::DW_TAG_union_type
-                    | gimli::DW_TAG_array_type
-            );
-            return Some((size, aggregate));
-        }
-        let gimli::AttributeValue::UnitRef(next) =
-            inherited_attr_value(unit, &entry, gimli::DW_AT_type)?
-        else {
-            return None;
-        };
-        if next == offset {
-            return None;
-        }
-        offset = next;
+    referenced_type_info_at(unit, offset, &mut HashSet::new())
+}
+
+fn referenced_type_info_at<'a>(
+    unit: &Unit<'a>,
+    offset: gimli::UnitOffset<usize>,
+    seen: &mut HashSet<gimli::UnitOffset<usize>>,
+) -> Option<(u64, bool)> {
+    if !seen.insert(offset) || seen.len() > 32 {
+        return None;
     }
-    None
+    let entry = unit.entry(offset).ok()?;
+    let aggregate = matches!(
+        entry.tag(),
+        gimli::DW_TAG_structure_type
+            | gimli::DW_TAG_class_type
+            | gimli::DW_TAG_union_type
+            | gimli::DW_TAG_array_type
+    );
+    let direct_size = _byte_size_of(&entry);
+    if direct_size != 0 {
+        return Some((direct_size, aggregate));
+    }
+
+    let gimli::AttributeValue::UnitRef(element_or_wrapped) =
+        inherited_attr_value(unit, &entry, gimli::DW_AT_type)?
+    else {
+        return None;
+    };
+    if entry.tag() == gimli::DW_TAG_array_type {
+        let elements = dwarf_array_element_count(unit, offset)?;
+        let (element_size, _) = referenced_type_info_at(unit, element_or_wrapped, seen)?;
+        return element_size.checked_mul(elements).map(|size| (size, true));
+    }
+    referenced_type_info_at(unit, element_or_wrapped, seen)
+}
+
+fn dwarf_integer(value: gimli::AttributeValue<Slice<'_>, usize>) -> Option<i128> {
+    match value {
+        gimli::AttributeValue::Sdata(value) => Some(i128::from(value)),
+        gimli::AttributeValue::Udata(value) => Some(i128::from(value)),
+        gimli::AttributeValue::Data1(value) => Some(i128::from(value)),
+        gimli::AttributeValue::Data2(value) => Some(i128::from(value)),
+        gimli::AttributeValue::Data4(value) => Some(i128::from(value)),
+        gimli::AttributeValue::Data8(value) => Some(i128::from(value)),
+        _ => None,
+    }
+}
+
+fn dwarf_subrange_count(
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+    default_lower_bound: Option<i128>,
+) -> Option<u64> {
+    if let Some(count) = entry.attr_value(gimli::DW_AT_count).and_then(dwarf_integer) {
+        return u64::try_from(count).ok();
+    }
+    let upper = entry
+        .attr_value(gimli::DW_AT_upper_bound)
+        .and_then(dwarf_integer)?;
+    let lower = entry
+        .attr_value(gimli::DW_AT_lower_bound)
+        .and_then(dwarf_integer)
+        .or(default_lower_bound)?;
+    u64::try_from(upper.checked_sub(lower)?.checked_add(1)?).ok()
+}
+
+fn dwarf_array_element_count<'a>(unit: &Unit<'a>, offset: gimli::UnitOffset<usize>) -> Option<u64> {
+    let mut unit_entries = unit.entries();
+    let unit_entry = unit_entries.next_dfs().ok().flatten()?;
+    let default_lower_bound = match unit_entry.attr_value(gimli::DW_AT_language) {
+        Some(gimli::AttributeValue::Language(language)) => language
+            .default_lower_bound()
+            .and_then(|bound| i128::try_from(bound).ok()),
+        _ => None,
+    };
+    let mut tree = unit.entries_tree(Some(offset)).ok()?;
+    let root = tree.root().ok()?;
+    let mut children = root.children();
+    let mut elements = 1u64;
+    let mut dimensions = 0usize;
+    while let Some(child) = children.next().ok()? {
+        if child.entry().tag() != gimli::DW_TAG_subrange_type {
+            continue;
+        }
+        elements =
+            elements.checked_mul(dwarf_subrange_count(child.entry(), default_lower_bound)?)?;
+        dimensions += 1;
+    }
+    (dimensions != 0).then_some(elements)
 }
 
 fn dwarf_stack_objects_for_subprogram<'a>(

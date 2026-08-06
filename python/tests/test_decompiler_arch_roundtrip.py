@@ -649,6 +649,37 @@ def test_aarch64_optimized_factorial_preserves_its_wide_accumulator(
     } == {function: "pass" for function in sorted(functions)}, results
 
 
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_aarch64_o0_kmp_array_initializer_aliases_indexed_storage(
+    tmp_path: Path,
+) -> None:
+    """A scalar ``prefix[0]`` store must define the indexed array object."""
+    if shutil.which(A.TARGETS["aarch64"].cc) is None:
+        pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
+    fixture = "25_kmp_search"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O0.so"
+    ok, error = A._cross_build("aarch64", source, "O0", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O0.so"
+    ok, error = A._reference_build(source, "O0", reference)
+    assert ok, error
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O0",
+        native_cc=A.native_cc("aarch64"),
+        only={"kmp_search"},
+    )
+
+    assert results["kmp_search"]["status"] == "pass", results
+
+
 def test_reference_so_defaults_to_the_binary_so_host_lanes_are_unchanged(tmp_path):
     """Every x86-64 lane must be bit-identical to what it was before
     `reference_so` existed, or the 656-case gate is measuring something new."""

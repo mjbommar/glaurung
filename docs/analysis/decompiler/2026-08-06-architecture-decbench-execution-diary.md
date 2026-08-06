@@ -419,3 +419,40 @@ library tests), and the complete `uv run pytest python/tests/ -q` run reaches
 Rust formatting and Python Ruff checks pass. Repository-wide checks still expose
 established debt: 354 files would be reformatted, 3,830 lint errors, and 2,043
 type diagnostics (one fewer than the preceding recorded run).
+
+## 18:35 — DWARF array extents reunified AArch64 O0 frame storage
+
+`kmp_search` was traced from source through the retained AArch64 O0 ELF,
+disassembly, raw lift, every AST pass, emitted C, and the crashing differential
+input. Assembly stores `prefix[0]` at `[sp+40]` and addresses later elements as
+`sp+40+4*i`. Promotion emitted the first store as scalar `stack_8 = 0` but the
+indexed accesses through a separate `local_58[]`. On the official KMP vector,
+the prefix-building loop therefore read uninitialised `local_58[0]`, made
+`matched` a large negative value, and faulted at `pattern[matched]`.
+
+The first loss was upstream of stack promotion. DWARF describes `prefix` at
+CFA-88 as `int32_t[16]`, but its array DIE has no direct `DW_AT_byte_size`.
+The reader followed `DW_AT_type` to the four-byte element and recorded a
+non-aggregate four-byte object, discarding the authoritative 64-byte boundary.
+The repair derives an array extent from `DW_AT_count` or inclusive lower/upper
+bounds, uses the compilation unit language for an omitted lower bound, and
+multiplies all dimensions by the recursively recovered element size. Cycles,
+unknown bounds, negative extents, and arithmetic overflow fail closed.
+
+After rebuilding the extension, emitted C declares `local_58[64]`; both
+`prefix[0]` and every indexed access use that one object, and the 128-vector KMP
+differential passes. The canonical full matrix finds the same storage defect in
+three neighboring AArch64 O0 fixtures and changes exactly `graph_bfs`,
+`graph_dfs`, `dijkstra_dense`, and `kmp_search` from fail to pass: 1,550 passes,
+250 failures, 228 structural rows, and six declared unsupported rows, with no
+toolchain or metadata drift. A separate 128-vector full run exposed three
+indirect-dispatch failures; controlled replay at parent `ec5b2b8` reproduced
+them, proving they are higher-fuzz pre-existing defects rather than regressions
+from array recovery.
+
+The complete Rust gate passes all 1,769 library tests plus every integration,
+example, and benchmark target. The complete Python suite reaches 100% with exit
+zero and its six established pytest-mark warnings. Rust formatting, changed-file
+Python formatting/linting, and whitespace checks pass. Repository-wide static
+checks retain the established debt unchanged: 354 files would be reformatted,
+3,830 lint errors, and 2,043 type diagnostics.
