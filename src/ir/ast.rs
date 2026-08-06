@@ -9336,7 +9336,7 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             // write: emit `local_0 = src` rather than `*(long *)(local_0) = src`.
             if let Expr::Reg(VReg::Phys(name)) = addr {
                 if is_promoted_local(name) && !dec_is_stack_object(name) {
-                    write_expr_dec(addr, out);
+                    write_reg_lvalue_dec(&VReg::phys(name), out);
                     out.push_str(" = ");
                     write_assignment_value_dec(&VReg::phys(name), src, out);
                     out.push_str(";\n");
@@ -13131,6 +13131,66 @@ function f @ 0x1000 {
             "return type should be `int` from the returned local, got:\n{}",
             text
         );
+    }
+
+    #[test]
+    fn promoted_pointer_slot_store_uses_the_declared_local_as_an_lvalue() {
+        use crate::debug::dwarf::{DwarfField, DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let local = VReg::phys("local_8");
+        let f = Function {
+            name: "pointer_result".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(local.clone()),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(local.clone())),
+                },
+            ],
+        };
+        let prototype = CallPrototype {
+            return_type: "struct node *".to_string(),
+            parameter_types: vec!["struct node *".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let layout = DwarfType {
+            kind: DwarfTypeKind::Struct,
+            name: "node".to_string(),
+            byte_size: 8,
+            fields: vec![DwarfField {
+                offset: 0,
+                name: "next".to_string(),
+                c_type: "struct node *".to_string(),
+                size: 8,
+            }],
+            variants: Vec::new(),
+            typedef_target: None,
+            source_file: Some("linkedlist.c".to_string()),
+        };
+        let pointer_types = std::collections::HashMap::from([
+            (VReg::phys("arg0"), "node".to_string()),
+            (local, "node".to_string()),
+        ]);
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &f,
+            None,
+            None,
+            RecoveredOutputKind::Direct,
+            Some(&prototype),
+            &[layout],
+            8,
+            &pointer_types,
+        );
+
+        assert!(text.contains("local_8 = arg0;"), "{text}");
+        assert!(!text.contains("(long)local_8 ="), "{text}");
     }
 
     #[test]

@@ -397,14 +397,21 @@ fn annotate_body(
             }
             Stmt::Store { addr, src, size } => {
                 annotate_expr(src, layouts, pointer_width, pointer_types, definitions);
-                annotate_address(
-                    addr,
-                    *size,
-                    layouts,
-                    pointer_width,
-                    pointer_types,
-                    definitions,
-                );
+                // A bare promoted stack-slot address is the storage identity of
+                // a source local, not a dereference through that local.  Once
+                // type propagation proves the slot contains `struct T *`,
+                // annotating offset zero here would turn `local = value` into
+                // the unrelated field store `local->first_field = value`.
+                if !matches!(addr, Expr::Reg(register) if is_promoted_local_reg(register)) {
+                    annotate_address(
+                        addr,
+                        *size,
+                        layouts,
+                        pointer_width,
+                        pointer_types,
+                        definitions,
+                    );
+                }
             }
             Stmt::Call {
                 dst, target, args, ..
@@ -1140,6 +1147,20 @@ mod tests {
             annotate_function_fields(&mut function, Some(&node_prototype()), &[node_layout()], 8);
 
         assert_eq!(pointer_types.get(&local).map(String::as_str), Some("node"));
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                ..
+            } if dst == &local
+        ));
+        assert!(matches!(
+            &function.body[1],
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                ..
+            } if dst == &local
+        ));
     }
 
     #[test]
