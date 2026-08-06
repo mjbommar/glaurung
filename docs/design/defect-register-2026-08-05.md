@@ -36,10 +36,10 @@ remote/integrated state are separate evidence. One never implies another.
 | D-001 | Phi-copy widths collapse distinct bare-name definitions | FIXED / GATES PENDING | `agent/defect-register` |
 | D-002 | Optimized large-function extents are wrong | CLOSED | adjudicated on `agent/defect-register` |
 | D-003 | AAPCS outgoing stack arguments stop at repeated slots | FIXED / GATES PENDING | `agent/defect-register` |
-| D-004 | Large ARM table dispatches do not structure | OPEN | unowned |
+| D-004 | Large ARM table dispatches do not structure | FIXED / GATES PENDING | `agent/defect-register` |
 | D-005 | Wrapped 32-bit array indices render as huge unsigned values | OPEN | unowned |
 | D-006 | C++ recovery lags across i386, AArch64, and ARMv7 | OPEN | unowned |
-| D-007 | Six ARMv7 `getent` string/call discrepancies lack a trustworthy mode oracle | ADJUDICATE | unowned |
+| D-007 | Six ARMv7 `getent` string/call discrepancies lack a trustworthy mode oracle | CLOSED | adjudicated on `agent/defect-register` |
 | D-008 | x86 ZF is computed from an untruncated parent register | OPEN | unowned; `agent/x86-flags` is separate BSR/BSF work |
 
 ## D-001 — per-definition phi-copy width attribution
@@ -207,6 +207,50 @@ predecessor check.
 dispatch have structural accounting proof; shared exits execute correctly; the
 NuttX case is independently root-caused; broad ARM and control gates pass.
 
+**Current evidence (2026-08-05, branch `agent/defect-register`).** Both proposed
+root causes were too coarse. Discovery and lifting already retain the complete
+dispatches and extents. Two later ownership/accounting defects independently
+forced the lossless labelled-CFG fallback:
+
+- NuttX O2-noinline `nxsig_find_pendingsignal` (`bin_170.elf`, SHA-256
+  `e3bc6f47bb8e792b0aa5ca16bffedcea2812f8f2764a15ae7c0547f02f4c8944`)
+  has 22 blocks in the authoritative `0x800d724..0x800d7e6` range. Its guard at
+  `0x800d746` and dispatch at `0x800d752` both reach the formal default at
+  `0x800d766`; every explicit case reaches that shared suffix as well. Building
+  cases first marked the suffix visited, then produced an empty formal default
+  and dropped the guard edge.
+- Betaflight O2 `mspProcessInCommand` (`bin_166.elf`, SHA-256
+  `42ffb92f561e384a536eb72ad741583c0727c6adb5779ac7e1a0969ec74972ec`)
+  has 393 blocks in the authoritative `0x8028164..0x8029e06` range. Raw region
+  recovery preserved the 240-slot dispatch at `0x802818c`, its ten-slot nested
+  dispatch at `0x802839a`, and a four-slot dispatch at `0x8029d10`. Production
+  nevertheless rejected the tree because accounting treated an explicit
+  `0x8029dce -> 0x802837a` jump from inside a loop as if it also fell through
+  to the loop header at `0x80299f4`, inventing a nonexistent edge.
+
+The guarded-switch builder now constructs its formal default with borrowed
+ownership, matching the existing unguarded-switch rule. Shared reachability is
+therefore represented without waiving the arm predecessor proof. Structural
+accounting now distinguishes explicit non-latch loop exits from actual jumps to
+the loop header; only the latter imply a latch. RED regressions preserve both
+real reduced shapes.
+
+- all 53 `ir::structure::tests` and all 18
+  `ir::structure_accounting::tests` pass;
+- a fresh release extension renders NuttX with cases 0--6 and 9 plus an explicit
+  default, and no unrecovered indirect jump;
+- the same extension renders all three Betaflight switches, including 56
+  non-default destinations from the intact 240-slot outer target table and five
+  from the ten-slot nested table, with no unrecovered indirect jump; and
+- Betaflight accounting retains only `BlockDuplicated` and `EdgeViaGoto` quality
+  findings. No `BlockDropped`, `EdgeUnaccounted`, `BackEdgeUnowned`,
+  `ImpliedEdgeAbsent`, `GotoTargetMissing`, or `SwitchArmOutsideLoop` finding
+  remains.
+
+**Remaining before closure.** Run the final full Rust/Python/decompiler gate and
+the broad ARM controls after the other register fixes, then reconcile the
+already-recorded metric-ratchet drift.
+
 ## D-005 — wrapped 32-bit array-index rendering
 
 **Observed defect.** i386 `heat_step_1d` renders `source[i - 1]` as
@@ -252,6 +296,37 @@ oracle, and the string pass is not the presumed owner.
 
 **Acceptance.** A trustworthy mode-aware reference adjudicates all six VAs. Only
 then assign a discovery, mode-propagation, extent, call, or external-oracle fix.
+
+**Adjudication and closure evidence (2026-08-05).** The retained unstripped twin
+`sym_getent_arm-v7` is byte-identical to the original Alpine 3.18 binary
+(`96f5bbc4980c0cd24edc5ffc489b1d46ed0e0671040e7b2a098f6eda50523934`),
+and its complete `.text` range `0x1080..0x1e0c` is byte-identical to stripped
+`strip_getent_arm-v7`
+(`191cd1f69d71f9c8eb6bbdf233d9abaf21eaef11c7dd81b46a0478da2529819e`).
+The twin's ELF mapping symbols and mode-aware ARM objdump provide the missing
+oracle:
+
+- `passwdprint` `0x1320..0x134c`, `servicesprint` `0x13c4..0x13fc`,
+  `protocolsprint` `0x14b0..0x14e0`, `groupprint` `0x14e0..0x1514`,
+  `networksprint` `0x162c..0x16b8`, and `hostsprint` `0x170e..0x1794` are all
+  Thumb code with exact symbol extents; nearby `$d` transitions identify their
+  literal pools rather than ARM instructions.
+- `passwdprint` directly calls `printf@plt` at `0xd70`; the other five directly
+  call the shared Thumb helper `printfmtstrings` at `0x134c`. PC-relative
+  literals provide their format/separator addresses. The larger network/host
+  functions also retain their expected `inet_ntop`/`strlcpy` calls.
+- Fresh stripped-binary replay discovers and decodes all six functions at the
+  correct entries and extents and retains those direct call targets. The
+  discrepancies are downstream: `passwdprint` leaves its format as numeric
+  `0x1ea4`; `networksprint`/`hostsprint` retain numeric string addresses such as
+  `0x1ecd`, `0x1ece`, and `0x1ef0`; the three smaller helpers lose PC-relative
+  r1--r3 argument provenance before call folding.
+
+D-007 is therefore not a discovery, ARM/Thumb mode, extent, or call-target
+defect. The numeric constants belong to EPIC 2's program-level address/string
+provenance lane; the lost r1--r3 values belong to the call-argument/reaching-def
+lane. This adjudication closes the mode-oracle issue without applying a
+fixture-specific string heuristic.
 
 ## D-008 — x86 zero-flag operand width
 

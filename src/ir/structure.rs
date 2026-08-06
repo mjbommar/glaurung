@@ -2339,7 +2339,14 @@ fn detect_guarded_switch_shape(
         .into_iter()
         .map(|arm| arm.expect("every validated guarded switch arm has a build order"))
         .collect();
-    let formal_default = Box::new(build(default_entry, cfg, visited, join));
+    // The default target is allowed to be a shared suffix reached from case
+    // bodies (and from jump-table holes).  Case recovery therefore may visit it
+    // before this branch is materialised.  Build the formal default against a
+    // borrowed ownership set, just as the unguarded-switch path above does:
+    // region ownership is not the same thing as CFG reachability, and cloning a
+    // shared suffix is preferable to dropping the guard's executable edge.
+    let mut default_visited = HashSet::from([guard, dispatch]);
+    let formal_default = Box::new(build(default_entry, cfg, &mut default_visited, join));
 
     Some((
         Region::Switch {
@@ -2745,6 +2752,70 @@ mod tests {
         assert!(
             formal_default.is_some_and(|default| default.blocks().contains(&4)),
             "the guard/table shared target must be the formal default: {region:#?}"
+        );
+    }
+
+    #[test]
+    fn guarded_switch_default_shared_by_case_paths_keeps_both_guard_edges() {
+        // Reduced from NuttX O2-noinline `nxsig_find_pendingsignal`.  The range
+        // guard and jump-table holes enter b3 directly, while every explicit
+        // case also flows through b3 before the common continuation b6.  Case
+        // recovery must not consume b3 before the formal default is built.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(crate::ir::types::Flag::C),
+                    target: 0x1300,
+                    inverted: false,
+                }],
+                vec![0x1100, 0x1300],
+            ),
+            (
+                0x1100,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("index"))),
+                }],
+                vec![0x1200, 0x1300, 0x1400, 0x1300],
+            ),
+            (0x1200, vec![Op::Jump { target: 0x1300 }], vec![0x1300]),
+            (
+                0x1300,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1500,
+                    inverted: false,
+                }],
+                vec![0x1500, 0x1600],
+            ),
+            (0x1400, vec![Op::Jump { target: 0x1300 }], vec![0x1300]),
+            (0x1500, vec![Op::Jump { target: 0x1600 }], vec![0x1600]),
+            (0x1600, vec![Op::Return], vec![]),
+        ]);
+
+        let ssa = compute_ssa(&lf);
+        let region = recover(&lf, &ssa);
+        let errors = verify_structure(&lf, &ssa);
+        assert!(
+            errors.is_empty(),
+            "the guard-to-default edge was lost: {errors:?}\n{region:#?}"
+        );
+
+        let Region::Seq(parts) = &region else {
+            panic!("expected switch followed by its continuation: {region:#?}")
+        };
+        let Some(Region::Switch {
+            guard: Some(0),
+            formal_default: Some(default),
+            ..
+        }) = parts.first()
+        else {
+            panic!("expected a guarded switch with a formal default: {region:#?}")
+        };
+        assert!(
+            default.blocks().contains(&3),
+            "the formal default must retain the shared target: {region:#?}"
         );
     }
 

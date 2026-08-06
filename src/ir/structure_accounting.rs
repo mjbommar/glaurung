@@ -376,12 +376,14 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
                 out.insert((*header, x));
             }
             // The body's ordinary escaping edges are the latch: they return to
-            // the header. An explicit goto to the distinguished exit is a
-            // source-level break and must not also invent a latch edge.
+            // the header. An explicit transfer to any other target is already
+            // complete control flow (a break, early return, or shared epilogue)
+            // and must not also invent a latch edge. Keep an explicit jump to
+            // the header itself as the real latch.
             for (from, target) in escaping(body, edges) {
-                let is_explicit_exit =
-                    *exit == Some(target) && has_explicit_goto(body, from, target, edges);
-                if !is_explicit_exit {
+                let is_explicit_non_latch =
+                    target != *header && has_explicit_goto(body, from, target, edges);
+                if !is_explicit_non_latch {
                     out.insert((from, *header));
                 }
             }
@@ -394,9 +396,9 @@ fn implied(r: &Region, edges: &[Vec<Edge>], out: &mut HashSet<(usize, usize)>) {
                 out.insert((*cond, x));
             }
             for (from, target) in escaping(body, edges) {
-                let is_explicit_exit =
-                    *exit == Some(target) && has_explicit_goto(body, from, target, edges);
-                if !is_explicit_exit {
+                let is_explicit_non_latch =
+                    target != *cond && has_explicit_goto(body, from, target, edges);
+                if !is_explicit_non_latch {
                     out.insert((from, *cond));
                 }
             }
@@ -1041,6 +1043,75 @@ mod tests {
         assert!(
             !declared.contains(&(1, 4)),
             "the machine goto to B3 must not become an absent B1->B4 join edge: {declared:?}"
+        );
+    }
+
+    #[test]
+    fn a_loop_body_goto_to_a_secondary_exit_does_not_invent_a_latch() {
+        // Reduced from Betaflight O2 `mspProcessInCommand`.  The While header
+        // has its ordinary exit B5, but one nested arm jumps to a different
+        // shared function exit B6.  That explicit transfer is complete; it
+        // must not also be interpreted as fallthrough to the loop header.
+        let edges = vec![
+            vec![
+                Edge {
+                    to: 1,
+                    kind: EdgeKind::Fallthrough,
+                    back: false,
+                },
+                Edge {
+                    to: 5,
+                    kind: EdgeKind::Taken,
+                    back: false,
+                },
+            ],
+            vec![
+                Edge {
+                    to: 2,
+                    kind: EdgeKind::Taken,
+                    back: false,
+                },
+                Edge {
+                    to: 3,
+                    kind: EdgeKind::Fallthrough,
+                    back: false,
+                },
+            ],
+            vec![Edge {
+                to: 6,
+                kind: EdgeKind::Jump,
+                back: false,
+            }],
+            vec![Edge {
+                to: 0,
+                kind: EdgeKind::Jump,
+                back: true,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        ];
+        let region = Region::While {
+            header: 0,
+            body: Box::new(Region::IfThenElse {
+                cond: 1,
+                then_r: Box::new(Region::Block(2)),
+                else_r: Box::new(Region::Block(3)),
+                join: Some(6),
+                invert: false,
+            }),
+            exit: Some(5),
+        };
+
+        let mut declared = HashSet::new();
+        implied(&region, &edges, &mut declared);
+        assert!(
+            !declared.contains(&(2, 0)),
+            "the explicit B2->B6 exit must not invent B2->B0: {declared:?}"
+        );
+        assert!(
+            declared.contains(&(3, 0)),
+            "the real B3->B0 latch must remain structured: {declared:?}"
         );
     }
 
