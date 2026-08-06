@@ -556,3 +556,175 @@ rewrite was used. At handoff, `origin/agent/defect-register` and
 `origin/master` resolve to the same final ledger object. The original local
 `master` worktree has overlapping uncommitted work and was deliberately left
 untouched on its existing local ref.
+
+## Post-register architecture audit — 2026-08-06
+
+This section restores the findings that were present only in the untracked
+`wt-globals` audit. It does not reopen D-001 through D-008; it corrects the scope
+and evidence around the next work. Where a figure below differs from an older
+entry, this section is authoritative for the current six-lane harness. The full
+component design, file-size decomposition, phases, acceptance criteria, and stop
+conditions are in
+[`decompiler-rearchitecture-2026-08-06.md`](decompiler-rearchitecture-2026-08-06.md).
+
+### ILP32 source support is not ARM validation
+
+The harness classification “unsupported on a 32-bit source target” describes a
+source-language/toolchain limitation such as `__int128`; it does not demonstrate
+an ARM architecture failure. Conversely, the old ARM32 lane compiled Thumb only,
+so its verdicts did not validate A32 instruction semantics. These two dimensions
+must remain separate in reports and baselines.
+
+The missing A32 coverage now exists as `armv7_a32`, built with `-marm` and run
+with `qemu-arm`. Its initial baseline is 112/272 (41.2%), with 160 failures, 38
+structural-only results, and two declared unsupported source cases. The existing
+Thumb lane is 238/272 after the CFA widening. Neither may stand in for the other.
+
+### The control compiler was confounded with the architecture
+
+The pinned x86-64 GCC 11.4 control remains 328/328. A distinct host-GCC-15
+x86-64 lane is now 323/328. All five GCC-15 failures had previously appeared on
+the non-control architecture lanes:
+
+1. `02_integer_widths:O2:reconstruct_64`;
+2. `03_loop_shapes:O2:for_sum`;
+3. `03_loop_shapes:O2:loop_continue`;
+4. `11_call_shapes:O2:call_into_spill`; and
+5. `14_flag_effects:O2:shift_until_zero`.
+
+These are compiler-shape failures until a narrower owner is proved. They are not
+valid evidence of an architecture gap merely because pinned GCC 11 does not emit
+the same shapes.
+
+### DecBench ARM metric soundness
+
+Production `byte_match` does not grant an unconditional 1.0 when two decoded
+instruction lists are empty: raw extracted function bytes remain the fallback.
+The real metric defect was symbol-declared ARM mode/range handling. A Thumb
+function may carry its T-bit in the declared address; object extraction needs the
+masked address while Capstone needs the T-bit to select Thumb rather than A32.
+
+The correction, cache-version bump, and nine regressions are DecBench commit
+`cc680f8`, proposed upstream as Noelo-Lab/decbench PR #61. It covers object
+extraction, T-bit preservation, A32/Thumb mode selection, and non-ARM controls.
+Published ARM figures remain due for regeneration after the correction, but the
+broader “empty ARM means a free perfect score” rationale is withdrawn.
+
+### Evaluation-tree reproducibility
+
+The current DecBench corpus now has a complete persistent source rebuild at
+`/nas4/data/binary-analysis/decbench-holdout-source-rebuild-2026-08-06`:
+41 projects, 122/122 declared project/optimization cells, 880 linked binaries,
+and 11,885 preprocessed source files. This is a distinct evaluation universe;
+its binaries are not relabeled as the old 250-function holdout.
+
+The rebuild exposed two driver defects: PE executables were reported as failed
+because only ELF linked images counted, and the driver ignored per-project
+optimization declarations. The tested correction and required image/dependency
+updates are clean DecBench commit `a3583d7`, proposed upstream as PR #62.
+
+The exact historical 250-entry manifest is absent. The first fresh direct score
+run therefore uses the 239 unique keys with a published Codex sample and is
+labeled `published-codex-239`. It is a falsifiable current proxy, not a claimed
+reproduction of the historical holdout. Its canonical finalization realizes 222
+exact rows and no extras: GED is finite for 218 rows (mean 22.9312, median 10),
+type match for 210 (mean 0.26185, median 0.11111), and byte match for all 222
+(mean 0.13425, median 0). Seventeen manifest keys are absent because of missing
+DWARF/source filters or zero matched decompilations. The new type mean is
+encouraging but is not a like-for-like clearance of the historical Ghidra 0.231
+bar; the binaries, compilers, and realized key set differ.
+
+The direct GED result is still above the historical Ghidra 20.43 bar. Five rows
+contribute 1,003 of 4,999 total GED; removing only those five lowers the mean to
+18.76. The worst is generated parser `yyparse` at 337, followed by large
+buffer/sort/parser functions. Work should therefore target total control-region
+recovery and size-stratified evaluation, not add a fixture-specific loop printer
+rule.
+
+### `linkedlist:clang:O0` is an emission regression
+
+The exact historical Glaurung base `b83a066` and pre-follow-through `master` both
+score GED 0.0 on the same input, but byte match falls 0.47 to 0.10. The old
+register's “structurally closer” explanation is withdrawn: GED observes CFG
+topology, which was already perfect at the base, and says nothing about
+instruction-level shape. A corrected `git bisect run` identifies
+`b2003b556cea929b333f4699c26d207700626482` as the first bad commit; its scope
+included the expanded O0 parameter-home coalescer and cross-architecture frame
+changes.
+
+At that bad state, output invented `stack_top[8]`, forcing stack-protector/frame
+code; `list_sum` fell from 0.3793 to 0.1190; and `list_find` did not compile,
+reducing its metric score from 0.5667 to zero. The direct type/storage slices in
+`199af22`, `9a6f627`, and `1fc76ab` remove the false array, retain `node *` through
+the promoted result slot, keep the slot distinct from `node::next`, and emit a
+valid lvalue. On the rebuilt extension, `list_sum` is 0.1935 and `list_find` is
+0.4194, so the official cell recovers to byte match 0.31 (GED 0.0, type match
+1.0). The residual gap to 0.47 remains O0 parameter-home/instruction-shape debt,
+not a metric waiver.
+
+### Direct type-match correction
+
+The DWARF signature path previously rejected every parameter when any sibling
+used an unavailable typedef. Commit `199af22` changes this to independent
+renderability: concrete siblings retain their exact source contracts, while
+only an opaque slot falls back to an ABI-safe type. It also accepts multi-level
+and `void *` parameters and normalizes repeated qualifiers. Fresh real-binary
+signatures now include `gyroInitFilterNotch1(uint16_t, uint16_t)`,
+`compare_files(char **)`, and three retained source-level pointer categories in
+`pkg_array_match_patterns`. Fully representing its opaque function-pointer
+parameter still requires EPIC 1's structured declarator/type environment.
+
+### Current strict AArch64-only set: 21, not 43
+
+The old 43-function count was a verdict-only snapshot and is stale. Relative to
+the current pinned x86-64, i386, and Thumb lanes, the strict AArch64-only set is:
+
+- `03_loop_shapes:O2:{for_sum,loop_continue,mutate_reverse}`;
+- `05_struct_arrays:O0:process`;
+- `06_recursion:O0:fib`;
+- `07_multi_return:O0:validate_header` and
+  `07_multi_return:O2:validate_header`;
+- `08_state_machine:O0:{dispatch,dispatch_switch,tail_dispatch}`;
+- `11_call_shapes:O0:{call_accumulate_bytes,call_twice_and_combine}`;
+- `11_call_shapes:O2:{call_chain_in_loop,call_into_spill}`;
+- `12_rotated_loops:O2:{factorial_while,nested_rotated}`;
+- `17_hash_table:O0:{hash_insert,hash_lookup}`;
+- `19_union_find:O0:{dsu_find,dsu_union}`; and
+- `25_kmp:O0:kmp_search`.
+
+Representative root causes split across architecture layers. `for_sum` needs
+AArch64 SIMD horizontal-reduction semantics. `validate_header`, `hash_lookup`,
+and `dsu_find` overwrite live argument identities with call-result definitions.
+`dispatch` and `call_into_spill` lose call results or outgoing arguments.
+`factorial_while` loses accumulator width/phi roles. `kmp_search` retains a fake
+frame/canary object and crashes. The set is therefore triage evidence, not one
+“AArch64 gap.”
+
+### Rank-ordered next work
+
+1. **P0 — sound definitions and value roles (EPIC 5).** Replace bare-name and
+   last-writer queries with one reaching-definitions oracle used by call-result,
+   phi, frame, and return recovery. Acceptance: the three call-result collision
+   canaries and the linked-list false frame are fixed without x86/Thumb ratchet
+   regressions.
+2. **P0 — program environment and call contracts (EPIC 1).** Persist one
+   program-level symbol/type environment and attach canonical prototypes to every
+   direct and indirect call site. Acceptance: `dispatch`, `call_into_spill`, and
+   pointer-depth type canaries improve with complete structured variables.
+3. **P1 — storage-backed aggregate recovery (EPIC 3).** Make stack/global objects
+   first-class, merge CFA/current-SP evidence into one storage identity, and derive
+   arrays/struct extents from access paths. Acceptance: no invented `stack_top` in
+   linked-list output and stable ARM constructor/destructor aggregate identity.
+4. **P1 — architecture-parametric semantics (EPIC 4).** Move calling-convention,
+   register-bank, stack-coordinate, and SIMD semantics behind machine-model traits;
+   keep A32 and Thumb as distinct test targets. Acceptance: implement AArch64
+   `addv`-class reductions and increase A32 from its measured baseline without
+   architecture-name gates in shared IR passes.
+5. **P2 — symbolic constant operands (EPIC 2).** Resolve data/code addresses,
+   literals, and table bases through the program environment instead of preserving
+   opaque integers. Acceptance: address-bearing operands retain symbol, section,
+   width, and relocation provenance through lifting and C emission.
+6. **P2 — direct metric campaign.** After the preceding typed/storage slices,
+   rerun the retained 239-key proxy and then freeze a new 250-function manifest.
+   Require complete coverage and per-function GED/type-match deltas; do not accept
+   generated-text improvement without behavioral and compiler controls.

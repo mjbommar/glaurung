@@ -6,6 +6,12 @@
 > behavior. The current native path is the LLIR/SSA/AST pipeline under
 > `src/ir/`; use `uv run glaurung decompile --help` for its supported CLI.
 
+Current evidence and migration decisions:
+
+- [2026-08-06 execution diary](2026-08-06-architecture-decbench-execution-diary.md)
+- [2026-08-06 ranked rearchitecture plan](../../design/decompiler-rearchitecture-2026-08-06.md)
+- [Decompiler middle architecture](../../design/decompiler-middle-architecture.md)
+
 ## Overview
 
 Glaurung's decompiler transforms low-level machine code, bytecode, and intermediate representations into high-level source code. This document details our multi-stage decompilation pipeline, supported languages, and integration strategies.
