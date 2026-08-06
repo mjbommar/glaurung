@@ -37,7 +37,7 @@ remote/integrated state are separate evidence. One never implies another.
 | D-002 | Optimized large-function extents are wrong | CLOSED | adjudicated on `agent/defect-register` |
 | D-003 | AAPCS outgoing stack arguments stop at repeated slots | FIXED / GATES PENDING | `agent/defect-register` |
 | D-004 | Large ARM table dispatches do not structure | FIXED / GATES PENDING | `agent/defect-register` |
-| D-005 | Wrapped 32-bit array indices render as huge unsigned values | OPEN | unowned |
+| D-005 | Wrapped 32-bit array indices render as huge unsigned values | FIXED / GATES PENDING | `agent/defect-register` |
 | D-006 | C++ recovery lags across i386, AArch64, and ARMv7 | OPEN | unowned |
 | D-007 | Six ARMv7 `getent` string/call discrepancies lack a trustworthy mode oracle | CLOSED | adjudicated on `agent/defect-register` |
 | D-008 | x86 ZF is computed from an untruncated parent register | OPEN | unowned; `agent/x86-flags` is separate BSR/BSF work |
@@ -264,6 +264,35 @@ index. With a proven 32-bit pointer width, normalize the quotient into
 **Canaries.** Real GCC `-m32 -O0` `heat_step_1d`, positive/negative wrapped
 offsets, non-divisible offsets, non-power-of-two element sizes, and LP64
 same-bits negative control. The portable rebuild must execute safely.
+
+**Current evidence (2026-08-05, branch `agent/defect-register`).** The fault was
+at the exact factoring boundary: `try_array_index` proved
+`base + index*sizeof(T)` and the renderer removed the byte scale, but it did not
+carry the target pointer width into the resulting C array index. GCC i386's
+`0x3fffffff * 4 == -4 (mod 2^32)` consequently became an ordinary positive LP64
+index after the scale disappeared.
+
+The shared array-access renderer now reconstructs the signed 32-bit byte
+residue first and divides it by the exact access size. It rewrites only a direct
+constant term in a proven scaled index, refuses a residue not divisible by the
+element size, and leaves every non-ILP32 render unchanged. Loads and stores use
+the same path; this is necessary because the real fixture's final copy reads
+and writes the same wrapped index.
+
+- RED/GREEN unit canaries cover positive and negative wrap, a wrapped store,
+  exact non-power-of-two scale 6, refusal of a non-divisible scale-3 residue,
+  and an LP64 same-bits control;
+- all 144 `ir::ast::tests` pass;
+- a fresh release extension decompiles the real GCC 15.2 `-m32 -O0`
+  `heat_step_1d` (`0x113d`, fixture SHA-256
+  `864fe7147bdb2f2c68b30e73e74855b454e61ca68ad218bf4cb9731e5806163c`)
+  with `arg1[local_14 - 1]` and
+  `arg0[arg2 - 1] = arg1[arg2 - 1]`; no `0x3fffffff` remains; and
+- the Docker-backed 32-case execution differential passes both the i386 O0
+  canary and its x86-64 O0 control.
+
+**Remaining before closure.** Run the final full Rust/Python/decompiler gate
+after D-006 and D-008, then reconcile the already-recorded metric-ratchet drift.
 
 ## D-006 — C++ recovery across architectures
 

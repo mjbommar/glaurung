@@ -6712,6 +6712,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     pointer_width: u8,
     dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
 ) -> String {
+    DEC_POINTER_WIDTH.with(|width| width.set(pointer_width));
     let mut ids = DecIdents::default();
     for s in &f.body {
         collect_idents_stmt(s, &mut ids);
@@ -7056,6 +7057,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     DEC_STRUCT_PTR_TYPES.with(|selected| selected.borrow_mut().clear());
     DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow_mut().clear());
     DEC_WIDE_LOCALS.with(|locals| locals.borrow_mut().clear());
+    DEC_POINTER_WIDTH.with(|width| width.set(8));
     out
 }
 
@@ -7640,6 +7642,11 @@ thread_local! {
     static DEC_PTRS: std::cell::RefCell<std::collections::HashMap<String, u8>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 
+    /// Target pointer width for the current render. Array-index syntax removes
+    /// an explicit byte scale, so it must retain the width at which that scaled
+    /// arithmetic wrapped before portable C promotes the index.
+    static DEC_POINTER_WIDTH: std::cell::Cell<u8> = const { std::cell::Cell::new(8) };
+
     /// The exact C type actually printed for each scalar local and argument.
     /// Type recovery can contain competing facts from different machine-value
     /// lifetimes that later share one rendered name; assignment conversion must
@@ -7947,6 +7954,109 @@ fn scaled_index<'a>(off: &'a Expr, size: u8) -> Option<&'a Expr> {
         },
         _ => None,
     }
+}
+
+/// Re-express an array-index constant after the machine's scaled address
+/// arithmetic wrapped at 32 bits.
+///
+/// GCC i386 commonly spells `a[i - 1]` as `add $0x3fffffff, %eax; lea
+/// (,%eax,4)`. The quotient `0x3fffffff` is only `-1` after multiplication by
+/// four wraps modulo 2^32. Once [`try_array_index`] removes that scale and the
+/// generated C is rebuilt for LP64, leaving the quotient unchanged creates a
+/// four-gigabyte access. Recover the signed byte displacement first and divide
+/// it back by the exact element size. If the wrapped displacement is not
+/// divisible by that size, there is no exact C array index and we refuse.
+fn normalize_wrapped_scaled_index_constant(
+    index_constant: i64,
+    element_size: u8,
+    pointer_width: u8,
+) -> Option<i64> {
+    if pointer_width != 4 || element_size == 0 {
+        return None;
+    }
+    let modulus = 1_i128 << 32;
+    let sign_bit = 1_i128 << 31;
+    let scale = i128::from(element_size);
+    let residue = (i128::from(index_constant) * scale).rem_euclid(modulus);
+    let signed_bytes = if residue >= sign_bit {
+        residue - modulus
+    } else {
+        residue
+    };
+    if signed_bytes % scale != 0 {
+        return None;
+    }
+    i64::try_from(signed_bytes / scale).ok()
+}
+
+fn index_with_addend(base: &Expr, addend: i64) -> Expr {
+    if addend == 0 {
+        return base.clone();
+    }
+    if addend < 0 {
+        let magnitude = addend
+            .checked_abs()
+            .expect("normalized 32-bit index addend cannot be i64::MIN");
+        return Expr::Bin {
+            op: BinOp::Sub,
+            lhs: Box::new(base.clone()),
+            rhs: Box::new(Expr::Const(magnitude)),
+        };
+    }
+    Expr::Bin {
+        op: BinOp::Add,
+        lhs: Box::new(base.clone()),
+        rhs: Box::new(Expr::Const(addend)),
+    }
+}
+
+/// Normalize only the constant term of a proven scaled array index. Dynamic
+/// terms and non-affine expressions remain byte-for-byte identical.
+fn normalize_wrapped_array_index(index: &Expr, element_size: u8) -> std::borrow::Cow<'_, Expr> {
+    let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+    let normalized = match index {
+        Expr::Const(value) => {
+            normalize_wrapped_scaled_index_constant(*value, element_size, pointer_width)
+                .filter(|normalized| normalized != value)
+                .map(Expr::Const)
+        }
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => match (lhs.as_ref(), rhs.as_ref()) {
+            (base, Expr::Const(addend)) | (Expr::Const(addend), base) => {
+                normalize_wrapped_scaled_index_constant(*addend, element_size, pointer_width)
+                    .filter(|normalized| normalized != addend)
+                    .map(|normalized| index_with_addend(base, normalized))
+            }
+            _ => None,
+        },
+        Expr::Bin {
+            op: BinOp::Sub,
+            lhs,
+            rhs,
+        } => match rhs.as_ref() {
+            Expr::Const(subtrahend) => subtrahend.checked_neg().and_then(|addend| {
+                normalize_wrapped_scaled_index_constant(addend, element_size, pointer_width)
+                    .filter(|normalized| *normalized != addend)
+                    .map(|normalized| index_with_addend(lhs, normalized))
+            }),
+            _ => None,
+        },
+        _ => None,
+    };
+    normalized.map_or(std::borrow::Cow::Borrowed(index), std::borrow::Cow::Owned)
+}
+
+/// Render one already-proven typed array access. Loads and stores must share
+/// this path: otherwise an ILP32 wrapped index can be made safe on the read
+/// side while the corresponding write still escapes as host-width arithmetic.
+fn write_array_access_dec(base: &str, index: &Expr, element_size: u8, out: &mut String) {
+    out.push_str(base);
+    out.push('[');
+    write_expr_dec(&normalize_wrapped_array_index(index, element_size), out);
+    out.push(']');
 }
 
 fn strip_implicit_pointer_index_extension(expr: &Expr) -> &Expr {
@@ -8264,10 +8374,7 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             // the `(long)` cast + explicit scale, so the compiler re-emits its own
             // scaled-addressing (`lea (%rax,%rdx,4)`) instead of our `shl`+`add`.
             if let Some((base, index)) = try_array_index(addr, *size) {
-                out.push_str(base);
-                out.push('[');
-                write_expr_dec(index, out);
-                out.push(']');
+                write_array_access_dec(base, index, *size, out);
             } else {
                 // Use the recovered access width for the load cast (`*(int *)` for
                 // a 4-byte read, not a blanket `*(long *)`). The width picks the
@@ -9163,6 +9270,13 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             }
             if let Some((base, index, hint)) = renderable_field_access(addr) {
                 write_field_access_dec(base, index, hint, out);
+                out.push_str(" = ");
+                write_store_value_dec(src, *size, out);
+                out.push_str(";\n");
+                return;
+            }
+            if let Some((base, index)) = try_array_index(addr, *size) {
+                write_array_access_dec(base, index, *size, out);
                 out.push_str(" = ");
                 write_store_value_dec(src, *size, out);
                 out.push_str(";\n");
@@ -13235,6 +13349,144 @@ function f @ 0x1000 {
             !text2.contains("arg0[local_4]"),
             "width mismatch must not array-index, got:\n{}",
             text2
+        );
+    }
+
+    fn render_wrapped_array_index(index_constant: i64, pointer_width: u8) -> String {
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let deref = Expr::Deref {
+            addr: Box::new(Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("local_4"))),
+                        rhs: Box::new(Expr::Const(index_constant)),
+                    }),
+                    rhs: Box::new(Expr::Const(4)),
+                }),
+            }),
+            size: 4,
+        };
+        let function = Function {
+            name: "wrapped_index".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return { value: Some(deref) }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 4 });
+        render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &function,
+            Some(&types),
+            None,
+            RecoveredOutputKind::Unknown,
+            None,
+            &[],
+            pointer_width,
+            &std::collections::HashMap::new(),
+        )
+    }
+
+    fn render_wrapped_array_store(index_constant: i64, pointer_width: u8) -> String {
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let address = Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+            rhs: Box::new(Expr::Bin {
+                op: BinOp::Mul,
+                lhs: Box::new(Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(VReg::phys("local_4"))),
+                    rhs: Box::new(Expr::Const(index_constant)),
+                }),
+                rhs: Box::new(Expr::Const(4)),
+            }),
+        };
+        let function = Function {
+            name: "wrapped_store".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: address,
+                src: Expr::Const(7),
+                size: 4,
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 4 });
+        render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &function,
+            Some(&types),
+            None,
+            RecoveredOutputKind::Unknown,
+            None,
+            &[],
+            pointer_width,
+            &std::collections::HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn ilp32_array_index_normalizes_negative_wrapped_scaled_offset() {
+        let text = render_wrapped_array_index(0x3fff_ffff, 4);
+        assert!(
+            text.contains("arg0[(local_4 - 1)]"),
+            "32-bit -4 byte offset must render as index -1:\n{text}"
+        );
+        assert!(!text.contains("0x3fffffff"), "{text}");
+    }
+
+    #[test]
+    fn ilp32_array_index_normalizes_positive_wrapped_scaled_offset() {
+        let text = render_wrapped_array_index(0x4000_0001, 4);
+        assert!(
+            text.contains("arg0[(local_4 + 1)]"),
+            "32-bit wrapped +4 byte offset must render as index +1:\n{text}"
+        );
+        assert!(!text.contains("0x40000001"), "{text}");
+    }
+
+    #[test]
+    fn ilp32_array_store_uses_the_same_wrapped_index_normalization() {
+        let text = render_wrapped_array_store(0x3fff_ffff, 4);
+        assert!(
+            text.contains("arg0[(local_4 - 1)] = 7;"),
+            "32-bit wrapped stores must not retain host-width arithmetic:\n{text}"
+        );
+        assert!(!text.contains("0x3fffffff"), "{text}");
+    }
+
+    #[test]
+    fn wrapped_scaled_index_normalization_is_exact_for_non_power_of_two_scales() {
+        assert_eq!(
+            normalize_wrapped_scaled_index_constant(0x8000_0001, 6, 4),
+            Some(1)
+        );
+        assert_eq!(
+            normalize_wrapped_scaled_index_constant(0x7fff_ffff, 6, 4),
+            Some(-1)
+        );
+        assert_eq!(
+            normalize_wrapped_scaled_index_constant(0x5555_5555, 3, 4),
+            None,
+            "a wrapped byte displacement that is not divisible by the element size must fail closed"
+        );
+        assert_eq!(
+            normalize_wrapped_scaled_index_constant(0x8000_0001, 6, 8),
+            None,
+            "LP64 arithmetic must never be normalized as an ILP32 wrap"
+        );
+    }
+
+    #[test]
+    fn lp64_array_index_preserves_the_same_constant_bits() {
+        let text = render_wrapped_array_index(0x3fff_ffff, 8);
+        assert!(
+            text.contains("arg0[(local_4 + 0x3fffffff)]"),
+            "64-bit pointer arithmetic must not apply an ILP32 wrap:\n{text}"
         );
     }
 
