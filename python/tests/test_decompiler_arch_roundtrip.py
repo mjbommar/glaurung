@@ -723,7 +723,7 @@ def test_native_worker_refuses_malformed_vectors_and_unknown_integer_widths():
     assert D._native_worker_source(_sig("f", odd_width), [[]], "int") is None
 
 
-@pytest.mark.slow
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_native_execution_compares_ilp32_returns_and_buffer_effects(tmp_path):
     """Non-vacuity for the generated target worker, using a real i386 process."""
     if not _multilib_available(tmp_path) or shutil.which("qemu-i386") is None:

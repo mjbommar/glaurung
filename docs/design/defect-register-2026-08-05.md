@@ -33,14 +33,14 @@ remote/integrated state are separate evidence. One never implies another.
 
 | ID | Defect | Status | Primary owner/lane |
 |---|---|---|---|
-| D-001 | Phi-copy widths collapse distinct bare-name definitions | FIXED / GATES PENDING | `agent/defect-register` |
+| D-001 | Phi-copy widths collapse distinct bare-name definitions | CLOSED | `agent/defect-register` |
 | D-002 | Optimized large-function extents are wrong | CLOSED | adjudicated on `agent/defect-register` |
-| D-003 | AAPCS outgoing stack arguments stop at repeated slots | FIXED / GATES PENDING | `agent/defect-register` |
-| D-004 | Large ARM table dispatches do not structure | FIXED / GATES PENDING | `agent/defect-register` |
-| D-005 | Wrapped 32-bit array indices render as huge unsigned values | FIXED / GATES PENDING | `agent/defect-register` |
-| D-006 | C++ recovery lags across i386, AArch64, and ARMv7 | FIXED / GATES PENDING | `agent/defect-register` |
+| D-003 | AAPCS outgoing stack arguments stop at repeated slots | CLOSED | `agent/defect-register` |
+| D-004 | Large ARM table dispatches do not structure | CLOSED | `agent/defect-register` |
+| D-005 | Wrapped 32-bit array indices render as huge unsigned values | CLOSED | `agent/defect-register` |
+| D-006 | C++ recovery lags across i386, AArch64, and ARMv7 | CLOSED | `agent/defect-register` |
 | D-007 | Six ARMv7 `getent` string/call discrepancies lack a trustworthy mode oracle | CLOSED | adjudicated on `agent/defect-register` |
-| D-008 | x86 ZF is computed from an untruncated parent register | FIXED / GATES PENDING | `agent/defect-register`; `agent/x86-flags` remains separate BSR/BSF work |
+| D-008 | x86 ZF is computed from an untruncated parent register | CLOSED | `agent/defect-register`; `agent/x86-flags` remains separate BSR/BSF work |
 
 ## D-001 — per-definition phi-copy width attribution
 
@@ -81,22 +81,32 @@ evidence.
   correction, not evidence for a large cosmetic merge-rate gain.
 - The older 4,033-attempt/46%-width corpus artifact is not present, so that exact
   historical number is not yet replayable.
-- The full five-lane local gate ran. Rust, the x86-64 structural/behavioral
-  matrix, all cross-architecture round trips, and both executable DecBench
-  corpora passed. The metric ratchet failed on three committed-baseline deltas:
-  `linkedlist:{clang,gcc}:O2` GED 0 -> 2.5 and `matrix:clang:O2` GED 21 -> 24.
-- Those three failures are not branch regressions. A detached worktree at the
+- The first full five-lane local gate after D-008 passed Rust, the x86-64
+  structural/behavioral matrix, all cross-architecture round trips, and both
+  executable DecBench corpora. Its metric lane reported five values requiring
+  adjudication rather than silently accepting them.
+- Three GED deltas are not branch regressions. A detached worktree at the
   exact base object `fcca960bd7490c452a541f1034d13f2dd4e98eda` reproduced all
   three current scores, and each generated C artifact was byte-identical to the
   branch artifact (SHA-256 `35f453e0...`, `210cb1b8...`, and `7a2e5da9...`).
-  The committed metric baseline is therefore already stale relative to its own
-  base commit and current evaluator; it must not be rewritten without first
-  explaining that drift.
+  The committed baseline was stale relative to its own base commit and current
+  evaluator: `linkedlist:{clang,gcc}:O2` GED is 2.5 rather than 0 and
+  `matrix:clang:O2` GED is 24 rather than 21.
+- The other two deltas were traced across immutable intermediate commits.
+  `linkedlist:clang:O0` byte match 0.47 -> 0.10 already exists before D-008 and
+  accompanies a structurally closer recovery: direct recovered `node` fields,
+  fewer spilled pointer locals, GED 0, and green behavior. `strops:gcc:O2` byte
+  match 0.42 -> 0.35 begins exactly at D-008 because the sound width fix emits
+  explicit byte-width casts; GED remains 7.67, type match remains 0.61, and the
+  behavior oracle remains green.
+- Exactly those five reviewed values were regenerated. A fresh complete
+  56-cell metric check then passed with no per-cell regressions. No other
+  baseline value changed.
 
-**Remaining before closure.** Explain and repair or deliberately rebaseline the
-pre-existing metric-ratchet drift; replay the historical 4,033-attempt corpus if
-recovered; commit and integrate the owned path only after that gate contract is
-trustworthy.
+The unavailable historical 4,033-attempt corpus is recorded as an archival
+limitation rather than a hidden gate. The current 21,635-attempt attribution
+measurement, exact canaries, immutable-base replay, and full ratchet now provide
+the reproducible closure evidence.
 
 ## D-002 — optimized large-function extent
 
@@ -186,10 +196,10 @@ one exact identity across the proven straight-line setup window.
   x86-64/i386/AArch64 verdict while ARMv7 `call_into_spill` improves from fail
   to pass at both O0 and O2.
 
-**Remaining before closure.** Run the final full Rust/Python/decompiler gate
-after the other register fixes and reconcile the already-recorded metric-ratchet
-drift. Mixed VFP/core calls which themselves spill remain deliberately
-fail-closed until the call layout owns explicit stack locations.
+**Closure.** The final full Python and five-lane decompiler gates pass with the
+complete register applied; the reviewed metric ratchet passes 56/56 cells.
+Mixed VFP/core calls which themselves spill remain deliberately fail-closed
+until the call layout owns explicit stack locations.
 
 ## D-004 — large ARM dispatch structuring
 
@@ -247,9 +257,9 @@ real reduced shapes.
   `ImpliedEdgeAbsent`, `GotoTargetMissing`, or `SwitchArmOutsideLoop` finding
   remains.
 
-**Remaining before closure.** Run the final full Rust/Python/decompiler gate and
-the broad ARM controls after the other register fixes, then reconcile the
-already-recorded metric-ratchet drift.
+**Closure.** The final full Python and five-lane decompiler gates pass. The
+architecture lane matches its complete baseline exactly, including all ARM
+controls, and both executable behavior corpora remain green.
 
 ## D-005 — wrapped 32-bit array-index rendering
 
@@ -291,8 +301,9 @@ and writes the same wrapped index.
 - the Docker-backed 32-case execution differential passes both the i386 O0
   canary and its x86-64 O0 control.
 
-**Remaining before closure.** Run the final full Rust/Python/decompiler gate
-after D-006 and D-008, then reconcile the already-recorded metric-ratchet drift.
+**Closure.** The final full Python and five-lane decompiler gates pass. The
+architecture lane executes the ILP32 target-ABI canary and matches its complete
+baseline exactly; the 56-cell metric ratchet is green.
 
 ## D-006 — C++ recovery across architectures
 
@@ -387,8 +398,10 @@ the harness must not invent. They are nevertheless executed transitively by
 the five exported C wrappers that own their objects, arguments, and observable
 effects.
 
-**Remaining before closure.** Run the final broad Rust/Python/decompiler gates
-after D-008. Report the exact C++ matrix separately from those broad gates.
+**Closure.** The exact C++ matrix remains 40/40 and is reported separately from
+the final broad evidence. The full Python suite and all five decompiler lanes
+pass; the architecture lane matches the 1,086-pass baseline exactly with zero
+infrastructure-result classes.
 
 ## D-007 — ARMv7 `getent` mode/extent adjudication
 
@@ -480,8 +493,9 @@ consumer, `bool_guard`, comparison-merging, or fixture exception was changed.
   structural verdicts and no failure, incomparable, missing, timeout, or lane
   result.
 
-**Remaining before closure.** Run the final full Rust/Python/decompiler and
-quality gates with the complete register applied.
+**Closure.** The final full Python and five-lane decompiler gates pass with the
+complete register applied. The x86-64 architecture control remains 328/328 and
+the complete architecture baseline matches exactly.
 
 ## Overall completion audit
 
@@ -490,3 +504,52 @@ all named fixtures/oracles have current evidence, the full Rust/Python/lint/type
 gates pass, the full decompiler gate has a final successful exit, owned commits
 are integrated, and no compatibility API or documentation still describes the
 fixed defect as open.
+
+### Final defect-validation ledger — 2026-08-06
+
+- `uv run pytest python/tests/ -q --tb=short` reached 100% and exited 0. The
+  first replay exposed one environment-sensitive test: the purportedly offline
+  `test_explain_runs_offline_pipeline_on_hello_world` inherited provider keys
+  from the repository `.env` and invoked an LLM. The immutable base reproduced
+  the same failure. Its subprocess now explicitly supplies empty provider
+  credentials, the exact RED test passes, its complete module passes with seven
+  passes and one fixture-dependent skip, and the definitive full replay is
+  green.
+- `scripts/decbench-local-gate.sh` exited 0 with the exact final line
+  `HEAVY GATE: passed (all five lanes ran)`. Rust, the 31-test x86-64 fixture
+  and structural matrix, the architecture round trip, both executable behavior
+  corpora, and the metric ratchet all report `ok`.
+- The architecture lane matches its baseline exactly: x86-64 328/328, i386
+  251/272, AArch64 279/328, and ARMv7 228/272; total 1,086 pass, 114 fail, 152
+  structural, four declared unsupported, and zero non-portable, incomparable,
+  missing, no-case, timeout, or lane-error result.
+- The metric lane reports `FULL MATRIX: no per-cell regressions across 56 of 56
+  cells`. No metric waiver or missing-lane allowance was used.
+- `cargo fmt --check`, `git diff --check`, JSON parsing for both ratchets, and
+  shell syntax validation pass. Scoped Ruff checks for every changed Python
+  harness/test module pass.
+
+### Repository-wide quality debt
+
+The defect work adds no repository-wide quality regression, but the strict
+overall completion audit is **not green** because the base repository already
+fails its global Python gates:
+
+| Gate | Base `fcca960b` | Defect branch | Verdict |
+|---|---:|---:|---|
+| `uvx ruff check python/` | 3,510 errors | 3,509 errors | red; one error removed |
+| `uvx ruff format --check python/` | 309 files | 308 files | red; one file repaired |
+| `uvx ty check python/` | 2,041 diagnostics | 2,041 diagnostics | red; exact parity |
+
+Mass-formatting or mechanically rewriting hundreds of unrelated files is not a
+safe defect-register change. These failures therefore remain explicit release
+debt rather than being called green or hidden behind scoped checks. They do not
+reopen D-001 through D-008, whose implementation, focused proof, broad behavior,
+and metric evidence are complete.
+
+### Integration disposition
+
+The owned commits are pushed on `origin/agent/defect-register`. Final
+fast-forward integration into `origin/master` is performed only after this
+ledger is committed and the remote base is revalidated; the original local
+`master` worktree has overlapping uncommitted work and must not be rewritten.

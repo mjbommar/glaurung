@@ -79,10 +79,13 @@ fi
 # Lane 2 is x86-64 in EVERY lane. This one is the only thing that executes a
 # single instruction lifted by src/ir/lift_arm64.rs, src/ir/lift_arm32.rs, or the
 # 32-bit half of src/ir/lift_x86.rs. It cross-builds the same 30-fixture corpus
-# for four architectures, decompiles it, rebuilds the recovered C for the host,
-# and diffs returns and mutated buffers against the same source built natively.
-# No qemu is in the loop deliberately: an emulator bug must never be mistakable
-# for a decompiler bug.
+# for four architectures and decompiles it. The LP64 lanes rebuild and execute
+# portable C on the host. Supported i386/ARMv7 signatures instead rebuild both
+# sides for their real ILP32 ABI and execute a generated comparator under a
+# version-fingerprinted qemu runner; richer signatures retain the explicit
+# host-width audit fallback. Returns and mutated buffers are compared in either
+# mode, and a runner change invalidates the ratchet rather than silently
+# redefining it.
 #
 # A missing cross compiler FAILS rather than skips, exactly like lane 5's absent
 # metrics. Provision with:

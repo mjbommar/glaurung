@@ -104,13 +104,13 @@
     "type_match": 0.78
   },
   "linkedlist:clang:O0": {
-    "byte_match": 0.47,
+    "byte_match": 0.1,
     "ged": 0.0,
     "type_match": 1.0
   },
   "linkedlist:clang:O2": {
     "byte_match": 0.08,
-    "ged": 0.0,
+    "ged": 2.5,
     "type_match": 1.0
   },
   "linkedlist:gcc:O0": {
@@ -120,7 +120,7 @@
   },
   "linkedlist:gcc:O2": {
     "byte_match": 0.77,
-    "ged": 0.0,
+    "ged": 2.5,
     "type_match": 0.75
   },
   "loops:clang:O0": {
@@ -150,7 +150,7 @@
   },
   "matrix:clang:O2": {
     "byte_match": 0.03,
-    "ged": 21.0,
+    "ged": 24.0,
     "type_match": null
   },
   "matrix:gcc:O0": {
@@ -239,7 +239,7 @@
     "type_match": 1.0
   },
   "strops:gcc:O2": {
-    "byte_match": 0.42,
+    "byte_match": 0.35,
     "ged": 7.67,
     "type_match": 0.61
   },

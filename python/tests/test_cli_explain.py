@@ -15,12 +15,12 @@ operator runs do. We don't pin a specific VA there because
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-
 
 SAMPLE = Path(
     "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
@@ -30,13 +30,25 @@ FASTFAT_POST = Path(
 )
 
 
-def _run(args: list[str]) -> subprocess.CompletedProcess:
+def _run(args: list[str], *, offline: bool = False) -> subprocess.CompletedProcess:
     """Invoke the CLI in-process via `python -m glaurung.cli`."""
+    env = os.environ.copy()
+    if offline:
+        # Empty, rather than merely absent, prevents config.py's automatic
+        # repository .env load from re-enabling a provider in the subprocess.
+        for name in (
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+        ):
+            env[name] = ""
     return subprocess.run(
         [sys.executable, "-m", "glaurung.cli", "explain", *args],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -80,7 +92,10 @@ def test_explain_runs_offline_pipeline_on_hello_world():
     """End-to-end smoke test: no LLM key -> every tool falls back to its
     heuristic path -> output is still well-formed C wrapping the
     pseudocode."""
-    result = _run([str(SAMPLE), "--func", "0x1840", "--no-types", "--no-roles"])
+    result = _run(
+        [str(SAMPLE), "--func", "0x1840", "--no-types", "--no-roles"],
+        offline=True,
+    )
     assert result.returncode == 0, result.stderr
     out = result.stdout
     # The plain-text formatter prepends a banner comment.
@@ -149,9 +164,7 @@ def test_explain_invalid_va_reports_error():
 def test_explain_quiet_suppresses_banner():
     """-q hides the // entry_va / // prototype-source banner so the
     output is pipeline-friendly (just the rewritten body)."""
-    result = _run(
-        [str(SAMPLE), "--func", "0x1840", "--no-types", "--no-roles", "-q"]
-    )
+    result = _run([str(SAMPLE), "--func", "0x1840", "--no-types", "--no-roles", "-q"])
     assert result.returncode == 0, result.stderr
     assert "// entry_va:" not in result.stdout
     # But the rewritten body still lands.
