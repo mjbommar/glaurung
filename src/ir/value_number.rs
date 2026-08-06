@@ -22,6 +22,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::call_args::CallConv;
+use crate::ir::ssa::SsaValue;
 use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, InstrAddr};
 
@@ -587,6 +588,33 @@ fn width_bytes(width: crate::ir::types::Width) -> u8 {
     ((width.bits().saturating_add(7)) / 8).min(u8::MAX as u16) as u8
 }
 
+/// Exact machine width of the definition at one raw LLIR instruction site.
+///
+/// A kept-bare ABI register can have several definitions which deliberately
+/// share one [`VReg`] spelling. The public name-keyed width map cannot represent
+/// those definitions independently, so phi coalescing consumes this companion
+/// map before deciding whether a shared name supplies consistent width evidence.
+type DefinitionWidthsBySite = HashMap<InstrAddr, u8>;
+
+/// Exact machine width keyed by SSA value identity.
+///
+/// This is the bridge from a phi incoming `(base, version)` to the particular
+/// raw definition site that reaches that predecessor edge. It is what lets two
+/// copies from the same kept-bare register spelling carry different, exact
+/// widths without joining every definition of that spelling first.
+type DefinitionWidthsByValue = HashMap<SsaValue, u8>;
+
+/// Materialized phi copies and the width of each incoming SSA value.
+///
+/// `incoming_widths` is parallel to `pairs`. `None` denotes a live-in or a
+/// definition whose width the lifter could not prove; it is not permission to
+/// assume the destination's width.
+#[derive(Debug, Default)]
+struct PhiCopies {
+    pairs: Vec<(VReg, VReg)>,
+    incoming_widths: Vec<Option<u8>>,
+}
+
 /// Machine width of the value defined by one raw LLIR operation.
 ///
 /// Most operations inherit the physical destination view (`edi` = 4 bytes).
@@ -687,6 +715,8 @@ pub fn value_number_with_parameter_slots(
 
     let mut out = lf.clone();
     let mut definition_widths = HashMap::new();
+    let mut definition_widths_by_site = DefinitionWidthsBySite::new();
+    let mut definition_widths_by_value = DefinitionWidthsByValue::new();
     for (bi, block) in out.blocks.iter_mut().enumerate() {
         for (ii, ins) in block.instrs.iter_mut().enumerate() {
             let addr = InstrAddr {
@@ -704,12 +734,29 @@ pub fn value_number_with_parameter_slots(
                 operation_definition_width(&lf.blocks[bi].instrs[ii].op),
             ) {
                 definition_widths.insert(dst, width);
+                definition_widths_by_site.insert(addr, width);
+                if let Some(value) = ssa.def_value(lf, addr) {
+                    definition_widths_by_value.insert(value, width);
+                }
             }
         }
     }
-    let phi_copies = insert_phi_copies(&mut out, lf, ssa, &ctx, &mut definition_widths);
+    let phi_copies = insert_phi_copies(
+        &mut out,
+        lf,
+        ssa,
+        &ctx,
+        &mut definition_widths,
+        &definition_widths_by_value,
+    );
     let parameter_slots = live_in_arg_slots_llir(&out, cc);
-    coalesce_phi_copies(&mut out, &phi_copies, &mut definition_widths);
+    coalesce_phi_copies_with_definition_sites(
+        &mut out,
+        &phi_copies.pairs,
+        &mut definition_widths,
+        &definition_widths_by_site,
+        &phi_copies.incoming_widths,
+    );
     (out, definition_widths, parameter_slots)
 }
 
@@ -761,17 +808,19 @@ pub fn value_number_with_parameter_slots(
 /// corresponds to.
 ///
 /// Returns every `(destination, source)` pair it materialised, in insertion
-/// order. [`coalesce_phi_copies`] consumes that list: these copies exist only to
-/// leave SSA, and most of them can be removed again by giving the two values one
-/// name once liveness proves they never hold different values at the same point.
+/// order, together with the exact width of that incoming SSA value when one is
+/// known. Phi-copy coalescing consumes both parallel lists: these copies exist
+/// only to leave SSA, and most can be removed again by giving the two values one
+/// name once liveness and width compatibility prove that is safe.
 fn insert_phi_copies(
     out: &mut LlirFunction,
     lf: &LlirFunction,
     ssa: &crate::ir::ssa::SsaInfo,
     ctx: &VnCtx,
     definition_widths: &mut HashMap<VReg, u8>,
-) -> Vec<(VReg, VReg)> {
-    let mut created: Vec<(VReg, VReg)> = Vec::new();
+    definition_widths_by_value: &DefinitionWidthsByValue,
+) -> PhiCopies {
+    let mut created = PhiCopies::default();
     if ssa.phis.is_empty() {
         return created;
     }
@@ -880,7 +929,15 @@ fn insert_phi_copies(
             if src == dst {
                 continue; // a version kept bare on both sides: `rax = rax`
             }
-            created.push((dst.clone(), src.clone()));
+            created.pairs.push((dst.clone(), src.clone()));
+            created.incoming_widths.push(
+                definition_widths_by_value
+                    .get(&SsaValue {
+                        base: phi.base.clone(),
+                        version: *ver,
+                    })
+                    .copied(),
+            );
             pending[*pred].push(Op::Assign {
                 dst: dst.clone(),
                 src: Value::Reg(src),
@@ -1104,12 +1161,17 @@ impl ClassWidth {
 fn coalescing_definition_claims(
     out: &LlirFunction,
     definition_widths: &HashMap<VReg, u8>,
+    definition_widths_by_site: &DefinitionWidthsBySite,
 ) -> HashMap<VReg, ClassWidth> {
     let mut claims = HashMap::new();
-    for block in &out.blocks {
-        for instruction in &block.instrs {
+    for (block_idx, block) in out.blocks.iter().enumerate() {
+        for (instr_idx, instruction) in block.instrs.iter().enumerate() {
             let Some(destination) = def_uses(&instruction.op).0 else {
                 continue;
+            };
+            let site = InstrAddr {
+                block_idx,
+                instr_idx,
             };
             let claim = match &instruction.op {
                 Op::Bin { .. }
@@ -1117,8 +1179,12 @@ fn coalescing_definition_claims(
                 | Op::Ite { .. }
                 | Op::ZExt { .. }
                 | Op::SExt { .. }
-                | Op::Intrinsic { .. } => definition_widths
-                    .get(&destination)
+                | Op::Intrinsic { .. } => definition_widths_by_site
+                    .get(&site)
+                    // Direct primitive tests construct already-numbered LLIR and
+                    // historically provide only the compatibility map. The real
+                    // value-numbering path always supplies the per-site entry.
+                    .or_else(|| definition_widths.get(&destination))
                     .copied()
                     .map_or(ClassWidth::Open, ClassWidth::Known),
                 _ => ClassWidth::Open,
@@ -1138,8 +1204,8 @@ fn coalescing_definition_claims(
     // carries truncation semantics.
     loop {
         let mut changed = false;
-        for block in &out.blocks {
-            for instruction in &block.instrs {
+        for (block_idx, block) in out.blocks.iter().enumerate() {
+            for (instr_idx, instruction) in block.instrs.iter().enumerate() {
                 let Op::Assign {
                     dst,
                     src: Value::Reg(src),
@@ -1150,7 +1216,15 @@ fn coalescing_definition_claims(
                 let Some(ClassWidth::Known(source_width)) = claims.get(src).copied() else {
                     continue;
                 };
-                if definition_widths.get(dst).copied() != Some(source_width) {
+                let site = InstrAddr {
+                    block_idx,
+                    instr_idx,
+                };
+                let destination_width = definition_widths_by_site
+                    .get(&site)
+                    .or_else(|| definition_widths.get(dst))
+                    .copied();
+                if destination_width != Some(source_width) {
                     continue;
                 }
                 let current = claims.get(dst).copied().unwrap_or(ClassWidth::Open);
@@ -1189,12 +1263,34 @@ fn coalescing_definition_claims(
 /// `factorial_while` at `clang -O2` see only its `mov eax,1` initialiser: the
 /// 8-byte `imul` result reaches the same phi through the bare return register,
 /// so the phi is ambiguous, and without that edge it looked like a 4-byte value.
+#[cfg(test)]
 fn class_widths(
     names: &[VReg],
     index: &HashMap<VReg, usize>,
     copies: &[(VReg, VReg)],
     definition_claims: &HashMap<VReg, ClassWidth>,
     consumed_live_ins: &HashSet<VReg>,
+) -> Vec<ClassWidth> {
+    class_widths_with_incoming_values(
+        names,
+        index,
+        copies,
+        definition_claims,
+        consumed_live_ins,
+        &[],
+    )
+}
+
+/// Decide class widths while retaining the exact width of each phi incoming
+/// SSA value, including values whose kept-bare ABI spelling is shared by
+/// several definitions.
+fn class_widths_with_incoming_values(
+    names: &[VReg],
+    index: &HashMap<VReg, usize>,
+    copies: &[(VReg, VReg)],
+    definition_claims: &HashMap<VReg, ClassWidth>,
+    consumed_live_ins: &HashSet<VReg>,
+    incoming_widths: &[Option<u8>],
 ) -> Vec<ClassWidth> {
     let mut widths: Vec<ClassWidth> = names
         .iter()
@@ -1208,30 +1304,34 @@ fn class_widths(
     // Each copy, reduced to (destination candidate, source candidate or a fixed
     // claim for a source that is not a candidate).
     //
-    // `definition_widths` is keyed by NAME, and a name is a value only when it
-    // is versioned. Every kept-bare definition of `rax` shares one key, so for
-    // such a name the entry describes whichever definition the tagging loop
-    // visited last. `factorial_while` at `clang -O2` has two — the 4-byte
-    // `mov eax,1` initialiser and the 8-byte `imul rax` — and the map reported 4
-    // for the pair; trusting it merged the accumulator's phi at four bytes and
-    // truncated the product every iteration. So a bare source is read by how
-    // many definitions it actually has in this body: none makes it a live-in
-    // parameter, about which this map says nothing at all; exactly one makes the
-    // entry unambiguous; more than one is unattributable.
+    // The compatibility `definition_claims` map is keyed by rendered NAME. That
+    // is sufficient for versioned values but cannot distinguish several
+    // definitions deliberately kept under one ABI spelling. Prefer the exact
+    // SSA incoming-edge width collected before tagging; only fall back to the
+    // name claim when no edge identity is available. A missing live-in width is
+    // not positive evidence: `consumed_live_ins` keeps the existing fail-closed
+    // rule for architectural values that cannot safely seed a phi class.
     let edges: Vec<(usize, Option<usize>, ClassWidth)> = copies
         .iter()
-        .filter_map(|(dst, src)| {
+        .enumerate()
+        .filter_map(|(copy_index, (dst, src))| {
             let d = *index.get(dst)?;
             if let Some(&s) = index.get(src) {
                 return Some((d, Some(s), ClassWidth::Open));
             }
-            let claim = definition_claims.get(src).copied().unwrap_or_else(|| {
-                if consumed_live_ins.contains(src) {
-                    ClassWidth::Ambiguous
-                } else {
-                    ClassWidth::Open
-                }
-            });
+            let claim = incoming_widths
+                .get(copy_index)
+                .copied()
+                .flatten()
+                .map(ClassWidth::Known)
+                .or_else(|| definition_claims.get(src).copied())
+                .unwrap_or_else(|| {
+                    if consumed_live_ins.contains(src) {
+                        ClassWidth::Ambiguous
+                    } else {
+                        ClassWidth::Open
+                    }
+                });
             Some((d, None, claim))
         })
         .collect();
@@ -1387,10 +1487,34 @@ const MAX_COALESCE_CANDIDATES: usize = 4096;
 ///
 /// Liveness restricted to candidates is exact rather than approximate: whether a
 /// value is live at a point does not depend on which other values are.
+#[cfg(test)]
 fn coalesce_phi_copies(
     out: &mut LlirFunction,
     copies: &[(VReg, VReg)],
     definition_widths: &mut HashMap<VReg, u8>,
+) {
+    coalesce_phi_copies_with_definition_sites(
+        out,
+        copies,
+        definition_widths,
+        &DefinitionWidthsBySite::new(),
+        &[],
+    );
+}
+
+/// Coalesce out-of-SSA phi copies using exact definition-site widths.
+///
+/// Phi copies are inserted immediately before a trailing terminator (which has
+/// no value definition) or appended to a fallthrough block. Consequently every
+/// original value-defining instruction retains its [`InstrAddr`] between width
+/// collection and this query; synthetic copies have no entry and remain
+/// width-neutral.
+fn coalesce_phi_copies_with_definition_sites(
+    out: &mut LlirFunction,
+    copies: &[(VReg, VReg)],
+    definition_widths: &mut HashMap<VReg, u8>,
+    definition_widths_by_site: &DefinitionWidthsBySite,
+    incoming_widths: &[Option<u8>],
 ) {
     if copies.is_empty() {
         return;
@@ -1507,25 +1631,36 @@ fn coalesce_phi_copies(
         x
     }
     let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
-    let definition_claims = coalescing_definition_claims(out, definition_widths);
+    let definition_claims =
+        coalescing_definition_claims(out, definition_widths, definition_widths_by_site);
     let candidate_names: HashSet<VReg> = names.iter().cloned().collect();
     let consumed_live_ins = consumed_live_ins_before_phi_copy(out, &candidate_names, copies);
-    let mut width: Vec<ClassWidth> = class_widths(
+    let mut width: Vec<ClassWidth> = class_widths_with_incoming_values(
         &names,
         &index,
         copies,
         &definition_claims,
         &consumed_live_ins,
+        incoming_widths,
     );
+    let mut attempted = 0usize;
+    let mut already_joined = 0usize;
+    let mut refused_interference = 0usize;
+    let mut refused_width = 0usize;
+    let mut merged = 0usize;
     for (d, s) in pairs.iter().copied() {
+        attempted += 1;
         let (a, b) = (find(&mut parent, d), find(&mut parent, s));
         if a == b {
+            already_joined += 1;
             continue;
         }
         if members[b].iter().any(|m| interferes[a].contains(m)) {
+            refused_interference += 1;
             continue;
         }
         let Some(merged_width) = width[a].merge(width[b]) else {
+            refused_width += 1;
             continue;
         };
         let moved = std::mem::take(&mut members[b]);
@@ -1534,6 +1669,7 @@ fn coalesce_phi_copies(
         interferes[a].extend(taken);
         width[a] = merged_width;
         parent[b] = a;
+        merged += 1;
     }
 
     // --- Rename to one representative per class ------------------------------
@@ -1553,6 +1689,11 @@ fn coalesce_phi_copies(
             .or_insert(i);
     }
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        eprintln!(
+            "phi-coalesce-stats attempted={attempted} merged={merged} \
+             interference={refused_interference} width={refused_width} \
+             joined={already_joined}"
+        );
         for (&root, &rep) in &representative {
             let class: Vec<&VReg> = members[root].iter().map(|&member| &names[member]).collect();
             eprintln!(
@@ -2422,8 +2563,26 @@ mod tests {
                 succs: vec![],
             }],
         };
-        let claims =
-            coalescing_definition_claims(&lf, &HashMap::from([(widened, 8), (value.clone(), 8)]));
+        let claims = coalescing_definition_claims(
+            &lf,
+            &HashMap::from([(widened, 8), (value.clone(), 8)]),
+            &DefinitionWidthsBySite::from([
+                (
+                    InstrAddr {
+                        block_idx: 0,
+                        instr_idx: 0,
+                    },
+                    8,
+                ),
+                (
+                    InstrAddr {
+                        block_idx: 0,
+                        instr_idx: 1,
+                    },
+                    8,
+                ),
+            ]),
+        );
 
         assert_eq!(
             claims.get(&value),
@@ -2702,6 +2861,20 @@ mod tests {
             ClassWidth::Ambiguous,
             "conflicting definitions of a kept-bare source must remain ambiguous"
         );
+        let decided = class_widths_with_incoming_values(
+            &names,
+            &index,
+            &both,
+            &with_bare,
+            &HashSet::new(),
+            &[None, Some(4)],
+        );
+        assert_eq!(
+            decided[0],
+            ClassWidth::Known(4),
+            "the exact definition reaching this bare phi edge must override the \
+             ambiguity of unrelated definitions sharing its register spelling"
+        );
         with_bare.insert(VReg::phys("rax"), ClassWidth::Known(4));
         let decided = class_widths(&names, &index, &both, &with_bare, &HashSet::new());
         assert_eq!(decided[0], ClassWidth::Known(4));
@@ -2747,6 +2920,71 @@ mod tests {
             ClassWidth::Known(4),
             "a phi fed only by another phi must inherit its width, or nested \
              loops coalesce nothing"
+        );
+    }
+
+    /// Kept-bare ABI names can have several machine definitions. Width evidence
+    /// belongs to each definition site, not to the shared spelling: otherwise
+    /// whichever definition was visited last is replayed for every operation and
+    /// a genuinely mixed-width phi input looks safe to coalesce.
+    #[test]
+    fn kept_bare_definition_widths_are_not_collapsed_by_name() {
+        let kept_bare = VReg::phys("rax");
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1008,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::ZExt {
+                            dst: kept_bare.clone(),
+                            src: Value::Const(1),
+                            from: crate::ir::types::Width::W8,
+                            to: crate::ir::types::Width::W32,
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::SExt {
+                            dst: kept_bare.clone(),
+                            src: Value::Const(-1),
+                            from: crate::ir::types::Width::W32,
+                            to: crate::ir::types::Width::W64,
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        // This is the lossy public compatibility map: the second insertion for
+        // `rax` replaced the first. The claim collector must not use that one
+        // entry as the width of both definitions.
+        let name_widths = HashMap::from([(kept_bare.clone(), 8)]);
+        let site_widths = DefinitionWidthsBySite::from([
+            (
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 0,
+                },
+                4,
+            ),
+            (
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 1,
+                },
+                8,
+            ),
+        ]);
+
+        let claims = coalescing_definition_claims(&lf, &name_widths, &site_widths);
+
+        assert_eq!(
+            claims.get(&kept_bare),
+            Some(&ClassWidth::Ambiguous),
+            "32- and 64-bit definitions sharing one bare name must remain distinct"
         );
     }
 
@@ -2851,6 +3089,100 @@ mod tests {
             Vec::<String>::new(),
             "a loop-carried phi read has no incoming edge definition; phis: {:#?}",
             ssa.phis
+        );
+    }
+
+    #[test]
+    fn real_gcc_o2_call_chain_keeps_the_iteration_value_at_the_call() {
+        use object::{Object, ObjectSymbol};
+        use std::io::Write;
+        use std::process::Command;
+
+        let tmp = tempfile::tempdir().expect("temporary call-shape build directory");
+        let source = tmp.path().join("11_call_shapes.c");
+        let binary = tmp.path().join("11_call_shapes.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decompiler_fixtures/src/11_call_shapes.c"
+                ))
+            })
+            .expect("write the real call-shape fixture source");
+        let build = match Command::new("gcc")
+            .args(["-shared", "-fPIC", "-g", "-O2", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch GCC: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile the real call fixture with GCC -O2: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read GCC output");
+        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let entry = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("call_chain_in_loop"))
+            .map(|symbol| symbol.address())
+            .expect("exported call_chain_in_loop symbol");
+        let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+            &data,
+            &crate::analysis::cfg::Budgets::default(),
+        );
+        let function = functions
+            .iter()
+            .find(|function| function.entry_point.value == entry)
+            .expect("discovered call_chain_in_loop function");
+        let mut lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift call_chain_in_loop");
+        crate::ir::abi::annotate_calls(&mut lifted, CallConv::SysVAmd64);
+        let ssa = compute_ssa(&lifted);
+        let numbered = value_number(&lifted, &ssa, CallConv::SysVAmd64);
+
+        let first_call_argument = numbered
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .find_map(|instruction| match &instruction.op {
+                Op::Call {
+                    effects: Some(effects),
+                    ..
+                } => effects.args.first().cloned(),
+                _ => None,
+            })
+            .expect("the loop must call signed_step with a first argument");
+        assert_ne!(
+            first_call_argument,
+            VReg::phys("rdi"),
+            "the loop call must not be frozen to the bare entry parameter"
+        );
+        let definitions = numbered
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter())
+            .filter(|instruction| {
+                def_uses(&instruction.op).0.as_ref() == Some(&first_call_argument)
+            })
+            .count();
+        assert!(
+            definitions >= 2,
+            "the call argument needs an entry definition and a loop-carried \
+             backedge definition, got {definitions}: {numbered:#?}"
+        );
+        assert_eq!(
+            undefined_reads(&numbered),
+            Vec::<String>::new(),
+            "coalescing must not orphan the loop-carried call argument"
         );
     }
 
