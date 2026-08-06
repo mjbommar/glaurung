@@ -871,7 +871,7 @@
   },
   "06_calling_conventions:aarch64:O0": {
     "fact_mod": "pass",
-    "fib": "fail",
+    "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
     "sum_arg0": "pass",
@@ -1099,7 +1099,7 @@
   },
   "07_packet_parser:aarch64:O0": {
     "parse_packet": "fail",
-    "validate_header": "fail"
+    "validate_header": "pass"
   },
   "07_packet_parser:aarch64:O2": {
     "parse_packet": "fail",
@@ -1147,9 +1147,9 @@
   },
   "08_indirect_dispatch:aarch64:O0": {
     "apply": "structural",
-    "dispatch": "fail",
-    "dispatch_switch": "fail",
-    "tail_dispatch": "fail"
+    "dispatch": "pass",
+    "dispatch_switch": "pass",
+    "tail_dispatch": "pass"
   },
   "08_indirect_dispatch:aarch64:O2": {
     "apply": "structural",
@@ -1614,7 +1614,7 @@
     "cpp_virtual_dispatch": "structural"
   },
   "11_call_shapes:aarch64:O0": {
-    "call_accumulate_bytes": "fail",
+    "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
     "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
@@ -1622,7 +1622,7 @@
     "call_nested": "pass",
     "call_result_drives_branch": "pass",
     "call_result_unused": "pass",
-    "call_twice_and_combine": "fail",
+    "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
     "widen_mul": "pass",
@@ -2202,8 +2202,8 @@
     "rb_validate": "pass"
   },
   "17_hash_table:aarch64:O0": {
-    "hash_insert": "fail",
-    "hash_lookup": "fail"
+    "hash_insert": "pass",
+    "hash_lookup": "pass"
   },
   "17_hash_table:aarch64:O2": {
     "hash_insert": "pass",
@@ -2298,8 +2298,8 @@
     "heap_push": "pass"
   },
   "19_disjoint_set:aarch64:O0": {
-    "dsu_find": "fail",
-    "dsu_union": "fail"
+    "dsu_find": "pass",
+    "dsu_union": "pass"
   },
   "19_disjoint_set:aarch64:O2": {
     "dsu_find": "pass",

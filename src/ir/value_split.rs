@@ -168,13 +168,19 @@ impl Splitter {
     }
 
     /// A write to an already-spilled argument register starts its scratch value.
+    /// A consumed call result is a definition too: on AArch64 the call-owned
+    /// destination is the same physical `x0` slot as the caller's arg0.
     fn scratch_definition_slot(&self, s: &Stmt) -> Option<usize> {
-        let Stmt::Assign {
-            dst: VReg::Phys(name),
-            ..
-        } = s
-        else {
-            return None;
+        let name = match s {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                ..
+            }
+            | Stmt::Call {
+                dst: Some(VReg::Phys(name)),
+                ..
+            } => name,
+            _ => return None,
         };
         let slot = self.slot(name)?;
         self.spilled.contains(&slot).then_some(slot)
@@ -211,10 +217,19 @@ impl Splitter {
                         self.rename_expr(src);
                     }
                 }
-                Stmt::Call { target, args, .. } => {
+                Stmt::Call {
+                    target, args, dst, ..
+                } => {
                     self.rename_expr(target);
                     for a in args.iter_mut() {
                         self.rename_expr(a);
+                    }
+                    if let Some(dst) = dst {
+                        if scratch_definition.is_some() {
+                            Self::rename_as_scratch(dst);
+                        } else {
+                            self.rename_reg(dst);
+                        }
                     }
                 }
                 Stmt::Return { value } => {
@@ -446,6 +461,59 @@ mod tests {
                 value: Some(Expr::Reg(reg("scr_r0"))),
             }),
             "the same post-spill role split must reach the direct return"
+        );
+    }
+
+    #[test]
+    fn call_result_survives_the_arg0_scratch_split() {
+        // AArch64 x0 is both the incoming arg0 and every integer call result.
+        // An earlier return-value assignment can start the post-spill scratch
+        // lifetime on one structured path before a later path calls a helper.
+        // The call definition and its consumer must retain one identity.
+        let mut f = Function {
+            name: "hash_lookup".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_2")),
+                    src: Expr::Reg(reg("x0")),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: reg("x0"),
+                    src: Expr::Const(-1),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "hash_slot".into(),
+                    },
+                    args: vec![Expr::Const(17), Expr::Const(8)],
+                    dst: Some(reg("x0")),
+                    call_spec: None,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_6")),
+                    src: Expr::Reg(reg("x0")),
+                    size: 4,
+                },
+            ],
+        };
+
+        split_spilled_arg_reuse(&mut f, CallConv::Aarch64);
+
+        let Stmt::Call { dst, .. } = &f.body[2] else {
+            panic!("expected helper call")
+        };
+        assert_eq!(dst, &Some(reg("scr_x0")));
+        assert_eq!(
+            f.body[3],
+            Stmt::Store {
+                addr: Expr::Reg(reg("stack_6")),
+                src: Expr::Reg(reg("scr_x0")),
+                size: 4,
+            },
+            "the spilled consumer must read the exact call-result role"
         );
     }
 }

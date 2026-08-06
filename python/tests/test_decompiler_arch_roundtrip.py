@@ -543,6 +543,46 @@ def test_a_cross_lane_links_the_rebuild_against_the_host_reference(tmp_path):
     assert "undefined symbol" not in detail, detail
 
 
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize(
+    ("fixture", "function"),
+    [
+        ("07_packet_parser", "validate_header"),
+        ("17_hash_table", "hash_lookup"),
+        ("19_disjoint_set", "dsu_find"),
+    ],
+)
+@pytest.mark.skipif(
+    shutil.which(A.TARGETS["aarch64"].cc) is None,
+    reason=f"{A.TARGETS['aarch64'].cc} is not installed on this host",
+)
+def test_aarch64_spilled_arg0_call_results_round_trip(
+    tmp_path: Path, fixture: str, function: str
+) -> None:
+    """A helper result must not inherit the caller's incoming ``arg0`` role."""
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O0.so"
+    ok, error = A._cross_build("aarch64", source, "O0", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O0.so"
+    ok, error = A._reference_build(source, "O0", reference)
+    assert ok, error
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O0",
+        native_cc=A.native_cc("aarch64"),
+        only={function},
+    )
+
+    assert results[function]["status"] == "pass", results[function]
+
+
 def test_reference_so_defaults_to_the_binary_so_host_lanes_are_unchanged(tmp_path):
     """Every x86-64 lane must be bit-identical to what it was before
     `reference_so` existed, or the 656-case gate is measuring something new."""

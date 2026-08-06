@@ -331,3 +331,24 @@ zero missing cells, timeouts, or lane errors. The post-fix complete Rust gate pa
 1,763 library tests plus every integration, example, and benchmark target. The complete
 Python gate also terminates green: 2,774 passed, 43 skipped, and six existing pytest
 mark warnings in 37 minutes 23 seconds.
+
+## 13:32 — AArch64 call-result ownership fixed at the first corrupting pass
+
+The three requested canaries reproduced as AArch64 O0 failures with green x86-64
+controls. Their first shared corruption was `split_spilled_arg_reuse`: after an O0
+prologue spilled `x0`, the pass renamed post-spill consumers to `scr_x0` but ignored a
+call destination that defined the same value. The AST therefore said `call -> x0` and
+`store <- scr_x0`; role naming subsequently made the first the pointer `arg0` and the
+second an uninitialised scalar.
+
+A failing Rust ownership test and three real cross-compiled execution tests were added
+before the fix. Treating a consumed call destination as a definition and renaming it
+with its consumers repairs `validate_header`, `hash_lookup`, and `dsu_find`. The full
+matrix exposes eight additional repairs with the same owner: `fib`, `dispatch`,
+`dispatch_switch`, `tail_dispatch`, `call_accumulate_bytes`,
+`call_twice_and_combine`, `hash_insert`, and `dsu_union`. The final matrix is 1,542
+passes, 258 failures, 228 structural rows, and six unsupported rows, with zero
+regressions, reclassifications, missing rows, timeouts, or lane errors.
+The post-fix full gates also terminate green: Rust has 1,764 library tests plus
+all integration and documentation targets, and Python has 2,777 passes, 43 skips,
+and the same six existing pytest-mark warnings.

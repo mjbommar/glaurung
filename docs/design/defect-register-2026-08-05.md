@@ -674,43 +674,43 @@ signatures now include `gyroInitFilterNotch1(uint16_t, uint16_t)`,
 `pkg_array_match_patterns`. Fully representing its opaque function-pointer
 parameter still requires EPIC 1's structured declarator/type environment.
 
-### Current strict AArch64-only set: 21, not 43
+### Current strict AArch64-only set: 10, not 43
 
 The old 43-function count was a verdict-only snapshot and is stale. Relative to
 the current pinned x86-64, i386, and Thumb lanes, the strict AArch64-only set is:
 
 - `03_loop_shapes:O2:{for_sum,loop_continue,mutate_reverse}`;
 - `05_struct_arrays:O0:process`;
-- `06_recursion:O0:fib`;
-- `07_multi_return:O0:validate_header` and
-  `07_multi_return:O2:validate_header`;
-- `08_state_machine:O0:{dispatch,dispatch_switch,tail_dispatch}`;
-- `11_call_shapes:O0:{call_accumulate_bytes,call_twice_and_combine}`;
+- `07_packet_parser:O2:validate_header`;
 - `11_call_shapes:O2:{call_chain_in_loop,call_into_spill}`;
 - `12_rotated_loops:O2:{factorial_while,nested_rotated}`;
-- `17_hash_table:O0:{hash_insert,hash_lookup}`;
-- `19_union_find:O0:{dsu_find,dsu_union}`; and
 - `25_kmp:O0:kmp_search`.
 
-Representative root causes split across architecture layers. `for_sum` needs
-AArch64 SIMD horizontal-reduction semantics. `validate_header`, `hash_lookup`,
-and `dsu_find` overwrite live argument identities with call-result definitions.
-`dispatch` and `call_into_spill` lose call results or outgoing arguments.
-`factorial_while` loses accumulator width/phi roles. `kmp_search` retains a fake
-frame/canary object and crashes. The set is therefore triage evidence, not one
-“AArch64 gap.”
+The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
+`fib`, O0 `validate_header`, all three indirect-dispatch functions, two O0 call
+shapes, both O0 hash-table functions, and both O0 disjoint-set functions. A
+consumed call destination now changes role with its post-spill consumers instead
+of leaving `call -> x0` followed by `store <- scr_x0` as two unrelated values.
+The complete six-architecture ratchet moves from 1,531 passes / 269 failures to
+1,542 / 258, with no regression or reclassification.
+
+The remaining root causes still split across architecture layers. `for_sum`
+needs AArch64 SIMD horizontal-reduction semantics. `call_into_spill` and
+`call_chain_in_loop` retain call-flow/value-definition defects. `factorial_while`
+loses accumulator width/phi roles. `kmp_search` retains a fake frame/canary object
+and crashes. The set is therefore triage evidence, not one “AArch64 gap.”
 
 ### Rank-ordered next work
 
 1. **P0 — sound definitions and value roles (EPIC 5).** Replace bare-name and
    last-writer queries with one reaching-definitions oracle used by call-result,
-   phi, frame, and return recovery. Acceptance: the three call-result collision
-   canaries and the linked-list false frame are fixed without x86/Thumb ratchet
-   regressions.
+   phi, frame, and return recovery. The post-spill call-result collision slice is
+   complete; next acceptance is `call_into_spill`, the rotated-loop phi canaries,
+   and the linked-list false frame without architecture-ratchet regressions.
 2. **P0 — program environment and call contracts (EPIC 1).** Persist one
    program-level symbol/type environment and attach canonical prototypes to every
-   direct and indirect call site. Acceptance: `dispatch`, `call_into_spill`, and
-   pointer-depth type canaries improve with complete structured variables.
+   direct and indirect call site. Acceptance: `call_into_spill` and pointer-depth
+   type canaries improve with complete structured variables.
 3. **P1 — storage-backed aggregate recovery (EPIC 3).** Make stack/global objects
    first-class, merge CFA/current-SP evidence into one storage identity, and derive
    arrays/struct extents from access paths. Acceptance: no invented `stack_top` in
