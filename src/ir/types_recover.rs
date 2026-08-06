@@ -450,6 +450,69 @@ pub struct RecoveredPrototype {
     output_locked: bool,
 }
 
+/// Source-ordered storage for a locked scalar AAPCS declaration.
+///
+/// This is deliberately a declaration projection, not another liveness pass.
+/// Unknown types retain the ordinary core-bank default; known hard-float
+/// scalars advance the independent VFP bank. A source parameter which cannot
+/// be represented by this scalar register model is kept as `argN`, allowing
+/// the outgoing-stack oracle to attach it at each call site without inventing
+/// a register SSA identity.
+fn locked_aapcs_parameter_storage(
+    cc: crate::ir::call_args::CallConv,
+    declared: &[Option<TypeHint>],
+) -> Vec<VReg> {
+    use crate::ir::call_args::CallConv;
+
+    let mut core_slot = 0usize;
+    let mut vfp_slot = 0usize;
+    declared
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(source_slot, hint)| {
+            if cc == CallConv::ArmHardFloat {
+                match hint {
+                    Some(TypeHint::Float { width: 4 }) => {
+                        if vfp_slot < 16 {
+                            let storage = VReg::phys(format!("s{vfp_slot}"));
+                            vfp_slot += 1;
+                            return storage;
+                        }
+                        return VReg::phys(format!("arg{source_slot}"));
+                    }
+                    Some(TypeHint::Float { width: 8 }) => {
+                        vfp_slot += vfp_slot % 2;
+                        if vfp_slot + 1 < 16 {
+                            let storage = VReg::phys(format!("d{}", vfp_slot / 2));
+                            vfp_slot += 2;
+                            return storage;
+                        }
+                        return VReg::phys(format!("arg{source_slot}"));
+                    }
+                    _ => {}
+                }
+            }
+
+            let core_width = match hint {
+                Some(TypeHint::Int { width: 8, .. }) | Some(TypeHint::Float { width: 8 }) => 2,
+                _ => 1,
+            };
+            if core_width == 2 {
+                core_slot += core_slot % 2;
+            }
+            if core_slot + core_width <= 4 {
+                let storage = VReg::phys(format!("r{core_slot}"));
+                core_slot += core_width;
+                storage
+            } else {
+                core_slot = 4;
+                VReg::phys(format!("arg{source_slot}"))
+            }
+        })
+        .collect()
+}
+
 impl RecoveredPrototype {
     pub fn parameters(&self) -> &[RecoveredParameter] {
         &self.parameters
@@ -497,20 +560,49 @@ impl RecoveredPrototype {
             .map(|parameter| (parameter.slot, parameter))
             .collect::<HashMap<_, _>>();
         let abi_registers = crate::ir::abi::argument_registers(cc);
+        // AAPCS-VFP has independent core and VFP allocation banks. A heuristic
+        // live-in `sN` is useful while the source type is unknown, but it
+        // cannot remain the storage of a DWARF/PDB-locked integer parameter.
+        // Compute declared storage in source order; parameters beyond the
+        // available register bank retain their `argN` source role until call-
+        // site stack recovery attaches the concrete outgoing value.
+        let aapcs_storage = matches!(
+            cc,
+            crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat
+        )
+        .then(|| locked_aapcs_parameter_storage(cc, declared));
         self.parameters = declared
             .iter()
             .copied()
             .enumerate()
             .map(|(slot, declared_hint)| {
+                let declared_storage = aapcs_storage
+                    .as_ref()
+                    .and_then(|storage| storage.get(slot))
+                    .cloned();
                 if let Some(mut parameter) = prior.get(&slot).cloned() {
-                    if declared_hint.is_some() {
-                        parameter.hint = declared_hint;
+                    let storage_matches = declared_storage.as_ref().is_none_or(|expected| {
+                        match (&parameter.value.base, expected) {
+                            (VReg::Phys(actual), VReg::Phys(expected)) => {
+                                crate::ir::abi::ssa_base(actual)
+                                    == crate::ir::abi::ssa_base(expected)
+                            }
+                            _ => parameter.value.base == *expected,
+                        }
+                    });
+                    if storage_matches {
+                        if declared_hint.is_some() {
+                            parameter.hint = declared_hint;
+                        }
+                        return parameter;
                     }
-                    return parameter;
                 }
-                let storage = abi_registers
-                    .get(slot)
-                    .map(|register| VReg::phys(*register))
+                let storage = declared_storage
+                    .or_else(|| {
+                        abi_registers
+                            .get(slot)
+                            .map(|register| VReg::phys(*register))
+                    })
                     // Stack-passed parameters acquire this same canonical role
                     // when stack promotion resolves their positive entry-frame
                     // offset. Retain the declared slot now so the arity lock
@@ -3252,6 +3344,53 @@ mod tests {
                 .parameter(7)
                 .map(|parameter| &parameter.value.base),
             Some(&VReg::phys("arg7"))
+        );
+    }
+
+    #[test]
+    fn locked_aapcs_integer_parameters_replace_spurious_vfp_live_ins() {
+        let hint = Some(TypeHint::Int {
+            signed: true,
+            width: 4,
+        });
+        let mut prototype = RecoveredPrototype {
+            parameters: (0..8)
+                .map(|slot| RecoveredParameter {
+                    slot,
+                    value: SsaValue {
+                        base: if slot < 4 {
+                            VReg::phys(format!("r{slot}"))
+                        } else {
+                            VReg::phys(format!("s{}", slot - 4))
+                        },
+                        version: 0,
+                    },
+                    hint,
+                })
+                .collect(),
+            ..RecoveredPrototype::default()
+        };
+
+        prototype.apply_locked_parameters(crate::ir::call_args::CallConv::ArmHardFloat, &[hint; 8]);
+
+        let storage: Vec<_> = prototype
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.value.base.clone())
+            .collect();
+        assert_eq!(
+            storage,
+            vec![
+                VReg::phys("r0"),
+                VReg::phys("r1"),
+                VReg::phys("r2"),
+                VReg::phys("r3"),
+                VReg::phys("arg4"),
+                VReg::phys("arg5"),
+                VReg::phys("arg6"),
+                VReg::phys("arg7"),
+            ],
+            "declared integer types, not heuristic VFP liveness, own AAPCS storage"
         );
     }
 

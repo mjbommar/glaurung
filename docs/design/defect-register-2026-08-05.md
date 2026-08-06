@@ -34,8 +34,8 @@ remote/integrated state are separate evidence. One never implies another.
 | ID | Defect | Status | Primary owner/lane |
 |---|---|---|---|
 | D-001 | Phi-copy widths collapse distinct bare-name definitions | FIXED / GATES PENDING | `agent/defect-register` |
-| D-002 | Optimized large-function extents are wrong | OPEN | unowned |
-| D-003 | AAPCS outgoing stack arguments stop at repeated slots | OPEN | unowned |
+| D-002 | Optimized large-function extents are wrong | CLOSED | adjudicated on `agent/defect-register` |
+| D-003 | AAPCS outgoing stack arguments stop at repeated slots | FIXED / GATES PENDING | `agent/defect-register` |
 | D-004 | Large ARM table dispatches do not structure | OPEN | unowned |
 | D-005 | Wrapped 32-bit array indices render as huge unsigned values | OPEN | unowned |
 | D-006 | C++ recovery lags across i386, AArch64, and ARMv7 | OPEN | unowned |
@@ -64,7 +64,7 @@ evidence.
   `signed_step(seed)`; and
 - `factorial_while` does not acquire a 32-bit declaration for a 64-bit product.
 
-**Current evidence (2026-08-06, branch `agent/defect-register`).**
+**Current evidence (2026-08-05, branch `agent/defect-register`).**
 
 - RED: `kept_bare_definition_widths_are_not_collapsed_by_name` returned
   `Known(8)` where `Ambiguous` was required.
@@ -115,6 +115,29 @@ telemetry.
 ownership proof; adjacent functions/cold chunks remain separate; behavioral and
 CFG-completeness controls pass; improvement is not inferred from GED alone.
 
+**Adjudication and closure evidence (2026-08-05).** The proposed extent root
+cause is false for the named canary. The official OpenSSH portable 9.1p1 source
+was rebuilt at `-O2 -g -fno-builtin -save-temps=obj`; `--without-openssl` was
+used only to avoid OpenSSH 9.1p1's configure rejection of host OpenSSL 3.5.
+
+- ELF `STT_FUNC` says `sshbuf_fromb` starts at `0xb5e0` and is `0x3a9` (937)
+  bytes. DWARF independently gives `low_pc=0xb5e0`, `high_pc=0xb989`, and its
+  FDE covers exactly `0xb5e0..0xb989`.
+- The next symbol, `sshbuf_reset`, starts at `0xb990`; the seven-byte gap is
+  alignment padding, not an owned adjacent body or cold chunk.
+- Current Glaurung discovery reports entry `0xb5e0`, size 937, 52 blocks, and
+  88 edges with neither per-function nor total truncation. The decompiler exits
+  successfully under the authoritative-range verifier, and its last recovered
+  block labels remain below `0xb989`.
+- The large native body is real: GCC inlines repeated `sshbuf_check_sanity`,
+  `sshbuf_len`, `sshbuf_ptr`, and `sshbuf_set_parent` logic, then emits the
+  configured `-fzero-call-used-regs=all` return epilogues. The retained DecBench
+  sample shows the same expansion in every backend; angr/IDA/Ghidra/Binary
+  Ninja/Kuna/Phoenix GED values are all high (150--233).
+
+No extent code was changed. Treating source line count or GED as a byte-range
+oracle here would truncate valid compiler-generated control flow.
+
 ## D-003 — AAPCS outgoing stack arguments
 
 **Observed defect.** `call_into_spill` recovers too few arguments for the
@@ -129,6 +152,44 @@ weakening the x86-64 path. Do not special-case the fixture.
 **Canaries.** AAPCS core/stack split, repeated-slot overwrite, intervening real
 read/clobber, x86-64 stack arguments, and real `call_into_spill` behavior across
 available architectures.
+
+**Current evidence (2026-08-05, branch `agent/defect-register`).** The defect
+had three coupled owners rather than one fixture-local break:
+
+- authoritative DWARF types for the eight integer parameters of
+  `spill_combine` retained heuristic VFP live-ins and produced the impossible
+  layout `[r0,r1,r2,r3,s0,s1,s2,s3]`;
+- the shared backward scan did not recognize interleaved 4-byte AAPCS stores at
+  `[sp,#0..12]`, so those stores marked r2/r3 as intervening reads; and
+- the immediately preceding `signed_step` result remained spelled as bare r0
+  inside transitive temporaries, allowing final role naming to turn `r + N`
+  back into `arg0 + N`.
+
+RED regressions captured all three failures. Locked scalar declarations now
+project source-ordered AAPCS storage, using explicit `argN` roles once the core
+bank is exhausted. Call reconstruction accepts only the exact integer layout
+`r0..r3,arg4..argN` and one nearest, contiguous 4-byte outgoing area; calls,
+control boundaries, stack-pointer writes, unrelated stores, duplicates, and
+gaps reject it. Proven stack stores are excluded from the register read scan,
+read-before-call SSA definitions remain statement-rooted, shadowed older r2/r3
+definitions no longer terminate the scan, and a preceding call result receives
+one exact identity across the proven straight-line setup window.
+
+- all 71 `ir::call_args::tests` and all 51 `ir::types_recover::tests` pass;
+- the complete Rust suite passes: 1,738 library tests, every integration test,
+  and doctests (one documented ignored doctest), with exit status 0;
+- the negative AAPCS oracle refuses to combine stack slots across an intervening
+  call, while existing SysV stack/cleanup and read/clobber controls remain green;
+- a fresh release extension renders the real ARMv7 O0 and O2 calls with exactly
+  eight ordered arguments; and
+- the complete `11_call_shapes` architecture matrix preserves every prior
+  x86-64/i386/AArch64 verdict while ARMv7 `call_into_spill` improves from fail
+  to pass at both O0 and O2.
+
+**Remaining before closure.** Run the final full Rust/Python/decompiler gate
+after the other register fixes and reconcile the already-recorded metric-ratchet
+drift. Mixed VFP/core calls which themselves spill remain deliberately
+fail-closed until the call layout owns explicit stack locations.
 
 ## D-004 — large ARM dispatch structuring
 

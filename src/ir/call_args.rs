@@ -1192,6 +1192,103 @@ fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize) -> bool {
     true
 }
 
+/// Number of source-ordered stack parameters in an integer-only AAPCS layout.
+///
+/// `argN` is the prototype layer's explicit marker for a locked source
+/// parameter that has no entry-register SSA identity. Requiring the exact
+/// `r0..r3, arg4..argN` sequence keeps this proof separate from mixed VFP
+/// layouts, whose two allocation banks need their own stack-location model.
+fn aapcs_integer_stack_suffix(layout: &[VReg]) -> Option<usize> {
+    if layout.len() <= 4 {
+        return None;
+    }
+    for (slot, storage) in layout.iter().enumerate() {
+        let VReg::Phys(name) = storage else {
+            return None;
+        };
+        let expected = if slot < 4 {
+            format!("r{slot}")
+        } else {
+            format!("arg{slot}")
+        };
+        if ssa_base(name) != expected {
+            return None;
+        }
+    }
+    Some(layout.len() - 4)
+}
+
+/// Recover an exact preallocated AAPCS outgoing stack suffix.
+///
+/// ARM compilers routinely interleave `[sp,#N]` argument stores with pure
+/// register setup and reuse r2/r3 for the stack values before installing the
+/// final core-register arguments. The locked callee layout supplies the exact
+/// number of stack parameters. Within the current straight-line call window we
+/// then require one nearest 4-byte store for every offset `0,4,..`; a call,
+/// control boundary, stack-pointer write, unrelated store, duplicate, or gap
+/// rejects the whole candidate.
+fn outgoing_aapcs_stack_area(
+    body: &[Stmt],
+    call_index: usize,
+    expected_args: usize,
+) -> Option<(Vec<Expr>, Vec<usize>)> {
+    if expected_args == 0 {
+        return None;
+    }
+    let expected_bytes = i64::try_from(expected_args).ok()?.checked_mul(4)?;
+    let mut by_offset = std::collections::BTreeMap::new();
+    let mut cursor = call_index;
+    while cursor > 0 {
+        let index = cursor - 1;
+        match &body[index] {
+            Stmt::Store { addr, src, size: 4 } => {
+                let disp = match addr {
+                    Expr::Reg(VReg::Phys(base)) if ssa_base(base) == "sp" => 0,
+                    Expr::Lea {
+                        base: Some(VReg::Phys(base)),
+                        index: None,
+                        disp,
+                        ..
+                    } if ssa_base(base) == "sp" => *disp,
+                    _ => return None,
+                };
+                if disp < 0 || disp >= expected_bytes || disp % 4 != 0 {
+                    return None;
+                }
+                if by_offset.insert(disp, (index, src.clone())).is_some() {
+                    return None;
+                }
+                if by_offset.len() == expected_args {
+                    break;
+                }
+            }
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                ..
+            } if ssa_base(name) == "sp" => return None,
+            Stmt::Assign { .. } => {}
+            Stmt::Comment(_) | Stmt::Nop => {}
+            // Do not cross a prior call/control boundary or an unproved memory
+            // side effect to assemble one call from unrelated stack state.
+            _ => return None,
+        }
+        cursor = index;
+    }
+    if by_offset.len() != expected_args {
+        return None;
+    }
+    let mut arguments = Vec::with_capacity(expected_args);
+    let mut indices = Vec::with_capacity(expected_args);
+    for (slot, (offset, (index, value))) in by_offset.into_iter().enumerate() {
+        if offset != i64::try_from(slot).ok()?.checked_mul(4)? {
+            return None;
+        }
+        arguments.push(value);
+        indices.push(index);
+    }
+    Some((arguments, indices))
+}
+
 fn fold_one_call(
     body: &mut Vec<Stmt>,
     call_idx: usize,
@@ -1204,9 +1301,16 @@ fn fold_one_call(
         fold_one_cdecl32_call(body, call_idx);
         return;
     }
-    if let Some(layout) =
-        direct_call_target_va(&body[call_idx]).and_then(|target| callee_layouts.get(&target))
-    {
+    let recovered_layout =
+        direct_call_target_va(&body[call_idx]).and_then(|target| callee_layouts.get(&target));
+    let aapcs_stack = matches!(arch, CallConv::Arm | CallConv::ArmHardFloat)
+        .then(|| {
+            recovered_layout
+                .and_then(|layout| aapcs_integer_stack_suffix(layout))
+                .and_then(|count| outgoing_aapcs_stack_area(body, call_idx, count))
+        })
+        .flatten();
+    if let Some(layout) = recovered_layout.filter(|_| aapcs_stack.is_none()) {
         if fold_one_recovered_layout_call(body, call_idx, layout) {
             return;
         }
@@ -1244,11 +1348,16 @@ fn fold_one_call(
     let preallocated_stack = (arch == CallConv::SysVAmd64)
         .then(|| outgoing_sysv_stack_area(body, call_idx))
         .flatten();
-    let (mut stack_args, mut stack_setup_indices) = preallocated_stack
+    let proven_aapcs_stack = aapcs_stack.is_some();
+    let (mut stack_args, mut stack_setup_indices) = aapcs_stack
         .clone()
+        .or_else(|| preallocated_stack.clone())
         .unwrap_or_else(|| (Vec::new(), Vec::new()));
-    let mut stack_arg_bytes = i64::try_from(stack_args.len()).unwrap_or(0) * 8;
+    let mut stack_arg_bytes =
+        i64::try_from(stack_args.len()).unwrap_or(0) * if proven_aapcs_stack { 4 } else { 8 };
     let mut stack_padding = None;
+    let stack_setup_set: std::collections::HashSet<usize> =
+        stack_setup_indices.iter().copied().collect();
     // An argument that reaches an impure definition must remain rooted at that
     // statement. Continue scanning for other slots, but never bind its same
     // unversioned register use to an older definition beyond this root.
@@ -1258,6 +1367,13 @@ fn fold_one_call(
     let mut i = call_idx;
     while i > 0 {
         i -= 1;
+        // These exact stores have already been captured as outgoing stack
+        // arguments. Treating them as arbitrary statements marks their r2/r3
+        // sources as intervening reads and prevents the same scan from finding
+        // the final core-register prefix.
+        if stack_setup_set.contains(&i) {
+            continue;
+        }
         // A label is a potential multi-predecessor join, and an explicit
         // transfer has no fall-through into the call.  Consuming assignments
         // across either boundary steals state from an unrelated predecessor
@@ -1331,12 +1447,13 @@ fn fold_one_call(
                             .iter()
                             .any(|argument| reads_reg_in_expr(argument, dst))
                             && substitutable
-                            && outgoing_stack_cleanup(
-                                body,
-                                call_idx,
-                                stack_arg_bytes + stack_padding.map_or(0, |_| 8),
-                            )
-                            .is_some();
+                            && (proven_aapcs_stack
+                                || outgoing_stack_cleanup(
+                                    body,
+                                    call_idx,
+                                    stack_arg_bytes + stack_padding.map_or(0, |_| 8),
+                                )
+                                .is_some());
                         // Preserve the existing statement-rooted dependency
                         // policy unless the same definition also feeds stack
                         // setup that is proven removable. In that one case all
@@ -1348,6 +1465,17 @@ fn fold_one_call(
                         }
                         let would_dangle =
                             feeds_captured_register_argument && !feeds_balanced_stack_argument;
+                        if proven_aapcs_stack && read_between[slot] {
+                            // The exact layout proves this slot is a call
+                            // input, while an intervening read proves its
+                            // definition cannot be deleted. Keep the statement
+                            // rooted and pass the exact reaching SSA value.
+                            // Abandoning the slot lets an older shadowed r2/r3
+                            // definition masquerade as the call argument.
+                            found[slot] = Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())));
+                            mark_arg_reads_in_expr(src, arch, &mut read_between);
+                            continue;
+                        }
                         if !would_dangle && (!read_between[slot] || feeds_balanced_stack_argument) {
                             // Keep the setup where it stands when moving it to
                             // the call would read a value written after it; the
@@ -1393,6 +1521,18 @@ fn fold_one_call(
                         if !substitutable {
                             opaque_reaching_defs.insert(dst.clone());
                         }
+                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        continue;
+                    }
+                    if proven_aapcs_stack {
+                        // A locked integer callee layout proves that every
+                        // core slot belongs to this call. Once the nearest
+                        // reaching definition of a slot is captured, an older
+                        // unrelated definition of that same register is
+                        // shadowed and cannot clobber it. Continue looking for
+                        // the still-missing leading slots; calls, control-flow
+                        // boundaries, unproved stores, and stack gaps were
+                        // already rejected by the area proof above.
                         mark_arg_reads_in_expr(src, arch, &mut read_between);
                         continue;
                     }
@@ -1449,13 +1589,16 @@ fn fold_one_call(
             // own identity before deleting the register-move setup; otherwise
             // a later `rax = ...` silently becomes the argument's definition.
             let return_register = VReg::phys(return_reg(arch));
+            let forwards_return_to_slot_zero =
+                proven_aapcs_stack && found.first().is_some_and(Option::is_none);
             let consumes_return = found
                 .iter()
                 .flatten()
                 .any(|(_, argument)| reads_reg_in_expr(argument, &return_register))
                 || stack_args
                     .iter()
-                    .any(|argument| reads_reg_in_expr(argument, &return_register));
+                    .any(|argument| reads_reg_in_expr(argument, &return_register))
+                || forwards_return_to_slot_zero;
             if consumes_return {
                 let existing_result = match &body[i] {
                     Stmt::Call { dst, .. } => dst.clone(),
@@ -1477,6 +1620,27 @@ fn fold_one_call(
                 }
                 for argument in &mut stack_args {
                     let _ = substitute_exact_reg(argument, &return_register, &replacement);
+                }
+                if forwards_return_to_slot_zero {
+                    // Every statement in the proven outgoing-area window is
+                    // straight-line Assign/Store setup. Rewrite transitive
+                    // computations as well as the final captured expressions:
+                    // ARM value numbering can leave `t21 = r0; r2 = t21 + 1`
+                    // with the bare architectural spelling, and renaming that
+                    // later as the caller's `arg0` loses the producer result.
+                    for statement in body.iter_mut().take(call_idx).skip(i + 1) {
+                        match statement {
+                            Stmt::Assign { src, .. } => {
+                                let _ = substitute_exact_reg(src, &return_register, &replacement);
+                            }
+                            Stmt::Store { addr, src, .. } => {
+                                let _ = substitute_exact_reg(addr, &return_register, &replacement);
+                                let _ = substitute_exact_reg(src, &return_register, &replacement);
+                            }
+                            _ => {}
+                        }
+                    }
+                    found[0] = Some((KEEP_ARG_SETUP, replacement));
                 }
                 if let Stmt::Call { dst, .. } = &mut body[i] {
                     *dst = Some(result);
@@ -1608,11 +1772,11 @@ fn fold_one_call(
     // six register slots are present and an exact post-call cleanup balances
     // the complete allocation. That balance distinguishes outgoing arguments
     // from callee-save pushes and local frame storage.
-    if arch == CallConv::SysVAmd64
+    if (arch == CallConv::SysVAmd64 || proven_aapcs_stack)
         && args_out.len() == arg_slots(arch).len()
         && !stack_args.is_empty()
     {
-        if preallocated_stack.is_some() {
+        if preallocated_stack.is_some() || proven_aapcs_stack {
             args_out.extend(stack_args);
             used_stmt_indices.extend(stack_setup_indices);
         } else {
@@ -5287,6 +5451,250 @@ mod tests {
             panic!("call disappeared: {:#?}", f.body);
         };
         assert_eq!(args, &[Expr::Reg(reg("r0"))]);
+    }
+
+    /// The exact core/stack setup emitted by ARM GCC for an eight-integer call.
+    /// Older r2/r3 definitions feed stack slots while the nearest definitions
+    /// feed the ordinary core-register prefix.
+    #[test]
+    fn recovered_aapcs_layout_folds_reused_core_registers_and_stack_suffix() {
+        let stack_store = |disp, source| Stmt::Store {
+            addr: if disp == 0 {
+                Expr::Reg(reg("sp"))
+            } else {
+                Expr::Lea {
+                    base: Some(reg("sp")),
+                    index: None,
+                    scale: 1,
+                    disp,
+                    segment: None,
+                }
+            },
+            src: Expr::Reg(reg(source)),
+            size: 4,
+        };
+        let mut f = Function {
+            name: "call_into_spill_shape".into(),
+            entry_va: 0x1000,
+            body: vec![
+                assign("r3#1", 7),
+                assign("r2#1", 8),
+                assign("ip#1", 6),
+                stack_store(8, "r3#1"),
+                stack_store(12, "r2#1"),
+                assign("r3#2", 5),
+                assign("r2#2", 3),
+                stack_store(0, "r3#2"),
+                stack_store(4, "ip#1"),
+                assign("r3#3", 4),
+                Stmt::Assign {
+                    dst: reg("flag_input#1"),
+                    src: Expr::Reg(reg("r3#3")),
+                },
+                assign("r1#1", 2),
+                assign("r0#1", 1),
+                call_to("spill_combine"),
+            ],
+        };
+        // Locked stack parameters use source-role placeholders because they do
+        // not have an entry register SSA value.
+        let layouts = std::collections::HashMap::from([(
+            0x2000,
+            vec![
+                reg("r0"),
+                reg("r1"),
+                reg("r2"),
+                reg("r3"),
+                reg("arg4"),
+                reg("arg5"),
+                reg("arg6"),
+                reg("arg7"),
+            ],
+        )]);
+        let mut parameter_slots = Default::default();
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::ArmHardFloat,
+            &mut parameter_slots,
+            &layouts,
+        );
+
+        let call = f
+            .body
+            .iter()
+            .find(|statement| matches!(statement, Stmt::Call { .. }))
+            .expect("call must survive");
+        let Stmt::Call { args, .. } = call else {
+            unreachable!()
+        };
+        assert_eq!(
+            args,
+            &vec![
+                Expr::Const(1),
+                Expr::Const(2),
+                Expr::Const(3),
+                Expr::Reg(reg("r3#3")),
+                Expr::Const(5),
+                Expr::Reg(reg("ip#1")),
+                Expr::Const(7),
+                Expr::Const(8),
+            ],
+            "AAPCS stack setup was not composed with the core-register prefix: {:#?}",
+            f.body
+        );
+        assert!(
+            f.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Assign { dst, src: Expr::Const(6) } if dst == &reg("ip#1")
+            )),
+            "versioned stack-argument definitions remain statement-rooted"
+        );
+        assert!(
+            f.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Assign { dst, src: Expr::Const(4) } if dst == &reg("r3#3")
+            )),
+            "an argument definition read by intervening bookkeeping must remain in place"
+        );
+        assert!(
+            f.body
+                .iter()
+                .all(|statement| !matches!(statement, Stmt::Store { .. })),
+            "consumed outgoing stores must not survive as frame locals: {:#?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn aapcs_stack_call_uses_the_immediately_prior_call_result_as_slot_zero() {
+        let stack_store = |disp, value| Stmt::Store {
+            addr: if disp == 0 {
+                Expr::Reg(reg("sp"))
+            } else {
+                Expr::Lea {
+                    base: Some(reg("sp")),
+                    index: None,
+                    scale: 1,
+                    disp,
+                    segment: None,
+                }
+            },
+            src: Expr::Const(value),
+            size: 4,
+        };
+        let mut producer = call_to("signed_step");
+        if let Stmt::Call {
+            target: Expr::Named { va, .. },
+            ..
+        } = &mut producer
+        {
+            *va = 0x1000;
+        }
+        let mut f = Function {
+            name: "call_result_into_spill".into(),
+            entry_va: 0x800,
+            body: vec![
+                producer,
+                Stmt::Assign {
+                    dst: reg("result_copy#1"),
+                    src: Expr::Reg(reg("r0")),
+                },
+                stack_store(0, 5),
+                stack_store(4, 6),
+                stack_store(8, 7),
+                stack_store(12, 8),
+                assign("r3#1", 4),
+                assign("r2#1", 3),
+                assign("r1#1", 2),
+                call_to("spill_combine"),
+            ],
+        };
+        let layouts = std::collections::HashMap::from([(
+            0x2000,
+            vec![
+                reg("r0"),
+                reg("r1"),
+                reg("r2"),
+                reg("r3"),
+                reg("arg4"),
+                reg("arg5"),
+                reg("arg6"),
+                reg("arg7"),
+            ],
+        )]);
+        let mut parameter_slots = [0].into_iter().collect();
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::ArmHardFloat,
+            &mut parameter_slots,
+            &layouts,
+        );
+
+        let calls: Vec<_> = f
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Call { args, dst, .. } => Some((args, dst)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 2, "both calls must survive: {:#?}", f.body);
+        let result = calls[0]
+            .1
+            .as_ref()
+            .expect("the consumed producer result needs an exact value");
+        assert_eq!(
+            calls[1].0,
+            &vec![
+                Expr::Reg(result.clone()),
+                Expr::Const(2),
+                Expr::Const(3),
+                Expr::Const(4),
+                Expr::Const(5),
+                Expr::Const(6),
+                Expr::Const(7),
+                Expr::Const(8),
+            ],
+            "slot zero must be the reaching call result, not the function's incoming r0"
+        );
+        assert!(
+            f.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Assign { dst, src: Expr::Reg(source) }
+                    if dst == &reg("result_copy#1") && source == result
+            )),
+            "transitive setup computations must read the exact producer result: {:#?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn aapcs_stack_area_does_not_cross_an_intervening_call() {
+        let store = |disp, value| Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg("sp")),
+                index: None,
+                scale: 1,
+                disp,
+                segment: None,
+            },
+            src: Expr::Const(value),
+            size: 4,
+        };
+        let body = vec![
+            store(4, 6),
+            call_to("clobber"),
+            store(0, 5),
+            call_to("callee"),
+        ];
+
+        assert_eq!(
+            outgoing_aapcs_stack_area(&body, 3, 2),
+            None,
+            "stack slots separated by a call are not one outgoing area"
+        );
     }
 
     fn dst_of(s: &Stmt) -> &Option<VReg> {
