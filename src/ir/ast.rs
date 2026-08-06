@@ -5930,10 +5930,21 @@ fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMa
                 src,
                 ..
             } if slots.contains_key(name) => {
-                *s = Stmt::Assign {
-                    dst: VReg::phys(name.clone()),
-                    src: src.clone(),
-                };
+                if slots
+                    .get(name)
+                    .is_some_and(|argument| parameter_source(src).as_ref() == Some(argument))
+                {
+                    // The defining spill is redundant even when the machine
+                    // width made it `local = (uint32_t)arg0`.  Retaining that
+                    // cast as `arg0 = (uint32_t)arg0` truncates a pointer when a
+                    // foreign-width host recompiles the recovered C.
+                    *s = Stmt::Nop;
+                } else {
+                    *s = Stmt::Assign {
+                        dst: VReg::phys(name.clone()),
+                        src: src.clone(),
+                    };
+                }
             }
             Stmt::If {
                 then_body,
@@ -5966,27 +5977,73 @@ fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMa
 /// store is `Store { local, Reg(argN) }`. A local spilled from two different
 /// args, or also stored from another register, is disqualified (value "").
 fn collect_param_homes(body: &[Stmt], home: &mut std::collections::HashMap<String, String>) {
+    collect_param_homes_with_aliases(body, home, &mut std::collections::HashMap::new());
+}
+
+fn parameter_alias(
+    expr: &Expr,
+    aliases: &std::collections::HashMap<VReg, String>,
+) -> Option<String> {
+    match expr {
+        Expr::Reg(register) => aliases
+            .get(register)
+            .cloned()
+            .or_else(|| parameter_source(expr)),
+        Expr::Cast { expr, .. } => parameter_alias(expr, aliases),
+        _ => None,
+    }
+}
+
+/// Find parameter homes without rewriting the scratch chain that carries the
+/// incoming value to the spill.  In particular, i386 commonly spells it
+/// ``eax = arg0; local = (uint32_t)eax``.  Running the general copy propagator
+/// first would also rewrite a later ``Store { addr: eax }`` to
+/// ``Store { addr: local }``, erasing the distinction between the home address
+/// and the pointer value loaded from it.  This tiny straight-line provenance
+/// map proves only parameter identity and leaves every address untouched.
+fn collect_param_homes_with_aliases(
+    body: &[Stmt],
+    home: &mut std::collections::HashMap<String, String>,
+    aliases: &mut std::collections::HashMap<VReg, String>,
+) {
     for s in body {
         match s {
+            Stmt::Assign { dst, src } => {
+                if let Some(argument) = parameter_alias(src, aliases) {
+                    aliases.insert(dst.clone(), argument);
+                } else {
+                    aliases.remove(dst);
+                }
+            }
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(local)),
-                src: Expr::Reg(VReg::Phys(src)),
+                src,
                 ..
-            } if is_promoted_local(local) => {
-                let arg_ok = parse_arg_index(src).is_some();
+            } if is_promoted_local(local)
+                && (matches!(src, Expr::Reg(_)) || parameter_alias(src, aliases).is_some()) =>
+            {
+                let argument = parameter_alias(src, aliases);
                 let entry = home.entry(local.clone());
                 match entry {
                     std::collections::hash_map::Entry::Vacant(v) => {
-                        v.insert(if arg_ok { src.clone() } else { String::new() });
+                        v.insert(argument.unwrap_or_default());
                     }
                     std::collections::hash_map::Entry::Occupied(mut o) => {
-                        // A second register store to this slot: only OK if it is
-                        // the same arg; otherwise disqualify.
-                        if !(arg_ok && o.get() == src) {
+                        // A later value computed in a scratch is an ordinary
+                        // reassignment of this parameter home (`cursor += n`).
+                        // Only evidence for a DIFFERENT incoming argument can
+                        // disqualify the identity. Whether the computation was
+                        // folded into an expression or still named by a scratch
+                        // register must not change that decision.
+                        if argument
+                            .as_ref()
+                            .is_some_and(|candidate| candidate != o.get())
+                        {
                             o.insert(String::new());
                         }
                     }
                 }
+                aliases.remove(&VReg::phys(local.clone()));
             }
             // A store to a promoted local from a NON-register expression is a
             // real reassignment of the parameter (`n = n - 1`) — allowed, it does
@@ -5996,29 +6053,42 @@ fn collect_param_homes(body: &[Stmt], home: &mut std::collections::HashMap<Strin
                 else_body,
                 ..
             } => {
-                collect_param_homes(then_body, home);
+                collect_param_homes_with_aliases(then_body, home, &mut aliases.clone());
                 if let Some(eb) = else_body {
-                    collect_param_homes(eb, home);
+                    collect_param_homes_with_aliases(eb, home, &mut aliases.clone());
                 }
+                aliases.clear();
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_param_homes(body, home)
+                collect_param_homes_with_aliases(body, home, &mut aliases.clone());
+                aliases.clear();
             }
             Stmt::For {
                 init, step, body, ..
             } => {
-                collect_param_homes(std::slice::from_ref(init.as_ref()), home);
-                collect_param_homes(body, home);
-                collect_param_homes(std::slice::from_ref(step.as_ref()), home);
+                collect_param_homes_with_aliases(
+                    std::slice::from_ref(init.as_ref()),
+                    home,
+                    &mut aliases.clone(),
+                );
+                collect_param_homes_with_aliases(body, home, &mut aliases.clone());
+                collect_param_homes_with_aliases(
+                    std::slice::from_ref(step.as_ref()),
+                    home,
+                    &mut aliases.clone(),
+                );
+                aliases.clear();
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases {
-                    collect_param_homes(b, home);
+                    collect_param_homes_with_aliases(b, home, &mut aliases.clone());
                 }
                 if let Some(b) = default {
-                    collect_param_homes(b, home);
+                    collect_param_homes_with_aliases(b, home, &mut aliases.clone());
                 }
+                aliases.clear();
             }
+            Stmt::Call { .. } | Stmt::Label(_) | Stmt::Goto { .. } => aliases.clear(),
             _ => {}
         }
     }
@@ -6306,6 +6376,9 @@ pub fn prepare_for_decbench_with_output(
             break;
         }
     }
+    // A spill carried through a scratch can become `arg0 = arg0` only after
+    // the copy fixpoint. The earlier coalescing cleanup cannot see it yet.
+    drop_self_stores(&mut owned.body);
     // Propagation can expose a casted result copy directly before its return.
     // Collapse it before exhaustive-switch joining so the lossless cast chain
     // can be carried into each arm instead of blocking source-level returns.
@@ -11793,6 +11866,88 @@ function f @ 0x1000 {
         assert!(
             render_decbench(&f).contains("local_14"),
             "the renderer must not rewrite value identities"
+        );
+    }
+
+    #[test]
+    fn a_cast_pointer_spill_does_not_turn_a_pointee_store_into_home_assignment() {
+        // i386 materializes a pointer argument through a four-byte cast before
+        // spilling it.  The later store is through a scratch loaded FROM that
+        // home, not another write TO the home.  Failing to recognize the cast
+        // spill leaves both operations named `local_1c` after copy propagation
+        // and renders `local_1c = 0` instead of `*(int *)arg0 = 0`.
+        let f = Function {
+            name: "i386_pointer_home".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("eax_in"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_1c")),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys("eax_in"))),
+                    },
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("eax"),
+                    src: Expr::Reg(VReg::phys("local_1c")),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("eax")),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("local_1c"))),
+                        size: 4,
+                    }),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+
+        assert!(
+            prepared.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Store {
+                    addr,
+                    src: Expr::Const(0),
+                    size: 4,
+                } if matches!(addr,
+                    Expr::Reg(VReg::Phys(name)) if name == "arg0"
+                ) || matches!(addr,
+                    Expr::Cast { expr, .. }
+                        if matches!(expr.as_ref(), Expr::Reg(VReg::Phys(name)) if name == "arg0")
+                )
+            )),
+            "the pointee store must remain a store through arg0: {prepared:#?}"
+        );
+        assert!(
+            !prepared.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Assign {
+                    dst: VReg::Phys(name),
+                    src: Expr::Const(0),
+                } if name == "arg0" || name == "local_1c"
+            )),
+            "the pointee store was mistaken for a parameter assignment: {prepared:#?}"
+        );
+        assert!(
+            !prepared.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Expr::Reg(VReg::Phys(src)),
+                } if dst == src
+            )),
+            "late copy propagation must not leave a self-assignment: {prepared:#?}"
         );
     }
 

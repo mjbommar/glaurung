@@ -1545,12 +1545,27 @@ def test_skip_exec_is_structural_not_pass(monkeypatch, tmp_path):
     assert r["status"] == "structural"
 
 
-def test_recovered_cpp_stack_objects_are_not_quarantined():
-    """Constructor and RAII O0 lanes must execute on both pinned compilers."""
-    for function in ("cpp_ctor_dtor", "cpp_raii_guard"):
+def test_recovered_cpp_wrappers_are_not_quarantined():
+    """Every scalar/stack C-ABI C++ wrapper must get a behavioural verdict."""
+    for function in (
+        "cpp_ctor_dtor",
+        "cpp_raii_guard",
+        "cpp_exception",
+        "cpp_lambda_capture",
+        "cpp_move",
+    ):
         override = M.OVERRIDES.get(("10_cpp_runtime_shapes", function), {})
         assert "skip_exec" not in override
         assert "skip_exec_lanes" not in override
+
+
+def test_cpp_virtual_dispatch_has_an_explicit_structural_contract():
+    """Vtable-backed automatic objects remain an aggregate-recovery gap."""
+    override = M.OVERRIDES[("10_cpp_runtime_shapes", "cpp_virtual_dispatch")]
+    assert override == {"skip_exec": True}
+    assert M.structural_spec("10_cpp_runtime_shapes", "cpp_virtual_dispatch") == {
+        "indirect_call": True
+    }
 
 
 def test_no_executable_cases_is_not_a_pass(monkeypatch, tmp_path):

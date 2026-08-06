@@ -400,24 +400,14 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     ("09_memory_effects", "vec_transform"): {"len_args": [1]},
     # 08: apply() takes a function pointer — not int-differential; check structurally.
     ("08_indirect_dispatch", "apply"): {"skip_exec": True},
-    # `cpp_virtual_dispatch` is the same defect, one lane wider. Our emitted C
-    # dereferences a `this`/vtable pointer it never assigned, so the worker takes
-    # SIGSEGV (exit -11) on ALL FOUR lanes — verified by running each directly
-    # through the pinned toolchain, not inferred from one.
-    #
-    # It is marked skip_exec rather than left executing because the verdict is not
-    # merely wrong, it is NONDETERMINISTIC: whether the garbage address happens to be
-    # mapped decides it. Observed four times in one session — recorded `fail`, then
-    # `pass`, then a gate `pass->fail`, then a gate `fail->pass` — with no rebuild
-    # between any of them, while five consecutive direct runs all segfaulted. A cell
-    # that flips at random is worse than one lane fewer: it turns a red gate into
-    # something people re-run until it goes green, which is how a real regression gets
-    # waved through.
-    #
-    # This RECORDS the defect, it does not hide it. The structural lane still asserts
-    # on the function, and the underlying bug — an address-taken object recovered as
-    # an unassigned pointer — is the same one tracked for `cpp_ctor_dtor`. Remove this
-    # entry when that is fixed; the differential is the thing that would prove it.
+    # The virtual wrapper remains structural by design.  Unlike the five C++
+    # wrappers below, its recovered body materializes each vtable-backed automatic
+    # object as an uninitialized pointer and dereferences it on the first vector.
+    # That is the aggregate/vtable-object recovery gap (EPIC 3), not an
+    # architecture-specific call, stack, or EH defect.  Executing the emitted C
+    # therefore deterministically crashes before it can judge dispatch.  Keep the
+    # structural indirect-call assertion until the object model can emit the two
+    # concrete objects and their vptr initializers.
     ("10_cpp_runtime_shapes", "cpp_virtual_dispatch"): {"skip_exec": True},
     # 06: guarded_spin's `spin` guard MUST stay 0, which is the contract its source
     # comment already states ("the harness always passes 0"). It was never enforced,

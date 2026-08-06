@@ -65,6 +65,11 @@ struct SlotVal {
     /// through the same byte-array identity; otherwise an earlier zeroing
     /// store and a later indexed load become unrelated C locals.
     object_size: Option<u16>,
+    /// Whether an observed boundary proves the end of this object. A negative
+    /// address escape with no following slot uses a conservative extent to the
+    /// frame base; that extent may support the escaped cursor itself, but must
+    /// not absorb unrelated current-SP accesses through coordinate aliasing.
+    bounded_object: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -189,7 +194,10 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
         parameter_count,
     };
     for hint in object_hints {
-        if hint.size == 0 || !is_active_stack_base(&hint.base, ctx) {
+        let authoritative_entry_coordinate = hint.base == entry_stack_base(ctx);
+        if hint.size == 0
+            || (!is_active_stack_base(&hint.base, ctx) && !authoritative_entry_coordinate)
+        {
             continue;
         }
         let key = SlotKey {
@@ -200,12 +208,14 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
         map.entry(key)
             .and_modify(|slot| {
                 slot.object_size = Some(slot.object_size.unwrap_or(0).max(hint.size));
+                slot.bounded_object = true;
             })
             .or_insert(SlotVal {
                 name,
                 declared_size: 1,
                 span_size: 1,
                 object_size: Some(hint.size),
+                bounded_object: true,
             });
     }
     let address_defs = collect_stack_address_defs(&f.body, ctx);
@@ -790,15 +800,17 @@ fn seed_indexed_stack_objects(
             disp: *start,
         };
         let name = alloc_name(base, *start, names, ctx);
-        map.insert(
-            key,
-            SlotVal {
-                name,
-                declared_size: 1,
-                span_size: 1,
-                object_size: Some(size),
-            },
-        );
+        // Debug-proven aggregate bounds are seeded before this heuristic and
+        // are authoritative. Never replace an exact `temp[16]` extent with the
+        // heuristic's conservative "to the frame base" partition merely
+        // because both observe the same indexed start.
+        map.entry(key).or_insert_with(|| SlotVal {
+            name,
+            declared_size: 1,
+            span_size: 1,
+            object_size: Some(size),
+            bounded_object: partitions.get(index + 1).is_some(),
+        });
     }
 }
 
@@ -1198,6 +1210,7 @@ fn rewrite_expr(
                         declared_size: size_val,
                         span_size: size_val,
                         object_size: None,
+                        bounded_object: false,
                     },
                 );
                 *e = Expr::Reg(VReg::phys(alias));
@@ -1494,6 +1507,23 @@ fn promote_address_taken_stack_object(
         base: key_base.clone(),
         disp: key_disp,
     };
+    // AArch64 own-frame memory is deliberately kept in current-SP coordinates
+    // until an address escapes. Address SSA facts use the entry-SP coordinate,
+    // however. If the scalar was initialized before its address was copied,
+    // move that existing slot metadata to the now-proven object coordinate so
+    // the already-rendered scalar name can be reconciled with the object rather
+    // than leaving an initialized scalar beside an uninitialized byte array.
+    if ctx.cc == Some(CallConv::Aarch64) && key_base == "entry_sp" && !map.contains_key(&key) {
+        if let Some(current_disp) = sp_delta.and_then(|delta| key_disp.checked_sub(delta)) {
+            let current_key = SlotKey {
+                base: "sp".to_string(),
+                disp: current_disp,
+            };
+            if let Some(existing) = map.remove(&current_key) {
+                map.insert(key.clone(), existing);
+            }
+        }
+    }
     let next_slot_extent = map
         .keys()
         .filter(|candidate| candidate.base == key_base && candidate.disp > key_disp)
@@ -1510,6 +1540,7 @@ fn promote_address_taken_stack_object(
         declared_size: pointer_size,
         span_size: pointer_size,
         object_size: None,
+        bounded_object: false,
     });
     let object = VReg::phys(entry.name.clone());
     // A frame-local object starts at a negative offset and grows toward the
@@ -1536,6 +1567,7 @@ fn promote_address_taken_stack_object(
     // array; rewriting them as scalar `Reg(local)` values would make C decay
     // the array to its address and use pointer bits as object contents.
     entry.object_size = Some(entry.object_size.unwrap_or(0).max(size));
+    entry.bounded_object |= next_slot_extent.is_some() || key_disp >= 0;
     *expr = Expr::StackAddr { object, size };
 }
 
@@ -1877,6 +1909,47 @@ fn resolved_memory_address(
     Some((resolved_base, resolved_disp, Some(base.clone()), 1))
 }
 
+/// Re-express an AArch64 current-SP coordinate in DWARF's CFA coordinate.
+///
+/// Ordinary AArch64 own-frame slots intentionally retain their current-SP
+/// spelling: globally rebasing them regressed established frame partitions.
+/// Debug-proven aggregate objects are different. Their locations are relative
+/// to the call-frame address (the entry SP), so look through that second
+/// coordinate only when an authoritative object actually contains the access.
+fn aarch64_entry_stack_coordinate(
+    base: &str,
+    disp: i64,
+    sp_delta: Option<i64>,
+    ctx: StackContext,
+) -> Option<(&'static str, i64)> {
+    (ctx.cc == Some(CallConv::Aarch64) && base == "sp")
+        .then(|| disp.checked_add(sp_delta?))?
+        .map(|disp| ("entry_sp", disp))
+}
+
+fn containing_stack_object<'a>(
+    map: &'a HashMap<SlotKey, SlotVal>,
+    base: &str,
+    disp: i64,
+    access_size: u8,
+    indexed: bool,
+    require_bounded: bool,
+) -> Option<(i64, &'a SlotVal, u16)> {
+    let access_end = disp.checked_add(i64::from(access_size))?;
+    map.iter()
+        .filter_map(|(key, slot)| {
+            let size = slot.object_size?;
+            let end = key.disp.checked_add(i64::from(size))?;
+            (key.base == base
+                && (!require_bounded || slot.bounded_object)
+                && key.disp <= disp
+                && disp < end
+                && (indexed || access_end <= end))
+                .then_some((key.disp, slot, size))
+        })
+        .max_by_key(|(start, _, _)| *start)
+}
+
 /// Materialise an access inside a seeded stack region as byte-pointer
 /// arithmetic rooted at one [`Expr::StackAddr`].
 fn stack_object_address(
@@ -1891,19 +1964,23 @@ fn stack_object_address(
     if index.is_some() && scale == 0 {
         return None;
     }
-    let access_end = disp.checked_add(i64::from(access_size))?;
-    let (start, slot, object_size) = map
-        .iter()
-        .filter_map(|(key, slot)| {
-            let size = slot.object_size?;
-            let end = key.disp.checked_add(i64::from(size))?;
-            (key.base == base
-                && key.disp <= disp
-                && disp < end
-                && (index.is_some() || access_end <= end))
-                .then_some((key.disp, slot, size))
+    let alternate = aarch64_entry_stack_coordinate(&base, disp, sp_delta, ctx);
+    let (object_disp, start, slot, object_size) = alternate
+        .and_then(|(alternate_base, alternate_disp)| {
+            containing_stack_object(
+                map,
+                alternate_base,
+                alternate_disp,
+                access_size,
+                index.is_some(),
+                true,
+            )
+            .map(|(start, slot, size)| (alternate_disp, start, slot, size))
         })
-        .max_by_key(|(start, _, _)| *start)?;
+        .or_else(|| {
+            containing_stack_object(map, &base, disp, access_size, index.is_some(), false)
+                .map(|(start, slot, size)| (disp, start, slot, size))
+        })?;
 
     let mut offset = index.map(|index| {
         let index = Expr::Reg(index);
@@ -1917,7 +1994,7 @@ fn stack_object_address(
             }
         }
     });
-    let relative = disp.checked_sub(start)?;
+    let relative = object_disp.checked_sub(start)?;
     if relative != 0 {
         offset = Some(match offset {
             Some(index) => Expr::Bin {
@@ -1958,19 +2035,21 @@ fn stack_object_constant_address(
         _ => constant_stack_address(expr, ctx),
     }?;
     let (base, disp) = normalized_stack_slot(&recovered.0, recovered.1, sp_delta, ctx);
-    let (start, slot, size) = map
-        .iter()
-        .filter_map(|(key, slot)| {
-            let size = slot.object_size?;
-            let end = key.disp.checked_add(i64::from(size))?;
-            (key.base == base && key.disp <= disp && disp < end).then_some((key.disp, slot, size))
+    let alternate = aarch64_entry_stack_coordinate(&base, disp, sp_delta, ctx);
+    let (object_disp, start, slot, size) = alternate
+        .and_then(|(alternate_base, alternate_disp)| {
+            containing_stack_object(map, alternate_base, alternate_disp, 0, true, true)
+                .map(|(start, slot, size)| (alternate_disp, start, slot, size))
         })
-        .max_by_key(|(start, _, _)| *start)?;
+        .or_else(|| {
+            containing_stack_object(map, &base, disp, 0, true, false)
+                .map(|(start, slot, size)| (disp, start, slot, size))
+        })?;
     let object = Expr::StackAddr {
         object: VReg::phys(slot.name.clone()),
         size,
     };
-    let relative = disp.checked_sub(start)?;
+    let relative = object_disp.checked_sub(start)?;
     Some(if relative != 0 {
         Expr::Bin {
             op: crate::ir::types::BinOp::Add,
@@ -2060,7 +2139,9 @@ fn stack_assignment_object_address(
         .ok()
         .filter(|size| *size > 0)?
         .max(minimum_size);
-    map.get_mut(&key)?.object_size = Some(size);
+    let slot = map.get_mut(&key)?;
+    slot.object_size = Some(size);
+    slot.bounded_object = true;
     stack_object_constant_address(expr, map, sp_delta, ctx, address_defs)
 }
 
@@ -2168,6 +2249,7 @@ fn try_promote_lea_to_local(
         declared_size: size,
         span_size: size,
         object_size: None,
+        bounded_object: false,
     });
     entry.declared_size = entry.declared_size.min(size);
     entry.span_size = entry.span_size.max(size);
@@ -4341,6 +4423,209 @@ mod tests {
                         if object == &reg("local_20"))
             ),
             "closure call lost the 16-byte object: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn aarch64_cfa_object_unifies_sp_relative_closure_fields() {
+        // Canonical AArch64 O0 frame: the CFA remains the entry SP while the
+        // body addresses a 16-byte closure at current sp+24 after allocating
+        // 64 bytes. A debug object at CFA-40 must therefore own both fields and
+        // the address passed to operator().
+        let mut f = Function {
+            name: "invoke_aarch64_closure".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(64)),
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("sp", 24),
+                    src: Expr::Reg(reg("w0")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("sp", 32),
+                    src: lea("sp", 16),
+                    size: 8,
+                },
+                Stmt::Call {
+                    target: Expr::Addr(0x1000),
+                    args: vec![lea("sp", 24)],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+        let hints = [StackObjectHint {
+            base: "entry_sp".into(),
+            disp: -40,
+            size: 16,
+        }];
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::Aarch64),
+            None,
+            &hints,
+        );
+
+        let object = reg("local_28");
+        assert!(
+            matches!(
+                &f.body[1],
+                Stmt::Store {
+                    addr: Expr::StackAddr { object: actual, size: 16 },
+                    ..
+                } if actual == &object
+            ),
+            "first closure field escaped the CFA object: {f:#?}"
+        );
+        assert!(
+            matches!(
+                &f.body[2],
+                Stmt::Store { addr: Expr::Bin { lhs, rhs, .. }, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { object: actual, size: 16 }
+                        if actual == &object)
+                        && rhs.as_ref() == &Expr::Const(8)
+            ),
+            "second closure field did not alias offset eight: {f:#?}"
+        );
+        assert!(
+            matches!(
+                &f.body[3],
+                Stmt::Call { args, .. }
+                    if matches!(args.as_slice(), [Expr::StackAddr { object: actual, size: 16 }]
+                        if actual == &object)
+            ),
+            "closure call lost the CFA-owned object: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn debug_object_extent_outranks_an_unbounded_indexed_frame_partition() {
+        // AArch64 merge_sort has `temp[16]` at CFA-168 (64 bytes).  The generic
+        // indexed-frame heuristic sees the same negative start and, with no
+        // following indexed partition, conservatively extends it to CFA (168
+        // bytes).  That absorbs the canary and saved-register area.  A debug
+        // extent is authoritative and must survive that heuristic seeding.
+        let key = SlotKey {
+            base: "entry_sp".into(),
+            disp: -168,
+        };
+        let mut map = HashMap::from([(
+            key.clone(),
+            SlotVal {
+                name: "local_a8".into(),
+                declared_size: 1,
+                span_size: 1,
+                object_size: Some(64),
+                bounded_object: true,
+            },
+        )]);
+        let cursor = reg("x9#1");
+        let address_defs = HashMap::from([(cursor.clone(), ("entry_sp".into(), -168))]);
+        let body = vec![Stmt::Assign {
+            dst: reg("w0#1"),
+            src: Expr::Deref {
+                addr: Box::new(Expr::Lea {
+                    base: Some(cursor),
+                    index: Some(reg("w1#1")),
+                    scale: 4,
+                    disp: 0,
+                    segment: None,
+                }),
+                size: 4,
+            },
+        }];
+
+        seed_indexed_stack_objects(
+            &body,
+            &mut map,
+            &mut SlotNames::default(),
+            StackContext {
+                cc: Some(CallConv::Aarch64),
+                rbp_repurposed: false,
+                frame_pointer_established: false,
+                parameter_count: Some(2),
+            },
+            &address_defs,
+            &HashMap::new(),
+        );
+
+        assert_eq!(map.get(&key).and_then(|slot| slot.object_size), Some(64));
+    }
+
+    #[test]
+    fn aarch64_address_alias_reconciles_an_earlier_scalar_initializer() {
+        let captured = reg("x8#1");
+        let mut f = Function {
+            name: "capture_scalar_by_reference".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(64)),
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("sp", 16),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: captured.clone(),
+                    src: lea("sp", 16),
+                },
+                Stmt::Store {
+                    addr: lea("sp", 32),
+                    src: Expr::Reg(captured),
+                    size: 8,
+                },
+            ],
+        };
+        let hints = [StackObjectHint {
+            base: "entry_sp".into(),
+            disp: -40,
+            size: 16,
+        }];
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::Aarch64),
+            None,
+            &hints,
+        );
+
+        let Stmt::Store {
+            addr:
+                Expr::StackAddr {
+                    object: scalar_object,
+                    size: scalar_size,
+                },
+            ..
+        } = &f.body[1]
+        else {
+            panic!("scalar initializer did not become object storage: {f:#?}");
+        };
+        assert!(*scalar_size >= 4);
+        assert!(
+            matches!(
+                &f.body[3],
+                Stmt::Store {
+                    src: Expr::StackAddr { object, .. },
+                    ..
+                } if object == scalar_object
+            ),
+            "captured pointer and initialized scalar are not one object: {f:#?}"
         );
     }
 

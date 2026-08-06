@@ -286,7 +286,7 @@
   "03_loop_shapes:armv7:O0": {
     "cond_reload_and_transform": "fail",
     "cond_side_effect": "pass",
-    "dowhile_atleastonce": "fail",
+    "dowhile_atleastonce": "pass",
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
     "for_stride2": "pass",
@@ -326,7 +326,7 @@
   "03_loop_shapes:i386:O0": {
     "cond_reload_and_transform": "pass",
     "cond_side_effect": "pass",
-    "dowhile_atleastonce": "fail",
+    "dowhile_atleastonce": "pass",
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
     "for_stride2": "pass",
@@ -600,7 +600,7 @@
   },
   "06_calling_conventions:aarch64:O2": {
     "fact_mod": "fail",
-    "fib": "fail",
+    "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
     "sum_arg0": "pass",
@@ -633,7 +633,7 @@
     "sum_arg7": "pass",
     "sum_arg8": "pass",
     "sum_arg9": "pass",
-    "sum_mixed_widths": "incomparable",
+    "sum_mixed_widths": "pass",
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:armv7:O2": {
@@ -652,11 +652,11 @@
     "sum_arg7": "pass",
     "sum_arg8": "pass",
     "sum_arg9": "pass",
-    "sum_mixed_widths": "incomparable",
+    "sum_mixed_widths": "pass",
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:i386:O0": {
-    "fact_mod": "fail",
+    "fact_mod": "pass",
     "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
@@ -671,11 +671,11 @@
     "sum_arg7": "pass",
     "sum_arg8": "pass",
     "sum_arg9": "pass",
-    "sum_mixed_widths": "incomparable",
+    "sum_mixed_widths": "pass",
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:i386:O2": {
-    "fact_mod": "fail",
+    "fact_mod": "pass",
     "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
@@ -690,7 +690,7 @@
     "sum_arg7": "pass",
     "sum_arg8": "pass",
     "sum_arg9": "pass",
-    "sum_mixed_widths": "incomparable",
+    "sum_mixed_widths": "pass",
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:x86_64:O0": {
@@ -795,9 +795,9 @@
   },
   "08_indirect_dispatch:i386:O2": {
     "apply": "structural",
-    "dispatch": "pass",
+    "dispatch": "fail",
     "dispatch_switch": "fail",
-    "tail_dispatch": "pass"
+    "tail_dispatch": "fail"
   },
   "08_indirect_dispatch:x86_64:O0": {
     "apply": "structural",
@@ -922,7 +922,7 @@
     "_ZN7MovableC2Ei": "structural",
     "cpp_ctor_dtor": "pass",
     "cpp_exception": "pass",
-    "cpp_lambda_capture": "fail",
+    "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
     "cpp_raii_guard": "pass",
     "cpp_virtual_dispatch": "structural"
@@ -936,11 +936,11 @@
     "_ZN7DerivedD0Ev": "structural",
     "_ZN7DerivedD1Ev": "structural",
     "_ZN7DerivedD2Ev": "structural",
-    "cpp_ctor_dtor": "fail",
+    "cpp_ctor_dtor": "pass",
     "cpp_exception": "pass",
     "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
-    "cpp_raii_guard": "fail",
+    "cpp_raii_guard": "pass",
     "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:armv7:O0": {
@@ -964,11 +964,11 @@
     "_ZN7MovableC1Ei": "structural",
     "_ZN7MovableC2EOS_": "structural",
     "_ZN7MovableC2Ei": "structural",
-    "cpp_ctor_dtor": "fail",
+    "cpp_ctor_dtor": "pass",
     "cpp_exception": "pass",
-    "cpp_lambda_capture": "fail",
-    "cpp_move": "fail",
-    "cpp_raii_guard": "fail",
+    "cpp_lambda_capture": "pass",
+    "cpp_move": "pass",
+    "cpp_raii_guard": "pass",
     "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:armv7:O2": {
@@ -1008,11 +1008,11 @@
     "_ZN7MovableC1Ei": "structural",
     "_ZN7MovableC2EOS_": "structural",
     "_ZN7MovableC2Ei": "structural",
-    "cpp_ctor_dtor": "fail",
+    "cpp_ctor_dtor": "pass",
     "cpp_exception": "pass",
-    "cpp_lambda_capture": "fail",
+    "cpp_lambda_capture": "pass",
     "cpp_move": "pass",
-    "cpp_raii_guard": "fail",
+    "cpp_raii_guard": "pass",
     "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:i386:O2": {
@@ -1110,14 +1110,14 @@
     "call_chain_in_loop": "pass",
     "call_fold_wide_result": "fail",
     "call_forward_result": "pass",
-    "call_into_spill": "fail",
+    "call_into_spill": "pass",
     "call_nested": "pass",
     "call_result_drives_branch": "pass",
     "call_result_unused": "pass",
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "pass",
+    "widen_mul": "fail",
     "wrap_byte": "pass"
   },
   "11_call_shapes:armv7:O2": {
@@ -1125,14 +1125,14 @@
     "call_chain_in_loop": "pass",
     "call_fold_wide_result": "fail",
     "call_forward_result": "pass",
-    "call_into_spill": "fail",
+    "call_into_spill": "pass",
     "call_nested": "pass",
     "call_result_drives_branch": "pass",
     "call_result_unused": "pass",
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "pass",
+    "widen_mul": "fail",
     "wrap_byte": "pass"
   },
   "11_call_shapes:i386:O0": {
@@ -1147,7 +1147,7 @@
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "pass",
+    "widen_mul": "fail",
     "wrap_byte": "pass"
   },
   "11_call_shapes:i386:O2": {
@@ -1162,7 +1162,7 @@
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "pass",
+    "widen_mul": "fail",
     "wrap_byte": "pass"
   },
   "11_call_shapes:x86_64:O0": {
@@ -1216,44 +1216,44 @@
     "skip_odd_sum": "pass"
   },
   "12_loop_rotation:armv7:O0": {
-    "count_up": "incomparable",
-    "do_while_control": "incomparable",
-    "down_by_negative_imm": "incomparable",
-    "factorial_while": "incomparable",
+    "count_up": "pass",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "pass",
+    "factorial_while": "pass",
     "find_first_set": "pass",
-    "for_accumulate": "incomparable",
-    "nested_rotated": "incomparable",
-    "skip_odd_sum": "incomparable"
+    "for_accumulate": "pass",
+    "nested_rotated": "pass",
+    "skip_odd_sum": "pass"
   },
   "12_loop_rotation:armv7:O2": {
-    "count_up": "incomparable",
-    "do_while_control": "incomparable",
-    "down_by_negative_imm": "incomparable",
-    "factorial_while": "incomparable",
+    "count_up": "pass",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "pass",
+    "factorial_while": "pass",
     "find_first_set": "fail",
-    "for_accumulate": "incomparable",
-    "nested_rotated": "incomparable",
-    "skip_odd_sum": "incomparable"
+    "for_accumulate": "pass",
+    "nested_rotated": "pass",
+    "skip_odd_sum": "pass"
   },
   "12_loop_rotation:i386:O0": {
-    "count_up": "incomparable",
-    "do_while_control": "incomparable",
-    "down_by_negative_imm": "incomparable",
-    "factorial_while": "incomparable",
+    "count_up": "pass",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "pass",
+    "factorial_while": "pass",
     "find_first_set": "pass",
-    "for_accumulate": "incomparable",
-    "nested_rotated": "incomparable",
-    "skip_odd_sum": "incomparable"
+    "for_accumulate": "pass",
+    "nested_rotated": "pass",
+    "skip_odd_sum": "pass"
   },
   "12_loop_rotation:i386:O2": {
-    "count_up": "incomparable",
-    "do_while_control": "incomparable",
-    "down_by_negative_imm": "incomparable",
-    "factorial_while": "incomparable",
+    "count_up": "pass",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "pass",
+    "factorial_while": "pass",
     "find_first_set": "pass",
-    "for_accumulate": "incomparable",
-    "nested_rotated": "incomparable",
-    "skip_odd_sum": "incomparable"
+    "for_accumulate": "pass",
+    "nested_rotated": "pass",
+    "skip_odd_sum": "pass"
   },
   "12_loop_rotation:x86_64:O0": {
     "count_up": "pass",
@@ -1293,7 +1293,7 @@
   },
   "13_loop_early_exit:armv7:O0": {
     "bisect": "pass",
-    "classify_run": "fail",
+    "classify_run": "pass",
     "find_first": "pass",
     "has_pair": "pass",
     "sum_positive": "pass",
@@ -1309,7 +1309,7 @@
   },
   "13_loop_early_exit:i386:O0": {
     "bisect": "pass",
-    "classify_run": "fail",
+    "classify_run": "pass",
     "find_first": "pass",
     "has_pair": "pass",
     "sum_positive": "pass",
@@ -1373,7 +1373,7 @@
     "dec_loop": "pass",
     "dec_preserves_carry": "pass",
     "shift_until_zero": "pass",
-    "sub_then_sign": "fail"
+    "sub_then_sign": "pass"
   },
   "14_flag_effects:i386:O0": {
     "add_then_negative": "pass",
@@ -1417,7 +1417,7 @@
   },
   "15_binary_search_tree:aarch64:O2": {
     "bst_inorder_checksum": "fail",
-    "bst_search": "fail"
+    "bst_search": "pass"
   },
   "15_binary_search_tree:armv7:O0": {
     "bst_inorder_checksum": "pass",
@@ -1508,16 +1508,16 @@
     "heap_push": "pass"
   },
   "18_binary_heap:armv7:O0": {
-    "heap_pop": "fail",
+    "heap_pop": "pass",
     "heap_push": "pass"
   },
   "18_binary_heap:armv7:O2": {
-    "heap_pop": "fail",
+    "heap_pop": "pass",
     "heap_push": "pass"
   },
   "18_binary_heap:i386:O0": {
-    "heap_pop": "fail",
-    "heap_push": "pass"
+    "heap_pop": "pass",
+    "heap_push": "fail"
   },
   "18_binary_heap:i386:O2": {
     "heap_pop": "pass",
@@ -1627,7 +1627,7 @@
     "dijkstra_dense": "pass"
   },
   "22_dijkstra:i386:O2": {
-    "dijkstra_dense": "fail"
+    "dijkstra_dense": "pass"
   },
   "22_dijkstra:x86_64:O0": {
     "dijkstra_dense": "pass"
@@ -1768,7 +1768,7 @@
     "euler_decay_q16": "fail"
   },
   "28_euler_ode:i386:O0": {
-    "euler_decay_q16": "pass"
+    "euler_decay_q16": "fail"
   },
   "28_euler_ode:i386:O2": {
     "euler_decay_q16": "pass"
@@ -1818,7 +1818,7 @@
     "heat_step_1d": "pass"
   },
   "30_finite_difference:armv7:O0": {
-    "heat_step_1d": "fail"
+    "heat_step_1d": "pass"
   },
   "30_finite_difference:armv7:O2": {
     "heat_step_1d": "fail"
@@ -1851,6 +1851,10 @@
       "ld": "GNU ld (GNU Binutils for Ubuntu) 2.38",
       "libc": "ldd (Ubuntu GLIBC 2.35-0ubuntu3.13) 2.35",
       "mode": "docker"
+    },
+    "runner": {
+      "armv7": "qemu-arm -L /usr/arm-linux-gnueabihf :: qemu-arm version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.1)",
+      "i386": "qemu-i386 -L / :: qemu-i386 version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.1)"
     }
   }
 }

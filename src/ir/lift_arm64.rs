@@ -1962,10 +1962,11 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             }
             vec![Op::Unknown { mnemonic: mnem }]
         }
-        // Load-pair / store-pair: `ldp Xt1, Xt2, [base, #disp]` transfers two
-        // consecutive 8-byte words. We decompose into two ordinary
-        // Load/Store ops so the rest of the pipeline (stack locals, dead
-        // stores, push/pop recognition) doesn't need to know about pairs.
+        // Load-pair / store-pair transfers two consecutive values whose width
+        // is encoded by the register class (`Wt` or `Xt`). We decompose into
+        // two ordinary Load/Store ops so the rest of the pipeline (stack
+        // locals, dead stores, push/pop recognition) doesn't need to know
+        // about pairs, while retaining that exact element width and stride.
         "ldp" => {
             if ins.operands.len() >= 3 {
                 let Some(dst1) = operand_reg(&ins.operands[0]) else {
@@ -1974,14 +1975,15 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 let Some(dst2) = operand_reg(&ins.operands[1]) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
-                if let Some(mut addr) = operand_to_memop(&ins.operands[2], 8) {
+                let pair_size = scalar_access_size(&mnem, &ins.operands[0]);
+                if let Some(mut addr) = operand_to_memop(&ins.operands[2], pair_size) {
                     let base_reg = addr.base.clone();
-                    let pair_off = 8i64;
+                    let pair_off = i64::from(pair_size);
                     let addr2 = MemOp {
                         disp: addr.disp.wrapping_add(pair_off),
                         ..addr.clone()
                     };
-                    addr.size = 8;
+                    addr.size = pair_size;
                     let mut out = vec![
                         Op::Load { dst: dst1, addr },
                         Op::Load {
@@ -2013,14 +2015,15 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 let Some(src2) = operand_to_value(&ins.operands[1]) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
-                if let Some(mut addr) = operand_to_memop(&ins.operands[2], 8) {
+                let pair_size = scalar_access_size(&mnem, &ins.operands[0]);
+                if let Some(mut addr) = operand_to_memop(&ins.operands[2], pair_size) {
                     let base_reg = addr.base.clone();
-                    let pair_off = 8i64;
+                    let pair_off = i64::from(pair_size);
                     let addr2 = MemOp {
                         disp: addr.disp.wrapping_add(pair_off),
                         ..addr.clone()
                     };
-                    addr.size = 8;
+                    addr.size = pair_size;
                     let mut out = vec![
                         Op::Store { addr, src: src1 },
                         Op::Store {
@@ -2611,6 +2614,35 @@ mod tests {
             .collect();
         assert_eq!(disps.len(), 2);
         assert_eq!((disps[1] - disps[0]).abs(), 8);
+    }
+
+    #[test]
+    fn word_register_pairs_use_four_byte_accesses_and_stride() {
+        // Real GCC -O2 C++ aggregate stores:
+        //   stp w3, w1, [x0] = 0x29000403
+        // Pair width follows Rt, not the architecture pointer width. Treating
+        // this as two X-register stores overwrites adjacent int fields.
+        let stores = lift_bytes(&[0x03, 0x04, 0x00, 0x29], 0x1000);
+        let store_layout: Vec<_> = stores
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Store { addr, .. } => Some((addr.disp, addr.size)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(store_layout, vec![(0, 4), (4, 4)]);
+
+        // The load-pair form is governed by the same encoding bit and must
+        // retain the same element width and stride.
+        let loads = lift_bytes(&[0x03, 0x04, 0x40, 0x29], 0x1000);
+        let load_layout: Vec<_> = loads
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Load { addr, .. } => Some((addr.disp, addr.size)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(load_layout, vec![(0, 4), (4, 4)]);
     }
 
     #[test]

@@ -38,7 +38,7 @@ remote/integrated state are separate evidence. One never implies another.
 | D-003 | AAPCS outgoing stack arguments stop at repeated slots | FIXED / GATES PENDING | `agent/defect-register` |
 | D-004 | Large ARM table dispatches do not structure | FIXED / GATES PENDING | `agent/defect-register` |
 | D-005 | Wrapped 32-bit array indices render as huge unsigned values | FIXED / GATES PENDING | `agent/defect-register` |
-| D-006 | C++ recovery lags across i386, AArch64, and ARMv7 | OPEN | unowned |
+| D-006 | C++ recovery lags across i386, AArch64, and ARMv7 | FIXED / GATES PENDING | `agent/defect-register` |
 | D-007 | Six ARMv7 `getent` string/call discrepancies lack a trustworthy mode oracle | CLOSED | adjudicated on `agent/defect-register` |
 | D-008 | x86 ZF is computed from an untruncated parent register | OPEN | unowned; `agent/x86-flags` is separate BSR/BSF work |
 
@@ -310,6 +310,85 @@ failures into one C++ heuristic.
 **Acceptance.** Every five-function lane has real execution verdicts; previously
 passing cells stay green; structural-only functions are either executed or
 explicitly justified; exact and broad C/C++ gates are reported separately.
+
+**Root causes and current evidence (2026-08-05, branch
+`agent/defect-register`).** The original matrix conflated real recovery defects
+with an invalid execution oracle. In particular, `cpp_exception` already passed
+every non-control cell when replayed; the older all-red statement was stale.
+Four independently proved causes were addressed:
+
+- AArch64 `LDP`/`STP` hard-coded eight-byte elements and strides even for `wN`
+  register pairs. A RED lift test recovered two eight-byte accesses at offsets
+  0 and 8 from `stp w3, w1, [x0]`; the lifter now derives pair width and stride
+  from the decoded scalar operand, producing four-byte accesses at 0 and 4.
+- AArch64 O0 lambda captures described by DWARF relative to call-frame CFA were
+  ignored, while globally rebasing every SP-relative access caused a real
+  merge-sort regression. CFA objects now use the architectural entry-SP
+  coordinate only when a bounded seeded object actually contains the access.
+  Debug extents and adjacent indexed partitions provide that bound; a final
+  conservative "to the frame base" partition does not. When an address alias
+  proves the object after an earlier scalar initializer, the equivalent
+  current-SP slot metadata migrates into the object so initialization and
+  escape remain one storage identity. The exact AArch64 O2 `merge_sort_i32`
+  cell is green with this proof gate.
+- i386/ARMv7 C++ wrappers were being recovered from ILP32 and then executed as
+  LP64 C against LP64 helper objects. Pointer fields and aggregate layouts made
+  those crashes harness artifacts. The cross-architecture gate now builds a
+  dependency-free target C worker, rebuilds the recovery for its source ABI,
+  loads the original target object beside it, and compares full returns and
+  buffer effects under fingerprinted `qemu-i386`/`qemu-arm`. A real i386
+  non-vacuity test proves that both a correct recovery and a one-element buffer
+  error are distinguished. Rich signatures outside the generated worker's
+  integer-scalar/integer-buffer subset retain the explicit `--width-audit`
+  fallback; none of these five C++ wrappers use that fallback.
+- The one genuine residual i386 O0 defect was `cpp_raii_guard`: a pointer home
+  spilled through a casted scratch was not recognized as `arg0`. Later copy
+  propagation collapsed “load pointer, store through pointer” into
+  `local_1c = 0`. Parameter-home recovery now carries a bounded straight-line
+  argument-provenance map through register copies/casts without rewriting
+  addresses, and treats later computed stores as parameter reassignment unless
+  they are proven to come from a different incoming argument. The emitted body
+  now performs `*(int *)arg0 = 0` and passes at the real i386 ABI.
+
+The fresh release-extension matrix executes the five scalar/stack C++ wrappers
+at both optimization levels on all four architectures: x86-64 10/10, i386
+10/10, AArch64 10/10, and ARMv7 10/10, for 40 passes and zero failures,
+non-portable results, incomparable results, timeouts, or lane errors. The exact
+Rust AST suite passes 145 tests; the architecture-harness and fixture-harness
+Python modules pass in full.
+
+The refreshed full architecture baseline is infrastructure-clean: 1,086 pass,
+114 fail, 152 structural, four declared unsupported, and no non-portable,
+incomparable, missing, timeout, or lane result. The x86-64 control remains
+328/328. An immediate full `--check` replay matches the generated baseline
+exactly. Relative to the committed baseline, 26 failures become passes and 32
+width-audit-incomparable results become genuine target-ABI passes. Ten C++
+wrapper cells improve from fail to pass, and no previously passing C++ cell
+regresses.
+
+Eight committed passes become genuine target-ABI failures: i386 O2 `dispatch`
+and `tail_dispatch`; ARMv7 and i386 O0/O2 `widen_mul`; i386 O0 `heap_push`; and
+i386 O0 `euler_decay_q16`. These are oracle corrections, not changes to their
+recovered code. The old LP64 rebuild accidentally supplied register arguments
+to no-argument i386 indirect calls, gave ILP32 `unsigned long` a 64-bit host
+width in `widen_mul`, and evaluated the latter two recoveries against LP64
+layout/semantics. The target worker now records their actual return/buffer
+divergence under qemu. They remain red in the regenerated baseline rather than
+being hidden by a permissive compatibility classification.
+
+`cpp_virtual_dispatch` remains explicitly structural: its recovered C still
+represents two vtable-backed automatic objects as uninitialized pointers and
+deterministically crashes on the first x86-64 O0 vector if the quarantine is
+removed. That is EPIC 3 aggregate/vptr initialization work, not a hidden green
+C++ cell; the structural oracle still requires an indirect call. Mangled C++
+ABI entries without recoverable DWARF call signatures remain direct-structural
+because safely invoking a constructor/destructor requires a valid `this` object
+the harness must not invent. They are nevertheless executed transitively by
+the five exported C wrappers that own their objects, arguments, and observable
+effects.
+
+**Remaining before closure.** Run the final broad Rust/Python/decompiler gates
+after D-008. Report the exact C++ matrix separately from those broad gates.
 
 ## D-007 — ARMv7 `getent` mode/extent adjudication
 

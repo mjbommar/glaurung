@@ -631,6 +631,271 @@ def width_sensitive(c_src: str) -> bool:
     return bool(_WIDTH_VARYING.search(_FIXED_WIDTH_LONG_LONG.sub(" ", c_src)))
 
 
+_NATIVE_INTEGER_TYPE = {
+    (1, True): "int8_t",
+    (1, False): "uint8_t",
+    (2, True): "int16_t",
+    (2, False): "uint16_t",
+    (4, True): "int32_t",
+    (4, False): "uint32_t",
+    (8, True): "int64_t",
+    (8, False): "uint64_t",
+}
+
+
+def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str | None:
+    """Generate a dependency-free target worker for scalar/pointer C ABIs.
+
+    ``None`` means the signature needs the richer ctypes materializer (aggregate
+    values, self-linked graphs, or pointer returns).  The generated subset is
+    deliberately type-directed rather than fixture-directed and covers plain
+    integer scalars plus pointers to integer arrays, including byte buffers.
+    """
+    params = [_as_desc(raw) for raw in sig["params"]]
+    ret = _as_desc(sig["ret"])
+    if ret["k"] not in {"int", "void"}:
+        return None
+    if any(not isinstance(vector, list) or len(vector) != len(params) for vector in vectors):
+        return None
+
+    param_types: list[str] = []
+    pointee_types: dict[int, str] = {}
+    for index, desc in enumerate(params):
+        if desc["k"] == "int":
+            ctype = _NATIVE_INTEGER_TYPE.get((desc["w"], desc["s"]))
+            if ctype is None:
+                return None
+            param_types.append(ctype)
+            continue
+        if desc["k"] != "ptr":
+            return None
+        pointee = _pointee_desc(desc)
+        if pointee["k"] != "int":
+            return None
+        ctype = "uint8_t" if ptr_elem in {"u8", "cstr"} else _NATIVE_INTEGER_TYPE.get(
+            (pointee["w"], pointee["s"])
+        )
+        if ctype is None:
+            return None
+        pointee_types[index] = ctype
+        param_types.append(f"{ctype} *")
+
+    return_type = "void" if ret["k"] == "void" else _NATIVE_INTEGER_TYPE.get(
+        (ret["w"], ret["s"])
+    )
+    if return_type is None:
+        return None
+    prototype = ", ".join(param_types) if param_types else "void"
+    lines = [
+        "#include <dlfcn.h>",
+        "#include <signal.h>",
+        "#include <stdint.h>",
+        "#include <stdio.h>",
+        "#include <string.h>",
+        "#include <unistd.h>",
+        f"typedef {return_type} (*measured_fn)({prototype});",
+        "typedef void (*scrub_fn)(void);",
+        "int main(void) {",
+        '  void *original = dlopen("./target_reference.so", RTLD_NOW | RTLD_LOCAL);',
+        '  if (!original) { fprintf(stderr, "original dlopen: %s\\n", dlerror()); return 70; }',
+        '  void *recovered = dlopen("./target_recovered.so", RTLD_NOW | RTLD_LOCAL);',
+        '  if (!recovered) { fprintf(stderr, "recovered dlopen: %s\\n", dlerror()); return 71; }',
+        f'  measured_fn fo = (measured_fn)dlsym(original, "{sig["name"]}");',
+        f'  measured_fn fd = (measured_fn)dlsym(recovered, "{sig["name"]}");',
+        '  scrub_fn scrub = (scrub_fn)dlsym(recovered, "glaurung_scrub_stack");',
+        '  if (!fo || !fd) { fprintf(stderr, "measured symbol missing\\n"); return 72; }',
+        "  signal(SIGALRM, SIG_DFL);",
+    ]
+    for case_index, vector in enumerate(vectors):
+        call_original: list[str] = []
+        call_recovered: list[str] = []
+        buffers: list[tuple[str, str, int]] = []
+        for param_index, (desc, value) in enumerate(zip(params, vector)):
+            if desc["k"] == "int":
+                literal = str(int(value))
+                ctype = param_types[param_index]
+                call_original.append(f"({ctype})({literal})")
+                call_recovered.append(f"({ctype})({literal})")
+                continue
+            if not isinstance(value, list) or not value:
+                return None
+            ctype = pointee_types[param_index]
+            initializer = ", ".join(str(int(item)) for item in value)
+            original_name = f"o_{case_index}_{param_index}"
+            recovered_name = f"d_{case_index}_{param_index}"
+            lines.extend(
+                [
+                    f"  {ctype} {original_name}[{len(value)}] = {{{initializer}}};",
+                    f"  {ctype} {recovered_name}[{len(value)}] = {{{initializer}}};",
+                ]
+            )
+            call_original.append(original_name)
+            call_recovered.append(recovered_name)
+            buffers.append((original_name, recovered_name, len(value)))
+        original_args = ", ".join(call_original)
+        recovered_args = ", ".join(call_recovered)
+        lines.append("  if (scrub) scrub();")
+        if ret["k"] == "void":
+            lines.append(f"  fo({original_args});")
+        else:
+            lines.append(f"  {return_type} ro_{case_index} = fo({original_args});")
+        lines.extend(["  if (scrub) scrub();", "  alarm(5);"])
+        if ret["k"] == "void":
+            lines.append(f"  fd({recovered_args});")
+        else:
+            lines.append(f"  {return_type} rd_{case_index} = fd({recovered_args});")
+        lines.append("  alarm(0);")
+        if ret["k"] != "void":
+            lines.extend(
+                [
+                    f"  if (ro_{case_index} != rd_{case_index}) {{",
+                    f'    printf("return differs on case {case_index}\\n"); return 10;',
+                    "  }",
+                ]
+            )
+        for original_name, recovered_name, length in buffers:
+            lines.extend(
+                [
+                    f"  if (memcmp({original_name}, {recovered_name}, sizeof({original_name}[0]) * {length}) != 0) {{",
+                    f'    printf("buffer differs on case {case_index}\\n"); return 11;',
+                    "  }",
+                ]
+            )
+    lines.extend([f'  printf("pass {len(vectors)} cases\\n");', "  return 0;", "}"])
+    return "\n".join(lines) + "\n"
+
+
+def native_execution_differential(
+    c_src: str,
+    binary: str | Path,
+    sig: dict,
+    vectors: list[list],
+    workdir: Path,
+    native_cc: list[str],
+    runner_prefix: list[str],
+    ptr_elem: str,
+) -> dict | None:
+    """Execute both sides at the target ABI using a generated C worker.
+
+    This closes the ILP32/LP64 object-layout confound without loading a foreign
+    ELF into CPython.  The original target object supplies exported sibling C++
+    helpers to the target rebuild, exactly as the host differential does.
+    """
+    worker_source = _native_worker_source(sig, vectors, ptr_elem)
+    if worker_source is None:
+        return None
+    for command in (native_cc[0], runner_prefix[0]):
+        if shutil.which(command) is None:
+            raise FileNotFoundError(f"native execution wanted {command}, not on PATH")
+
+    uses_cpp = bool(re.search(r"\b(?:try\s*\{|catch\s*\(|throw\b)", c_src))
+    translation_unit = NATIVE_PRELUDE + "\n" + c_src + "\n"
+    if uses_cpp:
+        translation_unit = 'extern "C" {\n' + translation_unit + "}\n"
+    recovered_source = workdir / f"target_recovered.{'cpp' if uses_cpp else 'c'}"
+    recovered_source.write_text(translation_unit)
+    recovered_so = workdir / "target_recovered.so"
+    target_reference = workdir / "target_reference.so"
+    shutil.copy2(Path(binary).resolve(), target_reference)
+    compiler = re.sub(r"gcc$", "g++", native_cc[0]) if uses_cpp else native_cc[0]
+    runtime_args = _inherited_cxx_runtime_args(str(binary))
+    compile_recovered = subprocess.run(
+        [
+            compiler,
+            *native_cc[1:],
+            *(_NATIVE_PARITY_FLAGS_CXX if uses_cpp else _NATIVE_PARITY_FLAGS),
+            "-shared",
+            "-fPIC",
+            "-O0",
+            "-w",
+            "-Wl,-Bsymbolic",
+            "-Wl,--no-as-needed",
+            "-Wl,-rpath,$ORIGIN",
+            "-o",
+            recovered_so.name,
+            recovered_source.name,
+            target_reference.name,
+            *runtime_args,
+        ],
+        cwd=workdir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if compile_recovered.returncode != 0:
+        diagnostic = " ".join(
+            (
+                compile_recovered.stderr
+                or compile_recovered.stdout
+                or "no compiler output"
+            ).split()
+        )
+        return {
+            "status": "nonportable",
+            "detail": f"native target recovery failed to link: {diagnostic[-400:]}",
+        }
+
+    worker_path = workdir / "target_worker.c"
+    worker_path.write_text(worker_source)
+    worker_exe = workdir / "target_worker"
+    compile_worker = subprocess.run(
+        [
+            native_cc[0],
+            *native_cc[1:],
+            "-std=gnu17",
+            "-O0",
+            "-w",
+            "-o",
+            worker_exe.name,
+            worker_path.name,
+            "-ldl",
+        ],
+        cwd=workdir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if compile_worker.returncode != 0:
+        diagnostic = " ".join(
+            (
+                compile_worker.stderr or compile_worker.stdout or "no compiler output"
+            ).split()
+        )
+        raise RuntimeError(
+            f"native target worker failed to compile: {diagnostic[-400:]}"
+        )
+    try:
+        run = subprocess.run(
+            [*runner_prefix, f"./{worker_exe.name}"],
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+            timeout=WORKER_TIMEOUT_S,
+            check=False,
+            env=BG.worker_env(),
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "timeout",
+            "detail": f"native target worker exceeded {WORKER_TIMEOUT_S}s",
+        }
+    output = (run.stdout or run.stderr or "no worker output").strip().splitlines()[-1]
+    if run.returncode == 0:
+        return {
+            "status": "pass",
+            "detail": f"{len(vectors)} cases (native target ABI)",
+        }
+    if run.returncode in {-signal.SIGALRM, 128 + signal.SIGALRM}:
+        return {
+            "status": "fail",
+            "detail": "native target decompiled function did not terminate",
+        }
+    return {
+        "status": "fail",
+        "detail": f"native target {output} (exit {run.returncode})",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Decompile + compile
 # ---------------------------------------------------------------------------
@@ -1614,6 +1879,7 @@ def run_function(
     reference_so: str | None = None,
     reference_sig: dict | None = None,
     native_cc: list[str] | None = None,
+    native_runner: list[str] | None = None,
 ) -> dict:
     """Run one function's execution differential.
 
@@ -1640,7 +1906,8 @@ def run_function(
     agree on the ABI types. `native_cc` is the target's own compiler driver and
     flags: when given, the recovered body is additionally compiled FOR ITS OWN
     ARCHITECTURE (see `native_rebuild_diagnostic`), which is the only build that
-    can reject C the target cannot spell.
+    can reject C the target cannot spell. ``native_runner`` selects a genuine
+    target-ABI worker for signatures the generated C comparator supports.
     """
     name = sig["name"]
     reference_so = reference_so or binary
@@ -1667,6 +1934,7 @@ def run_function(
     declarations = dwarf_c_type_declarations(sig, c)
     if declarations:
         c = declarations + "\n" + c
+    width_dependent = width_sensitive(c)
     dec_so, diagnostic = build_so_with_diagnostic(
         c,
         workdir,
@@ -1691,14 +1959,27 @@ def run_function(
                     f"recovered from ({' '.join(native_cc)}): {native[-400:]}"
                 ),
             }
-    why_incomparable = abi_incomparable(sig, reference_sig)
-    if why_incomparable is not None:
-        return {"status": "incomparable", "detail": why_incomparable}
     vectors = make_vectors(sig, ov, seed, fuzz)
     if not vectors:
         # An infra/manifest problem (no inputs generated), NOT a decompiler
         # result — a distinct status so --write-baseline can refuse it.
         return {"status": "nocases", "detail": "no executable cases"}
+    if native_cc is not None and native_runner is not None:
+        target_verdict = native_execution_differential(
+            c,
+            binary,
+            sig,
+            vectors,
+            workdir,
+            native_cc,
+            native_runner,
+            ov.get("ptr_elem", "int"),
+        )
+        if target_verdict is not None:
+            return target_verdict
+    why_incomparable = abi_incomparable(sig, reference_sig)
+    if why_incomparable is not None:
+        return {"status": "incomparable", "detail": why_incomparable}
     progress_path = workdir / f"progress_{name}.json"
     progress_path.unlink(missing_ok=True)
     # Every path the worker hands to `dlopen`/`open` is RELATIVE to `workdir`
@@ -1761,24 +2042,30 @@ def run_function(
             "detail": f"decompiled function did not terminate within "
             f"{DECOMPILED_CALL_BUDGET_S}s on an input the original returned on"
             f"{input_detail}",
+            "width_sensitive": width_dependent,
         }
     if r.returncode != 0:
         return {
             "status": "fail",
             "detail": f"worker crashed{input_detail} "
             f"(exit {r.returncode}; {r.stderr.strip()[-120:]})",
+            "width_sensitive": width_dependent,
         }
     try:
         verdict = json.loads(r.stdout.strip().splitlines()[-1])
     except (json.JSONDecodeError, IndexError):
-        return {"status": "fail", "detail": "worker produced no verdict"}
+        return {
+            "status": "fail",
+            "detail": "worker produced no verdict",
+            "width_sensitive": width_dependent,
+        }
     return {
         "status": "pass" if verdict["ok"] else "fail",
         "detail": verdict["detail"],
         # Quantifies the residual 32-bit confound (see `width_sensitive`): a
         # `fail` with this False is a real semantic defect, not a portability
         # artifact of rebuilding at the host's width.
-        "width_sensitive": width_sensitive(c),
+        "width_sensitive": width_dependent,
     }
 
 
@@ -1812,6 +2099,7 @@ def run(
     reference_so: str | None = None,
     lane: str | None = None,
     native_cc: list[str] | None = None,
+    native_runner: list[str] | None = None,
 ) -> dict:
     """`only` restricts which functions are executed and reported.
 
@@ -1926,6 +2214,7 @@ def run(
                 reference_so=reference_so,
                 reference_sig=reference_sig_by_name.get(name),
                 native_cc=native_cc,
+                native_runner=native_runner,
             )
     return results
 
@@ -1963,6 +2252,12 @@ def main() -> int:
         "recovered body is additionally compiled for that architecture; C the "
         "target cannot spell is reported `nonportable`.",
     )
+    ap.add_argument(
+        "--native-runner",
+        default=None,
+        help="target execution command prefix, JSON list. Supported signatures "
+        "are rebuilt and differentially executed at the target ABI.",
+    )
     ap.add_argument("--worker", default=None)
     args = ap.parse_args()
 
@@ -1982,6 +2277,7 @@ def main() -> int:
         reference_so=args.reference_so,
         lane=args.lane,
         native_cc=json.loads(args.native_cc) if args.native_cc else None,
+        native_runner=json.loads(args.native_runner) if args.native_runner else None,
     )
     if args.json:
         print(json.dumps(results, indent=2))

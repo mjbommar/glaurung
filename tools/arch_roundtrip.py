@@ -16,20 +16,26 @@ three had *no* execution coverage at all, and 32-bit x86 had none either. A
 change that inverted a branch in every ARM binary would have left all 656 cases
 green. This lane closes that hole.
 
-HOW IT AVOIDS NEEDING AN EMULATOR
----------------------------------
-The recovered artifact is portable C, so it does not have to run on the target.
-The question worth asking is "does the C we recovered *from a foreign-architecture
-binary* behave like the source it came from", and both sides of that comparison
-build for the host:
+HOW EXECUTION IS KEPT ABI-HONEST
+--------------------------------
+For 64-bit targets the recovered artifact is portable C, so it does not have to
+run on the target.  Both sides of that comparison build for the host:
 
     fixture.c --(cross cc)--> target .so --(glaurung)--> recovered.c --(cc)--> B
     fixture.c ---------------------(cc)-------------------------------------> A
 
-A and B are then called with identical seeded vectors and every full-width return
-and mutated buffer is compared. `qemu-aarch64`/`qemu-arm` are installed on this
-host and are deliberately NOT in the loop: an emulator bug must never be
-mistakable for a decompiler bug.
+A and B are called with identical seeded vectors and every full-width return and
+mutated buffer is compared.  This is ABI-honest for x86-64 and AArch64 because
+both sides are LP64.
+
+For i386 and ARMv7, rebuilding a target C++ object at LP64 is not portable: its
+pointer fields, aggregate offsets, and exported helper ABI change.  A generated,
+dependency-free C worker therefore rebuilds the recovery for the target, loads
+the original target object and recovery together, and compares them under
+`qemu-i386`/`qemu-arm`.  The worker currently supports integer scalars and
+integer/byte buffers; richer aggregate signatures retain the audited portable-C
+fallback below.  Runner command lines and versions are baseline fingerprints,
+so an emulator change cannot silently redefine the ratchet.
 
 WHAT IS BORROWED, AND WHY NOTHING IS REIMPLEMENTED
 --------------------------------------------------
@@ -41,13 +47,11 @@ produced 50 "AArch64 failures" that were entirely its own. This file therefore
 owns exactly two things `fixture_harness` cannot: which compiler builds the
 fixture, and which object the recovery is executed against.
 
-THE 32-BIT CONFOUND, AND WHAT IS NOW DONE ABOUT IT
---------------------------------------------------
-The recovered C is rebuilt and executed at the HOST's pointer width, so on
-`i386` and `armv7` the two sides of the differential are not built for the same
-machine. That used to be disclosed and nothing more. It is now attacked from
-three sides, because a disclosed confound still lets a lane be green for the
-wrong reason:
+THE 32-BIT FALLBACK, AND WHAT IS DONE ABOUT IT
+----------------------------------------------
+The target worker gives supported scalar/pointer signatures a genuine ILP32
+verdict.  Signatures outside that generated subset still rebuild at the host's
+pointer width, so that explicit residue is attacked from three sides:
 
 1. `incomparable` — the host reference's own DWARF prototype is now compared
    against the target's, and a function whose ABI types differ between the two
@@ -68,16 +72,12 @@ wrong reason:
    defect, since a 64-bit rebuild of such a fragment is value-identical to a
    32-bit one). See `diff_decompile.width_sensitive`.
 
-What is still NOT done: the recovery is not EXECUTED at 32 bits. `gcc -m32`
-works on this host, so the compile side is genuine; the execute side is not,
-because the differential worker is 64-bit CPython driving `ctypes.CDLL`, which
-refuses a 32-bit object outright (`wrong ELF class: ELFCLASS32`). Closing that
-needs the worker rewritten as a generated C driver (or run under `qemu-i386`
-with a 32-bit interpreter), which is a new comparator and therefore a new source
-of harness-attributed failures — the exact mistake the prototype made. The
-residue that leaves is quantified by `--width-audit`, not hand-waved.
-The 64-bit lanes carry no such caveat, and `aarch64` is measured to have zero
-ABI-incomparable functions, which is the control for point 1.
+The 64-bit lanes carry no such caveat.  For 32-bit signatures the result detail
+distinguishes target-worker verdicts from the host fallback, and
+`--width-audit` quantifies only fallback failures; it must never relabel one as a
+pass.  The generated worker has real i386 non-vacuity coverage that proves both
+return and buffer mismatches are detected, while the x86-64 control remains the
+independent whole-harness control.
 
 TOOLCHAIN
 ---------
@@ -255,6 +255,33 @@ def native_cc(arch: str) -> list[str] | None:
     return [TARGETS[arch].cc, *TARGETS[arch].cflags]
 
 
+def native_runner(arch: str) -> list[str] | None:
+    """Command prefix that executes an ILP32 worker at the target ABI.
+
+    Host-side portable-C execution remains the simpler oracle for both 64-bit
+    lanes.  It is not sound for an ILP32 recovery that constructs a target C++
+    object and then calls an exported target helper: recompiling that object at
+    LP64 changes both pointer fields and aggregate layout.  Those lanes use a
+    generated target-native C worker instead.
+    """
+    if TARGETS[arch].pointer_bytes != 4:
+        return None
+    if arch == "i386":
+        return ["qemu-i386", "-L", "/"]
+    if arch == "armv7":
+        loader = subprocess.run(
+            [TARGETS[arch].cc, "-print-file-name=ld-linux-armhf.so.3"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if loader.returncode != 0 or not loader.stdout.strip():
+            return ["qemu-arm", "-L", "/usr/arm-linux-gnueabihf"]
+        sysroot = Path(loader.stdout.strip()).resolve().parent.parent
+        return ["qemu-arm", "-L", str(sysroot)]
+    raise ValueError(f"no native runner for 32-bit architecture {arch}")
+
+
 def _cross_build(arch: str, src: Path, opt: str, out: Path) -> tuple[bool, str]:
     """Build the fixture FOR the target.
 
@@ -420,6 +447,9 @@ def _run_lane(
         native = native_cc(arch)
         if native is not None:
             cmd += ["--native-cc", json.dumps(native)]
+        runner = native_runner(arch)
+        if runner is not None:
+            cmd += ["--native-runner", json.dumps(runner)]
         r = subprocess.run(
             cmd,
             capture_output=True,
@@ -455,6 +485,7 @@ def fingerprint(arches) -> dict:
     a baseline can never be silently compared across the two.
     """
     fixture_cc: dict[str, str] = {}
+    runners: dict[str, str] = {}
     for arch in sorted(arches):
         cc = TARGETS[arch].cc
         if TARGETS[arch].pinned:
@@ -469,6 +500,16 @@ def fingerprint(arches) -> dict:
             [cc, "--version"], capture_output=True, text=True, check=False
         )
         fixture_cc[arch] = f"host: {(r.stdout.strip().splitlines() or ['?'])[0]}"
+        runner = native_runner(arch)
+        if runner is not None:
+            version = subprocess.run(
+                [runner[0], "--version"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            first_line = (version.stdout.strip().splitlines() or ["MISSING"])[0]
+            runners[arch] = f"{' '.join(runner)} :: {first_line}"
     # A recovery that reads an uninitialised local dereferences whatever the
     # stack happened to hold. `aslr` records whether randomization is off; the
     # matching fixed-environment rule (`build_guard.worker_env`) is unconditional
@@ -476,6 +517,7 @@ def fingerprint(arches) -> dict:
     return {
         "rebuild": TC.fingerprint(),
         "fixture": fixture_cc,
+        "runner": runners,
         "aslr": BG.aslr_mode(),
     }
 
@@ -738,6 +780,14 @@ def toolchain_problems(recorded, current) -> list[str]:
                 f"fixture cc[{arch}]: baseline {want.get(arch)!r} != "
                 f"current {got.get(arch)!r}"
             )
+    want_runners = recorded.get("runner") or {}
+    got_runners = current.get("runner") or {}
+    for arch in sorted(set(want_runners) | set(got_runners)):
+        if want_runners.get(arch) != got_runners.get(arch):
+            problems.append(
+                f"target runner[{arch}]: baseline {want_runners.get(arch)!r} != "
+                f"current {got_runners.get(arch)!r}"
+            )
     if recorded.get("aslr") != current.get("aslr"):
         problems.append(
             f"aslr: baseline {recorded.get('aslr')!r} != current "
@@ -840,6 +890,8 @@ def _print_report(result: dict, per_lane: bool = True) -> None:
     print(f"rebuild toolchain[{fp['rebuild']['mode']}]: {fp['rebuild']['gcc']}")
     for arch, ver in sorted(fp["fixture"].items()):
         print(f"  fixture cc {arch:8s} {ver}")
+    for arch, ver in sorted(fp.get("runner", {}).items()):
+        print(f"  target run {arch:8s} {ver}")
     print(f"  aslr                {fp.get('aslr', '?')}")
     print()
     for key, fns in sorted(H.lanes(result).items()) if per_lane else []:
@@ -871,10 +923,10 @@ def _print_report(result: dict, per_lane: bool = True) -> None:
         if arch == CONTROL_ARCH:
             marker = "  (CONTROL — must be clean)"
         elif TARGETS[arch].pointer_bytes == 4:
-            # Named on every printed line, not buried in a docstring: a 32-bit
-            # `fail` can still be a non-portable recovery rather than a lifter
-            # bug. `--width-audit` splits which.
-            marker = "  (32-bit: executed at host width — --width-audit)"
+            # Simple scalar/pointer signatures execute at the actual target ABI;
+            # richer aggregate signatures retain the explicitly audited portable-C
+            # fallback until the generated worker supports their materializer.
+            marker = "  (32-bit: target ABI where supported; --width-audit fallback)"
         else:
             marker = ""
         print(

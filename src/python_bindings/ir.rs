@@ -1470,6 +1470,12 @@ fn dwarf_stack_object_hints(
                 (CallConv::Cdecl32, DwarfStackBase::Register(5)) => ("ebp", 0),
                 (CallConv::Cdecl32, DwarfStackBase::CallFrameCfa) => ("ebp", 8),
                 (CallConv::Aarch64, DwarfStackBase::Register(29)) => ("x29", 0),
+                // DW_OP_fbreg is relative to the call-frame address, which is
+                // the architectural entry SP. The stack-local pass retains
+                // this coordinate for proven aggregates and reconciles it with
+                // the current-SP delta without globally rebasing AArch64's
+                // ordinary own-frame slots.
+                (CallConv::Aarch64, DwarfStackBase::CallFrameCfa) => ("entry_sp", 0),
                 (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::Register(11 | 7)) => {
                     ("fp", 0)
                 }
@@ -3164,5 +3170,26 @@ mod tests {
         assert_eq!(hints[1].base, "fp");
         assert_eq!(hints[1].disp, -8);
         assert_eq!(hints[1].size, 8);
+    }
+
+    #[test]
+    fn dwarf_aarch64_cfa_maps_to_the_entry_stack_coordinate() {
+        let contract = DwarfPrototypeContract {
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: vec![DwarfStackObject {
+                base: DwarfStackBase::CallFrameCfa,
+                offset: -40,
+                byte_size: 16,
+                aggregate: true,
+            }],
+        };
+
+        let hints = dwarf_stack_object_hints(Some(&contract), CallConv::Aarch64);
+
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].base, "entry_sp");
+        assert_eq!(hints[0].disp, -40);
+        assert_eq!(hints[0].size, 16);
     }
 }

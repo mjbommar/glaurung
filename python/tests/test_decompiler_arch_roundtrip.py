@@ -48,9 +48,11 @@ FP_FIXTURE: dict[str, str] = {
     "x86_64": "pinned: gcc 11",
     "aarch64": "host: aarch64 gcc 15",
 }
+FP_RUNNER: dict[str, str] = {}
 FP: dict = {
     "rebuild": FP_REBUILD,
     "fixture": FP_FIXTURE,
+    "runner": FP_RUNNER,
     "aslr": "no-randomize (setarch)",
 }
 
@@ -228,6 +230,13 @@ def test_toolchain_mismatch_covers_the_pinned_rebuild_toolchain():
     drifted = {**FP, "rebuild": {**FP_REBUILD, "gcc": "gcc 14"}}
     problems = A.toolchain_problems(FP, drifted)
     assert any(p.startswith("rebuild ") and "gcc" in p for p in problems)
+
+
+def test_toolchain_mismatch_covers_the_target_execution_runtime():
+    recorded = {**FP, "runner": {"armv7": "qemu-arm 10.2"}}
+    current = {**FP, "runner": {"armv7": "qemu-arm 10.3"}}
+    (problem,) = A.toolchain_problems(recorded, current)
+    assert problem.startswith("target runner[armv7]")
 
 
 def test_a_run_with_address_randomization_is_not_comparable():
@@ -691,6 +700,79 @@ def test_the_native_probe_is_configured_for_every_foreign_architecture():
             continue
         cc = A.native_cc(arch)
         assert cc and cc[0] == A.TARGETS[arch].cc, arch
+
+
+def test_genuine_target_execution_is_configured_for_both_ilp32_lanes():
+    """ILP32 C++ objects cannot be judged inside LP64 ctypes.
+
+    The two 32-bit lanes therefore need a target process, while the two 64-bit
+    lanes keep the simpler host-portable differential.
+    """
+    assert A.native_runner("x86_64") is None
+    assert A.native_runner("aarch64") is None
+    assert A.native_runner("i386")[:1] == ["qemu-i386"]
+    assert A.native_runner("armv7")[:1] == ["qemu-arm"]
+
+
+def test_native_worker_refuses_malformed_vectors_and_unknown_integer_widths():
+    """An unsupported comparator input must fall back, never emit a weak oracle."""
+    two_args = _sig("f", _I32, _I32, _I32)
+    assert D._native_worker_source(two_args, [[1]], "int") is None
+
+    odd_width = {"k": "int", "w": 3, "s": True}
+    assert D._native_worker_source(_sig("f", odd_width), [[]], "int") is None
+
+
+@pytest.mark.slow
+def test_native_execution_compares_ilp32_returns_and_buffer_effects(tmp_path):
+    """Non-vacuity for the generated target worker, using a real i386 process."""
+    if not _multilib_available(tmp_path) or shutil.which("qemu-i386") is None:
+        pytest.skip("32-bit gcc multilib and qemu-i386 are required")
+    original_source = tmp_path / "original.c"
+    original_source.write_text(
+        "int native_effect(int *out, int x) { out[0] = x + 1; return out[0]; }\n"
+    )
+    original = tmp_path / "original.so"
+    subprocess.run(
+        ["gcc", "-m32", "-shared", "-fPIC", "-o", original, original_source],
+        check=True,
+    )
+    sig = _sig(
+        "native_effect",
+        _I32,
+        {"k": "ptr", "p": _I32, "pw": 4, "ps": True},
+        _I32,
+    )
+    vectors = [[[3, 4, 5], 7], [[-1, 0, 1], -3]]
+    runner = ["qemu-i386", "-L", "/"]
+
+    good = D.native_execution_differential(
+        "int native_effect(int *out, int x) { out[0] = x + 1; return out[0]; }",
+        original,
+        sig,
+        vectors,
+        tmp_path,
+        ["gcc", "-m32"],
+        runner,
+        "int",
+    )
+    assert good == {
+        "status": "pass",
+        "detail": "2 cases (native target ABI)",
+    }
+
+    bad = D.native_execution_differential(
+        "int native_effect(int *out, int x) { out[0] = x + 2; return out[0]; }",
+        original,
+        sig,
+        vectors,
+        tmp_path,
+        ["gcc", "-m32"],
+        runner,
+        "int",
+    )
+    assert bad is not None and bad["status"] == "fail"
+    assert "native target" in bad["detail"]
 
 
 @pytest.mark.slow
