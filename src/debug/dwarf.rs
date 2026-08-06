@@ -917,6 +917,14 @@ fn _build_enum_variant(
     Some(DwarfEnumVariant { name, value })
 }
 
+fn prepend_type_qualifier(inner: &str, qualifier: &str) -> String {
+    if inner.split_whitespace().next() == Some(qualifier) {
+        inner.to_string()
+    } else {
+        format!("{qualifier} {inner}")
+    }
+}
+
 /// Resolve a `DW_AT_type` reference to a printable C-ish type string.
 /// Best-effort: handles base types (DW_TAG_base_type), pointers, refs,
 /// arrays (as `T[]`), const/volatile qualifiers, and forwards to named
@@ -967,14 +975,14 @@ fn _resolve_type_string(
                 .attr_value(gimli::DW_AT_type)
                 .and_then(|v| _resolve_type_string(dwarf, unit, v))
                 .unwrap_or_else(|| "void".to_string());
-            Some(format!("const {}", inner))
+            Some(prepend_type_qualifier(&inner, "const"))
         }
         gimli::DW_TAG_volatile_type => {
             let inner = entry
                 .attr_value(gimli::DW_AT_type)
                 .and_then(|v| _resolve_type_string(dwarf, unit, v))
                 .unwrap_or_else(|| "void".to_string());
-            Some(format!("volatile {}", inner))
+            Some(prepend_type_qualifier(&inner, "volatile"))
         }
         gimli::DW_TAG_array_type => {
             let inner = entry
@@ -1002,6 +1010,15 @@ mod tests {
         // 64 bytes of garbage — should not panic.
         let funcs = extract_dwarf_functions(&[0xAA; 64]);
         assert!(funcs.is_empty());
+    }
+
+    #[test]
+    fn repeated_type_qualifier_is_not_rendered_twice() {
+        assert_eq!(prepend_type_qualifier("char *", "const"), "const char *");
+        assert_eq!(
+            prepend_type_qualifier("const char *", "const"),
+            "const char *"
+        );
     }
 
     #[test]

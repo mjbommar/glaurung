@@ -6482,9 +6482,13 @@ fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
     {
         return false;
     }
-    let pointer = normalized.ends_with('*');
-    let base = normalized
-        .trim_end_matches('*')
+    let mut base_spelling = normalized.as_str();
+    let mut pointer = false;
+    while let Some(inner) = base_spelling.trim_end().strip_suffix('*') {
+        pointer = true;
+        base_spelling = inner;
+    }
+    let base = base_spelling
         .split_whitespace()
         .filter(|word| !matches!(*word, "const" | "volatile" | "restrict"))
         .collect::<Vec<_>>()
@@ -6542,7 +6546,7 @@ fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
             | "uint64_t"
             | "float"
             | "double"
-    ) || (allow_void && base == "void")
+    ) || (base == "void" && (allow_void || pointer))
 }
 
 fn dwarf_prototype_type_is_renderable(
@@ -6814,14 +6818,16 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     let declared_prototype = declared_prototype.filter(|prototype| {
         prototype.parameter_types.len() == arg_count
             && dwarf_prototype_type_is_renderable(&prototype.return_type, true, dwarf_types)
-            && prototype
-                .parameter_types
-                .iter()
-                .all(|c_type| dwarf_prototype_type_is_renderable(c_type, false, dwarf_types))
             && ((output_kind == crate::ir::types_recover::RecoveredOutputKind::Void
                 && prototype.return_type == "void")
                 || (output_kind != crate::ir::types_recover::RecoveredOutputKind::Void
                     && prototype.return_type != "void"))
+    });
+    let all_declared_parameters_renderable = declared_prototype.is_some_and(|prototype| {
+        prototype
+            .parameter_types
+            .iter()
+            .all(|c_type| dwarf_prototype_type_is_renderable(c_type, false, dwarf_types))
     });
 
     let aggregate_layouts =
@@ -6962,15 +6968,13 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
                 out.push_str(", ");
             }
             let aname = format!("arg{}", i);
-            let aty = declared_prototype.map_or_else(
-                || ctype_for(&aname, tm).to_string(),
-                |prototype| {
-                    source_type_with_complete_struct_alias(
-                        &prototype.parameter_types[i],
-                        &complete_structs,
-                    )
-                },
-            );
+            let recovered_type = || ctype_for(&aname, tm).to_string();
+            let aty = declared_prototype
+                .and_then(|prototype| prototype.parameter_types.get(i))
+                .filter(|c_type| dwarf_prototype_type_is_renderable(c_type, false, dwarf_types))
+                .map_or_else(recovered_type, |c_type| {
+                    source_type_with_complete_struct_alias(c_type, &complete_structs)
+                });
             if aty.ends_with('*') {
                 DEC_PTR_ARGS.with(|m| m.borrow_mut().insert(aname.clone(), aty.clone()));
             }
@@ -6994,9 +6998,11 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
             return_type: return_type.clone(),
             parameter_types,
             variadic: false,
-            authority: declared_prototype.map_or(CallPrototypeAuthority::Recovered, |_| {
+            authority: if all_declared_parameters_renderable {
                 CallPrototypeAuthority::Authoritative
-            }),
+            } else {
+                CallPrototypeAuthority::Recovered
+            },
         },
     );
     DEC_NAMED_CALL_PROTOTYPES.with(|selected| {
@@ -15234,6 +15240,64 @@ function f @ 0x1000 {
         assert!(
             rendered.contains("uint32_t fixed_width(const int32_t * arg0, int32_t arg1)"),
             "fixed-width DWARF prototype was discarded:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn opaque_dwarf_parameter_does_not_discard_renderable_sibling_types() {
+        let function = Function {
+            name: "mixed_dwarf_types".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: Expr::Reg(VReg::phys("arg1")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var2"),
+                    src: Expr::Reg(VReg::phys("arg3")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("arg2"))),
+                },
+            ],
+        };
+        let prototype = CallPrototype {
+            return_type: "long".into(),
+            parameter_types: vec![
+                "const char *".into(),
+                "opaque_callback *".into(),
+                "void *".into(),
+                "const char * *".into(),
+            ],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        let rendered = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(
+            rendered.contains(
+                "long mixed_dwarf_types(const char * arg0, long arg1, void * arg2, const char * * arg3)"
+            ),
+            "one opaque parameter discarded independently renderable DWARF types:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("opaque_callback"),
+            "an unavailable typedef escaped into generated C:\n{rendered}"
         );
     }
 
