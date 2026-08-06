@@ -68,20 +68,25 @@ class GlaurungDecompiler(Decompiler):
         revision = result.stdout.strip()
         return f"git-{revision}" if result.returncode == 0 and revision else "unknown"
 
-    def _run_batch(self, binary_path: Path) -> list[dict[str, Any]]:
+    def _run_batch(
+        self, binary_path: Path, requested_addresses: set[int] | None = None
+    ) -> list[dict[str, Any]]:
         executable = self._binary()
         if executable is None:
             raise RuntimeError("GLAURUNG_BIN does not name an executable")
         env = dict(os.environ, NO_COLOR="1", TERM="dumb")
         env.pop("FORCE_COLOR", None)
+        selectors = (
+            ["--vas", ",".join(hex(address) for address in sorted(requested_addresses))]
+            if requested_addresses
+            else ["--all", "--limit", "2000"]
+        )
         result = subprocess.run(
             [
                 executable,
                 "decompile",
                 str(binary_path),
-                "--all",
-                "--limit",
-                "2000",
+                *selectors,
                 "--style",
                 "decbench",
                 "--format",
@@ -119,7 +124,9 @@ class GlaurungDecompiler(Decompiler):
             raise RuntimeError("Decompiler 'glaurung' is not available")
 
         started = time.monotonic()
-        records = self._run_batch(binary_path)
+        requested_addresses = {address for _name, address in functions or []}
+        requested_addresses.update(function_names or ())
+        records = self._run_batch(binary_path, requested_addresses or None)
         text_range = common.elf_text_range(binary_path)
         requested = set(functions or [])
         enumerated: list[tuple[str, int, str]] = []
