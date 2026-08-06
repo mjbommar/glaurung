@@ -55,6 +55,34 @@
     "ternary": "pass",
     "ternary_nested": "pass"
   },
+  "01_conditional_polarity:armv7_a32:O0": {
+    "classify": "pass",
+    "cmp_signed": "pass",
+    "cmp_unsigned": "pass",
+    "early_return": "pass",
+    "early_return_ge": "pass",
+    "elseif": "pass",
+    "nested": "pass",
+    "sc_and": "pass",
+    "sc_mixed": "pass",
+    "sc_or": "pass",
+    "ternary": "pass",
+    "ternary_nested": "pass"
+  },
+  "01_conditional_polarity:armv7_a32:O2": {
+    "classify": "fail",
+    "cmp_signed": "pass",
+    "cmp_unsigned": "pass",
+    "early_return": "fail",
+    "early_return_ge": "fail",
+    "elseif": "fail",
+    "nested": "fail",
+    "sc_and": "fail",
+    "sc_mixed": "fail",
+    "sc_or": "fail",
+    "ternary": "fail",
+    "ternary_nested": "pass"
+  },
   "01_conditional_polarity:i386:O0": {
     "classify": "pass",
     "cmp_signed": "pass",
@@ -98,6 +126,34 @@
     "ternary_nested": "pass"
   },
   "01_conditional_polarity:x86_64:O2": {
+    "classify": "pass",
+    "cmp_signed": "pass",
+    "cmp_unsigned": "pass",
+    "early_return": "pass",
+    "early_return_ge": "pass",
+    "elseif": "pass",
+    "nested": "pass",
+    "sc_and": "pass",
+    "sc_mixed": "pass",
+    "sc_or": "pass",
+    "ternary": "pass",
+    "ternary_nested": "pass"
+  },
+  "01_conditional_polarity:x86_64_gcc15:O0": {
+    "classify": "pass",
+    "cmp_signed": "pass",
+    "cmp_unsigned": "pass",
+    "early_return": "pass",
+    "early_return_ge": "pass",
+    "elseif": "pass",
+    "nested": "pass",
+    "sc_and": "pass",
+    "sc_mixed": "pass",
+    "sc_or": "pass",
+    "ternary": "pass",
+    "ternary_nested": "pass"
+  },
+  "01_conditional_polarity:x86_64_gcc15:O2": {
     "classify": "pass",
     "cmp_signed": "pass",
     "cmp_unsigned": "pass",
@@ -177,6 +233,12 @@
   "02_integer_widths:armv7:O2": {
     "__lane__": "unsupported: __int128 is not a type on armv7"
   },
+  "02_integer_widths:armv7_a32:O0": {
+    "__lane__": "unsupported: __int128 is not a type on armv7_a32"
+  },
+  "02_integer_widths:armv7_a32:O2": {
+    "__lane__": "unsupported: __int128 is not a type on armv7_a32"
+  },
   "02_integer_widths:i386:O0": {
     "__lane__": "unsupported: __int128 is not a type on i386"
   },
@@ -222,6 +284,66 @@
     "mul_widen": "pass",
     "mul_wrap32": "pass",
     "reconstruct_64": "pass",
+    "rotl16_3": "pass",
+    "rotl32_7": "pass",
+    "rotr32": "pass",
+    "rt_u16": "pass",
+    "rt_u32": "pass",
+    "rt_u64": "pass",
+    "rt_u8": "pass",
+    "sar_signed": "pass",
+    "sext_i16": "pass",
+    "sext_i8": "pass",
+    "shr_unsigned": "pass",
+    "shr_via_cast": "pass",
+    "smul_high64": "pass",
+    "srem64": "pass",
+    "trunc_u16_after_mul": "pass",
+    "trunc_u8": "pass",
+    "umul_high64": "pass",
+    "urem64": "pass",
+    "wrap_sub_u32": "pass",
+    "zext_u32_to_u64": "pass"
+  },
+  "02_integer_widths:x86_64_gcc15:O0": {
+    "add_wrap32": "pass",
+    "deposit_byte1": "pass",
+    "deposit_low_byte": "pass",
+    "extract_byte1": "pass",
+    "extract_byte3": "pass",
+    "mul_widen": "pass",
+    "mul_wrap32": "pass",
+    "reconstruct_64": "pass",
+    "rotl16_3": "pass",
+    "rotl32_7": "pass",
+    "rotr32": "pass",
+    "rt_u16": "pass",
+    "rt_u32": "pass",
+    "rt_u64": "pass",
+    "rt_u8": "pass",
+    "sar_signed": "pass",
+    "sext_i16": "pass",
+    "sext_i8": "pass",
+    "shr_unsigned": "pass",
+    "shr_via_cast": "pass",
+    "smul_high64": "pass",
+    "srem64": "pass",
+    "trunc_u16_after_mul": "pass",
+    "trunc_u8": "pass",
+    "umul_high64": "pass",
+    "urem64": "pass",
+    "wrap_sub_u32": "pass",
+    "zext_u32_to_u64": "pass"
+  },
+  "02_integer_widths:x86_64_gcc15:O2": {
+    "add_wrap32": "pass",
+    "deposit_byte1": "pass",
+    "deposit_low_byte": "pass",
+    "extract_byte1": "pass",
+    "extract_byte3": "pass",
+    "mul_widen": "pass",
+    "mul_wrap32": "pass",
+    "reconstruct_64": "fail",
     "rotl16_3": "pass",
     "rotl32_7": "pass",
     "rotr32": "pass",
@@ -323,6 +445,46 @@
     "while_prefix": "pass",
     "while_reload_header": "pass"
   },
+  "03_loop_shapes:armv7_a32:O0": {
+    "cond_reload_and_transform": "fail",
+    "cond_side_effect": "fail",
+    "dowhile_atleastonce": "fail",
+    "dowhile_recompute": "fail",
+    "for_countdown": "fail",
+    "for_stride2": "fail",
+    "for_sum": "fail",
+    "loop_break": "fail",
+    "loop_continue": "fail",
+    "loop_early_return": "fail",
+    "loop_return_on_neg": "fail",
+    "mutate_prefix": "fail",
+    "mutate_reverse": "fail",
+    "nested_carry": "fail",
+    "nested_pairs": "fail",
+    "two_latches": "fail",
+    "while_prefix": "fail",
+    "while_reload_header": "fail"
+  },
+  "03_loop_shapes:armv7_a32:O2": {
+    "cond_reload_and_transform": "fail",
+    "cond_side_effect": "fail",
+    "dowhile_atleastonce": "pass",
+    "dowhile_recompute": "fail",
+    "for_countdown": "pass",
+    "for_stride2": "pass",
+    "for_sum": "pass",
+    "loop_break": "pass",
+    "loop_continue": "fail",
+    "loop_early_return": "pass",
+    "loop_return_on_neg": "fail",
+    "mutate_prefix": "pass",
+    "mutate_reverse": "pass",
+    "nested_carry": "pass",
+    "nested_pairs": "pass",
+    "two_latches": "fail",
+    "while_prefix": "pass",
+    "while_reload_header": "fail"
+  },
   "03_loop_shapes:i386:O0": {
     "cond_reload_and_transform": "pass",
     "cond_side_effect": "pass",
@@ -393,6 +555,46 @@
     "for_sum": "pass",
     "loop_break": "pass",
     "loop_continue": "pass",
+    "loop_early_return": "pass",
+    "loop_return_on_neg": "pass",
+    "mutate_prefix": "pass",
+    "mutate_reverse": "pass",
+    "nested_carry": "pass",
+    "nested_pairs": "pass",
+    "two_latches": "pass",
+    "while_prefix": "pass",
+    "while_reload_header": "pass"
+  },
+  "03_loop_shapes:x86_64_gcc15:O0": {
+    "cond_reload_and_transform": "pass",
+    "cond_side_effect": "pass",
+    "dowhile_atleastonce": "pass",
+    "dowhile_recompute": "pass",
+    "for_countdown": "pass",
+    "for_stride2": "pass",
+    "for_sum": "pass",
+    "loop_break": "pass",
+    "loop_continue": "pass",
+    "loop_early_return": "pass",
+    "loop_return_on_neg": "pass",
+    "mutate_prefix": "pass",
+    "mutate_reverse": "pass",
+    "nested_carry": "pass",
+    "nested_pairs": "pass",
+    "two_latches": "pass",
+    "while_prefix": "pass",
+    "while_reload_header": "pass"
+  },
+  "03_loop_shapes:x86_64_gcc15:O2": {
+    "cond_reload_and_transform": "pass",
+    "cond_side_effect": "pass",
+    "dowhile_atleastonce": "pass",
+    "dowhile_recompute": "pass",
+    "for_countdown": "pass",
+    "for_stride2": "pass",
+    "for_sum": "fail",
+    "loop_break": "pass",
+    "loop_continue": "fail",
     "loop_early_return": "pass",
     "loop_return_on_neg": "pass",
     "mutate_prefix": "pass",
@@ -475,6 +677,42 @@
     "switch_in_loop": "pass",
     "switch_loop_break": "pass"
   },
+  "04_switch_shapes:armv7_a32:O0": {
+    "default_dominant": "pass",
+    "dense_compute": "fail",
+    "dense_jumptable": "pass",
+    "explicit_fallthrough": "pass",
+    "fallthrough_chain": "pass",
+    "negative_cases": "pass",
+    "negative_sparse": "pass",
+    "nested_switch": "pass",
+    "no_default": "pass",
+    "shared_bodies": "pass",
+    "shared_sparse": "pass",
+    "sparse_shared_tail": "pass",
+    "sparse_switch": "pass",
+    "sparse_wide": "pass",
+    "switch_in_loop": "fail",
+    "switch_loop_break": "fail"
+  },
+  "04_switch_shapes:armv7_a32:O2": {
+    "default_dominant": "fail",
+    "dense_compute": "fail",
+    "dense_jumptable": "fail",
+    "explicit_fallthrough": "fail",
+    "fallthrough_chain": "fail",
+    "negative_cases": "fail",
+    "negative_sparse": "fail",
+    "nested_switch": "fail",
+    "no_default": "fail",
+    "shared_bodies": "fail",
+    "shared_sparse": "fail",
+    "sparse_shared_tail": "fail",
+    "sparse_switch": "fail",
+    "sparse_wide": "fail",
+    "switch_in_loop": "fail",
+    "switch_loop_break": "fail"
+  },
   "04_switch_shapes:i386:O0": {
     "default_dominant": "pass",
     "dense_compute": "pass",
@@ -547,6 +785,42 @@
     "switch_in_loop": "pass",
     "switch_loop_break": "pass"
   },
+  "04_switch_shapes:x86_64_gcc15:O0": {
+    "default_dominant": "pass",
+    "dense_compute": "pass",
+    "dense_jumptable": "pass",
+    "explicit_fallthrough": "pass",
+    "fallthrough_chain": "pass",
+    "negative_cases": "pass",
+    "negative_sparse": "pass",
+    "nested_switch": "pass",
+    "no_default": "pass",
+    "shared_bodies": "pass",
+    "shared_sparse": "pass",
+    "sparse_shared_tail": "pass",
+    "sparse_switch": "pass",
+    "sparse_wide": "pass",
+    "switch_in_loop": "pass",
+    "switch_loop_break": "pass"
+  },
+  "04_switch_shapes:x86_64_gcc15:O2": {
+    "default_dominant": "pass",
+    "dense_compute": "pass",
+    "dense_jumptable": "pass",
+    "explicit_fallthrough": "pass",
+    "fallthrough_chain": "pass",
+    "negative_cases": "pass",
+    "negative_sparse": "pass",
+    "nested_switch": "pass",
+    "no_default": "pass",
+    "shared_bodies": "pass",
+    "shared_sparse": "pass",
+    "sparse_shared_tail": "pass",
+    "sparse_switch": "pass",
+    "sparse_wide": "pass",
+    "switch_in_loop": "pass",
+    "switch_loop_break": "pass"
+  },
   "05_cleanup_and_state_machine:aarch64:O0": {
     "fsm": "pass",
     "process": "fail"
@@ -563,6 +837,14 @@
     "fsm": "pass",
     "process": "fail"
   },
+  "05_cleanup_and_state_machine:armv7_a32:O0": {
+    "fsm": "pass",
+    "process": "fail"
+  },
+  "05_cleanup_and_state_machine:armv7_a32:O2": {
+    "fsm": "fail",
+    "process": "fail"
+  },
   "05_cleanup_and_state_machine:i386:O0": {
     "fsm": "pass",
     "process": "pass"
@@ -576,6 +858,14 @@
     "process": "pass"
   },
   "05_cleanup_and_state_machine:x86_64:O2": {
+    "fsm": "pass",
+    "process": "pass"
+  },
+  "05_cleanup_and_state_machine:x86_64_gcc15:O0": {
+    "fsm": "pass",
+    "process": "pass"
+  },
+  "05_cleanup_and_state_machine:x86_64_gcc15:O2": {
     "fsm": "pass",
     "process": "pass"
   },
@@ -639,6 +929,44 @@
   "06_calling_conventions:armv7:O2": {
     "fact_mod": "fail",
     "fib": "pass",
+    "forward_sum6": "pass",
+    "guarded_spin": "pass",
+    "sum_arg0": "pass",
+    "sum_arg1": "pass",
+    "sum_arg10": "pass",
+    "sum_arg2": "pass",
+    "sum_arg3": "pass",
+    "sum_arg4": "pass",
+    "sum_arg5": "pass",
+    "sum_arg6": "pass",
+    "sum_arg7": "pass",
+    "sum_arg8": "pass",
+    "sum_arg9": "pass",
+    "sum_mixed_widths": "pass",
+    "tailcall_to_sum4": "pass"
+  },
+  "06_calling_conventions:armv7_a32:O0": {
+    "fact_mod": "fail",
+    "fib": "pass",
+    "forward_sum6": "fail",
+    "guarded_spin": "pass",
+    "sum_arg0": "pass",
+    "sum_arg1": "pass",
+    "sum_arg10": "fail",
+    "sum_arg2": "fail",
+    "sum_arg3": "fail",
+    "sum_arg4": "fail",
+    "sum_arg5": "fail",
+    "sum_arg6": "fail",
+    "sum_arg7": "fail",
+    "sum_arg8": "fail",
+    "sum_arg9": "fail",
+    "sum_mixed_widths": "fail",
+    "tailcall_to_sum4": "pass"
+  },
+  "06_calling_conventions:armv7_a32:O2": {
+    "fact_mod": "fail",
+    "fib": "fail",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
     "sum_arg0": "pass",
@@ -731,6 +1059,44 @@
     "sum_mixed_widths": "pass",
     "tailcall_to_sum4": "pass"
   },
+  "06_calling_conventions:x86_64_gcc15:O0": {
+    "fact_mod": "pass",
+    "fib": "pass",
+    "forward_sum6": "pass",
+    "guarded_spin": "pass",
+    "sum_arg0": "pass",
+    "sum_arg1": "pass",
+    "sum_arg10": "pass",
+    "sum_arg2": "pass",
+    "sum_arg3": "pass",
+    "sum_arg4": "pass",
+    "sum_arg5": "pass",
+    "sum_arg6": "pass",
+    "sum_arg7": "pass",
+    "sum_arg8": "pass",
+    "sum_arg9": "pass",
+    "sum_mixed_widths": "pass",
+    "tailcall_to_sum4": "pass"
+  },
+  "06_calling_conventions:x86_64_gcc15:O2": {
+    "fact_mod": "pass",
+    "fib": "pass",
+    "forward_sum6": "pass",
+    "guarded_spin": "pass",
+    "sum_arg0": "pass",
+    "sum_arg1": "pass",
+    "sum_arg10": "pass",
+    "sum_arg2": "pass",
+    "sum_arg3": "pass",
+    "sum_arg4": "pass",
+    "sum_arg5": "pass",
+    "sum_arg6": "pass",
+    "sum_arg7": "pass",
+    "sum_arg8": "pass",
+    "sum_arg9": "pass",
+    "sum_mixed_widths": "pass",
+    "tailcall_to_sum4": "pass"
+  },
   "07_packet_parser:aarch64:O0": {
     "parse_packet": "fail",
     "validate_header": "fail"
@@ -747,6 +1113,14 @@
     "parse_packet": "fail",
     "validate_header": "pass"
   },
+  "07_packet_parser:armv7_a32:O0": {
+    "parse_packet": "fail",
+    "validate_header": "fail"
+  },
+  "07_packet_parser:armv7_a32:O2": {
+    "parse_packet": "fail",
+    "validate_header": "fail"
+  },
   "07_packet_parser:i386:O0": {
     "parse_packet": "pass",
     "validate_header": "pass"
@@ -760,6 +1134,14 @@
     "validate_header": "pass"
   },
   "07_packet_parser:x86_64:O2": {
+    "parse_packet": "pass",
+    "validate_header": "pass"
+  },
+  "07_packet_parser:x86_64_gcc15:O0": {
+    "parse_packet": "pass",
+    "validate_header": "pass"
+  },
+  "07_packet_parser:x86_64_gcc15:O2": {
     "parse_packet": "pass",
     "validate_header": "pass"
   },
@@ -787,6 +1169,18 @@
     "dispatch_switch": "pass",
     "tail_dispatch": "fail"
   },
+  "08_indirect_dispatch:armv7_a32:O0": {
+    "apply": "structural",
+    "dispatch": "pass",
+    "dispatch_switch": "pass",
+    "tail_dispatch": "pass"
+  },
+  "08_indirect_dispatch:armv7_a32:O2": {
+    "apply": "structural",
+    "dispatch": "fail",
+    "dispatch_switch": "fail",
+    "tail_dispatch": "fail"
+  },
   "08_indirect_dispatch:i386:O0": {
     "apply": "structural",
     "dispatch": "pass",
@@ -806,6 +1200,18 @@
     "tail_dispatch": "pass"
   },
   "08_indirect_dispatch:x86_64:O2": {
+    "apply": "structural",
+    "dispatch": "pass",
+    "dispatch_switch": "pass",
+    "tail_dispatch": "pass"
+  },
+  "08_indirect_dispatch:x86_64_gcc15:O0": {
+    "apply": "structural",
+    "dispatch": "pass",
+    "dispatch_switch": "pass",
+    "tail_dispatch": "pass"
+  },
+  "08_indirect_dispatch:x86_64_gcc15:O2": {
     "apply": "structural",
     "dispatch": "pass",
     "dispatch_switch": "pass",
@@ -855,6 +1261,28 @@
     "vec_sum": "pass",
     "vec_transform": "pass"
   },
+  "09_memory_effects:armv7_a32:O0": {
+    "cas_update": "pass",
+    "mem_copy": "fail",
+    "mem_set": "fail",
+    "read_counter": "pass",
+    "reset_counter": "structural",
+    "tick": "structural",
+    "tick_n": "structural",
+    "vec_sum": "fail",
+    "vec_transform": "fail"
+  },
+  "09_memory_effects:armv7_a32:O2": {
+    "cas_update": "fail",
+    "mem_copy": "fail",
+    "mem_set": "fail",
+    "read_counter": "fail",
+    "reset_counter": "structural",
+    "tick": "structural",
+    "tick_n": "structural",
+    "vec_sum": "pass",
+    "vec_transform": "pass"
+  },
   "09_memory_effects:i386:O0": {
     "cas_update": "pass",
     "mem_copy": "pass",
@@ -889,6 +1317,28 @@
     "vec_transform": "pass"
   },
   "09_memory_effects:x86_64:O2": {
+    "cas_update": "pass",
+    "mem_copy": "pass",
+    "mem_set": "pass",
+    "read_counter": "pass",
+    "reset_counter": "structural",
+    "tick": "structural",
+    "tick_n": "structural",
+    "vec_sum": "pass",
+    "vec_transform": "pass"
+  },
+  "09_memory_effects:x86_64_gcc15:O0": {
+    "cas_update": "pass",
+    "mem_copy": "pass",
+    "mem_set": "pass",
+    "read_counter": "pass",
+    "reset_counter": "structural",
+    "tick": "structural",
+    "tick_n": "structural",
+    "vec_sum": "pass",
+    "vec_transform": "pass"
+  },
+  "09_memory_effects:x86_64_gcc15:O2": {
     "cas_update": "pass",
     "mem_copy": "pass",
     "mem_set": "pass",
@@ -972,6 +1422,50 @@
     "cpp_virtual_dispatch": "structural"
   },
   "10_cpp_runtime_shapes:armv7:O2": {
+    "_ZN4Base2opEi": "structural",
+    "_ZN4BaseD0Ev": "structural",
+    "_ZN4BaseD1Ev": "structural",
+    "_ZN4BaseD2Ev": "structural",
+    "_ZN7Derived2opEi": "structural",
+    "_ZN7DerivedD0Ev": "structural",
+    "_ZN7DerivedD1Ev": "structural",
+    "_ZN7DerivedD2Ev": "structural",
+    "cpp_ctor_dtor": "pass",
+    "cpp_exception": "pass",
+    "cpp_lambda_capture": "pass",
+    "cpp_move": "pass",
+    "cpp_raii_guard": "pass",
+    "cpp_virtual_dispatch": "structural"
+  },
+  "10_cpp_runtime_shapes:armv7_a32:O0": {
+    "_ZN4Base2opEi": "structural",
+    "_ZN4BaseD0Ev": "structural",
+    "_ZN4BaseD1Ev": "structural",
+    "_ZN4BaseD2Ev": "structural",
+    "_ZN5GuardC1EPii": "structural",
+    "_ZN5GuardC2EPii": "structural",
+    "_ZN5GuardD1Ev": "structural",
+    "_ZN5GuardD2Ev": "structural",
+    "_ZN6TracerC1EPiii": "structural",
+    "_ZN6TracerC2EPiii": "structural",
+    "_ZN6TracerD1Ev": "structural",
+    "_ZN6TracerD2Ev": "structural",
+    "_ZN7Derived2opEi": "structural",
+    "_ZN7DerivedD0Ev": "structural",
+    "_ZN7DerivedD1Ev": "structural",
+    "_ZN7DerivedD2Ev": "structural",
+    "_ZN7MovableC1EOS_": "structural",
+    "_ZN7MovableC1Ei": "structural",
+    "_ZN7MovableC2EOS_": "structural",
+    "_ZN7MovableC2Ei": "structural",
+    "cpp_ctor_dtor": "pass",
+    "cpp_exception": "fail",
+    "cpp_lambda_capture": "pass",
+    "cpp_move": "pass",
+    "cpp_raii_guard": "pass",
+    "cpp_virtual_dispatch": "structural"
+  },
+  "10_cpp_runtime_shapes:armv7_a32:O2": {
     "_ZN4Base2opEi": "structural",
     "_ZN4BaseD0Ev": "structural",
     "_ZN4BaseD1Ev": "structural",
@@ -1075,6 +1569,50 @@
     "cpp_raii_guard": "pass",
     "cpp_virtual_dispatch": "structural"
   },
+  "10_cpp_runtime_shapes:x86_64_gcc15:O0": {
+    "_ZN4Base2opEi": "structural",
+    "_ZN4BaseD0Ev": "structural",
+    "_ZN4BaseD1Ev": "structural",
+    "_ZN4BaseD2Ev": "structural",
+    "_ZN5GuardC1EPii": "structural",
+    "_ZN5GuardC2EPii": "structural",
+    "_ZN5GuardD1Ev": "structural",
+    "_ZN5GuardD2Ev": "structural",
+    "_ZN6TracerC1EPiii": "structural",
+    "_ZN6TracerC2EPiii": "structural",
+    "_ZN6TracerD1Ev": "structural",
+    "_ZN6TracerD2Ev": "structural",
+    "_ZN7Derived2opEi": "structural",
+    "_ZN7DerivedD0Ev": "structural",
+    "_ZN7DerivedD1Ev": "structural",
+    "_ZN7DerivedD2Ev": "structural",
+    "_ZN7MovableC1EOS_": "structural",
+    "_ZN7MovableC1Ei": "structural",
+    "_ZN7MovableC2EOS_": "structural",
+    "_ZN7MovableC2Ei": "structural",
+    "cpp_ctor_dtor": "pass",
+    "cpp_exception": "pass",
+    "cpp_lambda_capture": "pass",
+    "cpp_move": "pass",
+    "cpp_raii_guard": "pass",
+    "cpp_virtual_dispatch": "structural"
+  },
+  "10_cpp_runtime_shapes:x86_64_gcc15:O2": {
+    "_ZN4Base2opEi": "structural",
+    "_ZN4BaseD0Ev": "structural",
+    "_ZN4BaseD1Ev": "structural",
+    "_ZN4BaseD2Ev": "structural",
+    "_ZN7Derived2opEi": "structural",
+    "_ZN7DerivedD0Ev": "structural",
+    "_ZN7DerivedD1Ev": "structural",
+    "_ZN7DerivedD2Ev": "structural",
+    "cpp_ctor_dtor": "pass",
+    "cpp_exception": "pass",
+    "cpp_lambda_capture": "pass",
+    "cpp_move": "pass",
+    "cpp_raii_guard": "pass",
+    "cpp_virtual_dispatch": "structural"
+  },
   "11_call_shapes:aarch64:O0": {
     "call_accumulate_bytes": "fail",
     "call_chain_in_loop": "pass",
@@ -1128,6 +1666,36 @@
     "call_into_spill": "pass",
     "call_nested": "pass",
     "call_result_drives_branch": "pass",
+    "call_result_unused": "pass",
+    "call_twice_and_combine": "pass",
+    "signed_step": "pass",
+    "spill_combine": "pass",
+    "widen_mul": "fail",
+    "wrap_byte": "pass"
+  },
+  "11_call_shapes:armv7_a32:O0": {
+    "call_accumulate_bytes": "pass",
+    "call_chain_in_loop": "pass",
+    "call_fold_wide_result": "fail",
+    "call_forward_result": "pass",
+    "call_into_spill": "pass",
+    "call_nested": "pass",
+    "call_result_drives_branch": "pass",
+    "call_result_unused": "pass",
+    "call_twice_and_combine": "fail",
+    "signed_step": "pass",
+    "spill_combine": "fail",
+    "widen_mul": "fail",
+    "wrap_byte": "fail"
+  },
+  "11_call_shapes:armv7_a32:O2": {
+    "call_accumulate_bytes": "fail",
+    "call_chain_in_loop": "fail",
+    "call_fold_wide_result": "fail",
+    "call_forward_result": "pass",
+    "call_into_spill": "pass",
+    "call_nested": "pass",
+    "call_result_drives_branch": "fail",
     "call_result_unused": "pass",
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
@@ -1195,6 +1763,36 @@
     "widen_mul": "pass",
     "wrap_byte": "pass"
   },
+  "11_call_shapes:x86_64_gcc15:O0": {
+    "call_accumulate_bytes": "pass",
+    "call_chain_in_loop": "pass",
+    "call_fold_wide_result": "pass",
+    "call_forward_result": "pass",
+    "call_into_spill": "pass",
+    "call_nested": "pass",
+    "call_result_drives_branch": "pass",
+    "call_result_unused": "pass",
+    "call_twice_and_combine": "pass",
+    "signed_step": "pass",
+    "spill_combine": "pass",
+    "widen_mul": "pass",
+    "wrap_byte": "pass"
+  },
+  "11_call_shapes:x86_64_gcc15:O2": {
+    "call_accumulate_bytes": "pass",
+    "call_chain_in_loop": "pass",
+    "call_fold_wide_result": "pass",
+    "call_forward_result": "pass",
+    "call_into_spill": "fail",
+    "call_nested": "pass",
+    "call_result_drives_branch": "pass",
+    "call_result_unused": "pass",
+    "call_twice_and_combine": "pass",
+    "signed_step": "pass",
+    "spill_combine": "pass",
+    "widen_mul": "pass",
+    "wrap_byte": "pass"
+  },
   "12_loop_rotation:aarch64:O0": {
     "count_up": "pass",
     "do_while_control": "pass",
@@ -1234,6 +1832,26 @@
     "for_accumulate": "pass",
     "nested_rotated": "pass",
     "skip_odd_sum": "pass"
+  },
+  "12_loop_rotation:armv7_a32:O0": {
+    "count_up": "fail",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "fail",
+    "factorial_while": "pass",
+    "find_first_set": "pass",
+    "for_accumulate": "fail",
+    "nested_rotated": "fail",
+    "skip_odd_sum": "pass"
+  },
+  "12_loop_rotation:armv7_a32:O2": {
+    "count_up": "fail",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "pass",
+    "factorial_while": "pass",
+    "find_first_set": "pass",
+    "for_accumulate": "pass",
+    "nested_rotated": "pass",
+    "skip_odd_sum": "fail"
   },
   "12_loop_rotation:i386:O0": {
     "count_up": "pass",
@@ -1275,6 +1893,26 @@
     "nested_rotated": "pass",
     "skip_odd_sum": "pass"
   },
+  "12_loop_rotation:x86_64_gcc15:O0": {
+    "count_up": "pass",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "pass",
+    "factorial_while": "pass",
+    "find_first_set": "pass",
+    "for_accumulate": "pass",
+    "nested_rotated": "pass",
+    "skip_odd_sum": "pass"
+  },
+  "12_loop_rotation:x86_64_gcc15:O2": {
+    "count_up": "pass",
+    "do_while_control": "pass",
+    "down_by_negative_imm": "pass",
+    "factorial_while": "pass",
+    "find_first_set": "pass",
+    "for_accumulate": "pass",
+    "nested_rotated": "pass",
+    "skip_odd_sum": "pass"
+  },
   "13_loop_early_exit:aarch64:O0": {
     "bisect": "pass",
     "classify_run": "pass",
@@ -1307,6 +1945,22 @@
     "sum_positive": "pass",
     "sum_until_zero": "pass"
   },
+  "13_loop_early_exit:armv7_a32:O0": {
+    "bisect": "fail",
+    "classify_run": "fail",
+    "find_first": "fail",
+    "has_pair": "fail",
+    "sum_positive": "fail",
+    "sum_until_zero": "fail"
+  },
+  "13_loop_early_exit:armv7_a32:O2": {
+    "bisect": "fail",
+    "classify_run": "pass",
+    "find_first": "fail",
+    "has_pair": "pass",
+    "sum_positive": "fail",
+    "sum_until_zero": "fail"
+  },
   "13_loop_early_exit:i386:O0": {
     "bisect": "pass",
     "classify_run": "pass",
@@ -1332,6 +1986,22 @@
     "sum_until_zero": "pass"
   },
   "13_loop_early_exit:x86_64:O2": {
+    "bisect": "pass",
+    "classify_run": "pass",
+    "find_first": "pass",
+    "has_pair": "pass",
+    "sum_positive": "pass",
+    "sum_until_zero": "pass"
+  },
+  "13_loop_early_exit:x86_64_gcc15:O0": {
+    "bisect": "pass",
+    "classify_run": "pass",
+    "find_first": "pass",
+    "has_pair": "pass",
+    "sum_positive": "pass",
+    "sum_until_zero": "pass"
+  },
+  "13_loop_early_exit:x86_64_gcc15:O2": {
     "bisect": "pass",
     "classify_run": "pass",
     "find_first": "pass",
@@ -1375,6 +2045,24 @@
     "shift_until_zero": "pass",
     "sub_then_sign": "pass"
   },
+  "14_flag_effects:armv7_a32:O0": {
+    "add_then_negative": "pass",
+    "and_is_zero": "pass",
+    "countdown": "pass",
+    "dec_loop": "pass",
+    "dec_preserves_carry": "pass",
+    "shift_until_zero": "fail",
+    "sub_then_sign": "pass"
+  },
+  "14_flag_effects:armv7_a32:O2": {
+    "add_then_negative": "fail",
+    "and_is_zero": "fail",
+    "countdown": "fail",
+    "dec_loop": "fail",
+    "dec_preserves_carry": "fail",
+    "shift_until_zero": "fail",
+    "sub_then_sign": "fail"
+  },
   "14_flag_effects:i386:O0": {
     "add_then_negative": "pass",
     "and_is_zero": "pass",
@@ -1411,6 +2099,24 @@
     "shift_until_zero": "pass",
     "sub_then_sign": "pass"
   },
+  "14_flag_effects:x86_64_gcc15:O0": {
+    "add_then_negative": "pass",
+    "and_is_zero": "pass",
+    "countdown": "pass",
+    "dec_loop": "pass",
+    "dec_preserves_carry": "pass",
+    "shift_until_zero": "pass",
+    "sub_then_sign": "pass"
+  },
+  "14_flag_effects:x86_64_gcc15:O2": {
+    "add_then_negative": "pass",
+    "and_is_zero": "pass",
+    "countdown": "pass",
+    "dec_loop": "pass",
+    "dec_preserves_carry": "pass",
+    "shift_until_zero": "fail",
+    "sub_then_sign": "pass"
+  },
   "15_binary_search_tree:aarch64:O0": {
     "bst_inorder_checksum": "pass",
     "bst_search": "pass"
@@ -1424,6 +2130,14 @@
     "bst_search": "pass"
   },
   "15_binary_search_tree:armv7:O2": {
+    "bst_inorder_checksum": "fail",
+    "bst_search": "fail"
+  },
+  "15_binary_search_tree:armv7_a32:O0": {
+    "bst_inorder_checksum": "fail",
+    "bst_search": "pass"
+  },
+  "15_binary_search_tree:armv7_a32:O2": {
     "bst_inorder_checksum": "fail",
     "bst_search": "fail"
   },
@@ -1443,6 +2157,14 @@
     "bst_inorder_checksum": "pass",
     "bst_search": "pass"
   },
+  "15_binary_search_tree:x86_64_gcc15:O0": {
+    "bst_inorder_checksum": "pass",
+    "bst_search": "pass"
+  },
+  "15_binary_search_tree:x86_64_gcc15:O2": {
+    "bst_inorder_checksum": "pass",
+    "bst_search": "pass"
+  },
   "16_red_black_tree:aarch64:O0": {
     "rb_validate": "fail"
   },
@@ -1455,6 +2177,12 @@
   "16_red_black_tree:armv7:O2": {
     "rb_validate": "fail"
   },
+  "16_red_black_tree:armv7_a32:O0": {
+    "rb_validate": "fail"
+  },
+  "16_red_black_tree:armv7_a32:O2": {
+    "rb_validate": "fail"
+  },
   "16_red_black_tree:i386:O0": {
     "rb_validate": "fail"
   },
@@ -1465,6 +2193,12 @@
     "rb_validate": "pass"
   },
   "16_red_black_tree:x86_64:O2": {
+    "rb_validate": "pass"
+  },
+  "16_red_black_tree:x86_64_gcc15:O0": {
+    "rb_validate": "pass"
+  },
+  "16_red_black_tree:x86_64_gcc15:O2": {
     "rb_validate": "pass"
   },
   "17_hash_table:aarch64:O0": {
@@ -1483,6 +2217,14 @@
     "hash_insert": "pass",
     "hash_lookup": "pass"
   },
+  "17_hash_table:armv7_a32:O0": {
+    "hash_insert": "fail",
+    "hash_lookup": "fail"
+  },
+  "17_hash_table:armv7_a32:O2": {
+    "hash_insert": "fail",
+    "hash_lookup": "fail"
+  },
   "17_hash_table:i386:O0": {
     "hash_insert": "pass",
     "hash_lookup": "pass"
@@ -1496,6 +2238,14 @@
     "hash_lookup": "pass"
   },
   "17_hash_table:x86_64:O2": {
+    "hash_insert": "pass",
+    "hash_lookup": "pass"
+  },
+  "17_hash_table:x86_64_gcc15:O0": {
+    "hash_insert": "pass",
+    "hash_lookup": "pass"
+  },
+  "17_hash_table:x86_64_gcc15:O2": {
     "hash_insert": "pass",
     "hash_lookup": "pass"
   },
@@ -1515,6 +2265,14 @@
     "heap_pop": "pass",
     "heap_push": "pass"
   },
+  "18_binary_heap:armv7_a32:O0": {
+    "heap_pop": "fail",
+    "heap_push": "fail"
+  },
+  "18_binary_heap:armv7_a32:O2": {
+    "heap_pop": "fail",
+    "heap_push": "fail"
+  },
   "18_binary_heap:i386:O0": {
     "heap_pop": "pass",
     "heap_push": "fail"
@@ -1528,6 +2286,14 @@
     "heap_push": "pass"
   },
   "18_binary_heap:x86_64:O2": {
+    "heap_pop": "pass",
+    "heap_push": "pass"
+  },
+  "18_binary_heap:x86_64_gcc15:O0": {
+    "heap_pop": "pass",
+    "heap_push": "pass"
+  },
+  "18_binary_heap:x86_64_gcc15:O2": {
     "heap_pop": "pass",
     "heap_push": "pass"
   },
@@ -1547,6 +2313,14 @@
     "dsu_find": "pass",
     "dsu_union": "fail"
   },
+  "19_disjoint_set:armv7_a32:O0": {
+    "dsu_find": "fail",
+    "dsu_union": "fail"
+  },
+  "19_disjoint_set:armv7_a32:O2": {
+    "dsu_find": "fail",
+    "dsu_union": "fail"
+  },
   "19_disjoint_set:i386:O0": {
     "dsu_find": "pass",
     "dsu_union": "pass"
@@ -1563,6 +2337,14 @@
     "dsu_find": "pass",
     "dsu_union": "pass"
   },
+  "19_disjoint_set:x86_64_gcc15:O0": {
+    "dsu_find": "pass",
+    "dsu_union": "pass"
+  },
+  "19_disjoint_set:x86_64_gcc15:O2": {
+    "dsu_find": "pass",
+    "dsu_union": "pass"
+  },
   "20_graph_bfs:aarch64:O0": {
     "graph_bfs": "fail"
   },
@@ -1570,9 +2352,15 @@
     "graph_bfs": "fail"
   },
   "20_graph_bfs:armv7:O0": {
-    "graph_bfs": "fail"
+    "graph_bfs": "pass"
   },
   "20_graph_bfs:armv7:O2": {
+    "graph_bfs": "fail"
+  },
+  "20_graph_bfs:armv7_a32:O0": {
+    "graph_bfs": "fail"
+  },
+  "20_graph_bfs:armv7_a32:O2": {
     "graph_bfs": "fail"
   },
   "20_graph_bfs:i386:O0": {
@@ -1587,6 +2375,12 @@
   "20_graph_bfs:x86_64:O2": {
     "graph_bfs": "pass"
   },
+  "20_graph_bfs:x86_64_gcc15:O0": {
+    "graph_bfs": "pass"
+  },
+  "20_graph_bfs:x86_64_gcc15:O2": {
+    "graph_bfs": "pass"
+  },
   "21_graph_dfs:aarch64:O0": {
     "graph_dfs": "fail"
   },
@@ -1594,9 +2388,15 @@
     "graph_dfs": "fail"
   },
   "21_graph_dfs:armv7:O0": {
-    "graph_dfs": "fail"
+    "graph_dfs": "pass"
   },
   "21_graph_dfs:armv7:O2": {
+    "graph_dfs": "fail"
+  },
+  "21_graph_dfs:armv7_a32:O0": {
+    "graph_dfs": "fail"
+  },
+  "21_graph_dfs:armv7_a32:O2": {
     "graph_dfs": "fail"
   },
   "21_graph_dfs:i386:O0": {
@@ -1611,6 +2411,12 @@
   "21_graph_dfs:x86_64:O2": {
     "graph_dfs": "pass"
   },
+  "21_graph_dfs:x86_64_gcc15:O0": {
+    "graph_dfs": "pass"
+  },
+  "21_graph_dfs:x86_64_gcc15:O2": {
+    "graph_dfs": "pass"
+  },
   "22_dijkstra:aarch64:O0": {
     "dijkstra_dense": "fail"
   },
@@ -1618,9 +2424,15 @@
     "dijkstra_dense": "fail"
   },
   "22_dijkstra:armv7:O0": {
-    "dijkstra_dense": "fail"
+    "dijkstra_dense": "pass"
   },
   "22_dijkstra:armv7:O2": {
+    "dijkstra_dense": "fail"
+  },
+  "22_dijkstra:armv7_a32:O0": {
+    "dijkstra_dense": "fail"
+  },
+  "22_dijkstra:armv7_a32:O2": {
     "dijkstra_dense": "fail"
   },
   "22_dijkstra:i386:O0": {
@@ -1635,6 +2447,12 @@
   "22_dijkstra:x86_64:O2": {
     "dijkstra_dense": "pass"
   },
+  "22_dijkstra:x86_64_gcc15:O0": {
+    "dijkstra_dense": "pass"
+  },
+  "22_dijkstra:x86_64_gcc15:O2": {
+    "dijkstra_dense": "pass"
+  },
   "23_topological_sort:aarch64:O0": {
     "topological_sort": "fail"
   },
@@ -1645,6 +2463,12 @@
     "topological_sort": "pass"
   },
   "23_topological_sort:armv7:O2": {
+    "topological_sort": "fail"
+  },
+  "23_topological_sort:armv7_a32:O0": {
+    "topological_sort": "fail"
+  },
+  "23_topological_sort:armv7_a32:O2": {
     "topological_sort": "fail"
   },
   "23_topological_sort:i386:O0": {
@@ -1659,6 +2483,12 @@
   "23_topological_sort:x86_64:O2": {
     "topological_sort": "pass"
   },
+  "23_topological_sort:x86_64_gcc15:O0": {
+    "topological_sort": "pass"
+  },
+  "23_topological_sort:x86_64_gcc15:O2": {
+    "topological_sort": "pass"
+  },
   "24_merge_sort:aarch64:O0": {
     "merge_sort_i32": "pass"
   },
@@ -1669,6 +2499,12 @@
     "merge_sort_i32": "pass"
   },
   "24_merge_sort:armv7:O2": {
+    "merge_sort_i32": "fail"
+  },
+  "24_merge_sort:armv7_a32:O0": {
+    "merge_sort_i32": "fail"
+  },
+  "24_merge_sort:armv7_a32:O2": {
     "merge_sort_i32": "fail"
   },
   "24_merge_sort:i386:O0": {
@@ -1683,6 +2519,12 @@
   "24_merge_sort:x86_64:O2": {
     "merge_sort_i32": "pass"
   },
+  "24_merge_sort:x86_64_gcc15:O0": {
+    "merge_sort_i32": "pass"
+  },
+  "24_merge_sort:x86_64_gcc15:O2": {
+    "merge_sort_i32": "pass"
+  },
   "25_kmp_search:aarch64:O0": {
     "kmp_search": "fail"
   },
@@ -1693,6 +2535,12 @@
     "kmp_search": "pass"
   },
   "25_kmp_search:armv7:O2": {
+    "kmp_search": "fail"
+  },
+  "25_kmp_search:armv7_a32:O0": {
+    "kmp_search": "fail"
+  },
+  "25_kmp_search:armv7_a32:O2": {
     "kmp_search": "fail"
   },
   "25_kmp_search:i386:O0": {
@@ -1707,6 +2555,12 @@
   "25_kmp_search:x86_64:O2": {
     "kmp_search": "pass"
   },
+  "25_kmp_search:x86_64_gcc15:O0": {
+    "kmp_search": "pass"
+  },
+  "25_kmp_search:x86_64_gcc15:O2": {
+    "kmp_search": "pass"
+  },
   "26_sparse_matrix:aarch64:O0": {
     "csr_matvec": "pass"
   },
@@ -1719,6 +2573,12 @@
   "26_sparse_matrix:armv7:O2": {
     "csr_matvec": "pass"
   },
+  "26_sparse_matrix:armv7_a32:O0": {
+    "csr_matvec": "fail"
+  },
+  "26_sparse_matrix:armv7_a32:O2": {
+    "csr_matvec": "fail"
+  },
   "26_sparse_matrix:i386:O0": {
     "csr_matvec": "pass"
   },
@@ -1729,6 +2589,12 @@
     "csr_matvec": "pass"
   },
   "26_sparse_matrix:x86_64:O2": {
+    "csr_matvec": "pass"
+  },
+  "26_sparse_matrix:x86_64_gcc15:O0": {
+    "csr_matvec": "pass"
+  },
+  "26_sparse_matrix:x86_64_gcc15:O2": {
     "csr_matvec": "pass"
   },
   "27_newton_raphson:aarch64:O0": {
@@ -1743,6 +2609,12 @@
   "27_newton_raphson:armv7:O2": {
     "newton_isqrt": "pass"
   },
+  "27_newton_raphson:armv7_a32:O0": {
+    "newton_isqrt": "fail"
+  },
+  "27_newton_raphson:armv7_a32:O2": {
+    "newton_isqrt": "fail"
+  },
   "27_newton_raphson:i386:O0": {
     "newton_isqrt": "pass"
   },
@@ -1753,6 +2625,12 @@
     "newton_isqrt": "pass"
   },
   "27_newton_raphson:x86_64:O2": {
+    "newton_isqrt": "pass"
+  },
+  "27_newton_raphson:x86_64_gcc15:O0": {
+    "newton_isqrt": "pass"
+  },
+  "27_newton_raphson:x86_64_gcc15:O2": {
     "newton_isqrt": "pass"
   },
   "28_euler_ode:aarch64:O0": {
@@ -1767,6 +2645,12 @@
   "28_euler_ode:armv7:O2": {
     "euler_decay_q16": "fail"
   },
+  "28_euler_ode:armv7_a32:O0": {
+    "euler_decay_q16": "fail"
+  },
+  "28_euler_ode:armv7_a32:O2": {
+    "euler_decay_q16": "fail"
+  },
   "28_euler_ode:i386:O0": {
     "euler_decay_q16": "fail"
   },
@@ -1777,6 +2661,12 @@
     "euler_decay_q16": "pass"
   },
   "28_euler_ode:x86_64:O2": {
+    "euler_decay_q16": "pass"
+  },
+  "28_euler_ode:x86_64_gcc15:O0": {
+    "euler_decay_q16": "pass"
+  },
+  "28_euler_ode:x86_64_gcc15:O2": {
     "euler_decay_q16": "pass"
   },
   "29_polynomial:aarch64:O0": {
@@ -1795,6 +2685,14 @@
     "polynomial_derivative_mod32": "pass",
     "polynomial_eval_mod32": "pass"
   },
+  "29_polynomial:armv7_a32:O0": {
+    "polynomial_derivative_mod32": "fail",
+    "polynomial_eval_mod32": "fail"
+  },
+  "29_polynomial:armv7_a32:O2": {
+    "polynomial_derivative_mod32": "pass",
+    "polynomial_eval_mod32": "fail"
+  },
   "29_polynomial:i386:O0": {
     "polynomial_derivative_mod32": "pass",
     "polynomial_eval_mod32": "pass"
@@ -1811,6 +2709,14 @@
     "polynomial_derivative_mod32": "pass",
     "polynomial_eval_mod32": "pass"
   },
+  "29_polynomial:x86_64_gcc15:O0": {
+    "polynomial_derivative_mod32": "pass",
+    "polynomial_eval_mod32": "pass"
+  },
+  "29_polynomial:x86_64_gcc15:O2": {
+    "polynomial_derivative_mod32": "pass",
+    "polynomial_eval_mod32": "pass"
+  },
   "30_finite_difference:aarch64:O0": {
     "heat_step_1d": "pass"
   },
@@ -1821,6 +2727,12 @@
     "heat_step_1d": "pass"
   },
   "30_finite_difference:armv7:O2": {
+    "heat_step_1d": "fail"
+  },
+  "30_finite_difference:armv7_a32:O0": {
+    "heat_step_1d": "fail"
+  },
+  "30_finite_difference:armv7_a32:O2": {
     "heat_step_1d": "fail"
   },
   "30_finite_difference:i386:O0": {
@@ -1835,13 +2747,21 @@
   "30_finite_difference:x86_64:O2": {
     "heat_step_1d": "pass"
   },
+  "30_finite_difference:x86_64_gcc15:O0": {
+    "heat_step_1d": "pass"
+  },
+  "30_finite_difference:x86_64_gcc15:O2": {
+    "heat_step_1d": "pass"
+  },
   "__toolchain__": {
     "aslr": "no-randomize (setarch)",
     "fixture": {
       "aarch64": "host: aarch64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
       "armv7": "host: arm-linux-gnueabihf-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+      "armv7_a32": "host: arm-linux-gnueabihf-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
       "i386": "host: gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
-      "x86_64": "pinned: gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0"
+      "x86_64": "pinned: gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+      "x86_64_gcc15": "host: gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0"
     },
     "rebuild": {
       "clang": "Ubuntu clang version 14.0.0-1ubuntu1.1",
@@ -1854,6 +2774,7 @@
     },
     "runner": {
       "armv7": "qemu-arm -L /usr/arm-linux-gnueabihf :: qemu-arm version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.1)",
+      "armv7_a32": "qemu-arm -L /usr/arm-linux-gnueabihf :: qemu-arm version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.1)",
       "i386": "qemu-i386 -L / :: qemu-i386 version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.1)"
     }
   }

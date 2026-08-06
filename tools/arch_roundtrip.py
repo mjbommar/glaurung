@@ -12,7 +12,9 @@ WHY THIS EXISTS
 (`{gcc, clang} x {O0, O2}`) is x86-64 on the host. Glaurung lifts three
 architecture families — x86/x86-64 (`src/ir/lift_x86.rs`), ARM32
 (`src/ir/lift_arm32.rs`) and AArch64 (`src/ir/lift_arm64.rs`) — so two of the
-three had *no* execution coverage at all, and 32-bit x86 had none either. A
+three had *no* execution coverage at all, and 32-bit x86 had none either. ARM32
+is exercised in both Thumb-2 and A32 encodings because sharing a lifter does not
+make their decode paths interchangeable. A
 change that inverted a branch in every ARM binary would have left all 656 cases
 green. This lane closes that hole.
 
@@ -87,7 +89,7 @@ x86-64 gate does. The FIXTURE build does too — for `x86_64`, with byte-identic
 flags to `fixture_harness.compile_fixture`, which is what lets
 `control_gate_disagreements` demand that the control lane reproduce
 `tests/decompiler_fixtures/baseline.json` function for function. The image ships
-no cross toolchains and no multilib, so the other three architectures are built
+no cross toolchains and no multilib, so the other five lanes are built
 by host compilers; each version string is recorded per-arch in `__toolchain__`,
 tagged `pinned:`/`host:`, and asserted by `--check`. An upgrade therefore fails
 loudly with a refresh instruction instead of silently moving what the baseline
@@ -141,9 +143,10 @@ class Arch:
     why: str
 
 
-#: ARM32 is built as Thumb-2 because that is what every real distro armhf build
-#: uses, and it is the harder decode path. `-mfloat-abi=hard` is the armhf
-#: toolchain default and cc1 refuses outright unless an FPU is named.
+#: `-mfloat-abi=hard` is the armhf toolchain default and cc1 refuses outright
+#: unless an FPU is named. Thumb-2 remains the primary distro-shaped lane; A32
+#: is deliberately separate so a decode/convention defect cannot hide behind
+#: Thumb-only coverage.
 TARGETS: dict[str, Arch] = {
     "x86_64": Arch(
         "gcc",
@@ -155,6 +158,16 @@ TARGETS: dict[str, Arch] = {
         "verdicts must equal that gate's `gcc:{opt}` verdicts function for "
         "function. Nothing about a foreign lifter is involved; if it is not "
         "clean, no verdict on any other lane means anything.",
+    ),
+    "x86_64_gcc15": Arch(
+        "gcc",
+        (),
+        8,
+        False,
+        "the host-GCC shape control: same x86-64 lifter and flags as the pinned "
+        "control, but the GCC 15 compiler used by the foreign host-built lanes. "
+        "Differences isolated here are compiler-shape effects, not architecture "
+        "gaps.",
     ),
     "i386": Arch(
         "gcc",
@@ -178,13 +191,27 @@ TARGETS: dict[str, Arch] = {
         False,
         "src/ir/lift_arm32.rs, Thumb-2",
     ),
+    "armv7_a32": Arch(
+        "arm-linux-gnueabihf-gcc",
+        ("-march=armv7-a", "-mfpu=vfpv3-d16", "-marm"),
+        4,
+        False,
+        "src/ir/lift_arm32.rs, A32",
+    ),
 }
 
 #: The control lane proves the apparatus. It is first-class, it is always run,
 #: and it is required to be clean — see `control_problems`.
 CONTROL_ARCH = "x86_64"
 
-REQUIRED_ARCHES = ("x86_64", "i386", "aarch64", "armv7")
+REQUIRED_ARCHES = (
+    "x86_64",
+    "x86_64_gcc15",
+    "i386",
+    "aarch64",
+    "armv7",
+    "armv7_a32",
+)
 REQUIRED_OPTS = ("O0", "O2")
 REQUIRED_MATRIX = [(arch, opt) for arch in REQUIRED_ARCHES for opt in REQUIRED_OPTS]
 
@@ -268,7 +295,7 @@ def native_runner(arch: str) -> list[str] | None:
         return None
     if arch == "i386":
         return ["qemu-i386", "-L", "/"]
-    if arch == "armv7":
+    if arch in {"armv7", "armv7_a32"}:
         loader = subprocess.run(
             [TARGETS[arch].cc, "-print-file-name=ld-linux-armhf.so.3"],
             capture_output=True,

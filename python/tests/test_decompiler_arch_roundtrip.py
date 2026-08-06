@@ -412,10 +412,33 @@ def test_the_control_architecture_is_in_the_required_matrix():
 
 def test_the_required_matrix_covers_every_lifted_architecture_and_both_opts():
     """x86-64 alone is what the existing 656-case gate already measures. The
-    point of this lane is the other three families and an optimised build."""
-    assert set(A.REQUIRED_ARCHES) == {"x86_64", "i386", "aarch64", "armv7"}
+    point of this lane is the other three families, both ARM32 instruction sets,
+    and an optimised build."""
+    assert set(A.REQUIRED_ARCHES) == {
+        "x86_64",
+        "i386",
+        "aarch64",
+        "armv7",
+        "armv7_a32",
+        "x86_64_gcc15",
+    }
     assert set(A.REQUIRED_OPTS) == {"O0", "O2"}
-    assert len(A.REQUIRED_MATRIX) == 8
+    assert len(A.REQUIRED_MATRIX) == 12
+
+
+def test_arm32_required_lanes_select_distinct_instruction_sets():
+    assert "-mthumb" in A.TARGETS["armv7"].cflags
+    assert "-marm" in A.TARGETS["armv7_a32"].cflags
+
+
+def test_gcc15_x86_64_shape_control_is_required_and_host_built():
+    control = A.TARGETS["x86_64_gcc15"]
+
+    assert "x86_64_gcc15" in A.REQUIRED_ARCHES
+    assert control.cc == "gcc"
+    assert control.cflags == ()
+    assert control.pointer_bytes == 8
+    assert control.pinned is False
 
 
 # ---------------------------------------------------------------------------
@@ -702,16 +725,17 @@ def test_the_native_probe_is_configured_for_every_foreign_architecture():
         assert cc and cc[0] == A.TARGETS[arch].cc, arch
 
 
-def test_genuine_target_execution_is_configured_for_both_ilp32_lanes():
+def test_genuine_target_execution_is_configured_for_all_ilp32_lanes():
     """ILP32 C++ objects cannot be judged inside LP64 ctypes.
 
-    The two 32-bit lanes therefore need a target process, while the two 64-bit
+    The three 32-bit lanes therefore need a target process, while the two 64-bit
     lanes keep the simpler host-portable differential.
     """
     assert A.native_runner("x86_64") is None
     assert A.native_runner("aarch64") is None
     assert A.native_runner("i386")[:1] == ["qemu-i386"]
     assert A.native_runner("armv7")[:1] == ["qemu-arm"]
+    assert A.native_runner("armv7_a32")[:1] == ["qemu-arm"]
 
 
 def test_native_worker_refuses_malformed_vectors_and_unknown_integer_widths():
