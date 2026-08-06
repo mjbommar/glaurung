@@ -549,7 +549,10 @@ and metric evidence are complete.
 
 ### Integration disposition
 
-The owned commits are pushed on `origin/agent/defect-register`. Final
-fast-forward integration into `origin/master` is performed only after this
-ledger is committed and the remote base is revalidated; the original local
-`master` worktree has overlapping uncommitted work and must not be rewritten.
+The audited base `fcca960bd7490c452a541f1034d13f2dd4e98eda` remained the remote
+`master` tip after the final gates. The complete defect sequence was therefore
+integrated with a normal fast-forward push: no merge repair, force, or history
+rewrite was used. At handoff, `origin/agent/defect-register` and
+`origin/master` resolve to the same final ledger object. The original local
+`master` worktree has overlapping uncommitted work and was deliberately left
+untouched on its existing local ref.
