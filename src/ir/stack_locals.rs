@@ -101,6 +101,11 @@ fn is_active_stack_base(name: &str, ctx: StackContext) -> bool {
         && !(ctx.rbp_repurposed && matches!(crate::ir::abi::ssa_base(name), "rbp" | "ebp" | "bp"))
 }
 
+fn is_arm_frame_pointer(name: &str, ctx: StackContext) -> bool {
+    matches!(ctx.cc, Some(CallConv::Arm | CallConv::ArmHardFloat))
+        && matches!(crate::ir::abi::ssa_base(name), "fp" | "r7" | "r11")
+}
+
 /// Whether the function's first assignment to x86's nominal frame register
 /// makes it an ordinary callee-saved value instead of establishing a frame.
 fn rbp_is_repurposed(body: &[Stmt], cc: Option<CallConv>) -> bool {
@@ -1495,10 +1500,7 @@ fn promote_address_taken_stack_object(
         *expr = object_addr;
         return;
     }
-    let recovered = constant_stack_address(expr, ctx).or_else(|| match expr {
-        Expr::Reg(reg) => address_defs.get(reg).cloned(),
-        _ => None,
-    });
+    let recovered = escaped_stack_address(expr, sp_delta, ctx, address_defs, false);
     let Some((base, disp)) = recovered else {
         return;
     };
@@ -1507,13 +1509,19 @@ fn promote_address_taken_stack_object(
         base: key_base.clone(),
         disp: key_disp,
     };
-    // AArch64 own-frame memory is deliberately kept in current-SP coordinates
-    // until an address escapes. Address SSA facts use the entry-SP coordinate,
-    // however. If the scalar was initialized before its address was copied,
-    // move that existing slot metadata to the now-proven object coordinate so
-    // the already-rendered scalar name can be reconciled with the object rather
-    // than leaving an initialized scalar beside an uninitialized byte array.
-    if ctx.cc == Some(CallConv::Aarch64) && key_base == "entry_sp" && !map.contains_key(&key) {
+    // AAPCS own-frame memory can remain in current-SP coordinates until an
+    // address escapes. Address SSA and DWARF CFA facts use the entry-SP
+    // coordinate, however. If the scalar was initialized before its address
+    // was copied, move that existing slot metadata to the now-proven object
+    // coordinate so the already-rendered scalar name can be reconciled with
+    // the object rather than leaving an initialized scalar beside an
+    // uninitialized byte array.
+    if matches!(
+        ctx.cc,
+        Some(CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64)
+    ) && key_base == "entry_sp"
+        && !map.contains_key(&key)
+    {
         if let Some(current_disp) = sp_delta.and_then(|delta| key_disp.checked_sub(delta)) {
             let current_key = SlotKey {
                 base: "sp".to_string(),
@@ -1617,6 +1625,16 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                             (base == entry_stack_base(ctx)).then_some(disp)
                         });
                     } else if matches!(dst, VReg::Phys(name) if is_active_stack_base(name, ctx)) {
+                        if matches!(dst, VReg::Phys(name) if is_arm_frame_pointer(name, ctx)) {
+                            // ARM's frame register is SSA-versioned in the AST.
+                            // Preserve the exact entry-SP coordinate captured by
+                            // `r7#1 = sp`; later direct arithmetic and copied
+                            // destructor arguments must resolve to the same
+                            // DWARF CFA object. x86's unversioned `rbp = rsp`
+                            // remains a coordinate-system establishment below.
+                            record_definition(dst, address, out, ambiguous);
+                            continue;
+                        }
                         // Architectural frame bases define the coordinate
                         // system used by DWARF and local naming. In particular,
                         // `rbp = rsp` is a frame establishment, not an immutable
@@ -1909,20 +1927,22 @@ fn resolved_memory_address(
     Some((resolved_base, resolved_disp, Some(base.clone()), 1))
 }
 
-/// Re-express an AArch64 current-SP coordinate in DWARF's CFA coordinate.
+/// Re-express an AAPCS current-SP coordinate in DWARF's CFA coordinate.
 ///
-/// Ordinary AArch64 own-frame slots intentionally retain their current-SP
-/// spelling: globally rebasing them regressed established frame partitions.
-/// Debug-proven aggregate objects are different. Their locations are relative
-/// to the call-frame address (the entry SP), so look through that second
-/// coordinate only when an authoritative object actually contains the access.
-fn aarch64_entry_stack_coordinate(
+/// Ordinary own-frame slots may retain their current-SP spelling. Debug-proven
+/// aggregate objects are different: their locations are relative to the
+/// call-frame address (the entry SP), so look through that second coordinate
+/// only when an authoritative object actually contains the access.
+fn aapcs_entry_stack_coordinate(
     base: &str,
     disp: i64,
     sp_delta: Option<i64>,
     ctx: StackContext,
 ) -> Option<(&'static str, i64)> {
-    (ctx.cc == Some(CallConv::Aarch64) && base == "sp")
+    (matches!(
+        ctx.cc,
+        Some(CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64)
+    ) && base == "sp")
         .then(|| disp.checked_add(sp_delta?))?
         .map(|disp| ("entry_sp", disp))
 }
@@ -1964,7 +1984,7 @@ fn stack_object_address(
     if index.is_some() && scale == 0 {
         return None;
     }
-    let alternate = aarch64_entry_stack_coordinate(&base, disp, sp_delta, ctx);
+    let alternate = aapcs_entry_stack_coordinate(&base, disp, sp_delta, ctx);
     let (object_disp, start, slot, object_size) = alternate
         .and_then(|(alternate_base, alternate_disp)| {
             containing_stack_object(
@@ -2029,13 +2049,9 @@ fn stack_object_constant_address(
     ctx: StackContext,
     address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<Expr> {
-    let recovered = match expr {
-        Expr::Reg(VReg::Phys(name)) if is_active_stack_base(name, ctx) => Some((name.clone(), 0)),
-        Expr::Reg(reg) => address_defs.get(reg).cloned(),
-        _ => constant_stack_address(expr, ctx),
-    }?;
+    let recovered = escaped_stack_address(expr, sp_delta, ctx, address_defs, true)?;
     let (base, disp) = normalized_stack_slot(&recovered.0, recovered.1, sp_delta, ctx);
-    let alternate = aarch64_entry_stack_coordinate(&base, disp, sp_delta, ctx);
+    let alternate = aapcs_entry_stack_coordinate(&base, disp, sp_delta, ctx);
     let (object_disp, start, slot, size) = alternate
         .and_then(|(alternate_base, alternate_disp)| {
             containing_stack_object(map, alternate_base, alternate_disp, 0, true, true)
@@ -2076,11 +2092,7 @@ fn stack_assignment_object_address(
     if let Some(existing) = stack_object_constant_address(expr, map, sp_delta, ctx, address_defs) {
         return Some(existing);
     }
-    let recovered = match expr {
-        Expr::Reg(VReg::Phys(name)) if is_active_stack_base(name, ctx) => Some((name.clone(), 0)),
-        Expr::Reg(reg) => address_defs.get(reg).cloned(),
-        _ => constant_stack_address(expr, ctx),
-    }?;
+    let recovered = escaped_stack_address(expr, sp_delta, ctx, address_defs, true)?;
     let (base, disp) = normalized_stack_slot(&recovered.0, recovered.1, sp_delta, ctx);
     let key = SlotKey {
         base: base.clone(),
@@ -2145,6 +2157,35 @@ fn stack_assignment_object_address(
     stack_object_constant_address(expr, map, sp_delta, ctx, address_defs)
 }
 
+/// Resolve an escaping stack address without broadening the established x86
+/// frame model. AAPCS needs the SSA frame-pointer definition (`r7#1 = sp`) to
+/// reach the entry-SP coordinate; x86 frame registers deliberately retain
+/// their architectural coordinate and use the narrower legacy spelling.
+fn escaped_stack_address(
+    expr: &Expr,
+    sp_delta: Option<i64>,
+    ctx: StackContext,
+    address_defs: &HashMap<VReg, (String, i64)>,
+    prefer_active_base: bool,
+) -> Option<(String, i64)> {
+    if matches!(ctx.cc, Some(CallConv::Arm | CallConv::ArmHardFloat)) {
+        return resolve_stack_address(expr, sp_delta, ctx, address_defs);
+    }
+    if prefer_active_base {
+        return match expr {
+            Expr::Reg(VReg::Phys(name)) if is_active_stack_base(name, ctx) => {
+                Some((name.clone(), 0))
+            }
+            Expr::Reg(reg) => address_defs.get(reg).cloned(),
+            _ => constant_stack_address(expr, ctx),
+        };
+    }
+    constant_stack_address(expr, ctx).or_else(|| match expr {
+        Expr::Reg(reg) => address_defs.get(reg).cloned(),
+        _ => None,
+    })
+}
+
 fn constant_stack_address(expr: &Expr, ctx: StackContext) -> Option<(String, i64)> {
     match expr {
         Expr::Lea {
@@ -2155,10 +2196,8 @@ fn constant_stack_address(expr: &Expr, ctx: StackContext) -> Option<(String, i64
             ..
         } if is_active_stack_base(base, ctx) => Some((base.clone(), *disp)),
         Expr::Bin { op, lhs, rhs } => {
-            let Expr::Reg(VReg::Phys(base)) = lhs.as_ref() else {
-                return None;
-            };
-            let Expr::Const(amount) = rhs.as_ref() else {
+            let (Expr::Reg(VReg::Phys(base)), Expr::Const(amount)) = (lhs.as_ref(), rhs.as_ref())
+            else {
                 return None;
             };
             if !is_active_stack_base(base, ctx) {
@@ -4505,6 +4544,99 @@ mod tests {
             ),
             "closure call lost the CFA-owned object: {f:#?}"
         );
+    }
+
+    #[test]
+    fn arm_current_sp_coordinate_maps_to_the_entry_stack_coordinate() {
+        let ctx = StackContext {
+            cc: Some(CallConv::Arm),
+            rbp_repurposed: false,
+            frame_pointer_established: false,
+            parameter_count: None,
+        };
+
+        assert_eq!(
+            aapcs_entry_stack_coordinate("sp", 8, Some(-32), ctx),
+            Some(("entry_sp", -24))
+        );
+    }
+
+    #[test]
+    fn arm_cfa_object_unifies_frame_relative_constructor_and_destructor() {
+        let mut f = Function {
+            name: "cpp_ctor_dtor".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(24)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("r7#1"),
+                    src: Expr::Reg(reg("sp")),
+                },
+                Stmt::Call {
+                    target: Expr::Addr(0x1000),
+                    args: vec![Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("r7#1"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    }],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("r3#8"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("r7#1"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+                Stmt::Call {
+                    target: Expr::Addr(0x2000),
+                    args: vec![Expr::Reg(reg("r3#8"))],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+        let hints = [StackObjectHint {
+            base: "entry_sp".into(),
+            disp: -24,
+            size: 12,
+        }];
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::Arm),
+            Some(2),
+            &hints,
+        );
+
+        for statement in [&f.body[3], &f.body[5]] {
+            assert!(
+                matches!(
+                    statement,
+                    Stmt::Call { args, .. }
+                        if matches!(args.as_slice(), [Expr::StackAddr { object, size: 12 }]
+                            if object == &reg("local_18"))
+                ),
+                "constructor/destructor did not share the CFA object: {f:#?}"
+            );
+        }
     }
 
     #[test]

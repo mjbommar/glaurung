@@ -1479,6 +1479,9 @@ fn dwarf_stack_object_hints(
                 (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::Register(11 | 7)) => {
                     ("fp", 0)
                 }
+                (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::CallFrameCfa) => {
+                    ("entry_sp", 0)
+                }
                 _ => return None,
             };
             Some(crate::ir::stack_locals::StackObjectHint {
@@ -3191,5 +3194,28 @@ mod tests {
         assert_eq!(hints[0].base, "entry_sp");
         assert_eq!(hints[0].disp, -40);
         assert_eq!(hints[0].size, 16);
+    }
+
+    #[test]
+    fn dwarf_arm_cfa_maps_to_the_entry_stack_coordinate() {
+        let contract = DwarfPrototypeContract {
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: vec![DwarfStackObject {
+                base: DwarfStackBase::CallFrameCfa,
+                offset: -24,
+                byte_size: 8,
+                aggregate: true,
+            }],
+        };
+
+        for cc in [CallConv::Arm, CallConv::ArmHardFloat] {
+            let hints = dwarf_stack_object_hints(Some(&contract), cc);
+
+            assert_eq!(hints.len(), 1);
+            assert_eq!(hints[0].base, "entry_sp");
+            assert_eq!(hints[0].disp, -24);
+            assert_eq!(hints[0].size, 8);
+        }
     }
 }
