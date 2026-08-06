@@ -386,3 +386,36 @@ failures and the same six pre-existing pytest-mark warnings. Changed-path Rust
 formatting and Python Ruff checks pass. Repository-wide Ruff/format/type checks
 remain red on pre-existing debt (354 files would be reformatted, 3,830 lint
 errors, and 2,044 type diagnostics); this slice adds none of those diagnostics.
+
+## 16:59 — AArch64 rotated-loop results separated from entry parameters
+
+`factorial_while` was traced from its source contract through AArch64 O2 assembly,
+lifted IR, every AST pass, emitted DecBench C, and execution. GCC emits a 64-bit
+`mul x0,x0,x1`; lifting and structuring preserved it. The first semantic loss was
+role projection: the raw x0 result was renamed to the 32-bit input `arg0`, and C
+emission inserted `(unsigned long)(unsigned int)` on the loop-carried product.
+The failing differential made the truncation concrete: source returned
+1,307,674,368,000 while rebuilt C returned 2,004,310,016 for `INT_MAX`.
+
+Three Rust value-role tests and a real cross-compiled execution test were added
+before repair. The existing post-spill splitter is now the shared
+argument-storage-reuse pass. It consumes the central ABI slot/return tables,
+tracks unspilled definitions independently through structured branches, and
+enables an unspilled slot-zero split only when the recovered prototype proves a
+direct result with exact definitions and a scalar width different from the entry
+parameter sharing that storage. Post-spill state remains monotone across
+unstructured goto joins, pinned by a separate regression.
+
+The first broad ABI-overlap rule was rejected: the full matrix exposed five gains
+and ten regressions. The first proof-gated revision removed nine regressions but
+exposed `nested_switch:aarch64:O0`, because structured-arm intersection had lost
+the existing post-spill fact across gotos. After correcting that state merge, the
+final full matrix changes exactly `factorial_while` and `nested_rotated` from fail
+to pass: 1,546 passes, 254 failures, 228 structural rows, and six unsupported
+rows, with zero missing cells, timeouts, lane errors, toolchain differences, or
+control disagreements. `cargo test --all-targets` is green (including 1,769
+library tests), and the complete `uv run pytest python/tests/ -q` run reaches
+100% with exit zero and only the same six pytest-mark warnings. Changed-path
+Rust formatting and Python Ruff checks pass. Repository-wide checks still expose
+established debt: 354 files would be reformatted, 3,830 lint errors, and 2,043
+type diagnostics (one fewer than the preceding recorded run).

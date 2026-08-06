@@ -144,7 +144,7 @@ def test_decompile_arm32_thumb_recovers_main():
 
 
 def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> None:
-    """Keep the ARM arg0/frame/result roles intact through the full pipeline."""
+    """Keep the ARM entry parameter distinct from its narrower r0 result."""
     compiler = shutil.which("arm-none-eabi-gcc")
     if compiler is None:
         pytest.skip("arm-none-eabi-gcc is unavailable")
@@ -191,8 +191,8 @@ def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> Non
     )
 
     assert " frame_return(int arg0)" in text.splitlines()[1], text
-    assert "arg0 = (int)((signed char)(*(char *)((&local_" in text, text
-    assert "return arg0;" in text, text
+    assert "return (int)((signed char)(*(char *)((&local_" in text, text
+    assert "arg0 = " not in text, text
     assert "return 0;" not in text, text
 
 

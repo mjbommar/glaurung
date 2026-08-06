@@ -330,10 +330,9 @@ fn inline_soft_helper_calls_in(
 fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
     cc: crate::ir::call_args::CallConv,
-    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     param_slots: &mut std::collections::HashSet<usize>,
     locked_parameter_count: Option<usize>,
-    parameter_roles: &std::collections::HashMap<String, usize>,
     callee_facts: &DirectCalleeFacts,
     addr_map: &std::collections::HashMap<u64, String>,
     str_pool: &std::collections::HashMap<u64, String>,
@@ -344,9 +343,50 @@ fn run_ast_passes(
     std::collections::HashMap<String, String>,
 ) {
     let dump = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
+    let output_kind = prototype.map_or(
+        crate::ir::types_recover::RecoveredOutputKind::Unknown,
+        crate::ir::types_recover::RecoveredPrototype::output_kind,
+    );
+    let parameter_roles = prototype
+        .map(crate::ir::types_recover::RecoveredPrototype::parameter_role_map)
+        .unwrap_or_default();
+    let split_unspilled_dual_role = prototype.is_some_and(|prototype| {
+        use crate::ir::types_recover::TypeHint;
+
+        if prototype.output_kind() != crate::ir::types_recover::RecoveredOutputKind::Direct {
+            return false;
+        }
+        let Some(parameter) = prototype.parameter(0) else {
+            return false;
+        };
+        let Some(result) = prototype.result() else {
+            return false;
+        };
+        let parameter_uses_output_storage = match &parameter.value.base {
+            crate::ir::types::VReg::Phys(name) => crate::ir::abi::is_return_register(cc, name),
+            _ => false,
+        };
+        let widths = match (parameter.hint, result.hint) {
+            (
+                Some(TypeHint::Int {
+                    width: parameter_width,
+                    ..
+                }),
+                Some(TypeHint::Int {
+                    width: result_width,
+                    ..
+                }),
+            ) => Some((parameter_width, result_width)),
+            _ => None,
+        };
+        parameter_uses_output_storage
+            && !result.values.is_empty()
+            && widths.is_some_and(|(parameter_width, result_width)| parameter_width != result_width)
+    });
     if dump {
         eprintln!(
-            "\n===== parameter evidence =====\nslots={param_slots:?}\nroles={parameter_roles:?}"
+            "\n===== parameter evidence =====\nslots={param_slots:?}\nroles={parameter_roles:?}\n\
+             split_unspilled_dual_role={split_unspilled_dual_role}"
         );
     }
     macro_rules! dp {
@@ -425,13 +465,13 @@ fn run_ast_passes(
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
         crate::ir::ast::materialize_direct_output(f);
     }
-    crate::ir::value_split::split_spilled_arg_reuse(f, cc);
-    dp!("split_spilled_arg_reuse");
+    crate::ir::value_split::split_argument_storage_reuse(f, cc, split_unspilled_dual_role);
+    dp!("split_argument_storage_reuse");
     let role_names = crate::ir::naming::apply_role_names_with_parameter_roles(
         f,
         cc,
         param_slots,
-        parameter_roles,
+        &parameter_roles,
     );
     dp!("apply_role_names");
     crate::ir::canary::collapse_canary_save(f);
@@ -748,10 +788,6 @@ fn decompile_at_py(
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
-    let parameter_roles = prototype
-        .as_ref()
-        .map(|prototype| prototype.parameter_role_map())
-        .unwrap_or_default();
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
             .as_ref()
@@ -761,13 +797,9 @@ fn decompile_at_py(
     let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
         cc,
-        prototype.as_ref().map_or(
-            crate::ir::types_recover::RecoveredOutputKind::Unknown,
-            |prototype| prototype.output_kind(),
-        ),
+        prototype.as_ref(),
         &mut param_slots,
         locked_parameter_count(prototype.as_ref()),
-        &parameter_roles,
         &callee_facts,
         &addr_map,
         &str_pool,
@@ -993,10 +1025,6 @@ fn decompile_range_at_py(
     let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
-    let parameter_roles = prototype
-        .as_ref()
-        .map(|prototype| prototype.parameter_role_map())
-        .unwrap_or_default();
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
             .as_ref()
@@ -1006,13 +1034,9 @@ fn decompile_range_at_py(
     let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
         cc,
-        prototype.as_ref().map_or(
-            crate::ir::types_recover::RecoveredOutputKind::Unknown,
-            |prototype| prototype.output_kind(),
-        ),
+        prototype.as_ref(),
         &mut param_slots,
         locked_parameter_count(prototype.as_ref()),
-        &parameter_roles,
         &callee_facts,
         &addr_map,
         &str_pool,
@@ -2444,10 +2468,6 @@ fn decompile_all_py(
         // pruned unreferenced labels, so `--all` produced different output from `--vas`
         // for the same function, and the fixture gate's structural lane measured a
         // different pipeline from its execution lane. It cannot drift again.
-        let parameter_roles = prototype
-            .as_ref()
-            .map(|prototype| prototype.parameter_role_map())
-            .unwrap_or_default();
         let stack_object_hints = dwarf_stack_object_hints(
             dwarf_outputs
                 .as_ref()
@@ -2469,13 +2489,9 @@ fn decompile_all_py(
         let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
             cc,
-            prototype.as_ref().map_or(
-                crate::ir::types_recover::RecoveredOutputKind::Unknown,
-                |prototype| prototype.output_kind(),
-            ),
+            prototype.as_ref(),
             &mut param_slots,
             locked_parameter_count(prototype.as_ref()),
-            &parameter_roles,
             &callee_facts,
             &addr_map,
             &str_pool,
@@ -2683,10 +2699,6 @@ fn decompile_many_py(
         } else {
             None
         };
-        let parameter_roles = prototype
-            .as_ref()
-            .map(|prototype| prototype.parameter_role_map())
-            .unwrap_or_default();
         let stack_object_hints = dwarf_stack_object_hints(
             dwarf_outputs
                 .as_ref()
@@ -2708,13 +2720,9 @@ fn decompile_many_py(
         let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
             cc,
-            prototype.as_ref().map_or(
-                crate::ir::types_recover::RecoveredOutputKind::Unknown,
-                |prototype| prototype.output_kind(),
-            ),
+            prototype.as_ref(),
             &mut param_slots,
             locked_parameter_count(prototype.as_ref()),
-            &parameter_roles,
             &callee_facts,
             &addr_map,
             &str_pool,

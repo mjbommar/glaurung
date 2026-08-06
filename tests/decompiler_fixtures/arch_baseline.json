@@ -1807,10 +1807,10 @@
     "count_up": "pass",
     "do_while_control": "pass",
     "down_by_negative_imm": "pass",
-    "factorial_while": "fail",
+    "factorial_while": "pass",
     "find_first_set": "fail",
     "for_accumulate": "pass",
-    "nested_rotated": "fail",
+    "nested_rotated": "pass",
     "skip_odd_sum": "pass"
   },
   "12_loop_rotation:armv7:O0": {

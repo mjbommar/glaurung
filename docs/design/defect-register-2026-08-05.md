@@ -674,7 +674,7 @@ signatures now include `gyroInitFilterNotch1(uint16_t, uint16_t)`,
 `pkg_array_match_patterns`. Fully representing its opaque function-pointer
 parameter still requires EPIC 1's structured declarator/type environment.
 
-### Current strict AArch64-only set: 8, not 43
+### Current strict AArch64-only set: 6, not 43
 
 The old 43-function count was a verdict-only snapshot and is stale. Relative to
 the current pinned x86-64, i386, and Thumb lanes, the strict AArch64-only set is:
@@ -682,7 +682,6 @@ the current pinned x86-64, i386, and Thumb lanes, the strict AArch64-only set is
 - `03_loop_shapes:O2:{for_sum,loop_continue,mutate_reverse}`;
 - `05_struct_arrays:O0:process`;
 - `07_packet_parser:O2:validate_header`;
-- `12_rotated_loops:O2:{factorial_while,nested_rotated}`;
 - `25_kmp:O0:kmp_search`.
 
 The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
@@ -702,18 +701,28 @@ gets a distinct value used as x0 and in every derived argument. The complete
 ratchet moves again to 1,544 passes / 256 failures, with exactly these two
 fail-to-pass changes and no reclassification.
 
+The rotated-loop value-role slice then closes
+`12_loop_rotation:aarch64:O2:{factorial_while,nested_rotated}`. Their 64-bit
+loop results occupied x0 after 32-bit entry parameters had used the same
+storage. Lifting and structuring kept the wide arithmetic, but flat role naming
+renamed both values `arg0`, forcing a 32-bit truncation on every iteration. The
+shared storage-reuse pass now splits that lifetime only when the recovered
+prototype proves a direct result, a slot-zero/result-register alias, exact
+result definitions, and unequal scalar widths. The complete ratchet moves to
+1,546 passes / 254 failures, with exactly these two changes.
+
 The remaining root causes still split across architecture layers. `for_sum`
-needs AArch64 SIMD horizontal-reduction semantics. `factorial_while` loses
-accumulator width/phi roles. `kmp_search` retains a fake frame/canary object and
-crashes. The set is therefore triage evidence, not one “AArch64 gap.”
+needs AArch64 SIMD horizontal-reduction semantics. `kmp_search` retains a fake
+frame/canary object and crashes. The set is therefore triage evidence, not one
+“AArch64 gap.”
 
 ### Rank-ordered next work
 
 1. **P0 — sound definitions and value roles (EPIC 5).** Replace bare-name and
    last-writer queries with one reaching-definitions oracle used by call-result,
    phi, frame, and return recovery. The post-spill call-result collision slice is
-   complete, as is the adjacent AArch64 call-flow slice; next acceptance is the
-   rotated-loop phi canaries and the linked-list false frame without
+   complete, as are the adjacent AArch64 call-flow and rotated-loop value-role
+   slices; next acceptance is the linked-list false frame without
    architecture-ratchet regressions.
 2. **P0 — program environment and call contracts (EPIC 1).** Persist one
    program-level symbol/type environment and attach canonical prototypes to every

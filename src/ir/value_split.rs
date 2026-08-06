@@ -1,4 +1,4 @@
-//! Split an argument register's post-spill scratch reuse into a distinct local.
+//! Split reused argument-register storage into distinct source values.
 //!
 //! At `-O0` a function spills each parameter to its frame slot in the prologue
 //! (`store [rbp-8], rdi`), and thereafter reads the parameter back from the
@@ -8,18 +8,18 @@
 //! parameter reused as a scratch int produces `arg2 = <int>` (an int↔pointer
 //! assignment) that modern C rejects, tanking the recompile (byte_match).
 //!
-//! This pass exploits a stricter spill invariant: after an argument register has
-//! been stored to its frame slot, a later *definition* of that register starts
-//! its scratch lifetime. Reads and repeated spill stores before that definition
-//! are still the incoming parameter. Scratch occurrences get a fresh `scr_<reg>`
-//! name — which is in no argument table, so the naming pass folds it into an
-//! ordinary `varN` local with a plain scalar type. Result: `arg2 = ret` becomes
-//! `varK = ret`, with no int↔pointer conflict.
+//! Two independent facts can prove that a later definition starts a new value:
 //!
-//! Gated on "the register was actually spilled", so register-resident parameters
-//! (typical of `-O2`) are left completely untouched — this pass cannot change
-//! argument arity (type_match) or statement shape (GED); it only renames a
-//! scratch value that was already destined to be a `varN`.
+//! * after an argument has been stored to its frame slot, a later definition of
+//!   that register is post-spill scratch storage; and
+//! * on ABIs where argument slot zero aliases the return register (AAPCS32/64),
+//!   a definition of that storage is a result/scratch value, not a redefinition
+//!   of the entry parameter.
+//!
+//! Reads before the definition retain the incoming identity. Proven later
+//! occurrences get a fresh `scr_<reg>` name, which the naming pass folds into an
+//! ordinary `varN`. State is tracked independently through structured branches;
+//! a definition in one arm cannot rename a live-in read in its sibling arm.
 
 use std::collections::{HashMap, HashSet};
 
@@ -27,62 +27,54 @@ use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::{is_promoted_local_name as is_promoted_local, VReg};
 
-/// The argument-register sub-name groups for `cc`, one inner slice per ABI
-/// argument slot (mirrors `naming::arg_slot_tables`).
-fn arg_slot_tables(cc: CallConv) -> &'static [&'static [&'static str]] {
-    match cc {
-        CallConv::SysVAmd64 => &[
-            &["rdi", "edi", "di", "dil"],
-            &["rsi", "esi", "si", "sil"],
-            &["rdx", "edx", "dx", "dl"],
-            &["rcx", "ecx", "cx", "cl"],
-            &["r8", "r8d", "r8w", "r8b"],
-            &["r9", "r9d", "r9w", "r9b"],
-        ],
-        CallConv::Win64 => &[
-            &["rcx", "ecx", "cx", "cl"],
-            &["rdx", "edx", "dx", "dl"],
-            &["r8", "r8d", "r8w", "r8b"],
-            &["r9", "r9d", "r9w", "r9b"],
-        ],
-        CallConv::Cdecl32 => &[],
-        CallConv::Aarch64 => &[
-            &["x0", "w0"],
-            &["x1", "w1"],
-            &["x2", "w2"],
-            &["x3", "w3"],
-            &["x4", "w4"],
-            &["x5", "w5"],
-            &["x6", "w6"],
-            &["x7", "w7"],
-        ],
-        CallConv::Arm | CallConv::ArmHardFloat => &[&["r0"], &["r1"], &["r2"], &["r3"]],
-    }
-}
-
 struct Splitter {
     /// register sub-name -> argument slot index
     slot_of: HashMap<&'static str, usize>,
+    /// Slots where a definition is a new value even without a prior spill.
+    split_on_definition: HashSet<usize>,
+}
+
+#[derive(Clone, Default)]
+struct SplitState {
     /// slots whose spill store has already been seen
     spilled: HashSet<usize>,
-    /// slots whose first post-spill definition has started a scratch lifetime
+    /// slots whose first proven definition has started a scratch lifetime
     scratch: HashSet<usize>,
 }
 
-/// Rename an argument register's scratch reuse after it has been spilled.
-pub fn split_spilled_arg_reuse(f: &mut Function, cc: CallConv) {
+/// Rename later values that reuse an ABI argument's physical storage.
+pub fn split_argument_storage_reuse(
+    f: &mut Function,
+    cc: CallConv,
+    split_unspilled_dual_role: bool,
+) {
     let mut slot_of = HashMap::new();
-    for (i, names) in arg_slot_tables(cc).iter().enumerate() {
+    let argument_slots = crate::ir::abi::argument_slots(cc);
+    for (i, names) in argument_slots.iter().enumerate() {
         for n in *names {
             slot_of.insert(*n, i);
         }
     }
-    let mut sp = Splitter {
-        slot_of,
-        spilled: HashSet::new(),
-        scratch: HashSet::new(),
+    let return_aliases = crate::ir::abi::return_registers(cc);
+    let split_on_definition = if split_unspilled_dual_role {
+        argument_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, names)| {
+                names
+                    .iter()
+                    .any(|name| return_aliases.contains(name))
+                    .then_some(slot)
+            })
+            .collect()
+    } else {
+        HashSet::new()
     };
-    sp.walk_body(&mut f.body);
+    let splitter = Splitter {
+        slot_of,
+        split_on_definition,
+    };
+    splitter.walk_body(&mut f.body, &mut SplitState::default());
 }
 
 impl Splitter {
@@ -93,20 +85,20 @@ impl Splitter {
 
     /// Rename a register occurrence to its scratch alias when its slot has
     /// already been spilled.
-    fn rename_reg(&self, v: &mut VReg) {
+    fn rename_reg(&self, v: &mut VReg, state: &SplitState) {
         if let VReg::Phys(n) = v {
             if let Some(slot) = self.slot(n) {
-                if self.scratch.contains(&slot) {
+                if state.scratch.contains(&slot) {
                     *n = format!("scr_{}", n);
                 }
             }
         }
     }
 
-    fn rename_expr(&self, e: &mut Expr) {
+    fn rename_expr(&self, e: &mut Expr, state: &SplitState) {
         match e {
-            Expr::Reg(v) => self.rename_reg(v),
-            Expr::StackAddr { object, .. } => self.rename_reg(object),
+            Expr::Reg(v) => self.rename_reg(v, state),
+            Expr::StackAddr { object, .. } => self.rename_reg(object, state),
             Expr::Const(_)
             | Expr::FloatConst { .. }
             | Expr::Addr(_)
@@ -115,16 +107,16 @@ impl Splitter {
             | Expr::Unknown(_) => {}
             Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
                 if let Some(v) = base {
-                    self.rename_reg(v);
+                    self.rename_reg(v, state);
                 }
                 if let Some(v) = index {
-                    self.rename_reg(v);
+                    self.rename_reg(v, state);
                 }
             }
-            Expr::Deref { addr, .. } => self.rename_expr(addr),
+            Expr::Deref { addr, .. } => self.rename_expr(addr, state),
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-                self.rename_expr(lhs);
-                self.rename_expr(rhs);
+                self.rename_expr(lhs, state);
+                self.rename_expr(rhs, state);
             }
             Expr::Select {
                 cond,
@@ -132,16 +124,16 @@ impl Splitter {
                 if_false,
                 ..
             } => {
-                self.rename_expr(cond);
-                self.rename_expr(if_true);
-                self.rename_expr(if_false);
+                self.rename_expr(cond, state);
+                self.rename_expr(if_true, state);
+                self.rename_expr(if_false, state);
             }
-            Expr::Un { src, .. } => self.rename_expr(src),
-            Expr::Cast { expr, .. } => self.rename_expr(expr),
-            Expr::FunctionTableEntry { index, .. } => self.rename_expr(index),
+            Expr::Un { src, .. } => self.rename_expr(src, state),
+            Expr::Cast { expr, .. } => self.rename_expr(expr, state),
+            Expr::FunctionTableEntry { index, .. } => self.rename_expr(index, state),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {
-                    self.rename_expr(argument);
+                    self.rename_expr(argument, state);
                 }
             }
         }
@@ -149,7 +141,7 @@ impl Splitter {
 
     /// Is `s` the spill store of an argument register that hasn't been spilled
     /// yet — `store <promoted-local> = <argreg>`? Returns the slot to mark.
-    fn spill_slot(&self, s: &Stmt) -> Option<usize> {
+    fn spill_slot(&self, s: &Stmt, state: &SplitState) -> Option<usize> {
         if let Stmt::Store {
             addr: Expr::Reg(VReg::Phys(dst)),
             src: Expr::Reg(VReg::Phys(srcname)),
@@ -158,7 +150,7 @@ impl Splitter {
         {
             if is_promoted_local(dst) {
                 if let Some(slot) = self.slot(srcname) {
-                    if !self.scratch.contains(&slot) {
+                    if !state.scratch.contains(&slot) {
                         return Some(slot);
                     }
                 }
@@ -170,7 +162,7 @@ impl Splitter {
     /// A write to an already-spilled argument register starts its scratch value.
     /// A consumed call result is a definition too: on AArch64 the call-owned
     /// destination is the same physical `x0` slot as the caller's arg0.
-    fn scratch_definition_slot(&self, s: &Stmt) -> Option<usize> {
+    fn scratch_definition_slot(&self, s: &Stmt, state: &SplitState) -> Option<usize> {
         let name = match s {
             Stmt::Assign {
                 dst: VReg::Phys(name),
@@ -183,7 +175,7 @@ impl Splitter {
             _ => return None,
         };
         let slot = self.slot(name)?;
-        self.spilled.contains(&slot).then_some(slot)
+        (state.spilled.contains(&slot) || self.split_on_definition.contains(&slot)).then_some(slot)
     }
 
     fn rename_as_scratch(v: &mut VReg) {
@@ -192,105 +184,184 @@ impl Splitter {
         }
     }
 
-    fn walk_body(&mut self, body: &mut [Stmt]) {
-        for s in body.iter_mut() {
-            // Detect the spill BEFORE renaming this statement, so the parameter
-            // read that feeds it is preserved; mark the slot spilled AFTER, so
-            // a later definition can begin the scratch lifetime.
-            let spill = self.spill_slot(s);
-            let scratch_definition = self.scratch_definition_slot(s);
+    fn definite_intersection(states: &[SplitState]) -> SplitState {
+        let Some(first) = states.first() else {
+            return SplitState::default();
+        };
+        let spilled = first
+            .spilled
+            .iter()
+            .copied()
+            .filter(|slot| states[1..].iter().all(|state| state.spilled.contains(slot)))
+            .collect::<HashSet<_>>();
+        let scratch_candidates = states
+            .iter()
+            .flat_map(|state| state.scratch.iter().copied())
+            .collect::<HashSet<_>>();
+        let scratch = scratch_candidates
+            .into_iter()
+            .filter(|slot| {
+                states.iter().all(|state| state.scratch.contains(slot))
+                    // A definitely spilled parameter is dead in its register;
+                    // any later definition begins post-spill storage. Preserve
+                    // the historical monotone fact across unstructured gotos,
+                    // whose target may live inside a sibling AST arm.
+                    || (spilled.contains(slot)
+                        && states.iter().any(|state| state.scratch.contains(slot)))
+            })
+            .collect();
+        SplitState { spilled, scratch }
+    }
 
-            // Rename the statement's own (non-nested) register occurrences.
-            match s {
-                Stmt::Assign { dst, src } => {
-                    self.rename_expr(src);
-                    if scratch_definition.is_some() {
-                        Self::rename_as_scratch(dst);
-                    } else {
-                        self.rename_reg(dst);
-                    }
+    fn walk_body(&self, body: &mut [Stmt], state: &mut SplitState) {
+        for s in body.iter_mut() {
+            self.walk_stmt(s, state);
+        }
+    }
+
+    fn walk_stmt(&self, s: &mut Stmt, state: &mut SplitState) {
+        match s {
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                self.rename_expr(cond, state);
+                let entry = state.clone();
+                let mut then_state = entry.clone();
+                self.walk_body(then_body, &mut then_state);
+                let mut else_state = entry;
+                if let Some(else_body) = else_body {
+                    self.walk_body(else_body, &mut else_state);
                 }
-                Stmt::Store { addr, src, .. } => {
-                    self.rename_expr(addr);
-                    // For the spill store itself, keep the parameter register.
-                    if spill.is_none() {
-                        self.rename_expr(src);
-                    }
+                *state = Self::definite_intersection(&[then_state, else_state]);
+            }
+            Stmt::While { cond, body } => {
+                self.rename_expr(cond, state);
+                let entry = state.clone();
+                let mut body_state = entry.clone();
+                self.walk_body(body, &mut body_state);
+                *state = Self::definite_intersection(&[entry, body_state]);
+            }
+            Stmt::DoWhile { body, cond } => {
+                self.walk_body(body, state);
+                self.rename_expr(cond, state);
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                self.walk_stmt(init, state);
+                self.rename_expr(cond, state);
+                let entry = state.clone();
+                let mut body_state = entry.clone();
+                self.walk_body(body, &mut body_state);
+                self.walk_stmt(step, &mut body_state);
+                *state = Self::definite_intersection(&[entry, body_state]);
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                self.rename_expr(discriminant, state);
+                let entry = state.clone();
+                let mut exits = Vec::with_capacity(cases.len() + 1);
+                for (_, body) in cases {
+                    let mut case_state = entry.clone();
+                    self.walk_body(body, &mut case_state);
+                    exits.push(case_state);
                 }
-                Stmt::Call {
-                    target, args, dst, ..
-                } => {
-                    self.rename_expr(target);
-                    for a in args.iter_mut() {
-                        self.rename_expr(a);
-                    }
-                    if let Some(dst) = dst {
+                if let Some(default) = default {
+                    let mut default_state = entry;
+                    self.walk_body(default, &mut default_state);
+                    exits.push(default_state);
+                } else {
+                    exits.push(entry);
+                }
+                *state = Self::definite_intersection(&exits);
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                let entry = state.clone();
+                let mut exits = Vec::with_capacity(catches.len() + 1);
+                let mut try_state = entry.clone();
+                self.walk_body(try_body, &mut try_state);
+                exits.push(try_state);
+                for catch in catches {
+                    let mut catch_state = entry.clone();
+                    self.walk_body(&mut catch.body, &mut catch_state);
+                    exits.push(catch_state);
+                }
+                *state = Self::definite_intersection(&exits);
+            }
+            _ => {
+                // Detect the spill BEFORE renaming this statement, so the parameter
+                // read that feeds it is preserved; mark the slot spilled AFTER, so
+                // a later definition can begin the scratch lifetime.
+                let spill = self.spill_slot(s, state);
+                let scratch_definition = self.scratch_definition_slot(s, state);
+
+                match s {
+                    Stmt::Assign { dst, src } => {
+                        self.rename_expr(src, state);
                         if scratch_definition.is_some() {
                             Self::rename_as_scratch(dst);
                         } else {
-                            self.rename_reg(dst);
+                            self.rename_reg(dst, state);
                         }
                     }
-                }
-                Stmt::Return { value } => {
-                    if let Some(e) = value {
-                        self.rename_expr(e);
+                    Stmt::Store { addr, src, .. } => {
+                        self.rename_expr(addr, state);
+                        // For the spill store itself, keep the parameter register.
+                        if spill.is_none() {
+                            self.rename_expr(src, state);
+                        }
                     }
+                    Stmt::Call {
+                        target, args, dst, ..
+                    } => {
+                        self.rename_expr(target, state);
+                        for a in args.iter_mut() {
+                            self.rename_expr(a, state);
+                        }
+                        if let Some(dst) = dst {
+                            if scratch_definition.is_some() {
+                                Self::rename_as_scratch(dst);
+                            } else {
+                                self.rename_reg(dst, state);
+                            }
+                        }
+                    }
+                    Stmt::Return { value } => {
+                        if let Some(e) = value {
+                            self.rename_expr(e, state);
+                        }
+                    }
+                    Stmt::Throw { value } | Stmt::Push { value } => self.rename_expr(value, state),
+                    Stmt::Pop { target } => self.rename_reg(target, state),
+                    Stmt::IndirectGoto { target } => self.rename_expr(target, state),
+                    Stmt::Goto { .. }
+                    | Stmt::Label(_)
+                    | Stmt::Break
+                    | Stmt::Nop
+                    | Stmt::Unknown(_)
+                    | Stmt::Comment(_) => {}
+                    Stmt::If { .. }
+                    | Stmt::While { .. }
+                    | Stmt::DoWhile { .. }
+                    | Stmt::For { .. }
+                    | Stmt::Switch { .. }
+                    | Stmt::TryCatch { .. } => unreachable!("structured statements handled above"),
                 }
-                Stmt::Push { value } => self.rename_expr(value),
-                Stmt::Pop { target } => self.rename_reg(target),
-                Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
-                    self.rename_expr(cond)
-                }
-                Stmt::For { cond, .. } => self.rename_expr(cond),
-                Stmt::Switch { discriminant, .. } => self.rename_expr(discriminant),
-                Stmt::IndirectGoto { .. } => {}
-                Stmt::Goto { .. }
-                | Stmt::Label(_)
-                | Stmt::Break
-                | Stmt::Nop
-                | Stmt::Unknown(_)
-                | Stmt::Comment(_)
-                | Stmt::Throw { .. }
-                | Stmt::TryCatch { .. } => {}
-            }
 
-            if let Some(slot) = spill {
-                self.spilled.insert(slot);
-            }
-            if let Some(slot) = scratch_definition {
-                self.scratch.insert(slot);
-            }
-
-            // Recurse into nested bodies (they follow in program order).
-            match s {
-                Stmt::If {
-                    then_body,
-                    else_body,
-                    ..
-                } => {
-                    self.walk_body(then_body);
-                    if let Some(eb) = else_body {
-                        self.walk_body(eb);
-                    }
+                if let Some(slot) = spill {
+                    state.spilled.insert(slot);
                 }
-                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => self.walk_body(body),
-                Stmt::For {
-                    init, step, body, ..
-                } => {
-                    self.walk_body(std::slice::from_mut(init.as_mut()));
-                    self.walk_body(body);
-                    self.walk_body(std::slice::from_mut(step.as_mut()));
+                if let Some(slot) = scratch_definition {
+                    state.scratch.insert(slot);
                 }
-                Stmt::Switch { cases, default, .. } => {
-                    for (_, b) in cases.iter_mut() {
-                        self.walk_body(b);
-                    }
-                    if let Some(b) = default {
-                        self.walk_body(b);
-                    }
-                }
-                _ => {}
             }
         }
     }
@@ -329,7 +400,7 @@ mod tests {
                 },
             ],
         };
-        split_spilled_arg_reuse(&mut f, CallConv::SysVAmd64);
+        split_argument_storage_reuse(&mut f, CallConv::SysVAmd64, false);
         // The spill keeps the parameter register.
         assert_eq!(
             f.body[0],
@@ -379,7 +450,7 @@ mod tests {
             ],
         };
 
-        split_spilled_arg_reuse(&mut f, CallConv::SysVAmd64);
+        split_argument_storage_reuse(&mut f, CallConv::SysVAmd64, false);
 
         assert_eq!(
             f.body[1],
@@ -414,7 +485,7 @@ mod tests {
                 },
             ],
         };
-        split_spilled_arg_reuse(&mut f, CallConv::SysVAmd64);
+        split_argument_storage_reuse(&mut f, CallConv::SysVAmd64, false);
         assert_eq!(
             f.body[0],
             Stmt::Assign {
@@ -453,7 +524,7 @@ mod tests {
         };
 
         crate::ir::ast::materialize_direct_output(&mut f);
-        split_spilled_arg_reuse(&mut f, CallConv::Arm);
+        split_argument_storage_reuse(&mut f, CallConv::Arm, false);
 
         assert_eq!(
             f.body.last(),
@@ -500,7 +571,7 @@ mod tests {
             ],
         };
 
-        split_spilled_arg_reuse(&mut f, CallConv::Aarch64);
+        split_argument_storage_reuse(&mut f, CallConv::Aarch64, false);
 
         let Stmt::Call { dst, .. } = &f.body[2] else {
             panic!("expected helper call")
@@ -514,6 +585,183 @@ mod tests {
                 size: 4,
             },
             "the spilled consumer must read the exact call-result role"
+        );
+    }
+
+    /// AAPCS64 uses x0 for both the 32-bit entry parameter and the 64-bit
+    /// result.  An optimized accumulator can therefore overwrite x0 without
+    /// ever spilling arg0.  The result lifetime must not inherit arg0's name
+    /// and type merely because both values occupied the same register.
+    #[test]
+    fn unspilled_aarch64_arg0_reuse_is_split_from_the_wide_result() {
+        let mut f = Function {
+            name: "factorial_while".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("t0"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::And,
+                        lhs: Box::new(Expr::Reg(reg("x0"))),
+                        rhs: Box::new(Expr::Const(14)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("x1#1"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::And,
+                        lhs: Box::new(Expr::Reg(reg("x0"))),
+                        rhs: Box::new(Expr::Const(15)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("x0#1"),
+                    src: Expr::Const(1),
+                },
+                Stmt::DoWhile {
+                    body: vec![
+                        Stmt::Assign {
+                            dst: reg("x0"),
+                            src: Expr::Bin {
+                                op: crate::ir::types::BinOp::Mul,
+                                lhs: Box::new(Expr::Reg(reg("x0#1"))),
+                                rhs: Box::new(Expr::Reg(reg("x1#1"))),
+                            },
+                        },
+                        Stmt::Assign {
+                            dst: reg("x0#1"),
+                            src: Expr::Reg(reg("x0")),
+                        },
+                    ],
+                    cond: Expr::Const(1),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("x0"))),
+                },
+            ],
+        };
+
+        split_argument_storage_reuse(&mut f, CallConv::Aarch64, true);
+
+        assert_eq!(
+            f.body[0],
+            Stmt::Assign {
+                dst: reg("t0"),
+                src: Expr::Bin {
+                    op: crate::ir::types::BinOp::And,
+                    lhs: Box::new(Expr::Reg(reg("x0"))),
+                    rhs: Box::new(Expr::Const(14)),
+                },
+            },
+            "entry reads must retain the parameter identity"
+        );
+        let Stmt::DoWhile { body, .. } = &f.body[3] else {
+            panic!("expected accumulator loop: {:#?}", f.body)
+        };
+        let Stmt::Assign { dst, .. } = &body[0] else {
+            panic!("expected accumulator definition")
+        };
+        assert_eq!(dst, &reg("scr_x0"));
+        assert_eq!(
+            body[1],
+            Stmt::Assign {
+                dst: reg("x0#1"),
+                src: Expr::Reg(reg("scr_x0")),
+            }
+        );
+        assert_eq!(
+            f.body[4],
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("scr_x0"))),
+            }
+        );
+    }
+
+    /// A definition on one structured path must not rename a live-in read on
+    /// its sibling path.  The split tracks reaching state, not source order.
+    #[test]
+    fn dual_role_split_keeps_sibling_branch_live_in_reads() {
+        let mut f = Function {
+            name: "conditional_result".into(),
+            entry_va: 0,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(reg("x1")),
+                then_body: vec![
+                    Stmt::Assign {
+                        dst: reg("x0"),
+                        src: Expr::Const(7),
+                    },
+                    Stmt::Return {
+                        value: Some(Expr::Reg(reg("x0"))),
+                    },
+                ],
+                else_body: Some(vec![Stmt::Return {
+                    value: Some(Expr::Reg(reg("x0"))),
+                }]),
+            }],
+        };
+
+        split_argument_storage_reuse(&mut f, CallConv::Aarch64, true);
+
+        let Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } = &f.body[0]
+        else {
+            panic!("expected conditional result: {:#?}", f.body)
+        };
+        assert_eq!(
+            then_body[1],
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("scr_x0"))),
+            }
+        );
+        assert_eq!(
+            else_body[0],
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("x0"))),
+            },
+            "the sibling path still reads the entry value"
+        );
+    }
+
+    /// Once a parameter was definitely spilled, a branch-local definition is
+    /// post-spill storage on every later path.  A goto may enter the defining
+    /// tail from a sibling arm, so requiring structured-arm intersection would
+    /// lose the scratch identity at the common return.
+    #[test]
+    fn post_spill_branch_definition_reaches_an_unstructured_common_return() {
+        let mut f = Function {
+            name: "nested_switch".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_0")),
+                    src: Expr::Reg(reg("x0")),
+                    size: 4,
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("x1")),
+                    then_body: vec![Stmt::Assign {
+                        dst: reg("x0"),
+                        src: Expr::Const(6000),
+                    }],
+                    else_body: Some(vec![Stmt::Goto { target: 0x1040 }]),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("x0"))),
+                },
+            ],
+        };
+
+        split_argument_storage_reuse(&mut f, CallConv::Aarch64, false);
+
+        assert_eq!(
+            f.body[2],
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("scr_x0"))),
+            }
         );
     }
 }
