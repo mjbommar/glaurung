@@ -7,7 +7,7 @@
 use crate::core::instruction::Instruction;
 use crate::ir::types::{BinOp, CmpOp, Endian, MemOp, Op, VReg, Value, Width};
 
-use super::{operand_reg, operand_to_memop, scaled_memop, temp_for};
+use super::{instruction_word, operand_reg, operand_to_memop, scaled_memop, temp_for};
 
 /// Canonical full-vector spelling shared by the `qN` transfer view and `vN`
 /// packed-operation view.
@@ -137,6 +137,21 @@ fn dword_register_triplet(ins: &Instruction) -> Option<(String, String, String)>
     Some((dst, lhs, rhs))
 }
 
+fn dword_register_pair(ins: &Instruction) -> Option<(String, String)> {
+    if ins.operands.len() != 2
+        || ins.operands.iter().any(|operand| {
+            !operand
+                .vector_shape
+                .is_some_and(|shape| (shape.lanes, shape.element_bits) == (4, 32))
+        })
+    {
+        return None;
+    }
+    let dst = vector_name(&operand_reg(&ins.operands[0])?)?;
+    let src = vector_name(&operand_reg(&ins.operands[1])?)?;
+    Some((dst, src))
+}
+
 pub(super) fn dword_binary(ins: &Instruction, op: BinOp) -> Option<Vec<Op>> {
     let (dst, lhs, rhs) = dword_register_triplet(ins)?;
     Some(
@@ -151,29 +166,182 @@ pub(super) fn dword_binary(ins: &Instruction, op: BinOp) -> Option<Vec<Op>> {
     )
 }
 
-/// Broadcast the zero immediate into every dword lane.
+/// Broadcast an exact unshifted immediate into every dword lane.
 ///
-/// AArch64's non-zero `MOVI` forms may shift or replicate the encoded immediate;
-/// Capstone does not retain that modifier in our structured operand. Zero is
-/// invariant under every such modifier, so support it exactly and leave every
-/// non-zero form opaque until operand modifiers are represented explicitly.
-pub(super) fn dword_zero_splat(ins: &Instruction) -> Option<Vec<Op>> {
-    if ins.operands.len() != 2 || ins.operands[1].immediate != Some(0) {
+/// AArch64's other modified-immediate forms may shift or replicate the encoded
+/// immediate. The raw `cmode` check keeps those forms opaque until the operand
+/// representation carries their modifier explicitly.
+pub(super) fn dword_immediate_splat(ins: &Instruction, inverted: bool) -> Option<Vec<Op>> {
+    if ins.operands.len() != 2 {
         return None;
     }
     let shape = ins.operands[0].vector_shape?;
     if (shape.lanes, shape.element_bits) != (4, 32) {
         return None;
     }
+    // Advanced-SIMD modified-immediate encodings reuse the same decoded
+    // immediate for shifted and replicated forms. Only cmode=0000 is the exact
+    // unshifted 32-bit splat represented by our structured operands.
+    let word = instruction_word(ins)?;
+    if ((word >> 12) & 0xf) != 0 || ((word >> 11) & 1) != 0 {
+        return None;
+    }
+    let immediate = ins.operands[1].immediate?;
+    if !(0..=u8::MAX.into()).contains(&immediate) {
+        return None;
+    }
+    let value = if inverted {
+        i64::from(!u32::try_from(immediate).ok()?)
+    } else {
+        immediate
+    };
     let dst = vector_name(&operand_reg(&ins.operands[0])?)?;
     Some(
         (0..4)
             .map(|lane| Op::Assign {
                 dst: crate::ir::types::packed_dword_lane(&dst, lane),
-                src: Value::Const(0),
+                src: Value::Const(value),
             })
             .collect(),
     )
+}
+
+/// Broadcast a general-purpose 32-bit value into every 4S lane.
+pub(super) fn dword_duplicate(ins: &Instruction) -> Option<Vec<Op>> {
+    if ins.operands.len() != 2
+        || !ins.operands[0]
+            .vector_shape
+            .is_some_and(|shape| (shape.lanes, shape.element_bits) == (4, 32))
+    {
+        return None;
+    }
+    let dst = vector_name(&operand_reg(&ins.operands[0])?)?;
+    let src = operand_reg(&ins.operands[1])?;
+    let VReg::Phys(name) = &src else {
+        return None;
+    };
+    if !numbered_register(name, 'w', 30) {
+        return None;
+    }
+    Some(
+        (0..4)
+            .map(|lane| Op::Assign {
+                dst: crate::ir::types::packed_dword_lane(&dst, lane),
+                src: Value::Reg(src.clone()),
+            })
+            .collect(),
+    )
+}
+
+/// Per-lane two's-complement negation for the 4S arrangement.
+pub(super) fn dword_negate(ins: &Instruction) -> Option<Vec<Op>> {
+    let (dst, src) = dword_register_pair(ins)?;
+    Some(
+        (0..4)
+            .map(|lane| Op::Un {
+                dst: crate::ir::types::packed_dword_lane(&dst, lane),
+                op: crate::ir::types::UnOp::Neg,
+                src: Value::Reg(crate::ir::types::packed_dword_lane(&src, lane)),
+            })
+            .collect(),
+    )
+}
+
+/// AArch64 USHL with a signed per-lane shift count.
+///
+/// The shared scalar AST lowers this named operation with guarded unsigned
+/// shifts, including the architectural zero result when the magnitude is at
+/// least the lane width. One intrinsic per lane keeps ordinary SSA exact.
+pub(super) fn dword_unsigned_shift(ins: &Instruction) -> Option<Vec<Op>> {
+    let (dst, value, count) = dword_register_triplet(ins)?;
+    Some(
+        (0..4)
+            .map(|lane| Op::Intrinsic {
+                name: "packed_signed_shift_u32".to_string(),
+                ins: vec![
+                    Value::Reg(crate::ir::types::packed_dword_lane(&value, lane)),
+                    Value::Reg(crate::ir::types::packed_dword_lane(&count, lane)),
+                ],
+                outs: vec![(crate::ir::types::packed_dword_lane(&dst, lane), Width::W32)],
+                reads_mem: false,
+                writes_mem: false,
+            })
+            .collect(),
+    )
+}
+
+/// Per-lane compare-and-mask for `CMTST Vd.4S,Vn.4S,Vm.4S`.
+pub(super) fn dword_compare_test(ins: &Instruction) -> Option<Vec<Op>> {
+    let (dst, lhs, rhs) = dword_register_triplet(ins)?;
+    let mut out = Vec::with_capacity(12);
+    for lane in 0..4 {
+        let tested = temp_for(ins, lane as u32);
+        let nonzero = temp_for(ins, 4 + lane as u32);
+        out.push(Op::Bin {
+            dst: tested.clone(),
+            op: BinOp::And,
+            lhs: Value::Reg(crate::ir::types::packed_dword_lane(&lhs, lane)),
+            rhs: Value::Reg(crate::ir::types::packed_dword_lane(&rhs, lane)),
+        });
+        out.push(Op::Cmp {
+            dst: nonzero.clone(),
+            op: CmpOp::Ne,
+            lhs: Value::Reg(tested),
+            rhs: Value::Const(0),
+        });
+        out.push(Op::Ite {
+            dst: crate::ir::types::packed_dword_lane(&dst, lane),
+            cond: nonzero,
+            t: Value::Const(i64::from(u32::MAX)),
+            e: Value::Const(0),
+            width: Width::W32,
+        });
+    }
+    Some(out)
+}
+
+/// Pairwise unsigned maximum across two 4S inputs.
+///
+/// Snapshot all eight inputs before defining any destination lane: UMAXP reads
+/// adjacent lanes and commonly aliases its destination with both sources.
+pub(super) fn dword_pairwise_unsigned_max(ins: &Instruction) -> Option<Vec<Op>> {
+    let (dst, lhs, rhs) = dword_register_triplet(ins)?;
+    let mut out = Vec::with_capacity(20);
+    let lhs_snapshot: Vec<_> = (0..4).map(|lane| temp_for(ins, lane)).collect();
+    let rhs_snapshot: Vec<_> = (0..4).map(|lane| temp_for(ins, 4 + lane)).collect();
+    for lane in 0..4 {
+        out.push(Op::Assign {
+            dst: lhs_snapshot[lane].clone(),
+            src: Value::Reg(crate::ir::types::packed_dword_lane(&lhs, lane)),
+        });
+        out.push(Op::Assign {
+            dst: rhs_snapshot[lane].clone(),
+            src: Value::Reg(crate::ir::types::packed_dword_lane(&rhs, lane)),
+        });
+    }
+    for lane in 0..4 {
+        let source = if lane < 2 {
+            &lhs_snapshot
+        } else {
+            &rhs_snapshot
+        };
+        let pair = (lane % 2) * 2;
+        let less = temp_for(ins, 8 + lane as u32);
+        out.push(Op::Cmp {
+            dst: less.clone(),
+            op: CmpOp::Ult,
+            lhs: Value::Reg(source[pair].clone()),
+            rhs: Value::Reg(source[pair + 1].clone()),
+        });
+        out.push(Op::Ite {
+            dst: crate::ir::types::packed_dword_lane(&dst, lane),
+            cond: less,
+            t: Value::Reg(source[pair + 1].clone()),
+            e: Value::Reg(source[pair].clone()),
+            width: Width::W32,
+        });
+    }
+    Some(out)
 }
 
 /// Signed per-lane maximum for the 4S vector arrangement.
@@ -292,7 +460,7 @@ fn scalar_dword_lane(register: &VReg) -> Option<VReg> {
     Some(crate::ir::types::packed_dword_lane(&format!("v{index}"), 0))
 }
 
-pub(super) fn scalar_fmov(ins: &Instruction) -> Option<Op> {
+pub(super) fn scalar_fmov(ins: &Instruction) -> Option<Vec<Op>> {
     if ins.operands.len() != 2 {
         return None;
     }
@@ -301,10 +469,52 @@ pub(super) fn scalar_fmov(ins: &Instruction) -> Option<Op> {
     let VReg::Phys(name) = &dst else {
         return None;
     };
-    numbered_register(name, 'w', 30).then_some(Op::Assign {
-        dst,
-        src: Value::Reg(scalar_dword_lane(&src)?),
-    })
+    if numbered_register(name, 'w', 30) {
+        return Some(vec![Op::Assign {
+            dst,
+            src: Value::Reg(scalar_dword_lane(&src)?),
+        }]);
+    }
+    if !numbered_register(name, 'x', 30) {
+        return None;
+    }
+    let VReg::Phys(src_name) = &src else {
+        return None;
+    };
+    let index = src_name
+        .strip_prefix('d')?
+        .parse::<u8>()
+        .ok()
+        .filter(|index| *index <= 31)?;
+    let vector = format!("v{index}");
+    let low = temp_for(ins, 0);
+    let high = temp_for(ins, 1);
+    Some(vec![
+        Op::ZExt {
+            dst: low.clone(),
+            src: Value::Reg(crate::ir::types::packed_dword_lane(&vector, 0)),
+            from: Width::W32,
+            to: Width::W64,
+        },
+        Op::ZExt {
+            dst: high.clone(),
+            src: Value::Reg(crate::ir::types::packed_dword_lane(&vector, 1)),
+            from: Width::W32,
+            to: Width::W64,
+        },
+        Op::Bin {
+            dst: high.clone(),
+            op: BinOp::Shl,
+            lhs: Value::Reg(high.clone()),
+            rhs: Value::Const(32),
+        },
+        Op::Bin {
+            dst,
+            op: BinOp::Or,
+            lhs: Value::Reg(low),
+            rhs: Value::Reg(high),
+        },
+    ])
 }
 
 #[cfg(test)]
@@ -458,6 +668,46 @@ mod tests {
     }
 
     #[test]
+    fn packed_find_first_set_prescan_has_no_opaque_or_whole_vector_steps() {
+        // GCC 15 -O2 `find_first_set(unsigned)` vectorizes its outer scan:
+        //   dup   v27.4s, w0
+        //   movi  v28.4s, #1
+        //   movi  v25.4s, #4
+        //   mvni  v26.4s, #3
+        //   neg   v31.4s, v30.4s
+        //   ushl  v31.4s, v27.4s, v31.4s
+        //   cmtst v31.4s, v31.4s, v28.4s
+        //   umaxp v31.4s, v31.4s, v31.4s
+        //   fmov  x0, d31
+        // Every operation participates in the branch selecting the scalar
+        // fallback window. Dropping even one produces a plausible loop with
+        // undefined bounds rather than the machine's result.
+        let out = lift_bytes(
+            &[
+                0x1b, 0x0c, 0x04, 0x4e, 0x3c, 0x04, 0x00, 0x4f, 0x99, 0x04, 0x00, 0x4f, 0x7a, 0x04,
+                0x00, 0x6f, 0xdf, 0xbb, 0xa0, 0x6e, 0x7f, 0x47, 0xbf, 0x6e, 0xff, 0x8f, 0xbc, 0x4e,
+                0xff, 0xa7, 0xbf, 0x6e, 0xe0, 0x03, 0x66, 0x9e,
+            ],
+            0x780,
+        );
+
+        assert!(
+            out.iter()
+                .all(|instruction| !matches!(instruction.op, Op::Unknown { .. })),
+            "the real prescan sequence retains opaque holes: {out:#?}"
+        );
+        assert!(
+            out.iter().all(|instruction| {
+                let (defs, uses) = crate::ir::use_def::def_uses(&instruction.op);
+                defs.into_iter()
+                    .chain(uses)
+                    .all(|register| vector_name(&register).is_none())
+            }),
+            "packed operations escaped as whole-vector scalar values: {out:#?}"
+        );
+    }
+
+    #[test]
     fn packed_byte_table_sequence_declares_every_input_and_output_lane() {
         // GCC 15 -O2 `mutate_reverse(int *)` uses a read-only byte-index vector
         // and two one-table TBL operations to reverse the eight dwords:
@@ -507,16 +757,35 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_qword_fmov_remains_fail_closed() {
-        // The packed model in this slice proves 32-bit lanes only. Treating
-        // D31 as an unrelated scalar can manufacture a false passing result.
+    fn qword_fmov_joins_the_two_low_dword_lanes() {
+        // D31 is the low 64-bit view of V31, not unrelated scalar storage.
         let out = lift_bytes(&0x9e6603e0u32.to_le_bytes(), 0x1000); // fmov x0,d31
+        assert_eq!(out.len(), 4, "the lane join changed shape: {out:#?}");
         assert!(matches!(
-            &out[..],
-            [LlirInstr {
-                op: Op::Unknown { mnemonic },
+            &out[0].op,
+            Op::ZExt {
+                src: Value::Reg(src),
+                from: Width::W32,
+                to: Width::W64,
                 ..
-            }] if mnemonic == "fmov"
+            } if *src == VReg::phys("v31_d0")
+        ));
+        assert!(matches!(
+            &out[1].op,
+            Op::ZExt {
+                src: Value::Reg(src),
+                from: Width::W32,
+                to: Width::W64,
+                ..
+            } if *src == VReg::phys("v31_d1")
+        ));
+        assert!(matches!(
+            &out[3].op,
+            Op::Bin {
+                dst,
+                op: BinOp::Or,
+                ..
+            } if *dst == VReg::phys("x0")
         ));
     }
 

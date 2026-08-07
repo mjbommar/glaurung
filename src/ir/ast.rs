@@ -843,6 +843,72 @@ fn packed_byte_table_intrinsic(name: &str, ins: &[Value], outs: &[(VReg, Width)]
     })
 }
 
+/// Lower a signed-count packed shift into C expressions whose shifts are
+/// defined for every 32-bit count. AArch64 USHL shifts left for nonnegative
+/// counts, right for negative counts, and returns zero when the magnitude is
+/// at least 32. The unsigned casts also make INT_MIN negation well-defined.
+fn packed_signed_shift_intrinsic(
+    name: &str,
+    ins: &[Value],
+    outs: &[(VReg, Width)],
+) -> Option<Expr> {
+    let ([value, count], [(_, Width::W32)]) = (ins, outs) else {
+        return None;
+    };
+    if name != "packed_signed_shift_u32" {
+        return None;
+    }
+    let value = Expr::Cast {
+        signed: false,
+        width: 4,
+        expr: Box::new(lower_value(value)),
+    };
+    let count_unsigned = Expr::Cast {
+        signed: false,
+        width: 4,
+        expr: Box::new(lower_value(count)),
+    };
+    let count_signed = Expr::Cast {
+        signed: true,
+        width: 4,
+        expr: Box::new(lower_value(count)),
+    };
+    let zero_unsigned = Expr::Cast {
+        signed: false,
+        width: 4,
+        expr: Box::new(Expr::Const(0)),
+    };
+    let magnitude = Expr::Bin {
+        op: BinOp::Sub,
+        lhs: Box::new(zero_unsigned),
+        rhs: Box::new(count_unsigned.clone()),
+    };
+    let guarded_shift = |op: BinOp, amount: Expr| Expr::Select {
+        cond: Box::new(Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Const(32)),
+            rhs: Box::new(amount.clone()),
+        }),
+        if_true: Box::new(Expr::Const(0)),
+        if_false: Box::new(Expr::Bin {
+            op,
+            lhs: Box::new(value.clone()),
+            rhs: Box::new(amount),
+        }),
+        width: 4,
+    };
+    Some(Expr::Select {
+        cond: Box::new(Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(count_signed),
+            rhs: Box::new(Expr::Const(0)),
+        }),
+        if_true: Box::new(guarded_shift(BinOp::Shr, magnitude)),
+        if_false: Box::new(guarded_shift(BinOp::Shl, count_unsigned)),
+        width: 4,
+    })
+}
+
 /// Whether every VFP value used by the scalar arithmetic subset has a modeled
 /// producer in this function.
 ///
@@ -1236,6 +1302,14 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             }
             if let (Some(src), Some((dst, _))) =
                 (packed_byte_table_intrinsic(name, ins, outs), outs.first())
+            {
+                return vec![Stmt::Assign {
+                    dst: dst.clone(),
+                    src,
+                }];
+            }
+            if let (Some(src), Some((dst, _))) =
+                (packed_signed_shift_intrinsic(name, ins, outs), outs.first())
             {
                 return vec![Stmt::Assign {
                     dst: dst.clone(),
@@ -14225,6 +14299,36 @@ function f @ 0x1000 {
             assert!(!text.contains("asm: bswap"), "{text}");
             assert_looks_like_c(&text);
         }
+    }
+
+    #[test]
+    fn packed_signed_shift_guards_both_c_shift_directions() {
+        let statements = lower_op(
+            &Op::Intrinsic {
+                name: "packed_signed_shift_u32".to_string(),
+                ins: vec![
+                    Value::Reg(VReg::phys("arg0")),
+                    Value::Reg(VReg::phys("arg1")),
+                ],
+                outs: vec![(VReg::phys("ret"), Width::W32)],
+                reads_mem: false,
+                writes_mem: false,
+            },
+            false,
+        );
+        let function = Function {
+            name: "shift_lane".to_string(),
+            entry_va: 0x10,
+            body: statements,
+        };
+        let text = render_decbench(&function);
+        assert!(text.contains("(int)(arg1) < 0"), "{text}");
+        assert!(
+            text.contains("32") && text.matches("? 0 :").count() == 2,
+            "{text}"
+        );
+        assert!(text.contains(">>") && text.contains("<<"), "{text}");
+        assert_looks_like_c(&text);
     }
 
     #[test]

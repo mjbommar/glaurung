@@ -936,3 +936,15 @@ such a definition, including join and loop-carried writes; unstructured control
 fails closed. All 22 recursion vectors pass, and the exact ratchet moves only
 this cell to pass: 1,579 / 1,800 execution rows, zero regressions, and three
 AArch64 failures remaining.
+
+### Closed — packed AArch64 `find_first_set` pre-scan
+
+AArch64 O2 `12_loop_rotation:find_first_set` was not another loop-rotation
+failure. GCC 15 vectorized its outer search into four dword lanes, while the
+lifter dropped `DUP`, nonzero `MOVI`/`MVNI`, `USHL`, `CMTST`, `UMAXP`, and
+qword `FMOV`, and scalarized packed `NEG` against a whole-vector name. Exact
+4S-lane lowering now preserves the broadcast, immediate masks, signed-count
+shift, compare masks, alias-safe pairwise maximum, and low-qword transfer.
+The variable shift renders guarded unsigned C for all counts. The full ratchet
+moves only this cell to pass: 1,580 / 1,800 execution rows, zero regressions,
+and two AArch64 failures remaining (`rb_validate` and `topological_sort`).

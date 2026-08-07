@@ -1808,7 +1808,7 @@
     "do_while_control": "pass",
     "down_by_negative_imm": "pass",
     "factorial_while": "pass",
-    "find_first_set": "fail",
+    "find_first_set": "pass",
     "for_accumulate": "pass",
     "nested_rotated": "pass",
     "skip_odd_sum": "pass"

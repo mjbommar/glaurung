@@ -1133,18 +1133,27 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
 
     match mnem.as_str() {
         "nop" => vec![Op::Nop],
-        "movi" => {
-            packed::dword_zero_splat(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }])
+        "dup" => {
+            packed::dword_duplicate(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }])
         }
+        "movi" => packed::dword_immediate_splat(ins, false)
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
+        "mvni" => packed::dword_immediate_splat(ins, true)
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
         "smax" => {
             packed::dword_signed_max(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }])
         }
+        "ushl" => packed::dword_unsigned_shift(ins)
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
+        "cmtst" => {
+            packed::dword_compare_test(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }])
+        }
+        "umaxp" => packed::dword_pairwise_unsigned_max(ins)
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
         "tbl" => packed::byte_table_16(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
         "addv" => packed::dword_horizontal_add(ins)
             .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
-        "fmov" => packed::scalar_fmov(ins)
-            .map(|op| vec![op])
-            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
+        "fmov" => packed::scalar_fmov(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
         "mov" => {
             if ins.operands.len() == 2 {
                 let Some(dst) = operand_reg(&ins.operands[0]) else {
@@ -1213,6 +1222,9 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             ];
         }
         "neg" => {
+            if let Some(ops) = packed::dword_negate(ins) {
+                return ops;
+            }
             if ins.operands.len() == 2 {
                 let (Some(dst), Some(src)) = (
                     operand_reg(&ins.operands[0]),

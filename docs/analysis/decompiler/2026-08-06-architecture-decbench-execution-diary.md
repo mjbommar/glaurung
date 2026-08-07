@@ -1118,3 +1118,45 @@ whitespace gate are clean; the focused type check retains only the same six
 pre-existing pytest-stub diagnostics. The reusable production oracle lives in
 its own 452-line module rather than adding another dataflow implementation to
 the already 15,000-line AST renderer.
+
+## 09:01 — packed AArch64 pre-scan recovers `find_first_set`
+
+The retained GCC 15 AArch64 O2 ELF at
+`/tmp/glaurung-a64-find-first-set.doul2e/12_loop_rotation-aarch64-O2.so` has
+SHA-256 `d15318f73075d04b3c5c5b203fc1816977dac747d87520e362a31f6b3623551f`.
+Source `find_first_set(1)` returns zero; the recovered translation returned -1.
+This was not the historical loop-header-hoist defect suggested by the fixture's
+warning. The scalar bit-search loop and both exits were already structured
+correctly.
+
+GCC had introduced a packed four-lane pre-scan. Assembly at `0x780..0x7d4`
+broadcasts `x`, constructs the dword position/count vectors, applies `NEG`,
+signed-count `USHL`, `CMTST`, pairwise unsigned `UMAXP`, and transfers the low
+qword to x0. The old LLIR made `DUP`, nonzero `MOVI`, `MVNI`, `USHL`, `CMTST`,
+`UMAXP`, and the qword `FMOV` opaque; worse, it treated the packed `NEG` as one
+scalar operation on an unmodelled whole-vector register. The AST therefore kept
+the scalar fallback but derived its window from undefined lane values.
+
+The AArch64 packed lowering now decomposes the sequence into the same shared
+32-bit lane identities used by x86 SIMD. Pairwise operations snapshot aliased
+inputs before writing destinations. The signed variable shift is one typed,
+single-output intrinsic per lane; its architecture-neutral AST expression uses
+guarded unsigned left/right shifts, so magnitudes of 32 or greater produce zero
+without evaluating an undefined C shift. The low-qword FMOV explicitly joins
+the two low dword lanes after zero extension. Shifted/replicated modified
+immediates remain fail-closed behind the raw `cmode` check.
+
+The encoded machine-sequence unit test and the real AArch64 execution
+differential are green (23 input vectors). The complete pre-ratchet changes
+exactly `12_loop_rotation:aarch64:O2:find_first_set` from fail to pass: 1,580
+passes / 220 failures, AArch64 326/328, with all other architecture counts,
+228 structural rows, six declared-unsupported rows, toolchain fingerprints,
+schema checks, and the pinned x86-64 control unchanged.
+
+Final validation reproduces the 1,580 / 220 ratchet exactly. Rust all-targets is
+green with 1,808 library tests plus every integration, example, and benchmark
+target. The complete Python suite is green at 2,798 passed / 43 skipped with the
+same six pytest-mark warnings. Rust formatting, the diff whitespace gate, and
+owned Python formatting/lint are clean. The focused type check retains only the
+same six pre-existing pytest-stub diagnostics; repository-wide Ruff remains a
+pre-existing non-gate with 3,830 diagnostics outside this change.
