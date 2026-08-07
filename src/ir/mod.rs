@@ -36,6 +36,7 @@ pub mod control_semantics;
 pub mod copy_prop;
 pub mod dce;
 pub mod dead_stores;
+pub mod definedness;
 pub mod direct_output;
 pub mod dwarf_fields;
 pub mod exception_recover;

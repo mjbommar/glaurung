@@ -897,9 +897,11 @@ architecture matrix remains triage evidence rather than one undifferentiated
 1. **P0 — sound definitions and value roles (EPIC 5).** Replace bare-name and
    last-writer queries with one reaching-definitions oracle used by call-result,
    phi, frame, and return recovery. The post-spill call-result collision slice is
-   complete, as are the adjacent AArch64 call-flow and rotated-loop value-role
-   slices; next acceptance is the linked-list false frame without
-   architecture-ratchet regressions.
+   complete, as are the adjacent AArch64 call-flow, rotated-loop value-role,
+   linked-list emission, and BFI bit-demand slices. Next acceptance is making
+   implicit LLIR dependencies (conditional-assignment fallback and return value)
+   explicit, then sharing that identity with the emitted-local definition
+   verifier, without architecture-ratchet regressions.
 2. **P0 — program environment and call contracts (EPIC 1).** Persist one
    program-level symbol/type environment and attach canonical prototypes to every
    direct and indirect call site. Acceptance: pointer-depth type canaries and
@@ -1014,3 +1016,17 @@ The packed lifter now emits the exact read-modify-write expression
 materialized before the aliased destination write. The exact ratchet moves only
 this cell to pass: 1,582 / 1,800 execution rows, zero regressions, and the
 AArch64 lane is now 328/328.
+
+### Closed — unobserved AArch64 BFI preserved lane
+
+The earlier `rb_validate` behavior repair left an emission-safety defect:
+`bfi x12,x4,#32,#32` correctly preserved the old low word, but the function only
+observed `x12 >> 32`. Whole-register SSA still materialized the unobserved entry
+lane as a phi copy from an undefined local. A shared SSA-backed bit-demand oracle
+now proves the exact masked input demand is zero and a narrow constant-mask
+normalizer removes only that input before region recovery. Unknown operations and
+widths are conservative, and functions with implicit `CondAssign` fallback state
+decline the rewrite. The real AArch64 fixture, positive and negative synthetic
+proofs, exact 1,627/173 architecture ratchet, both executable matrices, 56/56
+metric cells, 1,829-test Rust library, all targets, and complete 2,847-test Python
+collection are green.

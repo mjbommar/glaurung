@@ -622,6 +622,30 @@ fn detect_arch_and_call_conv(
     (arch, cc)
 }
 
+/// Normalize proof-dead partial-register lanes before any consumer leaves SSA.
+///
+/// Exception edges participate in both SSA computations: the first supplies
+/// reaching values to the bit-demand oracle and the second describes the
+/// normalized LLIR consumed by region recovery and value numbering.  Keeping
+/// this sequence in one helper prevents the four Python decompilation entry
+/// points from drifting into different value models.
+fn normalize_definedness_and_compute_ssa(
+    function: &mut crate::ir::types::LlirFunction,
+    exception_sites: &[crate::analysis::exception::ExceptionCallSite],
+    cc: crate::ir::call_args::CallConv,
+) -> crate::ir::ssa::SsaInfo {
+    let graph = crate::analysis::exception::with_exceptional_successors(function, exception_sites);
+    let initial_ssa = crate::ir::ssa::compute_ssa(&graph);
+    let oracle = crate::ir::definedness::BitDemandOracle::analyze(&graph, &initial_ssa, cc);
+    if crate::ir::definedness::erase_unobserved_masked_inputs(function, &initial_ssa, &oracle) == 0
+    {
+        return initial_ssa;
+    }
+    let normalized_graph =
+        crate::analysis::exception::with_exceptional_successors(function, exception_sites);
+    crate::ir::ssa::compute_ssa(&normalized_graph)
+}
+
 fn arm_uses_vfp_arguments(data: &[u8]) -> bool {
     use object::Object;
 
@@ -665,7 +689,6 @@ fn decompile_at_py(
     use crate::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_bytes;
-    use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
 
@@ -725,9 +748,7 @@ fn decompile_at_py(
     let mut lf_raw = lf_raw;
     inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
     crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-    let ssa_graph =
-        crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
-    let ssa = compute_ssa(&ssa_graph);
+    let ssa = normalize_definedness_and_compute_ssa(&mut lf_raw, &exception_sites, cc);
     let region = recover_verified(&lf_raw, &ssa);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
@@ -919,7 +940,6 @@ fn decompile_range_at_py(
     use crate::core::function::{Function, FunctionKind};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_bytes;
-    use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
 
@@ -989,9 +1009,7 @@ fn decompile_range_at_py(
     let mut lf_raw = lf_raw;
     inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
     crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-    let ssa_graph =
-        crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
-    let ssa = compute_ssa(&ssa_graph);
+    let ssa = normalize_definedness_and_compute_ssa(&mut lf_raw, &exception_sites, cc);
     let region = recover_verified(&lf_raw, &ssa);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
@@ -2421,7 +2439,6 @@ fn decompile_all_py(
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render};
     use crate::ir::lift_function::lift_function_from_bytes;
-    use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover_verified;
 
     let data = std::fs::read(&path)
@@ -2469,9 +2486,7 @@ fn decompile_all_py(
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-        let ssa_graph =
-            crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
-        let ssa = compute_ssa(&ssa_graph);
+        let ssa = normalize_definedness_and_compute_ssa(&mut lf_raw, &exception_sites, cc);
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
@@ -2613,7 +2628,6 @@ fn decompile_many_py(
     use crate::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_bytes;
-    use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
     use std::collections::HashSet;
@@ -2693,9 +2707,7 @@ fn decompile_many_py(
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-        let ssa_graph =
-            crate::analysis::exception::with_exceptional_successors(&lf_raw, &exception_sites);
-        let ssa = compute_ssa(&ssa_graph);
+        let ssa = normalize_definedness_and_compute_ssa(&mut lf_raw, &exception_sites, cc);
         let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.

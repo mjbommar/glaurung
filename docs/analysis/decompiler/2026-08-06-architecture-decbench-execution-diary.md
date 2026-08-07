@@ -1435,3 +1435,65 @@ The repository-wide `uvx ty check python/` command is still non-green with 2,044
 diagnostics in the existing Python/test-stub surface; it is recorded separately
 from the green runtime, Rust, metric, and owned-path lint evidence rather than
 misreported as a passing gate.
+
+## 15:56 — bit-demand evidence removes the undefined AArch64 BFI live-in
+
+The independent definedness finding recorded after the `rb_validate` pair-load
+repair was reproduced before changing code. The retained source is
+`tests/decompiler_fixtures/src/16_red_black_tree.c` at SHA-256
+`ab01ca5165d9d63a77b8403f6c566ed47c038c5d07e6b11f72dae3aba16f12f5`.
+The exact GCC 15 AArch64 O2 ELF is
+`/tmp/glaurung-definedness-bfi.O1W0EJ/16_red_black_tree-aarch64-O2.so` at
+SHA-256 `e78eec859bfcaad10f69b840be436bac749f1c7a82a71ce18405446849bec330`.
+
+The source-to-machine path established that lifting was correct. At `0x768`,
+`bfi x12,x4,#32,#32` became the architecture-neutral sequence
+`(x12 & 0xffffffff) | (zext32(x4) << 32)`. At `0x7cc`, the only observation of
+that value was `lsr x3,x12,#32`. Whole-register SSA nevertheless placed an x12
+loop phi and value-numbering materialized its entry lane as `var32 = var33`.
+`var33` was declared but never assigned, so emitted C read uninitialized storage
+even though the low lane could not affect behavior. The existing AST definition
+verifier did not catch it: version-zero physical-register live-ins are excluded
+before renderer-local naming turns that value into `var33`.
+
+A new architecture-independent `BitDemandOracle` computes demanded masks per
+`SsaValue` and per exact `(InstrAddr,use_index)`. Observable memory, control, and
+call operands seed the backward fixed point; phi edges propagate the destination
+mask to their exact incoming versions. Assignments, masks, shifts, extensions,
+extracts, comparisons, and conservative arithmetic transfers preserve the proof.
+Unsupported widths and operations expand demand. Return values remain
+conservative because LLIR Return does not yet carry an explicit operand. The
+fixed point mutates masks in place rather than cloning its maps on every
+iteration.
+
+The consuming rewrite is intentionally smaller than the oracle: it replaces a
+register input only in a constant-mask `AND`, only when the destination has an
+observable demanded lane, and only when that exact input's demand mask is zero.
+Functions containing `CondAssign` fail closed because its false-path dependency
+on the previous destination is still implicit in LLIR and therefore has no SSA
+use identity. All four Python decompilation entry points now share one helper
+that builds exceptional-edge SSA, runs the proof, normalizes LLIR, and recomputes
+SSA before both region recovery and value numbering.
+
+The real fixture was RED on the undefined-copy assertion and is now green after
+rebuilding the extension. Its emitted C contains no source-only live-in copy;
+the inserted high lane is retained and the unobserved preserved low lane is not
+materialized. All behavior vectors still pass. Synthetic unit proofs separately
+show that a high-only observation erases the preserved input while returning the
+preserved lane keeps its full low-word demand.
+
+The closure gates are green:
+
+- the five-lane local gate passes, including the exact 1,627/173 architecture
+  ratchet, AArch64 and pinned x86-64 at 328/328, both executable corpora, and
+  56/56 GED/type/byte cells with no per-cell regression;
+- `cargo test --all-targets` passes 1,829 library tests plus every integration,
+  example, and benchmark target;
+- the complete 2,847-test Python collection exits zero;
+- focused Python format/lint, Rust format, and the diff whitespace gate pass.
+
+Repository-wide Ruff formatting remains non-green on 355 pre-existing files and
+was not mass-applied. Repository-wide `uvx ty check python/` remains at the same
+2,044 existing diagnostics; the changed fixture file has the same six pytest-stub
+diagnostics. These baseline limitations remain separate from the green runtime
+and decompiler evidence.

@@ -22,6 +22,7 @@ These tests exercise the harness, not the lifters:
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -675,7 +676,7 @@ def test_aarch64_vectorized_find_first_set_round_trips(tmp_path: Path) -> None:
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_aliased_load_pair_round_trips_rb_validation(tmp_path: Path) -> None:
-    """Both LDP fields must use the node pointer that precedes its Wt writes."""
+    """LDP aliases and BFI partial definitions must round-trip without live-ins."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
         pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
     fixture = "16_red_black_tree"
@@ -701,6 +702,16 @@ def test_aarch64_aliased_load_pair_round_trips_rb_validation(tmp_path: Path) -> 
     )
 
     assert results[function]["status"] == "pass", results[function]
+
+    functions = D.exported_functions(str(target))
+    code = D.decompiled_c(str(target), functions[function])
+    assert code is not None
+    assigned = set(re.findall(r"(?m)^\s*(var\d+)\s*=", code))
+    copied_sources = set(re.findall(r"(?m)^\s*var\d+\s*=\s*(var\d+)\s*;", code))
+    assert copied_sources <= assigned, (
+        "an unobserved preserved BFI lane became an undefined C live-in: "
+        f"{sorted(copied_sources - assigned)}\n{code}"
+    )
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
