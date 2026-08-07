@@ -1062,3 +1062,27 @@ unearned claim of concurrent equivalence. The exact 1,627/173 architecture
 ratchet, both executable matrices, 56/56 metric cells, 1,831-test Rust library
 and all targets, and the sequential complete 2,848-test Python collection are
 green.
+
+### Closed — ARMv7 VFP instruction truncating CFG discovery
+
+A real GCC 15 Thumb hard-float function placed `vneg.f64 d0,d0` before integer
+residue work and `bx lr`. Capstone rejected that exact four-byte instruction in
+its default Thumb mode, so CFG discovery and lifting stopped after the preceding
+stack adjustment. The resulting empty double function was initially suggestive
+of a return-register-bank defect, but raw LLIR proved that neither the VFP
+definition nor the terminal `Return` had entered the IR.
+
+The shared Capstone boundary now enables the ARM backend's V8 decode superset;
+all non-ARM modes are unchanged. An exact decoder regression and a real
+source-to-ELF-to-objdump-to-LLIR-to-C test retain the failure. The recovered C
+negates and returns the hard-float argument, recompiles for the same ABI, and is
+bit-identical under `qemu-arm` for signed zero, fractions, negative values, and
+varying integer residue inputs. The pinned x86-64, Thumb, and A32 architecture
+ratchets retain exactly 328/328, 241/272, and 156/272 respectively with no new
+failures. The complete five-lane gate retains 1,627/173 exactly, both executable
+corpora pass every required function, and all 56/56 official GED/type/byte cells
+have no regression. `cargo test --all-targets` passes 1,832 library tests plus
+all other targets, and the rebuilt-extension Python collection passes 2,806
+tests with 43 declared skips. Explicit LLIR return operands remain the next
+EPIC 5 slice; this repair closes only the earlier decode/CFG boundary that
+prevented that audit from being meaningful.

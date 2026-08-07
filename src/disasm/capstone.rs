@@ -7,7 +7,7 @@ use crate::core::instruction::{Access, Instruction, Operand, VectorShape};
 use capstone::arch::arm::ArmOperandType;
 use capstone::arch::arm64::{Arm64OperandType, Arm64Vas};
 use capstone::prelude::*;
-use capstone::{Arch, Capstone, Endian, Mode, NO_EXTRA_MODE};
+use capstone::{Arch, Capstone, Endian, ExtraMode, Mode};
 
 pub struct CapstoneDisassembler {
     cs: capstone::Capstone,
@@ -106,7 +106,16 @@ fn cs_arch_mode(arch: Architecture, end: Endianness) -> Option<(Arch, Mode, Opti
 impl CapstoneDisassembler {
     pub fn new(arch: Architecture, endianness: Endianness) -> Option<Self> {
         let (a, m, endian) = cs_arch_mode(arch, endianness)?;
-        let mut cs = Capstone::new_raw(a, m, NO_EXTRA_MODE, endian).ok()?;
+        // Capstone 5 rejects ARMv7 Thumb VFP encodings such as
+        // `vneg.f64 d0,d0` unless CS_MODE_V8 is enabled, even though the
+        // instruction itself predates ARMv8.  V8 is a decoding superset for
+        // the ARM backend; enabling it keeps ordinary A32/Thumb instructions
+        // valid while preventing CFG discovery from truncating at the first
+        // compiler-generated VFP operation. Other architectures retain their
+        // established mode exactly.
+        let arm_extra_mode = matches!(arch, Architecture::ARM).then_some(ExtraMode::V8);
+        let extra_modes = arm_extra_mode.into_iter();
+        let mut cs = Capstone::new_raw(a, m, extra_modes, endian).ok()?;
         // Enable details to recover structured operands (needed for PC-relative addressing)
         let _ = cs.set_detail(true);
         Some(Self {
@@ -465,6 +474,22 @@ mod tests {
             .expect("decode");
         assert_eq!(ins.length, 2, "Thumb NOP must be 2 bytes");
         assert_eq!(ins.mnemonic, "nop");
+    }
+
+    #[test]
+    fn thumb_mode_decodes_armv7_vfp_double_encoding() {
+        // GCC 15 `-march=armv7-a -mfpu=vfpv3-d16 -mthumb`:
+        // `vneg.f64 d0, d0`.  CFG discovery and the LLIR lifter share this
+        // backend boundary; refusing the instruction truncates the function
+        // before its result and RET even though the ARM lifter models VNEG.
+        let mut cs = CapstoneDisassembler::new(Architecture::ARM, Endianness::Little)
+            .expect("capstone arm backend");
+        cs.set_thumb_mode(true).expect("enable thumb");
+        let ins = cs
+            .disassemble_instruction(&va(0x1000), &[0xb1, 0xee, 0x40, 0x0b])
+            .expect("decode Thumb VFP negation");
+        assert_eq!(ins.length, 4);
+        assert_eq!(ins.mnemonic, "vneg.f64");
     }
 
     #[test]

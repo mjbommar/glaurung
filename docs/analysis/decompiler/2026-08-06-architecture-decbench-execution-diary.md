@@ -1556,3 +1556,73 @@ Owned Python format/lint, focused typing, Rust format, and the whitespace gate
 pass. Repository-wide baselines remain separately non-green: 354 files would be
 reformatted, Ruff reports 3,830 existing diagnostics, and `ty` reports the same
 2,044 diagnostics as before. None were mass-edited into this decompiler change.
+
+## 18:18 — ARMv7 VFP decode failure truncated CFGs before LLIR return recovery
+
+The next explicit-return audit began with a real ARM hard-float function whose
+floating-point result remains in `d0` while unrelated integer work reuses `r0`.
+The retained source is `/tmp/glaurung-hardfloat-return.c` at SHA-256
+`0a2d51df8f3c6d1d2ca01b888cabd26a88c82ba7f5fbfcf80118839f904d152d`;
+GCC 15 with `-march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -mthumb
+-fno-stack-protector -O2` produced
+`/tmp/glaurung-return-case.G7HYRC/hardfloat-return-thumb.so` at SHA-256
+`83cd36de22a5f1f090352f3888e3b99d93f012225869985ae9275f98f1a186f3`.
+The decisive machine sequence is:
+
+```asm
+374: b082       sub     sp, #8
+376: eeb1 0b40  vneg.f64 d0, d0
+37a: eb00 0040  add.w   r0, r0, r0, lsl #1
+37e: 3001       adds    r0, #1
+380: 9001       str     r0, [sp, #4]
+382: b002       add     sp, #8
+384: 4770       bx      lr
+```
+
+The first hypothesis was an independent return-register-bank identity defect.
+Raw annotated LLIR disproved it: the CFG claimed the 18-byte symbol extent but
+contained only the first `sub sp,#8`, with neither `vneg.f64` nor `Return`.
+Directly asking the shared Capstone ARM backend to decode bytes
+`b1 ee 40 0b` reproduced `InvalidInstruction`. `MClass` did not change that;
+`CS_MODE_V8` decoded the ARMv7 instruction. This is therefore a front-door
+decode/CFG-discovery failure, not permission to weaken return-definedness logic.
+
+ARM Capstone construction now enables its V8 decode superset for the ARM backend
+only; x86, AArch64, and every other architecture retain their existing mode.
+A RED Rust test owns the exact compiler encoding. After the fix, annotated LLIR
+contains a typed `vneg.f64` intrinsic from and to 64-bit `d0`, the complete
+integer residue sequence, the stack restore, and the terminal `Return`. Emitted
+C is:
+
+```c
+double return_double_after_integer(double arg0, int arg1) {
+    arg0 = (-arg0);
+    return arg0;
+}
+```
+
+A real integration test compiles the source, checks that the VFP instruction
+precedes the integer `r0` work in objdump, decompiles and recompiles it for the
+same ARM ABI, then loads both shared objects under `qemu-arm`. Bitwise comparison
+passes for positive and negative zero, positive and negative fractions, a large
+fraction, and four signed integer residues. This specifically preserves both
+floating return identity and IEEE signed zero.
+
+The focused Rust decoder suite and the existing Thumb suite are green. The
+three selected architecture lanes retain their exact prior counts: pinned
+x86-64 328/328, Thumb 241 pass / 31 fail, and A32 156 pass / 116 fail. The
+combined selected run is 725 pass / 147 known fail with no missing cells,
+timeouts, or lane errors.
+
+The final closure gates are green. `cargo test --all-targets` passes 1,832
+library tests and every integration, example, and benchmark target. After the
+final extension rebuild, the complete Python collection passes 2,806 tests with
+43 declared skips and zero failures. The five-lane local gate exactly retains
+1,627 architecture passes / 173 known failures, zero missing cells, timeouts, or
+lane errors, both executable corpora pass every required function, and all
+56/56 official GED/type/byte cells have no per-cell regression. Focused Python
+format, lint, and typing, Rust format, and the diff whitespace gate also pass.
+
+The original EPIC 5 task remains open: bare LLIR `Return` still lacks an
+explicit value identity; this finding merely establishes that the real probe
+reaches that boundary correctly after CFG discovery is repaired.
