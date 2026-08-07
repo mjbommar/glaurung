@@ -732,6 +732,22 @@ The final six-lane ratchet changes only `rt_u32`: 1,564 passes / 236 failures,
 AArch64 312/328, pinned x86-64 328/328, and no regression or reclassification.
 The full-matrix AArch64-only set is empty.
 
+The next shared AArch64 owner, O2 `call_fold_wide_result`, is now closed at the
+call-contract boundary. The recovered `widen_mul` prototype already proved two
+unsigned 32-bit parameters and an unsigned 64-bit result, but argument recovery
+dropped untouched live-in x1 and value splitting ignored the call-owned result
+type. Exact callee layouts now retain every parameter only when the caller
+prototype proves that live-in slot and no preceding statement clobbers it;
+structured-loop reaching overrides take priority over raw entry storage. The
+call's recovered `unsigned long` result is also an explicit wide-definition
+witness, so x0's result lifetime no longer inherits 32-bit arg0 storage. A first
+broad attempt regressed x86-64 `call_chain_in_loop` by reusing entry rdi; that
+attempt was rejected, and a RED loop-carried canary now keeps rdi#1. The pinned
+x86-64 and GCC 15 controls both pass the exact cell again.
+The final six-lane ratchet changes only
+`11_call_shapes:aarch64:O2:call_fold_wide_result`: 1,565 passes / 235 failures,
+AArch64 313/328, pinned x86-64 328/328, and no regression or reclassification.
+
 The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
 `fib`, O0 `validate_header`, all three indirect-dispatch functions, two O0 call
 shapes, both O0 hash-table functions, and both O0 disjoint-set functions. A
@@ -835,6 +851,6 @@ architecture matrix remains triage evidence rather than one undifferentiated
    opaque integers. Acceptance: address-bearing operands retain symbol, section,
    width, and relocation provenance through lifting and C emission.
 6. **P2 — direct metric campaign.** After the preceding typed/storage slices,
-   rerun the retained 236-key proxy and then freeze a new 250-function manifest.
+   rerun the retained 235-key proxy and then freeze a new 250-function manifest.
    Require complete coverage and per-function GED/type-match deltas; do not accept
    generated-text improvement without behavioral and compiler controls.

@@ -800,3 +800,39 @@ failures, AArch64 312/328, 228 structural rows, six declared unsupported rows,
 no missing/no-case/timeout/lane errors, and pinned x86-64 remains 328/328. All
 1,787 Rust library tests and the Rust all-targets gate pass. Both the original
 43-row set and the fresh full-matrix AArch64-only set are now empty.
+
+## 01:42 (2026-08-07) — exact callee inputs and result width close `call_fold_wide_result`
+
+Retained ELF
+`/tmp/glaurung-a64-mul-role-20260807.4HJHxh/11_call_shapes-aarch64-O2.so`
+has SHA-256 `21989d9ddf4d8720e6a401afb161a0abe320413e286874893a5a7398c4b8eeeb`.
+Source `call_fold_wide_result(uint32_t a, uint32_t b)` calls the 64-bit
+`widen_mul(a, b)` and XOR-folds its high and low halves. GCC 15 emits `bl
+widen_mul@plt; lsr x1, x0, #32; eor w0, w1, w0`. Before repair, Glaurung had
+already recovered `widen_mul`'s locked `[x0, x1]` layout and unsigned-long
+result, but emitted a one-argument call assigned back into 32-bit `arg0`.
+Input `[4294967295, 4294967295]` therefore returned `1` instead of source `-1`.
+
+Two independent RED canaries identify the owners. `call_args` now requires an
+exact two-argument call when both caller live-ins remain untouched;
+`value_split` now treats the call-owned 64-bit return contract as a significant
+wide definition. The live-in fallback is fail-closed: every storage item must
+map to a proven caller parameter slot, and any prior write or call rejects it.
+Within a structured loop it uses the existing reaching override instead of the
+function-entry register. That last condition came from the first broad run:
+the initial rule improved AArch64 but regressed pinned and GCC 15 x86-64
+`call_chain_in_loop` by passing entry rdi instead of loop-carried rdi#1. The
+attempt was rejected, a RED canary reproduced it, and both real x86-64 controls
+now pass all 22 vectors again.
+
+The final AArch64 C is `var0 = widen_mul(arg0, arg1)` with `var0` declared
+`unsigned long`; all 22 width-sensitive vectors pass, and all 13 AArch64 O2
+call-shape functions pass. The implementation is convention-parametric and has
+no AArch64 name gate: exact layout, caller parameter proof, reaching value, and
+call-owned width are the semantic inputs.
+
+The complete six-lane ratchet changes exactly
+`11_call_shapes:aarch64:O2:call_fold_wide_result` from fail to pass: 1,565
+passes / 235 failures, AArch64 313/328, 228 structural rows, six declared
+unsupported rows, no missing/no-case/timeout/lane errors, and pinned x86-64
+remains 328/328.

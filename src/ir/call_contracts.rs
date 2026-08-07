@@ -416,7 +416,8 @@ pub fn refine_call_result_types(function: &Function, types: &mut TypeMap) {
     refine_call_result_body(&function.body, types);
 }
 
-fn call_return_hint(c_type: &str) -> Option<TypeHint> {
+/// Recover a scalar hint from the standalone C spellings stored on call specs.
+pub(crate) fn call_return_hint(c_type: &str) -> Option<TypeHint> {
     match c_type.trim() {
         "float" => Some(TypeHint::Float { width: 4 }),
         "double" | "long double" => Some(TypeHint::Float { width: 8 }),
@@ -443,6 +444,14 @@ fn call_return_hint(c_type: &str) -> Option<TypeHint> {
         "unsigned int" => Some(TypeHint::Int {
             signed: false,
             width: 4,
+        }),
+        "long" => Some(TypeHint::Int {
+            signed: true,
+            width: 8,
+        }),
+        "unsigned long" => Some(TypeHint::Int {
+            signed: false,
+            width: 8,
         }),
         c_type if c_type.ends_with('*') => Some(TypeHint::Pointer { pointee_width: 0 }),
         "void" => None,

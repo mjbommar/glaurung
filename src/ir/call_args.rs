@@ -1314,6 +1314,37 @@ fn fold_one_call(
         if fold_one_recovered_layout_call(body, call_idx, layout) {
             return;
         }
+        // An optimized call may pass the values already occupying ABI storage,
+        // leaving no adjacent setup assignments to fold. The callee layout
+        // proves which storage is read, but it does not prove the reaching
+        // value: require a source parameter slot, preserve a structured-loop
+        // incoming override when one exists, and reject the whole fallback
+        // after any intervening write or call.
+        let mut blocked_live_ins = vec![false; arg_slots(arch).len()];
+        for statement in &body[..call_idx] {
+            mark_arg_writes_in_stmt(statement, arch, &mut blocked_live_ins);
+        }
+        let reaching_inputs = layout
+            .iter()
+            .map(|storage| {
+                let VReg::Phys(name) = storage else {
+                    return None;
+                };
+                let slot = crate::ir::abi::argument_slot_of(arch, name)?;
+                (param_slots.contains(&slot) && !blocked_live_ins[slot]).then(|| {
+                    incoming_overrides
+                        .get(slot)
+                        .and_then(Clone::clone)
+                        .unwrap_or_else(|| Expr::Reg(storage.clone()))
+                })
+            })
+            .collect::<Option<Vec<_>>>();
+        if let Some(arguments) = reaching_inputs {
+            if let Stmt::Call { args, .. } = &mut body[call_idx] {
+                *args = arguments;
+            }
+            return;
+        }
         // A locked callee layout says which architectural storage the callee
         // reads even when optimization left no adjacent setup assignment (an
         // incoming argument reused directly, or an epilogue between setup and
@@ -3745,7 +3776,13 @@ mod tests {
             ],
         };
 
-        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0].into_iter().collect());
+        let layouts = std::collections::HashMap::from([(0x2000, vec![reg("rdi")])]);
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::SysVAmd64,
+            &mut [0].into_iter().collect(),
+            &layouts,
+        );
 
         let Stmt::DoWhile { body, .. } = &f.body[1] else {
             panic!("expected loop: {f:#?}");
@@ -5533,6 +5570,66 @@ mod tests {
             panic!("call disappeared: {:#?}", f.body);
         };
         assert_eq!(args, &[Expr::Reg(reg("r0"))]);
+    }
+
+    #[test]
+    fn recovered_callee_layout_keeps_all_untouched_aarch64_live_in_parameters() {
+        let mut function = Function {
+            name: "wide_multiply_caller".into(),
+            entry_va: 0x1000,
+            body: vec![call_to("widen_mul")],
+        };
+        let layouts = std::collections::HashMap::from([(0x2000, vec![reg("x0"), reg("x1")])]);
+        let mut parameter_slots = [0, 1].into_iter().collect();
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut function,
+            CallConv::Aarch64,
+            &mut parameter_slots,
+            &layouts,
+        );
+
+        let Stmt::Call { args, .. } = &function.body[0] else {
+            panic!("call disappeared: {:#?}", function.body);
+        };
+        assert_eq!(
+            args,
+            &[Expr::Reg(reg("x0")), Expr::Reg(reg("x1"))],
+            "the locked callee layout must retain every proven caller live-in"
+        );
+    }
+
+    #[test]
+    fn recovered_callee_layout_does_not_reuse_live_ins_after_a_call_clobber() {
+        let mut function = Function {
+            name: "two_calls".into(),
+            entry_va: 0x1000,
+            body: vec![call_to("first"), call_to("second")],
+        };
+        let layouts = std::collections::HashMap::from([(0x2000, vec![reg("x0"), reg("x1")])]);
+        let mut parameter_slots = [0, 1].into_iter().collect();
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut function,
+            CallConv::Aarch64,
+            &mut parameter_slots,
+            &layouts,
+        );
+
+        let calls: Vec<_> = function
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], &[Expr::Reg(reg("x0")), Expr::Reg(reg("x1"))]);
+        assert!(
+            calls[1].is_empty(),
+            "a prior call clobbers both live-ins, so the fallback must fail closed"
+        );
     }
 
     /// The exact core/stack setup emitted by ARM GCC for an eight-integer call.

@@ -45,6 +45,17 @@ pub(crate) fn definition_exceeds_live_in_width(
             Stmt::Assign { dst, src } => {
                 dst == register && can_carry_bits_above(src, live_in_width)
             }
+            Stmt::Call {
+                dst: Some(destination),
+                call_spec: Some(call_spec),
+                ..
+            } if destination == register => matches!(
+                crate::ir::call_contracts::call_return_hint(
+                    &call_spec.call_prototype.return_type
+                ),
+                Some(crate::ir::types_recover::TypeHint::Int { width, .. })
+                    if width > live_in_width
+            ),
             Stmt::If {
                 then_body,
                 else_body,
@@ -828,6 +839,33 @@ mod tests {
         };
 
         assert!(definition_exceeds_live_in_width(&f, &reg("x0"), 4));
+
+        let wide_call_prototype = crate::ir::call_contracts::CallPrototype {
+            return_type: "unsigned long".into(),
+            parameter_types: vec!["unsigned int".into(), "unsigned int".into()],
+            variadic: false,
+            authority: crate::ir::call_contracts::CallPrototypeAuthority::Recovered,
+        };
+        let wide_call_result = Function {
+            name: "call_fold_wide_result".into(),
+            entry_va: 0,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "widen_mul".into(),
+                },
+                args: vec![Expr::Reg(reg("x0")), Expr::Reg(reg("x1"))],
+                dst: Some(reg("x0")),
+                call_spec: Some(crate::ir::call_contracts::CallSiteSpec {
+                    callee_prototype: Some(wide_call_prototype.clone()),
+                    call_prototype: wide_call_prototype,
+                }),
+            }],
+        };
+        assert!(
+            definition_exceeds_live_in_width(&wide_call_result, &reg("x0"), 4),
+            "a recovered 64-bit call contract is an explicit wide-definition witness"
+        );
 
         let w_register_canonicalization = Function {
             name: "word_identity".into(),
