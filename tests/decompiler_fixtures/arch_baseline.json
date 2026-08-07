@@ -70,17 +70,17 @@
     "ternary_nested": "pass"
   },
   "01_conditional_polarity:armv7_a32:O2": {
-    "classify": "fail",
+    "classify": "pass",
     "cmp_signed": "pass",
     "cmp_unsigned": "pass",
-    "early_return": "fail",
-    "early_return_ge": "fail",
-    "elseif": "fail",
-    "nested": "fail",
-    "sc_and": "fail",
-    "sc_mixed": "fail",
-    "sc_or": "fail",
-    "ternary": "fail",
+    "early_return": "pass",
+    "early_return_ge": "pass",
+    "elseif": "pass",
+    "nested": "pass",
+    "sc_and": "pass",
+    "sc_mixed": "pass",
+    "sc_or": "pass",
+    "ternary": "pass",
     "ternary_nested": "pass"
   },
   "01_conditional_polarity:i386:O0": {
@@ -474,14 +474,14 @@
     "for_stride2": "pass",
     "for_sum": "pass",
     "loop_break": "pass",
-    "loop_continue": "fail",
+    "loop_continue": "pass",
     "loop_early_return": "pass",
     "loop_return_on_neg": "fail",
     "mutate_prefix": "pass",
     "mutate_reverse": "pass",
     "nested_carry": "pass",
     "nested_pairs": "pass",
-    "two_latches": "fail",
+    "two_latches": "pass",
     "while_prefix": "pass",
     "while_reload_header": "fail"
   },
@@ -696,22 +696,22 @@
     "switch_loop_break": "fail"
   },
   "04_switch_shapes:armv7_a32:O2": {
-    "default_dominant": "fail",
+    "default_dominant": "pass",
     "dense_compute": "fail",
-    "dense_jumptable": "fail",
-    "explicit_fallthrough": "fail",
-    "fallthrough_chain": "fail",
+    "dense_jumptable": "pass",
+    "explicit_fallthrough": "pass",
+    "fallthrough_chain": "pass",
     "negative_cases": "pass",
-    "negative_sparse": "fail",
-    "nested_switch": "fail",
-    "no_default": "fail",
+    "negative_sparse": "pass",
+    "nested_switch": "pass",
+    "no_default": "pass",
     "shared_bodies": "fail",
     "shared_sparse": "fail",
     "sparse_shared_tail": "fail",
-    "sparse_switch": "fail",
-    "sparse_wide": "fail",
-    "switch_in_loop": "fail",
-    "switch_loop_break": "fail"
+    "sparse_switch": "pass",
+    "sparse_wide": "pass",
+    "switch_in_loop": "pass",
+    "switch_loop_break": "pass"
   },
   "04_switch_shapes:i386:O0": {
     "default_dominant": "pass",
@@ -842,7 +842,7 @@
     "process": "fail"
   },
   "05_cleanup_and_state_machine:armv7_a32:O2": {
-    "fsm": "fail",
+    "fsm": "pass",
     "process": "fail"
   },
   "05_cleanup_and_state_machine:i386:O0": {
@@ -1251,7 +1251,7 @@
     "vec_transform": "pass"
   },
   "09_memory_effects:armv7:O2": {
-    "cas_update": "fail",
+    "cas_update": "pass",
     "mem_copy": "pass",
     "mem_set": "pass",
     "read_counter": "pass",
@@ -1273,9 +1273,9 @@
     "vec_transform": "fail"
   },
   "09_memory_effects:armv7_a32:O2": {
-    "cas_update": "fail",
-    "mem_copy": "fail",
-    "mem_set": "fail",
+    "cas_update": "pass",
+    "mem_copy": "pass",
+    "mem_set": "pass",
     "read_counter": "fail",
     "reset_counter": "structural",
     "tick": "structural",
@@ -1689,13 +1689,13 @@
     "wrap_byte": "fail"
   },
   "11_call_shapes:armv7_a32:O2": {
-    "call_accumulate_bytes": "fail",
-    "call_chain_in_loop": "fail",
+    "call_accumulate_bytes": "pass",
+    "call_chain_in_loop": "pass",
     "call_fold_wide_result": "fail",
     "call_forward_result": "pass",
     "call_into_spill": "pass",
     "call_nested": "pass",
-    "call_result_drives_branch": "fail",
+    "call_result_drives_branch": "pass",
     "call_result_unused": "pass",
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
@@ -1844,14 +1844,14 @@
     "skip_odd_sum": "pass"
   },
   "12_loop_rotation:armv7_a32:O2": {
-    "count_up": "fail",
+    "count_up": "pass",
     "do_while_control": "pass",
     "down_by_negative_imm": "pass",
     "factorial_while": "pass",
     "find_first_set": "pass",
     "for_accumulate": "pass",
     "nested_rotated": "pass",
-    "skip_odd_sum": "fail"
+    "skip_odd_sum": "pass"
   },
   "12_loop_rotation:i386:O0": {
     "count_up": "pass",
@@ -1956,10 +1956,10 @@
   "13_loop_early_exit:armv7_a32:O2": {
     "bisect": "fail",
     "classify_run": "pass",
-    "find_first": "fail",
+    "find_first": "pass",
     "has_pair": "pass",
-    "sum_positive": "fail",
-    "sum_until_zero": "fail"
+    "sum_positive": "pass",
+    "sum_until_zero": "pass"
   },
   "13_loop_early_exit:i386:O0": {
     "bisect": "pass",
@@ -2056,12 +2056,12 @@
   },
   "14_flag_effects:armv7_a32:O2": {
     "add_then_negative": "fail",
-    "and_is_zero": "fail",
-    "countdown": "fail",
-    "dec_loop": "fail",
-    "dec_preserves_carry": "fail",
-    "shift_until_zero": "fail",
-    "sub_then_sign": "fail"
+    "and_is_zero": "pass",
+    "countdown": "pass",
+    "dec_loop": "pass",
+    "dec_preserves_carry": "pass",
+    "shift_until_zero": "pass",
+    "sub_then_sign": "pass"
   },
   "14_flag_effects:i386:O0": {
     "add_then_negative": "pass",
@@ -2222,8 +2222,8 @@
     "hash_lookup": "fail"
   },
   "17_hash_table:armv7_a32:O2": {
-    "hash_insert": "fail",
-    "hash_lookup": "fail"
+    "hash_insert": "pass",
+    "hash_lookup": "pass"
   },
   "17_hash_table:i386:O0": {
     "hash_insert": "pass",
@@ -2311,7 +2311,7 @@
   },
   "19_disjoint_set:armv7:O2": {
     "dsu_find": "pass",
-    "dsu_union": "fail"
+    "dsu_union": "pass"
   },
   "19_disjoint_set:armv7_a32:O0": {
     "dsu_find": "fail",
@@ -2691,7 +2691,7 @@
   },
   "29_polynomial:armv7_a32:O2": {
     "polynomial_derivative_mod32": "pass",
-    "polynomial_eval_mod32": "fail"
+    "polynomial_eval_mod32": "pass"
   },
   "29_polynomial:i386:O0": {
     "polynomial_derivative_mod32": "pass",

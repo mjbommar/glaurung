@@ -482,6 +482,42 @@ fn cond_flag_for(suffix: &str) -> Option<(VReg, bool)> {
     })
 }
 
+/// Decode the predicate carried by an A32 instruction word and remove the
+/// matching suffix from Capstone's mnemonic.
+///
+/// Unlike Thumb-2 IT blocks, every ordinary A32 word has a four-bit condition
+/// field. Reading the encoding is authoritative: suffix-only parsing can
+/// confuse mnemonics such as `bls` (branch-lower-or-same) with an unrelated
+/// spelling and cannot distinguish the unconditional `AL` encoding.
+fn a32_predicate(ins: &Instruction, mnemonic: &str) -> Option<(String, VReg, bool)> {
+    let condition = arm32_word(ins)? >> 28;
+    let aliases: &[&str] = match condition {
+        0x0 => &["eq"],
+        0x1 => &["ne"],
+        0x2 => &["hs", "cs"],
+        0x3 => &["lo", "cc"],
+        0x4 => &["mi"],
+        0x5 => &["pl"],
+        0x6 => &["vs"],
+        0x7 => &["vc"],
+        0x8 => &["hi"],
+        0x9 => &["ls"],
+        0xa => &["ge"],
+        0xb => &["lt"],
+        0xc => &["gt"],
+        0xd => &["le"],
+        // AL is unconditional; 0xf belongs to unconditional/special encodings.
+        _ => return None,
+    };
+    let suffix = aliases.iter().find(|suffix| mnemonic.ends_with(**suffix))?;
+    let base = mnemonic.strip_suffix(*suffix)?;
+    if base.is_empty() {
+        return None;
+    }
+    let (cond, inverted) = cond_flag_for(suffix)?;
+    Some((base.to_string(), cond, inverted))
+}
+
 /// The four flag writes an ARM `cmp a, b` performs — identical to x86/AArch64.
 /// Flags written by an `S`-suffixed data-processing instruction.
 ///
@@ -2357,21 +2393,27 @@ fn make_conditional(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
             ]
         }
         Op::Load { dst, addr } => {
-            let tmp = VReg::Temp(1);
-            let (t, e) = pick(Value::Reg(tmp.clone()), Value::Reg(dst.clone()));
-            vec![
-                Op::Load { dst: tmp, addr },
-                Op::Ite {
-                    dst,
-                    cond,
-                    t,
-                    e,
-                    width: Width::W32,
-                },
-            ]
+            let fallback = Value::Reg(dst.clone());
+            vec![Op::CondLoad {
+                dst,
+                cond,
+                inverted,
+                addr,
+                fallback,
+            }]
         }
-        // Stores / returns / anything else: keep as-is (unconditional approx).
-        other => vec![other],
+        Op::Store { addr, src } => vec![Op::CondStore {
+            cond,
+            inverted,
+            addr,
+            src,
+        }],
+        Op::Return => vec![Op::CondReturn { cond, inverted }],
+        // Reuse the multi-op machinery for pure one-result operations. It
+        // computes into scratch and commits only on the taken path; control or
+        // opaque side effects below fail closed rather than becoming
+        // unconditional.
+        other => predicate_sequence(vec![other], cond, inverted),
     }
 }
 
@@ -2379,26 +2421,45 @@ fn make_conditional(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
 const PRED_TEMP_BASE: u32 = 64;
 
 /// Compute a multi-operation instruction into scratch and conditionally commit
-/// each architectural write. Stores and control flow retain the old fallback
-/// because LLIR has no predicated-store/control representation.
-fn predicate_sequence(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
+/// each architectural write. Memory effects and returns remain guarded through
+/// their typed conditional LLIR operations.
+fn predicate_sequence(mut ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
     use crate::ir::use_def::def_mut;
     use crate::ir::value_number::for_each_vreg_mut;
+
+    // A conditional multi-register pop may end in a return. Predicate all of
+    // its register/stack effects, then make only the taken path return.
+    let conditional_return = matches!(ops.last(), Some(Op::Return));
+    if conditional_return {
+        ops.pop();
+    }
 
     let unpredicatable = ops.iter().any(|op| {
         matches!(
             op,
-            Op::Store { .. }
+            Op::CondLoad { .. }
+                | Op::CondStore { .. }
                 | Op::Jump { .. }
                 | Op::CondJump { .. }
+                | Op::CondReturn { .. }
                 | Op::IndirectJump { .. }
                 | Op::Call { .. }
                 | Op::Return
                 | Op::Unknown { .. }
+        ) || matches!(
+            op,
+            Op::Intrinsic {
+                outs,
+                reads_mem,
+                writes_mem,
+                ..
+            } if *reads_mem || *writes_mem || outs.len() > 1
         )
     });
     if unpredicatable {
-        return ops;
+        return vec![Op::Unknown {
+            mnemonic: "predicated control effect".to_string(),
+        }];
     }
 
     fn is_architectural(register: &VReg) -> bool {
@@ -2434,6 +2495,49 @@ fn predicate_sequence(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
                 *register = temp.clone();
             }
         });
+
+        if let Op::Store { addr, src } = op {
+            out.push(Op::CondStore {
+                cond: commit_cond.clone(),
+                inverted,
+                addr,
+                src,
+            });
+            continue;
+        }
+
+        // A predicated load must not dereference memory on the false path.
+        // Multi-op lifts compute architectural results in scratch before the
+        // conditional commit below, so a false scratch value may be zero: it
+        // cannot escape when the predicate is false.  The single-op path above
+        // instead retains the architectural destination directly.
+        if let Op::Load { dst, addr } = op {
+            let conditional_dst = if let Some(definition) = definition.filter(is_architectural) {
+                let temp = VReg::Temp(next_temp);
+                next_temp += 1;
+                match current
+                    .iter_mut()
+                    .find(|(register, _)| *register == definition)
+                {
+                    Some((_, held)) => *held = temp.clone(),
+                    None => current.push((definition.clone(), temp.clone())),
+                }
+                if !renamed.iter().any(|(register, _)| *register == definition) {
+                    renamed.push((definition, temp.clone()));
+                }
+                temp
+            } else {
+                dst
+            };
+            out.push(Op::CondLoad {
+                dst: conditional_dst,
+                cond: commit_cond.clone(),
+                inverted,
+                addr,
+                fallback: Value::Const(0),
+            });
+            continue;
+        }
 
         if let Some(definition) = definition.filter(is_architectural) {
             let temp = VReg::Temp(next_temp);
@@ -2477,6 +2581,12 @@ fn predicate_sequence(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
             t,
             e,
             width,
+        });
+    }
+    if conditional_return {
+        out.push(Op::CondReturn {
+            cond: commit_cond,
+            inverted,
         });
     }
     out
@@ -2552,6 +2662,30 @@ pub fn lift_bytes_in_image(
             let lifted = lift_one(&ins, mnemonic_in_it(&ins, mnem), &ctx);
             for op in make_conditional(lifted, flag, inverted) {
                 out.push(LlirInstr { va, op });
+            }
+        } else if !thumb {
+            if let Some((base, flag, inverted)) = a32_predicate(&ins, mnem) {
+                // A direct conditional branch already has an exact CondJump
+                // representation, including its target. All other A32
+                // condition-suffixed operations lift through their base
+                // mnemonic and then commit their effects conditionally.
+                let lifted = if base == "b" {
+                    lift_one(&ins, mnem, &ctx)
+                } else {
+                    lift_one(&ins, &base, &ctx)
+                };
+                let lifted = if base == "b" {
+                    lifted
+                } else {
+                    make_conditional(lifted, flag, inverted)
+                };
+                for op in lifted {
+                    out.push(LlirInstr { va, op });
+                }
+            } else {
+                for op in lift_one(&ins, mnem, &ctx) {
+                    out.push(LlirInstr { va, op });
+                }
             }
         } else {
             for op in lift_one(&ins, mnem, &ctx) {
@@ -2859,6 +2993,13 @@ mod tests {
 
     fn ops(bytes: &[u8]) -> Vec<Op> {
         lift_bytes(bytes, 0x1000, true)
+            .into_iter()
+            .map(|i| i.op)
+            .collect()
+    }
+
+    fn ops_a32(bytes: &[u8]) -> Vec<Op> {
+        lift_bytes(bytes, 0x1000, false)
             .into_iter()
             .map(|i| i.op)
             .collect()
@@ -3192,6 +3333,181 @@ mod tests {
         );
         // The IT prefixes themselves carry no data effect.
         assert!(out.iter().any(|o| matches!(o, Op::Nop)));
+    }
+
+    /// A32 carries the predicate in every instruction word instead of using a
+    /// Thumb IT prefix.  These are the exact GCC instructions from
+    /// `01_conditional_polarity.c:early_return` at `-O2`:
+    ///
+    /// ```text
+    /// cmp   r0, #0
+    /// movlt r0, #77
+    /// movge r0, #88
+    /// bx    lr
+    /// ```
+    #[test]
+    fn a32_instruction_predicates_become_conditional_selects() {
+        let out = ops_a32(&[
+            0x00, 0x00, 0x50, 0xe3, // cmp r0, #0
+            0x4d, 0x00, 0xa0, 0xb3, // movlt r0, #77
+            0x58, 0x00, 0xa0, 0xa3, // movge r0, #88
+            0x1e, 0xff, 0x2f, 0xe1, // bx lr
+        ]);
+
+        assert!(
+            !out.iter().any(|op| matches!(op, Op::Unknown { .. })),
+            "A32 predicates must not become opaque: {out:#?}"
+        );
+        let selects: Vec<_> = out
+            .iter()
+            .filter_map(|op| match op {
+                Op::Ite {
+                    dst, cond, t, e, ..
+                } if *dst == VReg::phys("r0") => Some((cond, t, e)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(selects.len(), 2, "expected two predicated moves: {out:#?}");
+        assert!(
+            selects
+                .iter()
+                .all(|(cond, _, _)| **cond == VReg::Flag(Flag::Slt)),
+            "both moves must consume the cmp signed-less predicate: {out:#?}"
+        );
+        assert!(matches!(out.last(), Some(Op::Return)));
+    }
+
+    #[test]
+    fn a32_conditional_bx_lr_becomes_a_conditional_return() {
+        let out = ops_a32(&[
+            0x00, 0x00, 0x50, 0xe3, // cmp r0, #0
+            0x1e, 0xff, 0x2f, 0x01, // bxeq lr
+            0x05, 0x00, 0xa0, 0xe3, // mov r0, #5 (fallthrough)
+            0x1e, 0xff, 0x2f, 0xe1, // bx lr
+        ]);
+
+        assert!(
+            out.iter().any(|op| matches!(
+                op,
+                Op::CondReturn {
+                    cond: VReg::Flag(Flag::Z),
+                    inverted: false,
+                }
+            )),
+            "bxeq lr must retain both return and fallthrough paths: {out:#?}"
+        );
+        assert!(matches!(out.last(), Some(Op::Return)));
+    }
+
+    #[test]
+    fn unsupported_a32_predicated_control_effects_fail_closed() {
+        let out = ops_a32(&[
+            0x00, 0x00, 0x00, 0x1b, // blne 0x1008
+            0x13, 0xff, 0x2f, 0x11, // bxne r3
+        ]);
+        assert_eq!(
+            out.iter()
+                .filter(|op| matches!(op, Op::Unknown { mnemonic } if mnemonic == "predicated control effect"))
+                .count(),
+            2,
+            "conditional calls/computed branches must not become unconditional: {out:#?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|op| matches!(op, Op::Call { .. } | Op::IndirectJump { .. })),
+            "unsupported predicated control must fail closed: {out:#?}"
+        );
+    }
+
+    #[test]
+    fn a32_predicated_store_does_not_become_an_unconditional_effect() {
+        // The exact optimized `cas_update` body: only the equal path stores.
+        let out = ops_a32(&[
+            0x00, 0x30, 0xa0, 0xe1, // mov r3, r0
+            0x00, 0x00, 0x90, 0xe5, // ldr r0, [r0]
+            0x01, 0x00, 0x50, 0xe1, // cmp r0, r1
+            0x01, 0x00, 0xa0, 0x03, // moveq r0, #1
+            0x00, 0x20, 0x83, 0x05, // streq r2, [r3]
+            0x00, 0x00, 0xa0, 0x13, // movne r0, #0
+            0x1e, 0xff, 0x2f, 0xe1, // bx lr
+        ]);
+
+        assert!(
+            out.iter().any(|op| matches!(
+                op,
+                Op::CondStore {
+                    cond: VReg::Flag(Flag::Z),
+                    inverted: false,
+                    ..
+                }
+            )),
+            "streq must retain its memory predicate: {out:#?}"
+        );
+        assert!(!out.iter().any(|op| matches!(op, Op::Store { .. })));
+    }
+
+    #[test]
+    fn a32_predicated_load_is_lazy_and_retains_the_destination() {
+        let out = ops_a32(&[
+            0x00, 0x00, 0x50, 0xe3, // cmp r0, #0
+            0x04, 0x10, 0x12, 0x15, // ldrne r1, [r2, #-4]
+            0x1e, 0xff, 0x2f, 0xe1, // bx lr
+        ]);
+
+        assert!(
+            out.iter().any(|op| matches!(
+                op,
+                Op::CondLoad {
+                    dst,
+                    cond: VReg::Flag(Flag::Z),
+                    inverted: true,
+                    addr,
+                    fallback: Value::Reg(fallback),
+                } if *dst == VReg::phys("r1")
+                    && addr.base.as_ref() == Some(&VReg::phys("r2"))
+                    && addr.disp == -4
+                    && *fallback == VReg::phys("r1")
+            )),
+            "ldrne must keep both its memory guard and old r1 fallback: {out:#?}"
+        );
+        assert!(
+            !out.iter().any(|op| matches!(op, Op::Load { .. })),
+            "predicated ldr must not dereference eagerly: {out:#?}"
+        );
+    }
+
+    #[test]
+    fn a32_predicated_multi_register_pop_retains_fallthrough() {
+        let out = ops_a32(&[
+            0x00, 0x00, 0x50, 0xe3, // cmp r0, #0
+            0x70, 0x80, 0xbd, 0x18, // popne {r4, r5, r6, pc}
+            0x05, 0x00, 0xa0, 0xe3, // mov r0, #5 (fallthrough)
+            0x1e, 0xff, 0x2f, 0xe1, // bx lr
+        ]);
+
+        assert!(
+            out.iter().any(|op| matches!(
+                op,
+                Op::CondReturn {
+                    cond: VReg::Flag(Flag::Z),
+                    inverted: true,
+                }
+            )),
+            "conditional pop-to-pc must not become an unconditional return: {out:#?}"
+        );
+        assert_eq!(
+            out.iter().filter(|op| matches!(op, Op::Return)).count(),
+            1,
+            "only the final bx lr is unconditional: {out:#?}"
+        );
+        assert!(
+            out.iter().any(|op| matches!(op, Op::CondLoad { .. })),
+            "conditional pop restores must remain lazy: {out:#?}"
+        );
+        assert!(
+            !out.iter().any(|op| matches!(op, Op::Load { .. })),
+            "conditional pop must not read the stack on its false path: {out:#?}"
+        );
     }
 
     /// A predicated flag-writing instruction must not execute unconditionally.

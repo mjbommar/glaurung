@@ -506,7 +506,10 @@ fn apply_control_relocations<'data, 'file>(
                 object::elf::R_AARCH64_LDST8_ABS_LO12_NC
                 | object::elf::R_AARCH64_LDST32_ABS_LO12_NC
                 | object::elf::R_AARCH64_LDST64_ABS_LO12_NC => match &mut instruction.op {
-                    Op::Load { addr, .. } | Op::Store { addr, .. } => {
+                    Op::Load { addr, .. }
+                    | Op::CondLoad { addr, .. }
+                    | Op::Store { addr, .. }
+                    | Op::CondStore { addr, .. } => {
                         addr.disp = (target_va & 0xfff) as i64;
                         matched = true;
                     }
@@ -558,7 +561,7 @@ fn build_cfg(instructions: Vec<LlirInstr>, entry: u64, end: u64) -> LlirFunction
                     boundaries.insert(instruction.va + 4);
                 }
             }
-            Op::Return => {
+            Op::Return | Op::CondReturn { .. } => {
                 if instruction.va + 4 < end {
                     boundaries.insert(instruction.va + 4);
                 }

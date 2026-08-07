@@ -951,8 +951,14 @@ fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
             // Scalar VFP memory traffic is represented by ordinary typed
             // Load/Store nodes. Those operations close dataflow rather than
             // creating an opaque producer.
-            Op::Load { dst, .. } if scalar_vfp_register(dst) => saw_scalar_float = true,
+            Op::Load { dst, .. } | Op::CondLoad { dst, .. } if scalar_vfp_register(dst) => {
+                saw_scalar_float = true
+            }
             Op::Store {
+                src: Value::Reg(src),
+                ..
+            }
+            | Op::CondStore {
                 src: Value::Reg(src),
                 ..
             } if scalar_vfp_register(src) => saw_scalar_float = true,
@@ -1065,6 +1071,18 @@ fn switch_index_of(target: &Expr) -> Option<Expr> {
 
 /// Lower a single LLIR op to one or more Stmts.
 fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
+    fn predicate_expr(cond: &VReg, inverted: bool) -> Expr {
+        if inverted {
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Reg(cond.clone())),
+                rhs: Box::new(Expr::Const(0)),
+            }
+        } else {
+            Expr::Reg(cond.clone())
+        }
+    }
+
     match op {
         Op::Nop => vec![Stmt::Nop],
         Op::Assign { dst, src } => vec![Stmt::Assign {
@@ -1131,6 +1149,21 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             dst: dst.clone(),
             src: lower_memop(addr),
         }],
+        Op::CondLoad {
+            dst,
+            cond,
+            inverted,
+            addr,
+            fallback,
+        } => vec![Stmt::Assign {
+            dst: dst.clone(),
+            src: Expr::Select {
+                cond: Box::new(predicate_expr(cond, *inverted)),
+                if_true: Box::new(lower_memop(addr)),
+                if_false: Box::new(lower_value(fallback)),
+                width: addr.size,
+            },
+        }],
         Op::Store { addr, src } => vec![Stmt::Store {
             addr: Expr::Lea {
                 base: addr.base.clone(),
@@ -1141,6 +1174,26 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             },
             src: lower_value(src),
             size: addr.size,
+        }],
+        Op::CondStore {
+            cond,
+            inverted,
+            addr,
+            src,
+        } => vec![Stmt::If {
+            cond: predicate_expr(cond, *inverted),
+            then_body: vec![Stmt::Store {
+                addr: Expr::Lea {
+                    base: addr.base.clone(),
+                    index: addr.index.clone(),
+                    scale: addr.scale,
+                    disp: addr.disp,
+                    segment: addr.segment.clone(),
+                },
+                src: lower_value(src),
+                size: addr.size,
+            }],
+            else_body: None,
         }],
         Op::Jump { target } => vec![Stmt::Goto { target: *target }],
         // A computed transfer. Where it goes lives in the CFG — the arms are
@@ -1167,21 +1220,17 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             target,
             inverted,
         } => {
-            let cond_expr = if *inverted {
-                Expr::Cmp {
-                    op: CmpOp::Eq,
-                    lhs: Box::new(Expr::Reg(cond.clone())),
-                    rhs: Box::new(Expr::Const(0)),
-                }
-            } else {
-                Expr::Reg(cond.clone())
-            };
             vec![Stmt::If {
-                cond: cond_expr,
+                cond: predicate_expr(cond, *inverted),
                 then_body: vec![Stmt::Goto { target: *target }],
                 else_body: None,
             }]
         }
+        Op::CondReturn { cond, inverted } => vec![Stmt::If {
+            cond: predicate_expr(cond, *inverted),
+            then_body: vec![Stmt::Return { value: None }],
+            else_body: None,
+        }],
         Op::Call { target, effects } => {
             let target = match target {
                 CallTarget::Direct(a) => Expr::Addr(*a),
@@ -14257,6 +14306,81 @@ function f @ 0x1000 {
             );
             assert_looks_like_c(&text);
         }
+    }
+
+    #[test]
+    fn conditional_return_lowers_to_an_if_with_no_invented_goto() {
+        let statements = lower_op(
+            &Op::CondReturn {
+                cond: VReg::Flag(Flag::Z),
+                inverted: true,
+            },
+            false,
+        );
+        assert!(matches!(
+            statements.as_slice(),
+            [Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs,
+                    rhs,
+                },
+                then_body,
+                else_body: None,
+            }] if **lhs == Expr::Reg(VReg::Flag(Flag::Z))
+                && **rhs == Expr::Const(0)
+                && then_body == &[Stmt::Return { value: None }]
+        ));
+    }
+
+    #[test]
+    fn conditional_store_lowers_the_memory_effect_inside_the_if() {
+        let statements = lower_op(
+            &Op::CondStore {
+                cond: VReg::Flag(Flag::Z),
+                inverted: false,
+                addr: MemOp::plain(Some(VReg::phys("arg0")), None, 1, 0, 4),
+                src: Value::Reg(VReg::phys("arg2")),
+            },
+            false,
+        );
+        assert!(matches!(
+            statements.as_slice(),
+            [Stmt::If {
+                cond: Expr::Reg(VReg::Flag(Flag::Z)),
+                then_body,
+                else_body: None,
+            }] if matches!(then_body.as_slice(), [Stmt::Store { size: 4, .. }])
+        ));
+    }
+
+    #[test]
+    fn conditional_load_lowers_the_dereference_inside_a_lazy_select() {
+        let statements = lower_op(
+            &Op::CondLoad {
+                dst: VReg::phys("r1"),
+                cond: VReg::Flag(Flag::Z),
+                inverted: true,
+                addr: MemOp::plain(Some(VReg::phys("r2")), None, 1, -4, 4),
+                fallback: Value::Reg(VReg::phys("r1")),
+            },
+            false,
+        );
+        assert!(matches!(
+            statements.as_slice(),
+            [Stmt::Assign {
+                dst,
+                src: Expr::Select {
+                    cond,
+                    if_true,
+                    if_false,
+                    width: 4,
+                },
+            }] if *dst == VReg::phys("r1")
+                && matches!(**cond, Expr::Cmp { op: CmpOp::Eq, .. })
+                && matches!(**if_true, Expr::Deref { size: 4, .. })
+                && **if_false == Expr::Reg(VReg::phys("r1"))
+        ));
     }
 
     #[test]

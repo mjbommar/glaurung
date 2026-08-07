@@ -1444,6 +1444,66 @@ fn process_block(
                     }
                 }
             }
+            Op::CondReturn { cond, inverted } => {
+                let c = st.machine.regs.read(&mut st.machine.dom, cond);
+                let returns = |bit: bool| bit != *inverted;
+                let decision = st.machine.dom.as_branch(&c);
+                match decision {
+                    BranchDecision::Taken | BranchDecision::NotTaken => {
+                        let bit = matches!(decision, BranchDecision::Taken);
+                        if returns(bit) {
+                            consider_terminal(&st, best);
+                            record_path_stat(|stats| {
+                                stats.returned += 1;
+                                record_stop_site(stats, ins.va, "conditional-return");
+                            });
+                            st.end_trace("conditional-return");
+                            return Vec::new();
+                        }
+                        st.pc = block.end_va;
+                        return vec![st];
+                    }
+                    BranchDecision::Fork => {
+                        let independent = can_skip_feasibility_check(&st, c);
+                        let serial_sibling_reuse = warm_serial_sibling_reuse_enabled();
+                        if serial_sibling_reuse {
+                            share_serial_warm_owner_with_children(st.warm_path_id, 2);
+                        }
+                        let mut out = Vec::new();
+                        for (bit, mut child) in st.fork_branch_successors(
+                            block.end_va,
+                            block.end_va,
+                            warm_owner_transfer_enabled(),
+                            serial_sibling_reuse,
+                        ) {
+                            child.assert((c, bit), "conditional-return", ins.va);
+                            let feasible = independent
+                                || !matches!(
+                                    solve_traced(
+                                        &mut child,
+                                        "conditional-return-feasibility",
+                                        ins.va,
+                                    ),
+                                    SolveResult::Unsat
+                                );
+                            if !feasible {
+                                child.end_trace("unsat-prune");
+                            } else if returns(bit) {
+                                consider_terminal(&child, best);
+                                record_path_stat(|stats| {
+                                    stats.returned += 1;
+                                    record_stop_site(stats, ins.va, "conditional-return");
+                                });
+                                child.end_trace("conditional-return");
+                            } else {
+                                out.push(child);
+                            }
+                        }
+                        st.end_trace("forked");
+                        return out;
+                    }
+                }
+            }
             Op::Jump { target } => {
                 st.pc = *target;
                 return vec![st];
@@ -1595,34 +1655,60 @@ fn process_block(
                 // Use-after-free is temporal, not address-symbolic: check every
                 // load/store target (concrete or symbolic) against freed blocks,
                 // so a deref of a freed pointer held in a global is caught.
-                if let Op::Load { addr, .. } = other {
-                    let av = st.machine.eval_addr(addr);
-                    record_access(&mut st, ins.va, av, false, sinks);
-                    if !uaf_check(&mut st, ins.va, av, sinks) {
-                        record_path_stat(|stats| {
-                            stats.model_unavailable += 1;
-                            record_stop_site(stats, ins.va, "model-unavailable");
-                        });
-                        st.end_trace("model-unavailable");
-                        return Vec::new();
+                let memory_executes = |st: &mut State, op: &Op| match op {
+                    Op::CondLoad { cond, inverted, .. } | Op::CondStore { cond, inverted, .. } => {
+                        let c = st.machine.regs.read(&mut st.machine.dom, cond);
+                        match st.machine.dom.as_branch(&c) {
+                            BranchDecision::Taken => !*inverted,
+                            BranchDecision::NotTaken => *inverted,
+                            // The access exists on one feasible side. Keep the
+                            // safety check conservative; execution below will
+                            // stop rather than invent a conditional memory
+                            // update when the predicate itself is symbolic.
+                            BranchDecision::Fork => true,
+                        }
                     }
-                } else if let Op::Store { addr, .. } = other {
-                    let av = st.machine.eval_addr(addr);
-                    record_access(&mut st, ins.va, av, true, sinks);
-                    if !uaf_check(&mut st, ins.va, av, sinks) {
-                        record_path_stat(|stats| {
-                            stats.model_unavailable += 1;
-                            record_stop_site(stats, ins.va, "model-unavailable");
-                        });
-                        st.end_trace("model-unavailable");
-                        return Vec::new();
+                    _ => true,
+                };
+                match other {
+                    Op::Load { addr, .. } | Op::CondLoad { addr, .. }
+                        if memory_executes(&mut st, other) =>
+                    {
+                        let av = st.machine.eval_addr(addr);
+                        record_access(&mut st, ins.va, av, false, sinks);
+                        if !uaf_check(&mut st, ins.va, av, sinks) {
+                            record_path_stat(|stats| {
+                                stats.model_unavailable += 1;
+                                record_stop_site(stats, ins.va, "model-unavailable");
+                            });
+                            st.end_trace("model-unavailable");
+                            return Vec::new();
+                        }
                     }
+                    Op::Store { addr, .. } | Op::CondStore { addr, .. }
+                        if memory_executes(&mut st, other) =>
+                    {
+                        let av = st.machine.eval_addr(addr);
+                        record_access(&mut st, ins.va, av, true, sinks);
+                        if !uaf_check(&mut st, ins.va, av, sinks) {
+                            record_path_stat(|stats| {
+                                stats.model_unavailable += 1;
+                                record_stop_site(stats, ins.va, "model-unavailable");
+                            });
+                            st.end_trace("model-unavailable");
+                            return Vec::new();
+                        }
+                    }
+                    _ => {}
                 }
                 // Route every memory operation through the same handler. A
                 // symbol-free address DAG is concrete without a solver, but it
                 // must still receive taint-through-memory semantics for marked
                 // regions such as WDM SystemBuffer.
-                if matches!(other, Op::Load { .. } | Op::Store { .. }) {
+                if matches!(
+                    other,
+                    Op::Load { .. } | Op::CondLoad { .. } | Op::Store { .. } | Op::CondStore { .. }
+                ) {
                     if execute_memory_op(&mut st, other).is_none() {
                         consider_terminal(&st, best);
                         record_path_stat(|stats| {
@@ -2577,6 +2663,34 @@ fn execute_memory_op(st: &mut State, op: &Op) -> Option<()> {
             st.machine.regs.write(&mut st.machine.dom, dst, val);
             Some(())
         }
+        Op::CondLoad {
+            dst,
+            cond,
+            inverted,
+            addr,
+            fallback,
+        } => {
+            let c = st.machine.regs.read(&mut st.machine.dom, cond);
+            let execute = match st.machine.dom.as_branch(&c) {
+                BranchDecision::Taken => !*inverted,
+                BranchDecision::NotTaken => *inverted,
+                BranchDecision::Fork => return None,
+            };
+            if !execute {
+                let width = Width::from_bytes(addr.size as u16);
+                let value = st.machine.read(fallback, width);
+                st.machine.regs.write(&mut st.machine.dom, dst, value);
+                return Some(());
+            }
+            let av = st.machine.eval_addr(addr);
+            let a = concretize_addr(st, av)?;
+            let value = st
+                .machine
+                .mem
+                .load(&mut st.machine.dom, a, addr.size, addr.endian);
+            st.machine.regs.write(&mut st.machine.dom, dst, value);
+            Some(())
+        }
         Op::Store { addr, src } => {
             let av = st.machine.eval_addr(addr);
             let a = concretize_addr(st, av)?;
@@ -2585,6 +2699,30 @@ fn execute_memory_op(st: &mut State, op: &Op) -> Option<()> {
             st.machine
                 .mem
                 .store(&mut st.machine.dom, a, &v, addr.size, addr.endian);
+            Some(())
+        }
+        Op::CondStore {
+            cond,
+            inverted,
+            addr,
+            src,
+        } => {
+            let c = st.machine.regs.read(&mut st.machine.dom, cond);
+            let execute = match st.machine.dom.as_branch(&c) {
+                BranchDecision::Taken => !*inverted,
+                BranchDecision::NotTaken => *inverted,
+                BranchDecision::Fork => return None,
+            };
+            if !execute {
+                return Some(());
+            }
+            let av = st.machine.eval_addr(addr);
+            let a = concretize_addr(st, av)?;
+            let width = Width::from_bytes(addr.size as u16);
+            let value = st.machine.read(src, width);
+            st.machine
+                .mem
+                .store(&mut st.machine.dom, a, &value, addr.size, addr.endian);
             Some(())
         }
         _ => None,
@@ -2706,6 +2844,94 @@ mod tests {
             matches!(result, SolveResult::Sat(_)),
             "symbolic-address store should be concretized, not halt the path; got {:?}",
             result
+        );
+    }
+
+    #[test]
+    fn symbolic_conditional_return_keeps_the_non_returning_path_reachable() {
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("r0")),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondReturn {
+                        cond: VReg::Flag(Flag::Z),
+                        inverted: false,
+                    },
+                ],
+                0x1008,
+            ),
+            (0x1008, vec![Op::Return], 0x100c),
+        ]);
+        let result = find_input_reaching(
+            &lf,
+            0x1008,
+            |machine| {
+                let input = machine.dom.fresh(Width::W32);
+                machine
+                    .regs
+                    .write(&mut machine.dom, &VReg::phys("r0"), input);
+            },
+            1000,
+        );
+        assert!(
+            matches!(result, SolveResult::Sat(_)),
+            "the false side of a symbolic conditional return must survive: {result:?}"
+        );
+    }
+
+    #[test]
+    fn false_conditional_memory_ops_do_not_concretize_their_address() {
+        use crate::ir::types::MemOp;
+
+        let mut machine = Machine::new(Symbolic::new());
+        let symbolic_address = machine.dom.fresh(Width::W32);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::phys("r2"), symbolic_address);
+        let old = machine.dom.constant(Width::W32, 0x1122_3344);
+        machine.regs.write(&mut machine.dom, &VReg::phys("r1"), old);
+        let false_value = machine.dom.constant(Width::W1, 0);
+        machine
+            .regs
+            .write(&mut machine.dom, &VReg::Flag(Flag::Z), false_value);
+        let mut state = State::root(machine, 0x1000, TaintSpec::new());
+
+        assert_eq!(
+            execute_memory_op(
+                &mut state,
+                &Op::CondLoad {
+                    dst: VReg::phys("r1"),
+                    cond: VReg::Flag(Flag::Z),
+                    inverted: false,
+                    addr: MemOp::plain(Some(VReg::phys("r2")), None, 1, 0, 4),
+                    fallback: Value::Reg(VReg::phys("r1")),
+                },
+            ),
+            Some(())
+        );
+        let retained = state
+            .machine
+            .regs
+            .read(&mut state.machine.dom, &VReg::phys("r1"));
+        assert_eq!(eval_concrete(&mut state, retained), Some(0x1122_3344));
+
+        assert_eq!(
+            execute_memory_op(
+                &mut state,
+                &Op::CondStore {
+                    cond: VReg::Flag(Flag::Z),
+                    inverted: false,
+                    addr: MemOp::plain(Some(VReg::phys("r2")), None, 1, 0, 4),
+                    src: Value::Reg(VReg::phys("r1")),
+                },
+            ),
+            Some(())
         );
     }
 

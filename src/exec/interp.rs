@@ -338,7 +338,55 @@ impl<D: Domain> Machine<D> {
                 self.write_defined(dst, v);
                 Flow::Next
             }
+            Op::CondLoad {
+                dst,
+                cond,
+                inverted,
+                addr,
+                fallback,
+            } => {
+                let c = self.regs.read(&mut self.dom, cond);
+                let execute = match self.dom.as_branch(&c) {
+                    BranchDecision::Taken => !*inverted,
+                    BranchDecision::NotTaken => *inverted,
+                    BranchDecision::Fork => return Flow::Halt(Halt::UnexpectedFork),
+                };
+                let value = if execute {
+                    let Some(ea) = self.effective_addr(addr) else {
+                        return Flow::Halt(Halt::UnresolvedAddress);
+                    };
+                    self.mem.load(&mut self.dom, ea, addr.size, addr.endian)
+                } else {
+                    self.read(fallback, Width::from_bytes(addr.size as u16))
+                };
+                self.write_defined(dst, value);
+                Flow::Next
+            }
             Op::Store { addr, src } => {
+                let Some(ea) = self.effective_addr(addr) else {
+                    return Flow::Halt(Halt::UnresolvedAddress);
+                };
+                let w = Width::from_bytes(addr.size as u16);
+                let v = self.read(src, w);
+                self.mem
+                    .store(&mut self.dom, ea, &v, addr.size, addr.endian);
+                Flow::Next
+            }
+            Op::CondStore {
+                cond,
+                inverted,
+                addr,
+                src,
+            } => {
+                let c = self.regs.read(&mut self.dom, cond);
+                let execute = match self.dom.as_branch(&c) {
+                    BranchDecision::Taken => !*inverted,
+                    BranchDecision::NotTaken => *inverted,
+                    BranchDecision::Fork => return Flow::Halt(Halt::UnexpectedFork),
+                };
+                if !execute {
+                    return Flow::Next;
+                }
                 let Some(ea) = self.effective_addr(addr) else {
                     return Flow::Halt(Halt::UnresolvedAddress);
                 };
@@ -375,6 +423,15 @@ impl<D: Domain> Machine<D> {
                         target: *target,
                         taken: *inverted,
                     },
+                    BranchDecision::Fork => Flow::Halt(Halt::UnexpectedFork),
+                }
+            }
+            Op::CondReturn { cond, inverted } => {
+                let c = self.regs.read(&mut self.dom, cond);
+                match self.dom.as_branch(&c) {
+                    BranchDecision::Taken if !*inverted => Flow::Return,
+                    BranchDecision::NotTaken if *inverted => Flow::Return,
+                    BranchDecision::Taken | BranchDecision::NotTaken => Flow::Next,
                     BranchDecision::Fork => Flow::Halt(Halt::UnexpectedFork),
                 }
             }
@@ -469,7 +526,7 @@ impl<D: Domain> Machine<D> {
 mod tests {
     use super::*;
     use crate::exec::concrete::Concrete;
-    use crate::ir::types::{BinOp, CmpOp, Flag, LlirInstr};
+    use crate::ir::types::{BinOp, CmpOp, Endian, Flag, LlirInstr};
 
     fn block(ops: Vec<Op>) -> LlirBlock {
         LlirBlock {
@@ -576,6 +633,28 @@ mod tests {
     }
 
     #[test]
+    fn conditional_return_obeys_both_predicate_polarities() {
+        let mut m = machine();
+        let one = m.dom.constant(Width::W1, 1);
+        m.regs.write(&mut m.dom, &VReg::Flag(Flag::Z), one);
+
+        assert_eq!(
+            m.step(&Op::CondReturn {
+                cond: VReg::Flag(Flag::Z),
+                inverted: false,
+            }),
+            Flow::Return
+        );
+        assert_eq!(
+            m.step(&Op::CondReturn {
+                cond: VReg::Flag(Flag::Z),
+                inverted: true,
+            }),
+            Flow::Next
+        );
+    }
+
+    #[test]
     fn memory_store_load_round_trip_via_ops() {
         // [rsp-8] = rax (64-bit), then rcx = [rsp-8]
         let mut m = machine();
@@ -597,6 +676,69 @@ mod tests {
             m.regs.read(&mut m.dom, &VReg::phys("rcx")),
             0xcafe_f00d_1234_5678
         );
+    }
+
+    #[test]
+    fn conditional_store_touches_memory_only_on_the_taken_path() {
+        let mut m = machine();
+        let ptr = m.dom.constant(Width::W64, 0x7000);
+        m.regs.write(&mut m.dom, &VReg::phys("r3"), ptr);
+        let value = m.dom.constant(Width::W32, 0x1234_5678);
+        m.regs.write(&mut m.dom, &VReg::phys("r2"), value);
+        let zero = m.dom.constant(Width::W1, 0);
+        m.regs.write(&mut m.dom, &VReg::Flag(Flag::Z), zero);
+        let store = Op::CondStore {
+            cond: VReg::Flag(Flag::Z),
+            inverted: false,
+            addr: MemOp::plain(Some(VReg::phys("r3")), None, 1, 0, 4),
+            src: Value::Reg(VReg::phys("r2")),
+        };
+
+        assert_eq!(m.step(&store), Flow::Next);
+        assert_eq!(m.mem.load(&mut m.dom, 0x7000, 4, Endian::Little), 0);
+
+        let one = m.dom.constant(Width::W1, 1);
+        m.regs.write(&mut m.dom, &VReg::Flag(Flag::Z), one);
+        assert_eq!(m.step(&store), Flow::Next);
+        assert_eq!(
+            m.mem.load(&mut m.dom, 0x7000, 4, Endian::Little),
+            0x1234_5678
+        );
+    }
+
+    #[test]
+    fn conditional_load_retains_fallback_then_loads_on_the_taken_path() {
+        let mut m = machine();
+        let ptr = m.dom.constant(Width::W64, 0x7000);
+        m.regs.write(&mut m.dom, &VReg::phys("r2"), ptr);
+        let old = m.dom.constant(Width::W32, 0x1111_2222);
+        m.regs.write(&mut m.dom, &VReg::phys("r1"), old);
+        let stored = m.dom.constant(Width::W32, 0x3344_5566);
+        m.regs.write(&mut m.dom, &VReg::phys("r3"), stored);
+        assert_eq!(
+            m.step(&Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("r2")), None, 1, 0, 4),
+                src: Value::Reg(VReg::phys("r3")),
+            }),
+            Flow::Next
+        );
+        let load = Op::CondLoad {
+            dst: VReg::phys("r1"),
+            cond: VReg::Flag(Flag::Z),
+            inverted: false,
+            addr: MemOp::plain(Some(VReg::phys("r2")), None, 1, 0, 4),
+            fallback: Value::Reg(VReg::phys("r1")),
+        };
+
+        let zero = m.dom.constant(Width::W1, 0);
+        m.regs.write(&mut m.dom, &VReg::Flag(Flag::Z), zero);
+        assert_eq!(m.step(&load), Flow::Next);
+        assert_eq!(m.regs.read(&mut m.dom, &VReg::phys("r1")), 0x1111_2222);
+
+        let one = m.dom.constant(Width::W1, 1);
+        m.regs.write(&mut m.dom, &VReg::Flag(Flag::Z), one);
+        assert_eq!(m.step(&load), Flow::Next);
+        assert_eq!(m.regs.read(&mut m.dom, &VReg::phys("r1")), 0x3344_5566);
     }
 
     #[test]

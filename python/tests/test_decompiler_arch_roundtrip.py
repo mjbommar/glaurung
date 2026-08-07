@@ -866,6 +866,87 @@ def test_arm32_optimized_readonly_switch_result_round_trips(
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_instruction_predication_round_trips_conditional_polarity(
+    tmp_path: Path,
+) -> None:
+    """A32 condition fields must guard data writes and register returns."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None:
+        pytest.skip(f"{A.TARGETS[arch].cc} is not installed on this host")
+    fixture = "01_conditional_polarity"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {
+        "classify",
+        "cmp_signed",
+        "cmp_unsigned",
+        "early_return",
+        "early_return_ge",
+        "elseif",
+        "nested",
+        "sc_and",
+        "sc_mixed",
+        "sc_or",
+        "ternary",
+        "ternary_nested",
+    }
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only=functions,
+    )
+
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_predicated_store_round_trips_cas_update(tmp_path: Path) -> None:
+    """A false A32 store predicate must leave target memory untouched."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None:
+        pytest.skip(f"{A.TARGETS[arch].cc} is not installed on this host")
+    fixture = "09_memory_effects"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    function = "cas_update"
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only={function},
+    )
+
+    assert results[function]["status"] == "pass", results[function]
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_clz_idiom_round_trips(tmp_path: Path) -> None:
     """AArch64 CLZ must define the exact-width bit-length computation."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:

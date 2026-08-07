@@ -294,7 +294,27 @@ pub enum Op {
         dst: VReg,
         addr: MemOp,
     },
+    /// Load only when `cond` has the requested polarity. `fallback` is the
+    /// value assigned when the predicate is false (normally the destination's
+    /// prior value). Keeping the dereference inside this op prevents a
+    /// predicated ARM load from faulting on a path where hardware skips it.
+    CondLoad {
+        dst: VReg,
+        cond: VReg,
+        inverted: bool,
+        addr: MemOp,
+        fallback: Value,
+    },
     Store {
+        addr: MemOp,
+        src: Value,
+    },
+    /// Store only when `cond` has the requested polarity. This is distinct
+    /// from selecting the stored value: when the predicate is false the
+    /// architecture performs no memory access at all.
+    CondStore {
+        cond: VReg,
+        inverted: bool,
         addr: MemOp,
         src: Value,
     },
@@ -335,6 +355,14 @@ pub enum Op {
     CondJump {
         cond: VReg,
         target: u64,
+        inverted: bool,
+    },
+    /// Return from the current function only when `cond` has the requested
+    /// polarity. A32 uses this for condition-suffixed register branches such
+    /// as `bxeq lr`: the taken path returns while the false path continues at
+    /// the next instruction.
+    CondReturn {
+        cond: VReg,
         inverted: bool,
     },
     Call {
@@ -682,8 +710,35 @@ impl fmt::Display for Op {
             Op::Un { dst, op, src } => write!(f, "{} = {:?} {}", dst, op, src),
             Op::Cmp { dst, op, lhs, rhs } => write!(f, "{} = cmp {:?} {} {}", dst, op, lhs, rhs),
             Op::Load { dst, addr } => write!(f, "{} = load[{} bytes] {:?}", dst, addr.size, addr),
+            Op::CondLoad {
+                dst,
+                cond,
+                inverted,
+                addr,
+                fallback,
+            } => {
+                let prefix = if *inverted { "!" } else { "" };
+                write!(
+                    f,
+                    "{} = if {}{} load[{} bytes] {:?} else {}",
+                    dst, prefix, cond, addr.size, addr, fallback
+                )
+            }
             Op::Store { addr, src } => {
                 write!(f, "store[{} bytes] {:?} <- {}", addr.size, addr, src)
+            }
+            Op::CondStore {
+                cond,
+                inverted,
+                addr,
+                src,
+            } => {
+                let prefix = if *inverted { "!" } else { "" };
+                write!(
+                    f,
+                    "if {}{} store[{} bytes] {:?} <- {}",
+                    prefix, cond, addr.size, addr, src
+                )
             }
             Op::Jump { target } => write!(f, "jmp 0x{:x}", target),
             Op::IndirectJump { target, index } => match index {
@@ -697,6 +752,10 @@ impl fmt::Display for Op {
             } => {
                 let prefix = if *inverted { "!" } else { "" };
                 write!(f, "if {}{} jmp 0x{:x}", prefix, cond, target)
+            }
+            Op::CondReturn { cond, inverted } => {
+                let prefix = if *inverted { "!" } else { "" };
+                write!(f, "if {}{} ret", prefix, cond)
             }
             Op::Call { target, .. } => match target {
                 CallTarget::Direct(a) => write!(f, "call 0x{:x}", a),

@@ -1243,3 +1243,81 @@ passed / 43 skipped, one passing test above the preceding run, with the same
 six pytest-mark warnings. Rust/Python formatting, owned Python lint, and the
 diff whitespace gate are clean; focused typing retains only the repository's
 six existing pytest-stub diagnostics.
+
+## 11:33 — A32 instruction predicates become typed conditional effects
+
+The proposed `aarch64_entry_stack_coordinate` widening was stale against live
+main: commit `401ac4f` had already replaced it with the AAPCS-wide coordinate
+used by `Arm`, `ArmHardFloat`, and `Aarch64`. The exact remaining A32 failure
+was earlier in the pipeline. The retained A32 ELF at
+`/tmp/glaurung-armv7-a32-classify.oeNtRa` has SHA-256
+`a8243b19c60993b1ce479171b63a0e0df0ebb0d2f850cbb209df78cfacb96303`;
+its source `tests/decompiler_fixtures/src/01_conditional_polarity.c` has SHA-256
+`eed9d99623f169699046a916c753fef0ad9412831ca84bdd15623a4ca6409df9`.
+GCC 15's O2 `early_return` is only four A32 instructions:
+
+```text
+cmp   r0, #0
+movlt r0, #77
+movge r0, #88
+bx    lr
+```
+
+The old lift emitted `Unknown("movlt")` and `Unknown("movge")`. In `elseif`,
+CFG classification also treated `bxeq lr` as neither branch nor return, losing
+the returning edge. This explains all nine O2 conditional-polarity failures:
+A32 stores a condition code in bits 31:28 of each instruction rather than in a
+Thumb IT block, and that encoding was never represented by the A32 lifter.
+
+The lifter now decodes the word's condition field, strips only the matching
+Capstone suffix, lifts the base operation, and predicates its effects. Pure
+register definitions compute in scratch and conditionally commit. Direct
+conditional branches retain their exact `CondJump`; condition-suffixed returns
+use the new typed `CondReturn`. Unsupported conditional calls and computed
+branches fail closed as `Unknown("predicated control effect")` instead of
+silently executing unconditionally.
+
+A scan of all 58 compiled A32 fixture ELFs then found real conditional memory
+effects (`streq`, `strne`, `strlt`, conditional byte stores and loads) and
+conditional multi-register pops ending in `pc`. That exposed two further
+safety defects: stores were unconditional, while loads dereferenced memory
+before an `Ite`, even on a hardware path that skips the instruction. Typed
+`CondStore` and `CondLoad` operations now keep the memory access itself behind
+the predicate; `CondLoad` carries an explicit false-path fallback for SSA.
+Conditional pop restores use scratch fallbacks and end in `CondReturn`, so the
+false path touches neither the stack nor control flow.
+
+The three conditional operations are carried through use/def, SSA value
+numbering, verification, type recovery, xrefs, the Python IR encoding, AST
+lowering, concrete interpretation, taint analysis, and symbolic exploration.
+The C AST uses a lazy conditional expression for loads and an `if` body for
+stores/returns. Concrete and symbolic tests prove a false conditional memory
+operation does not resolve its address; symbolic `CondReturn` forks and keeps
+the non-returning path reachable. Encoded tests cover exact `movlt`/`movge`,
+`bxeq lr`, `streq`, `ldrne`, `popne {...,pc}`, `blne`, and `bxne r3` words. Real
+fixture tests cover all 12 conditional-polarity functions and `cas_update`.
+
+The complete pre-ratchet matrix changes 45 cells from fail to pass with zero
+regressions: 1,627 passes / 173 failures, 228 structural rows, and six declared
+unsupported rows. A32 improves from 113/272 to 156/272 (+43); Thumb improves
+from 239/272 to 241/272 (+2). AArch64 and pinned x86-64 remain 328/328, i386
+remains 251/272, and the GCC 15 x86-64 comparison remains 323/328. The gains
+span conditional polarity, switches, loops, memory effects, call shapes, flag
+effects, hash tables, disjoint set, and polynomial evaluation rather than one
+fixture family. No lane error, timeout, missing case, status reclassification,
+toolchain drift, or new execution failure is present.
+
+The guarded baseline writer reproduces the 1,627 / 173 ratchet exactly: its
+diff contains 45 `fail` to `pass` transitions and no added/removed case,
+metadata change, or new failure. Rust all-targets is green with 1,820 library
+tests plus every integration, example, and benchmark target; the execution
+feature library is green at 1,884/1,884. The complete Python suite exits zero
+at 2,802 passed / 43 skipped with the same six pytest-mark warnings. The exact
+new symbolic-return and conditional-memory proofs pass, and the symbolic
+feature compiles. Its complete library run reaches 1,984/1,986: the two
+unchanged ordered-trace backend-identity tests require `bitwuzla`, while this
+environment reports no Bitwuzla backend; the all-features build independently
+confirms the missing `BITWUZLA_LIB_DIR` prerequisite. Rust/Python formatting,
+owned Python lint, Cargo checks, and the diff whitespace gate are clean;
+focused typing retains only the repository's six existing pytest-stub
+diagnostics.

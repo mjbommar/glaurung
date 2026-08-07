@@ -104,12 +104,32 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
             reads_of_memop(addr, &mut uses);
             Some(dst.clone())
         }
+        Op::CondLoad {
+            dst,
+            cond,
+            addr,
+            fallback,
+            ..
+        } => {
+            uses.push(cond.clone());
+            reads_of_memop(addr, &mut uses);
+            reads_of_value(fallback, &mut uses);
+            Some(dst.clone())
+        }
         Op::Store { addr, src } => {
             reads_of_memop(addr, &mut uses);
             reads_of_value(src, &mut uses);
             None
         }
-        Op::CondJump { cond, .. } => {
+        Op::CondStore {
+            cond, addr, src, ..
+        } => {
+            uses.push(cond.clone());
+            reads_of_memop(addr, &mut uses);
+            reads_of_value(src, &mut uses);
+            None
+        }
+        Op::CondJump { cond, .. } | Op::CondReturn { cond, .. } => {
             uses.push(cond.clone());
             None
         }
@@ -180,6 +200,7 @@ pub fn def_mut(op: &mut Op) -> Option<&mut VReg> {
         | Op::Un { dst, .. }
         | Op::Cmp { dst, .. }
         | Op::Load { dst, .. }
+        | Op::CondLoad { dst, .. }
         | Op::ZExt { dst, .. }
         | Op::SExt { dst, .. }
         | Op::Trunc { dst, .. }
@@ -189,8 +210,10 @@ pub fn def_mut(op: &mut Op) -> Option<&mut VReg> {
         Op::Call { effects, .. } => effects.as_mut().and_then(|effects| effects.result.as_mut()),
         Op::Intrinsic { outs, .. } => outs.first_mut().map(|(register, _)| register),
         Op::Store { .. }
+        | Op::CondStore { .. }
         | Op::IndirectJump { .. }
         | Op::CondJump { .. }
+        | Op::CondReturn { .. }
         | Op::Jump { .. }
         | Op::Return
         | Op::Nop

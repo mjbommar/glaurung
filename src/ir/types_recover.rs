@@ -939,6 +939,7 @@ fn arm_mixed_entry_spill_order(lf: &LlirFunction, candidates: &[VReg]) -> Option
             | Op::Jump { .. }
             | Op::IndirectJump { .. }
             | Op::CondJump { .. }
+            | Op::CondReturn { .. }
             | Op::Return => break,
             _ => {}
         }
@@ -981,10 +982,14 @@ fn qualified_result_hint(
     }
 
     match op {
-        Op::Load { addr, .. } if addr.size.max(1) < abi_pointer_width(cc) => Some(TypeHint::Int {
-            signed: true,
-            width: addr.size.max(1),
-        }),
+        Op::Load { addr, .. } | Op::CondLoad { addr, .. }
+            if addr.size.max(1) < abi_pointer_width(cc) =>
+        {
+            Some(TypeHint::Int {
+                signed: true,
+                width: addr.size.max(1),
+            })
+        }
         Op::Assign {
             src: Value::Reg(_) | Value::Const(_),
             ..
@@ -1534,7 +1539,7 @@ pub fn recover_prototype_with_arm_vfp_args(
         .blocks
         .iter()
         .flat_map(|block| &block.instrs)
-        .any(|instruction| matches!(instruction.op, Op::Return));
+        .any(|instruction| matches!(instruction.op, Op::Return | Op::CondReturn { .. }));
     // ARM32 still lowers broad VFP/DSP instruction families through the
     // footprint-free migration fallback.  Unlike the x86 path (where SIMD
     // arithmetic used for outputs is footprinted above), absence of an ARM
@@ -1817,7 +1822,7 @@ fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
             tag(src, tm);
         }
         Op::Store { src, .. } => tag(src, tm),
-        Op::Load { dst, .. } => {
+        Op::Load { dst, .. } | Op::CondLoad { dst, .. } => {
             if let VReg::Phys(_) = dst {
                 tm.upsert(dst.clone(), value_hint_for_reg(dst));
             }
@@ -2011,7 +2016,8 @@ fn op_dst_reg(op: &Op) -> Option<&VReg> {
         Op::Assign { dst, .. }
         | Op::Bin { dst, .. }
         | Op::Un { dst, .. }
-        | Op::Load { dst, .. } => Some(dst),
+        | Op::Load { dst, .. }
+        | Op::CondLoad { dst, .. } => Some(dst),
         _ => None,
     }
 }
@@ -2419,8 +2425,11 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                         }
                     }
                 }
-                Op::Load { addr, .. } => {
-                    let mut use_index = 0usize;
+                Op::Load { addr, .. } | Op::CondLoad { addr, .. } => {
+                    // CondLoad's predicate is the first use; ordinary Load
+                    // starts directly with address operands. The fallback is
+                    // after the address and does not affect pointer evidence.
+                    let mut use_index = usize::from(matches!(&ins.op, Op::CondLoad { .. }));
                     if addr.base.is_some() {
                         if let Some((_, base)) =
                             values.uses.get(use_index).and_then(|entry| entry.as_ref())
@@ -2453,8 +2462,10 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                         }
                     }
                 }
-                Op::Store { addr, .. } => {
-                    let mut use_index = 0usize;
+                Op::Store { addr, .. } | Op::CondStore { addr, .. } => {
+                    // CondStore's predicate is the first use; ordinary Store
+                    // starts directly with address operands.
+                    let mut use_index = usize::from(matches!(&ins.op, Op::CondStore { .. }));
                     if addr.base.is_some() {
                         if let Some((_, base)) =
                             values.uses.get(use_index).and_then(|entry| entry.as_ref())
@@ -2688,9 +2699,11 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
     let mut address_values = HashSet::new();
     for (block_idx, block) in lf.blocks.iter().enumerate() {
         for (instr_idx, instruction) in block.instrs.iter().enumerate() {
-            if !matches!(instruction.op, Op::Load { .. } | Op::Store { .. }) {
-                continue;
-            }
+            let address_use_index = match instruction.op {
+                Op::Load { .. } | Op::Store { .. } => 0,
+                Op::CondLoad { .. } | Op::CondStore { .. } => 1,
+                _ => continue,
+            };
             let values = instruction_values(
                 lf,
                 ssa,
@@ -2699,7 +2712,7 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                     instr_idx,
                 },
             );
-            if let Some((_, base)) = values.uses.first().and_then(Option::as_ref) {
+            if let Some((_, base)) = values.uses.get(address_use_index).and_then(Option::as_ref) {
                 address_values.insert(base.clone());
             }
         }
@@ -2958,7 +2971,10 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
             tag_value_regs(&ins.op, &mut tm);
             match &ins.op {
                 // Any register used as the base of a memory op is a pointer.
-                Op::Load { addr, .. } | Op::Store { addr, .. } => {
+                Op::Load { addr, .. }
+                | Op::CondLoad { addr, .. }
+                | Op::Store { addr, .. }
+                | Op::CondStore { addr, .. } => {
                     if let Some(b) = &addr.base {
                         tm.upsert(
                             b.clone(),

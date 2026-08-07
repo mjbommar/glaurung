@@ -143,7 +143,11 @@ pub fn build_llir_function_linear(entry_va: u64, instrs: Vec<LlirInstr>) -> Llir
         //     jump table or simply be the start of an orphan region)
         if matches!(
             &ins.op,
-            Op::Jump { .. } | Op::CondJump { .. } | Op::Return | Op::Unknown { .. }
+            Op::Jump { .. }
+                | Op::CondJump { .. }
+                | Op::CondReturn { .. }
+                | Op::Return
+                | Op::Unknown { .. }
         ) {
             // Find the next machine VA. Multiple LLIR ops can share a
             // VA (e.g. cmp expands to several flag writes); we want the
@@ -519,7 +523,13 @@ fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
             }
             None
         }
-        Op::Store { .. } => None,
+        Op::CondLoad { dst, .. } => {
+            if let Some(d) = vreg_canon(dst) {
+                write_reg(state, &d, Taint::Top);
+            }
+            None
+        }
+        Op::Store { .. } | Op::CondStore { .. } => None,
         Op::Call { .. } => {
             for r in CALLER_SAVED {
                 state.remove(*r);
@@ -554,7 +564,12 @@ fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
             }
             None
         }
-        Op::Jump { .. } | Op::CondJump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => None,
+        Op::Jump { .. }
+        | Op::CondJump { .. }
+        | Op::CondReturn { .. }
+        | Op::Return
+        | Op::Nop
+        | Op::Unknown { .. } => None,
     }
 }
 
@@ -605,7 +620,7 @@ fn step_block(
         // register write (the read happens before the write on the
         // same instruction).
         match &ins.op {
-            Op::Load { addr, .. } => {
+            Op::Load { addr, .. } | Op::CondLoad { addr, .. } => {
                 if let Some(f) = make_finding(
                     state.borrow_state(),
                     &local_nonnull,
@@ -617,7 +632,7 @@ fn step_block(
                     findings.push(f);
                 }
             }
-            Op::Store { addr, .. } => {
+            Op::Store { addr, .. } | Op::CondStore { addr, .. } => {
                 if let Some(f) = make_finding(
                     state.borrow_state(),
                     &local_nonnull,
@@ -818,7 +833,7 @@ fn looks_like_irp_handler(lf: &LlirFunction) -> bool {
     ];
     for block in &lf.blocks {
         for ins in &block.instrs {
-            if let Op::Load { addr, .. } = &ins.op {
+            if let Op::Load { addr, .. } | Op::CondLoad { addr, .. } = &ins.op {
                 if let Some(base) = &addr.base {
                     if let Some(base_canon) = vreg_canon(base) {
                         if GPR64_BASES.contains(&base_canon.as_str())

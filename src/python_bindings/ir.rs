@@ -164,8 +164,34 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("dst", vreg_to_str(dst))?;
             d.set_item("addr", memop_to_pyobj(py, addr)?)?;
         }
+        Op::CondLoad {
+            dst,
+            cond,
+            inverted,
+            addr,
+            fallback,
+        } => {
+            d.set_item("kind", "cond_load")?;
+            d.set_item("dst", vreg_to_str(dst))?;
+            d.set_item("cond", vreg_to_str(cond))?;
+            d.set_item("inverted", *inverted)?;
+            d.set_item("addr", memop_to_pyobj(py, addr)?)?;
+            d.set_item("fallback", value_to_pyobj(py, fallback)?)?;
+        }
         Op::Store { addr, src } => {
             d.set_item("kind", "store")?;
+            d.set_item("addr", memop_to_pyobj(py, addr)?)?;
+            d.set_item("src", value_to_pyobj(py, src)?)?;
+        }
+        Op::CondStore {
+            cond,
+            inverted,
+            addr,
+            src,
+        } => {
+            d.set_item("kind", "cond_store")?;
+            d.set_item("cond", vreg_to_str(cond))?;
+            d.set_item("inverted", *inverted)?;
             d.set_item("addr", memop_to_pyobj(py, addr)?)?;
             d.set_item("src", value_to_pyobj(py, src)?)?;
         }
@@ -189,6 +215,11 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("cond", vreg_to_str(cond))?;
             d.set_item("inverted", *inverted)?;
             d.set_item("target", *target)?;
+        }
+        Op::CondReturn { cond, inverted } => {
+            d.set_item("kind", "cond_return")?;
+            d.set_item("cond", vreg_to_str(cond))?;
+            d.set_item("inverted", *inverted)?;
         }
         Op::Call { target, .. } => {
             d.set_item("kind", "call")?;

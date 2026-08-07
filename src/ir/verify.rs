@@ -113,9 +113,10 @@ pub fn verify_function(lf: &LlirFunction) -> Vec<VerifyError> {
                         });
                     }
                 }
-                Op::Load { addr, .. } | Op::Store { addr, .. } => {
-                    check_memop(va, addr, &mut errors)
-                }
+                Op::Load { addr, .. }
+                | Op::CondLoad { addr, .. }
+                | Op::Store { addr, .. }
+                | Op::CondStore { addr, .. } => check_memop(va, addr, &mut errors),
                 Op::Unknown { mnemonic } => errors.push(VerifyError::ResidualUnknown {
                     va,
                     mnemonic: mnemonic.clone(),

@@ -527,6 +527,33 @@ fn is_arm_cond_branch(m: &str) -> bool {
     )
 }
 
+/// True when `m` is an A32 condition-suffixed register branch (`bxeq`,
+/// `bxne`, ...). When the operand is `lr` this is a conditional return, but
+/// either operand shape ends the current block and retains lexical fallthrough.
+fn is_arm_cond_bx(m: &str) -> bool {
+    let Some(cc) = m.strip_prefix("bx") else {
+        return false;
+    };
+    matches!(
+        cc,
+        "eq" | "ne"
+            | "cs"
+            | "hs"
+            | "cc"
+            | "lo"
+            | "mi"
+            | "pl"
+            | "vs"
+            | "vc"
+            | "hi"
+            | "ls"
+            | "ge"
+            | "lt"
+            | "gt"
+            | "le"
+    )
+}
+
 /// True when `ins` is an ARM `pop`/`ldm*` that writes `pc` — i.e. a function
 /// return. Resolved on operands because the mnemonic alone (`pop`) does not say
 /// whether the register list includes `pc`.
@@ -662,6 +689,7 @@ fn classify_ctrl_flow(mnemonic: &str, arch: BArch) -> (bool, bool, bool) {
                 || m == "tbb"
                 || m == "tbh"
                 || is_arm_cond_branch(&m)
+                || is_arm_cond_bx(&m)
             {
                 return (true, false, false);
             }
@@ -5118,7 +5146,7 @@ mod aarch64_ctrl_flow_tests {
 
 #[cfg(test)]
 mod arm32_ctrl_flow_tests {
-    use super::arm_pop_writes_pc;
+    use super::{arm_pop_writes_pc, classify_ctrl_flow, is_unconditional_branch_mnemonic, BArch};
     use crate::core::address::{Address, AddressKind};
     use crate::core::binary::Endianness;
     use crate::core::disassembler::{Architecture, Disassembler};
@@ -5139,6 +5167,17 @@ mod arm32_ctrl_flow_tests {
             arm_pop_writes_pc(&instruction),
             "decoded epilogue must terminate the CFG: {instruction:#?}"
         );
+    }
+
+    #[test]
+    fn a32_conditional_bx_ends_the_block_but_keeps_fallthrough() {
+        // A32 encodes conditional returns as `bx<cc> lr`.  Treating `bxeq` as
+        // an ordinary instruction lets the lexical fallthrough execute even
+        // when the return condition is true; treating it as an unconditional
+        // return loses the false path.  It is therefore a conditional branch
+        // for CFG construction.
+        assert_eq!(classify_ctrl_flow("bxeq", BArch::ARM), (true, false, false));
+        assert!(!is_unconditional_branch_mnemonic("bxeq", BArch::ARM));
     }
 }
 

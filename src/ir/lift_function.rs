@@ -950,6 +950,7 @@ mod tests {
                     | Op::Call { .. }
                     | Op::Jump { .. }
                     | Op::CondJump { .. }
+                    | Op::CondReturn { .. }
                     // Unmodelled terminators are lowered to Intrinsic (task 0.7).
                     | Op::Intrinsic { .. }
             ),

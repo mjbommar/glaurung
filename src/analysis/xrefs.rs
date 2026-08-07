@@ -235,7 +235,10 @@ fn update_known_addrs(op: &Op, known_addrs: &mut AddrState, data_ranges: &[(u64,
                 known_addrs.remove(&dst);
             }
         }
-        Op::Load { dst, .. } | Op::Un { dst, .. } | Op::Cmp { dst, .. } => {
+        Op::Load { dst, .. }
+        | Op::CondLoad { dst, .. }
+        | Op::Un { dst, .. }
+        | Op::Cmp { dst, .. } => {
             known_addrs.remove(&reg_key(dst));
         }
         Op::CondAssign { dst, .. } => {
@@ -348,9 +351,13 @@ pub fn llir_to_data_xrefs(
                     ..
                 } => Some(*v),
                 Op::CondAssign { src, .. } => value_known_addr(src, &known_addrs),
-                Op::Load { addr, .. } => memop_known_target(addr, &known_addrs),
-                Op::Store { addr, src } => value_known_addr(src, &known_addrs)
-                    .or_else(|| memop_known_target(addr, &known_addrs)),
+                Op::Load { addr, .. } | Op::CondLoad { addr, .. } => {
+                    memop_known_target(addr, &known_addrs)
+                }
+                Op::Store { addr, src } | Op::CondStore { addr, src, .. } => {
+                    value_known_addr(src, &known_addrs)
+                        .or_else(|| memop_known_target(addr, &known_addrs))
+                }
                 Op::Call {
                     target: crate::ir::types::CallTarget::Indirect(Value::Addr(v)),
                     ..

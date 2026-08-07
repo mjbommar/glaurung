@@ -410,11 +410,36 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
             tag_memop_uses(addr, use_vers, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
+        Op::CondLoad {
+            dst,
+            cond,
+            addr,
+            fallback,
+            ..
+        } => {
+            if let Some(&ver) = use_vers.first() {
+                tag_phys(cond, ver, ctx);
+            }
+            ui = 1;
+            tag_memop_uses(addr, use_vers, &mut ui, ctx);
+            tag_value(fallback, use_vers, &mut ui, ctx);
+            tag_phys(dst, def_ver, ctx);
+        }
         Op::Store { addr, src } => {
             tag_memop_uses(addr, use_vers, &mut ui, ctx);
             tag_value(src, use_vers, &mut ui, ctx);
         }
-        Op::CondJump { cond, .. } => {
+        Op::CondStore {
+            cond, addr, src, ..
+        } => {
+            if let Some(&ver) = use_vers.first() {
+                tag_phys(cond, ver, ctx);
+            }
+            ui = 1;
+            tag_memop_uses(addr, use_vers, &mut ui, ctx);
+            tag_value(src, use_vers, &mut ui, ctx);
+        }
+        Op::CondJump { cond, .. } | Op::CondReturn { cond, .. } => {
             if let Some(&ver) = use_vers.first() {
                 tag_phys(cond, ver, ctx);
             }
@@ -500,7 +525,7 @@ pub(crate) fn def_reaches_return(
 ) -> bool {
     // Rest of the def's own block first.
     for ins in &lf.blocks[def_bi].instrs[def_ii + 1..] {
-        if matches!(ins.op, Op::Return) {
+        if matches!(ins.op, Op::Return | Op::CondReturn { .. }) {
             return true;
         }
         if defs_return_reg(&ins.op, ret_names) {
@@ -523,7 +548,7 @@ pub(crate) fn def_reaches_return(
         }
         let mut killed = false;
         for ins in &lf.blocks[b].instrs {
-            if matches!(ins.op, Op::Return) {
+            if matches!(ins.op, Op::Return | Op::CondReturn { .. }) {
                 return true;
             }
             if defs_return_reg(&ins.op, ret_names) {
@@ -953,7 +978,9 @@ fn insert_phi_copies(
         // Insert before a trailing terminator; a block that falls through simply
         // takes them at the end.
         let at = match block.instrs.last().map(|i| &i.op) {
-            Some(Op::Jump { .. } | Op::CondJump { .. } | Op::Return) => block.instrs.len() - 1,
+            Some(Op::Jump { .. } | Op::CondJump { .. } | Op::CondReturn { .. } | Op::Return) => {
+                block.instrs.len() - 1
+            }
             _ => block.instrs.len(),
         };
         // Share the VA of the instruction the copies precede: these are not real
@@ -1027,11 +1054,30 @@ pub(crate) fn for_each_vreg_mut(op: &mut Op, f: &mut impl FnMut(&mut VReg)) {
             memop(addr, f);
             f(dst);
         }
+        Op::CondLoad {
+            dst,
+            cond,
+            addr,
+            fallback,
+            ..
+        } => {
+            f(cond);
+            memop(addr, f);
+            value(fallback, f);
+            f(dst);
+        }
         Op::Store { addr, src } => {
             memop(addr, f);
             value(src, f);
         }
-        Op::CondJump { cond, .. } => f(cond),
+        Op::CondStore {
+            cond, addr, src, ..
+        } => {
+            f(cond);
+            memop(addr, f);
+            value(src, f);
+        }
+        Op::CondJump { cond, .. } | Op::CondReturn { cond, .. } => f(cond),
         Op::Call { target, effects } => {
             if let crate::ir::types::CallTarget::Indirect(v) = target {
                 value(v, f);
