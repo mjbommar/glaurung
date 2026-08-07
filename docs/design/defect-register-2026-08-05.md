@@ -662,6 +662,49 @@ valid lvalue. On the rebuilt extension, `list_sum` is 0.1935 and `list_find` is
 1.0). The residual gap to 0.47 remains O0 parameter-home/instruction-shape debt,
 not a metric waiver.
 
+#### 2026-08-07 resolution — residual score is cross-compiler, real typed defects closed
+
+The residual was re-audited through source, Clang binary/assembly, raw LLIR,
+prepared AST, emitted C, Clang-recompiled assembly, execution, and the uncached
+official metric. Current and historical raw LLIR are identical. Current output
+contained two genuine typed-emission defects: pointer/null tests crossed an
+unnecessary integer representation, and machine-parent zero extensions survived
+inside arithmetic/equality operations whose recovered four-byte consumer could
+not observe their high bits. The contextual pointer comparison and new
+destination-aware `typed_simplify` pass remove only those proven-redundant views.
+Clang O0 `list_sum` now round-trips to the exact original 53 function bytes with
+all linked-list behavior, GED 0.0, and type match 1.0 retained.
+
+The remaining official 0.31 versus historical 0.47 is a compiler mismatch:
+DecBench recompiles this Clang 21.1.8 binary's recovered C with GCC 15. The old
+extra cursor/result locals score 0.379310/0.566667 because GCC happens to emit a
+more Clang-like frame; current parameter coalescing scores 0.193548/0.419355.
+Removing the result home produces exact Clang bytes but lowers the official
+`list_find` score to 0.322581, so that experiment was rejected. The retained
+typed fixes leave the official mean unchanged at 0.306452 rather than gaming it
+with redundant source storage.
+
+This audit also closed a separate correctness defect: generic adjacent promoted
+copy propagation could confuse a genuine `*local = value` pointer store with a
+frame-local assignment and replace a pointer return with the stored scalar.
+The untyped pass now accepts only explicit `Assign` identities. A separate late
+typed pass permits the overloaded `Store` form only for recovered integer or
+boolean storage after destination/source-width, adjacency, and single-use proofs;
+pointer, code-pointer, float, unknown, and truncating cases fail closed. The full
+metric ratchet proved the distinction is necessary: rejecting all stores dropped
+`statemachine:clang:O0` type match from 1.0 to 0.4 by retaining two scalar result
+homes, while the typed path restores 1.0 and retains the real signed-byte local.
+Longer term, scalar stack assignments and pointee stores need distinct AST
+variants so downstream passes do not repeatedly reconstruct this distinction.
+
+The complete follow-through gate passes all five lanes: both executable matrices,
+the unchanged 1,627/173 architecture ratchet, and all 56 official metric cells
+are green. It also fixed the Glaurung DecBench adapter's stale assumption that
+`function_names` contains addresses: current DecBench passes source names as
+strings, which previously crashed every executable cell at `hex(selector)`.
+Integer selectors now use address batching and string selectors use one bounded
+enumeration plus exact-name narrowing; real integration tests cover both paths.
+
 ### Direct type-match correction
 
 The DWARF signature path previously rejected every parameter when any sibling

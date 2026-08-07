@@ -94,14 +94,30 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
         ) else {
             return;
         };
-        if left.0 == right.0
-            && left.1 == right.1
-            && left.2 == right.2
-            && declared_source_type(left.3, left.0, left.2, tm)
-            && declared_source_type(right.3, right.0, right.2, tm)
-        {
-            **lhs = left.3.clone();
-            **rhs = right.3.clone();
+        if left.0 == right.0 && left.1 == right.1 && left.2 == right.2 {
+            if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                // Extending both values in the same way cannot change whether
+                // they are equal. Keep the exact source-width casts, rather
+                // than requiring the underlying values to be named registers:
+                // aggregate-field loads are expressions, not declarations.
+                // Keeping the inner casts also preserves the machine's signed
+                // or unsigned interpretation without forcing a wider compare.
+                **lhs = Expr::Cast {
+                    signed: left.0,
+                    width: left.2,
+                    expr: Box::new(left.3.clone()),
+                };
+                **rhs = Expr::Cast {
+                    signed: right.0,
+                    width: right.2,
+                    expr: Box::new(right.3.clone()),
+                };
+            } else if declared_source_type(left.3, left.0, left.2, tm)
+                && declared_source_type(right.3, right.0, right.2, tm)
+            {
+                **lhs = left.3.clone();
+                **rhs = right.3.clone();
+            }
         }
     }
 
@@ -2015,6 +2031,51 @@ mod tests {
             } if matches!(lhs.as_ref(), Expr::Reg(r) if r == &reg("arg0"))
                     && matches!(rhs.as_ref(), Expr::Reg(r) if r == &reg("arg1"))
         ));
+    }
+
+    #[test]
+    fn equal_zero_extensions_keep_the_source_width_without_a_wide_compare() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let extended = |expression| Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(expression),
+            }),
+        };
+        let mut f = one_stmt(Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(extended(Expr::Deref {
+                addr: Box::new(Expr::Reg(reg("arg0"))),
+                size: 4,
+            })),
+            rhs: Box::new(extended(Expr::Reg(reg("arg1")))),
+        });
+        let mut tm = TypeMap::default();
+        tm.upsert_public(
+            reg("arg1"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        fold_typed_comparison_extensions(&mut f, &tm);
+
+        assert!(
+            matches!(
+                &f.body[0],
+                Stmt::Assign {
+                    src: Expr::Cmp { lhs, rhs, .. },
+                    ..
+                } if matches!(lhs.as_ref(), Expr::Cast { width: 4, .. })
+                    && matches!(rhs.as_ref(), Expr::Cast { width: 4, .. })
+            ),
+            "equal same-width values do not need a wider comparison: {f:#?}"
+        );
     }
 
     #[test]

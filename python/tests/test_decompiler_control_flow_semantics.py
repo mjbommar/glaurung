@@ -57,6 +57,9 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
     functions = D.exported_functions(str(binary))
     code = D.decompiled_c(str(binary), functions["fsm"])
     assert code is not None
+    assert "signed char local_1d;" in code, code
+    assert "local_2c" not in code, code
+    assert "local_4" not in code, code
 
     # The preferred recovery is a structured switch whose C `break`s flow to
     # one latch after the switch.  Requiring a particular number of gotos made
@@ -680,7 +683,8 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     # test the node pointer before dereferencing it, return on a matching field,
     # and advance otherwise.  Keeping the field comparison as the while guard
     # obscures both the null-termination condition and the early match return.
-    assert re.search(r"while \(\(\(long\)var\d+ != 0\)\)", code), code
+    assert re.search(r"while \(\(var\d+ != 0\)\)", code), code
+    assert not re.search(r"\(long\)var\d+ != 0", code), code
     assert re.search(r"node \* var\d+;", code), code
     next_assignment = (
         r"(?:var\d+|ret) = "
@@ -695,7 +699,8 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     # do/while latch, but the explicit pre-loop null return proves it is safe to
     # recover the source-level while without dereferencing a null node.
     assert "do {" not in sum_code, sum_code
-    assert re.search(r"while \(\(\(long\)var\d+ != 0\)\)", sum_code), sum_code
+    assert re.search(r"while \(\(var\d+ != 0\)\)", sum_code), sum_code
+    assert not re.search(r"\(long\)var\d+ != 0", sum_code), sum_code
     # DecBench recompiles all functions from one binary as one translation
     # unit. Shared aggregate declarations therefore need an idempotent prelude,
     # not one unguarded definition per independently rendered function.
@@ -724,6 +729,79 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
         library.list_find.restype = ctypes.c_void_p
     for value in (7, -3, 11, 5, 99):
         assert original.list_find(head, value) == decompiled.list_find(head, value)
+
+
+def test_clang_o0_linked_list_sum_round_trips_exact_instruction_bytes(
+    tmp_path: Path,
+) -> None:
+    """Typed source expressions must not widen the original 32-bit loop body."""
+    source = ROOT / "tests" / "decbench_corpus" / "src" / "linkedlist.c"
+    original = tmp_path / "linkedlist-clang-O0.so"
+    compiled = subprocess.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O0",
+            "-o",
+            str(original),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    functions = D.exported_functions(str(original))
+    code = D.decompiled_c(str(original), functions["list_sum"])
+    find_code = D.decompiled_c(str(original), functions["list_find"])
+    assert code is not None
+    assert find_code is not None
+    assert "while ((arg0 != 0))" in code, code
+    assert "(long)arg0" not in code, code
+    assert "(unsigned long)((unsigned int)(arg0->val))" not in code, code
+    assert "(unsigned long)((unsigned int)(arg0->val))" not in find_code, find_code
+    assert "(unsigned long)((unsigned int)(arg1))" not in find_code, find_code
+
+    recovered_source = tmp_path / "linkedlist-list_sum-recovered.c"
+    recovered_source.write_text(code)
+    recovered = tmp_path / "linkedlist-list_sum-recovered.so"
+    rebuilt = subprocess.run(
+        [
+            "clang",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O0",
+            "-w",
+            "-o",
+            str(recovered),
+            str(recovered_source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rebuilt.returncode == 0, rebuilt.stderr
+
+    def function_bytes(binary: Path, function: str) -> bytes:
+        disassembly = subprocess.run(
+            ["objdump", "-d", f"--disassemble={function}", str(binary)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        encoded = []
+        for line in disassembly.splitlines():
+            match = re.match(r"^\s*[0-9a-f]+:\s+((?:[0-9a-f]{2}\s+)+)", line)
+            if match:
+                encoded.extend(bytes.fromhex(match.group(1)))
+        assert encoded, disassembly
+        return bytes(encoded)
+
+    assert function_bytes(recovered, "list_sum") == function_bytes(original, "list_sum")
 
 
 def test_gcc_o0_comparison_tree_recovers_switch_and_round_trips(tmp_path: Path) -> None:

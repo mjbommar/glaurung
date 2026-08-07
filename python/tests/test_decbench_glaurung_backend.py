@@ -56,10 +56,20 @@ def test_adapter_registers_and_decompiles_a_real_public_binary(tmp_path: Path) -
 
 
 @pytest.mark.slow
-def test_adapter_passes_requested_addresses_to_the_shared_batch_pipeline(
+@pytest.mark.parametrize(
+    ("selector", "expected_mode", "expected_value"),
+    [
+        ("{0x10F9}", "--vas", "0x10f9"),
+        ("{'addmul'}", "--all", "2000"),
+    ],
+)
+def test_adapter_passes_requested_selectors_to_the_shared_batch_pipeline(
     tmp_path: Path,
+    selector: str,
+    expected_mode: str,
+    expected_value: str,
 ) -> None:
-    """A 250-function sample must not decompile every function in each binary."""
+    """Address and source-name selectors must both reach the shared batch path."""
     checkout = _decbench_checkout()
     python = checkout / ".venv" / "bin" / "python"
     glaurung = ROOT / ".venv" / "bin" / "glaurung"
@@ -94,7 +104,7 @@ from pathlib import Path
 sys.path.insert(0, {str(ADAPTER.parent)!r})
 from decbench_glaurung import GlaurungDecompiler
 result = GlaurungDecompiler().decompile_binary(
-    Path({str(binary)!r}), function_names={{0x10F9}}
+    Path({str(binary)!r}), function_names={selector}
 )
 print(json.dumps(sorted(result.functions)))
 """
@@ -116,6 +126,6 @@ print(json.dumps(sorted(result.functions)))
     assert probe.returncode == 0, probe.stderr
     assert json.loads(probe.stdout) == ["addmul"]
     argv = json.loads(argv_log.read_text())
-    assert "--vas" in argv
-    assert "0x10f9" in argv
-    assert "--all" not in argv
+    assert expected_mode in argv
+    assert expected_value in argv
+    assert ({"--vas", "--all"} - {expected_mode}).isdisjoint(argv)

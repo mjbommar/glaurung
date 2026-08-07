@@ -8595,9 +8595,19 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 out.push_str("))");
             } else {
                 out.push('(');
-                write_expr_dec(lhs, out);
+                if !matches!(op, CmpOp::Eq | CmpOp::Ne)
+                    || !matches!(rhs.as_ref(), Expr::Const(0))
+                    || !write_direct_pointer_value_dec(lhs, out)
+                {
+                    write_expr_dec(lhs, out);
+                }
                 let _ = write!(out, " {} ", cmpop_sym_c(*op));
-                write_expr_dec(rhs, out);
+                if !matches!(op, CmpOp::Eq | CmpOp::Ne)
+                    || !matches!(lhs.as_ref(), Expr::Const(0))
+                    || !write_direct_pointer_value_dec(rhs, out)
+                {
+                    write_expr_dec(rhs, out);
+                }
                 out.push(')');
             }
         }
@@ -8621,6 +8631,32 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         // An unmodelled/indirect value: a call to an undeclared `__unknown`
         // (implicit-declaration warning only) keeps it a valid `long` rvalue.
         Expr::Unknown(_) => out.push_str("__unknown(0)"),
+    }
+}
+
+/// Render a declared pointer as a C pointer value rather than the integer
+/// address representation used by generic machine arithmetic.
+///
+/// This is intentionally narrow: direct pointer identities (optionally behind
+/// lossless machine casts) are safe in a null comparison. Arbitrary address
+/// arithmetic still goes through `write_expr_dec`, where the integer spelling
+/// is required for byte offsets and masks.
+fn write_direct_pointer_value_dec(expression: &Expr, out: &mut String) -> bool {
+    match expression {
+        Expr::Reg(register @ VReg::Phys(name))
+            if dec_ptr_arg_type(name).is_some()
+                || dec_struct_ptr_type(name).is_some()
+                || dec_is_stack_object(name) =>
+        {
+            write_reg_lvalue_dec(register, out);
+            true
+        }
+        Expr::Cast { width, expr, .. }
+            if *width == DEC_POINTER_WIDTH.with(std::cell::Cell::get) =>
+        {
+            write_direct_pointer_value_dec(expr, out)
+        }
+        _ => false,
     }
 }
 
@@ -13299,6 +13335,57 @@ function f @ 0x1000 {
 
         assert!(text.contains("local_8 = arg0;"), "{text}");
         assert!(!text.contains("(long)local_8 ="), "{text}");
+    }
+
+    #[test]
+    fn declared_pointer_null_test_does_not_round_trip_through_an_integer() {
+        let f = Function {
+            name: "has_node".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::While {
+                cond: Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+                body: vec![Stmt::Return {
+                    value: Some(Expr::Const(1)),
+                }],
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+
+        assert!(text.contains("while ((arg0 != 0))"), "{text}");
+        assert!(!text.contains("(long)arg0"), "{text}");
+    }
+
+    #[test]
+    fn narrowing_pointer_cast_in_null_test_remains_explicit() {
+        let f = Function {
+            name: "low_address_is_nonzero".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    }),
+                    rhs: Box::new(Expr::Const(0)),
+                }),
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
+
+        assert!(text.contains("(unsigned int)"), "{text}");
+        assert!(!text.contains("return (arg0 != 0);"), "{text}");
     }
 
     #[test]

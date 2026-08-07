@@ -1321,3 +1321,117 @@ confirms the missing `BITWUZLA_LIB_DIR` prerequisite. Rust/Python formatting,
 owned Python lint, Cargo checks, and the diff whitespace gate are clean;
 focused typing retains only the repository's six existing pytest-stub
 diagnostics.
+
+## 12:59 — linked-list residual separated into real emission bugs and a cross-compiler metric confound
+
+The retained source is `tests/decbench_corpus/src/linkedlist.c` at SHA-256
+`bd9c934db1c7f83e3aa92b904283c4e4fbf379966356864fb2dd52c78afc89e3`.
+The exact Clang O0 ELF used for this audit is
+`/tmp/glaurung-linkedlist-current.aPvE3m/roundtrip/build/linkedlist-clang-O0.so`
+at SHA-256 `23d6fa7a7914d7febc2f740ac391f889b7408b22fd44b3ea3f2c5347bfd0495a`.
+Source, binary disassembly, raw LLIR, prepared AST, emitted C, recompiled
+disassembly, behavior, and each official metric were compared. Raw LLIR from
+current `master` and historical `b83a066` is identical; the residual begins in
+typed source-AST preparation/rendering, not decoding or lifting.
+
+Two real emission defects were present after parameter-home coalescing:
+
+- a declared pointer used in `arg0 != 0` rendered as `(long)arg0 != 0`, making
+  Clang emit a register load plus compare instead of the original memory compare;
+- a four-byte accumulator consumed
+  `zext64(zext32(node->val)) + local_c`, forcing 64-bit arithmetic even though the
+  destination observes only the low word. Matching extensions around equality
+  operands similarly forced a wide `list_find` compare.
+
+Pointer/null comparisons now consume the pointer representation directly.
+Matching equality extensions retain only their common source-width cast. A new
+199-line `typed_simplify` module owns the destination-width proof that removes an
+outer unsigned machine-parent extension only for modulo-preserving arithmetic and
+only when the inner unsigned cast exactly matches the recovered destination.
+Division, shifts, signed inner views, and lone extensions fail closed. The real
+Clang O0 `list_sum` source now recompiles to the exact original 53 function bytes;
+both behavior functions still pass all 38 vectors, GED remains 0.0, and type match
+remains 1.0.
+
+The audit also found an independent safety bug. Adjacent promoted-value
+propagation treated every `Store { addr: Reg(local_*), ... }` as a local
+assignment. Stack promotion currently overloads that shape for both a frame-slot
+write and a genuine pointee write. Consequently
+`local = pointer; *local = 42; return local` could become `return 42`. Generic
+copy propagation now accepts only explicit `Assign` nodes and leaves ambiguous
+stores untouched; a direct counterexample regression test proves the pointer
+return is retained.
+
+The official 0.47-to-0.31 residual is not evidence that current parameter-home
+coalescing is less faithful to the Clang input. DecBench detects this x86-64 ELF
+but selects GCC as its recompiler; the producer is Clang 21.1.8, while the metric
+actually invokes GCC 15 with `-c -fno-builtin -w`. Per-function uncached scores
+are:
+
+| Output | `list_sum` | `list_find` | mean |
+|---|---:|---:|---:|
+| historical `b83a066` | 0.379310 | 0.566667 | 0.472989 |
+| current `master` | 0.193548 | 0.419355 | 0.306452 |
+| typed fixes | 0.193548 | 0.419355 | 0.306452 |
+
+The historical extra cursor/result locals happen to make GCC's O0 instruction
+selection resemble the original Clang output. A proof-gated experiment that
+removed the compiler result home made `list_find` byte-identical when recompiled
+with Clang, but reduced its official GCC-vs-Clang score from 0.419355 to 0.322581
+and the cell mean from 0.31 to 0.26. That experiment was reverted. The retained
+changes fix real representation errors and the pointer-store safety defect while
+preserving the official 0.31 score; restoring 0.47 by reintroducing a redundant
+source local would optimize for the metric's compiler mismatch rather than the
+audited source/binary round trip.
+
+## 14:58 — full ratchets exposed and closed two integration-level defects
+
+The first complete uncached 56-cell metric run rejected an over-broad version of
+the pointer-store correction: `statemachine:clang:O0` retained compiler result
+homes `local_2c` and `local_4`, dropping type match from 1.0 to 0.4. The retained
+state-machine source is SHA-256
+`49c3d37927d150e9937d944c7c2a3e19c1b6014d5ba15598ed651a0a1e91b692`; the
+exact Clang O0 ELF is
+`/tmp/glaurung-statemachine-current.drI0aG/statemachine-clang-O0.so` at SHA-256
+`24052f7924d188292e07265774877ad91696fd235853d40839910de6f92e6e73`.
+Its source, disassembly, LLIR, AST, emitted declarations, recompiled behavior,
+and uncached metrics established that those two stores are scalar result homes,
+not pointee writes.
+
+The generic pass still accepts only explicit `Assign` nodes. A separate late
+typed path now permits the overloaded `Store` form only when recovered storage is
+an integer or boolean, the destination and source widths preserve the store's
+truncation, and the original adjacency/single-use proof holds. Pointer,
+code-pointer, float, unknown, self-referential, memory-reading, and wider-source
+cases fail closed. This removes `local_2c` and `local_4` while retaining the real
+`signed char local_1d`; the exact uncached state-machine metric is restored to
+GED 0.0, type match 1.0, and byte match 0.13. A synthetic pointer counterexample
+and a wider-source truncation counterexample remain unchanged under both passes.
+
+The executable matrix then exposed a distinct backend integration defect before
+semantic evaluation. Current DecBench supplies source function names as strings,
+but Glaurung's adapter treated every selector as an address and called `hex()` on
+it. The adapter now keeps integer address selection on the `--vas` batch path and
+handles string selection by enumerating once with `--all --limit 2000`, then
+narrowing by exact symbol name with DecBench's existing fail-open denominator
+guard. Real adapter tests exercise both selector forms; the legacy and curriculum
+executable matrices subsequently pass every required function, including
+linked-list and state-machine cells.
+
+The final immutable-code validation is green at every decompiler gate:
+
+- `scripts/decbench-local-gate.sh` runs all five lanes and passes;
+- the architecture matrix exactly retains 1,627 pass / 173 known fail, with
+  x86-64 and AArch64 both 328/328 and no lane errors;
+- both executable round-trip matrices pass every printed required function;
+- GED, type match, and byte match have no per-cell regression across 56/56
+  official cells; `linkedlist:clang:O0` remains GED 0.0, type 1.0, byte 0.31;
+- `cargo test --all-targets` passes 1,827 library tests and all integration,
+  example, and benchmark targets;
+- the complete 2,847-test Python collection exits zero, and owned Python Ruff
+  checks plus the diff whitespace gate pass.
+
+The repository-wide `uvx ty check python/` command is still non-green with 2,044
+diagnostics in the existing Python/test-stub surface; it is recorded separately
+from the green runtime, Rust, metric, and owned-path lint evidence rather than
+misreported as a passing gate.

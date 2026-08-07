@@ -1378,7 +1378,9 @@ fn decbench_text(
         );
     }
     if let Some(tm) = refined_decl.as_ref() {
+        crate::ir::copy_prop::propagate_adjacent_typed_promoted_values(&mut prepared, tm);
         crate::ir::const_fold::fold_typed_declared_views(&mut prepared, tm);
+        crate::ir::typed_simplify::fold_consumed_extensions(&mut prepared, tm);
         crate::ir::const_fold::fold_typed_comparison_extensions(&mut prepared, tm);
         crate::ir::const_fold::fold_constants(&mut prepared);
     }

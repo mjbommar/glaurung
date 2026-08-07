@@ -116,7 +116,7 @@ class GlaurungDecompiler(Decompiler):
         binary_path: Path,
         functions: list[tuple[str, int]] | None = None,
         output_dir: Path | None = None,
-        function_names: set[int] | None = None,
+        function_names: set[int] | set[str] | None = None,
         progress_path: Path | None = None,
     ) -> DecompilationResult:
         """Decompile one binary and return DecBench's canonical result shape."""
@@ -125,7 +125,14 @@ class GlaurungDecompiler(Decompiler):
 
         started = time.monotonic()
         requested_addresses = {address for _name, address in functions or []}
-        requested_addresses.update(function_names or ())
+        requested_addresses.update(
+            selector
+            for selector in function_names or ()
+            if isinstance(selector, int) and not isinstance(selector, bool)
+        )
+        requested_names = {
+            selector for selector in function_names or () if isinstance(selector, str)
+        }
         records = self._run_batch(binary_path, requested_addresses or None)
         text_range = common.elf_text_range(binary_path)
         requested = set(functions or [])
@@ -144,12 +151,25 @@ class GlaurungDecompiler(Decompiler):
                 continue
             enumerated.append((name, address, code))
 
-        narrowed = common.narrow_to_source(
-            [(name, address) for name, address, _code in enumerated],
-            function_names,
-            backend=self.name,
-            binary_name=binary_path.name,
-        )
+        candidates = [(name, address) for name, address, _code in enumerated]
+        if requested_addresses:
+            narrowed = common.narrow_to_source(
+                candidates,
+                requested_addresses,
+                backend=self.name,
+                binary_name=binary_path.name,
+            )
+        elif requested_names:
+            # Current DecBench project runs narrow by source name. Glaurung's
+            # batch CLI accepts addresses, so enumerate once and apply the name
+            # contract here. Preserve DecBench's fail-open fallback when an
+            # unexpected symbol spelling matches nothing; returning an empty
+            # result would silently shrink the evaluator denominator.
+            narrowed = [item for item in candidates if item[0] in requested_names]
+            if not narrowed:
+                narrowed = candidates
+        else:
+            narrowed = candidates
         allowed = set(narrowed)
         decompiled: dict[str, FunctionDecompilation] = {}
 

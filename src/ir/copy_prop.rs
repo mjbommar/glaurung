@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{is_promoted_local_reg, VReg};
+use crate::ir::types_recover::{TypeHint, TypeMap};
 
 /// Run copy propagation then dead-copy elimination over `f`'s body.
 pub fn propagate_copies(f: &mut Function) {
@@ -257,9 +258,8 @@ pub fn propagate_switch_entry_copies(f: &mut Function) {
     }
 }
 
-/// Inline an adjacent, one-use promoted-stack value temporary. Select diamonds
-/// create the common store form; stack promotion also exposes boolean return
-/// temporaries as ordinary assignments.
+/// Inline an adjacent, one-use promoted-stack value temporary represented as
+/// an explicit assignment.
 ///
 /// Promoted locals are mutable variables rather than SSA values, so the general
 /// copy environment must not carry them into a loop condition or across a
@@ -267,13 +267,31 @@ pub fn propagate_switch_entry_copies(f: &mut Function) {
 ///
 /// `local_tmp = narrow_value; <next linear statement reads local_tmp once>`
 ///
-/// A stored value must already fit its stack write width, the expression may
-/// not read memory or contain an unknown, and the local must have exactly one
-/// read in the entire structured function. Those constraints preserve the
-/// store's truncation and evaluation point while removing compiler-only storage.
+/// `Store { addr: Reg(local_*), .. }` is deliberately excluded. Stack promotion
+/// historically overloaded that shape for both a frame-slot assignment and a
+/// real write through a pointer held in the slot; local adjacency cannot prove
+/// which meaning applies. Ambiguous stores remain explicit until stack storage
+/// carries a distinct assignment representation.
 pub fn propagate_adjacent_promoted_values(f: &mut Function) {
     loop {
-        if !fold_one_adjacent_promoted_value(&mut f.body) {
+        if !fold_one_adjacent_promoted_value(&mut f.body, None) {
+            break;
+        }
+    }
+}
+
+/// Inline adjacent promoted-stack stores only when recovered source types prove
+/// that the destination is scalar storage rather than a pointer value.
+///
+/// Stack promotion retains `Store { addr: Reg(local_*), .. }` for both a frame
+/// slot assignment and a genuine write through a pointer loaded from that slot.
+/// The untyped pass above therefore rejects every store. Once type recovery has
+/// classified the rendered local as an integer or boolean, pointer and code-
+/// pointer interpretations are excluded and the same local def/use proof is
+/// safe. Unknown, float, pointer, and code-pointer destinations remain explicit.
+pub fn propagate_adjacent_typed_promoted_values(f: &mut Function, types: &TypeMap) {
+    loop {
+        if !fold_one_adjacent_promoted_value(&mut f.body, Some(types)) {
             break;
         }
     }
@@ -472,7 +490,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usi
     false
 }
 
-fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>) -> bool {
+fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap>) -> bool {
     for index in 0..body.len().saturating_sub(1) {
         let candidate = match &body[index] {
             Stmt::Assign { dst, src }
@@ -488,6 +506,13 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>) -> bool {
                 src,
                 size,
             } if is_promoted_local_reg(dst)
+                && types.is_some_and(|types| {
+                    matches!(
+                        types.get(dst),
+                        Some(TypeHint::Int { width, .. })
+                            if width > 0 && width <= *size
+                    ) || matches!(types.get(dst), Some(TypeHint::BoolLike))
+                })
                 && is_deferable_promoted_value(src)
                 && !contains_reg(src, dst)
                 && promoted_value_width(src).is_some_and(|width| width <= *size) =>
@@ -546,21 +571,21 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>) -> bool {
                 else_body,
                 ..
             } => {
-                fold_one_adjacent_promoted_value(then_body)
+                fold_one_adjacent_promoted_value(then_body, types)
                     || else_body
                         .as_mut()
-                        .is_some_and(fold_one_adjacent_promoted_value)
+                        .is_some_and(|body| fold_one_adjacent_promoted_value(body, types))
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                fold_one_adjacent_promoted_value(body)
+                fold_one_adjacent_promoted_value(body, types)
             }
             Stmt::Switch { cases, default, .. } => {
                 cases
                     .iter_mut()
-                    .any(|(_, body)| fold_one_adjacent_promoted_value(body))
+                    .any(|(_, body)| fold_one_adjacent_promoted_value(body, types))
                     || default
                         .as_mut()
-                        .is_some_and(fold_one_adjacent_promoted_value)
+                        .is_some_and(|body| fold_one_adjacent_promoted_value(body, types))
             }
             _ => false,
         };
@@ -2729,10 +2754,9 @@ mod tests {
     }
 
     #[test]
-    fn single_use_promoted_local_select_folds_into_next_assignment() {
-        // A stack-slot assignment diamond has already become one lazy Select:
-        // local_tmp = cond ? 1 : 2; local_state = local_tmp. The intermediate
-        // promoted slot is compiler storage, not source-level state.
+    fn single_use_promoted_local_select_folds_into_return() {
+        // A stack-slot assignment diamond has already become one lazy Select.
+        // The explicit local assignment is compiler storage, not source state.
         let selected = Expr::Select {
             cond: Box::new(Expr::Reg(reg("cond"))),
             if_true: Box::new(Expr::Const(1)),
@@ -2743,18 +2767,12 @@ mod tests {
             name: "f".into(),
             entry_va: 0,
             body: vec![
-                Stmt::Store {
-                    addr: Expr::Reg(reg("local_tmp")),
+                Stmt::Assign {
+                    dst: reg("local_tmp"),
                     src: selected.clone(),
-                    size: 4,
-                },
-                Stmt::Store {
-                    addr: Expr::Reg(reg("local_state")),
-                    src: Expr::Reg(reg("local_tmp")),
-                    size: 4,
                 },
                 Stmt::Return {
-                    value: Some(Expr::Reg(reg("local_state"))),
+                    value: Some(Expr::Reg(reg("local_tmp"))),
                 },
             ],
         };
@@ -2770,6 +2788,121 @@ mod tests {
             }],
             "the one-use promoted temporary chain should disappear"
         );
+    }
+
+    #[test]
+    fn ambiguous_store_through_promoted_pointer_is_not_value_propagated() {
+        // Stack promotion currently uses the same `Store { addr: local }`
+        // spelling for assigning the frame slot and for writing through a
+        // pointer loaded from it. Local adjacency cannot distinguish these:
+        // folding the second store into the return would change a pointer
+        // return into the stored integer value.
+        let pointer = reg("local_8");
+        let mut function = Function {
+            name: "write_and_return".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(pointer.clone()),
+                    src: Expr::Reg(reg("source_pointer")),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(pointer.clone()),
+                    src: Expr::Const(42),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(pointer)),
+                },
+            ],
+        };
+        let expected = function.clone();
+
+        propagate_adjacent_promoted_values(&mut function);
+        let mut types = crate::ir::types_recover::TypeMap::default();
+        types.upsert_public(
+            reg("local_8"),
+            crate::ir::types_recover::TypeHint::Pointer { pointee_width: 4 },
+        );
+        propagate_adjacent_typed_promoted_values(&mut function, &types);
+
+        assert_eq!(function, expected);
+    }
+
+    #[test]
+    fn typed_scalar_promoted_store_folds_into_return() {
+        let predicate = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg("state"))),
+            rhs: Box::new(Expr::Const(3)),
+        };
+        let mut function = Function {
+            name: "finished".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_4")),
+                    src: predicate.clone(),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_4"))),
+                },
+            ],
+        };
+        let mut types = crate::ir::types_recover::TypeMap::default();
+        types.upsert_public(
+            reg("local_4"),
+            crate::ir::types_recover::TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        propagate_adjacent_typed_promoted_values(&mut function, &types);
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Return {
+                value: Some(predicate),
+            }]
+        );
+    }
+
+    #[test]
+    fn typed_scalar_store_does_not_erase_a_wider_source_truncation() {
+        let mut function = Function {
+            name: "truncate".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_4")),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(reg("wide"))),
+                    },
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_4"))),
+                },
+            ],
+        };
+        let expected = function.clone();
+        let mut types = crate::ir::types_recover::TypeMap::default();
+        types.upsert_public(
+            reg("local_4"),
+            crate::ir::types_recover::TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        propagate_adjacent_typed_promoted_values(&mut function, &types);
+
+        assert_eq!(function, expected);
     }
 
     #[test]
