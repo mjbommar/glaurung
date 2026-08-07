@@ -5482,6 +5482,13 @@ fn coalesce_param_spills(body: &mut Vec<Stmt>) {
     let map: std::collections::HashMap<String, String> = home
         .into_iter()
         .filter(|(_, arg)| !arg.is_empty())
+        .filter(|(slot, arg)| {
+            !crate::ir::structured_reaching::read_may_observe_prior_write(
+                body,
+                &VReg::phys(slot.clone()),
+                &VReg::phys(arg.clone()),
+            )
+        })
         .collect();
     if map.is_empty() {
         return;
@@ -11796,6 +11803,57 @@ function f @ 0x1000 {
             render_decbench(&f).contains("local_14"),
             "the renderer must not rewrite value identities"
         );
+    }
+
+    #[test]
+    fn prepare_keeps_a_saved_parameter_home_across_output_register_reuse() {
+        // AArch64 recursively calls through x0/arg0 after preserving the entry
+        // parameter in x4 and spilling x4 around the call. The compatibility
+        // call-result copy writes arg0 before x4 is restored. Coalescing the
+        // spill directly into arg0 would therefore reload the call result, not
+        // the saved entry parameter.
+        let f = Function {
+            name: "recursive_saved_parameter".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("saved_n"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("stack_n")),
+                    src: Expr::Reg(VReg::phys("saved_n")),
+                    size: 8,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x10,
+                        name: "recursive_saved_parameter".to_string(),
+                    },
+                    args: vec![Expr::Const(1)],
+                    dst: Some(VReg::phys("call_result")),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("arg0"),
+                    src: Expr::Reg(VReg::phys("call_result")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("saved_n"),
+                    src: Expr::Reg(VReg::phys("stack_n")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("saved_n"))),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+        let text = render_decbench(&prepared);
+
+        assert!(text.contains("stack_n = arg0;"), "{text}");
+        assert!(text.contains("return stack_n;"), "{text}");
+        assert!(!text.contains("return call_result;"), "{text}");
     }
 
     #[test]

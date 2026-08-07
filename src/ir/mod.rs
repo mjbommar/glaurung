@@ -64,6 +64,7 @@ pub mod stack_locals;
 pub mod strings_fold;
 pub mod structure;
 pub mod structure_accounting;
+pub mod structured_reaching;
 pub mod switch_ladder;
 pub mod types;
 pub mod types_recover;

@@ -1080,3 +1080,41 @@ existing pytest-mark warnings. Rust formatting and the diff whitespace gate are
 clean. Owned Python formatting/lint is clean; the focused type check retains the
 same 12 pre-existing pytest-stub and test-helper import diagnostics across the
 two touched test modules.
+
+## 07:59 — reaching writes preserve recursive saved parameters
+
+The retained AArch64 O2 calling-conventions ELF at
+`/tmp/glaurung-a64-fact-mod.1NKIYR` has SHA-256
+`10a642211edac267610f26c71dd275f8825fa04fe953992898c3e0428d028466`.
+Source `fact_mod(10)` returns 3,628,800; recovered C returned 43,545,600. GCC 15
+unrolls five factorial steps, saves `n..n-4` in x4/x5/x6 and frame slots, calls
+`fact_mod(n-5)`, restores those values, and applies the modulo chain. The lift,
+SSA identities, call-result split, and promoted stack objects all retained that
+exact sequence.
+
+The corruption began only in `prepare_for_decbench`. Parameter-home coalescing
+recognized the x4 spill as originating from `arg0` and globally renamed its
+reload to `arg0`; the recursive call's compatibility result copy had already
+overwritten that role. The final multiplication therefore used the recursive
+result twice instead of restoring `n`. A shared structured reaching-write query
+now tracks a monotone may-write state across sequence, joins, switches,
+exceptions, and loop fixed points. A home is coalesced only when none of its
+reads can observe a later definition of the proposed source role. Unstructured
+label/goto regions fail closed. Ordinary parameter reads before an output write
+still coalesce, so the fix does not globally disable the optimization.
+
+The real round trip now passes all 22 recursion vectors. The complete
+pre-ratchet matrix changes exactly
+`06_calling_conventions:aarch64:O2:fact_mod` from fail to pass: 1,579 passes /
+221 failures, AArch64 325/328, pinned x86-64 328/328, 228 structural rows, six
+declared unsupported rows, and no regression, reclassification,
+missing/no-case/timeout, or lane error.
+
+Final validation reproduces the 1,579 / 221 ratchet exactly. Rust all-targets is
+green with 1,806 library tests plus every integration, example, and benchmark
+target. The complete Python suite is green at 2,797 passed / 43 skipped with six
+existing pytest-mark warnings. Rust/Python formatting, Ruff, and the diff
+whitespace gate are clean; the focused type check retains only the same six
+pre-existing pytest-stub diagnostics. The reusable production oracle lives in
+its own 452-line module rather than adding another dataflow implementation to
+the already 15,000-line AST renderer.

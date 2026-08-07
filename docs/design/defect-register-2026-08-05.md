@@ -925,3 +925,14 @@ argument-register layout was treated as failed recovery. Complete DWARF
 `f(void)` contracts now survive that boundary, while unprototyped empty layouts
 remain rejected. The real O2 `int read_marker(void)` round trip and the full
 2,796-test Python suite are green.
+
+### Closed — saved parameter homes after recursive output reuse
+
+AArch64 O2 `06_calling_conventions:fact_mod` preserved `n` in x4 and a frame
+spill across its recursive call, but source preparation coalesced that home into
+`arg0` even though the call had already reused x0/arg0 for its result. A shared
+structured reaching-write query now rejects only a home whose reload may observe
+such a definition, including join and loop-carried writes; unstructured control
+fails closed. All 22 recursion vectors pass, and the exact ratchet moves only
+this cell to pass: 1,579 / 1,800 execution rows, zero regressions, and three
+AArch64 failures remaining.

@@ -889,7 +889,7 @@
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:aarch64:O2": {
-    "fact_mod": "fail",
+    "fact_mod": "pass",
     "fib": "pass",
     "forward_sum6": "pass",
     "guarded_spin": "pass",
