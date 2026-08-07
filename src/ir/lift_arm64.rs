@@ -15,7 +15,8 @@
 //! * `str`/`strb`/`strh` with `[base, #disp]` → [`Op::Store`]
 //! * `b` (near target), `b.<cond>`, `cbz`/`cbnz`, `tbz`/`tbnz` →
 //!   [`Op::Jump`] / [`Op::CondJump`]
-//! * `bl` (direct), `blr` / `br` (indirect) → [`Op::Call`]
+//! * `bl` (direct), `blr` (indirect) → [`Op::Call`]
+//! * `br` (indirect, without a link/return edge) → [`Op::IndirectJump`]
 //! * `ret` → [`Op::Return`]
 //!
 //! Anything else becomes [`Op::Unknown`] carrying the capstone mnemonic so
@@ -2218,7 +2219,16 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             }
             vec![Op::Unknown { mnemonic: mnem }]
         }
-        "br" | "blr" => {
+        "br" => {
+            if let Some(reg) = ins.operands.first().and_then(operand_reg) {
+                return vec![Op::IndirectJump {
+                    target: Value::Reg(reg),
+                    index: None,
+                }];
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        "blr" => {
             if let Some(reg) = ins.operands.first().and_then(operand_reg) {
                 return vec![Op::Call {
                     target: CallTarget::Indirect(Value::Reg(reg)),
@@ -2450,6 +2460,36 @@ mod tests {
             } => assert_eq!(*addr, 0x1020),
             other => panic!("expected Call Direct; got {:?}", other),
         }
+    }
+
+    #[test]
+    fn br_is_a_terminal_indirect_jump_while_blr_is_an_indirect_call() {
+        // These encodings are retained from the real AArch64 indirect-dispatch
+        // fixture: `br x16` is the optimized tail transfer, while `blr x2` is
+        // the ordinary -O0 call that returns to its following instruction.
+        let branch = lift_bytes(&0xd61f0200u32.to_le_bytes(), 0x1000);
+        assert!(matches!(
+            branch.as_slice(),
+            [LlirInstr {
+                op: Op::IndirectJump {
+                    target: Value::Reg(register),
+                    index: None,
+                },
+                ..
+            }] if register == &VReg::phys("x16")
+        ));
+
+        let call = lift_bytes(&0xd63f0040u32.to_le_bytes(), 0x1000);
+        assert!(matches!(
+            call.as_slice(),
+            [LlirInstr {
+                op: Op::Call {
+                    target: CallTarget::Indirect(Value::Reg(register)),
+                    ..
+                },
+                ..
+            }] if register == &VReg::phys("x2")
+        ));
     }
 
     #[test]

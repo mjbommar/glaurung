@@ -616,6 +616,38 @@ def test_aarch64_optimized_call_flow_round_trips(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_aarch64_optimized_indirect_tail_dispatch_round_trips(tmp_path: Path) -> None:
+    """AArch64 ``br`` must return the selected function-table result."""
+    if shutil.which(A.TARGETS["aarch64"].cc) is None:
+        pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
+    fixture = "08_indirect_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O2.so"
+    ok, error = A._cross_build("aarch64", source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {"dispatch", "tail_dispatch"}
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O2",
+        native_cc=A.native_cc("aarch64"),
+        only=functions,
+    )
+
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_factorial_preserves_its_wide_accumulator(
     tmp_path: Path,
 ) -> None:

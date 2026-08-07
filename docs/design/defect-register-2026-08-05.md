@@ -764,6 +764,18 @@ with a proven canary save, `saved != folded_GOT_VA` and an exact one-call
 is lost. The final cluster ratchet is 1,570 passes / 230 failures, AArch64
 318/328 and pinned x86-64 328/328, again with no regression or reclassification.
 
+The optimized indirect-dispatch pair is also closed at the AArch64 lifting
+boundary. GCC's `dispatch` and `tail_dispatch` both end their successful arm in
+`br x16`, but the lifter classified `BR` together with link-producing `BLR` as
+an ordinary returning call. Consequently the structured call fell through to
+the out-of-range `return -1`. `BR` now owns terminal `Op::IndirectJump`
+semantics while `BLR` remains `Op::Call`; shared function-table and tail-call
+recovery then preserve `return ops[tag](a, b)` without an architecture-gated
+AST heuristic. The O0 `BLR` lane remains 3/3 pass. The complete ratchet changes
+only `08_indirect_dispatch:aarch64:O2:{dispatch,tail_dispatch}`: 1,572 passes /
+228 failures, AArch64 320/328, pinned x86-64 328/328, and no regression or
+reclassification.
+
 The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
 `fib`, O0 `validate_header`, all three indirect-dispatch functions, two O0 call
 shapes, both O0 hash-table functions, and both O0 disjoint-set functions. A

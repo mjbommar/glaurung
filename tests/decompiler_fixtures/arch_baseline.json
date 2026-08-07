@@ -1153,9 +1153,9 @@
   },
   "08_indirect_dispatch:aarch64:O2": {
     "apply": "structural",
-    "dispatch": "fail",
+    "dispatch": "pass",
     "dispatch_switch": "pass",
-    "tail_dispatch": "fail"
+    "tail_dispatch": "pass"
   },
   "08_indirect_dispatch:armv7:O0": {
     "apply": "structural",

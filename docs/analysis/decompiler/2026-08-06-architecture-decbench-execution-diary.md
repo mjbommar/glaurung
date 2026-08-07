@@ -902,3 +902,42 @@ ratchet changes exactly `15_binary_search_tree:aarch64:O2:bst_inorder_checksum`
 from fail to pass: 1,570 passes / 230 failures, AArch64 318/328, pinned x86-64
 328/328, 228 structural rows, six declared unsupported rows, and no regression,
 reclassification, missing/no-case/timeout, or lane error.
+
+## 04:02 (2026-08-07) — `BR`/`BLR` separation closes optimized indirect tails
+
+Retained O2 `08_indirect_dispatch` ELF
+`/tmp/glaurung-a64-dispatch.xaPqzP/08_indirect_dispatch-aarch64-O2.so`
+has SHA-256 `fdb99e68d7cf667fae210c0fe60b54b02f2935203174fec52ffd62da3b4434ba`.
+Both `dispatch` and `tail_dispatch` compile to the same guarded tail-transfer
+shape: the table entry is loaded from `ops[tag]`, arguments move into w0/w1,
+and `br x16` leaves the current frame. Source input `[0, 0, 0]` returns 100;
+before repair the recovered function returned -1.
+
+The table, index, and arguments were not the defect. At `0x6d0` and `0x770`,
+the AArch64 lifter represented `BR` as `Op::Call`, exactly as it represented
+the link-producing `BLR`. The structured AST therefore owned a returning call
+inside the guard and then fell through to the source fallback return. This was
+the first incorrect stage: the machine instruction has no link/continuation
+edge. The ARM64 lifter now emits `Op::IndirectJump` for `BR` and retains
+`Op::Call` for `BLR`. Existing function-table resolution then turns the proven
+terminal table entry into the architecture-neutral `Call + Return` form;
+argument reconstruction supplies the two inputs, and final C returns the call
+result rather than the fallback.
+
+The opcode canary uses the real fixture encodings `d61f0200` (`br x16`) and
+`d63f0040` (`blr x2`). A real O2 fixture differential covers both optimized
+functions, while the complete O0 indirect-dispatch lane is the continuation
+control: its ordinary `BLR` calls remain 3/3 pass. The full six-lane pre-ratchet
+changes exactly `dispatch` and `tail_dispatch` from fail to pass. Totals are
+1,572 passes / 228 failures, AArch64 320/328, pinned x86-64 328/328, 228
+structural rows, six declared unsupported rows, and no regression,
+reclassification, missing/no-case/timeout, or lane error.
+
+Final validation retains that exact matrix against the updated baseline. Rust
+all-targets is green, including 1,793 library tests plus every integration,
+example, and benchmark target. The complete Python suite is green at 2,791
+passed / 43 skipped with six existing pytest-mark warnings. Rust formatting and
+owned-file Ruff formatting/lint are clean. Repository-wide Ruff/ty remain the
+pre-existing red debt (354 unformatted files, 3,830 lint findings, and 2,150
+type diagnostics); the focused type check reports only six existing pytest-stub
+diagnostics outside the added test.
