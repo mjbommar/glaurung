@@ -25,7 +25,113 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
+use crate::ir::expression_width::can_carry_bits_above;
 use crate::ir::types::{is_promoted_local_name as is_promoted_local, VReg};
+
+/// Whether an assignment proves that a live-in register's storage is reused at
+/// a wider width inside the function.
+///
+/// This is the missing dual-role witness for shapes such as AArch64 `UMULL`:
+/// the parameter and final result can both be 32-bit while an intermediate
+/// 64-bit product destructively occupies x0. Unknown expression widths remain
+/// conservative and do not trigger a split.
+pub(crate) fn definition_exceeds_live_in_width(
+    function: &Function,
+    register: &VReg,
+    live_in_width: u8,
+) -> bool {
+    fn body_has_wider_definition(body: &[Stmt], register: &VReg, live_in_width: u8) -> bool {
+        body.iter().any(|statement| match statement {
+            Stmt::Assign { dst, src } => {
+                dst == register && can_carry_bits_above(src, live_in_width)
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                body_has_wider_definition(then_body, register, live_in_width)
+                    || else_body.as_deref().is_some_and(|body| {
+                        body_has_wider_definition(body, register, live_in_width)
+                    })
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                body_has_wider_definition(body, register, live_in_width)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                body_has_wider_definition(std::slice::from_ref(init), register, live_in_width)
+                    || body_has_wider_definition(
+                        std::slice::from_ref(step),
+                        register,
+                        live_in_width,
+                    )
+                    || body_has_wider_definition(body, register, live_in_width)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter()
+                    .any(|(_, body)| body_has_wider_definition(body, register, live_in_width))
+                    || default.as_deref().is_some_and(|body| {
+                        body_has_wider_definition(body, register, live_in_width)
+                    })
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                body_has_wider_definition(try_body, register, live_in_width)
+                    || catches.iter().any(|catch| {
+                        body_has_wider_definition(&catch.body, register, live_in_width)
+                    })
+            }
+            _ => false,
+        })
+    }
+
+    body_has_wider_definition(&function.body, register, live_in_width)
+}
+
+/// Decide whether arg0/output storage has a proven second lifetime even when
+/// the entry parameter was never spilled.
+pub(crate) fn should_split_unspilled_dual_role(
+    function: &Function,
+    cc: CallConv,
+    prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
+) -> bool {
+    let Some(prototype) = prototype else {
+        return false;
+    };
+    use crate::ir::types_recover::TypeHint;
+
+    if prototype.output_kind() != crate::ir::types_recover::RecoveredOutputKind::Direct {
+        return false;
+    }
+    let Some(parameter) = prototype.parameter(0) else {
+        return false;
+    };
+    let Some(result) = prototype.result() else {
+        return false;
+    };
+    let parameter_uses_output_storage = match &parameter.value.base {
+        VReg::Phys(name) => crate::ir::abi::is_return_register(cc, name),
+        _ => false,
+    };
+    let Some(TypeHint::Int {
+        width: parameter_width,
+        ..
+    }) = parameter.hint
+    else {
+        return false;
+    };
+    let result_width_differs = matches!(
+        result.hint,
+        Some(TypeHint::Int { width, .. }) if width != parameter_width
+    );
+    let body_has_wider_definition =
+        definition_exceeds_live_in_width(function, &parameter.value.base, parameter_width);
+    parameter_uses_output_storage
+        && !result.values.is_empty()
+        && (result_width_differs || body_has_wider_definition)
+}
 
 struct Splitter {
     /// register sub-name -> argument slot index
@@ -674,6 +780,113 @@ mod tests {
             Stmt::Return {
                 value: Some(Expr::Reg(reg("scr_x0"))),
             }
+        );
+    }
+
+    /// `mul_widen(uint32_t, uint32_t)` has a 32-bit final result but computes a
+    /// genuine 64-bit product in x0 first. Comparing only parameter and result
+    /// prototype widths therefore misses the destructive dual-role lifetime.
+    #[test]
+    fn wider_intermediate_definition_is_evidence_for_an_unspilled_role_split() {
+        let f = Function {
+            name: "mul_widen".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("x0"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Mul,
+                        lhs: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 8,
+                            expr: Box::new(Expr::Cast {
+                                signed: false,
+                                width: 4,
+                                expr: Box::new(Expr::Reg(reg("x0"))),
+                            }),
+                        }),
+                        rhs: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 8,
+                            expr: Box::new(Expr::Cast {
+                                signed: false,
+                                width: 4,
+                                expr: Box::new(Expr::Reg(reg("x1"))),
+                            }),
+                        }),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("x1#1"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Shr,
+                        lhs: Box::new(Expr::Reg(reg("x0"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    },
+                },
+            ],
+        };
+
+        assert!(definition_exceeds_live_in_width(&f, &reg("x0"), 4));
+
+        let w_register_canonicalization = Function {
+            name: "word_identity".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: reg("x0"),
+                src: Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(reg("x0#2"))),
+                    }),
+                },
+            }],
+        };
+        assert!(
+            !definition_exceeds_live_in_width(&w_register_canonicalization, &reg("x0"), 4),
+            "zero-extension into the architectural X register carries no significant high bits"
+        );
+
+        let wide_select = Function {
+            name: "clamped_wide_state".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: reg("x0"),
+                src: Expr::Select {
+                    cond: Box::new(Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Sle,
+                        lhs: Box::new(Expr::Reg(reg("x0#4"))),
+                        rhs: Box::new(Expr::Reg(reg("x6#1"))),
+                    }),
+                    if_true: Box::new(Expr::Reg(reg("x0#4"))),
+                    if_false: Box::new(Expr::Reg(reg("x6#1"))),
+                    width: 8,
+                },
+            }],
+        };
+        assert!(
+            definition_exceeds_live_in_width(&wide_select, &reg("x0"), 4),
+            "a proven 64-bit select can carry significant state above the parameter width"
+        );
+
+        let ordinary = Function {
+            name: "increment".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: reg("x0"),
+                src: Expr::Bin {
+                    op: crate::ir::types::BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("x0"))),
+                    rhs: Box::new(Expr::Const(1)),
+                },
+            }],
+        };
+        assert!(
+            !definition_exceeds_live_in_width(&ordinary, &reg("x0"), 4),
+            "an untyped same-width parameter update is not proof of a new role"
         );
     }
 

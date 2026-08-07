@@ -203,7 +203,7 @@
     "deposit_low_byte": "pass",
     "extract_byte1": "pass",
     "extract_byte3": "pass",
-    "mul_widen": "fail",
+    "mul_widen": "pass",
     "mul_wrap32": "pass",
     "reconstruct_64": "pass",
     "rotl16_3": "pass",
@@ -2637,7 +2637,7 @@
     "euler_decay_q16": "pass"
   },
   "28_euler_ode:aarch64:O2": {
-    "euler_decay_q16": "fail"
+    "euler_decay_q16": "pass"
   },
   "28_euler_ode:armv7:O0": {
     "euler_decay_q16": "fail"

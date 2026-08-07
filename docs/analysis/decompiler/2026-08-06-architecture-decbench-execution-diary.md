@@ -705,3 +705,61 @@ x86-64 control remains 328/328. All 1,784 default-feature Rust library tests
 also pass. The full-matrix AArch64-only set is now the two genuinely independent
 O2 owners: `mul_widen` value-role/storage reuse and `rt_u32` ABI live-in/result
 aliasing.
+
+## 00:25 (2026-08-07) — significant high-bit proof closes the wide x0 roles
+
+The retained O2 integer-width ELF remains
+`/tmp/glaurung-a64-widths-20260806.yMgUdF/02_integer_widths-aarch64-O2.so`
+(SHA-256 `6d08b849a4f9d3975e1afa80cb4878d7479f6154bd6a66583b47e1c7c6e0ce30`).
+`mul_widen` is four instructions: `umull x0,w0,w1`, a 32-bit high-half shift,
+an XOR, and `ret`. Raw LLIR and reconstructed AST preserve the 64-bit product.
+The loss occurred when source-role naming projected every x0 lifetime onto the
+32-bit `arg0`; the high-half shift then read an already truncated parameter.
+The exact RED vector was `(UINT_MAX, UINT_MAX)`: source `-1`, recovered `1`.
+
+A prototype-width comparison was insufficient because both the parameter and
+final result are 32-bit. The missing witness is an intermediate definition in
+the same storage that can carry significant bits above the live-in width. That
+query now shares the AST's explicit expression-width oracle with select folding,
+and the unspilled-role policy lives beside the value splitter rather than in the
+3,000-line Python binding. The policy is evaluated after reconstruction, where
+the multiply's 64-bit casts are visible; evaluating it at pipeline entry saw
+only widthless temporaries and did not repair the real ELF.
+
+The first implementation treated every eight-byte cast as widening evidence.
+The complete six-lane pre-ratchet correctly rejected it: in addition to three
+apparent improvements, `27_newton_raphson:aarch64:O2:newton_isqrt` regressed on
+input `2` from source `1` to recovered `2`. Its assembly performs only 32-bit
+arithmetic and the AST's `(unsigned long)(unsigned int)` is the architectural
+W-to-X zero-extension, not a 64-bit source value. Splitting that loop left its
+post-break return on the stale parameter role. A RED Rust canary now requires
+that shape to remain non-widening. `can_carry_bits_above` accepts actual wide
+arithmetic, loads, selects, and signed extensions while failing closed on an
+unsigned container canonicalization.
+
+The same audit rejected the temporary `call_fold_wide_result` improvement. Its
+wide value comes from `widen_mul`, but the AST call still reconstructed only one
+argument and carried no explicit result-width witness; the split happened only
+because of the final W-to-X zero-extension. That cell remains a call-contract
+and call-result-width defect instead of receiving an incidental behavioral
+ratchet.
+
+One additional improvement survived the narrowed proof and was verified from
+source through execution. Fresh retained ELF
+`/tmp/glaurung-a64-mul-role-20260807.4HJHxh/28_euler_ode-aarch64-O2.so`
+has SHA-256 `80000370f7fd8f847e184de6ef33a60767033aed630c0b8409c83fd7606a3fe3`.
+`euler_decay_q16` uses `sxtw` for its inputs, 64-bit multiply/subtract/clamps,
+and an eight-byte select feeding x0; the source likewise declares `int64_t
+state`. Splitting that state from the 32-bit `arg0` changes its real differential
+from fail to pass. `newton_isqrt` is restored to pass, and the call-fold cell is
+restored to its honest prior failure.
+
+The final six-lane pre-ratchet has exactly two changes:
+`02_integer_widths:aarch64:O2:mul_widen` and
+`28_euler_ode:aarch64:O2:euler_decay_q16`, both fail to pass. Totals are 1,563
+passes / 237 failures, 228 structural rows, six declared unsupported rows, no
+missing/no-case/timeout/lane errors, and pinned x86-64 remains 328/328. The
+focused real-ELF test passes, all 1,785 Rust library tests pass, and every Rust
+all-targets test passes. The sole remaining full-matrix AArch64-only owner is
+O2 `rt_u32`, whose body is just `ret` and therefore requires prototype-proven
+live-in/result alias materialization rather than another value-role split.

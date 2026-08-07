@@ -37,6 +37,7 @@ pub mod dead_stores;
 pub mod dwarf_fields;
 pub mod exception_recover;
 pub mod expr_reconstruct;
+pub mod expression_width;
 pub mod function_tables;
 pub mod guard_chain;
 pub mod guarded_switch;

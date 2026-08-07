@@ -1,6 +1,7 @@
 //! Collapse structurally proven assignment diamonds into pure selects.
 
 use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::expression_width::explicit_expression_width;
 use crate::ir::types::{is_promoted_local_name as is_promoted_local, UnOp, VReg};
 
 /// Render exact comparison masks as arithmetic values instead of fake branches.
@@ -548,35 +549,11 @@ fn make_select(cond: &Expr, if_true: &Expr, if_false: &Expr) -> Expr {
 }
 
 fn select_width(if_true: &Expr, if_false: &Expr) -> u8 {
-    expression_width(if_true)
+    explicit_expression_width(if_true)
         .into_iter()
-        .chain(expression_width(if_false))
+        .chain(explicit_expression_width(if_false))
         .max()
         .unwrap_or(8)
-}
-
-fn expression_width(expr: &Expr) -> Option<u8> {
-    match expr {
-        Expr::Deref { size, .. }
-        | Expr::Select { width: size, .. }
-        | Expr::WideArithmetic { width: size, .. } => Some(*size),
-        Expr::Cast { width, .. } => Some(*width),
-        Expr::FloatConst { width, .. } => Some(*width),
-        Expr::FunctionTableEntry { pointer_size, .. } => Some(*pointer_size),
-        Expr::Cmp { .. } => Some(1),
-        Expr::Bin { lhs, rhs, .. } => expression_width(lhs)
-            .into_iter()
-            .chain(expression_width(rhs))
-            .max(),
-        Expr::Un { src, .. } => expression_width(src),
-        Expr::Addr(_)
-        | Expr::Named { .. }
-        | Expr::StringLit { .. }
-        | Expr::StackAddr { .. }
-        | Expr::Lea { .. }
-        | Expr::PdbFieldAddr { .. } => Some(8),
-        Expr::Reg(_) | Expr::Const(_) | Expr::Unknown(_) => None,
-    }
 }
 
 #[cfg(test)]

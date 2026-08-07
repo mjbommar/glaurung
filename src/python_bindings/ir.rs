@@ -350,43 +350,9 @@ fn run_ast_passes(
     let parameter_roles = prototype
         .map(crate::ir::types_recover::RecoveredPrototype::parameter_role_map)
         .unwrap_or_default();
-    let split_unspilled_dual_role = prototype.is_some_and(|prototype| {
-        use crate::ir::types_recover::TypeHint;
-
-        if prototype.output_kind() != crate::ir::types_recover::RecoveredOutputKind::Direct {
-            return false;
-        }
-        let Some(parameter) = prototype.parameter(0) else {
-            return false;
-        };
-        let Some(result) = prototype.result() else {
-            return false;
-        };
-        let parameter_uses_output_storage = match &parameter.value.base {
-            crate::ir::types::VReg::Phys(name) => crate::ir::abi::is_return_register(cc, name),
-            _ => false,
-        };
-        let widths = match (parameter.hint, result.hint) {
-            (
-                Some(TypeHint::Int {
-                    width: parameter_width,
-                    ..
-                }),
-                Some(TypeHint::Int {
-                    width: result_width,
-                    ..
-                }),
-            ) => Some((parameter_width, result_width)),
-            _ => None,
-        };
-        parameter_uses_output_storage
-            && !result.values.is_empty()
-            && widths.is_some_and(|(parameter_width, result_width)| parameter_width != result_width)
-    });
     if dump {
         eprintln!(
-            "\n===== parameter evidence =====\nslots={param_slots:?}\nroles={parameter_roles:?}\n\
-             split_unspilled_dual_role={split_unspilled_dual_role}"
+            "\n===== parameter evidence =====\nslots={param_slots:?}\nroles={parameter_roles:?}"
         );
     }
     macro_rules! dp {
@@ -464,6 +430,17 @@ fn run_ast_passes(
     // return use together, rather than orphaning the result as scratch.
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
         crate::ir::ast::materialize_direct_output(f);
+    }
+    // Reconstructed expressions now carry their explicit machine width. Make
+    // the dual-role decision here rather than at pipeline entry, where a wide
+    // result may still be hidden behind widthless temporaries.
+    let split_unspilled_dual_role =
+        crate::ir::value_split::should_split_unspilled_dual_role(f, cc, prototype);
+    if dump {
+        eprintln!(
+            "\n===== value-role evidence =====\n\
+             split_unspilled_dual_role={split_unspilled_dual_role}"
+        );
     }
     crate::ir::value_split::split_argument_storage_reuse(f, cc, split_unspilled_dual_role);
     dp!("split_argument_storage_reuse");
