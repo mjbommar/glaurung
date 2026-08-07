@@ -375,15 +375,6 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
             tag_phys(dst, def_ver, ctx);
         }
         Op::Undef { dst, .. } => tag_phys(dst, def_ver, ctx),
-        Op::CondAssign { dst, cond, src } => {
-            // def_uses order: cond, then src.
-            if let Some(&ver) = use_vers.first() {
-                tag_phys(cond, ver, ctx);
-            }
-            ui = 1;
-            tag_value(src, use_vers, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
-        }
         Op::Bin { dst, lhs, rhs, .. } => {
             tag_value(lhs, use_vers, &mut ui, ctx);
             tag_value(rhs, use_vers, &mut ui, ctx);
@@ -1025,11 +1016,6 @@ pub(crate) fn for_each_vreg_mut(op: &mut Op, f: &mut impl FnMut(&mut VReg)) {
             f(dst);
         }
         Op::Undef { dst, .. } => f(dst),
-        Op::CondAssign { dst, cond, src } => {
-            f(cond);
-            value(src, f);
-            f(dst);
-        }
         Op::Bin { dst, lhs, rhs, .. } => {
             value(lhs, f);
             value(rhs, f);

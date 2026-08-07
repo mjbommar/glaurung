@@ -8,8 +8,8 @@
 //! * [`code_to_data_xrefs`] — operates on decoded machine instructions and
 //!   includes an AArch64 ADRP+X reconstruction pass.
 //! * [`llir_to_data_xrefs`] — operates on an already-lifted [`LlirFunction`]
-//!   and picks up `Op::Assign { src: Value::Addr(..) }` / `Op::Load`/`Op::Store`
-//!   with absolute-address memory operands. This path is more faithful for
+//!   and picks up address-bearing `Op::Assign`/`Op::Ite` values and absolute
+//!   `Op::Load`/`Op::Store` memory operands. This path is more faithful for
 //!   RIP-relative LEAs on x86-64 because the lifter already resolves them.
 
 use crate::analysis::aarch64_literals;
@@ -235,13 +235,25 @@ fn update_known_addrs(op: &Op, known_addrs: &mut AddrState, data_ranges: &[(u64,
                 known_addrs.remove(&dst);
             }
         }
+        Op::Ite { dst, t, e, .. } => {
+            let dst = reg_key(dst);
+            let selected = match (
+                value_known_addr(t, known_addrs),
+                value_known_addr(e, known_addrs),
+            ) {
+                (Some(t), Some(e)) if t == e => Some(t),
+                _ => None,
+            };
+            if let Some(value) = selected.filter(|value| in_ranges(*value, data_ranges)) {
+                known_addrs.insert(dst, value);
+            } else {
+                known_addrs.remove(&dst);
+            }
+        }
         Op::Load { dst, .. }
         | Op::CondLoad { dst, .. }
         | Op::Un { dst, .. }
         | Op::Cmp { dst, .. } => {
-            known_addrs.remove(&reg_key(dst));
-        }
-        Op::CondAssign { dst, .. } => {
             known_addrs.remove(&reg_key(dst));
         }
         _ => {}
@@ -345,30 +357,37 @@ pub fn llir_to_data_xrefs(
             if out.len() >= max_xrefs {
                 return out;
             }
-            let target = match &ins.op {
+            let targets = match &ins.op {
                 Op::Assign {
                     src: Value::Addr(v),
                     ..
-                } => Some(*v),
-                Op::CondAssign { src, .. } => value_known_addr(src, &known_addrs),
+                } => [Some(*v), None],
+                Op::Ite { t, e, .. } => [
+                    value_known_addr(t, &known_addrs),
+                    value_known_addr(e, &known_addrs),
+                ],
                 Op::Load { addr, .. } | Op::CondLoad { addr, .. } => {
-                    memop_known_target(addr, &known_addrs)
+                    [memop_known_target(addr, &known_addrs), None]
                 }
-                Op::Store { addr, src } | Op::CondStore { addr, src, .. } => {
+                Op::Store { addr, src } | Op::CondStore { addr, src, .. } => [
                     value_known_addr(src, &known_addrs)
-                        .or_else(|| memop_known_target(addr, &known_addrs))
-                }
+                        .or_else(|| memop_known_target(addr, &known_addrs)),
+                    None,
+                ],
                 Op::Call {
                     target: crate::ir::types::CallTarget::Indirect(Value::Addr(v)),
                     ..
-                } => Some(*v),
+                } => [Some(*v), None],
                 Op::Call {
                     target: crate::ir::types::CallTarget::Indirect(value),
                     ..
-                } => value_known_addr(value, &known_addrs),
-                _ => None,
+                } => [value_known_addr(value, &known_addrs), None],
+                _ => [None, None],
             };
-            if let Some(to_va) = target {
+            for to_va in targets.into_iter().flatten() {
+                if out.len() >= max_xrefs {
+                    return out;
+                }
                 if in_ranges(to_va, data_ranges) && seen.insert((ins.va, to_va)) {
                     push_xref(&mut out, ins.va, to_va, bits);
                 }
@@ -544,6 +563,24 @@ pub fn function_data_xrefs(
 mod tests {
     use super::*;
     use crate::core::instruction::{Access, Operand};
+    use crate::ir::types::{LlirBlock, LlirInstr, VReg, Width};
+
+    fn single_block_llir(ops: Vec<(u64, Op)>) -> LlirFunction {
+        let start_va = ops.first().map_or(0, |(va, _)| *va);
+        let end_va = ops.last().map_or(start_va, |(va, _)| va + 4);
+        LlirFunction {
+            entry_va: start_va,
+            blocks: vec![LlirBlock {
+                start_va,
+                end_va,
+                instrs: ops
+                    .into_iter()
+                    .map(|(va, op)| LlirInstr { va, op })
+                    .collect(),
+                succs: vec![],
+            }],
+        }
+    }
 
     fn mk_arm64(mnem: &str, addr: u64, ops: Vec<Operand>) -> Instruction {
         Instruction {
@@ -611,6 +648,67 @@ mod tests {
         assert_eq!(xrefs.len(), 1);
         assert_eq!(xrefs[0].from.value, 0x1000);
         assert_eq!(xrefs[0].to.value, 0x20050);
+    }
+
+    #[test]
+    fn llir_ite_kills_a_prior_address_fact() {
+        let lf = single_block_llir(vec![
+            (
+                0x1000,
+                Op::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Value::Addr(0x20050),
+                },
+            ),
+            (
+                0x1004,
+                Op::Ite {
+                    dst: VReg::phys("rax"),
+                    cond: VReg::Flag(crate::ir::types::Flag::Z),
+                    t: Value::Const(1),
+                    e: Value::Const(2),
+                    width: Width::W64,
+                },
+            ),
+            (
+                0x1008,
+                Op::Load {
+                    dst: VReg::phys("rbx"),
+                    addr: MemOp {
+                        base: Some(VReg::phys("rax")),
+                        size: 8,
+                        ..Default::default()
+                    },
+                },
+            ),
+        ]);
+
+        let xrefs = llir_to_data_xrefs(&lf, &[(0x20000, 0x21000)], 64, 16);
+        assert!(
+            xrefs.iter().all(|xref| xref.from.value != 0x1008),
+            "the select overwrote rax, so the later load has no proven target: {xrefs:#?}"
+        );
+    }
+
+    #[test]
+    fn llir_ite_reports_both_explicit_address_arms() {
+        let lf = single_block_llir(vec![(
+            0x1000,
+            Op::Ite {
+                dst: VReg::phys("rax"),
+                cond: VReg::Flag(crate::ir::types::Flag::Z),
+                t: Value::Addr(0x20050),
+                e: Value::Addr(0x20080),
+                width: Width::W64,
+            },
+        )]);
+
+        let xrefs = llir_to_data_xrefs(&lf, &[(0x20000, 0x21000)], 64, 16);
+        let targets: HashSet<u64> = xrefs.iter().map(|xref| xref.to.value).collect();
+        assert_eq!(targets, HashSet::from([0x20050, 0x20080]));
+
+        let limited = llir_to_data_xrefs(&lf, &[(0x20000, 0x21000)], 64, 1);
+        assert_eq!(limited.len(), 1, "multi-arm selects still honor max_xrefs");
     }
 
     #[test]

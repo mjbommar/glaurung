@@ -1497,3 +1497,62 @@ was not mass-applied. Repository-wide `uvx ty check python/` remains at the same
 2,044 existing diagnostics; the changed fixture file has the same six pytest-stub
 diagnostics. These baseline limitations remain separate from the green runtime
 and decompiler evidence.
+
+## 16:43 — real CMPXCHG failure exposes an implicit-definition memory corruption
+
+The next EPIC 5 slice started from an actual compiler-generated conditional
+read-modify-write. The retained C11 source is
+`/tmp/glaurung-cmpxchg-source.c` at SHA-256
+`f7ad2fd083046667e8117bf73141c1da8d825d4f9c9ba7458d57266b21be3dc0`.
+GCC 15 O2 produced `/tmp/glaurung-cmpxchg-gcc-O2.so` at SHA-256
+`283e87c1b0c5a57d7f07b0a9d0c06b7061cf45bfffb4728e430fa420bbbc0c1f`.
+The decisive machine sequence is `mov %esi,%eax; lock cmpxchg %edx,(%rdi);
+jne ...`: success stores `edx`, while failure leaves memory unchanged and puts
+the old memory word in `eax`.
+
+The pre-fix lift represented both conditional register updates with
+`CondAssign`. For the memory destination it first assigned the old word to a
+temporary, conditionally overwrote that temporary, and then emitted an
+unconditional store. SSA treated the conditional destination as a pure
+definition because the retained false-path value was implicit. Value numbering
+therefore emitted `if (equal) t136 = desired; *slot = t136;`; `t136` was
+uninitialized on failure. The real round trip returned `-7` correctly for
+`slot=7, expected=5, desired=9`, but changed the slot from 7 to arbitrary stack
+residue. A second negative-value failure changed `slot=-17` to 4.
+
+The fixed raw LLIR contains a `CondStore` guarded by ZF and an accumulator
+`Ite` whose true and false inputs are both explicit. Register-form CMPXCHG uses
+the same explicit select for its destination. Emitted C now conditionally writes
+`arg2`, defines the accumulator result with a complete ternary, and preserves
+the slot on failure. The real round trip agrees on return value and memory for
+two success and two failure vectors, including negative values.
+
+An inventory found no remaining producer of `CondAssign`: ordinary conditional
+moves had already migrated to `Ite`, ARM predication uses explicit `Ite`,
+`CondLoad`, and `CondStore`, and CMPXCHG was the last lifter. The legacy variant
+was removed across the IR type, use-def/SSA consumers, value numbering, AST,
+interpreter, xrefs, taint, and Python encoding. This deletes more code than the
+fix adds and removes the bit-demand oracle's conservative whole-function
+bailout. Self-review found that xref address-state handling still understood the
+removed operation but not `Ite`: an explicit select could leave a stale pointer
+fact or omit address-valued arms. Two RED unit tests now prove ambiguous selects
+kill the old fact, both explicit address arms are reported, and `max_xrefs` is
+still a hard bound when one instruction names two targets. The retained
+limitation is concurrency: LLIR does not yet encode the `lock` prefix's atomicity
+or memory ordering, so the current behavioral proof is single-threaded
+architectural-state equivalence, not a concurrent C11 proof.
+
+The final gates are green. `cargo test --all-targets` passes 1,831 library tests
+and every integration, example, and benchmark target. The five-lane local gate
+retains exactly 1,627 architecture passes / 173 known failures, with AArch64 and
+the pinned x86-64 control at 328/328, both executable corpora complete, and no
+GED/type/byte regression in 56/56 cells. The first full Python run overlapped
+these heavy lanes and tripped one 100 ms per-function timeout in the unrelated
+30-file Windows vendor corpus. That exact test passed alone after the final
+extension rebuild; a subsequent sequential run of the complete 2,848-test
+collection exited zero, confirming contention rather than a code regression.
+
+Owned Python format/lint, focused typing, Rust format, and the whitespace gate
+pass. Repository-wide baselines remain separately non-green: 354 files would be
+reformatted, Ruff reports 3,830 existing diagnostics, and `ty` reports the same
+2,044 diagnostics as before. None were mass-edited into this decompiler change.

@@ -16,7 +16,7 @@
 //! * `cmp` → [`Op::Cmp`] writing `ZF`/`CF`/`SF`
 //! * `test` → [`Op::Cmp`] writing `ZF`/`SF`
 //! * `setcc` → [`Op::Assign`] / [`Op::Store`] from the corresponding flag
-//! * `cmovcc` → [`Op::CondAssign`]
+//! * `cmovcc` → [`Op::Ite`]
 //! * `push` / `pop` → decomposed into rsp-adjust + load/store
 //! * `call` near direct / indirect → [`Op::Call`]
 //! * `ret` → [`Op::Return`]
@@ -1777,15 +1777,19 @@ fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 Value::Reg(old.clone()),
                 width,
             ));
-            ops.push(Op::CondAssign {
-                dst,
+            // CMPXCHG is a two-input select for the destination.  The false
+            // arm must be explicit: it reads the destination value captured
+            // above, rather than defining an otherwise-uninitialized register.
+            ops.push(Op::Ite {
                 cond: VReg::Flag(Flag::Z),
-                src,
+                t: src,
+                e: Value::Reg(dst.clone()),
+                dst,
+                width,
             });
         }
         OpKind::Memory => {
             let addr = mem_op_of(instr);
-            let new_value = VReg::Temp(1);
             ops.push(Op::Load {
                 dst: old.clone(),
                 addr: addr.clone(),
@@ -1795,18 +1799,14 @@ fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 Value::Reg(old.clone()),
                 width,
             ));
-            ops.push(Op::Assign {
-                dst: new_value.clone(),
-                src: Value::Reg(old.clone()),
-            });
-            ops.push(Op::CondAssign {
-                dst: new_value.clone(),
+            // On comparison failure x86 leaves memory unchanged.  Model the
+            // memory effect itself as conditional so the false path performs
+            // no access and cannot store an undefined select temporary.
+            ops.push(Op::CondStore {
                 cond: VReg::Flag(Flag::Z),
-                src,
-            });
-            ops.push(Op::Store {
+                inverted: false,
                 addr,
-                src: Value::Reg(new_value),
+                src,
             });
         }
         _ => unreachable!("checked above"),
@@ -1819,10 +1819,14 @@ fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         lhs: Value::Reg(VReg::Flag(Flag::Z)),
         rhs: Value::Const(0),
     });
-    ops.push(Op::CondAssign {
-        dst: acc,
+    // The accumulator changes only on failure.  Its success-path prior value
+    // is an input, not an implicit side effect hidden from SSA/use-def.
+    ops.push(Op::Ite {
         cond: not_equal,
-        src: Value::Reg(old),
+        t: Value::Reg(old),
+        e: Value::Reg(acc.clone()),
+        dst: acc,
+        width,
     });
     ops
 }
@@ -5853,7 +5857,7 @@ mod tests {
                     "false arm must READ the destination — that is the whole point"
                 );
             }
-            other => panic!("expected CondAssign, got {:?}", other),
+            other => panic!("expected Ite, got {:?}", other),
         }
     }
 
@@ -5939,19 +5943,26 @@ mod tests {
         )));
         assert!(ops.iter().any(|ins| matches!(
             &ins.op,
-            Op::CondAssign {
+            Op::Ite {
                 dst,
                 cond: VReg::Flag(Flag::Z),
-                src: Value::Reg(src),
-            } if *dst == VReg::phys("rbx") && *src == VReg::phys("rcx")
+                t: Value::Reg(t),
+                e: Value::Reg(e),
+                width: Width::W64,
+            } if *dst == VReg::phys("rbx")
+                && *t == VReg::phys("rcx")
+                && *e == VReg::phys("rbx")
         )));
         assert!(matches!(
             &ops.last().expect("accumulator update").op,
-            Op::CondAssign {
+            Op::Ite {
                 dst,
                 cond: VReg::Temp(2),
-                src: Value::Reg(VReg::Temp(0)),
+                t: Value::Reg(VReg::Temp(0)),
+                e: Value::Reg(e),
+                width: Width::W64,
             } if *dst == VReg::phys("rax")
+                && *e == VReg::phys("rax")
         ));
     }
 
@@ -5968,26 +5979,27 @@ mod tests {
         ));
         assert!(ops.iter().any(|ins| matches!(
             &ins.op,
-            Op::CondAssign {
-                dst: VReg::Temp(1),
+            Op::CondStore {
                 cond: VReg::Flag(Flag::Z),
+                inverted: false,
+                addr: MemOp { size: 8, .. },
                 src: Value::Reg(src),
             } if *src == VReg::phys("rcx")
         )));
-        assert!(ops.iter().any(|ins| matches!(
-            &ins.op,
-            Op::Store {
-                src: Value::Reg(VReg::Temp(1)),
-                ..
-            }
-        )));
+        assert!(
+            ops.iter().all(|ins| !matches!(&ins.op, Op::Store { .. })),
+            "cmpxchg failure must not perform an unconditional store: {ops:#?}"
+        );
         assert!(matches!(
             &ops.last().expect("accumulator update").op,
-            Op::CondAssign {
+            Op::Ite {
                 dst,
                 cond: VReg::Temp(2),
-                src: Value::Reg(VReg::Temp(0)),
+                t: Value::Reg(VReg::Temp(0)),
+                e: Value::Reg(e),
+                width: Width::W64,
             } if *dst == VReg::phys("rax")
+                && *e == VReg::phys("rax")
         ));
     }
 

@@ -432,12 +432,6 @@ fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
         // A computed transfer writes no register; where it goes is the CFG's
         // business, not the taint state's.
         Op::IndirectJump { .. } => None,
-        Op::CondAssign { dst, .. } => {
-            if let Some(d) = vreg_canon(dst) {
-                write_reg(state, &d, Taint::Top);
-            }
-            None
-        }
         Op::Bin { dst, op, lhs, rhs } => {
             // Special case: `xor r, r` is the canonical zero idiom. Track
             // it as Const(0) so downstream code recognises it as a null

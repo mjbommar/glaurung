@@ -247,15 +247,6 @@ impl<D: Domain> Machine<D> {
                     .insert(Self::undefined_key(dst), reason.clone());
                 Flow::Next
             }
-            Op::CondAssign { dst, cond, src } => {
-                let c = self.regs.read(&mut self.dom, cond);
-                if let BranchDecision::Taken = self.dom.as_branch(&c) {
-                    let w = op_width(&self.regs, dst, &[src]);
-                    let v = self.read(src, w);
-                    self.write_defined(dst, v);
-                }
-                Flow::Next
-            }
             Op::Bin { dst, op, lhs, rhs } => {
                 let w = op_width(&self.regs, dst, &[lhs, rhs]);
                 let a = self.read(lhs, w);

@@ -180,7 +180,7 @@ def test_sete_lifts_to_assign_from_flag():
     assert ops[2]["dst"] == "rax" and ops[2]["op"] == "or"
 
 
-def test_cmovne_lifts_to_cond_assign_dict():
+def test_cmovne_lifts_to_explicit_select_dict():
     ops = g.ir.lift_bytes(bytes([0x48, 0x0F, 0x45, 0xC3]), 0x1000, 64)
     assert ops == [
         {
@@ -567,7 +567,6 @@ def test_lift_window_at_returns_dicts_for_real_binary():
             "nop",
             "assign",
             "undef",
-            "cond_assign",
             "bin",
             "un",
             "cmp",

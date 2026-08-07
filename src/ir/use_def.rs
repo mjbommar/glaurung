@@ -70,11 +70,6 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
             Some(dst.clone())
         }
         Op::Undef { dst, .. } => Some(dst.clone()),
-        Op::CondAssign { dst, cond, src } => {
-            uses.push(cond.clone());
-            reads_of_value(src, &mut uses);
-            Some(dst.clone())
-        }
         Op::Bin { dst, lhs, rhs, .. } => {
             reads_of_value(lhs, &mut uses);
             reads_of_value(rhs, &mut uses);
@@ -195,7 +190,6 @@ pub fn def_mut(op: &mut Op) -> Option<&mut VReg> {
     match op {
         Op::Assign { dst, .. }
         | Op::Undef { dst, .. }
-        | Op::CondAssign { dst, .. }
         | Op::Bin { dst, .. }
         | Op::Un { dst, .. }
         | Op::Cmp { dst, .. }

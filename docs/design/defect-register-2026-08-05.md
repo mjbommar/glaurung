@@ -899,9 +899,10 @@ architecture matrix remains triage evidence rather than one undifferentiated
    phi, frame, and return recovery. The post-spill call-result collision slice is
    complete, as are the adjacent AArch64 call-flow, rotated-loop value-role,
    linked-list emission, and BFI bit-demand slices. Next acceptance is making
-   implicit LLIR dependencies (conditional-assignment fallback and return value)
-   explicit, then sharing that identity with the emitted-local definition
-   verifier, without architecture-ratchet regressions.
+   the remaining implicit LLIR return value explicit, then sharing that identity
+   with the emitted-local definition verifier, without architecture-ratchet
+   regressions. Conditional assignment is closed: all real lifters use explicit
+   selects/conditional memory operations and the unsound legacy op is removed.
 2. **P0 — program environment and call contracts (EPIC 1).** Persist one
    program-level symbol/type environment and attach canonical prototypes to every
    direct and indirect call site. Acceptance: pointer-depth type canaries and
@@ -1030,3 +1031,34 @@ decline the rewrite. The real AArch64 fixture, positive and negative synthetic
 proofs, exact 1,627/173 architecture ratchet, both executable matrices, 56/56
 metric cells, 1,829-test Rust library, all targets, and complete 2,847-test Python
 collection are green.
+
+### Closed — x86 CMPXCHG implicit conditional definitions
+
+GCC 15 O2 compiled a real C11 strong atomic compare-exchange to
+`lock cmpxchg %edx,(%rdi)`. The old LLIR loaded the destination, conditionally
+defined a new-value temporary, and then stored that temporary unconditionally.
+On comparison failure the emitted C returned the right old value but wrote an
+uninitialized value into memory. The retained source and ELF hashes are
+`f7ad2fd083046667e8117bf73141c1da8d825d4f9c9ba7458d57266b21be3dc0`
+and `283e87c1b0c5a57d7f07b0a9d0c06b7061cf45bfffb4728e430fa420bbbc0c1f`.
+
+Register destinations and the accumulator now lower to `Ite` with both prior
+and replacement values explicit. Memory destinations lower to `CondStore`, so
+the false path performs no LLIR memory effect. A real compile-decompile-recompile
+test compares both return value and mutated storage on successful, failed, and
+negative-value cases. No production lifter still emitted `CondAssign`; removing
+the legacy variant from LLIR, SSA/use-def, value numbering, AST, interpreter,
+xrefs, taint, and Python encoding makes this hidden-dependency state
+unrepresentable. The bit-demand oracle consequently no longer needs its
+function-wide `CondAssign` bailout. The xref tracker now treats both `Ite` arms
+as address uses, kills ambiguous selected address facts, retains identical-arm
+facts, and preserves its hard result limit even when one select names two
+targets.
+
+This closes single-threaded architectural state equivalence for the instruction.
+The `lock` prefix's inter-thread atomicity and memory-order contract are still
+not represented by LLIR and remain separate machine-model work rather than an
+unearned claim of concurrent equivalence. The exact 1,627/173 architecture
+ratchet, both executable matrices, 56/56 metric cells, 1,831-test Rust library
+and all targets, and the sequential complete 2,848-test Python collection are
+green.

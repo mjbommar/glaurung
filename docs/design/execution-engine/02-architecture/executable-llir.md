@@ -10,7 +10,7 @@
 pub enum Value { Reg(VReg), Const(i64), Addr(u64) }      // ← no width
 pub struct MemOp { base, index, scale, disp, size: u8, segment }  // ← no endian
 pub enum BinOp { Add, Sub, Mul, Div, And, Or, Xor, Shl, Shr, Sar } // ← no width on the Op
-pub enum Op { Assign, CondAssign, Bin, Un, Cmp, Load, Store, Jump,
+pub enum Op { Assign, Ite, Bin, Un, Cmp, Load, CondLoad, Store, CondStore, Jump,
               CondJump, Call, Return, Nop, Unknown { mnemonic } }   // ← Unknown is a hole
 pub enum Flag { Z, C, Ule, S, Slt, Sle, O, P, A }        // ← GOOD: condition codes, keep
 ```

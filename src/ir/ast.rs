@@ -1093,14 +1093,6 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             dst: dst.clone(),
             src: Expr::Unknown(format!("undefined({reason})")),
         }],
-        Op::CondAssign { dst, cond, src } => vec![Stmt::If {
-            cond: Expr::Reg(cond.clone()),
-            then_body: vec![Stmt::Assign {
-                dst: dst.clone(),
-                src: lower_value(src),
-            }],
-            else_body: None,
-        }],
         Op::Bin { dst, op, lhs, rhs } => {
             let mut lhs = lower_value(lhs);
             // Arithmetic right shift is signed at the machine operand width.

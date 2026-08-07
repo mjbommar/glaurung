@@ -310,7 +310,7 @@ key on the def/use `SsaValue` instead of the raw `VReg`:
 
 - **Flags — do version them, cheaply.** Extend `is_ssa_reg`
   (`src/ir/ssa.rs:61-63`) to include `VReg::Flag` behind the existing scope so a
-  flag def and its consuming branch/`CondAssign`/`Ite` share a value. This gives
+  flag def and its consuming branch/`Ite` share a value. This gives
   precise bool-vs-int typing per condition and lets `hoist_inline_flag_conds`
   (`src/ir/ast.rs:408`) match on value identity instead of "same flag, no
   intervening read." Low risk: flags are short-lived and rarely merge.

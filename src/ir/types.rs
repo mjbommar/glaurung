@@ -265,13 +265,6 @@ pub enum Op {
         dst: VReg,
         reason: String,
     },
-    /// Conditional register assignment. `dst` receives `src` when `cond` is
-    /// true; otherwise its previous value is preserved.
-    CondAssign {
-        dst: VReg,
-        cond: VReg,
-        src: Value,
-    },
     Bin {
         dst: VReg,
         op: BinOp,
@@ -420,9 +413,9 @@ pub enum Op {
         hi: Value,
         lo: Value,
     },
-    /// Pure select: `dst = cond ? t : e`, where `cond` is a 1-bit value. Unlike
-    /// [`Op::CondAssign`] (which preserves the old value when false), `Ite`
-    /// always writes and is merge-friendly for symbolic execution.
+    /// Pure select: `dst = cond ? t : e`, where `cond` is a 1-bit value.
+    /// Both inputs are explicit, so SSA and symbolic execution observe the
+    /// dependency on the destination's prior value when it is the false arm.
     Ite {
         dst: VReg,
         cond: VReg,
@@ -703,9 +696,6 @@ impl fmt::Display for Op {
         match self {
             Op::Assign { dst, src } => write!(f, "{} = {}", dst, src),
             Op::Undef { dst, reason } => write!(f, "{} = undef({})", dst, reason),
-            Op::CondAssign { dst, cond, src } => {
-                write!(f, "if {} {} = {}", cond, dst, src)
-            }
             Op::Bin { dst, op, lhs, rhs } => write!(f, "{} = {:?} {} {}", dst, op, lhs, rhs),
             Op::Un { dst, op, src } => write!(f, "{} = {:?} {}", dst, op, src),
             Op::Cmp { dst, op, lhs, rhs } => write!(f, "{} = cmp {:?} {} {}", dst, op, lhs, rhs),

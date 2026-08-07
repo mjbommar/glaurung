@@ -10,7 +10,7 @@
 //! ```text
 //! {
 //!     "va": int,
-//!     "kind": "assign" | "cond_assign" | "bin" | "un" | "cmp"
+//!     "kind": "assign" | "ite" | "bin" | "un" | "cmp"
 //!           | "load" | "store" | "jump" | "cond_jump" | "call"
 //!           | "return" | "nop" | "unknown",
 //!     # additional kind-specific fields — see encode_op below.
@@ -132,12 +132,6 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("kind", "undef")?;
             d.set_item("dst", vreg_to_str(dst))?;
             d.set_item("reason", reason)?;
-        }
-        Op::CondAssign { dst, cond, src } => {
-            d.set_item("kind", "cond_assign")?;
-            d.set_item("dst", vreg_to_str(dst))?;
-            d.set_item("cond", vreg_to_str(cond))?;
-            d.set_item("src", value_to_pyobj(py, src)?)?;
         }
         Op::Bin { dst, op, lhs, rhs } => {
             d.set_item("kind", "bin")?;

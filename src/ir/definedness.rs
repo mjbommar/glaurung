@@ -164,17 +164,6 @@ pub fn erase_unobserved_masked_inputs(
     ssa: &SsaInfo,
     oracle: &BitDemandOracle,
 ) -> usize {
-    // CondAssign's false-path dependency on the previous destination is still
-    // implicit in LLIR and therefore has no SSA use identity.  Until that
-    // operand is explicit, decline all rewrites in a function containing one.
-    if function.blocks.iter().any(|block| {
-        block
-            .instrs
-            .iter()
-            .any(|instruction| matches!(instruction.op, Op::CondAssign { .. }))
-    }) {
-        return 0;
-    }
     let demanded_definitions: HashSet<InstrAddr> = ssa
         .def_versions
         .keys()
@@ -254,13 +243,6 @@ fn transfer_masks(op: &Op, demanded: u64) -> Vec<(usize, u64)> {
 
     match op {
         Op::Assign { src, .. } => value(&mut masks, &mut use_index, src, demanded),
-        Op::CondAssign { cond: _, src, .. } => {
-            // The condition is always use zero.  A demanded selected value
-            // depends on the predicate regardless of the source's shape.
-            masks.push((0, FULL));
-            use_index = 1;
-            value(&mut masks, &mut use_index, src, demanded);
-        }
         Op::Bin { op, lhs, rhs, .. } => {
             let lhs_mask = bin_operand_mask(*op, lhs, rhs, demanded, true);
             let rhs_mask = bin_operand_mask(*op, rhs, lhs, demanded, false);
