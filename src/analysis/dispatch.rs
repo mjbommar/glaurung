@@ -914,6 +914,8 @@ mod tests {
             scale: None,
             base: None,
             index: None,
+            vector_shape: None,
+            vector_index: None,
         }
     }
 
@@ -934,6 +936,8 @@ mod tests {
             scale: Some(scale),
             base: base.map(str::to_string),
             index: index.map(str::to_string),
+            vector_shape: None,
+            vector_index: None,
         }
     }
 
@@ -950,6 +954,8 @@ mod tests {
             scale: None,
             base: None,
             index: None,
+            vector_shape: None,
+            vector_index: None,
         }
     }
 

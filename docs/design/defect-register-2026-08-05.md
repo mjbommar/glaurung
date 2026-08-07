@@ -674,12 +674,12 @@ signatures now include `gyroInitFilterNotch1(uint16_t, uint16_t)`,
 `pkg_array_match_patterns`. Fully representing its opaque function-pointer
 parameter still requires EPIC 1's structured declarator/type environment.
 
-### Current strict AArch64-only set: 5, not 43
+### Current strict AArch64-only set: 4, not 43
 
 The old 43-function count was a verdict-only snapshot and is stale. Relative to
 the current pinned x86-64, i386, and Thumb lanes, the strict AArch64-only set is:
 
-- `03_loop_shapes:O2:{for_sum,loop_continue,mutate_reverse}`;
+- `03_loop_shapes:O2:{loop_continue,mutate_reverse}`;
 - `05_struct_arrays:O0:process`;
 - `07_packet_parser:O2:validate_header`.
 
@@ -719,10 +719,16 @@ the recursively recovered element size by every proven subrange count, with
 language-aware lower bounds plus cycle and overflow guards. The complete
 ratchet moves to 1,550 passes / 250 failures, with exactly these four changes.
 
-The remaining root causes still split across architecture layers. `for_sum`
-needs AArch64 SIMD horizontal-reduction semantics; the other cells retain
-control-flow, aggregate-shape, or packet-parser value-role defects. The set is
-therefore triage evidence, not one “AArch64 gap.”
+The packed-reduction slice then closes `03_loop_shapes:aarch64:O2:for_sum`.
+Capstone's structured operands now retain an architecture-independent lane
+shape; AArch64 `Q` transfers, `ADD Vn.4S`, `ADDV`, and the proven 32-bit
+FP-to-GPR `FMOV` form lower into the same scalar dword-lane LLIR already used by
+x86 SIMD.
+The low `sN` view shares `vN` lane zero, while unsupported 64-bit `dN` transfers
+remain opaque. The complete ratchet moves to 1,551 passes / 249 failures, with
+exactly this one change. The remaining cells retain control-flow,
+aggregate-shape, or packet-parser value-role defects, so the set remains triage
+evidence rather than one “AArch64 gap.”
 
 ### Rank-ordered next work
 
@@ -742,8 +748,9 @@ therefore triage evidence, not one “AArch64 gap.”
    linked-list output and stable ARM constructor/destructor aggregate identity.
 4. **P1 — architecture-parametric semantics (EPIC 4).** Move calling-convention,
    register-bank, stack-coordinate, and SIMD semantics behind machine-model traits;
-   keep A32 and Thumb as distinct test targets. Acceptance: implement AArch64
-   `addv`-class reductions and increase A32 from its measured baseline without
+   keep A32 and Thumb as distinct test targets. The first AArch64 `addv`-class
+   reduction slice is complete; next acceptance is to expand typed lane semantics
+   without false passes and increase A32 from its measured baseline without
    architecture-name gates in shared IR passes.
 5. **P2 — symbolic constant operands (EPIC 2).** Resolve data/code addresses,
    literals, and table bases through the program environment instead of preserving

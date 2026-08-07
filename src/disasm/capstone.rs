@@ -3,9 +3,9 @@ use crate::core::binary::Endianness;
 use crate::core::disassembler::{
     Architecture, Disassembler, DisassemblerError, DisassemblerResult,
 };
-use crate::core::instruction::{Access, Instruction, Operand};
+use crate::core::instruction::{Access, Instruction, Operand, VectorShape};
 use capstone::arch::arm::ArmOperandType;
-use capstone::arch::arm64::Arm64OperandType;
+use capstone::arch::arm64::{Arm64OperandType, Arm64Vas};
 use capstone::prelude::*;
 use capstone::{Arch, Capstone, Endian, Mode, NO_EXTRA_MODE};
 
@@ -13,6 +13,32 @@ pub struct CapstoneDisassembler {
     cs: capstone::Capstone,
     arch: Architecture,
     endianness: Endianness,
+}
+
+fn arm64_vector_shape(arrangement: Arm64Vas) -> Option<VectorShape> {
+    use Arm64Vas::*;
+
+    let (lanes, element_bits) = match arrangement {
+        ARM64_VAS_16B => (16, 8),
+        ARM64_VAS_8B => (8, 8),
+        ARM64_VAS_4B => (4, 8),
+        ARM64_VAS_1B => (1, 8),
+        ARM64_VAS_8H => (8, 16),
+        ARM64_VAS_4H => (4, 16),
+        ARM64_VAS_2H => (2, 16),
+        ARM64_VAS_1H => (1, 16),
+        ARM64_VAS_4S => (4, 32),
+        ARM64_VAS_2S => (2, 32),
+        ARM64_VAS_1S => (1, 32),
+        ARM64_VAS_2D => (2, 64),
+        ARM64_VAS_1D => (1, 64),
+        ARM64_VAS_1Q => (1, 128),
+        ARM64_VAS_INVALID => return None,
+    };
+    Some(VectorShape {
+        lanes,
+        element_bits,
+    })
 }
 
 fn cs_arch_mode(arch: Architecture, end: Endianness) -> Option<(Arch, Mode, Option<Endian>)> {
@@ -242,7 +268,15 @@ impl Disassembler for CapstoneDisassembler {
                             match op.op_type {
                                 Arm64OperandType::Reg(r) => {
                                     let name = self.cs.reg_name(r).unwrap_or_default();
-                                    operands.push(Operand::register(name, 0, Access::Read));
+                                    let shape = arm64_vector_shape(op.vas);
+                                    let mut operand = Operand::register(
+                                        name,
+                                        shape.and_then(VectorShape::total_bits).unwrap_or(0),
+                                        Access::Read,
+                                    );
+                                    operand.vector_shape = shape;
+                                    operand.vector_index = op.vector_index;
+                                    operands.push(operand);
                                 }
                                 Arm64OperandType::Imm(i) => {
                                     operands.push(Operand::immediate(i, 0));
@@ -431,6 +465,26 @@ mod tests {
             .expect("decode");
         assert_eq!(ins.length, 2, "Thumb NOP must be 2 bytes");
         assert_eq!(ins.mnemonic, "nop");
+    }
+
+    #[test]
+    fn arm64_preserves_packed_vector_arrangements() {
+        // `add v30.4s, v31.4s, v30.4s` = 0x4ebe87fe.
+        let cs = CapstoneDisassembler::new(Architecture::ARM64, Endianness::Little)
+            .expect("capstone arm64 backend");
+        let ins = cs
+            .disassemble_instruction(&va(0x1000), &0x4ebe87feu32.to_le_bytes())
+            .expect("decode packed add");
+        assert_eq!(ins.mnemonic, "add");
+        assert_eq!(ins.operands.len(), 3);
+        assert!(ins.operands.iter().all(|operand| {
+            operand.vector_shape
+                == Some(VectorShape {
+                    lanes: 4,
+                    element_bits: 32,
+                })
+                && operand.size == 128
+        }));
     }
 
     #[test]

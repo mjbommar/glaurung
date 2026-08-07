@@ -129,6 +129,15 @@ pub fn is_promoted_local_reg(register: &VReg) -> bool {
     matches!(register, VReg::Phys(name) if is_promoted_local_name(name))
 }
 
+/// A scalar dword lane of a packed register.
+///
+/// Packed operations in every ISA lower through this one spelling so ordinary
+/// LLIR, SSA, type recovery, and C emission can compose over lanes without a
+/// parallel vector AST.
+pub fn packed_dword_lane(register: &str, lane: usize) -> VReg {
+    VReg::phys(format!("{register}_d{lane}"))
+}
+
 /// A readable RHS value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -536,15 +545,16 @@ pub fn phys_reg_width(name: &str) -> Option<Width> {
             return Some(Width::W128);
         }
     }
-    // Scalarised packed-dword views used by the x86 lifter. Keeping lane
-    // identity in the register name lets ordinary SSA/dataflow process SSE2
-    // operations without pretending a lane-wise add is a scalar 128-bit add.
+    // Scalarised packed-dword views used by the x86 and AArch64 lifters.
+    // Keeping lane identity in the register name lets ordinary SSA/dataflow
+    // process packed operations without pretending a lane-wise add is one
+    // scalar 128-bit add.
     if let Some((register, lane)) = n.rsplit_once("_d") {
-        if register
+        let packed_register = register
             .strip_prefix("xmm")
-            .is_some_and(|index| index.parse::<u8>().is_ok())
-            && lane.parse::<u8>().is_ok_and(|index| index < 4)
-        {
+            .or_else(|| register.strip_prefix('v'))
+            .is_some_and(|index| index.parse::<u8>().is_ok_and(|index| index <= 31));
+        if packed_register && lane.parse::<u8>().is_ok_and(|index| index < 4) {
             return Some(Width::W32);
         }
     }
@@ -785,6 +795,9 @@ mod tests {
         assert_eq!(phys_reg_width("x30"), Some(Width::W64));
         assert_eq!(phys_reg_width("w0"), Some(Width::W32));
         assert_eq!(phys_reg_width("v5"), Some(Width::W128));
+        assert_eq!(phys_reg_width("v5_d0"), Some(Width::W32));
+        assert_eq!(phys_reg_width("v31_d3"), Some(Width::W32));
+        assert_eq!(phys_reg_width("v31_d4"), None);
         assert_eq!(phys_reg_width("d7"), Some(Width::W64));
         assert_eq!(phys_reg_width("s7"), Some(Width::W32));
     }

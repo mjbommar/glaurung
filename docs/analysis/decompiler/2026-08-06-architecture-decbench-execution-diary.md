@@ -456,3 +456,39 @@ zero and its six established pytest-mark warnings. Rust formatting, changed-file
 Python formatting/linting, and whitespace checks pass. Repository-wide static
 checks retain the established debt unchanged: 354 files would be reformatted,
 3,830 lint errors, and 2,043 type diagnostics.
+
+## 19:26 — typed AArch64 dword lanes closed the horizontal reduction
+
+`for_sum` was reproduced from its source through the retained GCC 15 AArch64 O2
+ELF, disassembly, lifted LLIR, emitted C, and a 128-vector differential. The five
+machine instructions are `ldp q31,q30,[x0]`, `add v30.4s,v31.4s,v30.4s`,
+`addv s31,v30.4s`, `fmov w0,s31`, and `ret`. Before repair, the pair load read
+only two eight-byte scalars, the packed add was represented as one 128-bit
+scalar operation, and `addv` plus `fmov` were opaque; emitted C returned zero.
+
+The repair carries a generic `(lane count, element width)` shape on decoded
+operands and centralizes packed-dword register spelling for both x86 and
+AArch64. A dedicated 203-line AArch64 packed module decomposes Q loads/stores,
+lane-wise 4S addition, the horizontal reduction, and the proven 32-bit
+FP-to-GPR transfer into ordinary LLIR. The `sN` scalar view is the low dword of `vN`, so
+the reduction and transfer share one storage identity. The existing large
+AArch64 lifter gains only dispatch glue; the component and its tests do not add
+another packed-semantics copy to that file.
+
+The first canonical run appeared to improve `find_first_set` too, but its
+emitted C still contained uninitialised vector temporaries. That false pass
+exposed an over-broad `xN`/`dN` FMOV claim and the missing `sN`/`vN[0]` alias.
+Restricting FMOV to the proven 32-bit form and unifying the low-lane identity
+keeps the target green at 128 vectors while returning `find_first_set` to its
+honest failure until `dup`, `movi`, `mvni`, `ushl`, `cmtst`, and `umaxp` are
+modeled. The fresh six-lane canonical ratchet matches exactly at 1,551 passes,
+249 failures, 228 structural rows, and six declared unsupported rows, with the
+pinned x86-64 control still 328/328.
+
+The final code passes all 1,774 Rust library tests and every integration,
+example, and benchmark target. The complete architecture-roundtrip Python
+module and the complete Python suite both reach 100% with exit zero; the latter
+retains only the same six pytest-mark warnings. Rust formatting, changed-file
+Python formatting/linting, and whitespace checks pass. Repository-wide static
+checks retain the established debt: 354 files would be reformatted, 3,830 lint
+errors, and 2,043 type diagnostics.

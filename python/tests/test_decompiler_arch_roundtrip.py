@@ -680,6 +680,37 @@ def test_aarch64_o0_kmp_array_initializer_aliases_indexed_storage(
     assert results["kmp_search"]["status"] == "pass", results
 
 
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_aarch64_o2_horizontal_reduction_preserves_all_integer_lanes(
+    tmp_path: Path,
+) -> None:
+    """AArch64 ADDV must reduce every packed lane into the integer result."""
+    if shutil.which(A.TARGETS["aarch64"].cc) is None:
+        pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
+    fixture = "03_loop_shapes"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O2.so"
+    ok, error = A._cross_build("aarch64", source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O2",
+        native_cc=A.native_cc("aarch64"),
+        only={"for_sum"},
+    )
+
+    assert results["for_sum"]["status"] == "pass", results
+
+
 def test_reference_so_defaults_to_the_binary_so_host_lanes_are_unchanged(tmp_path):
     """Every x86-64 lane must be bit-identical to what it was before
     `reference_so` existed, or the 656-case gate is measuring something new."""

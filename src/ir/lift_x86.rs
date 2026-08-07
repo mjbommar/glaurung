@@ -1833,7 +1833,7 @@ fn cmpxchg_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
 /// the four dword lanes independently lets the existing scalar LLIR, SSA, and C
 /// backend preserve exact lane dataflow without adding a second vector AST.
 fn packed_dword_lane(register: Register, lane: usize) -> VReg {
-    VReg::phys(format!("{}_d{lane}", reg_name(register)))
+    crate::ir::types::packed_dword_lane(&reg_name(register), lane)
 }
 
 fn is_xmm_register(register: Register) -> bool {

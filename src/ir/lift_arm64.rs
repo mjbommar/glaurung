@@ -31,6 +31,9 @@ use crate::ir::regview;
 use crate::ir::types::*;
 use crate::ir::use_def::def_uses;
 
+mod packed;
+use packed::Transfer as PackedTransfer;
+
 /// Does a write through this register name totally overwrite its 64-bit parent
 /// with a zero-extended value? True for exactly the `wN` views (ARM DDI 0487
 /// B1.2.1: "the upper 32 bits of the X register are set to zero").
@@ -143,6 +146,7 @@ fn scalar_access_size(mnemonic: &str, register: &Operand) -> u8 {
             "strb" | "sturb" => 1,
             "strh" | "sturh" => 2,
             _ => match register.register.as_deref() {
+                Some(name) if name.starts_with('q') || name.starts_with('v') => 16,
                 Some(name) if name.starts_with('w') || name.starts_with('s') => 4,
                 Some(name) if name.starts_with('h') => 2,
                 Some(name) if name.starts_with('b') => 1,
@@ -1008,6 +1012,12 @@ fn bitfield_operands(ins: &Instruction) -> Option<(VReg, Value, u16, u16, Width)
 fn lift_one(ins: &Instruction) -> Vec<Op> {
     let mnem = ins.mnemonic.to_ascii_lowercase();
 
+    if mnem == "add" {
+        if let Some(ops) = packed::dword_binary(ins, BinOp::Add) {
+            return ops;
+        }
+    }
+
     // Three-operand arithmetic: <op> Xd, Xn, <reg|imm>
     if let Some(op) = bin_for_mnem(&mnem) {
         if ins.operands.len() == 3 {
@@ -1122,6 +1132,11 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
 
     match mnem.as_str() {
         "nop" => vec![Op::Nop],
+        "addv" => packed::dword_horizontal_add(ins)
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
+        "fmov" => packed::scalar_fmov(ins)
+            .map(|op| vec![op])
+            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
         "mov" => {
             if ins.operands.len() == 2 {
                 let Some(dst) = operand_reg(&ins.operands[0]) else {
@@ -1879,6 +1894,10 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
                 let size = scalar_access_size(&mnem, &ins.operands[0]);
+                if size == 16 {
+                    return packed::memory_transfer(ins, &dst, 1, 2, PackedTransfer::Load)
+                        .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]);
+                }
                 // A sign-extending load reads `size` bytes and sign-fills the
                 // whole destination register, so the load lands in a temporary
                 // and the widening is an explicit `SExt`. Writing it straight
@@ -1942,6 +1961,13 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
                 let size = scalar_access_size(&mnem, &ins.operands[0]);
+                if size == 16 {
+                    let Value::Reg(register) = &src else {
+                        return vec![Op::Unknown { mnemonic: mnem }];
+                    };
+                    return packed::memory_transfer(ins, register, 1, 2, PackedTransfer::Store)
+                        .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]);
+                }
                 if let Some(addr) = operand_to_memop(&ins.operands[1], size) {
                     let base_reg = addr.base.clone();
                     let mut out = Vec::new();
@@ -1975,6 +2001,16 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 let Some(dst2) = operand_reg(&ins.operands[1]) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
+                match (packed::vector_name(&dst1), packed::vector_name(&dst2)) {
+                    (Some(_), Some(_)) => {
+                        return packed::pair_transfer(ins, &dst1, &dst2, PackedTransfer::Load)
+                            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]);
+                    }
+                    (Some(_), None) | (None, Some(_)) => {
+                        return vec![Op::Unknown { mnemonic: mnem }];
+                    }
+                    (None, None) => {}
+                }
                 let pair_size = scalar_access_size(&mnem, &ins.operands[0]);
                 if let Some(mut addr) = operand_to_memop(&ins.operands[2], pair_size) {
                     let base_reg = addr.base.clone();
@@ -2015,6 +2051,22 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 let Some(src2) = operand_to_value(&ins.operands[1]) else {
                     return vec![Op::Unknown { mnemonic: mnem }];
                 };
+                match (&src1, &src2) {
+                    (Value::Reg(first), Value::Reg(second))
+                        if packed::vector_name(first).is_some()
+                            && packed::vector_name(second).is_some() =>
+                    {
+                        return packed::pair_transfer(ins, first, second, PackedTransfer::Store)
+                            .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]);
+                    }
+                    (Value::Reg(first), Value::Reg(second))
+                        if packed::vector_name(first).is_some()
+                            || packed::vector_name(second).is_some() =>
+                    {
+                        return vec![Op::Unknown { mnemonic: mnem }];
+                    }
+                    _ => {}
+                }
                 let pair_size = scalar_access_size(&mnem, &ins.operands[0]);
                 if let Some(mut addr) = operand_to_memop(&ins.operands[2], pair_size) {
                     let base_reg = addr.base.clone();

@@ -118,6 +118,22 @@ impl fmt::Display for SideEffect {
     }
 }
 
+/// Packed-vector lane arrangement carried independently of any source ISA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VectorShape {
+    /// Number of independently operated lanes.
+    pub lanes: u8,
+    /// Width of one lane in bits.
+    pub element_bits: u8,
+}
+
+impl VectorShape {
+    /// Total register width described by this arrangement.
+    pub fn total_bits(self) -> Option<u8> {
+        self.lanes.checked_mul(self.element_bits)
+    }
+}
+
 /// Structured operand representation for instructions
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "python-ext", pyclass)]
@@ -144,6 +160,12 @@ pub struct Operand {
     pub base: Option<String>,
     /// Memory index register (for Memory operands)
     pub index: Option<String>,
+    /// Architecture-independent packed-lane arrangement, when one is encoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_shape: Option<VectorShape>,
+    /// Selected vector lane for indexed-lane operands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_index: Option<u32>,
 }
 
 #[cfg(feature = "python-ext")]
@@ -165,6 +187,8 @@ impl Operand {
             scale: None,
             base: None,
             index: None,
+            vector_shape: None,
+            vector_index: None,
         }
     }
 
@@ -184,6 +208,8 @@ impl Operand {
             scale: None,
             base: None,
             index: None,
+            vector_shape: None,
+            vector_index: None,
         }
     }
 
@@ -251,6 +277,8 @@ impl Operand {
             scale,
             base,
             index,
+            vector_shape: None,
+            vector_index: None,
         }
     }
 
@@ -349,6 +377,8 @@ impl Operand {
             scale: None,
             base: None,
             index: None,
+            vector_shape: None,
+            vector_index: None,
         }
     }
 
@@ -365,6 +395,8 @@ impl Operand {
             scale: None,
             base: None,
             index: None,
+            vector_shape: None,
+            vector_index: None,
         }
     }
 
@@ -421,6 +453,8 @@ impl Operand {
             scale,
             base,
             index,
+            vector_shape: None,
+            vector_index: None,
         }
     }
 }
