@@ -823,11 +823,11 @@
   },
   "05_cleanup_and_state_machine:aarch64:O0": {
     "fsm": "pass",
-    "process": "fail"
+    "process": "pass"
   },
   "05_cleanup_and_state_machine:aarch64:O2": {
     "fsm": "pass",
-    "process": "fail"
+    "process": "pass"
   },
   "05_cleanup_and_state_machine:armv7:O0": {
     "fsm": "pass",

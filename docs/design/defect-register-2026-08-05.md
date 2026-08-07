@@ -674,12 +674,11 @@ signatures now include `gyroInitFilterNotch1(uint16_t, uint16_t)`,
 `pkg_array_match_patterns`. Fully representing its opaque function-pointer
 parameter still requires EPIC 1's structured declarator/type environment.
 
-### Current strict AArch64-only set: 2, not 43
+### Current strict AArch64-only set: 1, not 43
 
 The old 43-function count was a verdict-only snapshot and is stale. Relative to
 the current pinned x86-64, i386, and Thumb lanes, the strict AArch64-only set is:
 
-- `05_struct_arrays:O0:process`;
 - `07_packet_parser:O2:validate_header`.
 
 The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
@@ -735,9 +734,17 @@ output per SSA definition. This changes `loop_continue` and `mutate_reverse`
 from fail to pass. The same zero-broadcast semantics also repairs the real O0
 stack-array initializers in `rb_validate` and `topological_sort`. The complete
 ratchet moves to 1,555 passes / 245 failures, with exactly those four changes.
-The two strict cells that remain are aggregate-shape and packet-parser
-value-role defects, so the set remains triage evidence rather than one
-“AArch64 gap.”
+The next source-to-machine audit corrects the stale classification and fixture
+name for `05_struct_arrays:O0:process`: the authoritative row is
+`05_cleanup_and_state_machine:aarch64:O0:process`, and its source has no struct
+or array. AArch64 `LDRB Wd,[...]` recorded the byte-sized memory read but omitted
+the architectural 8-to-32-bit zero-extension. Offset-zero accesses consequently
+rendered through signed `char`, while indexed accesses happened to inherit the
+DWARF `uint8_t *` type. Explicit narrow-load widening changes `process` from fail
+to pass at both O0 and O2. The complete ratchet moves to 1,557 passes / 243
+failures, with exactly those two changes. The one strict cell that remains is a
+packet-parser value-role defect, so the set remains triage evidence rather than
+one “AArch64 gap.”
 
 ### Rank-ordered next work
 
@@ -758,9 +765,10 @@ value-role defects, so the set remains triage evidence rather than one
 4. **P1 — architecture-parametric semantics (EPIC 4).** Move calling-convention,
    register-bank, stack-coordinate, and SIMD semantics behind machine-model traits;
    keep A32 and Thumb as distinct test targets. The AArch64 `addv`, zero-splat,
-   signed-max, and one-table byte-permutation slices are complete; next acceptance
-   is to expand typed lane semantics without false passes and increase A32 from its
-   measured baseline without architecture-name gates in shared IR passes.
+   signed-max, one-table byte-permutation, and unsigned narrow-load slices are
+   complete; next acceptance is to expand typed lane semantics without false
+   passes and increase A32 from its measured baseline without architecture-name
+   gates in shared IR passes.
 5. **P2 — symbolic constant operands (EPIC 2).** Resolve data/code addresses,
    literals, and table bases through the program environment instead of preserving
    opaque integers. Acceptance: address-bearing operands retain symbol, section,

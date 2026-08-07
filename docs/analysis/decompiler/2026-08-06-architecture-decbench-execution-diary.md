@@ -549,3 +549,53 @@ architecture-roundtrip Python module and the complete Python suite both reach
 Rust formatting, changed-file Python formatting/linting, and whitespace checks
 pass. Repository-wide static checks retain the established debt unchanged: 354
 files would be reformatted, 3,830 lint errors, and 2,043 type diagnostics.
+
+## 21:33 — explicit AArch64 narrow-load widening closed `process`
+
+The register called the remaining strict row `05_struct_arrays:O0:process` and
+classified it as aggregate-shape recovery. The authoritative baseline and
+source instead name `05_cleanup_and_state_machine:aarch64:O0:process`; the
+function is a cleanup ladder over scalar locals and a `const uint8_t *`, with no
+struct or array. That discrepancy was treated as evidence against the existing
+diagnosis rather than normalized away.
+
+The retained GCC 15 AArch64 O0 ELF at
+`/tmp/glaurung-a64-process-20260806/05_cleanup_and_state_machine-aarch64-O0.so`
+has SHA-256
+`cb32c7d2aa8f5f42d6f6c37a9395d46ec9680ddbdd9621729fd2a978819990bc`.
+Its first failing 128-vector differential returned 1248 where the source
+returned 1504 for bytes beginning `[188,19,98,251]`. Assembly uses unsigned
+`ldrb w0,[x0]` for byte zero. Raw LLIR had no unknown operations, but represented
+that instruction as a one-byte load directly into `w0` followed only by the
+generic 32-to-64-bit W-register zero-extension. The architectural 8-to-32-bit
+zero-extension was absent. Emitted C therefore evaluated byte zero as signed
+`*(char *)arg0`; the high byte 188 became -68. Offset-one through offset-three
+loads happened to render as `arg0[n]` and inherit the DWARF `uint8_t *` element
+type, which explains why the defect appeared offset-specific despite identical
+machine load semantics.
+
+A RED exact-instruction test now requires `LDRB` to load into a distinct value
+and explicitly zero-extend it from 8 to 32 bits. A RED real-fixture differential
+pins the high-byte mismatch. The lifter now emits explicit widening for every
+narrow GPR load: signed load mnemonics retain `SExt`, while unsigned `LDRB` and
+`LDRH` use `ZExt`; equal-width and SIMD scalar loads are unchanged. Post-fix
+LLIR for `0x5c4` is `Load %temp` then `ZExt %temp, W8 -> W32`, before the existing
+W-register canonicalization. Emitted C preserves `(unsigned char)` even for the
+zero-offset dereference, and the unchanged O0 binary passes 138 cases.
+
+The full ratchet exposed O2 as the same honest defect, not a free verdict. The
+retained O2 ELF has SHA-256
+`e552cdca7e9d92a6d1cef6ca67be80ca8bbb94be0649626e19518b34b3e6f32a`;
+its optimized body uses four `ldrb` instructions for offsets zero through three,
+and post-fix LLIR gives every one an 8-to-32-bit `ZExt`. It also passes 138
+cases. The canonical six-lane matrix changes exactly O0 and O2 `process` from
+fail to pass and has no regressions: 1,557 passes, 243 failures, 228 structural
+rows, and six declared unsupported rows; pinned x86-64 remains 328/328.
+
+The final code passes all 1,778 Rust library tests and every integration,
+example, benchmark, and other all-targets test. The complete
+architecture-roundtrip Python module and the complete Python suite both reach
+100% with exit zero; the latter retains only the same six pytest-mark warnings.
+Rust formatting, changed-file Python formatting/linting, and whitespace checks
+pass. Repository-wide static checks retain the established debt unchanged: 354
+files would be reformatted, 3,830 lint errors, and 2,043 type diagnostics.

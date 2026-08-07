@@ -1905,21 +1905,37 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                     return packed::memory_transfer(ins, &dst, 1, 2, PackedTransfer::Load)
                         .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]);
                 }
-                // A sign-extending load reads `size` bytes and sign-fills the
-                // whole destination register, so the load lands in a temporary
-                // and the widening is an explicit `SExt`. Writing it straight
-                // into `dst` would claim a zero-extension the CPU never did.
+                // A narrow load reads `size` bytes and fills the rest of its
+                // GPR destination. Keep the memory value distinct and make that
+                // architectural widening explicit: signed forms use `SExt`,
+                // while LDRB/LDRH use `ZExt`. A bare byte load into `wN` loses
+                // the unsigned result when it later renders through a signed C
+                // `char` dereference.
                 let signed = sign_extending_load(&mnem);
-                let loaded = if signed {
+                let from = Width(u16::from(size) * 8);
+                let widen_to = dst.width().filter(|to| from.bits() < to.bits());
+                let loaded = if widen_to.is_some() {
                     temp_for(ins, 14)
                 } else {
                     dst.clone()
                 };
-                let widen = signed.then(|| Op::SExt {
-                    src: Value::Reg(loaded.clone()),
-                    dst: dst.clone(),
-                    from: Width(u16::from(size) * 8),
-                    to: dst.width().unwrap_or(Width::W64),
+                let widen = widen_to.map(|to| {
+                    let src = Value::Reg(loaded.clone());
+                    if signed {
+                        Op::SExt {
+                            src,
+                            dst: dst.clone(),
+                            from,
+                            to,
+                        }
+                    } else {
+                        Op::ZExt {
+                            src,
+                            dst: dst.clone(),
+                            from,
+                            to,
+                        }
+                    }
                 });
                 if let Some(addr) = operand_to_memop(&ins.operands[1], size) {
                     let base_reg = addr.base.clone();
@@ -2997,6 +3013,37 @@ mod tests {
         assert!(
             !unsigned.iter().any(|i| matches!(&i.op, Op::SExt { .. })),
             "ldrb must not sign-extend: {unsigned:#?}"
+        );
+    }
+
+    /// An unsigned narrow load zero-fills the rest of its destination register.
+    /// Keeping only the byte-sized memory access leaves the C renderer free to
+    /// interpret a zero-offset dereference as signed `char`, which changes every
+    /// value above 0x7f even though AArch64 `LDRB` cannot produce that result.
+    #[test]
+    fn narrow_unsigned_loads_zero_fill_their_destination() {
+        // ldrb w0,[sp,#31] -> 0x39407fe0 (assembled, not hand-derived)
+        let out = lift_bytes(&0x39407fe0u32.to_le_bytes(), 0x1000);
+        let Op::Load { dst: loaded, addr } = &out[0].op else {
+            panic!("expected a load: {out:#?}");
+        };
+        assert_eq!(addr.size, 1, "wrong access size: {out:#?}");
+        assert!(
+            out.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::ZExt {
+                    src: Value::Reg(src),
+                    from: Width::W8,
+                    to: Width::W32,
+                    ..
+                } if src == loaded
+            )),
+            "LDRB did not zero-fill W0 from the loaded byte: {out:#?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|instruction| matches!(instruction.op, Op::SExt { .. })),
+            "LDRB must not sign-extend: {out:#?}"
         );
     }
 
