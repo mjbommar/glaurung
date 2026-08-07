@@ -836,3 +836,42 @@ The complete six-lane ratchet changes exactly
 passes / 235 failures, AArch64 313/328, 228 structural rows, six declared
 unsupported rows, no missing/no-case/timeout/lane errors, and pinned x86-64
 remains 328/328.
+
+## 02:33 (2026-08-07) — structured AArch64 canary removal closes four O2 crashes
+
+The apparent five-function graph/search cluster was partially shared. Retained
+AArch64 O2 ELFs and SHA-256 values were:
+
+- `15_binary_search_tree`: `432536005a47887bfd9b6505cc15aeb09b43d48be6ebac2e97530843591747f0`;
+- `20_graph_bfs`: `c1c5ef92e12f5430172ae0035fe8821399ec919df6371c04140c08dccb5e8e8f`;
+- `21_graph_dfs`: `ce536d154747dee952da25a4f651e1dd784f13e91d2c298c6cc44e82d46fc114`;
+- `22_dijkstra`: `cd994f76120c60a5defc9947186d1f1b2b7c1e9941b231e5cb376a61b8dce1ef`;
+- `25_kmp_search`: `22be2d0cf6088781ecb2485fab03ed3fe10f2d9641fe9d67cb0b9116ba707c90`.
+
+All five recovered workers initially crashed on their first invalid-input guard
+vector. Four shared the same complete cause. GCC's stack protector loaded the
+guard address through its GOT slot, loaded the guard value, saved it in the
+frame, and compared a fresh value at exit before calling `__stack_chk_fail`.
+Late name resolution recognized only the exit value. The source-level AST still
+saved through the split form `%addr = *(u64)__stack_chk_guard; store %stack_N =
+*(u64)&%addr`, then rendered the exit as `stack_N ==
+&glaurung_global_1ffd8[0]`. The portable synthetic global is an address, not the
+process guard value, so every legitimate return took the failure path.
+
+The canary owner now recognizes that split GOT sequence across only a
+straight-line, definition-safe prologue. After proving the matching saved slot,
+it also handles the structured epilogue form `if (saved == guard) { ...;
+return; } __stack_chk_fail()`: the successful body is retained and only the
+compiler-inserted check/failure path is removed. The proof requires the named
+guard relocation, two 64-bit loads, a promoted stack destination, no intervening
+use or overwrite, equality with that same slot, and the exact noreturn failure
+symbol. A negative unit canary keeps an ordinary following call untouched.
+
+The real AArch64 BFS fixture was RED before the implementation and passes all
+vectors after rebuilding the extension. The same pass changes O2 `graph_bfs`,
+`graph_dfs`, `dijkstra_dense`, and `kmp_search` from fail to pass. O2
+`bst_inorder_checksum` remains fail, proving the fifth row has a second owner
+and is not being credited to this repair. The complete six-lane ratchet has
+exactly those four improvements and no regressions or reclassifications: 1,569
+passes / 231 failures, AArch64 317/328, pinned x86-64 328/328, 228 structural
+rows, six declared unsupported rows, and no missing/no-case/timeout/lane errors.

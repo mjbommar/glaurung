@@ -119,6 +119,48 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
 
     let mut i = 0;
     while i < body.len() {
+        // After control-flow structuring, AArch64 commonly has the inverse
+        // shape of the branch-to-failure idiom below:
+        //
+        //   if (saved_guard == __stack_chk_guard) { ...; return value; }
+        //   __stack_chk_fail();
+        //
+        // The success edge has become an inline arm, while the fallthrough is
+        // the noreturn failure call. Once the matching prologue save has proved
+        // `slot` is canary storage, retain the success body and discard only the
+        // compiler-inserted guard machinery.
+        let structured_success = if i + 1 < body.len() && is_stack_chk_fail_call(&body[i + 1]) {
+            match &body[i] {
+                Stmt::If {
+                    cond:
+                        cond @ Expr::Cmp {
+                            op: crate::ir::types::CmpOp::Eq,
+                            ..
+                        },
+                    then_body,
+                    else_body: None,
+                } if !then_body.is_empty()
+                    && matches!(then_body.last(), Some(Stmt::Return { .. }))
+                    && expr_mentions_slot(cond, slot)
+                    && expr_mentions_guard(cond) =>
+                {
+                    Some(then_body.clone())
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(success_body) = structured_success {
+            body.splice(
+                i..=i + 1,
+                std::iter::once(Stmt::Comment("stack-canary check".to_string()))
+                    .chain(success_body),
+            );
+            i += 1;
+            continue;
+        }
+
         // After stack-local promotion and flag folding GCC's reload/xor/jne
         // sequence can already be one direct comparison of the saved slot
         // against the recovered TLS displacement. The preceding save comment
@@ -195,6 +237,16 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         }
         i += 1;
     }
+}
+
+fn is_stack_chk_fail_call(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::Call {
+            target: Expr::Named { name, .. },
+            ..
+        } if name.split('@').next() == Some("__stack_chk_fail")
+    )
 }
 
 fn expr_mentions_slot(e: &Expr, slot: &str) -> bool {
@@ -300,6 +352,82 @@ fn collapse_body(body: &mut Vec<Stmt>) {
 
     let mut i = 0;
     while i + 1 < body.len() {
+        // AArch64's guard is reached through a GOT entry. After constant and
+        // copy folding the two load instructions commonly become:
+        //
+        //   %addr = *(u64)__stack_chk_guard;
+        //   store %stack_N = *(u64)&%addr;
+        //
+        // This is the split-statement counterpart of `got_indirect_guard`.
+        // The relocation name, two 64-bit dereferences, and stack destination
+        // keep the match specific to the ABI canary sequence.
+        let got_addr = match &body[i] {
+            Stmt::Assign {
+                dst,
+                src:
+                    Expr::Deref {
+                        addr: named_slot,
+                        size: 8,
+                    },
+            } if matches!(
+                named_slot.as_ref(),
+                Expr::Named { name, .. } if canary_symbol(name)
+            ) =>
+            {
+                Some(dst.clone())
+            }
+            _ => None,
+        };
+        let split_got_store = got_addr.as_ref().and_then(|got_addr| {
+            let mut j = i + 1;
+            while j < body.len() {
+                let slot = match &body[j] {
+                    Stmt::Store {
+                        addr: Expr::Reg(crate::ir::types::VReg::Phys(slot)),
+                        src:
+                            Expr::Deref {
+                                addr: saved_addr,
+                                size: 8,
+                            },
+                        size: 8,
+                    } if slot.starts_with("stack_")
+                        && is_identity_address(saved_addr, got_addr) =>
+                    {
+                        Some(slot.clone())
+                    }
+                    _ => None,
+                };
+                if let Some(slot) = slot {
+                    return Some((j, slot));
+                }
+
+                // Scan only a straight-line prologue and stop at any other use
+                // or redefinition. Frame saves and unrelated initializers may
+                // legally sit between the two AArch64 loads.
+                if crate::ir::dead_stores::stmt_reads(&body[j], got_addr)
+                    || stmt_overwrites(&body[j], got_addr)
+                    || !matches!(
+                        &body[j],
+                        Stmt::Assign { .. }
+                            | Stmt::Store { .. }
+                            | Stmt::Comment(_)
+                            | Stmt::Label(_)
+                            | Stmt::Nop
+                    )
+                {
+                    return None;
+                }
+                j += 1;
+            }
+            None
+        });
+        if let Some((store_index, slot)) = split_got_store {
+            body.remove(store_index);
+            body[i] = Stmt::Comment(format!("stack canary: save guard to %{}", slot));
+            i += 1;
+            continue;
+        }
+
         let load = matches!(
             &body[i],
             Stmt::Assign {
@@ -330,6 +458,29 @@ fn collapse_body(body: &mut Vec<Stmt>) {
             body[i] = Stmt::Comment(format!("stack canary: save guard to %{}", slot));
         }
         i += 1;
+    }
+}
+
+fn is_identity_address(expr: &Expr, target: &crate::ir::types::VReg) -> bool {
+    match expr {
+        Expr::Reg(register) => register == target,
+        Expr::Lea {
+            base: Some(base),
+            index: None,
+            scale: 0,
+            disp: 0,
+            segment: None,
+        } => base == target,
+        _ => false,
+    }
+}
+
+fn stmt_overwrites(stmt: &Stmt, target: &crate::ir::types::VReg) -> bool {
+    match stmt {
+        Stmt::Assign { dst, .. } => dst == target,
+        Stmt::Call { dst, .. } => dst.as_ref() == Some(target),
+        Stmt::Pop { target: dst } => dst == target,
+        _ => false,
     }
 }
 
@@ -945,6 +1096,123 @@ mod tests {
         assert!(matches!(&f.body[0], Stmt::Comment(s) if s.contains("save guard")));
         assert!(matches!(&f.body[1], Stmt::Comment(s) if s == "stack-canary check"));
         assert!(matches!(&f.body[2], Stmt::Return { .. }));
+    }
+
+    /// Constant folding can leave AArch64's GOT-indirect guard save split
+    /// across one address load and the stack-slot store. Structuring then
+    /// turns the success edge into an inline return followed by the noreturn
+    /// failure call. The whole compiler artifact must disappear together.
+    #[test]
+    fn structured_aarch64_got_canary_epilogue_collapses_with_its_save() {
+        use crate::ir::types::{CmpOp, VReg};
+        let guard = Expr::Named {
+            va: 0x1ffd8,
+            name: "__stack_chk_guard".into(),
+        };
+        let mut f = Function {
+            name: "graph_bfs".into(),
+            entry_va: 0x6a0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: Expr::Deref {
+                        addr: Box::new(guard.clone()),
+                        size: 8,
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var3"),
+                    src: Expr::Const(0),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("stack_4")),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(VReg::phys("var1")),
+                            index: None,
+                            scale: 0,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 8,
+                    },
+                    size: 8,
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(VReg::phys("stack_4"))),
+                        rhs: Box::new(guard),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Const(4)),
+                    }],
+                    else_body: None,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x570,
+                        name: "__stack_chk_fail@plt".into(),
+                    },
+                    args: vec![],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        collapse_canary_save(&mut f);
+
+        assert_eq!(f.body.len(), 4, "got: {:?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Comment(s) if s.contains("save guard")));
+        assert!(
+            matches!(&f.body[1], Stmt::Assign { dst, src: Expr::Const(0) } if dst == &VReg::phys("var3"))
+        );
+        assert!(matches!(&f.body[2], Stmt::Comment(s) if s == "stack-canary check"));
+        assert!(matches!(
+            &f.body[3],
+            Stmt::Return {
+                value: Some(Expr::Const(4))
+            }
+        ));
+    }
+
+    #[test]
+    fn structured_guard_comparison_before_an_ordinary_call_is_untouched() {
+        use crate::ir::types::{CmpOp, VReg};
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Comment("stack canary: save guard to %stack_0".to_string()),
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(VReg::phys("stack_0"))),
+                        rhs: Box::new(Expr::Named {
+                            va: 0x1ffd8,
+                            name: "__stack_chk_guard".into(),
+                        }),
+                    },
+                    then_body: vec![Stmt::Return { value: None }],
+                    else_body: None,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x600,
+                        name: "ordinary_call".into(),
+                    },
+                    args: vec![],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+        let original = f.clone();
+
+        collapse_canary_save(&mut f);
+
+        assert_eq!(f, original);
     }
 
     #[test]

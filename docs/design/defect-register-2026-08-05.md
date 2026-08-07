@@ -748,6 +748,18 @@ The final six-lane ratchet changes only
 `11_call_shapes:aarch64:O2:call_fold_wide_result`: 1,565 passes / 235 failures,
 AArch64 313/328, pinned x86-64 328/328, and no regression or reclassification.
 
+The next shared AArch64 O2 slice closes four false stack-protector crashes.
+Late GOT name resolution left the prologue guard load split across a named GOT
+load and a later dereference, while structuring inverted the epilogue into a
+successful inline return followed by `__stack_chk_fail`. Canary normalization
+now crosses only a straight-line, definition-safe prologue and removes the
+structured failure artifact only after proving the named guard, saved stack
+slot, equality, returning success arm, and exact failure symbol. This changes
+`graph_bfs`, `graph_dfs`, `dijkstra_dense`, and `kmp_search` from fail to pass.
+The complete ratchet is 1,569 passes / 231 failures, AArch64 317/328 and pinned
+x86-64 328/328, with no regression or reclassification.
+`bst_inorder_checksum` remains a separate open failure.
+
 The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
 `fib`, O0 `validate_header`, all three indirect-dispatch functions, two O0 call
 shapes, both O0 hash-table functions, and both O0 disjoint-set functions. A
@@ -851,6 +863,6 @@ architecture matrix remains triage evidence rather than one undifferentiated
    opaque integers. Acceptance: address-bearing operands retain symbol, section,
    width, and relocation provenance through lifting and C emission.
 6. **P2 — direct metric campaign.** After the preceding typed/storage slices,
-   rerun the retained 235-key proxy and then freeze a new 250-function manifest.
+   rerun the retained 231-key proxy and then freeze a new 250-function manifest.
    Require complete coverage and per-function GED/type-match deltas; do not accept
    generated-text improvement without behavioral and compiler controls.

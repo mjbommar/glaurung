@@ -931,6 +931,37 @@ def test_aarch64_o2_direct_callee_live_ins_preserve_a_wide_call_result(
     assert results["call_fold_wide_result"]["status"] == "pass", results
 
 
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_aarch64_o2_stack_protected_graph_returns_through_its_canary(
+    tmp_path: Path,
+) -> None:
+    """A GOT-indirect stack guard must not force every valid return to abort."""
+    if shutil.which(A.TARGETS["aarch64"].cc) is None:
+        pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
+    fixture = "20_graph_bfs"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O2.so"
+    ok, error = A._cross_build("aarch64", source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O2",
+        native_cc=A.native_cc("aarch64"),
+        only={"graph_bfs"},
+    )
+
+    assert results["graph_bfs"]["status"] == "pass", results
+
+
 def test_reference_so_defaults_to_the_binary_so_host_lanes_are_unchanged(tmp_path):
     """Every x86-64 lane must be bit-identical to what it was before
     `reference_so` existed, or the 656-case gate is measuring something new."""

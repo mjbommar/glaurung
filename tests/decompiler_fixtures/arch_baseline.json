@@ -2349,7 +2349,7 @@
     "graph_bfs": "pass"
   },
   "20_graph_bfs:aarch64:O2": {
-    "graph_bfs": "fail"
+    "graph_bfs": "pass"
   },
   "20_graph_bfs:armv7:O0": {
     "graph_bfs": "pass"
@@ -2385,7 +2385,7 @@
     "graph_dfs": "pass"
   },
   "21_graph_dfs:aarch64:O2": {
-    "graph_dfs": "fail"
+    "graph_dfs": "pass"
   },
   "21_graph_dfs:armv7:O0": {
     "graph_dfs": "pass"
@@ -2421,7 +2421,7 @@
     "dijkstra_dense": "pass"
   },
   "22_dijkstra:aarch64:O2": {
-    "dijkstra_dense": "fail"
+    "dijkstra_dense": "pass"
   },
   "22_dijkstra:armv7:O0": {
     "dijkstra_dense": "pass"
@@ -2529,7 +2529,7 @@
     "kmp_search": "pass"
   },
   "25_kmp_search:aarch64:O2": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:armv7:O0": {
     "kmp_search": "pass"
