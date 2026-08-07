@@ -2592,190 +2592,6 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
     f
 }
 
-/// After [`fold_returns`] has collapsed adjacent `ret = E; return;` pairs, any
-/// remaining `Return { value: None }` is a return sited in a different block
-/// from where its value was computed — ubiquitous in `-O0` goto-heavy code
-/// (comparison ladders, switch chains). By the ABI the return register holds
-/// the result at every return, so when the function actually writes its return
-/// register (i.e. it is not void) we spell these `return <ret_reg>` rather than
-/// a bare `return;`.
-///
-/// Applied only in the DecBench C renderer when the recovered output is direct
-/// or still unknown: there a bare return would be emitted as the value-losing
-/// `return 0;`, whereas `return ret;` recovers the data dependency Joern/GED and
-/// recompilation both need. The faithful register/`render_c` views keep bare
-/// `return;` so a genuinely void function is not given an invented value.
-fn default_return_to_reg(body: &mut [Stmt]) {
-    let Some(ret_reg) = find_written_return_reg(body) else {
-        return;
-    };
-    apply_default_return(body, &ret_reg);
-}
-
-/// Project a prototype-proven direct machine output onto the AST before passes
-/// that split a dual-role ABI register into source variables.
-///
-/// ARM32/AArch64 use the same register for argument zero and the direct result.
-/// A later role-splitting pass may therefore rename a post-spill result write;
-/// materialising the return first lets that pass rename the definition and use
-/// together. Unknown/void policy remains the responsibility of the caller.
-pub(crate) fn materialize_direct_output(f: &mut Function) {
-    default_return_to_reg(&mut f.body);
-}
-
-/// Remove machine output operands once prototype recovery has established that
-/// the source function is `void`.
-///
-/// Lowering intentionally happens before prototype projection and may already
-/// have folded `ret = value; RET` into `return value;`. Clearing only bare
-/// returns would therefore be too late. Walk every structured region and erase
-/// the value at the semantic boundary instead.
-fn clear_return_values(body: &mut [Stmt]) {
-    for statement in body {
-        match statement {
-            Stmt::Return { value } => *value = None,
-            Stmt::If {
-                then_body,
-                else_body,
-                ..
-            } => {
-                clear_return_values(then_body);
-                if let Some(else_body) = else_body {
-                    clear_return_values(else_body);
-                }
-            }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => clear_return_values(body),
-            Stmt::For { body, .. } => clear_return_values(body),
-            Stmt::Switch { cases, default, .. } => {
-                for (_, body) in cases {
-                    clear_return_values(body);
-                }
-                if let Some(body) = default {
-                    clear_return_values(body);
-                }
-            }
-            Stmt::TryCatch { try_body, catches } => {
-                clear_return_values(try_body);
-                for catch in catches {
-                    clear_return_values(&mut catch.body);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Whether the body contains any `Return { value: None }` (including nested).
-fn body_has_bare_return(body: &[Stmt]) -> bool {
-    body.iter().any(|s| match s {
-        Stmt::Return { value } => value.is_none(),
-        Stmt::If {
-            then_body,
-            else_body,
-            ..
-        } => {
-            body_has_bare_return(then_body)
-                || else_body.as_deref().is_some_and(body_has_bare_return)
-        }
-        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body_has_bare_return(body),
-        Stmt::For { body, .. } => body_has_bare_return(body),
-        Stmt::Switch { cases, default, .. } => {
-            cases.iter().any(|(_, b)| body_has_bare_return(b))
-                || default.as_deref().is_some_and(body_has_bare_return)
-        }
-        _ => false,
-    })
-}
-
-/// The first return register the body assigns, or `None` for a void function.
-/// Recognises both raw ABI names and the post-naming `ret` alias.
-fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
-    for s in body {
-        let found = match s {
-            Stmt::Assign { dst, .. }
-                if is_return_reg(dst) || matches!(dst, VReg::Phys(n) if n == "ret") =>
-            {
-                Some(dst.clone())
-            }
-            // A CALL writes the return register too. Looking only at `Assign`
-            // meant a function whose value comes straight from a callee —
-            // `return sum_arg6(a0, …)` — found no writer and kept its bare
-            // `return`, which renders `return 0;`. The call was right and the
-            // result was thrown away one statement later.
-            Stmt::Call { dst: Some(d), .. }
-                if is_return_reg(d) || matches!(d, VReg::Phys(n) if n == "ret") =>
-            {
-                Some(d.clone())
-            }
-            Stmt::If {
-                then_body,
-                else_body,
-                ..
-            } => find_written_return_reg(then_body)
-                .or_else(|| else_body.as_deref().and_then(find_written_return_reg)),
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => find_written_return_reg(body),
-            Stmt::For { body, .. } => find_written_return_reg(body),
-            Stmt::Switch { cases, default, .. } => cases
-                .iter()
-                .find_map(|(_, b)| find_written_return_reg(b))
-                .or_else(|| default.as_deref().and_then(find_written_return_reg)),
-            _ => None,
-        };
-        if found.is_some() {
-            return found;
-        }
-    }
-    None
-}
-
-fn apply_default_return(body: &mut [Stmt], ret_reg: &VReg) {
-    for s in body.iter_mut() {
-        match s {
-            Stmt::Return { value } if value.is_none() => {
-                *value = Some(Expr::Reg(ret_reg.clone()));
-            }
-            Stmt::If {
-                then_body,
-                else_body,
-                ..
-            } => {
-                apply_default_return(then_body, ret_reg);
-                if let Some(eb) = else_body {
-                    apply_default_return(eb, ret_reg);
-                }
-            }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                apply_default_return(body, ret_reg)
-            }
-            Stmt::For { body, .. } => apply_default_return(body, ret_reg),
-            Stmt::Switch { cases, default, .. } => {
-                for (_, b) in cases.iter_mut() {
-                    apply_default_return(b, ret_reg);
-                }
-                if let Some(b) = default {
-                    apply_default_return(b, ret_reg);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Common return registers across the ISAs we currently lift. We use a list
-/// rather than a single name so this pass works on both x86/x86-64 and
-/// AArch64 without having to thread arch info through the AST.
-const RETURN_REGS: &[&str] = &[
-    "rax", "eax", "ax", "al", // x86 / x86-64
-    "x0", "w0", // AArch64
-    "r0", // ARM32 AAPCS
-    "s0", "d0",  // ARM32 AAPCS hard-float
-    "ret", // canonical role name after apply_role_names
-];
-
-fn is_return_reg(v: &VReg) -> bool {
-    matches!(v, VReg::Phys(n) if RETURN_REGS.iter().any(|r| n == *r))
-}
-
 /// Whether `name` is a stack slot the promotion pass named — i.e. a real local
 /// variable, so a store *to* it is a plain assignment rather than a pointer
 /// write.
@@ -2827,7 +2643,9 @@ fn fold_returns(body: &mut Vec<Stmt>) {
     let mut i = 0;
     while i < body.len() {
         let Some(dst) = (match &body[i] {
-            Stmt::Assign { dst, .. } if is_return_reg(dst) => Some(dst.clone()),
+            Stmt::Assign { dst, .. } if crate::ir::direct_output::is_return_reg(dst) => {
+                Some(dst.clone())
+            }
             _ => None,
         }) else {
             i += 1;
@@ -2893,7 +2711,7 @@ fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>) {
             Stmt::Assign {
                 dst,
                 src: Expr::Const(value),
-            } if is_return_reg(dst) => Some(*value),
+            } if crate::ir::direct_output::is_return_reg(dst) => Some(*value),
             _ => None,
         };
         let Some(assigned) = assigned else {
@@ -6460,9 +6278,9 @@ pub fn prepare_for_decbench_with_output(
 ) -> Function {
     let mut owned = f.clone();
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
-        clear_return_values(&mut owned.body);
+        crate::ir::direct_output::clear_return_values(&mut owned);
     } else {
-        default_return_to_reg(&mut owned.body);
+        crate::ir::direct_output::materialize_direct_output(&mut owned);
     }
     coalesce_param_spills(&mut owned.body);
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);

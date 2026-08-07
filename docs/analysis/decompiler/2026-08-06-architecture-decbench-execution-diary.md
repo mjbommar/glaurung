@@ -763,3 +763,40 @@ focused real-ELF test passes, all 1,785 Rust library tests pass, and every Rust
 all-targets test passes. The sole remaining full-matrix AArch64-only owner is
 O2 `rt_u32`, whose body is just `ret` and therefore requires prototype-proven
 live-in/result alias materialization rather than another value-role split.
+
+## 01:05 (2026-08-07) — locked live-in/result alias closes `rt_u32`
+
+The last full-matrix AArch64-only row uses the same retained O2 integer-width
+ELF and SHA-256 recorded above. Source `rt_u32(uint32_t x)` returns
+`(int)(uint32_t)x`; GCC 15 emits only `ret` at `0xa10`. Raw LLIR and every AST
+stage therefore contain one bare `Return` and no definition. Machine-only
+prototype recovery reasonably classifies that shape as void, but the retained
+DWARF contract then locks one unsigned 32-bit parameter and a direct signed
+32-bit result. Before repair, direct-result materialization searched only for a
+register written inside the body, found none, and DecBench emission fabricated
+`return 0`. The exact RED vector was input `1`: source `1`, recovered `0`.
+
+The repair does not pretend the no-op body wrote x0. It permits a live-in result
+only when the source prototype locks both direct output and parameter arity, the
+result has no machine definition, and parameter zero's storage aliases the ABI
+return register. AArch64 x0 satisfies that proof; the pinned SysV control does
+not because arg0 is rdi and the result is rax. Unknown, unlocked, void, written-
+result, and non-aliasing cases retain their previous behavior. A separate
+recursive storage scan recognizes SSA spellings such as `x0#1` and rejects the
+fallback rather than returning stale `arg0`. The real ELF now emits `return
+arg0` and passes the fixture differential.
+
+Return projection and clearing were also extracted from `ast.rs` into the
+300-line `src/ir/direct_output.rs` owner, with locked-alias and negative SysV
+unit canaries. This removes 194 lines from the already oversized AST module and
+keeps the PyO3 pipeline as orchestration: it passes the recovered prototype and
+calling convention, while the semantic policy lives with direct-output
+materialization. The pass dump now names this boundary explicitly.
+
+The full `02_integer_widths` O2 slice is 28/28 for AArch64 and 28/28 for pinned
+x86-64. The complete six-lane pre-ratchet changes exactly
+`02_integer_widths:aarch64:O2:rt_u32` from fail to pass: 1,564 passes / 236
+failures, AArch64 312/328, 228 structural rows, six declared unsupported rows,
+no missing/no-case/timeout/lane errors, and pinned x86-64 remains 328/328. All
+1,787 Rust library tests and the Rust all-targets gate pass. Both the original
+43-row set and the fresh full-matrix AArch64-only set are now empty.

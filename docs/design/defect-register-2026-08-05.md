@@ -674,7 +674,7 @@ signatures now include `gyroInitFilterNotch1(uint16_t, uint16_t)`,
 `pkg_array_match_patterns`. Fully representing its opaque function-pointer
 parameter still requires EPIC 1's structured declarator/type environment.
 
-### Original 43-row AArch64 set: 0; full matrix AArch64-only set: 1
+### Original 43-row AArch64 set: 0; full matrix AArch64-only set: 0
 
 The old 43-function count was a verdict-only snapshot and is stale. Every row in
 that tracked set is now closed. A fresh unfiltered 328-cell intersection exposed
@@ -718,6 +718,19 @@ The final ratchet changes exactly `mul_widen` and `euler_decay_q16`: 1,563
 passes / 237 failures, with pinned x86-64 still 328/328 and no regressions or
 reclassifications. O2 `rt_u32` is the sole remaining full-matrix AArch64-only
 owner.
+
+The direct-output slice closes that final owner without inventing a machine
+definition. O2 `rt_u32` is exactly `ret`: DWARF locks both its one-parameter
+arity and its direct `int` result, the recovered result has no in-function
+definitions, and parameter zero occupies the AArch64 return storage x0. Only
+that conjunction, plus proof that the body never writes return storage
+(including SSA spellings), permits a bare return to use the live-in parameter.
+A SysV x86-64 control refuses the same fallback because arg0 is rdi, not rax.
+Return projection now has a 300-line owner module, removing 194 lines from
+`ast.rs`.
+The final six-lane ratchet changes only `rt_u32`: 1,564 passes / 236 failures,
+AArch64 312/328, pinned x86-64 328/328, and no regression or reclassification.
+The full-matrix AArch64-only set is empty.
 
 The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
 `fib`, O0 `validate_header`, all three indirect-dispatch functions, two O0 call
@@ -813,14 +826,15 @@ architecture matrix remains triage evidence rather than one undifferentiated
    keep A32 and Thumb as distinct test targets. The AArch64 `addv`, zero-splat,
    signed-max, one-table byte-permutation, unsigned narrow-load, and halfword
    lane byte-order, exact sub-byte-width, destructive wide-product, and clamped
-   64-bit-state slices are complete. Next acceptance is the O2 identity-return
-   cell, followed by typed-lane expansion and an A32 increase without
-   architecture-name gates in shared IR passes.
+   64-bit-state and prototype-proven identity-return slices are complete. The
+   tracked and full-matrix AArch64-only sets are empty; next acceptance is typed-
+   lane expansion and an A32 increase without architecture-name gates in shared
+   IR passes.
 5. **P2 — symbolic constant operands (EPIC 2).** Resolve data/code addresses,
    literals, and table bases through the program environment instead of preserving
    opaque integers. Acceptance: address-bearing operands retain symbol, section,
    width, and relocation provenance through lifting and C emission.
 6. **P2 — direct metric campaign.** After the preceding typed/storage slices,
-   rerun the retained 239-key proxy and then freeze a new 250-function manifest.
+   rerun the retained 236-key proxy and then freeze a new 250-function manifest.
    Require complete coverage and per-function GED/type-match deltas; do not accept
    generated-text improvement without behavioral and compiler controls.

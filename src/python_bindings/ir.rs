@@ -429,8 +429,9 @@ fn run_ast_passes(
     // following spill-role split must rename both its final definition and the
     // return use together, rather than orphaning the result as scratch.
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
-        crate::ir::ast::materialize_direct_output(f);
+        crate::ir::direct_output::materialize_prototype_output(f, cc, prototype);
     }
+    dp!("materialize_direct_output");
     // Reconstructed expressions now carry their explicit machine width. Make
     // the dual-role decision here rather than at pipeline entry, where a wide
     // result may still be hidden behind widthless temporaries.

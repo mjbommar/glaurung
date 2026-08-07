@@ -210,7 +210,7 @@
     "rotl32_7": "pass",
     "rotr32": "pass",
     "rt_u16": "pass",
-    "rt_u32": "fail",
+    "rt_u32": "pass",
     "rt_u64": "pass",
     "rt_u8": "pass",
     "sar_signed": "pass",

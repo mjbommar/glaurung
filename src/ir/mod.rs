@@ -34,6 +34,7 @@ pub mod const_fold;
 pub mod copy_prop;
 pub mod dce;
 pub mod dead_stores;
+pub mod direct_output;
 pub mod dwarf_fields;
 pub mod exception_recover;
 pub mod expr_reconstruct;

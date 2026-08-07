@@ -629,7 +629,7 @@ mod tests {
             ],
         };
 
-        crate::ir::ast::materialize_direct_output(&mut f);
+        crate::ir::direct_output::materialize_direct_output(&mut f);
         split_argument_storage_reuse(&mut f, CallConv::Arm, false);
 
         assert_eq!(

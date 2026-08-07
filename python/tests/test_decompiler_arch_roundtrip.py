@@ -869,10 +869,10 @@ def test_aarch64_o0_non_byte_aligned_extracts_keep_all_live_bits(
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
-def test_aarch64_o2_widening_product_does_not_reuse_narrow_parameter_storage(
+def test_aarch64_o2_x0_roles_preserve_wide_product_and_identity_return(
     tmp_path: Path,
 ) -> None:
-    """A 64-bit UMULL lifetime must not inherit uint32_t arg0 storage."""
+    """Distinct wide and identity-result x0 roles must retain their values."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
         pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
     fixture = "02_integer_widths"
@@ -893,10 +893,11 @@ def test_aarch64_o2_widening_product_does_not_reuse_narrow_parameter_storage(
         reference_so=str(reference),
         lane="aarch64:O2",
         native_cc=A.native_cc("aarch64"),
-        only={"mul_widen"},
+        only={"mul_widen", "rt_u32"},
     )
 
     assert results["mul_widen"]["status"] == "pass", results
+    assert results["rt_u32"]["status"] == "pass", results
 
 
 def test_reference_so_defaults_to_the_binary_so_host_lanes_are_unchanged(tmp_path):
