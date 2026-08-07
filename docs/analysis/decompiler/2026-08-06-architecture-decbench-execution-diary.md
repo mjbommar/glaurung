@@ -677,3 +677,31 @@ zero instead of recognizing that the incoming x0 is simultaneously the direct
 result. This is an ABI parameter/result-alias case. The next implementation slice
 therefore targets the shared O0 rendering defect first and keeps both O2 cells
 as independent canaries rather than accepting a four-cell heuristic.
+
+## 23:24 — one exact-width boundary closes both O0 cells
+
+Four AST RED canaries expose the shared design error independently: i13/i15
+zero-extension floors its source carrier to one byte, i13 truncation both floors
+and lacks an exact mask, an i13 select advertises one-byte storage, and naive
+signed i13 extension would use bit 15 rather than the declared bit 12. The real
+fixture RED reproduces both retained-ELF failures on the manifest's 128 vectors:
+`rotl16_3(UINT_MAX)` is source 65,535 versus recovered 2,047, and
+`trunc_u16_after_mul(UINT_MAX)` is source 65,533 versus recovered 509.
+
+The repair adds one architecture-neutral bit-width-to-C boundary. It chooses the
+smallest containing ordinary C integer, masks non-byte-aligned values explicitly,
+and reconstructs a signed value as `(x ^ sign) - sign` using the LLIR sign bit.
+Extension, truncation, and select lowering all consume this one rule. The logic
+and its four unit canaries live in `src/ir/ast/width_semantics.rs`; this adds a
+232-line cohesive module while shrinking the 15,000-line `ast.rs` rather than
+adding another special case to it.
+
+After rebuilding the Python extension, the unchanged O0 ELF passes both
+functions. The full `02_integer_widths` O0 slice is 28/28 AArch64 and 28/28
+pinned x86-64. The complete six-lane ratchet changes exactly the two expected
+cells and nothing else: 1,561 passes, 239 failures, 228 structural rows, six
+declared unsupported rows, no missing/no-case/timeout/lane errors, and the
+x86-64 control remains 328/328. All 1,784 default-feature Rust library tests
+also pass. The full-matrix AArch64-only set is now the two genuinely independent
+O2 owners: `mul_widen` value-role/storage reuse and `rt_u32` ABI live-in/result
+aliasing.

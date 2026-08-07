@@ -21,6 +21,10 @@ use crate::ir::types::{
 };
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
+mod width_semantics;
+
+use width_semantics::{containing_c_integer_bytes, exact_non_byte_value};
+
 // -- Expressions ---------------------------------------------------------------
 
 /// PDB-backed field candidate for a memory operand offset.
@@ -560,18 +564,13 @@ fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
 ///
 /// Emits only the inner cast when the two widths agree (nothing is being extended),
 /// and only the outer one when `from` is already the full width.
-fn widen_cast(
-    expr: Expr,
-    signed: bool,
-    from: crate::ir::types::Width,
-    to: crate::ir::types::Width,
-) -> Expr {
-    let fw = (from.bits() / 8).max(1) as u8;
-    let tw = (to.bits() / 8).max(1) as u8;
+fn widen_cast(expr: Expr, signed: bool, from: Width, to: Width) -> Expr {
+    let fw = containing_c_integer_bytes(from);
+    let tw = containing_c_integer_bytes(to);
     let inner = Expr::Cast {
         signed,
         width: fw,
-        expr: Box::new(expr),
+        expr: Box::new(exact_non_byte_value(expr, from, signed)),
     };
     if tw <= fw {
         return inner;
@@ -1151,7 +1150,8 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         // An expression that means the same thing wherever it is folded has to carry
         // its own width.
         //
-        //   Trunc to W: keep the low W bits -> `(uint<W>)src`, already self-contained.
+        //   Trunc to W: keep exactly the low W bits. A C cast provides that mask
+        //   for byte-aligned widths; arbitrary LLIR widths need it explicitly.
         Op::ZExt { dst, src, from, to } => vec![Stmt::Assign {
             dst: dst.clone(),
             src: widen_cast(lower_value(src), false, *from, *to),
@@ -1164,8 +1164,8 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             dst: dst.clone(),
             src: Expr::Cast {
                 signed: false,
-                width: (to.bits() / 8).max(1) as u8,
-                expr: Box::new(lower_value(src)),
+                width: containing_c_integer_bytes(*to),
+                expr: Box::new(exact_non_byte_value(lower_value(src), *to, false)),
             },
         }],
         // Bit-slice `src[lo:hi]` → (src >> lo) & ((1<<(hi-lo))-1).
@@ -1215,7 +1215,7 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                 cond: Box::new(Expr::Reg(cond.clone())),
                 if_true: Box::new(lower_value(t)),
                 if_false: Box::new(lower_value(e)),
-                width: (width.bits() / 8).max(1) as u8,
+                width: containing_c_integer_bytes(*width),
             },
         }],
         // Opaque intrinsic. For the lowered-`Unknown` case (no typed operands)

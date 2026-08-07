@@ -674,12 +674,12 @@ signatures now include `gyroInitFilterNotch1(uint16_t, uint16_t)`,
 `pkg_array_match_patterns`. Fully representing its opaque function-pointer
 parameter still requires EPIC 1's structured declarator/type environment.
 
-### Original 43-row AArch64 set: 0; full matrix AArch64-only set: 4
+### Original 43-row AArch64 set: 0; full matrix AArch64-only set: 2
 
 The old 43-function count was a verdict-only snapshot and is stale. Every row in
-that tracked set is now closed. The unfiltered 328-cell matrix still has four
-AArch64-only failures outside that historical list. The August 1 gap plan grouped
-them as one 16-bit-width residue:
+that tracked set is now closed. A fresh unfiltered 328-cell intersection exposed
+four AArch64-only failures outside that historical list before the O0 pair below
+was repaired. The August 1 gap plan grouped all four as one 16-bit-width residue:
 
 - `02_integer_widths:O0:rotl16_3`;
 - `02_integer_widths:O0:trunc_u16_after_mul`;
@@ -694,6 +694,16 @@ LLIR, then role projection assigns that x0 storage to the 32-bit `arg0` before
 the high-half shift. O2 `rt_u32` is only `ret`; the recovered direct result must
 be the incoming x0 parameter, but emission returns zero. These are three owners,
 with the shared O0 pair first.
+
+That O0 pair is now closed at the shared AST width boundary. Arbitrary LLIR bit
+widths use the smallest containing C integer type instead of floor-dividing to
+bytes; non-byte-aligned truncations receive an explicit mask, and signed
+extensions reconstruct the declared sign bit. The isolated implementation and
+tests live in `src/ir/ast/width_semantics.rs`, reducing `ast.rs` while keeping
+extension, truncation, and select lowering DRY. The complete ratchet moves only
+`rotl16_3` and `trunc_u16_after_mul` from fail to pass: 1,561 passes / 239
+failures, with pinned x86-64 still 328/328. The two O2 cells remain independent
+open owners.
 
 The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
 `fib`, O0 `validate_header`, all three indirect-dispatch functions, two O0 call
@@ -764,7 +774,7 @@ intrinsic now carries that exact semantics through lifting, C emission, and
 native execution. It closes both O2 `validate_header` and the neighboring
 `parse_packet`, moving the complete ratchet to 1,559 passes / 241 failures with
 no regression or reclassification. The original 43-row set is therefore empty;
-the four unfiltered integer-width cells remain real next work. The cross-
+the two O2 integer-width cells remain real next work. The cross-
 architecture matrix remains triage evidence rather than one undifferentiated
 “AArch64 gap.”
 
@@ -788,10 +798,10 @@ architecture matrix remains triage evidence rather than one undifferentiated
    register-bank, stack-coordinate, and SIMD semantics behind machine-model traits;
    keep A32 and Thumb as distinct test targets. The AArch64 `addv`, zero-splat,
    signed-max, one-table byte-permutation, unsigned narrow-load, and halfword
-   lane byte-order slices are complete. Next acceptance is the shared O0
-   sub-byte-width pair above, then the distinct O2 product-role and identity-
-   return cells, followed by typed-lane expansion and an A32 increase without
-   architecture-name gates in shared IR passes.
+   lane byte-order and exact sub-byte-width slices are complete. Next acceptance
+   is the distinct O2 product-role and identity-return cells, followed by typed-
+   lane expansion and an A32 increase without architecture-name gates in shared
+   IR passes.
 5. **P2 — symbolic constant operands (EPIC 2).** Resolve data/code addresses,
    literals, and table bases through the program environment instead of preserving
    opaque integers. Acceptance: address-bearing operands retain symbol, section,
