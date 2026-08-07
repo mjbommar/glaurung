@@ -716,6 +716,36 @@ def test_arm32_optimized_readonly_switch_result_round_trips(
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_aarch64_optimized_clz_idiom_round_trips(tmp_path: Path) -> None:
+    """AArch64 CLZ must define the exact-width bit-length computation."""
+    if shutil.which(A.TARGETS["aarch64"].cc) is None:
+        pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
+    fixture = "14_flag_effects"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O2.so"
+    ok, error = A._cross_build("aarch64", source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    function = "shift_until_zero"
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O2",
+        native_cc=A.native_cc("aarch64"),
+        only={function},
+    )
+
+    assert results[function]["status"] == "pass", results[function]
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_factorial_preserves_its_wide_accumulator(
     tmp_path: Path,
 ) -> None:

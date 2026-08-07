@@ -1788,6 +1788,29 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             }
             vec![Op::Unknown { mnemonic: mnem }]
         }
+        "clz" => {
+            if ins.operands.len() == 2 {
+                let (Some(dst), Some(src)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                let Some(width) = dst.width() else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                if matches!(width, Width::W32 | Width::W64) {
+                    return vec![Op::Intrinsic {
+                        name: format!("aarch64.clz.{}", width.bits()),
+                        ins: vec![src],
+                        outs: vec![(dst, width)],
+                        reads_mem: false,
+                        writes_mem: false,
+                    }];
+                }
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
         "rev" | "rev16" => {
             if ins.operands.len() == 2 {
                 let (Some(dst), Some(src)) = (
@@ -3176,6 +3199,34 @@ mod tests {
             general.iter().any(|i| matches!(&i.op, Op::Unknown { .. })),
             "extr with distinct sources must not be guessed at: {general:#?}"
         );
+    }
+
+    /// CLZ's input width is part of its value, and the destination must be
+    /// defined even for zero (`clz(0) == width`). Leaving it opaque made GCC's
+    /// optimized `32 - clz(x)` bit-length idiom read an uninitialized local.
+    #[test]
+    fn clz_lifts_to_the_shared_width_aware_intrinsic() {
+        for (word, width, name, dst, src) in [
+            (0x5ac01002u32, Width::W32, "aarch64.clz.32", "w2", "w0"),
+            (0xdac01002u32, Width::W64, "aarch64.clz.64", "x2", "x0"),
+        ] {
+            let out = lift_bytes(&word.to_le_bytes(), 0x1000);
+            assert!(
+                out.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Intrinsic {
+                        name: actual_name,
+                        ins,
+                        outs,
+                        reads_mem: false,
+                        writes_mem: false,
+                    } if actual_name == name
+                        && ins == &[Value::Reg(VReg::phys(src))]
+                        && outs == &[(VReg::phys(dst), width)]
+                )),
+                "CLZ did not retain its operand width and destination: {out:#?}"
+            );
+        }
     }
 
     /// A rotate has to be exact at both ends: the amount is masked to the

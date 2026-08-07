@@ -894,3 +894,13 @@ the only reachable fallthrough; nonterminal and signed guards remain fail-closed
 This closes AArch64 O2 `negative_cases` and `sparse_shared_tail` and, without an
 architecture gate, Thumb-2 and A32 O2 `negative_cases`. The exact ratchet is
 1,576 passes / 224 failures with zero regressions; six AArch64 failures remain.
+
+### Closed — AArch64 CLZ destination and width semantics
+
+O2 `14_flag_effects:shift_until_zero` was not a flag or structuring defect: GCC
+replaced the source loop with `clz w2,w0`, and the lifter emitted only an opaque
+comment, leaving the following subtraction to read undefined `%x2`. AArch64 now
+emits the shared exact-width CLZ intrinsic for both W and X forms, preserving the
+defined zero result as well as ordinary inputs. The exact six-lane ratchet moves
+only that cell to pass: 1,577 passes / 223 failures, with five AArch64 failures
+remaining.

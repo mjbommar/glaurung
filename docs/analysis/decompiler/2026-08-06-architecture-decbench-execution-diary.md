@@ -933,17 +933,6 @@ changes exactly `dispatch` and `tail_dispatch` from fail to pass. Totals are
 structural rows, six declared unsupported rows, and no regression,
 reclassification, missing/no-case/timeout, or lane error.
 
-Final validation reproduces that matrix exactly against the four-cell-updated
-baseline. Rust all-targets is green with 1,795 library tests plus every
-integration, example, and benchmark target. The complete Python suite is green
-at 2,794 passed / 43 skipped with the same six existing pytest-mark warnings.
-The new unit proof lives in a 110-line child module, leaving the production
-`readonly_fold.rs` at 952 lines instead of growing it past 1,000. Rust formatting
-and owned Python formatting/lint are clean; the focused type check has only the
-six pre-existing pytest-stub diagnostics. Repository-wide checks retain their
-pre-existing debt: 354 Python files would be reformatted, Ruff reports 3,830
-findings, and ty reports 2,150 diagnostics.
-
 Final validation retains that exact matrix against the updated baseline. Rust
 all-targets is green, including 1,793 library tests plus every integration,
 example, and benchmark target. The complete Python suite is green at 2,791
@@ -987,3 +976,44 @@ plus Thumb-2 and A32 `negative_cases`. Totals are 1,576 passes / 224 failures,
 AArch64 322/328, ARMv7 239/272, A32 113/272, pinned x86-64 328/328, 228
 structural rows, six declared unsupported rows, and no regression,
 reclassification, missing/no-case/timeout, or lane error.
+
+Final validation reproduces that matrix exactly against the four-cell-updated
+baseline. Rust all-targets is green with 1,795 library tests plus every
+integration, example, and benchmark target. The complete Python suite is green
+at 2,794 passed / 43 skipped with the same six existing pytest-mark warnings.
+The new unit proof lives in a 110-line child module, leaving the production
+`readonly_fold.rs` at 952 lines instead of growing it past 1,000. Rust formatting
+and owned Python formatting/lint are clean; the focused type check has only the
+six pre-existing pytest-stub diagnostics. Repository-wide checks retain their
+pre-existing debt: 354 Python files would be reformatted, Ruff reports 3,830
+findings, and ty reports 2,150 diagnostics.
+
+## 05:27 — exact AArch64 CLZ semantics close the optimized bit-length idiom
+
+`14_flag_effects:shift_until_zero` is a source loop at O0 and passes all 19
+vectors there. GCC 15 replaces the O2 loop with `clz w2,w0`, `32-w2`, and a
+zero-select. The retained O2 ELF at `/tmp/glaurung-a64-clz.Vhi16O` has SHA-256
+`20ae5f5aac1eed32ee7cb57520b80468789fb1d69c56c698cd6659894b073c9c`.
+Before repair, the very first LLIR operation was `unknown(clz)`, `%x2` had no
+definition, and source input `[1]` returned 1 while rebuilt C returned
+1515870843 from stack residue.
+
+AArch64 now emits the same architecture-neutral, width-carrying CLZ intrinsic
+already consumed for ARM32. Both instruction forms are pinned by their real
+encodings: `5ac01002` (`clz w2,w0`) and `dac01002` (`clz x2,x0`). The downstream
+AST owns the exact C semantics, including the architectural `clz(0)==width`
+case that `__builtin_clz(0)` alone would leave undefined. Post-fix LLIR defines
+`%x2#1 = count_leading_zeros32(%x0)`, and the recovered function passes all 19
+vectors. The full pre-ratchet changes exactly this one cell: 1,577 passes / 223
+failures, AArch64 323/328, pinned x86-64 328/328, 228 structural rows, six
+declared unsupported rows, and no regression, reclassification,
+missing/no-case/timeout, or lane error.
+
+Final validation reproduces that one-cell ratchet exactly against the updated
+baseline. Rust all-targets is green with 1,796 library tests plus every
+integration, example, and benchmark target. The complete Python suite is green
+at 2,795 passed / 43 skipped with the same six existing pytest-mark warnings.
+Rust formatting and owned Python formatting/lint are clean; the focused type
+check reports only the six pre-existing pytest-stub diagnostics. The unrelated
+repository-wide debt remains the last measured 354 files needing format, 3,830
+Ruff findings, and 2,150 type diagnostics.
