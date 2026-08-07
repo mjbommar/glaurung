@@ -492,3 +492,60 @@ retains only the same six pytest-mark warnings. Rust formatting, changed-file
 Python formatting/linting, and whitespace checks pass. Repository-wide static
 checks retain the established debt: 354 files would be reformatted, 3,830 lint
 errors, and 2,043 type diagnostics.
+
+## 20:27 — signed lanes and byte tables closed the AArch64 O2 loop pair
+
+The two remaining `03_loop_shapes` AArch64 O2 failures were round-tripped from
+source through retained GCC 15 binaries, disassembly, raw LLIR, emitted C, and
+128-vector execution. The retained target ELF at
+`/tmp/glaurung-a64-loop-control-20260806/03_loop_shapes-aarch64-O2.so` has SHA-256
+`550e1d54f7a2d0f7e3268486d7acfe43517d9ef6e221c415ce134d769d78aa4d`.
+`loop_continue` is completely vectorized into `ldp`, a zero `movi`, two signed
+`smax vN.4s` operations, lane-wise `add`, `addv`, and `fmov`; only `movi` and
+`smax` were opaque. The RED differential returned -14 where the source returned
+12 on the first mixed-sign vector. `mutate_reverse` is completely vectorized
+into two Q loads, one read-only byte-index vector, two `tbl vN.16b` operations,
+and a Q pair store. Both `tbl` instructions were opaque and the RED differential
+reported a changed output buffer.
+
+Zero `MOVI` now defines every 4S lane. Non-zero forms remain fail-closed because
+the decoded operand does not yet retain the shift/replication modifier. Signed
+`SMAX` lowers each lane to an `Slt` comparison and a 32-bit pure select. A
+one-register 16-byte `TBL` snapshots all table and index dwords before any
+possibly aliasing destination write, then emits one single-output semantic
+intrinsic per dword. Each intrinsic declares all four table inputs and its index
+dword, reads and writes no memory, and lowers to the complete architectural byte
+lookup: indices 0 through 15 select a byte and every other index produces zero.
+This keeps the ordinary one-definition SSA model instead of introducing a
+multi-output vector exception.
+
+The exact dynamic table expression initially rendered as 45,921 bytes. The
+compiler mask is a read-only constant, but read-only folding runs after the main
+copy/constant pipeline. A bounded late re-propagation plus two missing general
+algebra rules—constant comparisons and constant-condition selects—reduces it to
+2,803 bytes while preserving the fully dynamic fallback semantics. Both target
+functions then pass 128 vectors, and all 18 functions in the AArch64 O2 loop
+fixture pass together.
+
+The first full ratchet found two additional O0 improvements, so neither was
+accepted on verdict alone. Source and assembly show both are the same zero-splat
+defect: `rb_validate` initializes `parents[16]` and `topological_sort` initializes
+`indegree[16]` with `movi v31.4s,#0` followed by four Q stores. Retained ELFs
+`16_red_black_tree-aarch64-O0.so` and `23_topological_sort-aarch64-O0.so` under
+`/tmp/glaurung-a64-const-select-20260806` have SHA-256
+`ed673ff8c3825da818765c9b009ebbacda45e84f59ffec2747a27171f7ff4d3a` and
+`debc52da3bc5baca736d4cd841de97f0e5db6e028d759bc0c14cf77381581ca6`.
+Their raw LLIR now has four zero lane definitions reaching all sixteen stack
+stores, emitted C initializes every array element, and both pass separate
+128-vector differentials. The six-lane matrix therefore has exactly four honest
+fail-to-pass changes and no regressions: 1,555 passes, 245 failures, 228
+structural rows, and six declared unsupported rows; pinned x86-64 remains
+328/328.
+
+The final code passes all 1,777 Rust library tests and every integration,
+example, benchmark, and other all-targets test. The complete
+architecture-roundtrip Python module and the complete Python suite both reach
+100% with exit zero; the latter retains only the same six pytest-mark warnings.
+Rust formatting, changed-file Python formatting/linting, and whitespace checks
+pass. Repository-wide static checks retain the established debt unchanged: 354
+files would be reformatted, 3,830 lint errors, and 2,043 type diagnostics.

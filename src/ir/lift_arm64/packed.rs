@@ -5,9 +5,9 @@
 //! register. This is the same representation used by the x86 SIMD lifter.
 
 use crate::core::instruction::Instruction;
-use crate::ir::types::{BinOp, Endian, MemOp, Op, VReg, Value};
+use crate::ir::types::{BinOp, CmpOp, Endian, MemOp, Op, VReg, Value, Width};
 
-use super::{operand_reg, operand_to_memop, scaled_memop};
+use super::{operand_reg, operand_to_memop, scaled_memop, temp_for};
 
 /// Canonical full-vector spelling shared by the `qN` transfer view and `vN`
 /// packed-operation view.
@@ -120,25 +120,25 @@ pub(super) fn pair_transfer(
     Some(out)
 }
 
-pub(super) fn dword_binary(ins: &Instruction, op: BinOp) -> Option<Vec<Op>> {
+fn dword_register_triplet(ins: &Instruction) -> Option<(String, String, String)> {
     if ins.operands.len() != 3 {
         return None;
     }
-    let shape = ins
-        .operands
-        .iter()
-        .find_map(|operand| operand.vector_shape)?;
-    if (shape.lanes, shape.element_bits) != (4, 32)
-        || ins
-            .operands
-            .iter()
-            .any(|operand| operand.vector_shape.is_some_and(|other| other != shape))
-    {
+    if ins.operands.iter().any(|operand| {
+        !operand
+            .vector_shape
+            .is_some_and(|shape| (shape.lanes, shape.element_bits) == (4, 32))
+    }) {
         return None;
     }
     let dst = vector_name(&operand_reg(&ins.operands[0])?)?;
     let lhs = vector_name(&operand_reg(&ins.operands[1])?)?;
     let rhs = vector_name(&operand_reg(&ins.operands[2])?)?;
+    Some((dst, lhs, rhs))
+}
+
+pub(super) fn dword_binary(ins: &Instruction, op: BinOp) -> Option<Vec<Op>> {
+    let (dst, lhs, rhs) = dword_register_triplet(ins)?;
     Some(
         (0..4)
             .map(|lane| Op::Bin {
@@ -149,6 +149,104 @@ pub(super) fn dword_binary(ins: &Instruction, op: BinOp) -> Option<Vec<Op>> {
             })
             .collect(),
     )
+}
+
+/// Broadcast the zero immediate into every dword lane.
+///
+/// AArch64's non-zero `MOVI` forms may shift or replicate the encoded immediate;
+/// Capstone does not retain that modifier in our structured operand. Zero is
+/// invariant under every such modifier, so support it exactly and leave every
+/// non-zero form opaque until operand modifiers are represented explicitly.
+pub(super) fn dword_zero_splat(ins: &Instruction) -> Option<Vec<Op>> {
+    if ins.operands.len() != 2 || ins.operands[1].immediate != Some(0) {
+        return None;
+    }
+    let shape = ins.operands[0].vector_shape?;
+    if (shape.lanes, shape.element_bits) != (4, 32) {
+        return None;
+    }
+    let dst = vector_name(&operand_reg(&ins.operands[0])?)?;
+    Some(
+        (0..4)
+            .map(|lane| Op::Assign {
+                dst: crate::ir::types::packed_dword_lane(&dst, lane),
+                src: Value::Const(0),
+            })
+            .collect(),
+    )
+}
+
+/// Signed per-lane maximum for the 4S vector arrangement.
+pub(super) fn dword_signed_max(ins: &Instruction) -> Option<Vec<Op>> {
+    let (dst, lhs, rhs) = dword_register_triplet(ins)?;
+    let mut out = Vec::with_capacity(8);
+    for lane in 0..4 {
+        let dst = crate::ir::types::packed_dword_lane(&dst, lane);
+        let lhs = crate::ir::types::packed_dword_lane(&lhs, lane);
+        let rhs = crate::ir::types::packed_dword_lane(&rhs, lane);
+        let condition = temp_for(ins, lane as u32);
+        out.push(Op::Cmp {
+            dst: condition.clone(),
+            op: CmpOp::Slt,
+            lhs: Value::Reg(lhs.clone()),
+            rhs: Value::Reg(rhs.clone()),
+        });
+        out.push(Op::Ite {
+            dst,
+            cond: condition,
+            t: Value::Reg(rhs),
+            e: Value::Reg(lhs),
+            width: Width::W32,
+        });
+    }
+    Some(out)
+}
+
+/// One-register AArch64 `TBL` as four architecture-neutral dword results.
+///
+/// The semantic intrinsic consumes four snapshotted table dwords and one index
+/// dword. Emitting one single-output intrinsic per result lane keeps the ordinary
+/// def/use and SSA model exact; snapshotting both inputs first is required when
+/// the destination aliases either the table or index vector.
+pub(super) fn byte_table_16(ins: &Instruction) -> Option<Vec<Op>> {
+    if ins.operands.len() != 3
+        || ins.operands.iter().any(|operand| {
+            !operand
+                .vector_shape
+                .is_some_and(|shape| (shape.lanes, shape.element_bits) == (16, 8))
+        })
+    {
+        return None;
+    }
+    let dst = vector_name(&operand_reg(&ins.operands[0])?)?;
+    let table = vector_name(&operand_reg(&ins.operands[1])?)?;
+    let indices = vector_name(&operand_reg(&ins.operands[2])?)?;
+
+    let mut out = Vec::with_capacity(12);
+    let table_snapshot: Vec<_> = (0..4).map(|lane| temp_for(ins, lane)).collect();
+    let index_snapshot: Vec<_> = (0..4).map(|lane| temp_for(ins, 4 + lane)).collect();
+    for lane in 0..4 {
+        out.push(Op::Assign {
+            dst: table_snapshot[lane].clone(),
+            src: Value::Reg(crate::ir::types::packed_dword_lane(&table, lane)),
+        });
+        out.push(Op::Assign {
+            dst: index_snapshot[lane].clone(),
+            src: Value::Reg(crate::ir::types::packed_dword_lane(&indices, lane)),
+        });
+    }
+    for lane in 0..4 {
+        let mut inputs: Vec<_> = table_snapshot.iter().cloned().map(Value::Reg).collect();
+        inputs.push(Value::Reg(index_snapshot[lane].clone()));
+        out.push(Op::Intrinsic {
+            name: "packed_byte_table_16".to_string(),
+            ins: inputs,
+            outs: vec![(crate::ir::types::packed_dword_lane(&dst, lane), Width::W32)],
+            reads_mem: false,
+            writes_mem: false,
+        });
+    }
+    Some(out)
 }
 
 pub(super) fn dword_horizontal_add(ins: &Instruction) -> Option<Vec<Op>> {
@@ -295,6 +393,117 @@ mod tests {
             )),
             "FMOV does not carry the reduction into w0: {out:#?}"
         );
+    }
+
+    #[test]
+    fn packed_signed_max_sequence_keeps_negative_lanes_out_of_the_sum() {
+        // GCC 15 -O2 `loop_continue(const int *)` replaces the source loop with:
+        //   ldp  q31, q29, [x0]
+        //   movi v30.4s, #0
+        //   smax v31.4s, v31.4s, v30.4s
+        //   smax v29.4s, v29.4s, v30.4s
+        //   add  v29.4s, v31.4s, v29.4s
+        //   addv s31, v29.4s
+        //   fmov w0, s31
+        let out = lift_bytes(
+            &[
+                0x1f, 0x74, 0x40, 0xad, 0x1e, 0x04, 0x00, 0x4f, 0xff, 0x67, 0xbe, 0x4e, 0xbd, 0x67,
+                0xbe, 0x4e, 0xfd, 0x87, 0xbd, 0x4e, 0xbf, 0xbb, 0xb1, 0x4e, 0xe0, 0x03, 0x26, 0x1e,
+                0xc0, 0x03, 0x5f, 0xd6,
+            ],
+            0xac8,
+        );
+        assert!(
+            out.iter()
+                .all(|instruction| !matches!(instruction.op, Op::Unknown { .. })),
+            "the real signed-lane reduction retains opaque holes: {out:#?}"
+        );
+
+        for lane in 0..4 {
+            let zero = crate::ir::types::packed_dword_lane("v30", lane);
+            assert!(
+                out.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Assign { dst, src: Value::Const(0) } if dst == &zero
+                )),
+                "MOVI did not define zero in lane {lane}: {out:#?}"
+            );
+        }
+        assert_eq!(
+            out.iter()
+                .filter(|instruction| matches!(
+                    instruction.op,
+                    Op::Cmp {
+                        op: crate::ir::types::CmpOp::Slt,
+                        ..
+                    }
+                ))
+                .count(),
+            8,
+            "each SMAX needs one signed comparison per lane: {out:#?}"
+        );
+        assert_eq!(
+            out.iter()
+                .filter(|instruction| matches!(
+                    instruction.op,
+                    Op::Ite {
+                        width: crate::ir::types::Width::W32,
+                        ..
+                    }
+                ))
+                .count(),
+            8,
+            "each signed comparison must select one complete lane value: {out:#?}"
+        );
+    }
+
+    #[test]
+    fn packed_byte_table_sequence_declares_every_input_and_output_lane() {
+        // GCC 15 -O2 `mutate_reverse(int *)` uses a read-only byte-index vector
+        // and two one-table TBL operations to reverse the eight dwords:
+        //   adrp x1, mask_page
+        //   ldp  q31, q30, [x0]
+        //   ldr  q29, [x1, mask_offset]
+        //   tbl  v30.16b, {v30.16b}, v29.16b
+        //   tbl  v29.16b, {v31.16b}, v29.16b
+        //   stp  q30, q29, [x0]
+        let out = lift_bytes(
+            &[
+                0x01, 0x00, 0x00, 0x90, 0x1f, 0x78, 0x40, 0xad, 0x3d, 0x18, 0xc3, 0x3d, 0xde, 0x03,
+                0x1d, 0x4e, 0xfd, 0x03, 0x1d, 0x4e, 0x1e, 0x74, 0x00, 0xad, 0xc0, 0x03, 0x5f, 0xd6,
+            ],
+            0xc28,
+        );
+        assert!(
+            out.iter()
+                .all(|instruction| !matches!(instruction.op, Op::Unknown { .. })),
+            "the real byte-table permutation retains opaque holes: {out:#?}"
+        );
+        let table_outputs: Vec<_> = out
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Intrinsic {
+                    name,
+                    ins,
+                    outs,
+                    reads_mem,
+                    writes_mem,
+                } if name == "packed_byte_table_16" => {
+                    Some((ins.len(), outs.clone(), *reads_mem, *writes_mem))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(table_outputs.len(), 8, "each TBL defines four dwords");
+        assert!(table_outputs
+            .iter()
+            .all(|(inputs, outputs, reads, writes)| {
+                *inputs == 5
+                    && outputs.len() == 1
+                    && outputs[0].1 == Width::W32
+                    && !reads
+                    && !writes
+            }));
     }
 
     #[test]

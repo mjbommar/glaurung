@@ -499,6 +499,27 @@ fn fold_expr(e: &mut Expr) {
         _ => {}
     }
 
+    // A select whose predicate became literal has exactly one reachable arm.
+    // Both arms were folded above, so replacing the node cannot hide additional
+    // work and removes the unreachable expression without changing evaluation.
+    let selected_arm = match e {
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => match cond.as_ref() {
+            Expr::Const(0) => Some(if_false.as_ref().clone()),
+            Expr::Const(_) => Some(if_true.as_ref().clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(replacement) = selected_arm {
+        *e = replacement;
+        return;
+    }
+
     // `castN(castM(x)) == castN(x)` whenever `M >= N`: the outer cast observes
     // only the low N bits, and an inner cast to an equal-or-wider width cannot
     // have altered them. The inner cast's signedness is irrelevant for the same
@@ -913,6 +934,18 @@ fn fold_expr(e: &mut Expr) {
     // negation, not a bitwise operation; invert it into the corresponding
     // relation so it remains readable and type-correct.
     if let Expr::Cmp { op, lhs, rhs } = e {
+        if let (Expr::Const(lhs), Expr::Const(rhs)) = (lhs.as_ref(), rhs.as_ref()) {
+            let value = match op {
+                CmpOp::Eq => lhs == rhs,
+                CmpOp::Ne => lhs != rhs,
+                CmpOp::Ult => (*lhs as u64) < (*rhs as u64),
+                CmpOp::Ule => (*lhs as u64) <= (*rhs as u64),
+                CmpOp::Slt => lhs < rhs,
+                CmpOp::Sle => lhs <= rhs,
+            };
+            *e = Expr::Const(i64::from(value));
+            return;
+        }
         // Subtraction sets x86's zero flag: `(X - Y) == 0` is exactly
         // `X == Y` (and likewise for `!=`) in modular machine arithmetic.
         // Recover that relation before merging ZF with CF/SF into inclusive
@@ -1320,6 +1353,27 @@ mod tests {
                 src,
             }],
         }
+    }
+
+    #[test]
+    fn constant_comparison_select_keeps_only_the_selected_value() {
+        let mut function = one_stmt(Expr::Select {
+            cond: Box::new(Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Const(13)),
+                rhs: Box::new(Expr::Const(13)),
+            }),
+            if_true: Box::new(Expr::Reg(reg("selected"))),
+            if_false: Box::new(Expr::Reg(reg("discarded"))),
+            width: 4,
+        });
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("fixture assignment disappeared: {:#?}", function.body);
+        };
+        assert_eq!(src, &Expr::Reg(reg("selected")));
     }
 
     #[test]

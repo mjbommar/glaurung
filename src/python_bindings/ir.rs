@@ -1371,6 +1371,12 @@ fn decbench_text(
         crate::ir::const_fold::fold_constants(&mut prepared);
     }
     crate::ir::readonly_fold::fold_guarded_readonly_lookups(&mut prepared, readonly_data);
+    // Read-only folding can turn an image load into a literal after the main
+    // expression pipeline has already run. Re-propagate and fold immediately so
+    // consumers such as packed byte-table permutations see the literal index
+    // rather than rendering a dynamic 16-way lookup for a compiler-emitted mask.
+    crate::ir::copy_prop::propagate_copies(&mut prepared);
+    crate::ir::const_fold::fold_constants(&mut prepared);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!(
             "\n===== after fold_guarded_readonly_lookups =====\n{}",

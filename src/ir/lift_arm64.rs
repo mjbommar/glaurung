@@ -1132,6 +1132,13 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
 
     match mnem.as_str() {
         "nop" => vec![Op::Nop],
+        "movi" => {
+            packed::dword_zero_splat(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }])
+        }
+        "smax" => {
+            packed::dword_signed_max(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }])
+        }
+        "tbl" => packed::byte_table_16(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
         "addv" => packed::dword_horizontal_add(ins)
             .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
         "fmov" => packed::scalar_fmov(ins)

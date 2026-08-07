@@ -743,6 +743,96 @@ fn byte_swap_intrinsic(name: &str, ins: &[Value], outs: &[(VReg, Width)]) -> Opt
     })
 }
 
+/// Lower a one-register, 16-byte table lookup into portable scalar C semantics.
+///
+/// Each intrinsic produces one dword from four table dwords and one dword of
+/// byte indices. An index in 0..16 selects that table byte; every other index
+/// yields zero, matching AArch64 `TBL` rather than `TBX`. Unsigned casts keep
+/// every shift defined even when a table byte sets the source language sign bit.
+fn packed_byte_table_intrinsic(name: &str, ins: &[Value], outs: &[(VReg, Width)]) -> Option<Expr> {
+    let ([table0, table1, table2, table3, indices], [(_, Width::W32)]) = (ins, outs) else {
+        return None;
+    };
+    if name != "packed_byte_table_16" {
+        return None;
+    }
+    let table: Vec<_> = [table0, table1, table2, table3]
+        .into_iter()
+        .map(|value| Expr::Cast {
+            signed: false,
+            width: 4,
+            expr: Box::new(lower_value(value)),
+        })
+        .collect();
+    let indices = Expr::Cast {
+        signed: false,
+        width: 4,
+        expr: Box::new(lower_value(indices)),
+    };
+
+    let extract_byte = |word: Expr, byte: usize| {
+        let shifted = if byte == 0 {
+            word
+        } else {
+            Expr::Bin {
+                op: BinOp::Shr,
+                lhs: Box::new(word),
+                rhs: Box::new(Expr::Const((byte * 8) as i64)),
+            }
+        };
+        Expr::Bin {
+            op: BinOp::And,
+            lhs: Box::new(shifted),
+            rhs: Box::new(Expr::Const(0xff)),
+        }
+    };
+
+    let mut output_bytes = Vec::with_capacity(4);
+    for output_byte in 0..4 {
+        let index = extract_byte(indices.clone(), output_byte);
+        let mut selected = Expr::Const(0);
+        for table_index in (0..16).rev() {
+            selected = Expr::Select {
+                cond: Box::new(Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(index.clone()),
+                    rhs: Box::new(Expr::Const(table_index as i64)),
+                }),
+                if_true: Box::new(extract_byte(
+                    table[table_index / 4].clone(),
+                    table_index % 4,
+                )),
+                if_false: Box::new(selected),
+                width: 1,
+            };
+        }
+        let selected = Expr::Cast {
+            signed: false,
+            width: 4,
+            expr: Box::new(selected),
+        };
+        output_bytes.push(if output_byte == 0 {
+            selected
+        } else {
+            Expr::Bin {
+                op: BinOp::Shl,
+                lhs: Box::new(selected),
+                rhs: Box::new(Expr::Const((output_byte * 8) as i64)),
+            }
+        });
+    }
+    let combined = output_bytes.into_iter().reduce(|lhs, rhs| Expr::Bin {
+        op: BinOp::Or,
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+    })?;
+    Some(Expr::Cast {
+        signed: false,
+        width: 4,
+        expr: Box::new(combined),
+    })
+}
+
 /// Whether every VFP value used by the scalar arithmetic subset has a modeled
 /// producer in this function.
 ///
@@ -1127,6 +1217,14 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         } => {
             if let (Some(src), Some((dst, _))) =
                 (byte_swap_intrinsic(name, ins, outs), outs.first())
+            {
+                return vec![Stmt::Assign {
+                    dst: dst.clone(),
+                    src,
+                }];
+            }
+            if let (Some(src), Some((dst, _))) =
+                (packed_byte_table_intrinsic(name, ins, outs), outs.first())
             {
                 return vec![Stmt::Assign {
                     dst: dst.clone(),

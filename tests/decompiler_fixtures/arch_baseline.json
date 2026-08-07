@@ -394,11 +394,11 @@
     "for_stride2": "pass",
     "for_sum": "pass",
     "loop_break": "pass",
-    "loop_continue": "fail",
+    "loop_continue": "pass",
     "loop_early_return": "pass",
     "loop_return_on_neg": "pass",
     "mutate_prefix": "pass",
-    "mutate_reverse": "fail",
+    "mutate_reverse": "pass",
     "nested_carry": "pass",
     "nested_pairs": "pass",
     "two_latches": "pass",
@@ -2166,7 +2166,7 @@
     "bst_search": "pass"
   },
   "16_red_black_tree:aarch64:O0": {
-    "rb_validate": "fail"
+    "rb_validate": "pass"
   },
   "16_red_black_tree:aarch64:O2": {
     "rb_validate": "fail"
@@ -2454,7 +2454,7 @@
     "dijkstra_dense": "pass"
   },
   "23_topological_sort:aarch64:O0": {
-    "topological_sort": "fail"
+    "topological_sort": "pass"
   },
   "23_topological_sort:aarch64:O2": {
     "topological_sort": "fail"
