@@ -1160,3 +1160,45 @@ same six pytest-mark warnings. Rust formatting, the diff whitespace gate, and
 owned Python formatting/lint are clean. The focused type check retains only the
 same six pre-existing pytest-stub diagnostics; repository-wide Ruff remains a
 pre-existing non-gate with 3,830 diagnostics outside this change.
+
+## 09:44 — aliased load-pair address fixes `rb_validate`
+
+The retained GCC 15 AArch64 O2 ELF at
+`/tmp/glaurung-a64-rb-validate.IIvujL/16_red_black_tree-aarch64-O2.so` has
+SHA-256 `8c5db55492e46ad70612714b9828b7c65ac67c07d7f2ce201fd02fd5f8890547`.
+The original accepted the seven-node balanced tree; the recovered worker died
+with SIGSEGV on that same input.
+
+Assembly at `0x8c0` contains `ldp w4,w5,[x4,#4]`: both child fields use the
+pre-instruction node pointer in x4. The scalar LLIR expansion emitted the w4
+load first and the w5 load second. Because AArch64 w4 is a zero-extending view
+of x4, the first destination definition replaced the second load's address.
+Recovered C consequently loaded `left`, then dereferenced `left + 8` as a host
+pointer. For the leaf value -1 this is the immediate crash path.
+
+Pair-load lowering now queries the shared AArch64 register-view descriptor and
+snapshots a base or index only when the first destination aliases that address
+storage. Both scalar loads use the preserved pre-instruction address; ordinary
+non-aliasing pairs retain their old two-op shape, and writeback still targets
+the architectural base. The encoded `LDP` unit proof and the real tree
+differential are green across 23 input vectors.
+
+The complete pre-ratchet changes exactly
+`16_red_black_tree:aarch64:O2:rb_validate` from fail to pass: 1,581 passes / 219
+failures, AArch64 327/328, with every other verdict, all 228 structural rows,
+the six declared-unsupported rows, schema/toolchain checks, and the pinned
+x86-64 control unchanged.
+
+Independent definedness finding: the earlier `BFI x12,x4,#32,#32` preserves an
+architecturally unknown low half that is never observed, but the whole-value IR
+still renders that preservation as an uninitialized C read before a later
+high-half extraction. It did not cause the differential failure and cannot be
+soundly replaced by zero without a bit-level use proof. This is direct evidence
+for EPIC 5's definedness oracle rather than a reason to weaken this exact fix.
+
+Final validation reproduces the 1,581 / 219 ratchet exactly. Rust all-targets is
+green with 1,809 library tests plus every integration, example, and benchmark
+target. The complete Python suite is green at 2,799 passed / 43 skipped with the
+same six pytest-mark warnings. Rust/Python formatting, owned Python lint, and
+the diff whitespace gate are clean; focused typing retains the repository's six
+existing pytest-stub diagnostics.

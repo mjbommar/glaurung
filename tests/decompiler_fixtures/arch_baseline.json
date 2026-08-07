@@ -2169,7 +2169,7 @@
     "rb_validate": "pass"
   },
   "16_red_black_tree:aarch64:O2": {
-    "rb_validate": "fail"
+    "rb_validate": "pass"
   },
   "16_red_black_tree:armv7:O0": {
     "rb_validate": "fail"

@@ -948,3 +948,14 @@ shift, compare masks, alias-safe pairwise maximum, and low-qword transfer.
 The variable shift renders guarded unsigned C for all counts. The full ratchet
 moves only this cell to pass: 1,580 / 1,800 execution rows, zero regressions,
 and two AArch64 failures remaining (`rb_validate` and `topological_sort`).
+
+### Closed — aliased AArch64 load-pair address
+
+AArch64 O2 `16_red_black_tree:rb_validate` crashed because
+`ldp w4,w5,[x4,#4]` became two sequential scalar loads without preserving the
+old x4 address. The first w4 write zero-extended into x4, so the second load
+dereferenced a child index as a pointer. Pair-load lowering now uses the shared
+register-view model to snapshot only an address component aliased by the first
+destination. The exact ratchet moves only this cell to pass: 1,581 / 1,800
+execution rows, zero regressions, and one AArch64 failure remaining
+(`23_topological_sort:topological_sort`).

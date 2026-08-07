@@ -98,6 +98,16 @@ fn operand_reg(op: &Operand) -> Option<VReg> {
     }
 }
 
+/// Whether two AArch64 register spellings are views of the same storage.
+fn same_register_family(lhs: &VReg, rhs: &VReg) -> bool {
+    match (lhs, rhs) {
+        (VReg::Phys(lhs), VReg::Phys(rhs)) => {
+            regview::same_family(regview::Arch::AArch64, lhs, rhs)
+        }
+        _ => lhs == rhs,
+    }
+}
+
 /// `xzr`/`wzr` are not registers with a value — the architecture defines a read
 /// of either as zero (ARM DDI 0487 C1.2.5). Reading them as an ordinary register
 /// name made `str wzr,[sp,#24]` — the ordinary way gcc zeroes a local, 133 sites
@@ -2082,18 +2092,49 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 if let Some(mut addr) = operand_to_memop(&ins.operands[2], pair_size) {
                     let base_reg = addr.base.clone();
                     let pair_off = i64::from(pair_size);
+                    let mut out = Vec::new();
+                    // LDP reads both memory operands from the pre-instruction
+                    // address. If the first destination is a view of the base
+                    // or index (`ldp w4,w5,[x4,#4]`), sequential scalar loads
+                    // must not let that first write redirect the second load.
+                    if let Some(base) = addr
+                        .base
+                        .as_ref()
+                        .filter(|base| same_register_family(base, &dst1))
+                        .cloned()
+                    {
+                        let preserved = temp_for(ins, 0);
+                        out.push(Op::Assign {
+                            dst: preserved.clone(),
+                            src: Value::Reg(base),
+                        });
+                        addr.base = Some(preserved);
+                    }
+                    if let Some(index) = addr
+                        .index
+                        .as_ref()
+                        .filter(|index| same_register_family(index, &dst1))
+                        .cloned()
+                    {
+                        let preserved = temp_for(ins, 1);
+                        out.push(Op::Assign {
+                            dst: preserved.clone(),
+                            src: Value::Reg(index),
+                        });
+                        addr.index = Some(preserved);
+                    }
                     let addr2 = MemOp {
                         disp: addr.disp.wrapping_add(pair_off),
                         ..addr.clone()
                     };
                     addr.size = pair_size;
-                    let mut out = vec![
+                    out.extend([
                         Op::Load { dst: dst1, addr },
                         Op::Load {
                             dst: dst2,
                             addr: addr2,
                         },
-                    ];
+                    ]);
                     // Post-indexed: 4th operand is the writeback amount.
                     if ins.operands.len() == 4 {
                         if let (Some(base), Some(off)) = (base_reg, ins.operands[3].immediate) {
@@ -3318,6 +3359,38 @@ mod tests {
                     && outs == &[(VReg::phys("w0"), Width::W32)]
             ),
             "REV16 must retain its lane-local byte order semantics: {out:#?}"
+        );
+    }
+
+    #[test]
+    fn load_pair_snapshots_an_aliased_address_base() {
+        // GCC 15 -O2 `rb_validate`:
+        //   ldp w4, w5, [x4, #4]
+        // Both loads address the OLD x4. Lowering them sequentially without a
+        // snapshot makes the first w4 destination redirect the second load.
+        let out = lift_bytes(&0x29409484u32.to_le_bytes(), 0x8c0);
+        let snapshot = out.iter().find_map(|instruction| match &instruction.op {
+            Op::Assign {
+                dst,
+                src: Value::Reg(src),
+            } if *src == VReg::phys("x4") => Some(dst.clone()),
+            _ => None,
+        });
+        let snapshot = snapshot.expect("aliased pair load did not preserve its old base");
+        let loads: Vec<_> = out
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Load { dst, addr } => Some((dst.clone(), addr.base.clone(), addr.disp)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            loads,
+            vec![
+                (VReg::phys("w4"), Some(snapshot.clone()), 4),
+                (VReg::phys("w5"), Some(snapshot), 8),
+            ],
+            "pair load did not keep one pre-instruction address: {out:#?}"
         );
     }
 
