@@ -704,6 +704,36 @@ def test_aarch64_aliased_load_pair_round_trips_rb_validation(tmp_path: Path) -> 
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_aarch64_packed_bit_insert_round_trips_topological_sort(tmp_path: Path) -> None:
+    """BIT must preserve masked indegrees before Kahn queue construction."""
+    if shutil.which(A.TARGETS["aarch64"].cc) is None:
+        pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
+    fixture = "23_topological_sort"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O2.so"
+    ok, error = A._cross_build("aarch64", source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    function = "topological_sort"
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O2",
+        native_cc=A.native_cc("aarch64"),
+        only={function},
+    )
+
+    assert results[function]["status"] == "pass", results[function]
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_call_flow_round_trips(tmp_path: Path) -> None:
     """Implicit x0 inputs survive loops and a prior-call-result tail call."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:

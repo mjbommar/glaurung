@@ -1158,6 +1158,9 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
         "cmtst" => {
             packed::dword_compare_test(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }])
         }
+        "bit" => {
+            packed::byte_bit_insert(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }])
+        }
         "umaxp" => packed::dword_pairwise_unsigned_max(ins)
             .unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),
         "tbl" => packed::byte_table_16(ins).unwrap_or_else(|| vec![Op::Unknown { mnemonic: mnem }]),

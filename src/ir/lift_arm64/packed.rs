@@ -300,6 +300,63 @@ pub(super) fn dword_compare_test(ins: &Instruction) -> Option<Vec<Op>> {
     Some(out)
 }
 
+/// Bitwise insert-if-true for a complete 128-bit vector.
+///
+/// `BIT Vd.16B,Vn.16B,Vm.16B` computes
+/// `(old(Vd) & !Vm) | (Vn & Vm)`.  The operation is bitwise, so four explicit
+/// dword lanes preserve the byte arrangement without introducing a dedicated
+/// vector value into the architecture-neutral LLIR.  Each lane's old
+/// destination and mask-derived temporaries are consumed before the final
+/// destination write, which also preserves the architectural result when Vd
+/// aliases either source.
+pub(super) fn byte_bit_insert(ins: &Instruction) -> Option<Vec<Op>> {
+    if ins.operands.len() != 3
+        || ins.operands.iter().any(|operand| {
+            !operand
+                .vector_shape
+                .is_some_and(|shape| (shape.lanes, shape.element_bits) == (16, 8))
+        })
+    {
+        return None;
+    }
+    let dst = vector_name(&operand_reg(&ins.operands[0])?)?;
+    let src = vector_name(&operand_reg(&ins.operands[1])?)?;
+    let mask = vector_name(&operand_reg(&ins.operands[2])?)?;
+    let mut out = Vec::with_capacity(16);
+    for lane in 0..4 {
+        let destination = crate::ir::types::packed_dword_lane(&dst, lane);
+        let source = crate::ir::types::packed_dword_lane(&src, lane);
+        let mask = crate::ir::types::packed_dword_lane(&mask, lane);
+        let inverted_mask = temp_for(ins, lane as u32);
+        let retained = temp_for(ins, 4 + lane as u32);
+        let inserted = temp_for(ins, 8 + lane as u32);
+        out.push(Op::Un {
+            dst: inverted_mask.clone(),
+            op: crate::ir::types::UnOp::Not,
+            src: Value::Reg(mask.clone()),
+        });
+        out.push(Op::Bin {
+            dst: retained.clone(),
+            op: BinOp::And,
+            lhs: Value::Reg(destination.clone()),
+            rhs: Value::Reg(inverted_mask),
+        });
+        out.push(Op::Bin {
+            dst: inserted.clone(),
+            op: BinOp::And,
+            lhs: Value::Reg(source),
+            rhs: Value::Reg(mask),
+        });
+        out.push(Op::Bin {
+            dst: destination,
+            op: BinOp::Or,
+            lhs: Value::Reg(retained),
+            rhs: Value::Reg(inserted),
+        });
+    }
+    Some(out)
+}
+
 /// Pairwise unsigned maximum across two 4S inputs.
 ///
 /// Snapshot all eight inputs before defining any destination lane: UMAXP reads
@@ -705,6 +762,60 @@ mod tests {
             }),
             "packed operations escaped as whole-vector scalar values: {out:#?}"
         );
+    }
+
+    #[test]
+    fn packed_bit_insert_has_explicit_old_destination_semantics() {
+        // GCC 15 -O2 `topological_sort` uses the all-zero/all-ones result of
+        // CMTST as the mask for:
+        //
+        //   bit v31.16b, v28.16b, v29.16b
+        //
+        // BIT is a read-modify-write operation: each destination bit comes
+        // from Vn when the corresponding mask bit is one and from the old Vd
+        // otherwise.  An opaque instruction silently leaves the indegree
+        // vector at its zero initializer and queues every vertex.
+        let out = lift_bytes(&[0x9f, 0x1f, 0xbd, 0x6e], 0x714);
+
+        assert!(
+            out.iter()
+                .all(|instruction| !matches!(instruction.op, Op::Unknown { .. })),
+            "the real packed bit insert remains opaque: {out:#?}"
+        );
+        assert_eq!(
+            out.iter()
+                .filter(|instruction| matches!(
+                    instruction.op,
+                    Op::Un {
+                        op: crate::ir::types::UnOp::Not,
+                        ..
+                    }
+                ))
+                .count(),
+            4,
+            "each lane must complement its mask exactly once: {out:#?}"
+        );
+        assert_eq!(
+            out.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Bin { op: BinOp::And, .. }))
+                .count(),
+            8,
+            "each lane must retain masked bits from both candidate values: {out:#?}"
+        );
+        for lane in 0..4 {
+            let destination = crate::ir::types::packed_dword_lane("v31", lane);
+            assert!(
+                out.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Bin {
+                        dst,
+                        op: BinOp::Or,
+                        ..
+                    } if dst == &destination
+                )),
+                "lane {lane} has no complete bitwise selection: {out:#?}"
+            );
+        }
     }
 
     #[test]

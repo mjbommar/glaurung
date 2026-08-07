@@ -2457,7 +2457,7 @@
     "topological_sort": "pass"
   },
   "23_topological_sort:aarch64:O2": {
-    "topological_sort": "fail"
+    "topological_sort": "pass"
   },
   "23_topological_sort:armv7:O0": {
     "topological_sort": "pass"

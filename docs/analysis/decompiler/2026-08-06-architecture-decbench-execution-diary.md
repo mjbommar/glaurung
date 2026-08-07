@@ -1202,3 +1202,44 @@ target. The complete Python suite is green at 2,799 passed / 43 skipped with the
 same six pytest-mark warnings. Rust/Python formatting, owned Python lint, and
 the diff whitespace gate are clean; focused typing retains the repository's six
 existing pytest-stub diagnostics.
+
+## 10:11 — packed bit insert closes the AArch64 execution lane
+
+The retained GCC 15 AArch64 O2 ELF at
+`/tmp/glaurung-a64-topological-sort.pnl6Ru/23_topological_sort-aarch64-O2.so`
+has SHA-256
+`6e86b42b2d3f5fef905ada1810868b786b8db14e9082fd482465ecfec1f26d34`.
+For a dense four-vertex graph the source returned -1 because no vertex has
+indegree zero; the recovered translation returned 4 after incorrectly queuing
+every vertex.
+
+The first semantic divergence is assembly `0x714`:
+`bit v31.16b,v28.16b,v29.16b`. The preceding packed load, add, and `CMTST`
+were explicit in LLIR, but `BIT` remained `Unknown` and rendered as
+`/* asm: bit */`. Consequently v31 retained its all-zero initializer instead
+of selecting the incremented indegrees under the all-ones comparison masks.
+Queue construction then observed four zero indegrees. Control-flow recovery,
+stack-array recovery, and the scalar fallback path were not the cause.
+
+The AArch64 packed lifter now implements the complete read-modify-write
+semantics `(old Vd & ~Vm) | (Vn & Vm)` over the shared four-dword scalar lane
+model. Each lane computes both masked candidates before defining its
+destination, so destination/source aliasing remains architectural. Grouping
+the `.16B` operation into dwords is exact because the operation is purely
+bitwise; it does not assume the mask came from `CMTST` or is all-or-nothing.
+
+The encoded machine-instruction unit proof and the real AArch64 execution
+differential are green across all 23 generated cases. The complete pre-ratchet
+changes exactly `23_topological_sort:aarch64:O2:topological_sort` from fail to
+pass: 1,582 passes / 218 failures, AArch64 328/328, with every other verdict,
+all 228 structural rows, six declared-unsupported rows, schema and toolchain
+fingerprints, and the pinned x86-64 328/328 control unchanged. The guarded
+baseline writer changes one JSON verdict and no metadata.
+
+Final validation reproduces the 1,582 / 218 ratchet exactly. Rust all-targets
+is green with 1,810 library tests plus every integration, example, and
+benchmark target. The complete Python suite exits zero at an inferred 2,800
+passed / 43 skipped, one passing test above the preceding run, with the same
+six pytest-mark warnings. Rust/Python formatting, owned Python lint, and the
+diff whitespace gate are clean; focused typing retains only the repository's
+six existing pytest-stub diagnostics.

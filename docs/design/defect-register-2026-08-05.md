@@ -959,3 +959,15 @@ register-view model to snapshot only an address component aliased by the first
 destination. The exact ratchet moves only this cell to pass: 1,581 / 1,800
 execution rows, zero regressions, and one AArch64 failure remaining
 (`23_topological_sort:topological_sort`).
+
+### Closed — packed AArch64 bit insert in `topological_sort`
+
+AArch64 O2 `23_topological_sort:topological_sort` returned a complete order for
+a cyclic graph because GCC's `bit v31.16b,v28.16b,v29.16b` remained opaque.
+The destination therefore retained its zero initializer instead of its
+masked, incremented indegrees, and queue construction accepted every vertex.
+The packed lifter now emits the exact read-modify-write expression
+`(old Vd & ~Vm) | (Vn & Vm)` across four dword lanes, with both candidates
+materialized before the aliased destination write. The exact ratchet moves only
+this cell to pass: 1,582 / 1,800 execution rows, zero regressions, and the
+AArch64 lane is now 328/328.
