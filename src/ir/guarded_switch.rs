@@ -269,7 +269,7 @@ fn guarded_switch_after_early_return(guard: &Stmt, following: &Stmt) -> Option<(
     let Expr::Const(bound) = lhs.as_ref() else {
         return None;
     };
-    if !is_straight_line_return_body(then_body) {
+    if !crate::ir::control_semantics::straight_line_return_body(then_body) {
         return None;
     }
     let Stmt::Switch { cases, default, .. } = following else {
@@ -285,34 +285,6 @@ fn guarded_switch_after_early_return(guard: &Stmt, following: &Stmt) -> Option<(
     };
     *default = Some(then_body.clone());
     Some((switch, rhs.as_ref().clone()))
-}
-
-/// Whether an early guard arm executes only ordinary statements and then
-/// unconditionally returns.
-///
-/// GCC commonly spells a cold default as `call; return result`, rather than a
-/// single return expression. Moving that sequence into a switch default keeps
-/// its execution condition and order. Control-bearing statements are rejected:
-/// in particular, moving a `break` from an enclosing loop into a switch would
-/// silently retarget it to the switch.
-fn is_straight_line_return_body(body: &[Stmt]) -> bool {
-    let Some((last, prefix)) = body.split_last() else {
-        return false;
-    };
-    matches!(last, Stmt::Return { .. })
-        && prefix.iter().all(|statement| {
-            matches!(
-                statement,
-                Stmt::Assign { .. }
-                    | Stmt::Store { .. }
-                    | Stmt::Call { .. }
-                    | Stmt::Nop
-                    | Stmt::Unknown(_)
-                    | Stmt::Comment(_)
-                    | Stmt::Push { .. }
-                    | Stmt::Pop { .. }
-            )
-        })
 }
 
 fn labels_within_unsigned_bound(cases: &[(Option<i64>, Vec<Stmt>)], bound: i64) -> bool {

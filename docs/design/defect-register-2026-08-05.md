@@ -882,3 +882,15 @@ architecture matrix remains triage evidence rather than one undifferentiated
    rerun the retained 230-key proxy and then freeze a new 250-function manifest.
    Require complete coverage and per-function GED/type-match deltas; do not accept
    generated-text improvement without behavioral and compiler controls.
+
+### Closed — fallthrough bounds for read-only result tables
+
+Optimized `04_switch_shapes` exposed a shared AST dataflow defect rather than an
+ISA-specific lift error. A terminating early guard encoded the table domain on
+its false edge, but `readonly_fold` discarded that fact at every `if`, leaving
+recompiled C to dereference the original binary's table VA. A shared
+straight-line-return proof now carries aliases and inverted unsigned bounds onto
+the only reachable fallthrough; nonterminal and signed guards remain fail-closed.
+This closes AArch64 O2 `negative_cases` and `sparse_shared_tail` and, without an
+architecture gate, Thumb-2 and A32 O2 `negative_cases`. The exact ratchet is
+1,576 passes / 224 failures with zero regressions; six AArch64 failures remain.

@@ -186,6 +186,11 @@ fn fold_body(
                 else_body,
             } => {
                 fold_expr(cond, data, &aliases, &bounds, current_guard.as_ref());
+                let terminating_fallthrough = else_body.is_none()
+                    && crate::ir::control_semantics::straight_line_return_body(then_body);
+                let fallthrough_guard = terminating_fallthrough
+                    .then(|| bounded_fallthrough_guard(cond, &aliases))
+                    .flatten();
                 let guard = bounded_guard(cond, &aliases, &bounds);
                 fold_body(
                     then_body,
@@ -197,11 +202,18 @@ fn fold_body(
                 if let Some(else_body) = else_body {
                     fold_body(else_body, data, &aliases, &bounds, current_guard.as_ref());
                 }
-                // Definitions in either branch need a join proof before aliases
-                // or an enclosing bound can be reused after the conditional.
-                aliases.clear();
-                bounds.clear();
-                current_guard = None;
+                if terminating_fallthrough {
+                    // The taken arm cannot reach the following statement, so
+                    // the incoming state still describes the false path. An
+                    // inverted unsigned guard may additionally bound it.
+                    current_guard = fallthrough_guard.or(current_guard);
+                } else {
+                    // Definitions in either branch need a join proof before
+                    // aliases or an enclosing bound can be reused.
+                    aliases.clear();
+                    bounds.clear();
+                    current_guard = None;
+                }
             }
             Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
                 fold_expr(cond, data, &aliases, &bounds, current_guard.as_ref());
@@ -426,6 +438,29 @@ fn bounded_guard(
     })
 }
 
+/// Derive the bound true on the fallthrough path of a terminating early guard.
+///
+/// Only unsigned comparisons are sound here: the false path of a signed upper
+/// bound can still contain negative indices and therefore does not prove a
+/// safe table extent.
+fn bounded_fallthrough_guard(condition: &Expr, aliases: &HashMap<String, String>) -> Option<Guard> {
+    let Expr::Cmp { op, lhs, rhs } = condition else {
+        return None;
+    };
+    let (index, inclusive_max) = match op {
+        CmpOp::Ult => (source_register(rhs)?, constant_usize(lhs)?),
+        CmpOp::Ule => (source_register(rhs)?, constant_usize(lhs)?.checked_sub(1)?),
+        _ => return None,
+    };
+    if inclusive_max >= MAX_GUARDED_ENTRIES {
+        return None;
+    }
+    Some(Guard {
+        index_root: resolve_alias(index, aliases),
+        inclusive_max,
+    })
+}
+
 fn proven_index_max(
     index: &Expr,
     aliases: &HashMap<String, String>,
@@ -539,6 +574,10 @@ fn constant_u64(expression: &Expr) -> Option<u64> {
 fn constant_usize(expression: &Expr) -> Option<usize> {
     usize::try_from(constant_u64(expression)?).ok()
 }
+
+#[cfg(test)]
+#[path = "readonly_fold/fallthrough_tests.rs"]
+mod fallthrough_tests;
 
 #[cfg(test)]
 mod tests {

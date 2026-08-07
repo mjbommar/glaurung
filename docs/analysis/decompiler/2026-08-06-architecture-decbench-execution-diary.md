@@ -933,6 +933,17 @@ changes exactly `dispatch` and `tail_dispatch` from fail to pass. Totals are
 structural rows, six declared unsupported rows, and no regression,
 reclassification, missing/no-case/timeout, or lane error.
 
+Final validation reproduces that matrix exactly against the four-cell-updated
+baseline. Rust all-targets is green with 1,795 library tests plus every
+integration, example, and benchmark target. The complete Python suite is green
+at 2,794 passed / 43 skipped with the same six existing pytest-mark warnings.
+The new unit proof lives in a 110-line child module, leaving the production
+`readonly_fold.rs` at 952 lines instead of growing it past 1,000. Rust formatting
+and owned Python formatting/lint are clean; the focused type check has only the
+six pre-existing pytest-stub diagnostics. Repository-wide checks retain their
+pre-existing debt: 354 Python files would be reformatted, Ruff reports 3,830
+findings, and ty reports 2,150 diagnostics.
+
 Final validation retains that exact matrix against the updated baseline. Rust
 all-targets is green, including 1,793 library tests plus every integration,
 example, and benchmark target. The complete Python suite is green at 2,791
@@ -941,3 +952,38 @@ owned-file Ruff formatting/lint are clean. Repository-wide Ruff/ty remain the
 pre-existing red debt (354 unformatted files, 3,830 lint findings, and 2,150
 type diagnostics); the focused type check reports only six existing pytest-stub
 diagnostics outside the added test.
+
+## 04:48 (2026-08-07) — terminating guards make fallthrough tables portable
+
+The remaining O2 switch-table crashes were round-tripped from source through
+three machine encodings. AArch64 `negative_cases` adds three, rejects unsigned
+indices above five, and loads a dword from the table at `0xc28`; Thumb-2 and A32
+emit the same guard/load shape at `0x64c` and `0x6b8`, with PC-relative tables at
+`0x8bc` and `0x9fc`. AArch64 `sparse_shared_tail` similarly guards an index up to
+22 before loading its shared-tail multiplier. In every case the prepared AST was
+already faithful: `if (max u< index) return default; return table[index]`. The
+portable readonly materializer did nothing because it understood bounds inside
+the taken arm but discarded all facts at the conditional join. Recompiled C
+therefore dereferenced the original image VA and crashed.
+
+The architecture-neutral readonly pass now recognizes a no-else arm that is
+provably straight-line and ends in `return`. Because that taken edge cannot
+reach the following statement, the false edge retains incoming aliases and an
+inverted unsigned bound. Signed comparisons are deliberately rejected: their
+false path can contain negative table indices. Non-returning arms still clear
+all state. The terminal-arm predicate was moved out of `guarded_switch.rs` into
+one shared control-semantics module, so guard normalization and readonly folding
+use the same transfer proof.
+
+Retained ARM audit objects live in `/tmp/glaurung-arm-readonly.HdvOOf` with
+SHA-256 `138605ae5eb34192f3685e3349eebbdb6639074adc326bd6bfb8bfa5e8b46b79`
+(Thumb-2) and
+`d9dfed1f172eddff5187f8d2ae175921a6138ae0881baa413567f34b92e366f4`
+(A32). Both execute 28 native-target-ABI vectors successfully. The AArch64
+fixture test executes both affected functions, and the two ARM tests execute
+the same source contract under Thumb-2 and A32. The complete pre-ratchet matrix
+changes exactly four cells: AArch64 `negative_cases` and `sparse_shared_tail`,
+plus Thumb-2 and A32 `negative_cases`. Totals are 1,576 passes / 224 failures,
+AArch64 322/328, ARMv7 239/272, A32 113/272, pinned x86-64 328/328, 228
+structural rows, six declared unsupported rows, and no regression,
+reclassification, missing/no-case/timeout, or lane error.

@@ -31,6 +31,7 @@ pub mod call_contracts;
 pub mod canary;
 pub mod cfg_edges;
 pub mod const_fold;
+pub mod control_semantics;
 pub mod copy_prop;
 pub mod dce;
 pub mod dead_stores;
