@@ -674,12 +674,26 @@ signatures now include `gyroInitFilterNotch1(uint16_t, uint16_t)`,
 `pkg_array_match_patterns`. Fully representing its opaque function-pointer
 parameter still requires EPIC 1's structured declarator/type environment.
 
-### Current strict AArch64-only set: 1, not 43
+### Original 43-row AArch64 set: 0; full matrix AArch64-only set: 4
 
-The old 43-function count was a verdict-only snapshot and is stale. Relative to
-the current pinned x86-64, i386, and Thumb lanes, the strict AArch64-only set is:
+The old 43-function count was a verdict-only snapshot and is stale. Every row in
+that tracked set is now closed. The unfiltered 328-cell matrix still has four
+AArch64-only failures outside that historical list. The August 1 gap plan grouped
+them as one 16-bit-width residue:
 
-- `07_packet_parser:O2:validate_header`.
+- `02_integer_widths:O0:rotl16_3`;
+- `02_integer_widths:O0:trunc_u16_after_mul`;
+- `02_integer_widths:O2:mul_widen`; and
+- `02_integer_widths:O2:rt_u32`.
+
+A fresh source/binary/assembly/raw-LLIR/C/execution pass rejects that grouping.
+The two O0 cells share a downstream width-rendering defect: raw `UBFIZ` LLIR
+correctly extracts 13 or 15 bits, but emitted C narrows the extracted value to
+`unsigned char` before shifting. O2 `mul_widen` has a correct 64-bit `UMULL` in
+LLIR, then role projection assigns that x0 storage to the 32-bit `arg0` before
+the high-half shift. O2 `rt_u32` is only `ret`; the recovered direct result must
+be the incoming x0 parameter, but emission returns zero. These are three owners,
+with the shared O0 pair first.
 
 The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
 `fib`, O0 `validate_header`, all three indirect-dispatch functions, two O0 call
@@ -742,9 +756,17 @@ the architectural 8-to-32-bit zero-extension. Offset-zero accesses consequently
 rendered through signed `char`, while indexed accesses happened to inherit the
 DWARF `uint8_t *` type. Explicit narrow-load widening changes `process` from fail
 to pass at both O0 and O2. The complete ratchet moves to 1,557 passes / 243
-failures, with exactly those two changes. The one strict cell that remains is a
-packet-parser value-role defect, so the set remains triage evidence rather than
-one “AArch64 gap.”
+failures, with exactly those two changes. The last strict cell was a packet-
+parser byte-order defect rather than a value-role defect: GCC 15 lowers the
+portable big-endian halfword read to `REV16`, which was the only `Unknown`
+operation in `validate_header`. An architecture-neutral halfword-lane byte-swap
+intrinsic now carries that exact semantics through lifting, C emission, and
+native execution. It closes both O2 `validate_header` and the neighboring
+`parse_packet`, moving the complete ratchet to 1,559 passes / 241 failures with
+no regression or reclassification. The original 43-row set is therefore empty;
+the four unfiltered integer-width cells remain real next work. The cross-
+architecture matrix remains triage evidence rather than one undifferentiated
+“AArch64 gap.”
 
 ### Rank-ordered next work
 
@@ -765,10 +787,11 @@ one “AArch64 gap.”
 4. **P1 — architecture-parametric semantics (EPIC 4).** Move calling-convention,
    register-bank, stack-coordinate, and SIMD semantics behind machine-model traits;
    keep A32 and Thumb as distinct test targets. The AArch64 `addv`, zero-splat,
-   signed-max, one-table byte-permutation, and unsigned narrow-load slices are
-   complete; next acceptance is to expand typed lane semantics without false
-   passes and increase A32 from its measured baseline without architecture-name
-   gates in shared IR passes.
+   signed-max, one-table byte-permutation, unsigned narrow-load, and halfword
+   lane byte-order slices are complete. Next acceptance is the shared O0
+   sub-byte-width pair above, then the distinct O2 product-role and identity-
+   return cells, followed by typed-lane expansion and an A32 increase without
+   architecture-name gates in shared IR passes.
 5. **P2 — symbolic constant operands (EPIC 2).** Resolve data/code addresses,
    literals, and table bases through the program environment instead of preserving
    opaque integers. Acceptance: address-bearing operands retain symbol, section,

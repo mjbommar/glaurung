@@ -684,19 +684,27 @@ fn wide_integer_intrinsic(
     Some((op, (bits / 8) as u8))
 }
 
-/// Lower x86 BSWAP to an exact unsigned expression instead of an opaque asm
-/// comment.  The explicit machine-width casts keep every shift defined and
-/// prevent a 32-bit source with its sign bit set from being promoted to a
-/// signed C value before the byte shuffle is complete.
+/// Lower full-register and lane-local byte swaps to an exact unsigned
+/// expression instead of an opaque asm comment. The explicit machine-width
+/// casts keep every shift defined and prevent a 32-bit source with its sign bit
+/// set from being promoted to a signed C value before the shuffle is complete.
 fn byte_swap_intrinsic(name: &str, ins: &[Value], outs: &[(VReg, Width)]) -> Option<Expr> {
     let ([src], [(_, output_width)]) = (ins, outs) else {
         return None;
     };
-    if name != "bswap" || !matches!(*output_width, Width::W32 | Width::W64) {
+    if !matches!(*output_width, Width::W32 | Width::W64) {
         return None;
     }
 
     let bytes = u8::try_from(output_width.bytes()).ok()?;
+    let lane_bytes = match name {
+        "bswap" => bytes,
+        "byte_swap_16_lanes" => 2,
+        _ => return None,
+    };
+    if bytes % lane_bytes != 0 {
+        return None;
+    }
     let input = Expr::Cast {
         signed: false,
         width: bytes,
@@ -705,7 +713,10 @@ fn byte_swap_intrinsic(name: &str, ins: &[Value], outs: &[(VReg, Width)]) -> Opt
     let mut parts = Vec::with_capacity(bytes as usize);
     for source_byte in 0..bytes {
         let source_shift = i64::from(source_byte) * 8;
-        let destination_shift = i64::from(bytes - 1 - source_byte) * 8;
+        let lane_base = (source_byte / lane_bytes) * lane_bytes;
+        let lane_offset = source_byte % lane_bytes;
+        let destination_byte = lane_base + (lane_bytes - 1 - lane_offset);
+        let destination_shift = i64::from(destination_byte) * 8;
         let shifted_down = if source_shift == 0 {
             input.clone()
         } else {
@@ -14338,6 +14349,47 @@ function f @ 0x1000 {
             assert!(!text.contains("asm: bswap"), "{text}");
             assert_looks_like_c(&text);
         }
+    }
+
+    #[test]
+    fn halfword_lane_byte_swap_intrinsic_lowers_to_executable_c() {
+        let statements = lower_op(
+            &Op::Intrinsic {
+                name: "byte_swap_16_lanes".to_string(),
+                ins: vec![Value::Reg(VReg::phys("arg0"))],
+                outs: vec![(VReg::phys("ret"), Width::W32)],
+                reads_mem: false,
+                writes_mem: false,
+            },
+            false,
+        );
+        assert!(matches!(
+            statements.as_slice(),
+            [Stmt::Assign {
+                dst,
+                src: Expr::Cast {
+                    signed: false,
+                    width: 4,
+                    ..
+                },
+            }] if dst == &VReg::phys("ret")
+        ));
+        let function = Function {
+            name: "swap_halfwords".to_string(),
+            entry_va: 0x10,
+            body: statements,
+        };
+        let text = render_decbench(&function);
+        assert!(
+            text.contains("<< 8"),
+            "low bytes were not exchanged: {text}"
+        );
+        assert!(
+            text.contains(">> 8"),
+            "high bytes were not exchanged: {text}"
+        );
+        assert!(!text.contains("asm: rev16"), "{text}");
+        assert_looks_like_c(&text);
     }
 
     #[test]

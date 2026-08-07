@@ -1102,8 +1102,8 @@
     "validate_header": "pass"
   },
   "07_packet_parser:aarch64:O2": {
-    "parse_packet": "fail",
-    "validate_header": "fail"
+    "parse_packet": "pass",
+    "validate_header": "pass"
   },
   "07_packet_parser:armv7:O0": {
     "parse_packet": "fail",

@@ -1787,7 +1787,7 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
             }
             vec![Op::Unknown { mnemonic: mnem }]
         }
-        "rev" => {
+        "rev" | "rev16" => {
             if ins.operands.len() == 2 {
                 let (Some(dst), Some(src)) = (
                     operand_reg(&ins.operands[0]),
@@ -1798,7 +1798,15 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 let width = dst.width().unwrap_or(Width::W64);
                 if matches!(width, Width::W32 | Width::W64) {
                     return vec![Op::Intrinsic {
-                        name: "bswap".into(),
+                        // REV reverses the entire register. REV16 reverses the
+                        // two bytes independently inside every halfword lane.
+                        // Keep that distinction in architecture-neutral LLIR;
+                        // both AST lowering and native execution consume it.
+                        name: if mnem == "rev" {
+                            "bswap".into()
+                        } else {
+                            "byte_swap_16_lanes".into()
+                        },
                         ins: vec![src],
                         outs: vec![(dst, width)],
                         reads_mem: false,
@@ -3171,6 +3179,42 @@ mod tests {
             masks.iter().filter(|c| **c == 31).count(),
             2,
             "both the rotate amount and its complement need masking: {register:#?}"
+        );
+    }
+
+    /// REV16 reverses bytes independently inside each 16-bit lane.  It is not
+    /// a full-register REV/BSWAP: 0x11223344 becomes 0x22114433.
+    #[test]
+    fn rev16_declares_a_halfword_lane_byte_swap() {
+        // rev16 w0, w0 -> 0x5ac00400
+        let out = lift_bytes(&0x5ac00400u32.to_le_bytes(), 0x1000);
+        assert!(
+            matches!(
+                out.as_slice(),
+                [
+                    LlirInstr {
+                        op: Op::Intrinsic {
+                            name,
+                            ins,
+                            outs,
+                            reads_mem: false,
+                            writes_mem: false,
+                        },
+                        ..
+                    },
+                    LlirInstr {
+                        op: Op::ZExt {
+                            from: Width::W32,
+                            to: Width::W64,
+                            ..
+                        },
+                        ..
+                    }
+                ] if name == "byte_swap_16_lanes"
+                    && ins == &[Value::Reg(VReg::phys("w0"))]
+                    && outs == &[(VReg::phys("w0"), Width::W32)]
+            ),
+            "REV16 must retain its lane-local byte order semantics: {out:#?}"
         );
     }
 

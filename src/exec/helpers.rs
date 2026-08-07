@@ -99,6 +99,8 @@ impl<D: Domain> HelperRegistry<D> {
         registry.register("aarch64_cmn64", helper_aarch64_cmn64::<D>);
         registry.register("aarch64_tst32", helper_aarch64_tst32::<D>);
         registry.register("aarch64_tst64", helper_aarch64_tst64::<D>);
+        registry.register("bswap", helper_bswap::<D>);
+        registry.register("byte_swap_16_lanes", helper_halfword_lane_byte_swap::<D>);
         registry
     }
 }
@@ -271,16 +273,61 @@ fn helper_bswap<D: Domain>(
     ins: &[Value],
     outs: &[(VReg, Width)],
 ) -> Result<(), Halt> {
-    let (dst, w) = (&outs[0].0, outs[0].1);
-    let v = m.read(&ins[0], w);
+    helper_byte_swap_lanes(m, ins, outs, None, "bswap")
+}
+
+/// Reverse bytes independently inside each 16-bit lane (AArch64 REV16).
+fn helper_halfword_lane_byte_swap<D: Domain>(
+    m: &mut Machine<D>,
+    ins: &[Value],
+    outs: &[(VReg, Width)],
+) -> Result<(), Halt> {
+    helper_byte_swap_lanes(m, ins, outs, Some(2), "byte_swap_16_lanes")
+}
+
+/// Shared domain-level implementation for a full-register byte swap
+/// (`lane_bytes = None`) and fixed-width lane-local byte swaps. Building the
+/// result from `extract`/`concat` preserves the same semantics for concrete and
+/// symbolic domains.
+fn helper_byte_swap_lanes<D: Domain>(
+    m: &mut Machine<D>,
+    ins: &[Value],
+    outs: &[(VReg, Width)],
+    lane_bytes: Option<u16>,
+    intrinsic_name: &'static str,
+) -> Result<(), Halt> {
+    let ([src], [(dst, w)]) = (ins, outs) else {
+        return Err(Halt::UndefinedValue(format!(
+            "malformed {intrinsic_name} intrinsic"
+        )));
+    };
+    if !matches!(*w, Width::W32 | Width::W64) {
+        return Err(Halt::UndefinedValue(format!(
+            "malformed {intrinsic_name} intrinsic"
+        )));
+    }
     let nbytes = w.bytes();
-    // Build the reversal: byte 0 (LSB of the source) becomes the MSB of the
-    // result. acc accumulates [b0 .. b_{i}] with b0 at the top.
-    let mut acc = m.dom.extract(&v, 8, 0);
+    let lane_bytes = lane_bytes.unwrap_or(nbytes);
+    if lane_bytes == 0 || nbytes % lane_bytes != 0 {
+        return Err(Halt::UndefinedValue(format!(
+            "malformed {intrinsic_name} intrinsic"
+        )));
+    }
+    let v = m.read(src, *w);
+
+    // Construct destination bytes from MSB to LSB. Within each lane, source
+    // byte order is reversed; lane order itself is unchanged.
+    let source_byte_for = |destination_byte: u16| {
+        let lane_base = (destination_byte / lane_bytes) * lane_bytes;
+        lane_base + (lane_bytes - 1 - destination_byte % lane_bytes)
+    };
+    let first_source = source_byte_for(nbytes - 1);
+    let mut acc = m.dom.extract(&v, (first_source + 1) * 8, first_source * 8);
     let mut acc_w = 8u16;
-    for i in 1..nbytes {
-        let bi = m.dom.extract(&v, (i + 1) * 8, i * 8);
-        acc = m.dom.concat(&acc, &bi, Width(acc_w), Width::W8);
+    for destination_byte in (0..nbytes - 1).rev() {
+        let source_byte = source_byte_for(destination_byte);
+        let byte = m.dom.extract(&v, (source_byte + 1) * 8, source_byte * 8);
+        acc = m.dom.concat(&acc, &byte, Width(acc_w), Width::W8);
         acc_w += 8;
     }
     m.regs.write(&mut m.dom, dst, acc);
@@ -440,5 +487,40 @@ mod tests {
         assert_eq!(machine.step(&tst), Flow::Next);
         assert_eq!(machine.regs.read(&mut machine.dom, &VReg::Flag(Flag::Z)), 0);
         assert_eq!(machine.regs.read(&mut machine.dom, &VReg::Flag(Flag::C)), 1);
+    }
+
+    #[test]
+    fn aarch64_halfword_lane_byte_swap_executes_concretely() {
+        let mut machine: Machine<Concrete> = Machine::new_with_arch(Concrete, RegArch::AArch64);
+        let rev16 = Op::Intrinsic {
+            name: "byte_swap_16_lanes".to_string(),
+            ins: vec![Value::Const(0x1122_3344)],
+            outs: vec![(VReg::phys("w0"), Width::W32)],
+            reads_mem: false,
+            writes_mem: false,
+        };
+        assert_eq!(machine.step(&rev16), Flow::Next);
+        assert_eq!(
+            machine.regs.read(&mut machine.dom, &VReg::phys("x0")),
+            0x2211_4433
+        );
+    }
+
+    #[test]
+    fn malformed_byte_swap_halts_instead_of_panicking_or_continuing() {
+        let mut machine: Machine<Concrete> = Machine::new_with_arch(Concrete, RegArch::AArch64);
+        let malformed = Op::Intrinsic {
+            name: "byte_swap_16_lanes".to_string(),
+            ins: vec![Value::Const(0x1122_3344)],
+            outs: Vec::new(),
+            reads_mem: false,
+            writes_mem: false,
+        };
+        assert_eq!(
+            machine.step(&malformed),
+            Flow::Halt(Halt::UndefinedValue(
+                "malformed byte_swap_16_lanes intrinsic".to_string()
+            ))
+        );
     }
 }

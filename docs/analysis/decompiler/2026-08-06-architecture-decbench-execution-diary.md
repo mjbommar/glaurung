@@ -599,3 +599,81 @@ architecture-roundtrip Python module and the complete Python suite both reach
 Rust formatting, changed-file Python formatting/linting, and whitespace checks
 pass. Repository-wide static checks retain the established debt unchanged: 354
 files would be reformatted, 3,830 lint errors, and 2,043 type diagnostics.
+
+## 22:30 — exact `REV16` semantics closed the tracked AArch64 set
+
+The final row in the tracked 43-function AArch64 set was first classified as a
+packet-parser value-role defect. A source-to-machine round trip disproved that
+hypothesis.
+The retained GCC 15 AArch64 O2 ELF at
+`/tmp/glaurung-a64-packet-20260806/07_packet_parser-aarch64-O2.so` has SHA-256
+`2515a764c691f94b7566b002c7eac91b9de1282f1cc9ec7ac226832b05d8f74e`.
+Its `validate_header` symbol is 140 bytes at `0x5e0`. The critical tail loads the
+big-endian packet length with `ldrh w0,[x0,#4]`, computes `len - 7`, executes
+`rev16 w0,w0`, compares the swapped halfword, and takes the `-6` path when the
+declared payload does not fit. Before repair, raw LLIR preserved every value and
+branch around `0x628` but represented that one `REV16` as `Unknown`; emitted C
+therefore compared the host-endian value. A valid length-four packet returned
+source `0` versus recovered `-6`.
+
+Three RED semantic canaries now pin the instruction at its ownership seams: the
+AArch64 decoder must emit one pure `byte_swap_16_lanes` intrinsic plus the normal
+W-register zero-extension; AST lowering must produce executable unsigned C; and
+the concrete AArch64 engine must transform `0x11223344` into `0x22114433` without
+halting. A fourth RED test cross-builds the real fixture and reproduces the valid
+packet mismatch. The implementation uses one architecture-neutral intrinsic.
+Its AST lowering and domain-level executor share the same lane contract, and
+AArch64 execution now also registers the existing full-register `bswap` used by
+`REV`. Unsupported widths and malformed operand shapes remain fail-safe instead
+of indexing unchecked vectors.
+
+Post-fix LLIR replaces the sole `Unknown` at `0x628` with the explicit pure
+intrinsic. Emitted C swaps bytes independently in both halfwords before the
+existing signed bound. The unchanged binary passes all 138 vectors for
+`validate_header`. The broad fixture run also changed `parse_packet` from fail
+to pass; this was audited separately rather than accepted from the verdict. Its
+assembly has the same `rev16 w2,w2` at `0x690` before the defensive declared-
+length check, and its post-fix LLIR carries the same intrinsic. Both AArch64 O2
+packet functions and both pinned x86-64 controls pass.
+
+The complete six-architecture ratchet changes exactly those two functions from
+fail to pass: 1,559 passes, 241 failures, 228 structural rows, six declared
+unsupported rows, no missing/no-case/timeout/lane errors, and pinned x86-64 at
+328/328. This empties the original tracked 43-row AArch64 set, but a fresh
+unfiltered baseline intersection finds four additional AArch64-only cells that
+the later strict-set narrative had omitted: `02_integer_widths:O0:rotl16_3`,
+`02_integer_widths:O0:trunc_u16_after_mul`, `02_integer_widths:O2:mul_widen`, and
+`02_integer_widths:O2:rt_u32`. The August 1 gap plan already classified all four
+as one 16-bit-width residue, so they are restored as the next AArch64 work rather
+than silently erased. Other remaining AArch64 failures are shared with at least
+one comparator architecture or compiler-shape lane and should be clustered from
+their exact verdict intersections.
+
+## 22:50 — the four restored AArch64 width cells split into three owners
+
+The first fresh round trip rejects the August 1 plan's “one 16-bit-width residue”
+classification. Retained GCC 15 ELFs are under
+`/tmp/glaurung-a64-widths-20260806.yMgUdF`: O0 SHA-256
+`09e9f7a92fbd5860d3784059db6485f04e3be552f72ccecb52c0f3a6b3af5c37`
+and O2 SHA-256
+`6d08b849a4f9d3975e1afa80cb4878d7479f6154bd6a66583b47e1c7c6e0ce30`.
+The 128-vector RED differentials are exact: O0 `rotl16_3` returns 2,047 instead
+of 65,535 and `trunc_u16_after_mul` returns 509 instead of 65,533 for input
+`UINT_MAX`; O2 `mul_widen(UINT_MAX,UINT_MAX)` returns 1 instead of -1; and O2
+`rt_u32(1)` returns 0 instead of 1.
+
+The O0 pair share one downstream width-rendering defect. Assembly uses
+`ubfiz w0,w0,#3,#13` and `ubfiz w0,w0,#1,#15`. Raw LLIR exactly preserves the
+13- and 15-bit extracts, zero-extends them to 32 bits, and shifts at W32. Emitted
+C nevertheless casts each extracted value to `unsigned char` before the shift,
+discarding five or seven live bits. The first loss is therefore after lifting.
+
+The O2 cells are separate. `mul_widen` assembly is `umull x0,w0,w1`, high-half
+shift, then a 32-bit XOR. Raw LLIR preserves the widened inputs and 64-bit
+product, but emitted C assigns the product to the 32-bit parameter `arg0`, so
+the high half is already gone. This is value-role/storage reuse. `rt_u32` is the
+single instruction `ret`; raw LLIR contains only `Return`, and emitted C returns
+zero instead of recognizing that the incoming x0 is simultaneously the direct
+result. This is an ABI parameter/result-alias case. The next implementation slice
+therefore targets the shared O0 rendering defect first and keeps both O2 cells
+as independent canaries rather than accepting a four-cell heuristic.
