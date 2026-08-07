@@ -875,3 +875,30 @@ and is not being credited to this repair. The complete six-lane ratchet has
 exactly those four improvements and no regressions or reclassifications: 1,569
 passes / 231 failures, AArch64 317/328, pinned x86-64 328/328, 228 structural
 rows, six declared unsupported rows, and no missing/no-case/timeout/lane errors.
+
+## 03:13 (2026-08-07) — direct failure-arm canary closes the remaining BST row
+
+After the four-function repair, retained O2 `bst_inorder_checksum` still crashed
+on its first invalid-input vector. Its prologue was already normalized to a
+proven `stack canary: save guard to %stack_3` comment, but its early-return
+epilogue had a third post-structuring form:
+`if (stack_3 != 0x1ffd8) __stack_chk_fail(); return checksum`. Copy folding had
+reduced the fresh guard load to its GOT VA, so the older canary marker test could
+not recognize it and the uninitialized synthetic stack slot always selected the
+failure call.
+
+Canary normalization now removes this form only when the prologue has already
+proved the compared slot is saved guard storage, the predicate is inequality,
+the arm contains exactly one call, and that call is the decorated
+`__stack_chk_fail` symbol. No guard-address guess is required: the saved-slot
+provenance and exact failure sink own the classification. A RED unit test
+retains the literal-GOT form, and the real architecture test now covers both
+`bst_inorder_checksum` and `graph_bfs`.
+
+The retained BST ELF with SHA-256
+`432536005a47887bfd9b6505cc15aeb09b43d48be6ebac2e97530843591747f0`
+passes every differential vector after rebuilding. The complete six-lane
+ratchet changes exactly `15_binary_search_tree:aarch64:O2:bst_inorder_checksum`
+from fail to pass: 1,570 passes / 230 failures, AArch64 318/328, pinned x86-64
+328/328, 228 structural rows, six declared unsupported rows, and no regression,
+reclassification, missing/no-case/timeout, or lane error.

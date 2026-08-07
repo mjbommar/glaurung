@@ -119,6 +119,33 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
 
     let mut i = 0;
     while i < body.len() {
+        // A fully structured failure edge no longer has a goto for the older
+        // reload/branch matcher below to see:
+        //
+        //   if (saved_guard != original_guard) { __stack_chk_fail(); }
+        //
+        // The prologue comment has already proved `slot` is guard storage, so
+        // the exact inequality plus exact noreturn call is sufficient even if
+        // late copy folding reduced the original guard load back to its GOT VA.
+        let structured_failure = matches!(
+            &body[i],
+            Stmt::If {
+                cond: cond @ Expr::Cmp {
+                    op: crate::ir::types::CmpOp::Ne,
+                    ..
+                },
+                then_body,
+                else_body: None,
+            } if then_body.len() == 1
+                && is_stack_chk_fail_call(&then_body[0])
+                && expr_mentions_slot(cond, slot)
+        );
+        if structured_failure {
+            body[i] = Stmt::Comment("stack-canary check".to_string());
+            i += 1;
+            continue;
+        }
+
         // After control-flow structuring, AArch64 commonly has the inverse
         // shape of the branch-to-failure idiom below:
         //
@@ -1213,6 +1240,44 @@ mod tests {
         collapse_canary_save(&mut f);
 
         assert_eq!(f, original);
+    }
+
+    #[test]
+    fn structured_aarch64_failure_arm_collapses_with_a_proven_save() {
+        use crate::ir::types::{CmpOp, VReg};
+        let mut f = Function {
+            name: "bst_inorder_checksum".into(),
+            entry_va: 0x724,
+            body: vec![
+                Stmt::Comment("stack canary: save guard to %stack_3".to_string()),
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Reg(VReg::phys("stack_3"))),
+                        rhs: Box::new(Expr::Const(0x1ffd8)),
+                    },
+                    then_body: vec![Stmt::Call {
+                        target: Expr::Named {
+                            va: 0x5a0,
+                            name: "__stack_chk_fail@plt".into(),
+                        },
+                        args: vec![],
+                        dst: None,
+                        call_spec: None,
+                    }],
+                    else_body: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        collapse_canary_save(&mut f);
+
+        assert_eq!(f.body.len(), 3, "got: {:?}", f.body);
+        assert!(matches!(&f.body[1], Stmt::Comment(s) if s == "stack-canary check"));
+        assert!(matches!(&f.body[2], Stmt::Return { .. }));
     }
 
     #[test]

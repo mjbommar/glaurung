@@ -2122,7 +2122,7 @@
     "bst_search": "pass"
   },
   "15_binary_search_tree:aarch64:O2": {
-    "bst_inorder_checksum": "fail",
+    "bst_inorder_checksum": "pass",
     "bst_search": "pass"
   },
   "15_binary_search_tree:armv7:O0": {

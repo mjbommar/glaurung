@@ -758,7 +758,11 @@ slot, equality, returning success arm, and exact failure symbol. This changes
 `graph_bfs`, `graph_dfs`, `dijkstra_dense`, and `kmp_search` from fail to pass.
 The complete ratchet is 1,569 passes / 231 failures, AArch64 317/328 and pinned
 x86-64 328/328, with no regression or reclassification.
-`bst_inorder_checksum` remains a separate open failure.
+A follow-up closes `bst_inorder_checksum`'s already-promoted failure-arm form:
+with a proven canary save, `saved != folded_GOT_VA` and an exact one-call
+`__stack_chk_fail` arm are the same compiler artifact even after the guard name
+is lost. The final cluster ratchet is 1,570 passes / 230 failures, AArch64
+318/328 and pinned x86-64 328/328, again with no regression or reclassification.
 
 The post-spill call-result ownership fix closes 11 strict AArch64-only failures:
 `fib`, O0 `validate_header`, all three indirect-dispatch functions, two O0 call
@@ -863,6 +867,6 @@ architecture matrix remains triage evidence rather than one undifferentiated
    opaque integers. Acceptance: address-bearing operands retain symbol, section,
    width, and relocation provenance through lifting and C emission.
 6. **P2 — direct metric campaign.** After the preceding typed/storage slices,
-   rerun the retained 231-key proxy and then freeze a new 250-function manifest.
+   rerun the retained 230-key proxy and then freeze a new 250-function manifest.
    Require complete coverage and per-function GED/type-match deltas; do not accept
    generated-text improvement without behavioral and compiler controls.

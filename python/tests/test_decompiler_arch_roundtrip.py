@@ -932,13 +932,19 @@ def test_aarch64_o2_direct_callee_live_ins_preserve_a_wide_call_result(
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
-def test_aarch64_o2_stack_protected_graph_returns_through_its_canary(
-    tmp_path: Path,
+@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
+    ("fixture", "function"),
+    [
+        ("15_binary_search_tree", "bst_inorder_checksum"),
+        ("20_graph_bfs", "graph_bfs"),
+    ],
+)
+def test_aarch64_o2_stack_protected_functions_return_through_their_canary(
+    tmp_path: Path, fixture: str, function: str
 ) -> None:
-    """A GOT-indirect stack guard must not force every valid return to abort."""
+    """A structured stack guard must not force every valid return to abort."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
         pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
-    fixture = "20_graph_bfs"
     source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
     target = tmp_path / f"{fixture}-aarch64-O2.so"
     ok, error = A._cross_build("aarch64", source, "O2", target)
@@ -956,10 +962,10 @@ def test_aarch64_o2_stack_protected_graph_returns_through_its_canary(
         reference_so=str(reference),
         lane="aarch64:O2",
         native_cc=A.native_cc("aarch64"),
-        only={"graph_bfs"},
+        only={function},
     )
 
-    assert results["graph_bfs"]["status"] == "pass", results
+    assert results[function]["status"] == "pass", results
 
 
 def test_reference_so_defaults_to_the_binary_so_host_lanes_are_unchanged(tmp_path):
