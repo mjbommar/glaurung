@@ -354,6 +354,7 @@ fn run_ast_passes(
         eprintln!(
             "\n===== parameter evidence =====\nslots={param_slots:?}\nroles={parameter_roles:?}"
         );
+        eprintln!("\n===== stack object hints =====\n{stack_object_hints:#?}");
     }
     macro_rules! dp {
         ($n:expr) => {
@@ -402,6 +403,8 @@ fn run_ast_passes(
     // renderer to paper over a semantically impossible AST result.
     crate::ir::call_contracts::apply_known_call_contracts(f);
     dp!("apply_known_call_contracts");
+    crate::ir::call_result_split::split_call_result_lifetimes(f, cc);
+    dp!("split_call_result_lifetimes");
     crate::ir::strings_fold::fold_string_literals(f, str_pool);
     crate::ir::canary::recognise_canary(f);
     dp!("canary+strings");
@@ -1434,6 +1437,10 @@ fn decbench_text(
 /// compact companion map carries parameter and output facts to typed recovery.
 #[derive(Debug, Clone)]
 struct DwarfPrototypeContract {
+    /// Whether the producer marked this as a complete function prototype.
+    /// This distinguishes `f(void)` from an old-style `f()` when both have no
+    /// formal-parameter DIEs.
+    prototyped: bool,
     parameter_types: Vec<crate::debug::dwarf::DwarfParameterType>,
     return_type: crate::debug::dwarf::DwarfReturnType,
     stack_objects: Vec<crate::debug::dwarf::DwarfStackObject>,
@@ -1446,6 +1453,7 @@ fn dwarf_output_contracts(data: &[u8]) -> std::collections::HashMap<u64, DwarfPr
             (
                 function.entry_va,
                 DwarfPrototypeContract {
+                    prototyped: function.prototyped,
                     parameter_types: function.parameter_types,
                     return_type: function.return_type,
                     stack_objects: function.stack_objects,
@@ -1801,6 +1809,17 @@ fn recovered_call_prototype(
     }
 }
 
+/// Whether a direct callee's empty recovered argument layout is authoritative.
+///
+/// Machine-code liveness can miss parameters, so an empty inferred layout is
+/// normally not safe to impose on a caller. A DWARF `DW_AT_prototyped` function
+/// with no formal parameters is different: it proves a genuine `f(void)`
+/// declaration, and its return contract must not be discarded merely because
+/// there are no argument registers to record.
+fn retain_empty_direct_callee_layout(declared: Option<&DwarfPrototypeContract>) -> bool {
+    declared.is_some_and(|contract| contract.prototyped && contract.parameter_types.is_empty())
+}
+
 /// Recover the source-ordered physical parameter storage and prototype of direct callees.
 ///
 /// This is intentionally demand-driven and cached. AAPCS-VFP callsites need
@@ -1924,7 +1943,9 @@ fn recover_direct_callee_layouts(
                     .map(|parameter| parameter.value.base.clone())
                     .collect();
                 let call_prototype = recovered_call_prototype(&prototype);
-                (!layout.is_empty()).then(|| (layout, call_prototype, callee.name.clone()))
+                let declared = dwarf_outputs.and_then(|outputs| outputs.get(&body_va));
+                (!layout.is_empty() || retain_empty_direct_callee_layout(declared))
+                    .then(|| (layout, call_prototype, callee.name.clone()))
             })
             .clone();
         if let Some((layout, prototype, name)) = recovered {
@@ -2798,7 +2819,8 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
 mod tests {
     use super::{
         dwarf_return_hint, dwarf_stack_object_hints, imported_symbol_base, integer_widths_by_role,
-        merge_exact_definition_widths, refine_numbered_declaration, DwarfPrototypeContract,
+        merge_exact_definition_widths, refine_numbered_declaration,
+        retain_empty_direct_callee_layout, DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
     use crate::ir::call_args::CallConv;
@@ -2811,6 +2833,24 @@ mod tests {
         assert_eq!(imported_symbol_base("signed_step@plt"), "signed_step");
         assert_eq!(imported_symbol_base("signed_step.plt"), "signed_step");
         assert_eq!(imported_symbol_base("signed_step"), "signed_step");
+    }
+
+    #[test]
+    fn only_a_complete_void_parameter_list_authorizes_an_empty_callee_layout() {
+        let complete = DwarfPrototypeContract {
+            prototyped: true,
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Type("int".to_string()),
+            stack_objects: Vec::new(),
+        };
+        let old_style = DwarfPrototypeContract {
+            prototyped: false,
+            ..complete.clone()
+        };
+
+        assert!(retain_empty_direct_callee_layout(Some(&complete)));
+        assert!(!retain_empty_direct_callee_layout(Some(&old_style)));
+        assert!(!retain_empty_direct_callee_layout(None));
     }
 
     #[test]
@@ -3138,6 +3178,7 @@ mod tests {
     #[test]
     fn dwarf_arm_frame_registers_map_to_stack_object_hints() {
         let contract = DwarfPrototypeContract {
+            prototyped: true,
             parameter_types: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: vec![
@@ -3170,6 +3211,7 @@ mod tests {
     #[test]
     fn dwarf_aarch64_cfa_maps_to_the_entry_stack_coordinate() {
         let contract = DwarfPrototypeContract {
+            prototyped: true,
             parameter_types: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: vec![DwarfStackObject {
@@ -3191,6 +3233,7 @@ mod tests {
     #[test]
     fn dwarf_arm_cfa_maps_to_the_entry_stack_coordinate() {
         let contract = DwarfPrototypeContract {
+            prototyped: true,
             parameter_types: Vec::new(),
             return_type: DwarfReturnType::Void,
             stack_objects: vec![DwarfStackObject {

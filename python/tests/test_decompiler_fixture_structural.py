@@ -353,7 +353,15 @@ def test_optimized_tail_dispatch_recovers_portable_local_function_table(
     for handler in ("h_add", "h_sub", "h_mul", "h_xor", "h_max"):
         assert handler in result.stdout, result.stdout
     assert "unrecovered indirect jump" not in result.stdout, result.stdout
-    assert "return ret;" in result.stdout, result.stdout
+    call_assignments = [
+        line
+        for line in result.stdout.splitlines()
+        if " = " in line and "ops[" in line and "]))(" in line
+    ]
+    assert len(call_assignments) == 1, result.stdout
+    result_name = call_assignments[0].split(" = ", maxsplit=1)[0].strip()
+    assert result_name.isidentifier(), result.stdout
+    assert f"return {result_name};" in result.stdout, result.stdout
 
     helper = subprocess.run(
         [

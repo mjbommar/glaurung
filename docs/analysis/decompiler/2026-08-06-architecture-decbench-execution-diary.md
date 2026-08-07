@@ -1017,3 +1017,66 @@ Rust formatting and owned Python formatting/lint are clean; the focused type
 check reports only the six pre-existing pytest-stub diagnostics. The unrelated
 repository-wide debt remains the last measured 354 files needing format, 3,830
 Ruff findings, and 2,150 type diagnostics.
+
+## 06:21 — exact call-result lifetimes and bounded frame overlap close packet O0
+
+The retained AArch64 O0 packet ELF at
+`/tmp/glaurung-a64-parse-packet.HfJ4bV` has SHA-256
+`a774cb71e959fdcf13f4e90991a3f064271a4f3642e1d0a9bc9f7bfa72b1ca48`;
+its host reference is
+`1e7ece7a6402e900fbd0e51703aeef45dfa49b8c5e89064faebe74f4e739e439`.
+The first differential failure was an invalid zero-length packet: source
+`parse_packet` returned -2, while recovered C returned 65534. The caller's
+assembly and lift were correct. The corruption began in local `decode_header`:
+`validate_header` returns a signed `int` through x0, followed by three
+`read_be16` calls returning `unsigned short` through the same storage. The
+post-spill pass named every definition `scr_x0`, so one source role inherited
+the narrow prototype and truncated the validator error.
+
+A shared AST pass now gives every attributed ABI result a fresh definition,
+rewrites only its proven reaching uses, and intersects exact identities at
+structured joins. It leaves a compatibility copy in architectural storage;
+unproven loop-carried or label-crossing uses therefore retain pre-pass semantics
+instead of becoming undefined. In the repaired helper the validator result is
+an `int`, and all three halfword readers have distinct `unsigned short` roles.
+
+That exposed a second pre-existing valid-packet failure, 266 versus 284. Source
+stores the one-byte `ver_type_bits` temporary at `[sp+56]`. Assembly writes it
+with `strb`, then GCC loads the word ending exactly at entry SP (`ldr x0,[sp,#56]`)
+before extracting only bits 0..7. DWARF proves a one-byte object at CFA-8, but
+stack promotion named byte accesses `local_8` and the word view an unrelated,
+uninitialized `stack_6`. The AAPCS overlap component now projects an exact
+bounded scalar when a wider non-indexed load begins at that object and extends
+only through top-of-frame padding. Interior padding, entry-SP crossings,
+unbounded slots, indexed accesses, and non-scalar objects remain rejected.
+
+The real fixture passes every invalid and valid vector after both repairs. The
+complete pre-ratchet changes exactly
+`07_packet_parser:aarch64:O0:parse_packet` from fail to pass: 1,578 passes / 222
+failures, AArch64 324/328, pinned x86-64 328/328, 228 structural rows, six
+declared unsupported rows, and no regression, reclassification,
+missing/no-case/timeout, or lane error.
+
+The first complete Python gate then found a real i386 integration regression,
+not an acceptable cosmetic delta. The O2 `cdecl_pair` source calls
+`int read_marker(void)`, but the fresh result role was emitted as `long`; the
+rebuilt translation unit therefore conflicted with the real callee definition.
+Round-tripping that source through its i386 assembly, LLIR, and pass dump showed
+that direct-callee recovery reported `no recovered layout`: it discarded every
+zero-argument callee because an empty register layout was being used as a proxy
+for failed recovery. That also discarded DWARF's complete `int (void)` contract.
+The program contract now retains an empty layout only when `DW_AT_prototyped`
+and the absence of formal parameters jointly prove `f(void)`. Old-style or
+unprototyped empty layouts remain conservative, so a missed machine-code
+parameter cannot silently truncate a caller. Recovered C now declares both the
+callee and its fresh result role as `int`, and all four real signed input vectors
+match the original i386 executable.
+
+Final validation reproduces the 1,578 / 222 ratchet exactly. Rust all-targets is
+green with 1,802 library tests plus every integration, example, and benchmark
+target; the Python-extension-only zero-arity contract unit proof is separately
+green. The complete Python suite is green at 2,796 passed / 43 skipped with six
+existing pytest-mark warnings. Rust formatting and the diff whitespace gate are
+clean. Owned Python formatting/lint is clean; the focused type check retains the
+same 12 pre-existing pytest-stub and test-helper import diagnostics across the
+two touched test modules.

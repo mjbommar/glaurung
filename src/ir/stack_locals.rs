@@ -28,6 +28,8 @@ use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::VReg;
 
+mod bounded_overlap;
+
 const STACK_BASES: &[&str] = &["rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp"];
 const FRAME_POINTER_BASES: &[&str] = &["rbp", "ebp", "bp", "x29", "w29", "fp"];
 
@@ -1148,6 +1150,17 @@ fn rewrite_expr(
         Expr::Deref { addr, size } => {
             let size_val = *size;
             rewrite_expr(addr, map, names, ctx, sp_delta, address_defs);
+            if let Some(source_value) = bounded_overlap::aapcs_top_padding_scalar_value(
+                addr.as_ref(),
+                size_val,
+                map,
+                sp_delta,
+                ctx,
+                address_defs,
+            ) {
+                *e = source_value;
+                return;
+            }
             if let Some(object_addr) =
                 stack_object_address(addr.as_ref(), size_val, map, sp_delta, ctx, address_defs)
             {
@@ -2473,6 +2486,9 @@ struct SlotNames {
     local_counter: usize,
     taken: std::collections::HashSet<String>,
 }
+
+#[cfg(test)]
+mod overlap_tests;
 
 #[cfg(test)]
 mod tests {

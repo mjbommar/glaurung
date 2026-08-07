@@ -584,6 +584,36 @@ def test_aarch64_spilled_arg0_call_results_round_trip(
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_aarch64_o0_distinct_call_result_types_round_trip(tmp_path: Path) -> None:
+    """Sequential ``x0`` results must retain their own callee prototypes."""
+    if shutil.which(A.TARGETS["aarch64"].cc) is None:
+        pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
+    fixture = "07_packet_parser"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O0.so"
+    ok, error = A._cross_build("aarch64", source, "O0", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O0.so"
+    ok, error = A._reference_build(source, "O0", reference)
+    assert ok, error
+
+    function = "parse_packet"
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O0",
+        native_cc=A.native_cc("aarch64"),
+        only={function},
+    )
+
+    assert results[function]["status"] == "pass", results[function]
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_call_flow_round_trips(tmp_path: Path) -> None:
     """Implicit x0 inputs survive loops and a prior-call-result tail call."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:

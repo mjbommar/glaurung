@@ -1098,7 +1098,7 @@
     "tailcall_to_sum4": "pass"
   },
   "07_packet_parser:aarch64:O0": {
-    "parse_packet": "fail",
+    "parse_packet": "pass",
     "validate_header": "pass"
   },
   "07_packet_parser:aarch64:O2": {

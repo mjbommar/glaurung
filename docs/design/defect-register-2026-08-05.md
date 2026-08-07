@@ -904,3 +904,24 @@ emits the shared exact-width CLZ intrinsic for both W and X forms, preserving th
 defined zero result as well as ordinary inputs. The exact six-lane ratchet moves
 only that cell to pass: 1,577 passes / 223 failures, with five AArch64 failures
 remaining.
+
+### Closed — packet call-result definitions and CFA/current-SP overlap
+
+AArch64 O0 `07_packet_parser:parse_packet` contained two independently verified
+defects. Sequential helper calls reused one post-spill `scr_x0` role, merging a
+signed-int validator result with three unsigned-halfword results and turning
+-2 into 65534. A shared reaching-identity pass now versions consumed call
+results and retains compatibility storage where structured proof is
+insufficient. The newly reachable valid path then exposed a frame-storage split:
+byte stores to the DWARF object at CFA-8 became `local_8`, while word loads from
+the identical `[sp+56]` address became uninitialized `stack_6`. An exact AAPCS
+top-padding proof now projects the bounded scalar without permitting interior or
+cross-frame overlap. The full ratchet moves only this cell to pass: 1,578 / 1,800
+execution rows, zero regressions, and four AArch64 failures remaining.
+
+The fresh identity initially exposed an i386 declaration regression:
+zero-argument direct callees lost their return prototype because an empty
+argument-register layout was treated as failed recovery. Complete DWARF
+`f(void)` contracts now survive that boundary, while unprototyped empty layouts
+remain rejected. The real O2 `int read_marker(void)` round trip and the full
+2,796-test Python suite are green.
