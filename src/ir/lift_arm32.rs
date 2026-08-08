@@ -1564,10 +1564,14 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
     }
 
     // --- long multiply / multiply-accumulate (4-operand forms) ----------
-    // umull/smull RdLo, RdHi, Rn, Rm : {RdHi:RdLo} = Rn * Rm. We compute the
-    // full product into a temp (the IR is 64-bit-wide), assign the low half to
-    // RdLo, and the high half (RdLo shifted right 32) to RdHi -- logical shift
-    // for umull, arithmetic for smull.
+    // umull/smull RdLo, RdHi, Rn, Rm : {RdHi:RdLo} = Rn * Rm. Keep the low
+    // product as the ordinary width-truncated multiply and make the high half a
+    // typed intrinsic, matching x86/AArch64's shared wide-arithmetic boundary.
+    // The instruction itself owns signedness: reconstructing `smull` as a bare
+    // product followed by `sar` lets a high-bit immediate become an unsigned C
+    // operand before the later shift/cast can recover signed 32x32 semantics.
+    // Emit the high half before committing RdLo because ARM permits a source to
+    // overlap a destination; the temp retains the low product independently.
     if (mnem == "umull" || mnem == "smull") && ops.len() == 4 {
         if let (Some(rd_lo), Some(rd_hi), Some(rn), Some(rm)) = (
             operand_reg(&ops[0]),
@@ -1576,27 +1580,28 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
             operand_to_value(&ops[3]),
         ) {
             let t = VReg::Temp(0);
-            let hi_shift = if mnem == "smull" {
-                BinOp::Sar
+            let high_name = if mnem == "smull" {
+                "arm.smul_hi.32"
             } else {
-                BinOp::Shr
+                "arm.umul_hi.32"
             };
             return vec![
                 Op::Bin {
                     dst: t.clone(),
                     op: BinOp::Mul,
-                    lhs: rn,
-                    rhs: rm,
+                    lhs: rn.clone(),
+                    rhs: rm.clone(),
+                },
+                Op::Intrinsic {
+                    name: high_name.to_string(),
+                    ins: vec![rn, rm],
+                    outs: vec![(rd_hi, Width::W32)],
+                    reads_mem: false,
+                    writes_mem: false,
                 },
                 Op::Assign {
                     dst: rd_lo,
-                    src: Value::Reg(t.clone()),
-                },
-                Op::Bin {
-                    dst: rd_hi,
-                    op: hi_shift,
-                    lhs: Value::Reg(t),
-                    rhs: Value::Const(32),
+                    src: Value::Reg(t),
                 },
             ];
         }
@@ -1691,8 +1696,10 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
             mnem.ends_with('s') && mnem != "rsb" && bin_for_mnem(&mnem[..mnem.len() - 1]).is_some();
         // A shift written as its own instruction (`lsl.w Rd,Rn,#n`) is encoded
         // as `mov` WITH a shift, so it sits in the very same instruction family
-        // the modifier is decoded from; applying the modifier there would square
-        // the scale. Its shift is already an explicit operand.
+        // the modifier is decoded from. Thumb exposes the distance as a third
+        // operand. A32's alias can expose only `Rd,Rn`, in which case the word
+        // is the sole owner of the distance and must be handled before the
+        // ordinary two-operand accumulate form.
         let carries_own_shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
         let operand = |i: usize, out: &mut Vec<Op>| {
             if carries_own_shift {
@@ -1701,6 +1708,32 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
                 shifted_operand(ins, ctx, i, out)
             }
         };
+        if carries_own_shift && ops.len() == 2 {
+            if let (Some(dst), Some(lhs), Some(shift)) = (
+                operand_reg(&ops[0]),
+                operand_to_value(&ops[1]).map(|value| resolve_pc(value, ctx.pc_at(ins))),
+                data_processing_shift(ins, ctx),
+            ) {
+                let encoded_op = match shift.kind {
+                    ShiftKind::Lsl => Some(BinOp::Shl),
+                    ShiftKind::Lsr => Some(BinOp::Shr),
+                    ShiftKind::Asr => Some(BinOp::Sar),
+                    ShiftKind::Ror | ShiftKind::Rrx => None,
+                };
+                if encoded_op == Some(op) {
+                    let rhs = Value::Const(i64::from(shift.amount));
+                    let (before, after) = if sets_flags {
+                        flags_for_arith(op, &dst, lhs.clone(), rhs.clone())
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
+                    let mut out = before;
+                    out.push(Op::Bin { dst, op, lhs, rhs });
+                    out.extend(after);
+                    return out;
+                }
+            }
+        }
         // Three-operand: Rd, Rn, Op2
         if ops.len() == 3 {
             let mut out = Vec::new();
@@ -3139,8 +3172,10 @@ mod tests {
         );
         assert!(
             umull.iter().any(|o| matches!(o,
-                Op::Bin { dst, op: BinOp::Shr, .. } if matches!(dst, VReg::Phys(n) if n == "r1"))),
-            "umull high half not r1 = t >> 32: {:?}",
+                Op::Intrinsic { name, outs, .. }
+                    if name == "arm.umul_hi.32"
+                        && outs == &[(VReg::phys("r1"), Width::W32)])),
+            "umull high half is not the typed r1 result: {:?}",
             umull
         );
 
@@ -3745,6 +3780,59 @@ mod tests {
             }],
             "standalone lsl was re-shifted: {out:#?}"
         );
+    }
+
+    /// A32 represents the standalone immediate-shift alias in the instruction
+    /// word even when Capstone exposes only `Rd, Rm` through the shared operand
+    /// model. The encoded distance must remain the right-hand operand; treating
+    /// the two visible registers as an accumulate form turns `i << 2` into
+    /// `i << i`.
+    #[test]
+    fn a32_standalone_immediate_shift_uses_the_encoded_distance() {
+        // lsl r3, r3, #2   e1a03103
+        let out = ops_a32(&[0x03, 0x31, 0xa0, 0xe1]);
+        assert_eq!(
+            out,
+            vec![Op::Bin {
+                dst: VReg::phys("r3"),
+                op: BinOp::Shl,
+                lhs: Value::Reg(VReg::phys("r3")),
+                rhs: Value::Const(2),
+            }],
+            "A32 standalone lsl lost its encoded immediate: {out:#?}"
+        );
+    }
+
+    /// The high half of a signed long multiply owns signed 32x32 semantics.
+    /// Keeping it as an untyped temporary product lets a high-bit constant enter
+    /// C's unsigned arithmetic conversions before a later cast can recover it.
+    #[test]
+    fn arm32_signed_long_multiply_has_a_typed_high_half() {
+        for out in [
+            // smull r1, r2, r2, r3   e0c21392
+            ops_a32(&[0x92, 0x13, 0xc2, 0xe0]),
+            // smull r1, r2, r2, r3   fb82 1203
+            ops(&[0x82, 0xfb, 0x03, 0x12]),
+        ] {
+            assert!(
+                out.iter().any(|op| matches!(
+                    op,
+                    Op::Intrinsic {
+                        name,
+                        ins,
+                        outs,
+                        reads_mem: false,
+                        writes_mem: false,
+                    } if name == "arm.smul_hi.32"
+                        && ins == &[
+                            Value::Reg(VReg::phys("r2")),
+                            Value::Reg(VReg::phys("r3")),
+                        ]
+                        && outs == &[(VReg::phys("r2"), Width::W32)]
+                )),
+                "signed multiply-high lost its width or signedness: {out:#?}"
+            );
+        }
     }
 
     /// A register-offset load/store scales its index by the encoded `lsl`.
