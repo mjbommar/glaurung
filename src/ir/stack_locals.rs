@@ -29,6 +29,8 @@ use crate::ir::call_args::CallConv;
 use crate::ir::types::VReg;
 
 mod address_aliases;
+#[cfg(test)]
+mod arm32_tests;
 mod bounded_overlap;
 
 const STACK_BASES: &[&str] = &["rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp"];
@@ -1634,7 +1636,7 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
         ctx: StackContext,
         sp_delta: &mut Option<i64>,
     ) {
-        for stmt in body {
+        for (statement_index, stmt) in body.iter().enumerate() {
             match stmt {
                 Stmt::Assign { dst, src } => {
                     let address = resolve_stack_address(src, *sp_delta, ctx, out);
@@ -1644,12 +1646,29 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                         });
                     } else if matches!(dst, VReg::Phys(name) if is_active_stack_base(name, ctx)) {
                         if matches!(dst, VReg::Phys(name) if is_arm_frame_pointer(name, ctx)) {
-                            // ARM's frame register is SSA-versioned in the AST.
-                            // Preserve the exact entry-SP coordinate captured by
-                            // `r7#1 = sp`; later direct arithmetic and copied
-                            // destructor arguments must resolve to the same
-                            // DWARF CFA object. x86's unversioned `rbp = rsp`
-                            // remains a coordinate-system establishment below.
+                            // Thumb's frame register is normally SSA-versioned,
+                            // while A32 names the architectural `fp` directly.
+                            // An A32 epilogue restores that unversioned register
+                            // from its saved stack word, which is a terminal
+                            // overwrite rather than a competing reaching frame
+                            // definition. Ignore it only when the current path
+                            // terminates and the old frame value is provably
+                            // unread afterwards; a fall-through nested body or
+                            // any live redefinition remains ambiguous.
+                            let terminal_dead_overwrite = address.is_none()
+                                && out.contains_key(dst)
+                                && !body_falls_through(&body[statement_index + 1..])
+                                && body[statement_index + 1..]
+                                    .iter()
+                                    .all(|later| !crate::ir::dead_stores::stmt_reads(later, dst));
+                            if terminal_dead_overwrite {
+                                continue;
+                            }
+                            // Preserve the exact entry-SP coordinate captured
+                            // by `r7#1 = sp` or `fp = sp + 4`; later direct
+                            // arithmetic must resolve to the same DWARF CFA
+                            // object. x86's `rbp = rsp` remains a coordinate-
+                            // system establishment below.
                             record_definition(dst, address, out, ambiguous);
                             continue;
                         }
@@ -1841,9 +1860,9 @@ fn resolved_memory_address(
     ctx: StackContext,
     address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<(String, i64, Option<VReg>, u8)> {
-    fn scaled_index(expr: &Expr) -> Option<(VReg, u8)> {
+    fn scaled_index(expr: &Expr) -> Option<(VReg, u8, i64)> {
         match expr {
-            Expr::Reg(index) => Some((index.clone(), 1)),
+            Expr::Reg(index) => Some((index.clone(), 1, 0)),
             Expr::Bin {
                 op: crate::ir::types::BinOp::Mul,
                 lhs,
@@ -1857,12 +1876,12 @@ fn resolved_memory_address(
                     return u8::try_from(*scale)
                         .ok()
                         .filter(|scale| *scale > 0)
-                        .map(|scale| (index.clone(), scale));
+                        .map(|scale| (index.clone(), scale, 0));
                 };
                 u8::try_from(*scale)
                     .ok()
                     .filter(|scale| *scale > 0)
-                    .map(|scale| (index.clone(), scale))
+                    .map(|scale| (index.clone(), scale, 0))
             }
             Expr::Bin {
                 op: crate::ir::types::BinOp::Shl,
@@ -1876,7 +1895,30 @@ fn resolved_memory_address(
                     .ok()
                     .and_then(|shift| 1u8.checked_shl(shift))
                     .filter(|scale| *scale > 0)
-                    .map(|scale| (index.clone(), scale))
+                    .map(|scale| (index.clone(), scale, 0))
+            }
+            Expr::Bin { op, lhs, rhs }
+                if matches!(
+                    op,
+                    crate::ir::types::BinOp::Add | crate::ir::types::BinOp::Sub
+                ) =>
+            {
+                if let Expr::Const(amount) = rhs.as_ref() {
+                    let (index, scale, offset) = scaled_index(lhs)?;
+                    let adjustment = match op {
+                        crate::ir::types::BinOp::Add => *amount,
+                        crate::ir::types::BinOp::Sub => amount.checked_neg()?,
+                        _ => unreachable!(),
+                    };
+                    return Some((index, scale, offset.checked_add(adjustment)?));
+                }
+                if matches!(op, crate::ir::types::BinOp::Add) {
+                    if let Expr::Const(amount) = lhs.as_ref() {
+                        let (index, scale, offset) = scaled_index(rhs)?;
+                        return Some((index, scale, offset.checked_add(*amount)?));
+                    }
+                }
+                None
             }
             _ => None,
         }
@@ -1915,11 +1957,11 @@ fn resolved_memory_address(
             for (base_expr, index_expr) in
                 [(lhs.as_ref(), rhs.as_ref()), (rhs.as_ref(), lhs.as_ref())]
             {
-                if let (Some((base, disp)), Some((index, scale))) = (
+                if let (Some((base, disp)), Some((index, scale, index_offset))) = (
                     resolve_stack_address(base_expr, sp_delta, ctx, address_defs),
                     scaled_index(index_expr),
                 ) {
-                    return Some((base, disp, Some(index), scale));
+                    return Some((base, disp.checked_add(index_offset)?, Some(index), scale));
                 }
             }
         }
@@ -1935,12 +1977,6 @@ fn resolved_memory_address(
     else {
         return None;
     };
-    if let VReg::Phys(name) = base {
-        if is_active_stack_base(name, ctx) {
-            let (base, disp) = normalized_stack_slot(name, *disp, sp_delta, ctx);
-            return Some((base, disp, index.clone(), *scale));
-        }
-    }
     if let Some((resolved_base, base_disp)) = address_defs.get(base) {
         return Some((
             resolved_base.clone(),
@@ -1948,6 +1984,12 @@ fn resolved_memory_address(
             index.clone(),
             *scale,
         ));
+    }
+    if let VReg::Phys(name) = base {
+        if is_active_stack_base(name, ctx) {
+            let (base, disp) = normalized_stack_slot(name, *disp, sp_delta, ctx);
+            return Some((base, disp, index.clone(), *scale));
+        }
     }
 
     // Addition is commutative when the SIB scale is one. Encoders freely put
@@ -1958,15 +2000,18 @@ fn resolved_memory_address(
     if *scale != 1 {
         return None;
     }
-    let (resolved_base, resolved_disp) = match stack_index {
-        VReg::Phys(name) if is_active_stack_base(name, ctx) => {
-            normalized_stack_slot(name, *disp, sp_delta, ctx)
-        }
-        _ => {
-            let (resolved_base, base_disp) = address_defs.get(stack_index)?.clone();
-            (resolved_base, base_disp.checked_add(*disp)?)
-        }
-    };
+    let (resolved_base, resolved_disp) =
+        if let Some((resolved_base, base_disp)) = address_defs.get(stack_index) {
+            (resolved_base.clone(), base_disp.checked_add(*disp)?)
+        } else if let VReg::Phys(name) = stack_index {
+            if is_active_stack_base(name, ctx) {
+                normalized_stack_slot(name, *disp, sp_delta, ctx)
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
     Some((resolved_base, resolved_disp, Some(base.clone()), 1))
 }
 

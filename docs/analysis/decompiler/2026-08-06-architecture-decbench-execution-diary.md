@@ -2234,3 +2234,129 @@ failures in 20m06s. Its log is
 `1b4b51fcb712a1263f22e4bb02faffd75cb70f319b0a55c7a37da69907232edd`.
 Owned Python paths pass Ruff formatting/lint and `ty`; Rust formatting and
 `git diff --check` are clean. Integration and remote evidence follow below.
+
+## 2026-08-08 08:10 — ARM32 O0 CFA coordinates and bounded affine addresses
+
+The next residual was the two O0 `rb_validate` cells left deliberately open by
+the preceding O2 increment. The exact symptoms differed: Thumb returned the
+wrong value on target-native case 10, while A32 died under qemu-arm with
+SIGSEGV. Both source binaries allocate the same three arrays and both DWARF
+objects use the entry-SP/CFA coordinate, but GCC O0 spells their indexed
+addresses as several instructions rather than one memory operand.
+
+The retained source, binaries, disassembly, numbered pass dumps, emitted C,
+target-differential details, and before/after diffs are under
+`/tmp/glaurung-rb-o0-evidence/`. The immutable source hash is
+`ab01ca5165d9d63a77b8403f6c566ed47c038c5d07e6b11f72dae3aba16f12f5`;
+the Thumb and A32 O0 objects hash to
+`e56c909d76d0aac0f1e72ce6d2808cec523e35cbb04e702c18716c6663d21342`
+and `f795ea3b0b635e2cccfacb6e8c67b8ae9e68cd46e36bcd9c5587b49277da00cf`.
+The pre-fix differential reproduces a wrong return and SIGSEGV respectively.
+The final recoveries pass all 23 cases at the native ARM32 ABI in both modes.
+
+The round trip identified two related ownership defects:
+
+1. A32 establishes `fp = entry_sp - 4`, then restores the unversioned `fp`
+   register in the epilogue. The old global address-definition map treated that
+   terminal restore as a competing definition and discarded the established
+   frame coordinate. A terminal overwrite is now ignored only when the current
+   statement-list suffix cannot fall through and no later statement reads the
+   old frame value; any nested fall-through or live redefinition remains
+   ambiguous. Low-level memory resolution consults that proven definition
+   before falling back to a raw architectural frame-register coordinate. Thus
+   A32 `fp-328` rejoins the authoritative `CFA-332` parents array instead of
+   becoming `stack_1+4` and letting a 64-byte `memset` overrun a synthetic
+   eight-byte object.
+2. Both encodings split one affine address across scalar temporaries. Thumb's
+   black-stack access is `index<<2; +384; +r7; -132`; A32 additionally uses
+   `index<<2; -4; +fp; -disp`. The ARM-only local alias pass now retains
+   versioned affine components inside one control-flow run and expands them
+   only in address positions. The stack-object resolver then folds checked
+   constant offsets into the CFA coordinate while retaining the scaled index.
+   The final C uses the debug-proven `parents[64]`, `node_stack[128]`, and
+   `black_stack[128]` byte objects; it contains neither negative four-byte
+   array offsets nor arithmetic rooted in the synthetic frame blob.
+
+The broad matrix rejected two unsafe intermediate designs before any commit.
+The first carried preheader cursor definitions into structured loop bodies and
+froze 46 ARM O2 cells at their first element. Affine components are therefore
+cleared at loop boundaries, and a dedicated regression pins the exact
+`cursor = arg0-4; load cursor+4; cursor += 4` counterexample. The second
+distributed KMP's `matched-1` through a left shift, moving the `-1` from the
+array index into the object displacement and regressing A32 O0 `kmp_search`.
+The value immediately scaled by shift/multiply now remains the affine index
+atom. Finally, a 64-entry cache cap produced a mixed partial expansion in one
+long O0 topological-sort block; the per-block cap is now 256 entries and every
+stored expression is independently capped at 32 nodes. Both limits are hard,
+and the final matrix exactly reproduces the earlier zero-regression result.
+
+The RED/GREEN layers cover the real Thumb/A32 source, exact assembly patterns,
+DWARF object hints, numbered IR, emitted C, and qemu-arm differential; A32
+frame-pointer/CFA reconciliation; both split-address instruction shapes; the
+loop-carried cursor counterexample; KMP's pre-shift index; and the expression
+growth bound. The final ARM32 semantics file passes all six real-product tests.
+
+The independent Thumb/A32 plus x86 control replay covers 180 lanes and 990
+function cells. Relative to the prior baseline it contains exactly two
+`fail -> pass` changes, both `16_red_black_tree:rb_validate:O0`, with zero
+regressions or reclassifications. Its JSON is
+`/tmp/glaurung-rb-o0-evidence/arm32-control-matrix-verified.json`, SHA-256
+`8804ce6541d0e7769bedbc62e4baa2e92f498791bfef24ae5b835b1be7044b49`.
+The repository-wide ratchet is therefore 1,745 pass, 55 known fail, 228
+structural, and six declared unsupported cells. Full exact-tree repository and
+integration evidence follow after the baseline refresh.
+
+Final review found one additional fail-closed requirement before commit. The
+first dead-overwrite proof checked only later statements in the current nested
+body; an overwrite at the end of a fall-through `if` arm could therefore look
+terminal even when outer code later read `fp`. A new RED regression reproduces
+that stale-coordinate escape. The final proof also requires the current suffix
+to terminate control flow, so the real epilogue restore remains recoverable but
+a fall-through branch invalidates the address definition. This condition is
+inside the ARM frame-pointer branch and cannot alter x86 metric output.
+
+The refreshed six-architecture baseline matches an independent full replay
+exactly: 1,745 pass, 55 known fail, 228 structural, six declared unsupported,
+and zero missing, timeout, or lane-error cells. Its log is
+`/tmp/glaurung-rb-o0-evidence/full-arch-check-exact-final.log`, SHA-256
+`5970b5f832d61d59a05554adf9a0819b5d8345c7a9832ea67ca0d543394d06ed`.
+`cargo test --all-targets` passes 1,867 library tests and 1,960 total tests
+across all library, integration, example, and benchmark targets. Its log is
+`/tmp/glaurung-rb-o0-evidence/cargo-test-all-targets-exact-final.log`, SHA-256
+`c27652ceeed9d0927bebbdf9dd2d9deae01ed43c58bb6af352b74f368dde558b`.
+All six real ARM32 semantics tests pass against the final release extension;
+that log hashes to
+`700bc0322b00f8e8db3ce495047983b54ab27ab59ed1fedac05f3aeba47dae24`.
+
+The fresh-release five-lane decompiler gate passes its Rust preflight, all 31
+pinned x86 behavioral/structural fixtures, the exact 1,745/55 architecture
+ratchet, both executable DecBench corpora, and all 56 official metric cells.
+It reports no GED, type-match, or byte-match regression. Its log is
+`/tmp/glaurung-rb-o0-evidence/decbench-local-gate.log`, SHA-256
+`3ff8f0df975a204275f96adcf1316e0675d5fe5dfdbadacd0a39d40337269514`.
+That complete run predates only the ARM-only non-fall-through guard above. An
+exact-tree duplicate replay again passed its Rust, x86, architecture, and both
+behavior lanes, but its metric lane encountered a pyjoern resource leak: cells
+hit the harness's 900-second limit while leaving orphaned Joern trees. The
+duplicate was stopped rather than misreported green, and all leaked processes
+were removed. Its partial log is
+`/tmp/glaurung-rb-o0-evidence/decbench-local-gate-exact-final.log`, SHA-256
+`98ac1cf937b4f9e65fda59516c2efac1a083250c5baf2e91ae82e5f70051c06c`.
+The final guard cannot execute in the x86-only official metric lane, while its
+actual ARM behavior is covered by the exact architecture and product tests.
+
+As in the preceding increment, the first full Python run reached 100% with one
+tutorial fixture-drift failure: an internal `uv run glaurung --version`
+performed a one-time editable-package uninstall/install and appended those
+progress lines after the correct version. The final release rebuild reproduced
+that side effect in a preflight, after which the exact tutorial test passed in
+isolation. The exact-tree full run then passes 2,842 tests with 43 declared
+skips and zero failures; its log is
+`/tmp/glaurung-rb-o0-evidence/python-full-exact-final.log`, SHA-256
+`6534bc248e539f379b9631ff165d8e1f0f7918b800dc2150c755aeb59c06dd0b`.
+The clean tutorial preflight log hashes to
+`423b1d0e014eb1eab96f4420f7b344c2615be505dd574b756ac884826ca74f2d`.
+Owned Python paths pass Ruff formatting/lint and `ty`; Rust formatting and
+`git diff --check` are clean; the exact style/type log hashes to
+`8c4e7b4a72d4c495ea2c194492900ae0def41653f41828e433e1d18b88d61ac5`.
+Commit, integration replay, and remote evidence follow below.
