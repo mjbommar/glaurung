@@ -427,7 +427,7 @@
   },
   "03_loop_shapes:armv7:O2": {
     "cond_reload_and_transform": "pass",
-    "cond_side_effect": "fail",
+    "cond_side_effect": "pass",
     "dowhile_atleastonce": "pass",
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
@@ -436,7 +436,7 @@
     "loop_break": "pass",
     "loop_continue": "pass",
     "loop_early_return": "pass",
-    "loop_return_on_neg": "fail",
+    "loop_return_on_neg": "pass",
     "mutate_prefix": "pass",
     "mutate_reverse": "pass",
     "nested_carry": "pass",
@@ -467,7 +467,7 @@
   },
   "03_loop_shapes:armv7_a32:O2": {
     "cond_reload_and_transform": "pass",
-    "cond_side_effect": "fail",
+    "cond_side_effect": "pass",
     "dowhile_atleastonce": "pass",
     "dowhile_recompute": "pass",
     "for_countdown": "pass",
@@ -476,7 +476,7 @@
     "loop_break": "pass",
     "loop_continue": "pass",
     "loop_early_return": "pass",
-    "loop_return_on_neg": "fail",
+    "loop_return_on_neg": "pass",
     "mutate_prefix": "pass",
     "mutate_reverse": "pass",
     "nested_carry": "pass",
@@ -835,7 +835,7 @@
   },
   "05_cleanup_and_state_machine:armv7:O2": {
     "fsm": "pass",
-    "process": "fail"
+    "process": "pass"
   },
   "05_cleanup_and_state_machine:armv7_a32:O0": {
     "fsm": "pass",
@@ -843,7 +843,7 @@
   },
   "05_cleanup_and_state_machine:armv7_a32:O2": {
     "fsm": "pass",
-    "process": "fail"
+    "process": "pass"
   },
   "05_cleanup_and_state_machine:i386:O0": {
     "fsm": "pass",
@@ -1106,19 +1106,19 @@
     "validate_header": "pass"
   },
   "07_packet_parser:armv7:O0": {
-    "parse_packet": "fail",
+    "parse_packet": "pass",
     "validate_header": "pass"
   },
   "07_packet_parser:armv7:O2": {
-    "parse_packet": "fail",
+    "parse_packet": "pass",
     "validate_header": "pass"
   },
   "07_packet_parser:armv7_a32:O0": {
-    "parse_packet": "fail",
+    "parse_packet": "pass",
     "validate_header": "pass"
   },
   "07_packet_parser:armv7_a32:O2": {
-    "parse_packet": "fail",
+    "parse_packet": "pass",
     "validate_header": "pass"
   },
   "07_packet_parser:i386:O0": {

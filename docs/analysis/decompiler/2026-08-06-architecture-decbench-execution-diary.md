@@ -2360,3 +2360,92 @@ Owned Python paths pass Ruff formatting/lint and `ty`; Rust formatting and
 `git diff --check` are clean; the exact style/type log hashes to
 `8c4e7b4a72d4c495ea2c194492900ae0def41653f41828e433e1d18b88d61ac5`.
 Commit, integration replay, and remote evidence follow below.
+
+## 2026-08-08 11:33 — ARM32 packet bitfields, rotates, and halfword MAC
+
+The next residual cluster was `07_packet_parser:parse_packet` in all four
+ARM32 cells: Thumb and A32 at O0 and O2. The x86-64 control and AArch64 cells
+pass, and the sibling `validate_header` passes in every ARM32 lane. All four
+failures first diverged on native target case 10, the explicit valid packet
+`c0 de 13 00 00 04 00 00 11 22 33 44`. The source returns 284; the recovered
+Thumb/A32 functions returned 291/188 at O0 and 166/92 at O2. The retained
+source, target and host binaries, disassembly, prototype/numbered LLIR, every
+AST pass, emitted C, target rebuilds, generated qemu workers, and baseline
+details are under `/tmp/glaurung-arm32-packet-evidence/`.
+
+The round trip found three lifter omissions, not one shared high-level parser
+bug:
+
+1. Both O0 binaries use two `bfi` instructions to assemble the backing byte of
+   `struct ver_type_bits`. LLIR retained each as a footprint-free intrinsic, so
+   emitted C preserved the uninitialised byte and discarded both source nibbles.
+   `bfi` now lowers to an exact masked read-modify-write that retains the
+   destination outside the inserted lane.
+2. A32 represents the checksum recurrence with the two-operand Capstone alias
+   for `ror r3,r3,#31`. The existing ARM32 rotate path accepted only three
+   operands, so A32 emitted only `/* asm: ror */` and reduced the checksum to a
+   plain sum. The two-operand form now reads the authoritative immediate-shift
+   bits from the A32 instruction word and shares the existing shift/shift/or
+   lowering.
+3. Both O2 binaries fold `100 + type*7` into
+   `smlabb r2,r2,{lr|r4},{r4|lr}`. The opaque intrinsic left `r2` at `type`
+   and dropped 118 from the valid-packet result. `smlabb` now truncates both
+   inputs to signed bottom halfwords, widens both values and the signed
+   accumulator to 64 bits, multiplies/adds there, and truncates the result to
+   32 bits. The wider intermediate preserves exact ARM wrap semantics without
+   making the rebuilt C depend on signed-overflow undefined behaviour.
+
+Three RED instruction regressions reproduced the exact Thumb/A32 machine
+words; before the implementation each produced only `Op::Unknown`. They now
+pass and live in the 134-line
+`src/ir/lift_arm32/packet_tests.rs` submodule rather than growing the already
+4,600-line lifter. A real product regression compiles all four source lanes,
+asserts the exact `bfi`/`ror`/`smlabb` assembly shapes, requires semantic LLIR
+and emitted C with no residual instruction comments, and runs the full native
+qemu-arm differential. All four parameterized cases pass after the release
+rebuild. Broad architecture, repository, and metric evidence follows after the
+exact-tree replays.
+
+The `smlabb` repair also resolves six independently checked O2 failures:
+`cond_side_effect` and `loop_return_on_neg` in both Thumb and A32, plus
+`05_cleanup_and_state_machine:process` in both encodings. Each retained target
+binary contains the instruction, each numbered LLIR now contains a signed
+halfword multiply-add rather than an opaque `smlabb`, and each rebuilt target
+passes its native qemu-arm differential (22, 12, and 22 cases respectively in
+each encoding). These are real semantic improvements, not score-only baseline
+changes. The focused Thumb/A32 matrix therefore records exactly ten
+`fail -> pass` transitions: those six cells and all four packet-parser cells,
+with zero regressions. Its JSON is
+`/tmp/glaurung-arm32-packet-evidence/arm32-matrix-after.json`, SHA-256
+`23b824c7a5eb861f58bebbca256adb00f9ce71cdb861d7501fd24d88ba12bbb7`.
+
+The first full architecture ratchet failed closed on exactly those ten
+improvements and no regression. A guarded baseline refresh then reran the
+whole matrix, changed exactly those ten statuses, and a third independent
+`--check` matched it exactly. The final six-architecture result is 1,755 pass,
+45 known fail, 228 structural, six declared unsupported, and zero
+nonportable, incomparable, missing, no-case, timeout, or lane-error cells. The
+final check log is
+`/tmp/glaurung-arm32-packet-evidence/full-arch-check-exact.log`, SHA-256
+`9af37bd9fa8ef4904ef2023830c50ef3fc7e6e90d9ddcea67deebddb2ec500`.
+
+`cargo test --all-targets` passes 1,870 library tests and 1,963 total tests;
+its log is `/tmp/glaurung-arm32-packet-evidence/cargo-test-all-targets.log`,
+SHA-256
+`3d8b1c925d5284783109157ebd73b808683505b3d109eae5783cc0ed4afa4903`.
+The exact-tree Python suite passes 2,846 tests with 43 declared skips and zero
+failures in 20m39s; its log is
+`/tmp/glaurung-arm32-packet-evidence/python-full.log`, SHA-256
+`31d1f97823feca4737fb7b25a7a36112fa343d499b24fe73081ca3d26b918b41`.
+Rust formatting, owned Python Ruff formatting/lint and type checking, tutorial
+preflight, and `git diff --check` also pass. An advisory full-tree
+`ty check python/` still reports 2,042 diagnostics in unrelated existing
+modules; none point to the owned ARM32 test path.
+
+Finally, the fresh-release five-lane decompiler gate passes its Rust
+preflight, all 31 pinned x86 behavioral/structural fixtures, the exact
+architecture ratchet, both executable DecBench corpora, and all 56 official
+metric cells. It reports no GED, type-match, or byte-match regression and ends
+with `HEAVY GATE: passed (all five lanes ran)`. Its log is
+`/tmp/glaurung-arm32-packet-evidence/decbench-local-gate.log`, SHA-256
+`17b9134f1d25ea354c597685b69d8920644eff8cb58d829efd86b2eebbb6d5f6`.
