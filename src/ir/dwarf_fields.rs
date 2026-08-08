@@ -877,7 +877,10 @@ fn affine_form(
             }
             if let Some(index) = index {
                 let index = affine_form(&Expr::Reg(index.clone()), definitions, expanding)?;
-                form = combine_affine(form, scale_affine(index, i64::from(*scale))?, 1)?;
+                // MemOp/Lea use zero for an ordinary one-times index. Treating
+                // it as a mathematical zero discards the index and can turn
+                // `base + byte_offset` into the unrelated `base->field0`.
+                form = combine_affine(form, scale_affine(index, i64::from((*scale).max(1)))?, 1)?;
             }
             Some(form)
         }
@@ -1290,6 +1293,50 @@ mod tests {
                 disp: 8,
                 ..
             } if base == &VReg::phys("arg0") && index == &VReg::phys("index")
+        ));
+    }
+
+    #[test]
+    fn unscaled_lea_index_is_not_discarded_as_a_zero_coefficient() {
+        let mut function = Function {
+            name: "byte_offset_member".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("value"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Lea {
+                        base: Some(VReg::phys("arg0")),
+                        index: Some(VReg::phys("byte_offset")),
+                        // MemOp uses zero for an ordinary, one-times index.
+                        scale: 0,
+                        disp: 0,
+                        segment: None,
+                    }),
+                    size: 8,
+                },
+            }],
+        };
+
+        annotate_function_fields(&mut function, Some(&node_prototype()), &[node_layout()], 8);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected indexed load");
+        };
+        assert!(
+            field_hint(src).is_none(),
+            "an unknown byte offset must not collapse to arg0->next: {src:#?}"
+        );
+        assert!(matches!(
+            src,
+            Expr::Deref { addr, .. }
+                if matches!(
+                    addr.as_ref(),
+                    Expr::Lea {
+                        index: Some(index),
+                        scale: 0,
+                        ..
+                    } if index == &VReg::phys("byte_offset")
+                )
         ));
     }
 

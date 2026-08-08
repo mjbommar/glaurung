@@ -330,6 +330,29 @@ fn ssa_base(name: &str) -> &str {
     crate::ir::abi::ssa_base(name)
 }
 
+/// Architectural registers whose value is a stack-coordinate phase, not an
+/// ordinary substitutable scalar.
+///
+/// An unversioned `sp = sp - N` definition describes when a coordinate is
+/// observed. Inlining it into a later call argument and then running stack
+/// promotion applies the current delta a second time. Frame pointers have the
+/// dual hazard: replacing their establishment value with the current stack
+/// pointer changes meaning after any later allocation. Keeping these
+/// definitions statement-rooted is conservative and preserves the coordinate
+/// oracle's ownership of frame rebasing.
+fn is_frame_coordinate_storage(arch: CallConv, name: &str) -> bool {
+    let name = ssa_base(name);
+    match arch {
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => {
+            matches!(name, "rsp" | "esp" | "rbp" | "ebp")
+        }
+        CallConv::Aarch64 => matches!(name, "sp" | "x29" | "fp"),
+        CallConv::Arm | CallConv::ArmHardFloat => {
+            matches!(name, "sp" | "r7" | "r11" | "fp")
+        }
+    }
+}
+
 /// An expression naming the function's INCOMING value in `slot`, as that value is
 /// actually spelled in `body`.
 ///
@@ -941,6 +964,41 @@ fn direct_call_target_va(statement: &Stmt) -> Option<u64> {
     }
 }
 
+/// Exact core-register arity of a fixed AAPCS32 library call.
+///
+/// Register liveness alone cannot distinguish call inputs from caller-local
+/// scratch state. Thumb GCC, for example, writes `r3` for stack-canary
+/// bookkeeping after setting up the three arguments to `memset`; A32 GCC may
+/// also leave multiple shadowed definitions of one argument register. A locked
+/// catalog declaration proves both that r0..rN-1 are inputs and that later core
+/// registers are not. Only one-word scalar parameters qualify here. Wider,
+/// variadic, and otherwise unrepresentable layouts stay on the conservative
+/// evidence-only path until the ABI layout model can describe them exactly.
+fn known_arm_core_register_arity(statement: &Stmt) -> Option<usize> {
+    let name = match statement {
+        Stmt::Call {
+            target: Expr::Named { name, .. },
+            ..
+        } => name,
+        _ => return None,
+    };
+    let contract = crate::ir::call_contracts::lookup(name)?;
+    if contract.is_variadic || contract.params.len() > 4 {
+        return None;
+    }
+    for parameter in &contract.params {
+        let c_type = crate::ir::call_contracts::standalone_c_type(&parameter.c_type)?;
+        let fits_one_core_register = c_type == "float"
+            || c_type.ends_with('*')
+            || crate::ir::call_contracts::integer_c_type_width(&c_type, 4)
+                .is_some_and(|width| width <= 4);
+        if !fits_one_core_register {
+            return None;
+        }
+    }
+    Some(contract.params.len())
+}
+
 /// Source-ordered AAPCS-VFP storage selected by a locked library prototype.
 ///
 /// The core and VFP banks advance independently. This is exactly why a flat
@@ -1023,6 +1081,21 @@ fn known_arm_hard_float_layout(statement: &Stmt) -> Option<Vec<VReg>> {
         layout.push(storage);
     }
     Some(layout)
+}
+
+/// Whether a source-ordered AAPCS layout is exactly the contiguous r0-r3
+/// prefix used by one-word scalar parameters.
+fn aapcs_core_register_arity(layout: &[VReg]) -> Option<usize> {
+    if layout.len() > 4 {
+        return None;
+    }
+    layout
+        .iter()
+        .enumerate()
+        .all(|(slot, storage)| {
+            matches!(storage, VReg::Phys(name) if ssa_base(name) == format!("r{slot}"))
+        })
+        .then_some(layout.len())
 }
 
 /// Fold a call setup according to a recovered callee's source-ordered storage.
@@ -1301,6 +1374,19 @@ fn fold_one_call(
         fold_one_cdecl32_call(body, call_idx);
         return;
     }
+    let known_arm_hard_float_layout = (arch == CallConv::ArmHardFloat)
+        .then(|| known_arm_hard_float_layout(&body[call_idx]))
+        .flatten();
+    let known_arm_core_arity = match arch {
+        CallConv::Arm => known_arm_core_register_arity(&body[call_idx]),
+        CallConv::ArmHardFloat => known_arm_hard_float_layout
+            .as_deref()
+            .and_then(aapcs_core_register_arity),
+        _ => None,
+    };
+    if known_arm_core_arity == Some(0) {
+        return;
+    }
     let recovered_layout =
         direct_call_target_va(&body[call_idx]).and_then(|target| callee_layouts.get(&target));
     let aapcs_stack = matches!(arch, CallConv::Arm | CallConv::ArmHardFloat)
@@ -1360,9 +1446,12 @@ fn fold_one_call(
         }
     }
     if arch == CallConv::ArmHardFloat {
-        if let Some(layout) = known_arm_hard_float_layout(&body[call_idx]) {
+        if let Some(layout) = known_arm_hard_float_layout
+            .as_ref()
+            .filter(|_| known_arm_core_arity.is_none())
+        {
             if !layout.is_empty() {
-                let _ = fold_one_recovered_layout_call(body, call_idx, &layout);
+                let _ = fold_one_recovered_layout_call(body, call_idx, layout);
             }
             // A locked fixed-arity declaration is stronger than a scratch
             // register prefix even when the setup was not locally foldable.
@@ -1463,6 +1552,12 @@ fn fold_one_call(
         if let Stmt::Assign { dst, src } = &body[i] {
             if let VReg::Phys(name) = dst {
                 if let Some(slot) = slot_of(arch, name.as_str()) {
+                    if known_arm_core_arity.is_some_and(|arity| slot >= arity) {
+                        // The fixed declaration proves this is caller-local
+                        // scratch state, not an additional call argument.
+                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        continue;
+                    }
                     if found[slot].is_none() {
                         // Before claiming this slot, make sure no already-
                         // captured arg expression reads this register. If
@@ -1577,7 +1672,7 @@ fn fold_one_call(
                         mark_arg_reads_in_expr(src, arch, &mut read_between);
                         continue;
                     }
-                    if proven_aapcs_stack {
+                    if proven_aapcs_stack || known_arm_core_arity.is_some() {
                         // A locked integer callee layout proves that every
                         // core slot belongs to this call. Once the nearest
                         // reaching definition of a slot is captured, an older
@@ -1608,7 +1703,7 @@ fn fold_one_call(
                 // identities and should remain statement-rooted. This repair
                 // is specifically for unversioned lifter output where several
                 // reaching definitions otherwise collapse to one register.
-                if !name.contains('#') {
+                if !name.contains('#') && !is_frame_coordinate_storage(arch, name) {
                     if opaque_reaching_defs.contains(dst) {
                         continue;
                     }
@@ -6716,6 +6811,170 @@ mod tests {
                 disp: 0,
                 segment: None,
             }]
+        );
+    }
+
+    #[test]
+    fn fixed_arm_library_contract_crosses_shadowed_argument_setup() {
+        // GCC 15 emits two consecutive `mov r1, #0` instructions before the
+        // A32 rb_validate memset. The nearest definition is the call input;
+        // the older one is shadowed machine state, not a boundary that can
+        // erase the already-proven r0-r2 fixed-arity call.
+        let destination = Expr::Lea {
+            base: Some(reg("sp")),
+            index: None,
+            scale: 1,
+            disp: 12,
+            segment: None,
+        };
+        for convention in [CallConv::Arm, CallConv::ArmHardFloat] {
+            let mut function = Function {
+                name: "a32_memset_caller".into(),
+                entry_va: 0x1000,
+                body: vec![
+                    assign("r2#1", 64),
+                    Stmt::Assign {
+                        dst: reg("r0#1"),
+                        src: destination.clone(),
+                    },
+                    assign("r1#1", 0),
+                    assign("r1#2", 0),
+                    call_to("memset@plt"),
+                ],
+            };
+
+            reconstruct_args(&mut function, convention);
+
+            let Stmt::Call { args, .. } = function.body.last().expect("memset call must survive")
+            else {
+                panic!("expected memset call: {:#?}", function.body);
+            };
+            assert_eq!(
+                args,
+                &[destination.clone(), Expr::Const(0), Expr::Const(64)],
+                "{convention:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_arm_library_contract_excludes_scratch_registers_after_setup() {
+        // Thumb rb_validate writes r3 for stack-canary bookkeeping after the
+        // complete r0-r2 memset setup. Treating every observed ABI register as
+        // a possible argument invents slot three, then an older r3 definition
+        // aborts the backward scan and loses the real call entirely.
+        let destination = Expr::Lea {
+            base: Some(reg("sp")),
+            index: None,
+            scale: 1,
+            disp: 4,
+            segment: None,
+        };
+        let canary = Expr::Deref {
+            addr: Box::new(Expr::Reg(reg("r8#1"))),
+            size: 4,
+        };
+        for convention in [CallConv::Arm, CallConv::ArmHardFloat] {
+            let mut function = Function {
+                name: "thumb_memset_caller".into(),
+                entry_va: 0x1000,
+                body: vec![
+                    assign("r2#1", 64),
+                    Stmt::Assign {
+                        dst: reg("r0#1"),
+                        src: destination.clone(),
+                    },
+                    assign("r1#1", 0),
+                    Stmt::Assign {
+                        dst: reg("r3#1"),
+                        src: canary.clone(),
+                    },
+                    Stmt::Store {
+                        addr: Expr::Lea {
+                            base: Some(reg("sp")),
+                            index: None,
+                            scale: 1,
+                            disp: 324,
+                            segment: None,
+                        },
+                        src: Expr::Reg(reg("r3#1")),
+                        size: 4,
+                    },
+                    assign("r3#2", 0),
+                    call_to("memset@plt"),
+                ],
+            };
+
+            reconstruct_args(&mut function, convention);
+
+            let Stmt::Call { args, .. } = function.body.last().expect("memset call must survive")
+            else {
+                panic!("expected memset call: {:#?}", function.body);
+            };
+            assert_eq!(
+                args,
+                &[destination.clone(), Expr::Const(0), Expr::Const(64)],
+                "{convention:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn arm_call_argument_keeps_its_current_stack_coordinate() {
+        // The r0 definition is relative to the current SP after both frame
+        // allocations. Inlining the two older unversioned SP definitions into
+        // the call argument changes its coordinate phase; stack promotion then
+        // applies the current delta again and addresses entry_sp-740 instead of
+        // the real entry_sp-364 object.
+        let current_stack_destination = Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(reg("sp"))),
+            rhs: Box::new(Expr::Const(12)),
+        };
+        let stack_adjust = |amount| Stmt::Assign {
+            dst: reg("sp"),
+            src: Expr::Bin {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg("sp"))),
+                rhs: Box::new(Expr::Const(amount)),
+            },
+        };
+        let mut function = Function {
+            name: "a32_memset_stack_coordinate".into(),
+            entry_va: 0x1000,
+            body: vec![
+                stack_adjust(36),
+                stack_adjust(340),
+                assign("r2#1", 64),
+                Stmt::Assign {
+                    dst: reg("r0#1"),
+                    src: current_stack_destination.clone(),
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("sp")),
+                        index: None,
+                        scale: 1,
+                        disp: 332,
+                        segment: None,
+                    },
+                    src: Expr::Reg(reg("r8#1")),
+                    size: 4,
+                },
+                assign("r1#1", 0),
+                call_to("memset@plt"),
+            ],
+        };
+
+        reconstruct_args(&mut function, CallConv::ArmHardFloat);
+
+        let Stmt::Call { args, .. } = function.body.last().expect("memset call must survive")
+        else {
+            panic!("expected memset call: {:#?}", function.body);
+        };
+        assert_eq!(
+            args,
+            &[current_stack_destination, Expr::Const(0), Expr::Const(64)]
         );
     }
 

@@ -23,14 +23,22 @@ pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
 
 A32_ARCH = "armv7_a32"
 A32_OBJDUMP = "arm-linux-gnueabihf-objdump"
+ARM32_ARCHES = ("armv7", A32_ARCH)
 
 
 def _build_a32_fixture(tmp_path: Path, fixture: str) -> tuple[Path, Path, Path]:
     """Build one A32 fixture and its pinned host-side reference."""
+    return _build_arm32_fixture(tmp_path, fixture, A32_ARCH, "O0")
+
+
+def _build_arm32_fixture(
+    tmp_path: Path, fixture: str, arch: str, opt: str
+) -> tuple[Path, Path, Path]:
+    """Build one ARM32 fixture and its pinned host-side reference."""
     missing = [
         tool
         for tool in (
-            A.TARGETS[A32_ARCH].cc,
+            A.TARGETS[arch].cc,
             A32_OBJDUMP,
             "glaurung",
             "qemu-arm",
@@ -41,11 +49,11 @@ def _build_a32_fixture(tmp_path: Path, fixture: str) -> tuple[Path, Path, Path]:
         pytest.skip(f"A32 round-trip tools are missing: {', '.join(missing)}")
 
     source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
-    target = tmp_path / f"{fixture}-{A32_ARCH}-O0.so"
-    ok, error = A._cross_build(A32_ARCH, source, "O0", target)
+    target = tmp_path / f"{fixture}-{arch}-{opt}.so"
+    ok, error = A._cross_build(arch, source, opt, target)
     assert ok, error
-    reference = tmp_path / f"{fixture}-host-O0.so"
-    ok, error = A._reference_build(source, "O0", reference)
+    reference = tmp_path / f"{fixture}-host-{opt}.so"
+    ok, error = A._reference_build(source, opt, reference)
     assert ok, error
     return source, target, reference
 
@@ -181,3 +189,77 @@ def test_a32_o0_frame_pointer_stack_arguments_round_trip(
         "sum_mixed_widths",
     }
     _assert_qemu_round_trip(target, source, reference, fixture, functions)
+
+
+@pytest.mark.parametrize("arch", ARM32_ARCHES)  # ty: ignore[unresolved-attribute]
+def test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution(
+    tmp_path: Path, arch: str
+) -> None:
+    """ARM call, aggregate address, stack alias, and LDM semantics stay exact."""
+    fixture = "16_red_black_tree"
+    function = "rb_validate"
+    source, target, reference = _build_arm32_fixture(tmp_path, fixture, arch, "O2")
+
+    source_text = source.read_text()
+    assert "int32_t parents[16] = {0};" in source_text
+    assert "node_stack[top] = root;" in source_text
+
+    disassembled = subprocess.run(
+        [A32_OBJDUMP, "-d", f"--disassemble={function}", str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert disassembled.returncode == 0, disassembled.stderr
+    assert re.search(r"\b(?:bl|blx)\b.*<memset@plt>", disassembled.stdout), (
+        disassembled.stdout
+    )
+    if arch == A32_ARCH:
+        assert re.search(
+            r"\bldr\s+\w+,\s*\[\w+,\s*\w+,\s*lsl #4\]", disassembled.stdout
+        ), disassembled.stdout
+        assert "ldmib" in disassembled.stdout, disassembled.stdout
+    else:
+        assert re.search(
+            r"\bldr\.w\s+\w+,\s*\[\w+,\s*\w+,\s*lsl #2\]", disassembled.stdout
+        ), disassembled.stdout
+
+    decompiled = _decompile(target, function)
+    assert decompiled.returncode == 0, decompiled.stderr
+    assert "===== prototype-resolved LLIR =====" in decompiled.stderr
+    assert "===== prepared numbered LLIR =====" in decompiled.stderr
+    assert re.search(r"memset\([^\n]+,\s*\(int\)\(0\),[^\n]+64", decompiled.stdout), (
+        decompiled.stdout
+    )
+    assert "memset()" not in decompiled.stdout
+    assert re.search(r"local_[0-9a-f]+\[64\]", decompiled.stdout), decompiled.stdout
+    assert not re.search(r"\*\(int \*\)\(\(sp \+", decompiled.stdout), decompiled.stdout
+    if arch == A32_ARCH:
+        assert re.search(r"scale: 16, disp: 0, size: 4", decompiled.stderr), (
+            decompiled.stderr
+        )
+        assert re.search(r"load\[4 bytes\].*disp: 4, size: 4", decompiled.stderr), (
+            decompiled.stderr
+        )
+        assert re.search(r"load\[4 bytes\].*disp: 8, size: 4", decompiled.stderr), (
+            decompiled.stderr
+        )
+    else:
+        assert re.search(
+            r"\bt\d+\s*=\s*var\d+;\s*\n\s*var\d+\s*=.*\+ 1", decompiled.stdout
+        ), decompiled.stdout
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only={function},
+    )
+    assert results[function]["status"] == "pass", results
+    assert results[function]["detail"].endswith("cases (native target ABI)"), results

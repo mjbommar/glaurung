@@ -158,7 +158,9 @@ pub enum Value {
 pub struct MemOp {
     pub base: Option<VReg>,
     pub index: Option<VReg>,
-    pub scale: u8, // 1, 2, 4, 8
+    /// Byte multiplier for `index`. Zero is the legacy spelling for unity when
+    /// no architecture-specific scale was encoded.
+    pub scale: u8,
     pub disp: i64,
     /// Access width in bytes (1, 2, 4, 8).
     pub size: u8,

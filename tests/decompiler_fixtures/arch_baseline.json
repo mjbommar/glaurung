@@ -2131,15 +2131,15 @@
   },
   "15_binary_search_tree:armv7:O2": {
     "bst_inorder_checksum": "fail",
-    "bst_search": "fail"
+    "bst_search": "pass"
   },
   "15_binary_search_tree:armv7_a32:O0": {
-    "bst_inorder_checksum": "fail",
+    "bst_inorder_checksum": "pass",
     "bst_search": "pass"
   },
   "15_binary_search_tree:armv7_a32:O2": {
     "bst_inorder_checksum": "fail",
-    "bst_search": "fail"
+    "bst_search": "pass"
   },
   "15_binary_search_tree:i386:O0": {
     "bst_inorder_checksum": "pass",
@@ -2175,13 +2175,13 @@
     "rb_validate": "fail"
   },
   "16_red_black_tree:armv7:O2": {
-    "rb_validate": "fail"
+    "rb_validate": "pass"
   },
   "16_red_black_tree:armv7_a32:O0": {
     "rb_validate": "fail"
   },
   "16_red_black_tree:armv7_a32:O2": {
-    "rb_validate": "fail"
+    "rb_validate": "pass"
   },
   "16_red_black_tree:i386:O0": {
     "rb_validate": "pass"
@@ -2358,7 +2358,7 @@
     "graph_bfs": "fail"
   },
   "20_graph_bfs:armv7_a32:O0": {
-    "graph_bfs": "fail"
+    "graph_bfs": "pass"
   },
   "20_graph_bfs:armv7_a32:O2": {
     "graph_bfs": "fail"
@@ -2394,7 +2394,7 @@
     "graph_dfs": "fail"
   },
   "21_graph_dfs:armv7_a32:O0": {
-    "graph_dfs": "fail"
+    "graph_dfs": "pass"
   },
   "21_graph_dfs:armv7_a32:O2": {
     "graph_dfs": "fail"
@@ -2427,13 +2427,13 @@
     "dijkstra_dense": "pass"
   },
   "22_dijkstra:armv7:O2": {
-    "dijkstra_dense": "fail"
+    "dijkstra_dense": "pass"
   },
   "22_dijkstra:armv7_a32:O0": {
     "dijkstra_dense": "pass"
   },
   "22_dijkstra:armv7_a32:O2": {
-    "dijkstra_dense": "fail"
+    "dijkstra_dense": "pass"
   },
   "22_dijkstra:i386:O0": {
     "dijkstra_dense": "pass"
@@ -2466,7 +2466,7 @@
     "topological_sort": "fail"
   },
   "23_topological_sort:armv7_a32:O0": {
-    "topological_sort": "fail"
+    "topological_sort": "pass"
   },
   "23_topological_sort:armv7_a32:O2": {
     "topological_sort": "fail"
@@ -2502,7 +2502,7 @@
     "merge_sort_i32": "fail"
   },
   "24_merge_sort:armv7_a32:O0": {
-    "merge_sort_i32": "fail"
+    "merge_sort_i32": "pass"
   },
   "24_merge_sort:armv7_a32:O2": {
     "merge_sort_i32": "fail"
@@ -2538,7 +2538,7 @@
     "kmp_search": "fail"
   },
   "25_kmp_search:armv7_a32:O0": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:armv7_a32:O2": {
     "kmp_search": "fail"
