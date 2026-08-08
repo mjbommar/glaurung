@@ -948,20 +948,20 @@
   "06_calling_conventions:armv7_a32:O0": {
     "fact_mod": "pass",
     "fib": "pass",
-    "forward_sum6": "fail",
+    "forward_sum6": "pass",
     "guarded_spin": "pass",
     "sum_arg0": "pass",
     "sum_arg1": "pass",
-    "sum_arg10": "fail",
+    "sum_arg10": "pass",
     "sum_arg2": "pass",
     "sum_arg3": "pass",
     "sum_arg4": "pass",
-    "sum_arg5": "fail",
-    "sum_arg6": "fail",
-    "sum_arg7": "fail",
-    "sum_arg8": "fail",
-    "sum_arg9": "fail",
-    "sum_mixed_widths": "fail",
+    "sum_arg5": "pass",
+    "sum_arg6": "pass",
+    "sum_arg7": "pass",
+    "sum_arg8": "pass",
+    "sum_arg9": "pass",
+    "sum_mixed_widths": "pass",
     "tailcall_to_sum4": "pass"
   },
   "06_calling_conventions:armv7_a32:O2": {
@@ -1684,7 +1684,7 @@
     "call_result_unused": "pass",
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
-    "spill_combine": "fail",
+    "spill_combine": "pass",
     "widen_mul": "fail",
     "wrap_byte": "pass"
   },
@@ -2218,7 +2218,7 @@
     "hash_lookup": "pass"
   },
   "17_hash_table:armv7_a32:O0": {
-    "hash_insert": "fail",
+    "hash_insert": "pass",
     "hash_lookup": "pass"
   },
   "17_hash_table:armv7_a32:O2": {
@@ -2315,7 +2315,7 @@
   },
   "19_disjoint_set:armv7_a32:O0": {
     "dsu_find": "pass",
-    "dsu_union": "fail"
+    "dsu_union": "pass"
   },
   "19_disjoint_set:armv7_a32:O2": {
     "dsu_find": "pass",
@@ -2574,7 +2574,7 @@
     "csr_matvec": "pass"
   },
   "26_sparse_matrix:armv7_a32:O0": {
-    "csr_matvec": "fail"
+    "csr_matvec": "pass"
   },
   "26_sparse_matrix:armv7_a32:O2": {
     "csr_matvec": "pass"

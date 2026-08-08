@@ -1850,3 +1850,67 @@ The full Python collection passes 2,832 tests with 43 declared skips and zero
 failures in 29m19s. Its retained log is
 `/tmp/glaurung-arm32-shift-wide-python-full.log` with SHA-256
 `9a22dc50627eefc0893bd1031d4de7345d987d5cd6c509c97c54d5b4aa0757ed`.
+
+## 2026-08-07 23:47 — AAPCS32 frame-pointer stack arguments
+
+The next residual cluster was not control-flow recovery. Eight of the nine
+`06_calling_conventions:armv7_a32` failures were O0 functions with at least a
+fifth integer parameter. The retained source, A32 binary, objdump, pre/post pass
+dumps, and emitted C are under `/tmp/glaurung-a32-callconv.3KCk4j/`. The source
+and binary identities are:
+
+```text
+source  53cabf411fd60b0781ddf019b2fc529947a7e11e56dd96a7208c068dd0c5b09a
+A32     e4d174a9f05cfd880ac86b091981a8adbc67ea1d8cec1ed99ae162f1e8a6a1db
+```
+
+`sum_arg5` takes `a0` through `a4`. Its canonical A32 prologue pushes the
+four-byte `fp`, sets `fp = sp`, and reads `a4` with `ldr r2, [fp, #4]`: the
+caller's entry SP is therefore `fp+4`. Numbered LLIR retained that exact load,
+and prototype recovery correctly locked a five-parameter signature, but stack
+promotion's `stack_arg_layout` deliberately returned no layout for ARM32. It
+renamed the load `stack_0`; emitted C declared `arg4` but calculated with the
+uninitialised local. The pre-fix C has SHA-256
+`e16d34e249abf6cbc75802ed76c139d8301ef6ebb427791fcd77d0351bf3671b`.
+
+The RED unit reproduced the coordinate directly: `fp+4` and `fp+8` became
+`stack_0` and `stack_1` instead of `arg4` and `arg5`. The real RED regression
+compiled the source, proved the `fp+4` load in objdump and numbered LLIR, then
+observed `stack_0` in product C. AAPCS32's modeled integer stack layout is now
+four register arguments followed by four-byte slots starting at `fp+4`; the
+existing authoritative parameter count remains the bound that prevents
+inventing arguments. Win64 remains explicitly unmodeled because its shadow
+space needs separate semantics.
+
+After rebuilding the extension, product C uses `arg4` and contains no
+`stack_0`; its SHA-256 is
+`38fccb14fb344476144aa7a2866699f5237fa826adb4d74a56c93730458090cc`.
+All eight targeted functions pass their source/rebuild comparison under
+`qemu-arm`. The complete A32 O0 lane records twelve `fail -> pass` changes and
+zero regressions: the eight calling-convention cases plus `spill_combine`,
+`hash_insert`, `dsu_union`, and `csr_matvec`. The exact lane result is
+`/tmp/glaurung-a32-stack-args-a32-o0-after.json` with SHA-256
+`9f99878a006106182ac08ef17bacbf171f531d64f98933f7fe8b22e59ef6013b`.
+The controlled Thumb O0 lane is unchanged with zero regressions. All 62
+stack-local tests and both real A32 semantics round trips are green. The A32 and
+Thumb O2 controls are also unchanged with zero regressions. The complete matrix
+contains 1,712 pass, 88 known fail, 228 structural, and six declared unsupported
+results, with zero missing cells, timeouts, lane errors, nonportable, or
+incomparable results. Its only delta is the same twelve A32 O0 improvements;
+schema, x86 control, and baseline-health checks return no problems. The exact
+result is `/tmp/glaurung-a32-stack-args-full-arch.json` with SHA-256
+`762d2d40ee840fb0f0aa8a756b4919a0f45511fc4a8be5c70030da95cd5c6fb5`.
+Repository-wide Rust and decompiler closure are green. `cargo test
+--all-targets` passes 1,938 tests. The fresh-release five-lane gate passes all
+x86 behavioral/structural tests, reproduces the complete architecture ratchet,
+passes every required legacy and curriculum executable behavior cell, and
+reports no GED/type/byte regression across 56/56 official cells. Its retained
+log is `/tmp/glaurung-a32-stack-args-local-gate.log` with SHA-256
+`aaf868561491a373c9ed07309ff26a90c58ab4cdb8c12b6322fe3470e37cc660`.
+The first full Python run had two unrelated environmental failures while the
+editable environment was being rebuilt concurrently: both the tutorial drift
+check and Windows vendor corpus test pass immediately in isolation. The clean,
+uncontended full Python rerun passes 2,833 tests with 43 declared skips and zero
+failures in 23m52s. Its retained log is
+`/tmp/glaurung-a32-stack-args-python-full-clean.log` with SHA-256
+`c422345b4ac70e74ec6088079c88337da1296eeeb42755886a09badbc939f022`.

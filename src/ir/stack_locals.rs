@@ -268,16 +268,19 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
 /// SysV AMD64: six integer registers, then `[rbp+16]` upward — `[rbp]` holds the
 /// saved frame pointer and `[rbp+8]` the return address. Cdecl32 has no integer
 /// register arguments and starts at `[ebp+8]` in four-byte slots. AArch64 AAPCS:
-/// eight registers, then `[x29+16]`, the frame record being `{fp, lr}`. Win64 and
-/// ARM32 are deliberately absent: their layouts (a 32-byte shadow space; a
-/// different frame record) are not exercised by any fixture here, and guessing
-/// at an ABI is how a decompiler invents a parameter that does not exist.
+/// eight registers, then `[x29+16]`, the frame record being `{fp, lr}`. AAPCS32
+/// uses four integer registers; a canonical frame saves one four-byte `fp`
+/// below the entry SP, so its first stacked integer argument is `[fp+4]`.
+/// Win64 remains deliberately absent: its 32-byte shadow space needs separate
+/// treatment, and guessing at an ABI is how a decompiler invents a parameter
+/// that does not exist.
 fn stack_arg_layout(cc: CallConv) -> Option<(usize, i64, i64)> {
     match cc {
         CallConv::SysVAmd64 => Some((6, 16, 8)),
         CallConv::Cdecl32 => Some((0, 8, 4)),
         CallConv::Aarch64 => Some((8, 16, 8)),
-        CallConv::Win64 | CallConv::Arm | CallConv::ArmHardFloat => None,
+        CallConv::Arm | CallConv::ArmHardFloat => Some((4, 4, 4)),
+        CallConv::Win64 => None,
     }
 }
 
@@ -2643,6 +2646,43 @@ mod tests {
         }
     }
 
+    /// A canonical A32 O0 frame pushes `fp` and then sets `fp = sp`, so the
+    /// caller's entry stack pointer is `fp + 4`. The fifth and sixth integer
+    /// parameters must keep their source argument identities when accessed
+    /// through that second frame coordinate.
+    #[test]
+    fn aapcs_frame_pointer_stack_arguments_follow_the_saved_fp() {
+        for cc in [CallConv::Arm, CallConv::ArmHardFloat] {
+            let mut f = Function {
+                name: "sum_arg6".into(),
+                entry_va: 0,
+                body: vec![
+                    Stmt::Assign {
+                        dst: reg("r0"),
+                        src: deref_of("fp", 4, 4),
+                    },
+                    Stmt::Assign {
+                        dst: reg("r1"),
+                        src: deref_of("fp", 8, 4),
+                    },
+                ],
+            };
+            promote_stack_locals_typed_with_parameter_count(&mut f, Some(cc), Some(6));
+            let names: Vec<String> = f
+                .body
+                .iter()
+                .map(|stmt| match stmt {
+                    Stmt::Assign {
+                        src: Expr::Reg(VReg::Phys(name)),
+                        ..
+                    } => name.clone(),
+                    other => panic!("expected a promoted argument, got {other:?}"),
+                })
+                .collect();
+            assert_eq!(names, ["arg4", "arg5"], "{cc:?}");
+        }
+    }
+
     /// AAPCS64 is the same rule with eight register arguments and eight-byte
     /// stacked slots. This is what `06_calling_conventions:aarch64:sum_arg9`
     /// and `sum_arg10` read: `ldr w9, [sp]` / `ldr w8, [sp, #8]` in the `-O2`
@@ -3504,11 +3544,10 @@ mod tests {
 
     #[test]
     fn an_abi_we_do_not_model_keeps_the_conservative_name() {
-        // Win64 (32-byte shadow space) and ARM32 have different layouts and no
-        // fixture coverage here. Guessing at an ABI would invent a parameter that
-        // does not exist, so those keep `stack_N`.
+        // Win64's 32-byte shadow space still has no layout model here. Guessing
+        // at that ABI would invent a parameter that does not exist, so it and
+        // unknown conventions keep `stack_N`.
         assert_eq!(promoted("rbp", 16, Some(CallConv::Win64)), "stack_0");
-        assert_eq!(promoted("rbp", 16, Some(CallConv::Arm)), "stack_0");
         assert_eq!(promoted("rbp", 16, None), "stack_0");
     }
 
