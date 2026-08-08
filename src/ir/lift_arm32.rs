@@ -329,7 +329,7 @@ fn index_shift(ins: &Instruction, ctx: &LiftCtx) -> Option<u8> {
             RegShift {
                 kind: ShiftKind::Lsl,
                 amount,
-            } if amount <= 3 => Some(amount),
+            } if amount < u8::BITS as u8 => Some(amount),
             _ => None,
         }
     }
@@ -1125,21 +1125,32 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
         let regs: Vec<String> = ops.iter().filter_map(operand_reg_name).collect();
         return lift_pop(&regs);
     }
-    // Load/store multiple: `ldm{ia} Rn{!}, {list}` / `stm{ia} Rn{!}, {list}`.
-    // operands[0] is the base register, the rest the register list. We emit a
-    // load/store per list register at `[Rn + 4·i]` (increment-after assumed;
-    // base writeback is not surfaced by the decoder, so it is approximated as a
-    // no-op). `ldm … , {…, pc}` returns.
+    // Load/store multiple: `ldm{ia,ib,da,db} Rn{!}, {list}` and its `stm`
+    // sibling. Operands[0] is the base register, the rest the register list.
+    // ARM assigns registers in ascending order to ascending addresses; only
+    // the first address changes with the addressing mode. Base writeback is
+    // not surfaced by the decoder yet, so it remains a conservative no-op.
+    // `ldm … , {…, pc}` returns.
     if mnem.starts_with("ldm") || mnem.starts_with("stm") {
         let regs: Vec<String> = ops.iter().filter_map(operand_reg_name).collect();
         if regs.len() >= 2 {
             let base = VReg::phys(regs[0].clone());
             let list = &regs[1..];
             let is_load = mnem.starts_with("ldm");
+            let bytes = 4 * list.len() as i64;
+            let first_disp = if mnem.ends_with("ib") {
+                4
+            } else if mnem.ends_with("da") {
+                4 - bytes
+            } else if mnem.ends_with("db") {
+                -bytes
+            } else {
+                0
+            };
             let mut out = Vec::new();
             let mut returns = false;
             for (i, r) in list.iter().enumerate() {
-                let addr = MemOp::plain(Some(base.clone()), None, 0, 4 * i as i64, 4);
+                let addr = MemOp::plain(Some(base.clone()), None, 0, first_disp + 4 * i as i64, 4);
                 if is_load {
                     if r == "pc" {
                         returns = true;
@@ -3848,6 +3859,8 @@ mod tests {
             (&[0x11, 0xf8, 0x12, 0x00][..], true, 2),
             // A32: ldr r3, [r1, r2, lsl #2] e7913102
             (&[0x02, 0x31, 0x91, 0xe7][..], false, 4),
+            // A32: ldr r3, [r4, r2, lsl #4] e7943202
+            (&[0x02, 0x32, 0x94, 0xe7][..], false, 16),
         ] {
             let out: Vec<Op> = lift_bytes(bytes, 0x1000, thumb)
                 .into_iter()
@@ -3882,6 +3895,29 @@ mod tests {
             matches!(out.as_slice(), [Op::Load { addr, .. }]
                 if addr.index == Some(VReg::phys("r2")) && addr.scale <= 1),
             "unshifted index was scaled: {out:#?}"
+        );
+    }
+
+    #[test]
+    fn a32_load_multiple_honors_increment_before_addressing() {
+        // ldmib r2, {r1, r2}   e9920006
+        //
+        // Increment-before starts at r2+4, not r2. This exact instruction
+        // loads RbNode.left/right together in rb_validate.
+        let out = ops_a32(&[0x06, 0x00, 0x92, 0xe9]);
+        assert_eq!(
+            out,
+            vec![
+                Op::Load {
+                    dst: VReg::phys("r1"),
+                    addr: MemOp::plain(Some(VReg::phys("r2")), None, 0, 4, 4),
+                },
+                Op::Load {
+                    dst: VReg::phys("r2"),
+                    addr: MemOp::plain(Some(VReg::phys("r2")), None, 0, 8, 4),
+                },
+            ],
+            "ldmib must not be approximated as increment-after"
         );
     }
 

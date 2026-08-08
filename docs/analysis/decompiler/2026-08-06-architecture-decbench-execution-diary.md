@@ -2103,3 +2103,134 @@ Owned Python paths pass Ruff formatting/lint and the new end-to-end test passes
 remain non-gates with pre-existing repository debt (including documentation
 code fences and 2,043 existing type diagnostics), so they were not rewritten
 as part of this decompiler fix. Integration and remote evidence follow below.
+
+## 2026-08-08 06:18 — ARM32 frame objects, dynamic fields, and exact A32 addressing
+
+The next residual was `16_red_black_tree:rb_validate:O2` on both ARM32
+encodings. This was a real execution defect, not a textual score. On the first
+valid non-trivial tree, case 10 of the target-native corpus, the original A32
+recovery first crashed and then returned zero after the earliest layers were
+fixed; the source returned one. Thumb progressed from an empty `memset()` call,
+through a false comparison and a crash, to the same incorrect zero. The final
+recoveries agree with the source on all 23 target-ABI cases under qemu-arm for
+both Thumb-2 and A32.
+
+The checked-in source establishes the two storage obligations explicitly:
+`int32_t parents[16] = {0}` and `node_stack[top] = root`. Both optimized
+binaries call `memset` for the first array. Thumb then carries stack-object
+addresses through ordinary register temporaries and a pre-incremented index.
+A32 additionally uses `ldr ..., [base, index, lsl #4]` to address 16-byte
+`RbNode` elements and `ldmib base, {left,right}` to load the two fields at
+offsets four and eight. The old pipeline lost each fact at a different owner:
+
+1. Call reconstruction treated every observed AAPCS core register as a
+   possible input. Thumb's post-setup `r3` canary scratch and A32's shadowed
+   `r1` definition caused the scan to discard the real three `memset`
+   arguments. Fixed library contracts now provide an exact one-word core
+   register arity, including the core-only subset of hard-float AAPCS layouts.
+   The scan crosses shadowed definitions only for those proven slots and
+   excludes later scratch registers.
+2. Generic expression substitution inlined unversioned `sp`/frame-pointer
+   phase definitions into call arguments. Stack promotion then applied the
+   current-SP delta a second time. Architectural frame-coordinate registers
+   remain statement-rooted so the stack-coordinate analysis is their sole
+   rebasing owner.
+3. Stack promotion understood constant addresses but not the locally
+   value-numbered chains GCC uses for dynamic frame arrays. A bounded ARM-only
+   address-alias analysis now expands pure, versioned address expressions only
+   within one linear control-flow run. Every stack-pointer write and control
+   boundary clears the state. It recognizes shifted indices, rejoins constant
+   and dynamic aliases with the authoritative CFA object, and retargets a
+   pending alias to the lifter's old-value snapshot in the exact
+   `t = index; index = t + 1` shape. Without a proven snapshot, a redefining
+   write kills the dependent alias conservatively. The 421-line analysis lives
+   in `stack_locals/address_aliases.rs` instead of adding another production
+   block to the already oversized parent pass.
+4. DWARF field affine analysis interpreted the IR's legacy `scale == 0`
+   spelling as multiplication by mathematical zero. A dynamic
+   `base + byte_offset` therefore collapsed to `base->field0`. Zero now means
+   the IR's documented unity scale, so an unresolved dynamic offset remains
+   dynamic rather than receiving a false field annotation.
+5. The A32 lifter arbitrarily accepted register-offset `lsl` only through
+   three bits. Any encoded shift whose power-of-two multiplier fits `u8` is now
+   represented exactly, including the target's `lsl #4` / scale 16.
+6. Load/store-multiple lifting assumed increment-after for every mnemonic.
+   IA, IB, DA, and DB now derive the correct first displacement while keeping
+   ARM's ascending-register/ascending-address rule. The target `ldmib` now
+   produces numbered LLIR loads at +4 and +8 rather than the incorrect +0/+4.
+   Base writeback remains a documented conservative no-op because the decoder
+   does not surface it in this path.
+
+The production regression compiles the real source separately for Thumb and
+A32 at O2, inspects those exact assembly patterns, requires prototype-resolved
+and numbered LLIR, checks the scale-16 and +4/+8 loads, rejects raw synthetic
+`sp` dereferences, checks the three-argument `memset`, and then performs the
+23-case native differential. Unit regressions pin fixed-arity AAPCS calls,
+frame-coordinate preservation, chained/constant/snapshotted stack aliases,
+unity affine scale, A32 scale 16, and increment-before multiple loads. The
+first broad Rust run caught unsafe overlap with AArch64 and x86 stack recovery;
+the address expansion and direct arithmetic resolution were consequently
+scoped to `Arm | ArmHardFloat`. The final library gate passes all 1,860 tests.
+
+The complete matrix exposed ten additional improvements, so none were accepted
+as score-only collateral. I built the identical binaries once, decompiled them
+with the pre-fix `b1e3c7a` release and the corrected release, retained assembly,
+numbered pass dumps, C, and unified before/after diffs, and reran each target
+differential. The pre-fix tree reproduced all twelve failures. The corrected
+tree passes all twelve:
+
+- dynamic struct-base preservation fixes `bst_search` at Thumb O2; exact
+  `ldmib` offsets fix its A32 O2 sibling;
+- frame-array promotion fixes A32 O0 `bst_inorder_checksum`, `graph_bfs`,
+  `graph_dfs`, `topological_sort`, `merge_sort_i32`, and `kmp_search` by
+  replacing undefined raw `fp` arithmetic with one bounded local object;
+- current-SP alias promotion fixes `dijkstra_dense` at Thumb and A32 O2 by
+  replacing the residual `sp + index` write with the recovered 16-byte `used`
+  object;
+- the combined call, coordinate, alias, DWARF, scale, and load-multiple repair
+  fixes both `rb_validate` O2 cells.
+
+Those before/after verdicts are retained as `armv7-O2-before.json`,
+`a32-O0-before.json`, `a32-O2-before.json` and their `*-verified.json`
+counterparts under `/tmp/glaurung-arm32-memset.aK7awt/`. The full source,
+binary, assembly, pass-dump, emitted-C, and diff corpus is in its `collateral/`
+subdirectory; `collateral/SHA256SUMS` itself hashes to
+`68ba6ddd8de012ef529bfa9dba45deb21cc92c5f489cdd7e60e34309f8e4bc53`.
+
+The verified baseline refresh is 1,743 pass, 57 known fail, 228 structural,
+and six declared-unsupported cells: exactly twelve `fail -> pass` changes,
+zero regressions, and zero reclassifications. Its log is
+`/tmp/glaurung-arm32-memset.aK7awt/baseline-refresh.log`, SHA-256
+`0a1d45378f3cdd49d3c91a36d100ac6d2118ceb58423af3fdbf9104f46aa6816`.
+The independent full rerun matches that baseline exactly; its log is
+`/tmp/glaurung-arm32-memset.aK7awt/full-arch-exact.log`, SHA-256
+`6bb381d9cbfb3f86247b3140f86be40fe15962b44b1f9618cf99763f2ec6266f`.
+Repository-wide and remote integration evidence follow after the exact tree is
+committed.
+
+The final exact-tree repository gates are green. `cargo test --all-targets`
+passes 1,953 tests across all library, integration, example, and benchmark
+targets; its log is
+`/tmp/glaurung-arm32-memset.aK7awt/cargo-all-targets.log`, SHA-256
+`e6c84ad1dd1c2bb1578bd4508970e0981e9e20d167b7463435edf73e3edd2e4c`.
+The fresh-release five-lane decompiler gate passes its Rust preflight, all 31
+pinned x86 behavioral/structural fixtures, the exact 1,743/57 architecture
+ratchet, both legacy/curriculum execution corpora, and every official metric
+cell. It reports no GED, type-match, or byte-match regression across 56/56
+cells. Its log is
+`/tmp/glaurung-arm32-memset.aK7awt/decbench-local-gate.log`, SHA-256
+`1e20d7923a15e1d74d9a5cbee6e0702dab732736d459e55c6b4a42932fa83d40`.
+
+As in the preceding increments, the first full Python run reached 2,839 passes
+and one tutorial fixture-drift failure because an internal
+`uv run glaurung --version` performed a one-time editable-package
+uninstall/install and appended those progress lines after the correct version.
+The exact tutorial test passed immediately in isolation; its log is
+`/tmp/glaurung-arm32-memset.aK7awt/tutorial-isolated.log`, SHA-256
+`ddc25d9bedf22540cdc336b374fd238ab99e097cb56636a3024f249106fd7cd8`.
+The uncontended full rerun passes 2,840 tests with 43 declared skips and zero
+failures in 20m06s. Its log is
+`/tmp/glaurung-arm32-memset.aK7awt/python-full-clean.log`, SHA-256
+`1b4b51fcb712a1263f22e4bb02faffd75cb70f319b0a55c7a37da69907232edd`.
+Owned Python paths pass Ruff formatting/lint and `ty`; Rust formatting and
+`git diff --check` are clean. Integration and remote evidence follow below.

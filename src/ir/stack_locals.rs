@@ -28,6 +28,7 @@ use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::VReg;
 
+mod address_aliases;
 mod bounded_overlap;
 
 const STACK_BASES: &[&str] = &["rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp"];
@@ -200,6 +201,7 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
         frame_pointer_established: frame_pointer_is_established(&f.body, cc),
         parameter_count,
     };
+    address_aliases::expand(&mut f.body, ctx);
     for hint in object_hints {
         let authoritative_entry_coordinate = hint.base == entry_stack_base(ctx);
         if hint.size == 0
@@ -1862,7 +1864,32 @@ fn resolved_memory_address(
                     .filter(|scale| *scale > 0)
                     .map(|scale| (index.clone(), scale))
             }
+            Expr::Bin {
+                op: crate::ir::types::BinOp::Shl,
+                lhs,
+                rhs,
+            } => {
+                let (Expr::Reg(index), Expr::Const(shift)) = (lhs.as_ref(), rhs.as_ref()) else {
+                    return None;
+                };
+                u32::try_from(*shift)
+                    .ok()
+                    .and_then(|shift| 1u8.checked_shl(shift))
+                    .filter(|scale| *scale > 0)
+                    .map(|scale| (index.clone(), scale))
+            }
             _ => None,
+        }
+    }
+
+    // Alias expansion represents a constant stack address as ordinary
+    // arithmetic (`sp + 68`) instead of a low-level Lea. Resolve that exact
+    // non-indexed form before looking for dynamic address components; otherwise
+    // the address-valued definition promotes while a store through the same
+    // alias remains rooted at an uninitialised synthetic `sp` C local.
+    if matches!(ctx.cc, Some(CallConv::Arm | CallConv::ArmHardFloat)) {
+        if let Some((base, disp)) = resolve_stack_address(expr, sp_delta, ctx, address_defs) {
+            return Some((base, disp, None, 1));
         }
     }
 
@@ -4613,6 +4640,271 @@ mod tests {
         assert_eq!(
             aapcs_entry_stack_coordinate("sp", 8, Some(-32), ctx),
             Some(("entry_sp", -24))
+        );
+    }
+
+    #[test]
+    fn arm_chained_stack_address_aliases_rejoin_a_cfa_array() {
+        // GCC's A32 rb_validate forms parents[i] in three instructions:
+        // ip = sp + 336; lr = ip + i*4; [lr - 324]. The composed address is
+        // current_sp + 12 + i*4, inside the debug-proven CFA-364 array. Keeping
+        // each SSA assignment opaque leaves the final C dereference rooted at
+        // an uninitialised synthetic `sp` local.
+        let mut f = Function {
+            name: "rb_validate_a32".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(36)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(340)),
+                    },
+                },
+                Stmt::Label(0x5a8),
+                Stmt::Assign {
+                    dst: reg("ip#12"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(336)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("lr#16"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("ip#12"))),
+                        rhs: Box::new(Expr::Bin {
+                            op: crate::ir::types::BinOp::Shl,
+                            lhs: Box::new(Expr::Reg(reg("r2#11"))),
+                            rhs: Box::new(Expr::Const(2)),
+                        }),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("ip#13"),
+                    src: Expr::Deref {
+                        addr: Box::new(lea("lr#16", -324)),
+                        size: 4,
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("lr#16", -324),
+                    src: Expr::Reg(reg("ip#13")),
+                    size: 4,
+                },
+            ],
+        };
+        let hints = [StackObjectHint {
+            base: "entry_sp".into(),
+            disp: -364,
+            size: 64,
+        }];
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::ArmHardFloat),
+            Some(3),
+            &hints,
+        );
+
+        let expected_object = reg("local_16c");
+        let is_indexed_object = |address: &Expr| {
+            matches!(
+                address,
+                Expr::Bin { lhs, rhs, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 64 }
+                        if object == &expected_object)
+                        && matches!(rhs.as_ref(), Expr::Bin {
+                            op: crate::ir::types::BinOp::Mul,
+                            lhs,
+                            rhs,
+                        } if lhs.as_ref() == &Expr::Reg(reg("r2#11"))
+                            && rhs.as_ref() == &Expr::Const(4))
+            )
+        };
+        assert!(
+            matches!(&f.body[5], Stmt::Assign {
+                src: Expr::Deref { addr, size: 4 }, ..
+            } if is_indexed_object(addr)),
+            "load did not rejoin the CFA array: {f:#?}"
+        );
+        assert!(
+            matches!(&f.body[6], Stmt::Store { addr, size: 4, .. }
+                if is_indexed_object(addr)),
+            "store did not rejoin the CFA array: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn arm_constant_stack_alias_store_rejoins_its_cfa_array() {
+        // Thumb rb_validate materialises node_stack as r5 = sp + 68 and then
+        // stores through [r5]. Alias expansion turns the memory address into
+        // ordinary `sp + 68` arithmetic; that form must retain the same stack
+        // identity as the address-valued r5 definition.
+        let mut f = Function {
+            name: "rb_validate_thumb".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(328)),
+                    },
+                },
+                Stmt::Label(0x592),
+                Stmt::Assign {
+                    dst: reg("r5#2"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(68)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("r5#2")),
+                        index: None,
+                        scale: 0,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Reg(reg("root")),
+                    size: 4,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::Arm),
+            Some(3),
+            &[StackObjectHint {
+                base: "entry_sp".into(),
+                disp: -292,
+                size: 128,
+            }],
+        );
+
+        let Stmt::Assign {
+            src: Expr::StackAddr { object, size: 128 },
+            ..
+        } = &f.body[3]
+        else {
+            panic!("stack alias definition was not promoted: {f:#?}");
+        };
+        assert!(
+            matches!(
+                &f.body[4],
+                Stmt::Store {
+                    addr: Expr::StackAddr {
+                        object: store_object,
+                        size: 128,
+                    },
+                    ..
+                } if store_object == object
+            ),
+            "store through the exact alias lost the stack object: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn arm_dynamic_stack_alias_freezes_the_preincrement_index() {
+        // r3 captures sp + top*4, then the machine increments top before using
+        // [r3+196]. Expanding r3 with the redefined top writes black_stack at
+        // top+1. The lifter's t52 copy is the exact old value and must carry
+        // the address alias across that redefinition.
+        let mut f = Function {
+            name: "rb_validate_thumb_black_stack".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(360)),
+                    },
+                },
+                Stmt::Label(0x5bc),
+                Stmt::Assign {
+                    dst: reg("r3#22"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Bin {
+                            op: crate::ir::types::BinOp::Shl,
+                            lhs: Box::new(Expr::Reg(reg("r2#8"))),
+                            rhs: Box::new(Expr::Const(2)),
+                        }),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("t52"),
+                    src: Expr::Reg(reg("r2#8")),
+                },
+                Stmt::Assign {
+                    dst: reg("r2#8"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("t52"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("r3#22", 196),
+                    src: Expr::Reg(reg("black_count")),
+                    size: 4,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::Arm),
+            Some(3),
+            &[StackObjectHint {
+                base: "entry_sp".into(),
+                disp: -164,
+                size: 128,
+            }],
+        );
+
+        assert!(
+            matches!(
+                &f.body[5],
+                Stmt::Store {
+                    addr: Expr::Bin { lhs, rhs, .. },
+                    ..
+                } if matches!(lhs.as_ref(), Expr::StackAddr { size: 128, .. })
+                    && matches!(rhs.as_ref(), Expr::Bin {
+                        op: crate::ir::types::BinOp::Mul,
+                        lhs,
+                        rhs,
+                    } if lhs.as_ref() == &Expr::Reg(reg("t52"))
+                        && rhs.as_ref() == &Expr::Const(4))
+            ),
+            "stack alias used the post-increment index: {f:#?}"
         );
     }
 
