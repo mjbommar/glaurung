@@ -49,6 +49,17 @@ pub enum TypeHint {
 /// Call-site specifications and the DecBench renderer consume the same mapping
 /// so prototype metadata cannot drift from the declarations eventually printed.
 pub fn c_type_for_hint(hint: TypeHint) -> &'static str {
+    c_type_for_hint_with_pointer_width(hint, 8)
+}
+
+/// Stable standalone-C spelling under the target data model.
+///
+/// A byte width is a semantic fact; `long` is not.  In particular, an
+/// eight-byte integer must be `long long` on ILP32 targets, while the same
+/// value can use `long` on LP64.  Keeping this conversion beside
+/// [`c_type_for_hint`] gives call prototypes and the final renderer one owner
+/// for that distinction.
+pub fn c_type_for_hint_with_pointer_width(hint: TypeHint, pointer_width: u8) -> &'static str {
     match hint {
         TypeHint::Int { signed, width } => match (signed, width) {
             (true, 1) => "signed char",
@@ -57,6 +68,8 @@ pub fn c_type_for_hint(hint: TypeHint) -> &'static str {
             (false, 2) => "unsigned short",
             (true, 4) => "int",
             (false, 4) => "unsigned int",
+            (true, 8) if pointer_width < 8 => "long long",
+            (false, 8) if pointer_width < 8 => "unsigned long long",
             (false, 8) => "unsigned long",
             _ => "long",
         },
@@ -64,6 +77,7 @@ pub fn c_type_for_hint(hint: TypeHint) -> &'static str {
             1 => "char *",
             2 => "short *",
             4 => "int *",
+            8 if pointer_width < 8 => "long long *",
             8 => "long *",
             _ => "void *",
         },
