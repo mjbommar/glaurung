@@ -1782,3 +1782,71 @@ skips and zero failures in 28m31s. The retained final logs are:
 /tmp/glaurung-explicit-return-local-gate-final.log
 /tmp/glaurung-explicit-return-python-full.log
 ```
+
+## 2026-08-07 22:35 — A32 encoded shifts and typed ARM multiply-high
+
+The next live architecture inventory contradicted the stale AArch64 backlog:
+AArch64 was already 328/328, while `03_loop_shapes:armv7_a32:O0` failed all 18
+functions. The controlled Thumb build passed 17/18 from the same source. The
+retained source, A32 and Thumb binaries, objdump text, pass dumps, and emitted C
+are under `/tmp/glaurung-a32-loop-o0.XD9frg/`. Their SHA-256 identities are:
+
+```text
+source  06b828d9466d7c863e40bfb6602b732459b504c7d28b18cd700d9f105dcce9cc
+A32     1b4c630bf04af28be32d0054c8136b521844ce397cff7f9fcd97322292187ec8
+Thumb   e33212dd76c8cf8b9d832d7729d4ac66b3e4e4f31f3a4511f8e3e7ff86994e7d
+```
+
+The first exact mismatch was `while_prefix`. Source computes `p[i]`; A32
+objdump contains `e1a03103  lsl r3, r3, #2`, but pre-fix numbered LLIR said
+`r3 = r3 << r3` and emitted `local_c << local_c`. Capstone's shared ARM operand
+model exposes only `Rd,Rm` for this A32 standalone immediate-shift alias; the
+distance remains solely in the instruction word. The generic two-operand
+accumulate path therefore mistook the source register for a shift-count
+operand. The architecture decoder now consumes the existing encoded
+`data_processing_shift` fact before that generic path. An exact-byte unit test
+was RED on `e1a03103` and is green with `Shl r3, r3, 2`. The resulting product C
+uses `arg0[local_c]`, and this one encoding repair moved the A32 O0 cell from
+0/18 to 17/18.
+
+The remaining `cond_reload_and_transform` failure was shared by Thumb. Its loop
+and index were correct; the deterministic case-zero buffer begins
+`[-8, -5, -2, 1, ...]`, and the original/recovery return values differed. Both
+assemblies implement signed `% 7` with `smull` and the high-bit magic constant
+`0x92492493`. The old LLIR erased the instruction's signedness into a bare
+machine-word multiply followed by `sar 32`. Emitted C consequently performed
+unsigned multiplication before a later `long` cast, corrupting negative inputs.
+
+ARM32 `smull`/`umull` now uses the same typed, independently renameable
+multiply-high boundary as x86 and AArch64: a width-truncated low multiply plus
+one `arm.smul_hi.32` or `arm.umul_hi.32` output. This is an instruction semantic,
+not a modulo recognizer. Exact A32 and Thumb byte tests were RED on the missing
+intrinsic and are green. Product pass dumps retain
+`intrinsic arm.smul_hi.32`; emitted C widens signed 32-bit operands to `long
+long` before multiplying. Both full O0 cells now pass 18/18 under QEMU.
+
+The real regression compiles `03_loop_shapes.c` for A32, checks both `lsl #2`
+and `smull` in objdump, inspects prepared numbered LLIR, checks the typed emitted
+C, recompiles for ARM, and compares both functions under `qemu-arm`. The focused
+43-test ARM32 decoder suite, this product round trip, and the same-target ARM32
+wide-arithmetic portability test are green.
+
+The complete six-architecture matrix is also green against its fail-closed
+schema and x86-64 control: 1,700 pass, 100 known fail, 228 structural, and six
+declared `__int128`-unsupported lanes. Relative to the prior ratchet it contains
+exactly 73 `fail -> pass` improvements, zero regressions, and zero missing,
+no-case, timeout, or lane-error results. The exact result is retained at
+`/tmp/glaurung-arm32-shift-wide-full-arch.json` with SHA-256
+`59d42bd17159086dd6ed4b826b603f5cdeb4e615d8294bbaeb97559499408be6`.
+Repository-wide Rust and decompiler closure are green. `cargo test
+--all-targets` passes 1,937 tests across the library and every integration,
+example, and benchmark target. The full five-lane local gate passes all 31 x86
+behavioral/structural tests; reproduces the 1,700-pass six-architecture matrix;
+passes every required legacy and curriculum executable behavior cell; and
+reports no GED/type/byte regression across 56/56 official cells. Its retained
+log is `/tmp/glaurung-arm32-shift-wide-local-gate.log` with SHA-256
+`b52de8dace8b5db02150c1b9128b1b3212dbbae20c6e695d53f51b0fb94dd94d`.
+The full Python collection passes 2,832 tests with 43 declared skips and zero
+failures in 29m19s. Its retained log is
+`/tmp/glaurung-arm32-shift-wide-python-full.log` with SHA-256
+`9a22dc50627eefc0893bd1031d4de7345d987d5cd6c509c97c54d5b4aa0757ed`.

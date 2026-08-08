@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
 import manifest as M  # ty: ignore[unresolved-import]  # added above
 
-pytestmark = pytest.mark.slow
+pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
 
 #: Constant divisors and a widening multiply: every one of these lowers to a
 #: 32x32 multiply-high or a double-width divide on a 32-bit target.
@@ -47,18 +47,17 @@ unsigned int mul_high(unsigned int a, unsigned int b) {
 unsigned int mod_by_seven(unsigned int value) { return value % 7u; }
 """
 
-#: ``(arch, compiler, flags, recovers_double_width)``. The last field records
-#: whether this target's lifter currently produces a double-width intermediate
-#: at all: x86's ``mul``/``imul`` do, while ARM32's ``umull``/``smull`` are
-#: lifted as a plain machine-word multiply followed by a high-word shift, so
-#: that lane guards only the same-target rebuild.
+#: ``(arch, compiler, flags, recovers_double_width)``. Both lifters retain the
+#: multiply-high operation as a typed double-width intermediate. This makes the
+#: same-target rebuild non-vacuous on ARM32 as well as i386: signedness and the
+#: target's available C integer widths must survive the IR boundary.
 _TARGETS = (
     ("i386", "gcc", ("-m32",), True),
     (
         "armv7",
         "arm-linux-gnueabihf-gcc",
         ("-march=armv7-a", "-mfpu=vfpv3-d16", "-mthumb"),
-        False,
+        True,
     ),
 )
 
@@ -111,7 +110,7 @@ def _build(compiler: str, extra: tuple[str, ...], directory: Path) -> Path:
     return target
 
 
-@pytest.mark.parametrize(
+@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
     ("arch", "compiler", "extra", "recovers_double_width"), _TARGETS
 )
 def test_wide_arithmetic_never_names_int128_on_a_32_bit_target(
