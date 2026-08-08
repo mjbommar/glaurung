@@ -4479,6 +4479,15 @@ fn int_ctype(signed: bool, width: u8) -> &'static str {
     }
 }
 
+/// C spelling for a byte width that is proven semantic rather than inherited
+/// from the logical SSA parent register.
+fn target_int_ctype(signed: bool, width: u8) -> &'static str {
+    crate::ir::types_recover::c_type_for_hint_with_pointer_width(
+        TypeHint::Int { signed, width },
+        DEC_POINTER_WIDTH.with(std::cell::Cell::get),
+    )
+}
+
 /// The pointee C type for a store of `size` bytes, so `*(T *)(addr) = v` writes
 /// exactly `size` bytes (a 4-byte store must be `*(int *)`, not `*(long *)`).
 fn store_pointee_ctype(size: u8) -> &'static str {
@@ -4491,6 +4500,12 @@ fn store_pointee_ctype(size: u8) -> &'static str {
 }
 
 fn hint_to_ctype(hint: TypeHint) -> &'static str {
+    // The general TypeMap still contains logical-parent widths (notably the
+    // 64-bit SSA parent used to model i386 registers).  Until those storage
+    // facts are split from proven source widths, only explicit-width AST
+    // operations and recovered prototypes may use the target-parametric
+    // spelling.  Treating every width-8 hint as semantic made ordinary ILP32
+    // loop locals `long long` and changed their wrap behavior.
     crate::ir::types_recover::c_type_for_hint(hint)
 }
 
@@ -5400,12 +5415,12 @@ fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
                             _ => None,
                         })
                 })
-                .or_else(|| Some(int_ctype(*signed, *width)))
+                .or_else(|| Some(target_int_ctype(*signed, *width)))
         }
         // `Expr::Cast` is an integer cast by construction. Its target type is
         // stronger return-type evidence than a flow-insensitive physical
         // register hint.
-        Expr::Cast { signed, width, .. } if tm.is_some() => Some(int_ctype(*signed, *width)),
+        Expr::Cast { signed, width, .. } if tm.is_some() => Some(target_int_ctype(*signed, *width)),
         // C comparison operators produce `int`.  This is an expression-level
         // language rule and therefore outranks whichever narrow sub-register
         // (`al` for SETcc) happened to materialise the value on the machine.
@@ -7168,13 +7183,19 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
             );
             continue;
         }
-        let ty = dec_struct_ptr_type(local).unwrap_or_else(|| {
-            if is_promoted_local(local) || is_high_variable(local) {
-                ctype_for(local, tm).to_string()
-            } else {
-                "long".to_string()
-            }
-        });
+        let ty = ids
+            .call_result_types
+            .get(local)
+            .and_then(Option::as_ref)
+            .cloned()
+            .or_else(|| dec_struct_ptr_type(local))
+            .unwrap_or_else(|| {
+                if is_promoted_local(local) || is_high_variable(local) {
+                    ctype_for(local, tm).to_string()
+                } else {
+                    "long".to_string()
+                }
+            });
         DEC_DECLARED_CTYPES.with(|types| {
             types.borrow_mut().insert(local.clone(), ty.clone());
         });
@@ -7236,6 +7257,13 @@ struct DecIdents {
     /// Scalar names whose value is actually a complete 128-bit machine load.
     /// These render as byte arrays so no high half is discarded.
     wide_locals: std::collections::BTreeSet<String>,
+    /// Exact source-level return type attached to each call destination.
+    ///
+    /// `None` records conflicting prototypes for the same identity and makes
+    /// declaration fall back conservatively.  Normally call-result lifetime
+    /// splitting gives every call a distinct `varN`, so a value here is a
+    /// stronger declaration fact than the flow-insensitive TypeMap.
+    call_result_types: std::collections::BTreeMap<String, Option<String>>,
 }
 
 /// If `name` is exactly `arg` followed by decimal digits, return that index.
@@ -7313,6 +7341,16 @@ fn collect_reg(v: &VReg, ids: &mut DecIdents) {
             .expect("FlagValue always has a predicate identifier"),
     };
     ids.locals.insert(spelling);
+}
+
+fn local_reg_spelling(v: &VReg) -> Option<String> {
+    match v {
+        VReg::Phys(name) if parse_arg_index(name).is_none() => Some(sanitize_c_ident(name)),
+        VReg::Phys(_) => None,
+        VReg::Temp(index) => Some(format!("t{index}")),
+        VReg::Flag(flag) => Some(flag_ident(flag).to_string()),
+        VReg::FlagValue { .. } => v.predicate_ident(),
+    }
 }
 
 fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
@@ -7424,7 +7462,10 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             collect_idents_expr(src, ids);
         }
         Stmt::Call {
-            target, args, dst, ..
+            target,
+            args,
+            dst,
+            call_spec,
         } => {
             // A `Named` target is a callee name, not a local; other targets are
             // rendered as value expressions and their registers must be declared.
@@ -7437,6 +7478,19 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             // The destination is assigned here, so it needs a declaration.
             if let Some(d) = dst {
                 collect_reg(d, ids);
+                if let (Some(spelling), Some(call_spec)) =
+                    (local_reg_spelling(d), call_spec.as_ref())
+                {
+                    let recovered = call_spec.call_prototype.return_type.clone();
+                    ids.call_result_types
+                        .entry(spelling)
+                        .and_modify(|selected| {
+                            if selected.as_ref() != Some(&recovered) {
+                                *selected = None;
+                            }
+                        })
+                        .or_insert_with(|| Some(recovered));
+                }
             }
         }
         Stmt::Return { value } => {
@@ -7789,6 +7843,13 @@ thread_local! {
     /// arithmetic wrapped before portable C promotes the index.
     static DEC_POINTER_WIDTH: std::cell::Cell<u8> = const { std::cell::Cell::new(8) };
 
+    /// Whether an explicit eight-byte cast is currently consumed by a proven
+    /// eight-byte source-level destination.  ILP32's logical SSA parent also
+    /// creates width-8 casts as register bookkeeping; those must remain
+    /// machine-word `long`, while this scoped context renders true 64-bit
+    /// arithmetic as `long long`.
+    static DEC_SEMANTIC_WIDE_CAST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
     /// The exact C type actually printed for each scalar local and argument.
     /// Type recovery can contain competing facts from different machine-value
     /// lifetimes that later share one rendered name; assignment conversion must
@@ -7929,12 +7990,7 @@ fn dec_int_type(name: &str) -> Option<(bool, u8)> {
 
 /// The C spelling of an `size`-byte *unsigned* integer, for logical-shift casts.
 fn unsigned_ctype(size: u8) -> &'static str {
-    match size {
-        1 => "unsigned char",
-        2 => "unsigned short",
-        4 => "unsigned int",
-        _ => "unsigned long",
-    }
+    int_ctype(false, size)
 }
 
 /// The unsigned-cast width for a logical right shift `lhs >> rhs`. The shift
@@ -7943,15 +7999,27 @@ fn unsigned_ctype(size: u8) -> &'static str {
 /// only when (a) the operand's width is positively known from narrow-typed
 /// identifiers, and (b) the shift amount is a constant that fits inside that
 /// width — a `>> 32` on a value that is genuinely 64-bit (e.g. `mul_widen`'s
-/// `(uint64_t)a*b`) must keep `unsigned long`. Everything else falls back to
-/// `unsigned long`, correct for genuine 64-bit values.
+/// `(uint64_t)a*b`) must keep an eight-byte type.  A declared call-result local
+/// is stronger evidence than its canonical SSA parent: on ILP32, `long` is
+/// only four bytes while a proven `long long` destination remains eight.
 fn shift_operand_ctype(lhs: &Expr, rhs: &Expr) -> &'static str {
+    if let Expr::Reg(register) = lhs {
+        let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+        if let Some(width) = crate::ir::call_contracts::integer_c_type_width(
+            &declared_reg_ctype(register),
+            pointer_width,
+        )
+        .filter(|width| *width > pointer_width)
+        {
+            return target_int_ctype(false, width);
+        }
+    }
     if let (Some(w), Expr::Const(k)) = (expr_machine_width(lhs), rhs) {
         if *k >= 0 && (*k as u64) < (w as u64) * 8 {
             return unsigned_ctype(w);
         }
     }
-    "unsigned long"
+    target_int_ctype(false, 8)
 }
 
 fn signed_shift_operand<'a>(lhs: &'a Expr, rhs: &Expr) -> (&'static str, &'a Expr) {
@@ -8588,7 +8656,12 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             if let Some(reg) = redundant_declared_integer_cast(e) {
                 write_reg_dec(reg, out);
             } else {
-                let _ = write!(out, "({})(", int_ctype(*signed, *width));
+                let c_type = if *width == 8 && DEC_SEMANTIC_WIDE_CAST.with(std::cell::Cell::get) {
+                    target_int_ctype(*signed, *width)
+                } else {
+                    int_ctype(*signed, *width)
+                };
+                let _ = write!(out, "({c_type})(");
                 write_expr_dec(expr, out);
                 out.push(')');
             }
@@ -9224,6 +9297,18 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
     }
 }
 
+fn write_expr_for_destination_dec(destination_type: &str, src: &Expr, out: &mut String) {
+    let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+    let semantic_wide =
+        crate::ir::call_contracts::integer_c_type_width(destination_type, pointer_width)
+            .is_some_and(|width| width > pointer_width);
+    DEC_SEMANTIC_WIDE_CAST.with(|context| {
+        let previous = context.replace(context.get() || semantic_wide);
+        write_expr_dec(src, out);
+        context.set(previous);
+    });
+}
+
 /// Render a value against the declaration that consumes it.
 ///
 /// The AST retains machine values even when type recovery proves that one side
@@ -9300,7 +9385,7 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
         return;
     }
     if destination_is_pointer == source_is_pointer {
-        write_expr_dec(src, out);
+        write_expr_for_destination_dec(destination_type, src, out);
         return;
     }
 
@@ -9794,6 +9879,10 @@ pub fn render_with_types(f: &Function, tm: &TypeMap) -> String {
     out.push_str("}\n");
     out
 }
+
+#[cfg(test)]
+#[path = "ast_tests/ilp32_wide.rs"]
+mod ilp32_wide_tests;
 
 #[cfg(test)]
 mod tests {

@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
-use crate::ir::types::VReg;
+use crate::ir::types::{BinOp, VReg};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct FlowState {
@@ -60,6 +60,9 @@ impl Splitter {
         let VReg::Phys(name) = register else {
             return None;
         };
+        if crate::ir::abi::wide_integer_return_part(self.cc, name) == Some(1) {
+            return Some("wide_integer_result_high".to_string());
+        }
         if !crate::ir::abi::is_return_register(self.cc, name) {
             return None;
         }
@@ -82,6 +85,22 @@ impl Splitter {
         let result = VReg::phys(format!("{base}#call_lifetime_{}", self.next_result));
         self.next_result += 1;
         result
+    }
+
+    fn fresh_high_result(&self, high_register: &str) -> VReg {
+        let index = self.next_result.saturating_sub(1);
+        VReg::phys(format!("{high_register}#call_lifetime_high_{index}"))
+    }
+
+    fn wide_result_pair(
+        &self,
+        call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
+    ) -> Option<(&'static str, &'static str)> {
+        let width = crate::ir::call_contracts::integer_c_type_width(
+            &call_spec?.call_prototype.return_type,
+            crate::ir::abi::machine_word_bytes(self.cc),
+        )?;
+        crate::ir::abi::wide_integer_return_pair(self.cc, width)
     }
 
     fn rewrite_reg(&self, register: &mut VReg, state: &FlowState) {
@@ -204,16 +223,14 @@ impl Splitter {
         for mut statement in std::mem::take(body) {
             let compatibility = self.walk_stmt(&mut statement, state);
             output.push(statement);
-            if let Some(compatibility) = compatibility {
-                output.push(compatibility);
-            }
+            output.extend(compatibility);
         }
         *body = output;
     }
 
     /// Transform a statement. Calls return a compatibility copy for their
     /// enclosing vector body to insert immediately after the call.
-    fn walk_stmt(&mut self, statement: &mut Stmt, state: &mut FlowState) -> Option<Stmt> {
+    fn walk_stmt(&mut self, statement: &mut Stmt, state: &mut FlowState) -> Vec<Stmt> {
         match statement {
             Stmt::Assign { dst, src } => {
                 self.rewrite_expr(src, state);
@@ -224,7 +241,10 @@ impl Splitter {
                 self.rewrite_expr(src, state);
             }
             Stmt::Call {
-                target, args, dst, ..
+                target,
+                args,
+                dst,
+                call_spec,
             } => {
                 self.rewrite_expr(target, state);
                 for argument in args {
@@ -233,17 +253,52 @@ impl Splitter {
                 // Every call clobbers every ABI result bank, regardless of
                 // whether source-level consumption attributed a destination.
                 state.results.clear();
-                let original = dst.clone()?;
-                let storage = self.result_storage(&original)?;
+                let Some(original) = dst.clone() else {
+                    return Vec::new();
+                };
+                let Some(storage) = self.result_storage(&original) else {
+                    return Vec::new();
+                };
+                let wide_pair = self.wide_result_pair(call_spec.as_ref());
                 let fresh = self.fresh_result(&original);
                 *dst = Some(fresh.clone());
                 if state.reachable {
                     state.results.insert(storage, fresh.clone());
                 }
-                return Some(Stmt::Assign {
+                let mut compatibility = Vec::with_capacity(if wide_pair.is_some() { 2 } else { 1 });
+                if let Some((_, high_register)) = wide_pair.filter(|(low, _)| {
+                    crate::ir::abi::ssa_base(match &original {
+                        VReg::Phys(name) => name,
+                        _ => "",
+                    }) == *low
+                }) {
+                    let high = self.fresh_high_result(high_register);
+                    if state.reachable {
+                        let high_storage = self
+                            .result_storage(&VReg::phys(high_register))
+                            .expect("a wide return pair must expose its high storage");
+                        state.results.insert(high_storage, high.clone());
+                    }
+                    compatibility.push(Stmt::Assign {
+                        dst: high,
+                        src: Expr::Cast {
+                            signed: false,
+                            width: crate::ir::abi::machine_word_bytes(self.cc),
+                            expr: Box::new(Expr::Bin {
+                                op: BinOp::Shr,
+                                lhs: Box::new(Expr::Reg(fresh.clone())),
+                                rhs: Box::new(Expr::Const(
+                                    i64::from(crate::ir::abi::machine_word_bytes(self.cc)) * 8,
+                                )),
+                            }),
+                        },
+                    });
+                }
+                compatibility.push(Stmt::Assign {
                     dst: original,
                     src: Expr::Reg(fresh),
                 });
+                return compatibility;
             }
             Stmt::Return { value } => {
                 if let Some(value) = value {
@@ -379,7 +434,7 @@ impl Splitter {
             }
             Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
-        None
+        Vec::new()
     }
 
     fn walk_embedded_stmt(&mut self, statement: &mut Stmt, state: &mut FlowState) {
@@ -391,13 +446,14 @@ impl Splitter {
             state.results.clear();
             return;
         }
-        debug_assert!(self.walk_stmt(statement, state).is_none());
+        debug_assert!(self.walk_stmt(statement, state).is_empty());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 
     fn reg(name: &str) -> VReg {
         VReg::phys(name)
@@ -412,6 +468,27 @@ mod tests {
             args: Vec::new(),
             dst: Some(reg("x0")),
             call_spec: None,
+        }
+    }
+
+    fn wide_call(name: &str, cc: CallConv) -> Stmt {
+        let prototype = CallPrototype {
+            return_type: "unsigned long long".to_string(),
+            parameter_types: Vec::new(),
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        Stmt::Call {
+            target: Expr::Named {
+                va: 0,
+                name: name.to_string(),
+            },
+            args: Vec::new(),
+            dst: Some(reg(crate::ir::abi::return_register(cc))),
+            call_spec: Some(CallSiteSpec {
+                callee_prototype: Some(prototype.clone()),
+                call_prototype: prototype,
+            }),
         }
     }
 
@@ -490,6 +567,82 @@ mod tests {
                 ..
             } if name == "x0"
         )));
+    }
+
+    #[test]
+    fn ilp32_wide_call_joins_low_and_high_abi_registers_into_one_scalar() {
+        for (cc, low, high) in [
+            (CallConv::Arm, "r0", "r1"),
+            (CallConv::Cdecl32, "rax", "rdx"),
+        ] {
+            let mut function = Function {
+                name: "fold_wide".to_string(),
+                entry_va: 0,
+                body: vec![
+                    wide_call("widen_mul", cc),
+                    Stmt::Store {
+                        addr: Expr::Reg(reg("low_slot")),
+                        src: Expr::Reg(reg(low)),
+                        size: 4,
+                    },
+                    Stmt::Store {
+                        addr: Expr::Reg(reg("high_slot")),
+                        src: Expr::Reg(reg(high)),
+                        size: 4,
+                    },
+                ],
+            };
+
+            split_call_result_lifetimes(&mut function, cc);
+
+            let call_result = function.body.iter().find_map(|statement| match statement {
+                Stmt::Call { dst: Some(dst), .. } => Some(dst.clone()),
+                _ => None,
+            });
+            let Some(call_result) = call_result else {
+                panic!("wide call lost its scalar destination: {function:#?}");
+            };
+            let stored = function
+                .body
+                .iter()
+                .filter_map(|statement| match statement {
+                    Stmt::Store {
+                        src: Expr::Reg(src),
+                        ..
+                    } => Some(src.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(stored.first(), Some(&call_result), "{function:#?}");
+            let high_result = stored.get(1).expect("missing high-half consumer");
+            assert_ne!(
+                high_result,
+                &reg(high),
+                "stale pre-call high half: {function:#?}"
+            );
+            assert!(
+                function.body.iter().any(|statement| matches!(
+                    statement,
+                    Stmt::Assign {
+                        dst,
+                        src: Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr,
+                        },
+                    } if dst == high_result && matches!(
+                        expr.as_ref(),
+                        Expr::Bin {
+                            op: crate::ir::types::BinOp::Shr,
+                            lhs,
+                            rhs,
+                        } if lhs.as_ref() == &Expr::Reg(call_result.clone())
+                            && rhs.as_ref() == &Expr::Const(32)
+                    )
+                )),
+                "wide call did not define its high ABI part from the scalar result: {function:#?}"
+            );
+        }
     }
 
     #[test]

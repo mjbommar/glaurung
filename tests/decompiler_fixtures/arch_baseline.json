@@ -1646,7 +1646,7 @@
   "11_call_shapes:armv7:O0": {
     "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
-    "call_fold_wide_result": "fail",
+    "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "pass",
     "call_nested": "pass",
@@ -1655,13 +1655,13 @@
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "fail",
+    "widen_mul": "pass",
     "wrap_byte": "pass"
   },
   "11_call_shapes:armv7:O2": {
     "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
-    "call_fold_wide_result": "fail",
+    "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "pass",
     "call_nested": "pass",
@@ -1670,13 +1670,13 @@
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "fail",
+    "widen_mul": "pass",
     "wrap_byte": "pass"
   },
   "11_call_shapes:armv7_a32:O0": {
     "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
-    "call_fold_wide_result": "fail",
+    "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "pass",
     "call_nested": "pass",
@@ -1685,13 +1685,13 @@
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "fail",
+    "widen_mul": "pass",
     "wrap_byte": "pass"
   },
   "11_call_shapes:armv7_a32:O2": {
     "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
-    "call_fold_wide_result": "fail",
+    "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "pass",
     "call_nested": "pass",
@@ -1700,13 +1700,13 @@
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "fail",
+    "widen_mul": "pass",
     "wrap_byte": "pass"
   },
   "11_call_shapes:i386:O0": {
     "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
-    "call_fold_wide_result": "fail",
+    "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "pass",
     "call_nested": "pass",
@@ -1715,13 +1715,13 @@
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "fail",
+    "widen_mul": "pass",
     "wrap_byte": "pass"
   },
   "11_call_shapes:i386:O2": {
     "call_accumulate_bytes": "fail",
     "call_chain_in_loop": "pass",
-    "call_fold_wide_result": "fail",
+    "call_fold_wide_result": "pass",
     "call_forward_result": "pass",
     "call_into_spill": "pass",
     "call_nested": "pass",
@@ -1730,7 +1730,7 @@
     "call_twice_and_combine": "pass",
     "signed_step": "pass",
     "spill_combine": "pass",
-    "widen_mul": "fail",
+    "widen_mul": "pass",
     "wrap_byte": "pass"
   },
   "11_call_shapes:x86_64:O0": {
@@ -2652,7 +2652,7 @@
     "euler_decay_q16": "pass"
   },
   "28_euler_ode:i386:O0": {
-    "euler_decay_q16": "fail"
+    "euler_decay_q16": "pass"
   },
   "28_euler_ode:i386:O2": {
     "euler_decay_q16": "pass"
@@ -2736,10 +2736,10 @@
     "heat_step_1d": "fail"
   },
   "30_finite_difference:i386:O0": {
-    "heat_step_1d": "fail"
+    "heat_step_1d": "pass"
   },
   "30_finite_difference:i386:O2": {
-    "heat_step_1d": "fail"
+    "heat_step_1d": "pass"
   },
   "30_finite_difference:x86_64:O0": {
     "heat_step_1d": "pass"

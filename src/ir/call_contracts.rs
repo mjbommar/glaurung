@@ -453,8 +453,32 @@ pub(crate) fn call_return_hint(c_type: &str) -> Option<TypeHint> {
             signed: false,
             width: 8,
         }),
+        "long long" => Some(TypeHint::Int {
+            signed: true,
+            width: 8,
+        }),
+        "unsigned long long" => Some(TypeHint::Int {
+            signed: false,
+            width: 8,
+        }),
         c_type if c_type.ends_with('*') => Some(TypeHint::Pointer { pointee_width: 0 }),
         "void" => None,
+        _ => None,
+    }
+}
+
+/// Exact byte width of a standalone C integer spelling under one data model.
+///
+/// Call-result storage needs the semantic width before rendering.  Keeping the
+/// parser here, beside the prototype owner, prevents ABI passes from growing
+/// ad-hoc checks for strings such as `long long`.
+pub fn integer_c_type_width(c_type: &str, pointer_width: u8) -> Option<u8> {
+    match c_type.trim() {
+        "char" | "signed char" | "unsigned char" | "int8_t" | "uint8_t" => Some(1),
+        "short" | "unsigned short" | "int16_t" | "uint16_t" => Some(2),
+        "int" | "unsigned int" | "int32_t" | "uint32_t" => Some(4),
+        "long" | "unsigned long" | "__SIZE_TYPE__" | "__PTRDIFF_TYPE__" => Some(pointer_width),
+        "long long" | "unsigned long long" | "int64_t" | "uint64_t" => Some(8),
         _ => None,
     }
 }

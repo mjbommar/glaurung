@@ -1914,3 +1914,91 @@ uncontended full Python rerun passes 2,833 tests with 43 declared skips and zero
 failures in 23m52s. Its retained log is
 `/tmp/glaurung-a32-stack-args-python-full-clean.log` with SHA-256
 `c422345b4ac70e74ec6088079c88337da1296eeeb42755886a09badbc939f022`.
+
+## 2026-08-08 03:25 — ILP32 wide scalar return storage and exact C widths
+
+The next residual was one ABI defect repeated across twelve documented cells:
+`widen_mul` and `call_fold_wide_result` failed at O0 and O2 on Thumb ARMv7,
+A32, and i386. The checked-in source returns a `uint64_t` product and its caller
+XORs the low and high 32-bit halves. Retained evidence is under
+`/tmp/glaurung-ilp32-wide-final.6o4FO2/`; the source and representative O0
+binary identities are:
+
+```text
+source    c8cbc7edbfe98e7bee3a294dc1a9e28d957e0fa6ecfabe2b3373764a2b8e3447
+A32       bfd9e4f72b21e0b5542a744f27841a202e37e70a81468575b937081f99e7969b
+i386      13b3b25716eb0cd4a10f3cce488ec63393ff0bceec4677948d0d9fe4389a717a
+```
+
+The binary contract is unambiguous. A32 `widen_mul` uses `umull` and returns
+through `r0:r1`; its caller immediately stores `r0:r1` with `strd`. i386 uses
+`mul` and returns through `eax:edx`; its caller stores both registers. Numbered
+LLIR retained those two machine words, but call effects and SSA modeled only
+the low result register. The high store therefore reached the pre-call `r1` or
+`rdx` value. Separately, recovered eight-byte casts were rendered as `long`;
+that is eight bytes on LP64 but only four on these targets. An otherwise correct
+`value >> 32` consequently shifted a truncated operand.
+
+The architecture fix gives these facts one owner. The ABI module now owns
+machine-word size and the low/high scalar return pair. A call's exact
+`CallSiteSpec` return type selects that pair; call-result lifetime splitting
+creates one fresh eight-byte source value, derives the high machine word from
+it, and rewrites only consumers reached by that call. The call destination
+keeps its exact prototype type through local declaration. Semantic integer
+widths now use target-parametric C spelling: `long long` on ILP32 and `long` on
+LP64. Generic logical-parent `TypeMap` residue remains conservative, so an
+i386 canonical `rax` name alone cannot turn an ordinary wrapping local into a
+64-bit source value. The pre-existing duplicate machine-word table in the
+Python pipeline was removed in favor of the ABI owner, and the new renderer
+unit tests live in a separate 125-line module rather than further growing
+`ast.rs`; the extracted module is 122 lines.
+
+The RED layers covered both failures: exact ARM/i386 AST call splitting first
+observed the stale high register, and the ILP32 renderer emitted
+`((unsigned long)(var0) >> 32)` for a prototype-proven `unsigned long long`
+local. Both are green. A real parameterized regression compiles the checked-in
+source for A32 and i386, checks the instruction sequences, inspects numbered
+LLIR and the `call_lifetime_high` AST identity, requires exact emitted
+`unsigned long long`, rebuilds for the same target, and QEMU-compares both
+`widen_mul` and `call_fold_wide_result`.
+
+All six focused O0/O2 lanes now pass both functions. The first complete matrix
+found exactly fifteen `fail -> pass` improvements, zero regressions, and zero
+reclassifications: the expected twelve plus i386 `euler_decay_q16:O0` and
+`heat_step_1d:O0/O2`. Those extra three are the same width defect, not metric
+noise. Their sources use signed 64-bit fixed-point/intermediate arithmetic;
+objdump contains the corresponding `mul`/`adc`/`shrd` word-pair operations,
+numbered LLIR retains the halves, and the corrected C keeps the eight-byte
+operand across its logical high-word shift. All three now pass the native i386
+execution differential. The initial complete result is 1,727 pass, 73 known
+fail, 228 structural, and six declared unsupported lanes, retained at
+`/tmp/glaurung-ilp32-wide-full-arch.json` with SHA-256
+`aa6f869a04e43084284078742d1ef9bb857d973a8fcf1e13062ee3312f197241`.
+The official baseline refresh reproduced that exact file byte-for-byte; its
+log is `/tmp/glaurung-ilp32-wide-baseline-refresh.log` with SHA-256
+`96624fe74b0feedf58bff933e4eed9d9c736465d087cf6dc498b4d810f4719aa`.
+Schema, baseline-health, control, toolchain, and control-gate validators all
+return empty problem lists.
+
+Final exact-tree repository-wide gates are green. `cargo test --all-targets`
+passes 1,942 tests across all targets (1,849 in the library); the retained log
+is `/tmp/glaurung-ilp32-wide-cargo-all-targets.log` with SHA-256
+`194eef2fa022592d42953b39afe5ca997efc3704efd5d746ad117711e20921c6`.
+The fresh-release five-lane decompiler gate passes all 31 pinned x86
+behavioral/structural tests, reproduces the complete architecture ratchet,
+passes all required executable behavior cells, and reports no GED, type, or
+byte regression across 56/56 official metric cells. Its log is
+`/tmp/glaurung-ilp32-wide-local-gate.log` with SHA-256
+`38188a706c1e088b5416482f46c5a32bce2d1897ce6d1e5662f3d954c6147d00`.
+
+The first full Python run reached 2,834 passes and one tutorial fixture-drift
+failure because an internal `uv run glaurung --version` performed a one-time
+editable-package uninstall/install and wrote those progress lines into the
+fixture. The exact tutorial test passed immediately in isolation; its log is
+`/tmp/glaurung-ilp32-wide-tutorial-isolated.log` with SHA-256
+`5993966311c301d4f1d653de4f8137def643cff702dd7c1af5775b13780d3f63`.
+The uncontended full rerun using the already-synchronized environment passes
+2,835 tests with 43 declared skips and zero failures in 21m02s. Its retained
+log is `/tmp/glaurung-ilp32-wide-python-full-clean.log` with SHA-256
+`22e002288fe18a725cbba46860de2c472f53645824a7d9c4edccab5faa8aafc7`.
+Integration and remote-gate evidence follow after the exact tree is committed.

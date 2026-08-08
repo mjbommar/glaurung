@@ -25,6 +25,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use crate::ir::abi::machine_word_bytes;
 use crate::ir::types::{BinOp, CallTarget, CmpOp, Flag, LlirInstr, MemOp, Op, UnOp, VReg, Value};
 use crate::ir::{lift_arm64, lift_x86};
 
@@ -1885,10 +1886,11 @@ fn itanium_runtime_layout(
 
 fn recovered_call_prototype(
     prototype: &crate::ir::types_recover::RecoveredPrototype,
+    cc: crate::ir::call_args::CallConv,
 ) -> crate::ir::call_contracts::CallPrototype {
     use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
     use crate::ir::types::VReg;
-    use crate::ir::types_recover::{c_type_for_hint, RecoveredOutputKind};
+    use crate::ir::types_recover::RecoveredOutputKind;
 
     fn storage_fallback(register: &VReg) -> &'static str {
         match register {
@@ -1904,7 +1906,12 @@ fn recovered_call_prototype(
         .map(|parameter| {
             parameter
                 .hint
-                .map(c_type_for_hint)
+                .map(|hint| {
+                    crate::ir::types_recover::c_type_for_hint_with_pointer_width(
+                        hint,
+                        calling_convention_pointer_width(cc),
+                    )
+                })
                 .unwrap_or_else(|| storage_fallback(&parameter.value.base))
                 .to_string()
         })
@@ -1914,7 +1921,12 @@ fn recovered_call_prototype(
         RecoveredOutputKind::Direct => prototype
             .result()
             .and_then(|result| result.hint)
-            .map(c_type_for_hint)
+            .map(|hint| {
+                crate::ir::types_recover::c_type_for_hint_with_pointer_width(
+                    hint,
+                    calling_convention_pointer_width(cc),
+                )
+            })
             .or_else(|| {
                 prototype
                     .result()
@@ -2065,7 +2077,7 @@ fn recover_direct_callee_layouts(
                     .iter()
                     .map(|parameter| parameter.value.base.clone())
                     .collect();
-                let call_prototype = recovered_call_prototype(&prototype);
+                let call_prototype = recovered_call_prototype(&prototype, cc);
                 let declared = dwarf_outputs.and_then(|outputs| outputs.get(&body_va));
                 (!layout.is_empty() || retain_empty_direct_callee_layout(declared))
                     .then(|| (layout, call_prototype, callee.name.clone()))
@@ -2213,23 +2225,6 @@ fn refine_float_copy_types(
 /// needs. Parameter facts are projected from the pre-lowering `RecoveredPrototype`,
 /// which retains exact SSA live-in identity. Only non-parameter roles are remapped
 /// from storage names; both maps are then augmented with promoted-slot sizes.
-/// Bytes in one general-purpose register on the machine this convention runs on.
-///
-/// This is what makes a definition width *evidence*. On x86-64, writing `edi`
-/// rather than `rdi` is a deliberate narrowing and proves the source-level type
-/// was 32-bit. On a 32-bit target there is no wider spelling to choose instead:
-/// `edi` IS the register, so its width proves nothing about the value — it is
-/// equally an `int`, a `long` and a pointer, all of which are four bytes there.
-///
-/// See [`merge_exact_definition_widths`] for why the difference matters.
-fn machine_word_bytes(cc: crate::ir::call_args::CallConv) -> u8 {
-    use crate::ir::call_args::CallConv;
-    match cc {
-        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => 8,
-        CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => 4,
-    }
-}
-
 /// Whether a MACHINE-WORD-sized definition or frame slot should be read as
 /// evidence that the value is an `int` of that width.
 ///
@@ -3179,12 +3174,15 @@ mod tests {
 
     #[test]
     fn machine_word_is_four_bytes_on_every_thirty_two_bit_convention() {
-        assert_eq!(super::machine_word_bytes(CallConv::Cdecl32), 4);
-        assert_eq!(super::machine_word_bytes(CallConv::Arm), 4);
-        assert_eq!(super::machine_word_bytes(CallConv::ArmHardFloat), 4);
-        assert_eq!(super::machine_word_bytes(CallConv::SysVAmd64), 8);
-        assert_eq!(super::machine_word_bytes(CallConv::Win64), 8);
-        assert_eq!(super::machine_word_bytes(CallConv::Aarch64), 8);
+        assert_eq!(crate::ir::abi::machine_word_bytes(CallConv::Cdecl32), 4);
+        assert_eq!(crate::ir::abi::machine_word_bytes(CallConv::Arm), 4);
+        assert_eq!(
+            crate::ir::abi::machine_word_bytes(CallConv::ArmHardFloat),
+            4
+        );
+        assert_eq!(crate::ir::abi::machine_word_bytes(CallConv::SysVAmd64), 8);
+        assert_eq!(crate::ir::abi::machine_word_bytes(CallConv::Win64), 8);
+        assert_eq!(crate::ir::abi::machine_word_bytes(CallConv::Aarch64), 8);
     }
 
     #[test]

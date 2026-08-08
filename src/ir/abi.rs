@@ -37,6 +37,51 @@ pub fn return_register(cc: CallConv) -> &'static str {
     }
 }
 
+/// Bytes in one general-purpose register for this calling convention.
+///
+/// This is a machine-model fact shared by ABI storage reconstruction and C
+/// type spelling.  It must not be inferred from a register name (`rax` is the
+/// canonical SSA parent even for i386).
+pub fn machine_word_bytes(cc: CallConv) -> u8 {
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => 8,
+        CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => 4,
+    }
+}
+
+/// Low/high general-purpose registers for a scalar integer wider than one
+/// machine word.
+///
+/// The names are the canonical SSA spellings.  Returning `None` is deliberate:
+/// 64-bit ABIs keep an eight-byte scalar in one register, and aggregate or FP
+/// returns have different storage contracts.
+pub fn wide_integer_return_pair(
+    cc: CallConv,
+    value_width: u8,
+) -> Option<(&'static str, &'static str)> {
+    if value_width != 8 || machine_word_bytes(cc) != 4 {
+        return None;
+    }
+    match cc {
+        CallConv::Cdecl32 => Some(("rax", "rdx")),
+        CallConv::Arm | CallConv::ArmHardFloat => Some(("r0", "r1")),
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => None,
+    }
+}
+
+/// Which half of an ILP32 wide integer result a register name denotes.
+pub fn wide_integer_return_part(cc: CallConv, name: &str) -> Option<usize> {
+    let base = ssa_base(name);
+    let (low, high) = wide_integer_return_pair(cc, 8)?;
+    if base == low || (cc == CallConv::Cdecl32 && ["eax", "ax", "al"].contains(&base)) {
+        Some(0)
+    } else if base == high || (cc == CallConv::Cdecl32 && ["edx", "dx", "dl"].contains(&base)) {
+        Some(1)
+    } else {
+        None
+    }
+}
+
 /// The integer argument registers, in ABI order — canonical (widest) names only.
 ///
 /// Prefer [`argument_slots`] when matching a register NAME found in code: a 32-bit
