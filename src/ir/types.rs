@@ -358,6 +358,12 @@ pub enum Op {
         cond: VReg,
         inverted: bool,
     },
+    /// Conditional return with a prototype-proven direct scalar result.
+    CondReturnValue {
+        cond: VReg,
+        inverted: bool,
+        value: Value,
+    },
     Call {
         target: CallTarget,
         /// The ABI effects of this call, filled by `abi::annotate_calls` once the
@@ -372,6 +378,19 @@ pub enum Op {
         /// consumer that wanted the truth had to special-case calls for itself.
         effects: Option<CallEffects>,
     },
+    /// Return a prototype-proven direct scalar value.
+    ///
+    /// Machine return instructions initially lift as bare [`Op::Return`]
+    /// because the instruction encoding does not say whether the source
+    /// function is void or which ABI result bank it uses. Prototype recovery
+    /// upgrades a proven direct result to this form before final SSA so the
+    /// exact reaching definition is an ordinary explicit use.
+    ReturnValue {
+        value: Value,
+    },
+    /// Unresolved machine return. This remains deliberately operand-free until
+    /// prototype recovery proves a direct result; void and unknown outputs do
+    /// not acquire an invented register read.
     Return,
     Nop,
     /// Zero-extend `src` (`from` bits) into `dst` (`to` bits, `to >= from`).
@@ -674,6 +693,34 @@ impl fmt::Display for Value {
 }
 
 impl Op {
+    /// Whether this operation terminates the current function on every path.
+    pub fn is_unconditional_return(&self) -> bool {
+        matches!(self, Op::Return | Op::ReturnValue { .. })
+    }
+
+    /// Whether this operation terminates the current function on one condition.
+    pub fn is_conditional_return(&self) -> bool {
+        matches!(self, Op::CondReturn { .. } | Op::CondReturnValue { .. })
+    }
+
+    /// Whether this operation is any machine-level function return.
+    pub fn is_return(&self) -> bool {
+        self.is_unconditional_return() || self.is_conditional_return()
+    }
+
+    /// Whether result storage has not yet been resolved to an explicit value.
+    pub fn is_unresolved_return(&self) -> bool {
+        matches!(self, Op::Return | Op::CondReturn { .. })
+    }
+
+    /// The explicit source value of a prototype-resolved return, if present.
+    pub fn returned_value(&self) -> Option<&Value> {
+        match self {
+            Op::ReturnValue { value } | Op::CondReturnValue { value, .. } => Some(value),
+            _ => None,
+        }
+    }
+
     /// Build a maximally-conservative opaque [`Op::Intrinsic`] from an
     /// unmodelled instruction mnemonic: no typed inputs/outputs, and assumed to
     /// both read and write memory. This is the lowering target for the
@@ -747,10 +794,19 @@ impl fmt::Display for Op {
                 let prefix = if *inverted { "!" } else { "" };
                 write!(f, "if {}{} ret", prefix, cond)
             }
+            Op::CondReturnValue {
+                cond,
+                inverted,
+                value,
+            } => {
+                let prefix = if *inverted { "!" } else { "" };
+                write!(f, "if {}{} ret {}", prefix, cond, value)
+            }
             Op::Call { target, .. } => match target {
                 CallTarget::Direct(a) => write!(f, "call 0x{:x}", a),
                 CallTarget::Indirect(v) => write!(f, "call {}", v),
             },
+            Op::ReturnValue { value } => write!(f, "ret {}", value),
             Op::Return => write!(f, "ret"),
             Op::Nop => write!(f, "nop"),
             Op::ZExt {

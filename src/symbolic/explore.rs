@@ -1444,7 +1444,7 @@ fn process_block(
                     }
                 }
             }
-            Op::CondReturn { cond, inverted } => {
+            Op::CondReturn { cond, inverted } | Op::CondReturnValue { cond, inverted, .. } => {
                 let c = st.machine.regs.read(&mut st.machine.dom, cond);
                 let returns = |bit: bool| bit != *inverted;
                 let decision = st.machine.dom.as_branch(&c);
@@ -1452,6 +1452,16 @@ fn process_block(
                     BranchDecision::Taken | BranchDecision::NotTaken => {
                         let bit = matches!(decision, BranchDecision::Taken);
                         if returns(bit) {
+                            if let Some(reason) = ins
+                                .op
+                                .returned_value()
+                                .and_then(|value| st.machine.undefined_value_reason(value))
+                            {
+                                consider_terminal(&st, best);
+                                record_execution_halt(ins.va, &Halt::UndefinedValue(reason));
+                                st.end_trace("execution-halt");
+                                return Vec::new();
+                            }
                             consider_terminal(&st, best);
                             record_path_stat(|stats| {
                                 stats.returned += 1;
@@ -1489,6 +1499,16 @@ fn process_block(
                             if !feasible {
                                 child.end_trace("unsat-prune");
                             } else if returns(bit) {
+                                if let Some(reason) = ins
+                                    .op
+                                    .returned_value()
+                                    .and_then(|value| child.machine.undefined_value_reason(value))
+                                {
+                                    consider_terminal(&child, best);
+                                    record_execution_halt(ins.va, &Halt::UndefinedValue(reason));
+                                    child.end_trace("execution-halt");
+                                    continue;
+                                }
                                 consider_terminal(&child, best);
                                 record_path_stat(|stats| {
                                     stats.returned += 1;
@@ -1580,7 +1600,17 @@ fn process_block(
                 }
                 continue;
             }
-            Op::Return => {
+            Op::Return | Op::ReturnValue { .. } => {
+                if let Some(reason) = ins
+                    .op
+                    .returned_value()
+                    .and_then(|value| st.machine.undefined_value_reason(value))
+                {
+                    consider_terminal(&st, best);
+                    record_execution_halt(ins.va, &Halt::UndefinedValue(reason));
+                    st.end_trace("execution-halt");
+                    return Vec::new();
+                }
                 if st.machine.regs.arch() == RegArch::X86_64 {
                     // MS x64 `ret` pops [rsp]. AArch64 returns through x30 and
                     // needs separate spill/reload provenance; treating [sp] as
@@ -2882,6 +2912,49 @@ mod tests {
         assert!(
             matches!(result, SolveResult::Sat(_)),
             "the false side of a symbolic conditional return must survive: {result:?}"
+        );
+    }
+
+    #[test]
+    fn symbolic_conditional_return_value_does_not_observe_false_path_undef() {
+        let lf = func(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Undef {
+                        dst: VReg::phys("r1"),
+                        reason: "unmodelled result".into(),
+                    },
+                    Op::Cmp {
+                        dst: VReg::Flag(Flag::Z),
+                        op: CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("r0")),
+                        rhs: Value::Const(0),
+                    },
+                    Op::CondReturnValue {
+                        cond: VReg::Flag(Flag::Z),
+                        inverted: false,
+                        value: Value::Reg(VReg::phys("r1")),
+                    },
+                ],
+                0x100c,
+            ),
+            (0x100c, vec![Op::Return], 0x1010),
+        ]);
+        let result = find_input_reaching(
+            &lf,
+            0x100c,
+            |machine| {
+                let input = machine.dom.fresh(Width::W32);
+                machine
+                    .regs
+                    .write(&mut machine.dom, &VReg::phys("r0"), input);
+            },
+            1000,
+        );
+        assert!(
+            matches!(result, SolveResult::Sat(_)),
+            "an undefined return value must not kill the non-returning path: {result:?}"
         );
     }
 

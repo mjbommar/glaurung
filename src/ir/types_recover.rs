@@ -532,6 +532,47 @@ impl RecoveredPrototype {
         self.output_kind
     }
 
+    /// Exact machine storage for a proven direct scalar output.
+    ///
+    /// Branch-local output trials may contribute several SSA values, but they
+    /// must all occupy one physical result register. A locked identity function
+    /// is the only no-definition exception: its first live-in parameter is also
+    /// the result storage. Any disagreement remains unresolved instead of
+    /// attaching a fabricated return operand.
+    fn direct_return_storage(
+        &self,
+        function: &LlirFunction,
+        cc: crate::ir::call_args::CallConv,
+    ) -> Option<VReg> {
+        if self.output_kind != RecoveredOutputKind::Direct {
+            return None;
+        }
+        let result = self.result.as_ref()?;
+        if let Some(first) = result.values.first() {
+            if result.values.iter().all(|value| value.base == first.base) {
+                return Some(first.base.clone());
+            }
+            return None;
+        }
+        if !self.output_locked || !self.parameter_arity_locked {
+            return None;
+        }
+        let parameter = self.parameter(0)?;
+        let VReg::Phys(parameter_name) = &parameter.value.base else {
+            return None;
+        };
+        let class = crate::ir::abi::return_register_class(cc, parameter_name)?;
+        let class_is_written = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter_map(|instruction| def_uses(&instruction.op).0)
+            .any(|definition| {
+                matches!(definition, VReg::Phys(name) if class.contains(&crate::ir::abi::ssa_base(&name)))
+            });
+        (!class_is_written).then(|| parameter.value.base.clone())
+    }
+
     pub(crate) fn output_is_locked(&self) -> bool {
         self.output_locked
     }
@@ -705,6 +746,45 @@ impl RecoveredPrototype {
         }
         out
     }
+}
+
+/// Replace operand-free machine returns with prototype-proven direct values.
+///
+/// This runs before final SSA. Each return therefore receives the exact
+/// branch-local reaching version through the ordinary def/use machinery; AST
+/// lowering and emitted-local verification consume that same identity without
+/// rescanning for a register name or a last writer.
+pub(crate) fn materialize_return_values(
+    function: &mut LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+    prototype: &RecoveredPrototype,
+) -> usize {
+    let Some(storage) = prototype.direct_return_storage(function, cc) else {
+        return 0;
+    };
+    let mut changed = 0;
+    for instruction in function
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.instrs)
+    {
+        let replacement = match &instruction.op {
+            Op::Return => Some(Op::ReturnValue {
+                value: Value::Reg(storage.clone()),
+            }),
+            Op::CondReturn { cond, inverted } => Some(Op::CondReturnValue {
+                cond: cond.clone(),
+                inverted: *inverted,
+                value: Value::Reg(storage.clone()),
+            }),
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            instruction.op = replacement;
+            changed += 1;
+        }
+    }
+    changed
 }
 
 fn abi_pointer_width(cc: crate::ir::call_args::CallConv) -> u8 {
@@ -935,12 +1015,10 @@ fn arm_mixed_entry_spill_order(lf: &LlirFunction, candidates: &[VReg]) -> Option
                     spills.push((*disp, origin));
                 }
             }
-            Op::Call { .. }
-            | Op::Jump { .. }
-            | Op::IndirectJump { .. }
-            | Op::CondJump { .. }
-            | Op::CondReturn { .. }
-            | Op::Return => break,
+            Op::Call { .. } | Op::Jump { .. } | Op::IndirectJump { .. } | Op::CondJump { .. } => {
+                break
+            }
+            op if op.is_return() => break,
             _ => {}
         }
     }
@@ -1539,7 +1617,7 @@ pub fn recover_prototype_with_arm_vfp_args(
         .blocks
         .iter()
         .flat_map(|block| &block.instrs)
-        .any(|instruction| matches!(instruction.op, Op::Return | Op::CondReturn { .. }));
+        .any(|instruction| instruction.op.is_return());
     // ARM32 still lowers broad VFP/DSP instruction families through the
     // footprint-free migration fallback.  Unlike the x86 path (where SIMD
     // arithmetic used for outputs is footprinted above), absence of an ARM
@@ -1990,24 +2068,12 @@ fn propagate_spill_slot_pointers(lf: &LlirFunction, tm: &mut TypeMap) {
 
 /// The registers that carry the return value under `cc`, widest first.
 fn return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static str] {
-    use crate::ir::call_args::CallConv;
-    match cc {
-        CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
-        CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
-        CallConv::Aarch64 => &["x0", "w0"],
-        CallConv::Arm | CallConv::ArmHardFloat => &["r0"],
-    }
+    crate::ir::abi::integer_return_registers(cc)
 }
 
 /// Dedicated floating-point result storage under `cc`, widest aliases first.
 fn float_return_reg_names(cc: crate::ir::call_args::CallConv) -> &'static [&'static str] {
-    use crate::ir::call_args::CallConv;
-    match cc {
-        CallConv::SysVAmd64 | CallConv::Win64 => &["xmm0", "ymm0", "zmm0"],
-        CallConv::Cdecl32 => &["st0", "xmm0"],
-        CallConv::Aarch64 => &["v0", "q0", "d0", "s0", "h0", "b0"],
-        CallConv::Arm | CallConv::ArmHardFloat => &["d0", "s0"],
-    }
+    crate::ir::abi::float_return_registers(cc)
 }
 
 /// The destination register an op writes to (if it writes a value register).
@@ -3152,6 +3218,69 @@ mod tests {
                 succs: vec![],
             }],
         }
+    }
+
+    #[test]
+    fn direct_result_materialization_gives_return_an_exact_ssa_use() {
+        let mut function = mk_block(vec![
+            Op::Assign {
+                dst: VReg::phys("x0"),
+                src: Value::Const(0x1111),
+            },
+            Op::Assign {
+                dst: VReg::phys("x0"),
+                src: Value::Const(0x2222),
+            },
+            Op::Return,
+        ]);
+        let initial_ssa = compute_ssa(&function);
+        let returned = initial_ssa
+            .def_value(
+                &function,
+                crate::ir::use_def::InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 1,
+                },
+            )
+            .expect("final x0 definition");
+        let prototype = RecoveredPrototype {
+            result: Some(RecoveredResult {
+                values: vec![returned.clone()],
+                hint: Some(TypeHint::Int {
+                    signed: false,
+                    width: 8,
+                }),
+            }),
+            output_kind: RecoveredOutputKind::Direct,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            materialize_return_values(
+                &mut function,
+                crate::ir::call_args::CallConv::Aarch64,
+                &prototype,
+            ),
+            1
+        );
+        assert!(matches!(
+            &function.blocks[0].instrs[2].op,
+            Op::ReturnValue {
+                value: Value::Reg(register),
+            } if register == &VReg::phys("x0")
+        ));
+        let final_ssa = compute_ssa(&function);
+        assert_eq!(
+            final_ssa.use_value(
+                &function,
+                crate::ir::use_def::InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 2,
+                },
+                0,
+            ),
+            Some(returned)
+        );
     }
 
     #[test]

@@ -1626,3 +1626,159 @@ format, lint, and typing, Rust format, and the diff whitespace gate also pass.
 The original EPIC 5 task remains open: bare LLIR `Return` still lacks an
 explicit value identity; this finding merely establishes that the real probe
 reaches that boundary correctly after CFG discovery is repaired.
+
+## 2026-08-07 20:05 — prototype-proven returns become exact LLIR uses
+
+The next EPIC 5 slice started by testing the old compatibility rule rather than
+assuming it was conservative in a useful way. `BitDemandOracle` demanded every
+definition of every ABI result register in any function containing a bare
+machine return. A RED unit graph with two consecutive `x0` definitions proved
+that the first, overwritten lifetime received a full-word demand despite being
+unobservable. This can retain undefined live-ins and scratch computations which
+no execution reaches at a return.
+
+Bare machine returns cannot be assigned an operand during instruction lifting:
+the encoding does not distinguish `void` from integer, pointer, floating, or
+indirect aggregate results. The retained architecture therefore resolves the
+operand only after semantic prototype recovery. Direct scalar outputs become
+`ReturnValue { value }` or `CondReturnValue { cond, inverted, value }` before a
+second definedness/SSA pass. Void, indirect, and unknown outputs remain bare and
+use a narrower compatibility oracle which demands only result-bank definitions
+that can actually reach an unresolved return without an intervening overwrite.
+Integer and floating result banks are separate, so an `xmm0`/`d0` lifetime does
+not alias `rax`/`r0` merely because both are ABI outputs.
+
+This feedback edge previously had four possible homes. One
+`prepare_llir_for_lowering` function now owns normalization, provisional
+parameter evidence, prototype recovery, return materialization, recomputed SSA,
+region recovery, value numbering, and locked parameter slots for `decompile_at`,
+explicit ranges, `--all`, and `--vas`. The `GLAURUNG_DUMP_PASSES` observer prints
+both prototype-resolved and final numbered LLIR, making stale or name-only return
+identity visible during an actual product run.
+
+The first real pass still exposed an old workaround. Value numbering kept every
+result-register definition bare when it could reach a return, because operand-free
+returns once depended on a shared register spelling to keep the writer live. That
+discarded the new identity on x86-64 and Thumb. The compatibility rule now applies
+only to definitions reaching unresolved returns. An explicit cross-view edge such
+as an `eax` write followed by `ReturnValue(rax)` is resolved by SSA instead of being
+forced bare. Unrelated sub-register reads retain the existing fail-safe alias rule.
+
+The source-to-product proof uses the same branch function under GCC `-O1` on
+x86-64, AArch64, and ARMv7 hard-float Thumb. Each test compiles real source,
+checks the function's return instruction in objdump, inspects the product's
+numbered LLIR, recompiles emitted C, and compares the two shared objects natively
+or under QEMU over negative, zero, and positive inputs. The decisive final edges
+are:
+
+```text
+x86-64: ret %rax#2 / ret %rax#4
+AArch64: ret %x0#2
+Thumb:   ret %r0#1 / ret %r0#2 / ret %r0#3
+```
+
+The new concrete-execution semantics also preserve definedness: an explicit
+unconditional return observes its value, while a conditional return observes the
+value only on the returning path. Symbolic execution applies the same rule. A RED
+test first showed that the feature-complete build had no cases for the new IR;
+the complete interpreter test group now passes, including an undefined result
+which is harmless on the false path and halts on the true path.
+
+Focused evidence is green: all four real return-definedness integrations pass;
+all 36 value-numbering, 53 prototype-recovery, and four bit-demand tests pass;
+and the Python-extension plus symbolic feature build completes. Broad repository,
+architecture, executable-corpus, and metric ratchets remain pending at this diary
+checkpoint and must not be inferred from the focused results.
+
+## 2026-08-08 00:24 — exact-return compatibility failures isolated and repaired
+
+The first full local gate after return materialization did not close. Its architecture
+lane retained the exact 1,627 pass / 173 known-fail baseline with no missing cells,
+timeouts, or lane errors, and both executable corpora passed every required function.
+It nevertheless found two structural regressions: the Clang O2 BST guard lost its
+expected conjunctions, and `linkedlist:clang:O2` GED moved from 2.5 to 4.0. No
+type-match or byte-match regression was reported. The complete first-run log is
+retained at `/tmp/glaurung-explicit-return-local-gate.log`.
+
+A detached worktree at the exact parent, commit
+`02d32c9db62a4c8dc77a801795adc33b6ca5794d`, provided the controlled A/B. For the
+BST cell, `/tmp/glaurung-bst-explicit-return/` retains source, binary, disassembly,
+parent/current emitted C, and pass dumps. The compiler uses eager `setcc` bytes and
+two OR operations before a shared `eax = -1; ret`. The parent reconstructed the
+guarded body with conjunctions; the new pipeline reconstructed an early-return OR
+guard. The discrepancy was not in lifting or reachability. Exact SSA changed the
+returned carrier from an unversioned ABI spelling to `rax#N`, while source-role naming
+and adjacent `result = E; return result` folding still recognized only the old name.
+Output-role projection now recognizes an entire directly returned SSA carrier, with
+parameter roles taking precedence, and return folding compares the exact carrier.
+The real BST structural test is green again without discarding SSA identity.
+
+The linked-list A/B is retained under
+`/tmp/glaurung-linkedlist-explicit-return/`. Its Clang O2 assembly implements the
+canonical sentinel search: test the head, compare the current node, advance to
+`next`, and return null at exhaustion. The parent's numbered form kept separate
+result and cursor names. Exact SSA correctly proved them to be one value and emitted
+one coalesced carrier. The old sentinel-loop matcher required the split two-seed,
+three-body form, so the recovery pass failed and left an entry return plus a rotated
+loop even though behavior stayed correct.
+
+Sentinel recovery now accepts the coalesced one-seed form only when it proves the
+same invariants as the split form: one exact seed, a self-carried advance, identical
+entry and exit sentinels, a match guard on the current carrier, an advance from that
+carrier, a terminal return of that carrier, and no extra tail effects. The emitted C
+is again the direct source shape:
+
+```c
+node *ret;
+ret = arg0;
+while (ret != 0) {
+    if (ret->val == arg1) return ret;
+    ret = ret->next;
+}
+return NULL;
+```
+
+The real GCC and Clang pointer-return integrations both recompile and preserve the
+null-guard, dereference, comparison, advance, and null-tail semantics. The official
+scoped DecBench cell is back at its exact baseline: GED 2.5, type-match 1.0, and
+byte-match 0.09. The scoped checker reports no per-cell regression. These focused
+repairs are green; the final all-target, full local-gate, and complete Python gates
+remain to be rerun on the combined tree before integration.
+
+## 2026-08-08 01:44 — result storage separated from returned source values
+
+The first all-target rerun exposed one more migration boundary. The existing
+`rotr32` safety test constructs the promoted `n &= 31u` shape as a spill-slot
+read-modify-write followed by `return n`. After coalescing, the exact carrier is
+`arg1`. The broadened return fold treated any `value = E; return value` pair as
+machine output storage and emitted only `return (arg1 & 31)`, losing the explicit
+in-place assignment required by the recovered source-object contract.
+
+A second RED test proved the same category error in naming: a directly returned
+source local was being assigned the `ret` role merely because it was returned. The
+correct invariant is narrower. “Value returned” is a use relation; “machine result
+storage” is an ABI storage relation. Naming now projects an exact direct carrier to
+`ret` only when the machine model proves its SSA base is result storage. Return
+folding uses a separate SSA-aware result-storage predicate. The legacy bare-return
+fallback deliberately remains SSA-unaware: a versioned `x0#1` write blocks the
+identity-function fallback instead of allowing it to return stale live-in `x0`.
+
+The returned-local RED test, the existing coalesced-slot safety test, the exact
+`rax#7` result-fold test, and the AArch64 stale-live-in guard all pass. This split
+preserves the BST repair while preventing output-role projection from consuming
+ordinary source values.
+
+Final closure is green on the combined tree. `cargo test --all-targets` passes
+1,842 library tests and every integration, example, and benchmark target. The full
+five-lane local gate passes all 31 x86 behavioral/structural tests, retains the exact
+six-lane architecture baseline of 1,627 pass / 173 known fail with zero missing
+cells, timeouts, or lane errors, passes every required legacy and curriculum
+executable behavior cell, and reports no GED/type/byte regression across 56/56
+official cells. The complete Python collection passes 2,809 tests with 43 declared
+skips and zero failures in 28m31s. The retained final logs are:
+
+```text
+/tmp/glaurung-explicit-return-cargo-all-targets-final.log
+/tmp/glaurung-explicit-return-local-gate-final.log
+/tmp/glaurung-explicit-return-python-full.log
+```

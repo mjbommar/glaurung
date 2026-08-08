@@ -1223,6 +1223,17 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
             then_body: vec![Stmt::Return { value: None }],
             else_body: None,
         }],
+        Op::CondReturnValue {
+            cond,
+            inverted,
+            value,
+        } => vec![Stmt::If {
+            cond: predicate_expr(cond, *inverted),
+            then_body: vec![Stmt::Return {
+                value: Some(lower_value(value)),
+            }],
+            else_body: None,
+        }],
         Op::Call { target, effects } => {
             let target = match target {
                 CallTarget::Direct(a) => Expr::Addr(*a),
@@ -1240,6 +1251,9 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                 call_spec: None,
             }]
         }
+        Op::ReturnValue { value } => vec![Stmt::Return {
+            value: Some(lower_value(value)),
+        }],
         Op::Return => vec![Stmt::Return { value: None }],
         // Width changes must preserve their semantics, not collapse to `dst = src`.
         //
@@ -2103,7 +2117,8 @@ fn implicit_successor(block: &crate::ir::types::LlirBlock) -> Option<u64> {
             .iter()
             .copied()
             .find(|successor| successor != target),
-        Some(Op::Jump { .. } | Op::IndirectJump { .. } | Op::Return) => None,
+        Some(Op::Jump { .. } | Op::IndirectJump { .. }) => None,
+        Some(op) if op.is_unconditional_return() => None,
         _ if block.succs.len() == 1 => block.succs.first().copied(),
         _ => None,
     }
@@ -2720,12 +2735,15 @@ fn width_ctype(size: u8) -> &'static str {
     }
 }
 
-/// Collapse `return_reg = E; [comments]; return [return_reg];` into a direct
-/// `return E`, retaining provenance comments in place.
+/// Collapse `result = E; [comments]; return result;` into a direct `return E`,
+/// retaining provenance comments in place.
 ///
-/// Recurses into nested If / While bodies. Only comments/Nops may intervene, so
-/// the expression stays at the same observable point and no state-changing
-/// operation is crossed.
+/// Both operand-free and explicit returns require proven machine result storage.
+/// [`crate::ir::direct_output::is_exact_return_storage`] accepts its exact SSA
+/// spelling (for example `rax#7`) while rejecting a returned source local or
+/// coalesced parameter. Recurses into nested If / While bodies. Only
+/// comments/Nops may intervene, so the expression stays at the same observable
+/// point and no state-changing operation is crossed.
 fn fold_returns(body: &mut Vec<Stmt>) {
     // Recurse first so inner bodies are folded before we inspect an outer
     // fall-through return.
@@ -2758,7 +2776,7 @@ fn fold_returns(body: &mut Vec<Stmt>) {
     let mut i = 0;
     while i < body.len() {
         let Some(dst) = (match &body[i] {
-            Stmt::Assign { dst, .. } if crate::ir::direct_output::is_return_reg(dst) => {
+            Stmt::Assign { dst, .. } if crate::ir::direct_output::is_exact_return_storage(dst) => {
                 Some(dst.clone())
             }
             _ => None,
@@ -10873,6 +10891,28 @@ function f @ 0x1000 {
         );
         assert!(text.contains("return;"), "return line missing: {}", text);
         assert!(!text.contains("return 1"), "folded wrong reg: {}", text);
+    }
+
+    #[test]
+    fn return_fold_collapses_an_exact_ssa_result_carrier() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("rax#7"),
+                src: Expr::Const(42),
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("rax#7"))),
+            },
+        ];
+
+        fold_returns(&mut body);
+
+        assert_eq!(
+            body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(42)),
+            }]
+        );
     }
 
     #[test]

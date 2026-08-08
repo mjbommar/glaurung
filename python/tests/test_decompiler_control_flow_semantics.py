@@ -683,13 +683,14 @@ def test_o2_pointer_return_keeps_declared_dwarf_kind(
     # test the node pointer before dereferencing it, return on a matching field,
     # and advance otherwise.  Keeping the field comparison as the while guard
     # obscures both the null-termination condition and the early match return.
-    assert re.search(r"while \(\(var\d+ != 0\)\)", code), code
-    assert not re.search(r"\(long\)var\d+ != 0", code), code
-    assert re.search(r"node \* var\d+;", code), code
-    next_assignment = (
-        r"(?:var\d+|ret) = "
-        r"(?:var\d+|\(\(struct node \*\)var\d+\))->next;"
-    )
+    # Exact return SSA can prove that the cursor and output carrier are one
+    # value (`ret`); a still-split phi retains a `varN`. Both must keep the same
+    # pointer-typed, pre-dereference null guard.
+    cursor = r"(?:var\d+|ret)"
+    assert re.search(rf"while \(\({cursor} != 0\)\)", code), code
+    assert not re.search(rf"\(long\){cursor} != 0", code), code
+    assert re.search(rf"node \* {cursor};", code), code
+    next_assignment = rf"{cursor} = (?:{cursor}|\(\(struct node \*\){cursor}\))->next;"
     assert re.search(next_assignment, code), code
     # The cursor may stay split at a correctness-preserving phi boundary, but
     # every emitted cursor must retain the recovered node-pointer kind.

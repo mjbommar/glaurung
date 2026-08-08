@@ -561,7 +561,7 @@ fn build_cfg(instructions: Vec<LlirInstr>, entry: u64, end: u64) -> LlirFunction
                     boundaries.insert(instruction.va + 4);
                 }
             }
-            Op::Return | Op::CondReturn { .. } => {
+            op if op.is_return() => {
                 if instruction.va + 4 < end {
                     boundaries.insert(instruction.va + 4);
                 }
@@ -604,7 +604,7 @@ fn build_cfg(instructions: Vec<LlirInstr>, entry: u64, end: u64) -> LlirFunction
         let mut succs = Vec::new();
         if terminal_ops
             .iter()
-            .any(|op| matches!(op, Op::Return) || is_halting_intrinsic(op))
+            .any(|op| op.is_unconditional_return() || is_halting_intrinsic(op))
         {
             // no successor
         } else if let Some(target) = terminal_ops.iter().find_map(|op| match op {

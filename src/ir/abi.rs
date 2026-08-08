@@ -115,6 +115,41 @@ pub fn return_registers(cc: CallConv) -> &'static [&'static str] {
     }
 }
 
+/// General-purpose storage aliases for one scalar result.
+pub fn integer_return_registers(cc: CallConv) -> &'static [&'static str] {
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
+        CallConv::Aarch64 => &["x0", "w0"],
+        CallConv::Arm | CallConv::ArmHardFloat => &["r0"],
+    }
+}
+
+/// Floating-point storage aliases for one scalar result.
+pub fn float_return_registers(cc: CallConv) -> &'static [&'static str] {
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 => &["xmm0", "ymm0", "zmm0"],
+        CallConv::Cdecl32 => &["st0", "xmm0"],
+        CallConv::Aarch64 => &["v0", "q0", "d0", "s0", "h0", "b0"],
+        CallConv::Arm | CallConv::ArmHardFloat => &["d0", "s0"],
+    }
+}
+
+/// The non-aliasing ABI result bank containing `name`.
+///
+/// Integer and floating-point result storage must be tracked independently: a
+/// write to `rax` does not overwrite `xmm0`, and a write to `r0` does not
+/// overwrite `d0`. Returning the complete class lets reaching-definition
+/// consumers use one machine-model owner instead of restating those tables.
+pub fn return_register_class(cc: CallConv, name: &str) -> Option<&'static [&'static str]> {
+    let base = ssa_base(name);
+    for class in [integer_return_registers(cc), float_return_registers(cc)] {
+        if class.contains(&base) {
+            return Some(class);
+        }
+    }
+    None
+}
+
 /// A value-numbered register's underlying name: `rdi#3` -> `rdi`.
 ///
 /// Canonicalising here rather than at each call site is what keeps the slot tables
@@ -197,7 +232,7 @@ fn hard_float_result_consumed_after(block: &crate::ir::types::LlirBlock, call_id
                 break;
             }
         }
-        if matches!(instruction.op, Op::Call { .. } | Op::Return) {
+        if matches!(instruction.op, Op::Call { .. }) || instruction.op.is_return() {
             break;
         }
     }

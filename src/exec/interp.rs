@@ -204,6 +204,13 @@ impl<D: Domain> Machine<D> {
         }
     }
 
+    pub(crate) fn undefined_value_reason(&self, value: &Value) -> Option<String> {
+        let Value::Reg(register) = value else {
+            return None;
+        };
+        self.undefined.get(&Self::undefined_key(register)).cloned()
+    }
+
     fn write_defined(&mut self, register: &VReg, value: D::Val) {
         self.undefined.remove(&Self::undefined_key(register));
         self.regs.write(&mut self.dom, register, value);
@@ -228,10 +235,18 @@ impl<D: Domain> Machine<D> {
     /// Execute one op, returning the resulting control [`Flow`].
     pub fn step(&mut self, op: &Op) -> Flow {
         let (_, uses) = crate::ir::use_def::def_uses(op);
-        if let Some(reason) = uses
-            .iter()
-            .find_map(|register| self.undefined.get(&Self::undefined_key(register)).cloned())
-        {
+        let undefined_reason = match op {
+            // The result is observable only when this conditional return is
+            // taken. Check the predicate here and the value in the matching
+            // arm after its control decision.
+            Op::CondReturnValue { cond, .. } => {
+                self.undefined.get(&Self::undefined_key(cond)).cloned()
+            }
+            _ => uses
+                .iter()
+                .find_map(|register| self.undefined.get(&Self::undefined_key(register)).cloned()),
+        };
+        if let Some(reason) = undefined_reason {
             return Flow::Halt(Halt::UndefinedValue(reason));
         }
         match op {
@@ -426,6 +441,25 @@ impl<D: Domain> Machine<D> {
                     BranchDecision::Fork => Flow::Halt(Halt::UnexpectedFork),
                 }
             }
+            Op::CondReturnValue {
+                cond,
+                inverted,
+                value,
+            } => {
+                let c = self.regs.read(&mut self.dom, cond);
+                let returns = match self.dom.as_branch(&c) {
+                    BranchDecision::Taken => !*inverted,
+                    BranchDecision::NotTaken => *inverted,
+                    BranchDecision::Fork => return Flow::Halt(Halt::UnexpectedFork),
+                };
+                if !returns {
+                    return Flow::Next;
+                }
+                if let Some(reason) = self.undefined_value_reason(value) {
+                    return Flow::Halt(Halt::UndefinedValue(reason));
+                }
+                Flow::Return
+            }
             Op::Call { target, .. } => {
                 let resolved = match target {
                     CallTarget::Direct(a) => Some(*a),
@@ -446,7 +480,7 @@ impl<D: Domain> Machine<D> {
                 }
                 Flow::Call(resolved)
             }
-            Op::Return => Flow::Return,
+            Op::Return | Op::ReturnValue { .. } => Flow::Return,
             Op::Intrinsic {
                 name, ins, outs, ..
             } => match self.helpers.get(name) {
@@ -646,6 +680,33 @@ mod tests {
     }
 
     #[test]
+    fn conditional_return_value_is_demanded_only_on_the_returning_path() {
+        let mut m = machine();
+        assert_eq!(
+            m.step(&Op::Undef {
+                dst: VReg::phys("r0"),
+                reason: "unmodelled result".into(),
+            }),
+            Flow::Next
+        );
+        let zero = m.dom.constant(Width::W1, 0);
+        m.regs.write(&mut m.dom, &VReg::Flag(Flag::Z), zero);
+        let op = Op::CondReturnValue {
+            cond: VReg::Flag(Flag::Z),
+            inverted: false,
+            value: Value::Reg(VReg::phys("r0")),
+        };
+        assert_eq!(m.step(&op), Flow::Next);
+
+        let one = m.dom.constant(Width::W1, 1);
+        m.regs.write(&mut m.dom, &VReg::Flag(Flag::Z), one);
+        assert_eq!(
+            m.step(&op),
+            Flow::Halt(Halt::UndefinedValue("unmodelled result".into()))
+        );
+    }
+
+    #[test]
     fn memory_store_load_round_trip_via_ops() {
         // [rsp-8] = rax (64-bit), then rcx = [rsp-8]
         let mut m = machine();
@@ -736,6 +797,14 @@ mod tests {
     fn return_and_intrinsic_flows() {
         let mut m = machine();
         assert_eq!(m.step(&Op::Return), Flow::Return);
+        let value = m.dom.constant(Width::W64, 42);
+        m.regs.write(&mut m.dom, &VReg::phys("rax"), value);
+        assert_eq!(
+            m.step(&Op::ReturnValue {
+                value: Value::Reg(VReg::phys("rax")),
+            }),
+            Flow::Return
+        );
         // An intrinsic with no registered helper halts cleanly.
         assert_eq!(
             m.step(&Op::opaque("vfmadd231ps")),

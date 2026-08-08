@@ -310,7 +310,7 @@ impl Cfg {
                 block
                     .instrs
                     .last()
-                    .is_some_and(|instr| matches!(instr.op, crate::ir::types::Op::Return))
+                    .is_some_and(|instr| instr.op.is_unconditional_return())
             })
             .collect();
         // Record each conditional block's taken-branch successor index.

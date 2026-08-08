@@ -609,7 +609,7 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
         }
         cursor += 1;
     }
-    if seeds.len() != 2 || seeds[0].0 == seeds[1].0 {
+    if !(1..=2).contains(&seeds.len()) || (seeds.len() == 2 && seeds[0].0 == seeds[1].0) {
         return None;
     }
 
@@ -620,33 +620,57 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
     else {
         return None;
     };
-    let [Stmt::Assign {
-        dst: result,
-        src: advance,
-    }, Stmt::Assign {
-        dst: current,
-        src: carried_result,
-    }, Stmt::If {
-        cond: exit_guard,
-        then_body: exit_body,
-        else_body: None,
-    }] = loop_body.as_slice()
-    else {
-        return None;
+    let (result, current, advance, exit_body) = match loop_body.as_slice() {
+        [Stmt::Assign {
+            dst: current,
+            src: advance,
+        }, Stmt::If {
+            cond: exit_guard,
+            then_body: exit_body,
+            else_body: None,
+        }] if seeds.len() == 1 => {
+            if seeds[0].0 != current
+                || equality_other_side(exit_guard, sentinel).and_then(reg_through_casts)
+                    != Some(current)
+                || !contains_reg(match_continue, current)
+                || !contains_reg(advance, current)
+            {
+                return None;
+            }
+            (current, current, advance, exit_body)
+        }
+        [Stmt::Assign {
+            dst: result,
+            src: advance,
+        }, Stmt::Assign {
+            dst: current,
+            src: carried_result,
+        }, Stmt::If {
+            cond: exit_guard,
+            then_body: exit_body,
+            else_body: None,
+        }] if seeds.len() == 2 => {
+            if result == current
+                || reg_through_casts(carried_result) != Some(result)
+                || equality_other_side(exit_guard, sentinel).and_then(reg_through_casts)
+                    != Some(result)
+                || !seeds.iter().any(|(seed, _)| *seed == result)
+                || !seeds.iter().any(|(seed, _)| *seed == current)
+                || !contains_reg(match_continue, current)
+                || contains_reg(match_continue, result)
+                || !contains_reg(advance, current)
+                || contains_reg(advance, result)
+            {
+                return None;
+            }
+            (result, current, advance, exit_body)
+        }
+        _ => return None,
     };
-    if result == current
-        || reg_through_casts(carried_result) != Some(result)
-        || equality_other_side(exit_guard, sentinel).and_then(reg_through_casts) != Some(result)
-        || exit_body.as_slice()
-            != [Stmt::Return {
-                value: Some(sentinel.clone()),
-            }]
-        || !seeds.iter().any(|(seed, _)| *seed == result)
-        || !seeds.iter().any(|(seed, _)| *seed == current)
-        || !contains_reg(match_continue, current)
-        || contains_reg(match_continue, result)
-        || !contains_reg(advance, current)
-        || contains_reg(advance, result)
+    if exit_body.as_slice()
+        != [Stmt::Return {
+            value: Some(sentinel.clone()),
+        }]
     {
         return None;
     }
@@ -1488,6 +1512,94 @@ mod tests {
             function.body[2],
             Stmt::Return {
                 value: Some(Expr::Const(0))
+            }
+        );
+    }
+
+    #[test]
+    fn coalesced_sentinel_result_rotates_to_a_null_guarded_loop() {
+        let current = reg("current");
+        let initial = Expr::Reg(reg("arg0"));
+        let sentinel = Expr::Const(0);
+        let match_continue = Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Deref {
+                addr: Box::new(Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(current.clone())),
+                    rhs: Box::new(Expr::Const(8)),
+                }),
+                size: 4,
+            }),
+            rhs: Box::new(Expr::Reg(reg("needle"))),
+        };
+        let advance = Expr::Deref {
+            addr: Box::new(Expr::Reg(current.clone())),
+            size: 8,
+        };
+        let mut function = Function {
+            name: "coalesced_find".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(initial.clone()),
+                        rhs: Box::new(sentinel.clone()),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(sentinel.clone()),
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: current.clone(),
+                    src: initial,
+                },
+                Stmt::While {
+                    cond: match_continue,
+                    body: vec![
+                        Stmt::Assign {
+                            dst: current.clone(),
+                            src: advance,
+                        },
+                        Stmt::If {
+                            cond: Expr::Cmp {
+                                op: CmpOp::Eq,
+                                lhs: Box::new(Expr::Reg(current.clone())),
+                                rhs: Box::new(sentinel.clone()),
+                            },
+                            then_body: vec![Stmt::Return {
+                                value: Some(sentinel.clone()),
+                            }],
+                            else_body: None,
+                        },
+                    ],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(current.clone())),
+                },
+            ],
+        };
+
+        recover_sentinel_search_loops(&mut function);
+
+        assert_eq!(function.body.len(), 3, "{:#?}", function.body);
+        assert!(matches!(
+            &function.body[1],
+            Stmt::While {
+                cond: Expr::Cmp { op: CmpOp::Ne, lhs, rhs },
+                body,
+            } if lhs.as_ref() == &Expr::Reg(current.clone())
+                && rhs.as_ref() == &Expr::Const(0)
+                && matches!(body.as_slice(), [Stmt::If { then_body, .. }, Stmt::Assign { dst, .. }]
+                    if then_body == &[Stmt::Return { value: Some(Expr::Reg(current.clone())) }]
+                        && dst == &current)
+        ));
+        assert_eq!(
+            function.body[2],
+            Stmt::Return {
+                value: Some(Expr::Const(0)),
             }
         );
     }
