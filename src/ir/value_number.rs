@@ -435,6 +435,13 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
                 tag_phys(cond, ver, ctx);
             }
         }
+        Op::CondReturnValue { cond, value, .. } => {
+            if let Some(&ver) = use_vers.first() {
+                tag_phys(cond, ver, ctx);
+            }
+            ui = 1;
+            tag_value(value, use_vers, &mut ui, ctx);
+        }
         // A call's effects must be renamed like any other operand. They are the only
         // place the op records its result and its argument reads, so leaving them at
         // the raw ABI names desynchronises them from the renamed def/use they describe:
@@ -456,6 +463,7 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
                 }
             }
         }
+        Op::ReturnValue { value } => tag_value(value, use_vers, &mut ui, ctx),
         Op::ZExt { dst, src, .. }
         | Op::SExt { dst, src, .. }
         | Op::Trunc { dst, src, .. }
@@ -500,7 +508,7 @@ fn defs_return_reg(op: &Op, ret_names: &[&str]) -> bool {
     matches!(def_uses(op).0, Some(VReg::Phys(n)) if ret_names.contains(&n.as_str()))
 }
 
-/// Can the return-register def at (`def_bi`, `def_ii`) reach an `Op::Return`
+/// Can the return-register def at (`def_bi`, `def_ii`) reach a return
 /// without an intervening return-register def overwriting it? Such a def is a
 /// value the function actually returns (the `if (c) ret=A; else ret=B; return`
 /// shape has TWO of them, both reaching the return via the join). A return
@@ -514,10 +522,31 @@ pub(crate) fn def_reaches_return(
     def_bi: usize,
     def_ii: usize,
 ) -> bool {
+    def_reaches_return_kind(lf, ret_names, va_to_idx, def_bi, def_ii, false)
+}
+
+pub(crate) fn def_reaches_unresolved_return(
+    lf: &LlirFunction,
+    ret_names: &[&str],
+    va_to_idx: &std::collections::HashMap<u64, usize>,
+    def_bi: usize,
+    def_ii: usize,
+) -> bool {
+    def_reaches_return_kind(lf, ret_names, va_to_idx, def_bi, def_ii, true)
+}
+
+fn def_reaches_return_kind(
+    lf: &LlirFunction,
+    ret_names: &[&str],
+    va_to_idx: &std::collections::HashMap<u64, usize>,
+    def_bi: usize,
+    def_ii: usize,
+    unresolved_only: bool,
+) -> bool {
     // Rest of the def's own block first.
     for ins in &lf.blocks[def_bi].instrs[def_ii + 1..] {
-        if matches!(ins.op, Op::Return | Op::CondReturn { .. }) {
-            return true;
+        if ins.op.is_return() {
+            return !unresolved_only || ins.op.is_unresolved_return();
         }
         if defs_return_reg(&ins.op, ret_names) {
             return false; // overwritten before any return
@@ -539,8 +568,14 @@ pub(crate) fn def_reaches_return(
         }
         let mut killed = false;
         for ins in &lf.blocks[b].instrs {
-            if matches!(ins.op, Op::Return | Op::CondReturn { .. }) {
-                return true;
+            if ins.op.is_return() {
+                if !unresolved_only || ins.op.is_unresolved_return() {
+                    return true;
+                }
+                // This path terminates at an explicit return, but another
+                // queued CFG path may still reach an unresolved one.
+                killed = true;
+                break;
             }
             if defs_return_reg(&ins.op, ret_names) {
                 killed = true;
@@ -574,11 +609,17 @@ fn def_read_by_alias_before_redef(
     def_name: &str,
 ) -> bool {
     for ins in &lf.blocks[def_bi].instrs[def_ii + 1..] {
-        let (_, uses) = def_uses(&ins.op);
-        for u in &uses {
-            if let VReg::Phys(n) = u {
-                if ret_names.contains(&n.as_str()) && n != def_name {
-                    return true;
+        // An explicit return's register view is resolved by SSA itself. It is
+        // the one cross-alias use which must *not* force the definition bare:
+        // e.g. an `eax` write followed by `ReturnValue(rax)` is exactly the
+        // x86-64 zero-extending result edge whose version we need to preserve.
+        if ins.op.returned_value().is_none() {
+            let (_, uses) = def_uses(&ins.op);
+            for u in &uses {
+                if let VReg::Phys(n) = u {
+                    if ret_names.contains(&n.as_str()) && n != def_name {
+                        return true;
+                    }
                 }
             }
         }
@@ -683,13 +724,11 @@ pub fn value_number_with_parameter_slots(
     cc: CallConv,
 ) -> (LlirFunction, HashMap<VReg, u8>, HashSet<usize>) {
     let ret_names = return_reg_names(cc);
-    // Keep bare every return-register def that can reach a `Return` without being
-    // overwritten — the value(s) the function actually returns. Keeping ALL of
-    // them bare (not just one per block) is required for branch-merged returns
-    // (`if (c) return A; else return B;`), where each branch's `ret = N` must
-    // survive as `ret` and not be versioned into a scratch name (which the
-    // dead-store pass would then drop, losing the return value). Scratch reuse of
-    // a return register that never reaches a return stays versioned and foldable.
+    // Keep bare only return-register defs which still reach an operand-free
+    // return. This compatibility path is required until prototype recovery can
+    // resolve every output. Explicit `ReturnValue` uses participate in ordinary
+    // SSA and must retain their exact versions; keeping those definitions bare
+    // would throw away the identity this pipeline just proved.
     let va_to_idx: std::collections::HashMap<u64, usize> = lf
         .blocks
         .iter()
@@ -701,7 +740,7 @@ pub fn value_number_with_parameter_slots(
         for (ii, ins) in block.instrs.iter().enumerate() {
             if let (Some(VReg::Phys(n)), _) = def_uses(&ins.op) {
                 if ret_names.contains(&n.as_str())
-                    && (def_reaches_return(lf, ret_names, &va_to_idx, bi, ii)
+                    && (def_reaches_unresolved_return(lf, ret_names, &va_to_idx, bi, ii)
                         || def_read_by_alias_before_redef(lf, ret_names, bi, ii, &n))
                 {
                     let v = ssa
@@ -969,9 +1008,8 @@ fn insert_phi_copies(
         // Insert before a trailing terminator; a block that falls through simply
         // takes them at the end.
         let at = match block.instrs.last().map(|i| &i.op) {
-            Some(Op::Jump { .. } | Op::CondJump { .. } | Op::CondReturn { .. } | Op::Return) => {
-                block.instrs.len() - 1
-            }
+            Some(Op::Jump { .. } | Op::CondJump { .. }) => block.instrs.len() - 1,
+            Some(op) if op.is_return() => block.instrs.len() - 1,
             _ => block.instrs.len(),
         };
         // Share the VA of the instruction the copies precede: these are not real
@@ -1064,6 +1102,14 @@ pub(crate) fn for_each_vreg_mut(op: &mut Op, f: &mut impl FnMut(&mut VReg)) {
             value(src, f);
         }
         Op::CondJump { cond, .. } | Op::CondReturn { cond, .. } => f(cond),
+        Op::CondReturnValue {
+            cond,
+            value: returned,
+            ..
+        } => {
+            f(cond);
+            value(returned, f);
+        }
         Op::Call { target, effects } => {
             if let crate::ir::types::CallTarget::Indirect(v) = target {
                 value(v, f);
@@ -1105,6 +1151,7 @@ pub(crate) fn for_each_vreg_mut(op: &mut Op, f: &mut impl FnMut(&mut VReg)) {
                 f(&mut out.0);
             }
         }
+        Op::ReturnValue { value: returned } => value(returned, f),
         Op::Jump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => {}
     }
 }
@@ -1999,6 +2046,35 @@ mod tests {
                 succs: vec![],
             }],
         }
+    }
+
+    #[test]
+    fn explicit_return_preserves_exact_result_definition_identity() {
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("eax"),
+                src: Value::Const(42),
+            },
+            Op::ReturnValue {
+                value: Value::Reg(VReg::phys("rax")),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let numbered = value_number(&lf, &ssa, CallConv::SysVAmd64);
+
+        assert_eq!(
+            numbered.blocks[0].instrs[0].op,
+            Op::Assign {
+                dst: VReg::phys("rax#1"),
+                src: Value::Const(42),
+            }
+        );
+        assert_eq!(
+            numbered.blocks[0].instrs[1].op,
+            Op::ReturnValue {
+                value: Value::Reg(VReg::phys("rax#1")),
+            }
+        );
     }
 
     #[test]

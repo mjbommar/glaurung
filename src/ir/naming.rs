@@ -125,6 +125,21 @@ pub fn apply_role_names_with_parameter_roles(
         // the ordinary core-register slot table must not win here.
         role.insert(name.clone(), format!("arg{slot}"));
     }
+    // Explicit LLIR returns preserve their exact SSA identity through AST
+    // lowering. Project a directly returned *machine result-storage* carrier
+    // onto the source-level output role just as we do for an unversioned ABI
+    // register below. A returned source local is a value, not evidence that its
+    // storage has the ABI output role. Registers nested inside a cast or
+    // arithmetic expression are likewise merely inputs to the result.
+    // Parameter bindings keep priority for identity functions such as AArch64
+    // `return x0`.
+    let mut direct_return_carriers = Vec::new();
+    collect_direct_return_carriers(&f.body, &mut direct_return_carriers);
+    for name in direct_return_carriers {
+        if crate::ir::abi::is_return_register(cc, &name) {
+            role.entry(name).or_insert_with(|| "ret".to_string());
+        }
+    }
     for name in return_reg_aliases(cc) {
         // `ret` only wins if no arg-slot already claimed the name (x0 case
         // above keeps `arg0`).
@@ -166,6 +181,45 @@ pub fn apply_role_names_with_parameter_roles(
 
     rewrite_body(&mut f.body, &role);
     role
+}
+
+fn collect_direct_return_carriers(body: &[Stmt], out: &mut Vec<String>) {
+    for statement in body {
+        match statement {
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::Phys(name))),
+            } => out.push(name.clone()),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_direct_return_carriers(then_body, out);
+                if let Some(else_body) = else_body {
+                    collect_direct_return_carriers(else_body, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_direct_return_carriers(body, out);
+            }
+            Stmt::For { body, .. } => collect_direct_return_carriers(body, out),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    collect_direct_return_carriers(case_body, out);
+                }
+                if let Some(default_body) = default {
+                    collect_direct_return_carriers(default_body, out);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collect_direct_return_carriers(try_body, out);
+                for catch in catches {
+                    collect_direct_return_carriers(&catch.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Slot indices (into [`arg_slot_tables`]) that behave like genuine live-in
@@ -649,6 +703,58 @@ mod tests {
     }
 
     #[test]
+    fn exact_ssa_return_carrier_keeps_the_output_role() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1010,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax#7"),
+                    src: Expr::Const(42),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax#7"))),
+                },
+            ],
+        };
+
+        apply_role_names(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(
+            f.body,
+            vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Const(42),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("ret"))),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn returned_source_local_does_not_become_machine_output_storage() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1010,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(reg("local_18"))),
+            }],
+        };
+
+        apply_role_names(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(
+            f.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Reg(reg("local_18"))),
+            }]
+        );
+    }
+
+    #[test]
     fn scratch_arg_register_written_first_is_not_a_param() {
         // rcx (SysV 4th arg slot) is written before any read -> it is scratch,
         // not `arg3`; it must become a `varN` local so the recovered arity is
@@ -744,6 +850,38 @@ mod tests {
         apply_role_names(&mut f, CallConv::Aarch64);
         let text = render(&f);
         assert!(text.contains("return %arg0;"), "got: {}", text);
+    }
+
+    #[test]
+    fn aarch64_exact_result_does_not_steal_the_live_in_arg0_role() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("x0#2"),
+                    src: Expr::Reg(reg("x0")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("x0#2"))),
+                },
+            ],
+        };
+
+        apply_role_names(&mut f, CallConv::Aarch64);
+
+        assert_eq!(
+            f.body,
+            vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Reg(reg("arg0")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("ret"))),
+                },
+            ]
+        );
     }
 
     #[test]

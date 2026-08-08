@@ -128,6 +128,11 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
             uses.push(cond.clone());
             None
         }
+        Op::CondReturnValue { cond, value, .. } => {
+            uses.push(cond.clone());
+            reads_of_value(value, &mut uses);
+            None
+        }
         Op::Call { target, effects } => {
             if let CallTarget::Indirect(v) = target {
                 reads_of_value(v, &mut uses);
@@ -147,6 +152,10 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
                 // rather than guessing at an ABI.
                 None => None,
             }
+        }
+        Op::ReturnValue { value } => {
+            reads_of_value(value, &mut uses);
+            None
         }
         Op::ZExt { dst, src, .. }
         | Op::SExt { dst, src, .. }
@@ -208,7 +217,9 @@ pub fn def_mut(op: &mut Op) -> Option<&mut VReg> {
         | Op::IndirectJump { .. }
         | Op::CondJump { .. }
         | Op::CondReturn { .. }
+        | Op::CondReturnValue { .. }
         | Op::Jump { .. }
+        | Op::ReturnValue { .. }
         | Op::Return
         | Op::Nop
         | Op::Unknown { .. } => None,

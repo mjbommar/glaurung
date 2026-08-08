@@ -33,6 +33,19 @@ impl BitDemandOracle {
     /// Compute a conservative backward demand fixed point.
     pub fn analyze(function: &LlirFunction, ssa: &SsaInfo, cc: CallConv) -> Self {
         let mut oracle = Self::default();
+        let has_unresolved_return = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .any(|instruction| matches!(instruction.op, Op::Return | Op::CondReturn { .. }));
+        let va_to_idx = has_unresolved_return.then(|| {
+            function
+                .blocks
+                .iter()
+                .enumerate()
+                .map(|(index, block)| (block.start_va, index))
+                .collect::<HashMap<_, _>>()
+        });
 
         // Memory/control/call operands are observable independently of whether
         // the operation defines a subsequently-used register.
@@ -49,13 +62,23 @@ impl BitDemandOracle {
                     }
                 }
 
-                // LLIR Return has no explicit operand.  Keep every definition
-                // of an ABI result register demanded.  This is intentionally
-                // conservative until return operands become explicit LLIR.
-                if let Some(value) = ssa.def_value(function, addr) {
-                    if matches!(&value.base, VReg::Phys(name) if abi::is_return_register(cc, name))
-                    {
-                        oracle.demand_value(value, FULL);
+                // An unresolved machine return still lacks an operand. Demand
+                // only result-bank definitions which can actually reach one;
+                // an overwritten scratch lifetime is not observable. Direct
+                // outputs use `ReturnValue` and follow the ordinary use edge
+                // above, so this compatibility path disappears as prototype
+                // coverage grows.
+                if let (Some(va_to_idx), Some(value)) =
+                    (va_to_idx.as_ref(), ssa.def_value(function, addr))
+                {
+                    if let VReg::Phys(name) = &value.base {
+                        if let Some(class) = abi::return_register_class(cc, name) {
+                            if crate::ir::value_number::def_reaches_unresolved_return(
+                                function, class, va_to_idx, block_idx, instr_idx,
+                            ) {
+                                oracle.demand_value(value, FULL);
+                            }
+                        }
                     }
                 }
             }
@@ -225,6 +248,8 @@ fn has_observable_uses(op: &Op) -> bool {
             | Op::IndirectJump { .. }
             | Op::CondJump { .. }
             | Op::CondReturn { .. }
+            | Op::CondReturnValue { .. }
+            | Op::ReturnValue { .. }
             | Op::Call { .. }
             | Op::Intrinsic { .. }
     )
@@ -308,7 +333,9 @@ fn transfer_masks(op: &Op, demanded: u64) -> Vec<(usize, u64)> {
         | Op::Jump { .. }
         | Op::CondJump { .. }
         | Op::CondReturn { .. }
+        | Op::CondReturnValue { .. }
         | Op::Call { .. }
+        | Op::ReturnValue { .. }
         | Op::Return
         | Op::Nop
         | Op::Intrinsic { .. }
@@ -523,5 +550,137 @@ mod tests {
             ),
             0xffff_ffff
         );
+    }
+
+    #[test]
+    fn overwritten_return_storage_is_not_an_observable_result() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x100c,
+                instrs: vec![
+                    instruction(
+                        0x1000,
+                        Op::Assign {
+                            dst: VReg::phys("x0"),
+                            src: Value::Const(0x1111),
+                        },
+                    ),
+                    instruction(
+                        0x1004,
+                        Op::Assign {
+                            dst: VReg::phys("x0"),
+                            src: Value::Const(0x2222),
+                        },
+                    ),
+                    instruction(0x1008, Op::Return),
+                ],
+                succs: vec![],
+            }],
+        };
+        let ssa = compute_ssa(&function);
+        let oracle = BitDemandOracle::analyze(&function, &ssa, CallConv::Aarch64);
+        let first = ssa
+            .def_value(
+                &function,
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 0,
+                },
+            )
+            .expect("first x0 definition");
+        let second = ssa
+            .def_value(
+                &function,
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 1,
+                },
+            )
+            .expect("second x0 definition");
+
+        assert_eq!(oracle.value_demand(&first), 0);
+        assert_eq!(oracle.value_demand(&second), FULL);
+    }
+
+    #[test]
+    fn unresolved_fallback_does_not_demand_another_result_bank_on_explicit_path() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1004,
+                    instrs: vec![instruction(
+                        0x1000,
+                        Op::CondJump {
+                            cond: VReg::phys("rdi"),
+                            target: 0x1020,
+                            inverted: false,
+                        },
+                    )],
+                    succs: vec![0x1010, 0x1020],
+                },
+                LlirBlock {
+                    start_va: 0x1010,
+                    end_va: 0x1018,
+                    instrs: vec![
+                        instruction(
+                            0x1010,
+                            Op::Assign {
+                                dst: VReg::phys("rax"),
+                                src: Value::Const(0x1111),
+                            },
+                        ),
+                        instruction(
+                            0x1014,
+                            Op::ReturnValue {
+                                value: Value::Reg(VReg::phys("xmm0")),
+                            },
+                        ),
+                    ],
+                    succs: vec![],
+                },
+                LlirBlock {
+                    start_va: 0x1020,
+                    end_va: 0x1028,
+                    instrs: vec![
+                        instruction(
+                            0x1020,
+                            Op::Assign {
+                                dst: VReg::phys("rax"),
+                                src: Value::Const(0x2222),
+                            },
+                        ),
+                        instruction(0x1024, Op::Return),
+                    ],
+                    succs: vec![],
+                },
+            ],
+        };
+        let ssa = compute_ssa(&function);
+        let oracle = BitDemandOracle::analyze(&function, &ssa, CallConv::SysVAmd64);
+        let explicit_path_scratch = ssa
+            .def_value(
+                &function,
+                InstrAddr {
+                    block_idx: 1,
+                    instr_idx: 0,
+                },
+            )
+            .expect("explicit-path rax scratch");
+        let unresolved_path_result = ssa
+            .def_value(
+                &function,
+                InstrAddr {
+                    block_idx: 2,
+                    instr_idx: 0,
+                },
+            )
+            .expect("unresolved-path rax result");
+
+        assert_eq!(oracle.value_demand(&explicit_path_scratch), 0);
+        assert_eq!(oracle.value_demand(&unresolved_path_result), FULL);
     }
 }

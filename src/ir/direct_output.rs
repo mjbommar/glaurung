@@ -223,6 +223,19 @@ pub(crate) fn is_return_reg(value: &VReg) -> bool {
     matches!(value, VReg::Phys(name) if RETURN_REGS.iter().any(|register| name == *register))
 }
 
+/// Whether an exact value identity is backed by machine result storage.
+///
+/// Unlike [`is_return_reg`], this accepts an SSA version. The distinction is
+/// intentional: a compatibility path projecting a bare machine return must not
+/// infer a value merely because it sees a versioned write, while a return whose
+/// operand already names that exact version may safely fold its adjacent writer.
+pub(crate) fn is_exact_return_storage(value: &VReg) -> bool {
+    matches!(value, VReg::Phys(name) if {
+        let base = crate::ir::abi::ssa_base(name);
+        RETURN_REGS.iter().any(|register| base == *register)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +254,15 @@ mod tests {
             signed: false,
             width: 4,
         }
+    }
+
+    #[test]
+    fn exact_ssa_result_storage_is_distinct_from_the_bare_return_fallback() {
+        assert!(!is_return_reg(&VReg::phys("rax#7")));
+        assert!(!is_return_reg(&VReg::phys("x0#2")));
+        assert!(is_exact_return_storage(&VReg::phys("rax#7")));
+        assert!(is_exact_return_storage(&VReg::phys("x0#2")));
+        assert!(!is_exact_return_storage(&VReg::phys("local_18")));
     }
 
     #[test]

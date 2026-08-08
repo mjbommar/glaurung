@@ -10,6 +10,22 @@ emission
 Do not rewrite Glaurung. Replace the decompiler's accidental middle-layer contracts in
 dependency order, behind the existing APIs and behavioral ratchets.
 
+**Implementation checkpoint (2026-08-07).** The first EPIC 5 boundary is now in
+place behind the existing APIs: prototype-proven direct scalar results are explicit
+LLIR return uses, all four Python front doors share one LLIR preparation service, and
+operand-free unknown/void returns retain a reachability-gated compatibility path.
+This is an incremental bridge to mandatory typed MIR/SSA, not a claim that the full
+`DefinitionOracle` or stable arena identities below are complete.
+
+The first broad-gate feedback also establishes a migration rule for that bridge:
+preserve exact SSA identity through correctness analyses, then project source roles
+from proven whole-value uses. A rendered ABI spelling is not a substitute for a
+definition identity, but changing `rax` to `rax#N` must not make an exact returned
+carrier cease to be the source-level result. Likewise, high-variable and loop recovery
+must accept both split machine lifetimes and an SSA-coalesced carrier when their
+control-flow and use-def invariants prove the same source object. Compatibility belongs
+at these typed projection boundaries, never in value numbering as a forced name alias.
+
 The target is one program analysis session feeding one verified pipeline:
 
 ```text

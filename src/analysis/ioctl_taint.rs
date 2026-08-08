@@ -143,12 +143,9 @@ pub fn build_llir_function_linear(entry_va: u64, instrs: Vec<LlirInstr>) -> Llir
         //     jump table or simply be the start of an orphan region)
         if matches!(
             &ins.op,
-            Op::Jump { .. }
-                | Op::CondJump { .. }
-                | Op::CondReturn { .. }
-                | Op::Return
-                | Op::Unknown { .. }
-        ) {
+            Op::Jump { .. } | Op::CondJump { .. } | Op::Unknown { .. }
+        ) || ins.op.is_return()
+        {
             // Find the next machine VA. Multiple LLIR ops can share a
             // VA (e.g. cmp expands to several flag writes); we want the
             // first op whose VA strictly exceeds `ins.va`.
@@ -215,7 +212,8 @@ pub fn build_llir_function_linear(entry_va: u64, instrs: Vec<LlirInstr>) -> Llir
                         }
                     }
                 }
-                Op::Return | Op::Unknown { .. } => {} // no successors
+                op if op.is_unconditional_return() => {} // no successors
+                Op::Unknown { .. } => {}                 // no successors
                 _ => {
                     // Fall-through to the next head.
                     if let Some(&(nva, _)) = head_positions.get(k + 1) {
@@ -561,6 +559,8 @@ fn apply_op(state: &mut State, op: &Op) -> Option<FlagInference> {
         Op::Jump { .. }
         | Op::CondJump { .. }
         | Op::CondReturn { .. }
+        | Op::CondReturnValue { .. }
+        | Op::ReturnValue { .. }
         | Op::Return
         | Op::Nop
         | Op::Unknown { .. } => None,

@@ -215,6 +215,16 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
             d.set_item("cond", vreg_to_str(cond))?;
             d.set_item("inverted", *inverted)?;
         }
+        Op::CondReturnValue {
+            cond,
+            inverted,
+            value,
+        } => {
+            d.set_item("kind", "cond_return")?;
+            d.set_item("cond", vreg_to_str(cond))?;
+            d.set_item("inverted", *inverted)?;
+            d.set_item("value", value_to_pyobj(py, value)?)?;
+        }
         Op::Call { target, .. } => {
             d.set_item("kind", "call")?;
             let tgt = PyDict::new(py);
@@ -232,6 +242,10 @@ fn encode_op(py: Python<'_>, va: u64, op: &Op) -> PyResult<PyObject> {
         }
         Op::Return => {
             d.set_item("kind", "return")?;
+        }
+        Op::ReturnValue { value } => {
+            d.set_item("kind", "return")?;
+            d.set_item("value", value_to_pyobj(py, value)?)?;
         }
         Op::Nop => {
             d.set_item("kind", "nop")?;
@@ -640,6 +654,88 @@ fn normalize_definedness_and_compute_ssa(
     crate::ir::ssa::compute_ssa(&normalized_graph)
 }
 
+/// One shared LLIR preparation pipeline for every decompilation entry point.
+///
+/// Prototype recovery needs initial SSA and parameter evidence. A proven direct
+/// output then upgrades operand-free machine returns to explicit LLIR uses, so
+/// SSA and the definedness oracle must run once more before value numbering and
+/// structuring. Keeping that feedback edge here prevents `--all`, `--vas`, and
+/// address/range decompilation from observing different return identities.
+struct PreparedLlir {
+    region: crate::ir::structure::Region,
+    numbered: crate::ir::types::LlirFunction,
+    definition_widths: std::collections::HashMap<crate::ir::types::VReg, u8>,
+    parameter_slots: std::collections::HashSet<usize>,
+    prototype: Option<crate::ir::types_recover::RecoveredPrototype>,
+}
+
+fn prepare_llir_for_lowering(
+    function: &mut crate::ir::types::LlirFunction,
+    exception_sites: &[crate::analysis::exception::ExceptionCallSite],
+    cc: crate::ir::call_args::CallConv,
+    recover_semantic_prototype: bool,
+    arm_vfp_args: bool,
+    declared: Option<&DwarfPrototypeContract>,
+) -> PreparedLlir {
+    let mut ssa = normalize_definedness_and_compute_ssa(function, exception_sites, cc);
+    let provisional_slots = if recover_semantic_prototype {
+        crate::ir::value_number::value_number_with_parameter_slots(function, &ssa, cc).2
+    } else {
+        crate::ir::value_number::live_in_arg_slots_llir(function, cc)
+    };
+    let prototype = recover_semantic_prototype.then(|| {
+        recover_decbench_prototype(
+            function,
+            &ssa,
+            cc,
+            &provisional_slots,
+            arm_vfp_args,
+            declared,
+        )
+    });
+    if prototype.as_ref().is_some_and(|prototype| {
+        crate::ir::types_recover::materialize_return_values(function, cc, prototype) != 0
+    }) {
+        ssa = normalize_definedness_and_compute_ssa(function, exception_sites, cc);
+    }
+    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        eprintln!("\n===== prototype-resolved LLIR =====");
+        for block in &function.blocks {
+            eprintln!("block 0x{:x} -> {:?}", block.start_va, block.succs);
+            for instruction in &block.instrs {
+                eprintln!("  0x{:x}: {}", instruction.va, instruction.op);
+            }
+        }
+    }
+    let region = crate::ir::structure::recover_verified(function, &ssa);
+    let (numbered, definition_widths, mut parameter_slots) = if recover_semantic_prototype {
+        crate::ir::value_number::value_number_with_parameter_slots(function, &ssa, cc)
+    } else {
+        (
+            function.clone(),
+            std::collections::HashMap::new(),
+            crate::ir::value_number::live_in_arg_slots_llir(function, cc),
+        )
+    };
+    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+        eprintln!("\n===== prepared numbered LLIR =====");
+        for block in &numbered.blocks {
+            eprintln!("block 0x{:x} -> {:?}", block.start_va, block.succs);
+            for instruction in &block.instrs {
+                eprintln!("  0x{:x}: {}", instruction.va, instruction.op);
+            }
+        }
+    }
+    lock_parameter_slots_from_prototype(prototype.as_ref(), &mut parameter_slots);
+    PreparedLlir {
+        region,
+        numbered,
+        definition_widths,
+        parameter_slots,
+        prototype,
+    }
+}
+
 fn arm_uses_vfp_arguments(data: &[u8]) -> bool {
     use object::Object;
 
@@ -683,7 +779,6 @@ fn decompile_at_py(
     use crate::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_bytes;
-    use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
 
     let data = std::fs::read(&path)
@@ -742,8 +837,6 @@ fn decompile_at_py(
     let mut lf_raw = lf_raw;
     inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
     crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-    let ssa = normalize_definedness_and_compute_ssa(&mut lf_raw, &exception_sites, cc);
-    let region = recover_verified(&lf_raw, &ssa);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
     // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
@@ -751,34 +844,28 @@ fn decompile_at_py(
     // intact) while everything downstream uses the canonicalised `lf`; the
     // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
     // narrower width.
-    let (lf, definition_widths, mut param_slots) = if style == "decbench" {
-        crate::ir::value_number::value_number_with_parameter_slots(&lf_raw, &ssa, cc)
-    } else {
-        let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf_raw, cc);
-        (
-            lf_raw.clone(),
-            std::collections::HashMap::new(),
-            parameter_slots,
-        )
-    };
     // Live-in argument slots (authoritative parameter set) for the type-map
     // remap, so scratch reuse of an arg register never becomes a spurious `argN`.
     // Recover the semantic prototype while SSA value IDs are still available.
     // It survives the AST pipeline as an immutable companion object; naming is
     // now only a final projection (`value -> argN`), never a type-analysis key.
-    let prototype = (style == "decbench" && types).then(|| {
-        recover_decbench_prototype(
-            &lf_raw,
-            &ssa,
-            cc,
-            &param_slots,
-            arm_vfp_args,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-        )
-    });
-    lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
+    let prepared_llir = prepare_llir_for_lowering(
+        &mut lf_raw,
+        &exception_sites,
+        cc,
+        style == "decbench" && types,
+        arm_vfp_args,
+        dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&func_va)),
+    );
+    let PreparedLlir {
+        region,
+        numbered: lf,
+        definition_widths,
+        parameter_slots: mut param_slots,
+        prototype,
+    } = prepared_llir;
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
     }
@@ -934,7 +1021,6 @@ fn decompile_range_at_py(
     use crate::core::function::{Function, FunctionKind};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_bytes;
-    use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
 
     if range_end <= range_start {
@@ -1003,8 +1089,6 @@ fn decompile_range_at_py(
     let mut lf_raw = lf_raw;
     inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
     crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-    let ssa = normalize_definedness_and_compute_ssa(&mut lf_raw, &exception_sites, cc);
-    let region = recover_verified(&lf_raw, &ssa);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
     // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
@@ -1012,29 +1096,23 @@ fn decompile_range_at_py(
     // intact) while everything downstream uses the canonicalised `lf`; the
     // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
     // narrower width.
-    let (lf, definition_widths, mut param_slots) = if style == "decbench" {
-        crate::ir::value_number::value_number_with_parameter_slots(&lf_raw, &ssa, cc)
-    } else {
-        let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf_raw, cc);
-        (
-            lf_raw.clone(),
-            std::collections::HashMap::new(),
-            parameter_slots,
-        )
-    };
-    let prototype = (style == "decbench" && types).then(|| {
-        recover_decbench_prototype(
-            &lf_raw,
-            &ssa,
-            cc,
-            &param_slots,
-            arm_vfp_args,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-        )
-    });
-    lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
+    let prepared_llir = prepare_llir_for_lowering(
+        &mut lf_raw,
+        &exception_sites,
+        cc,
+        style == "decbench" && types,
+        arm_vfp_args,
+        dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&func_va)),
+    );
+    let PreparedLlir {
+        region,
+        numbered: lf,
+        definition_widths,
+        parameter_slots: mut param_slots,
+        prototype,
+    } = prepared_llir;
     let mut f = lower(&lf, &region, func.name.clone());
     crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
     // An explicit byte range has no discovered callee Function objects from
@@ -2433,7 +2511,6 @@ fn decompile_all_py(
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render};
     use crate::ir::lift_function::lift_function_from_bytes;
-    use crate::ir::structure::recover_verified;
 
     let data = std::fs::read(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
@@ -2480,33 +2557,25 @@ fn decompile_all_py(
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-        let ssa = normalize_definedness_and_compute_ssa(&mut lf_raw, &exception_sites, cc);
-        let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
-        let (lf, definition_widths, mut param_slots) = if style == "decbench" {
-            crate::ir::value_number::value_number_with_parameter_slots(&lf_raw, &ssa, cc)
-        } else {
-            let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf_raw, cc);
-            (
-                lf_raw.clone(),
-                std::collections::HashMap::new(),
-                parameter_slots,
-            )
-        };
-        let prototype = (style == "decbench").then(|| {
-            recover_decbench_prototype(
-                &lf_raw,
-                &ssa,
-                cc,
-                &param_slots,
-                arm_vfp_args,
-                dwarf_outputs
-                    .as_ref()
-                    .and_then(|outputs| outputs.get(&func.entry_point.value)),
-            )
-        });
-        lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
+        let prepared_llir = prepare_llir_for_lowering(
+            &mut lf_raw,
+            &exception_sites,
+            cc,
+            style == "decbench",
+            arm_vfp_args,
+            dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func.entry_point.value)),
+        );
+        let PreparedLlir {
+            region,
+            numbered: lf,
+            definition_widths,
+            parameter_slots: mut param_slots,
+            prototype,
+        } = prepared_llir;
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut f = lower(&lf, &region, outer_name.clone());
         crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
@@ -2622,7 +2691,6 @@ fn decompile_many_py(
     use crate::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_bytes;
-    use crate::ir::structure::recover_verified;
     use crate::ir::types_recover::recover_types_for;
     use std::collections::HashSet;
 
@@ -2701,33 +2769,25 @@ fn decompile_many_py(
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         crate::ir::abi::annotate_calls(&mut lf_raw, cc);
-        let ssa = normalize_definedness_and_compute_ssa(&mut lf_raw, &exception_sites, cc);
-        let region = recover_verified(&lf_raw, &ssa);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
-        let (lf, definition_widths, mut param_slots) = if style == "decbench" {
-            crate::ir::value_number::value_number_with_parameter_slots(&lf_raw, &ssa, cc)
-        } else {
-            let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lf_raw, cc);
-            (
-                lf_raw.clone(),
-                std::collections::HashMap::new(),
-                parameter_slots,
-            )
-        };
-        let prototype = (style == "decbench").then(|| {
-            recover_decbench_prototype(
-                &lf_raw,
-                &ssa,
-                cc,
-                &param_slots,
-                arm_vfp_args,
-                dwarf_outputs
-                    .as_ref()
-                    .and_then(|outputs| outputs.get(&func_va)),
-            )
-        });
-        lock_parameter_slots_from_prototype(prototype.as_ref(), &mut param_slots);
+        let prepared_llir = prepare_llir_for_lowering(
+            &mut lf_raw,
+            &exception_sites,
+            cc,
+            style == "decbench",
+            arm_vfp_args,
+            dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func_va)),
+        );
+        let PreparedLlir {
+            region,
+            numbered: lf,
+            definition_widths,
+            parameter_slots: mut param_slots,
+            prototype,
+        } = prepared_llir;
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         let mut f = lower(&lf, &region, outer_name);
         crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
