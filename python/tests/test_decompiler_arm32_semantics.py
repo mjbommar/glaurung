@@ -263,3 +263,72 @@ def test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution(
     )
     assert results[function]["status"] == "pass", results
     assert results[function]["detail"].endswith("cases (native target ABI)"), results
+
+
+@pytest.mark.parametrize("arch", ARM32_ARCHES)  # ty: ignore[unresolved-attribute]
+def test_arm32_o0_rb_validate_round_trips_split_frame_addresses(
+    tmp_path: Path, arch: str
+) -> None:
+    """O0 split affine frame addresses retain their debug-proven arrays."""
+    fixture = "16_red_black_tree"
+    function = "rb_validate"
+    source, target, reference = _build_arm32_fixture(tmp_path, fixture, arch, "O0")
+
+    source_text = source.read_text()
+    assert "int32_t parents[16] = {0};" in source_text
+    assert "int32_t node_stack[32];" in source_text
+    assert "int32_t black_stack[32];" in source_text
+
+    disassembled = subprocess.run(
+        [A32_OBJDUMP, "-d", f"--disassemble={function}", str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert disassembled.returncode == 0, disassembled.stderr
+    if arch == A32_ARCH:
+        assert re.search(r"\blsl\s+\w+,\s*\w+,\s*#2", disassembled.stdout), (
+            disassembled.stdout
+        )
+        assert re.search(r"\bsub\s+\w+,\s*\w+,\s*#4", disassembled.stdout), (
+            disassembled.stdout
+        )
+        assert re.search(r"\badd\s+\w+,\s*\w+,\s*fp", disassembled.stdout), (
+            disassembled.stdout
+        )
+    else:
+        assert re.search(r"\badd\.w\s+\w+,\s*\w+,\s*#384", disassembled.stdout), (
+            disassembled.stdout
+        )
+        assert re.search(r"\badd\s+\w+,\s*r7", disassembled.stdout), disassembled.stdout
+
+    decompiled = _decompile(target, function)
+    assert decompiled.returncode == 0, decompiled.stderr
+    assert "===== stack object hints =====" in decompiled.stderr
+    for displacement, size in ((-332, 64), (-268, 128), (-140, 128)):
+        assert re.search(
+            rf'base: "entry_sp",\s+disp: {displacement},\s+size: {size}',
+            decompiled.stderr,
+        ), decompiled.stderr
+    assert re.search(
+        r"memset\(\(void \*\)\(&local_[0-9a-f]+\[0\]\),\s*\(int\)\(0\),"
+        r"\s*\(__SIZE_TYPE__\)\(64\)\)",
+        decompiled.stdout,
+    ), decompiled.stdout
+    assert not re.search(r"<< 2\) - 4", decompiled.stdout), decompiled.stdout
+    assert not re.search(r"\+ 384\).+- 132", decompiled.stdout), decompiled.stdout
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O0",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only={function},
+    )
+    assert results[function]["status"] == "pass", results
+    assert results[function]["detail"].endswith("cases (native target ABI)"), results
