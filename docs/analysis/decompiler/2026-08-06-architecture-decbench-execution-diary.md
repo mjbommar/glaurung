@@ -2002,3 +2002,104 @@ The uncontended full rerun using the already-synchronized environment passes
 log is `/tmp/glaurung-ilp32-wide-python-full-clean.log` with SHA-256
 `22e002288fe18a725cbba46860de2c472f53645824a7d9c4edccab5faa8aafc7`.
 Integration and remote-gate evidence follow after the exact tree is committed.
+
+## 2026-08-08 03:44 — x86 REP-STOS semantics and a target-native struct oracle
+
+The highest residual cluster was `rb_validate`: both optimization levels still
+failed on Thumb ARMv7, A32, and i386. Round-tripping each lane showed that this
+was not one six-cell defect. The ARM O0 recoveries still lose frame-object
+identity, while ARM O2 loses the arguments to an external `memset`; those four
+cells remain known failures for the next increment. Both i386 binaries instead
+contained the same exact instruction-level defect. The source initializes
+`int32_t parents[16] = {0}`. GCC 15 emitted `eax = 0`, `ecx = 16`, the parents
+address in `edi`, and `rep stosd`; `topological_sort` uses the same pattern for
+its `indeg[16]` array. The old lifter deliberately represented this as one store
+and one pointer advance. Its own comment said repetition was not modeled. The
+emitted C consequently initialized only element zero, and valid trees/graphs
+returned zero when the source returned one.
+
+The repair models the architecture rather than recognizing either fixture.
+Direction is now an explicit IR flag, with the x86 ABI's clear-at-entry fact
+materialized only when a string operation reads it; `CLD` and `STD` are ordinary
+flag definitions. Repeated STOS (both F3 REP and F2 REPNE spellings) lifts to an
+architecture-neutral, width-parameterized `memory.fill` effect plus exact final
+destination/count register updates. Non-repeated STOS performs one
+direction-aware step. AST lowering expands the intrinsic to the exact
+store/advance/count-down loop, so no opaque helper is required in emitted C.
+
+Two general pipeline defects became visible while following that value through
+numbered LLIR and every AST pass. Effect-only intrinsics were not assigning SSA
+versions to their inputs. After that was fixed, expression reconstruction saw
+the fill count once in the loop guard, ignored the body, substituted only the
+guard, and deleted the initializer while leaving the decrement attached to an
+undefined temporary. Recursive use counting now includes nested control-flow
+bodies and permits deletion only when the single use is in the immediate
+statement itself. This is a general loop-carried-value safety rule, not a fill
+special case.
+
+The RED/GREEN layers pin each boundary: encoded REP/REPNE STOS lifting and final
+register state; effect-only intrinsic SSA inputs; exact directional fill AST;
+and the loop-carried reconstruction counterexample. The real Python regression
+then compiles the checked-in red-black source at i386 O0/O2, requires REP STOS in
+objdump, requires `memory.fill.4.word4` in numbered LLIR, checks the finite
+count-16 loop in emitted C, and execution-diffs it.
+
+That product test initially exposed a measurement gap: a pointer to a plain
+DWARF struct forced the ILP32 lane back to a width-sensitive LP64 rebuild. The
+target comparator now renders flat integer structs from the binary-derived
+field widths and offsets, asserts every offset and total size in target C, and
+refuses nesting, overlap, or unsupported widths. It preserves natural target
+alignment rather than using a packed approximation. `rb_validate` now passes
+19/19 cases at both optimization levels inside qemu-i386. The collateral
+`topological_sort` cells were independently traced through source, REP-STOS
+assembly, numbered LLIR, emitted finite loop, and 19/19 target-ABI cases.
+
+Retained evidence is `/tmp/glaurung-rb-validate.5SFq5a/`. Source and target
+binary identities are:
+
+```text
+red-black source  ab01ca5165d9d63a77b8403f6c566ed47c038c5d07e6b11f72dae3aba16f12f5
+rb i386 O0        078ae7e02e99a050df40ca712582a1b6833b3a7ac4725b6897fa36626cdac27e
+rb i386 O2        45b8ee5fcab598278dc8730cabbc756097ff57aef77ebbf40b958aa204436c19
+topological src   085942c0fb7f67b699dee17659e068adb03702c9c4c63c7e9562f3463997cdc5
+topological O0    018196953c1b3904149bdec4014ba965a1d8ae28b654ada8cad64638a6bfe72e
+topological O2    22215b6fbda332b7a2b18e4782722787ce08494716c449f8d92e64454c69ccea
+```
+
+The complete final architecture matrix is 1,731 pass, 69 known fail, 228
+structural, and six declared unsupported lanes. Relative to the prior baseline
+it contains exactly four `fail -> pass` changes: `rb_validate` and
+`topological_sort`, each at i386 O0/O2, with zero regressions or
+reclassifications. After the four-cell baseline refresh, comparison,
+baseline-health, schema, control, x86 control-gate, and toolchain validators all
+return empty problem lists. The result is
+`/tmp/glaurung-rb-validate.5SFq5a/full-arch-final.json`, SHA-256
+`5bb454654d2edc87deada7c6961355df6dd5905e0d3ce2787f857d67a7b44177`.
+Repository-wide local and remote integration evidence follows after the exact
+tree is committed.
+
+The final exact-tree repository gates are green. `cargo test --all-targets`
+passes 1,945 tests across every library, integration, example, and benchmark
+target; its retained log is
+`/tmp/glaurung-rb-validate.5SFq5a/cargo-all-targets.log`, SHA-256
+`1eb809cf1da1a633606d02c905b4071b7c96088097d51323ab0f3621a5916f83`.
+The fresh-release five-lane decompiler gate passes all 31 pinned x86 tests,
+reproduces the complete 1,731/69 architecture ratchet, passes both executable
+behavior corpora (including every red-black and topological cell), and reports
+no GED, type-match, or byte-match regression across 56/56 official cells. Its
+log is `/tmp/glaurung-rb-validate.5SFq5a/decbench-local-gate.log`, SHA-256
+`c5ca86d4ff9e888a0122668781190bc935fb37a71221218e8cc89bf17de1ebf4`.
+
+As in the preceding increment, the first full Python run overlapped the
+one-time editable-package transition immediately after `maturin develop`: the
+tutorial's internal `uv run glaurung --version` captured uv's uninstall/install
+progress after the correct version line. The other 2,837 tests passed. The
+exact tutorial test then passed in isolation, and the uncontended full rerun
+passes 2,838 tests with 43 declared skips and zero failures in 20m02s. The clean
+log is `/tmp/glaurung-rb-validate.5SFq5a/python-full-clean.log`, SHA-256
+`9eba629ad64d86b1fac77be629b68c1b1d2cb8ad79645cd88464ead182abe8cb`.
+Owned Python paths pass Ruff formatting/lint and the new end-to-end test passes
+`ty`; Rust formatting and `git diff --check` are clean. Whole-tree Ruff/`ty`
+remain non-gates with pre-existing repository debt (including documentation
+code fences and 2,043 existing type diagnostics), so they were not rewritten
+as part of this decompiler fix. Integration and remote evidence follow below.

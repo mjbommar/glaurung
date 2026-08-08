@@ -40,6 +40,7 @@ fn flag_repr(f: Flag) -> &'static str {
         Flag::O => "%of",
         Flag::P => "%pf",
         Flag::A => "%af",
+        Flag::D => "%df",
         Flag::Bit => "%bitpred",
     }
 }

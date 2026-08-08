@@ -488,14 +488,17 @@ fn tag_op(op: &mut Op, def_ver: u32, use_vers: &[u32], ctx: &VnCtx) {
             tag_value(e, use_vers, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
-        // A single-output intrinsic fits the ordinary SSA model exactly. This
-        // includes scalar VFP operations such as `vneg s15, s15`; tagging both
-        // sides is what connects the use to the preceding `vldr` definition.
-        Op::Intrinsic { ins, outs, .. } if outs.len() == 1 => {
+        // Effect-only and single-output intrinsics fit the ordinary SSA model
+        // exactly. This includes memory effects such as `memory.fill` and
+        // scalar VFP operations such as `vneg s15, s15`; tagging every input is
+        // what connects each use to its reaching definition.
+        Op::Intrinsic { ins, outs, .. } if outs.len() <= 1 => {
             for input in ins {
                 tag_value(input, use_vers, &mut ui, ctx);
             }
-            tag_phys(&mut outs[0].0, def_ver, ctx);
+            if let Some((output, _)) = outs.first_mut() {
+                tag_phys(output, def_ver, ctx);
+            }
         }
         // Multi-output intrinsics (`cpuid`, ...) don't fit the single-def SSA
         // model cleanly, so leave them untagged for now.
@@ -3786,6 +3789,38 @@ mod tests {
                 writes_mem: false,
             }
         );
+    }
+
+    #[test]
+    fn effect_only_intrinsic_uses_every_reaching_ssa_value() {
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("rdi"),
+                src: Value::Const(0x1000),
+            },
+            Op::Assign {
+                dst: VReg::phys("rcx"),
+                src: Value::Const(16),
+            },
+            Op::Intrinsic {
+                name: "memory.fill.4.word8".into(),
+                ins: vec![Value::Reg(VReg::phys("rdi")), Value::Reg(VReg::phys("rcx"))],
+                outs: Vec::new(),
+                reads_mem: false,
+                writes_mem: true,
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+
+        assert!(matches!(
+            &out.blocks[0].instrs[2].op,
+            Op::Intrinsic { ins, outs, .. }
+                if ins == &[
+                    Value::Reg(VReg::phys("rdi#1")),
+                    Value::Reg(VReg::phys("rcx#1")),
+                ] && outs.is_empty()
+        ));
     }
 
     #[test]

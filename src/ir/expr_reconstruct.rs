@@ -96,7 +96,7 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
         let mut total_uses = 0usize;
         let mut first_use_idx: Option<usize> = None;
         for j in (i + 1)..stmts.len() {
-            let n = count_reg_uses_in_stmt(&stmts[j], &temp);
+            let n = count_reg_uses_in_stmt_recursive(&stmts[j], &temp);
             if n > 0 && first_use_idx.is_none() {
                 first_use_idx = Some(j);
             }
@@ -110,7 +110,13 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
                 break;
             }
         }
-        if total_uses == 1 && first_use_idx == Some(i + 1) {
+        if total_uses == 1
+            && first_use_idx == Some(i + 1)
+            // `substitute_in_stmt` deliberately rewrites only expressions
+            // evaluated by this statement itself, never a conditional/loop
+            // body whose evaluation frequency differs from the definition.
+            && count_reg_uses_in_stmt(&stmts[i + 1], &temp) == 1
+        {
             // (e) the use is somewhere `substitute_in_expr` can actually write.
             // An `Expr::Lea` base/index is a REGISTER slot, not an expression,
             // so substitution silently declines — and deleting the definition
@@ -350,6 +356,57 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
     }
 }
 
+/// Count reads through every nested control-flow body.
+///
+/// Expression reconstruction may substitute only into the immediate
+/// statement, but its single-use proof must include descendants. Otherwise a
+/// loop counter read once by the guard and once by the update looks like a
+/// one-use temporary; deleting its initializer freezes the guard while leaving
+/// the carried update attached to an undefined value.
+fn count_reg_uses_in_stmt_recursive(s: &Stmt, target: &VReg) -> usize {
+    let direct = count_reg_uses_in_stmt(s, target);
+    direct
+        + match s {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                count_reg_uses_in_body_recursive(then_body, target)
+                    + else_body
+                        .as_deref()
+                        .map_or(0, |body| count_reg_uses_in_body_recursive(body, target))
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                count_reg_uses_in_body_recursive(body, target)
+            }
+            Stmt::For { body, .. } => count_reg_uses_in_body_recursive(body, target),
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter()
+                    .map(|(_, body)| count_reg_uses_in_body_recursive(body, target))
+                    .sum::<usize>()
+                    + default
+                        .as_deref()
+                        .map_or(0, |body| count_reg_uses_in_body_recursive(body, target))
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                count_reg_uses_in_body_recursive(try_body, target)
+                    + catches
+                        .iter()
+                        .map(|catch| count_reg_uses_in_body_recursive(&catch.body, target))
+                        .sum::<usize>()
+            }
+            _ => 0,
+        }
+}
+
+fn count_reg_uses_in_body_recursive(body: &[Stmt], target: &VReg) -> usize {
+    body.iter()
+        .map(|statement| count_reg_uses_in_stmt_recursive(statement, target))
+        .sum()
+}
+
 fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
     let take = std::mem::replace(e, Expr::Unknown(String::new()));
     *e = match take {
@@ -587,6 +644,44 @@ mod tests {
             !text.contains("%t0 ="),
             "temp definition not removed: {}",
             text
+        );
+    }
+
+    #[test]
+    fn loop_carried_temp_copy_is_not_inlined_only_into_the_guard() {
+        let counter = VReg::Temp(1);
+        let mut function = Function {
+            name: "fill".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: counter.clone(),
+                    src: Expr::Reg(VReg::phys("rcx#1")),
+                },
+                Stmt::While {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Reg(counter.clone())),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    body: vec![Stmt::Assign {
+                        dst: counter.clone(),
+                        src: Expr::Bin {
+                            op: BinOp::Sub,
+                            lhs: Box::new(Expr::Reg(counter)),
+                            rhs: Box::new(Expr::Const(1)),
+                        },
+                    }],
+                },
+            ],
+        };
+        let before = function.clone();
+
+        reconstruct(&mut function);
+
+        assert_eq!(
+            function, before,
+            "the loop counter is carried across iterations"
         );
     }
 

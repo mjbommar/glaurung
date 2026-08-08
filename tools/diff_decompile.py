@@ -643,6 +643,62 @@ _NATIVE_INTEGER_TYPE = {
 }
 
 
+def _native_flat_struct_layout(
+    desc: dict, fallback_name: str
+) -> tuple[str, str, list[tuple[str, str]]] | None:
+    """Render one binary-derived flat integer struct for a target worker.
+
+    The target comparator only needs object layout, not source spelling. Refuse
+    nested aggregates, links, overlaps, and unrepresentable scalar widths; a
+    partial declaration would turn an execution oracle into a false authority.
+    """
+    if desc.get("k") != "struct" or not 1 <= desc.get("w", 0) <= 256:
+        return None
+    name = desc.get("name", fallback_name)
+    if re.fullmatch(r"[A-Za-z_]\w*", name) is None:
+        name = fallback_name
+
+    declarations: list[str] = []
+    initializer_fields: list[tuple[str, str]] = []
+    offset_assertions: list[str] = []
+    cursor = 0
+    for index, field in enumerate(desc.get("fields", [])):
+        offset = field.get("off")
+        field_type = field.get("t", {})
+        if (
+            not isinstance(offset, int)
+            or offset < cursor
+            or field_type.get("k") != "int"
+        ):
+            return None
+        ctype = _NATIVE_INTEGER_TYPE.get((field_type.get("w"), field_type.get("s")))
+        if ctype is None:
+            return None
+        if offset > cursor:
+            declarations.append(f"uint8_t _dwarf_pad_{index}[{offset - cursor}];")
+        field_name = field.get("name", f"field_{index}")
+        if re.fullmatch(r"[A-Za-z_]\w*", field_name) is None:
+            field_name = f"field_{index}"
+        declarations.append(f"{ctype} {field_name};")
+        initializer_fields.append((field_name, ctype))
+        offset_assertions.append(
+            f"_Static_assert(offsetof({name}, {field_name}) == {offset}, "
+            f'"DWARF field offset");'
+        )
+        cursor = offset + field_type["w"]
+    if not initializer_fields or cursor > desc["w"]:
+        return None
+    if cursor < desc["w"]:
+        declarations.append(f"uint8_t _dwarf_tail_pad[{desc['w'] - cursor}];")
+    body = " ".join(declarations)
+    declaration = (
+        f"typedef struct {name} {{ {body} }} {name};\n"
+        f'_Static_assert(sizeof({name}) == {desc["w"]}, "DWARF layout");\n'
+        + "\n".join(offset_assertions)
+    )
+    return name, declaration, initializer_fields
+
+
 def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str | None:
     """Generate a dependency-free target worker for scalar/pointer C ABIs.
 
@@ -655,11 +711,14 @@ def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str 
     ret = _as_desc(sig["ret"])
     if ret["k"] not in {"int", "void"}:
         return None
-    if any(not isinstance(vector, list) or len(vector) != len(params) for vector in vectors):
+    if any(
+        not isinstance(vector, list) or len(vector) != len(params) for vector in vectors
+    ):
         return None
 
     param_types: list[str] = []
-    pointee_types: dict[int, str] = {}
+    pointee_types: dict[int, tuple[str, str, list[tuple[str, str]]]] = {}
+    struct_declarations: dict[str, tuple[dict, str]] = {}
     for index, desc in enumerate(params):
         if desc["k"] == "int":
             ctype = _NATIVE_INTEGER_TYPE.get((desc["w"], desc["s"]))
@@ -670,18 +729,32 @@ def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str 
         if desc["k"] != "ptr":
             return None
         pointee = _pointee_desc(desc)
-        if pointee["k"] != "int":
+        if pointee["k"] == "int":
+            ctype = (
+                "uint8_t"
+                if ptr_elem in {"u8", "cstr"}
+                else _NATIVE_INTEGER_TYPE.get((pointee["w"], pointee["s"]))
+            )
+            if ctype is None:
+                return None
+            pointee_types[index] = ("int", ctype, [])
+        elif pointee["k"] == "struct":
+            layout = _native_flat_struct_layout(pointee, f"GlaurungStruct{index}")
+            if layout is None:
+                return None
+            ctype, declaration, initializer_fields = layout
+            existing = struct_declarations.get(ctype)
+            if existing is not None and existing[0] != pointee:
+                return None
+            struct_declarations[ctype] = (pointee, declaration)
+            pointee_types[index] = ("struct", ctype, initializer_fields)
+        else:
             return None
-        ctype = "uint8_t" if ptr_elem in {"u8", "cstr"} else _NATIVE_INTEGER_TYPE.get(
-            (pointee["w"], pointee["s"])
-        )
-        if ctype is None:
-            return None
-        pointee_types[index] = ctype
-        param_types.append(f"{ctype} *")
+        qualifier = "const " if desc.get("const") else ""
+        param_types.append(f"{qualifier}{pointee_types[index][1]} *")
 
-    return_type = "void" if ret["k"] == "void" else _NATIVE_INTEGER_TYPE.get(
-        (ret["w"], ret["s"])
+    return_type = (
+        "void" if ret["k"] == "void" else _NATIVE_INTEGER_TYPE.get((ret["w"], ret["s"]))
     )
     if return_type is None:
         return None
@@ -689,10 +762,12 @@ def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str 
     lines = [
         "#include <dlfcn.h>",
         "#include <signal.h>",
+        "#include <stddef.h>",
         "#include <stdint.h>",
         "#include <stdio.h>",
         "#include <string.h>",
         "#include <unistd.h>",
+        *(declaration for _, declaration in struct_declarations.values()),
         f"typedef {return_type} (*measured_fn)({prototype});",
         "typedef void (*scrub_fn)(void);",
         "int main(void) {",
@@ -719,8 +794,30 @@ def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str 
                 continue
             if not isinstance(value, list) or not value:
                 return None
-            ctype = pointee_types[param_index]
-            initializer = ", ".join(str(int(item)) for item in value)
+            pointee_kind, ctype, initializer_fields = pointee_types[param_index]
+            if pointee_kind == "int":
+                try:
+                    initializer = ", ".join(str(int(item)) for item in value)
+                except (TypeError, ValueError):
+                    return None
+            else:
+                aggregates: list[str] = []
+                for item in value:
+                    if not isinstance(item, list) or len(item) != len(
+                        initializer_fields
+                    ):
+                        return None
+                    try:
+                        fields = ", ".join(
+                            f".{field_name} = ({field_type})({int(field_value)})"
+                            for (field_name, field_type), field_value in zip(
+                                initializer_fields, item
+                            )
+                        )
+                    except (TypeError, ValueError):
+                        return None
+                    aggregates.append("{" + fields + "}")
+                initializer = ", ".join(aggregates)
             original_name = f"o_{case_index}_{param_index}"
             recovered_name = f"d_{case_index}_{param_index}"
             lines.extend(

@@ -42,7 +42,7 @@ pub use crate::ir::regview::Arch as RegArch;
 /// at 0..=16 and AArch64 `x0`..`x30`,`sp`,`pc` at 0..=32).
 const NUM_PARENTS: usize = 40;
 /// Number of processor flags ([`Flag`] variants).
-const NUM_FLAGS: usize = 10;
+const NUM_FLAGS: usize = 11;
 
 /// How a physical register name maps onto a canonical full-width cell.
 #[derive(Debug, Clone, Copy)]
@@ -67,7 +67,8 @@ fn flag_idx(f: Flag) -> usize {
         Flag::O => 6,
         Flag::P => 7,
         Flag::A => 8,
-        Flag::Bit => 9,
+        Flag::D => 9,
+        Flag::Bit => 10,
     }
 }
 
