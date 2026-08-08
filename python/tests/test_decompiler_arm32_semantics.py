@@ -85,8 +85,11 @@ def _assert_qemu_round_trip(
     reference: Path,
     fixture: str,
     functions: set[str],
+    *,
+    arch: str = A32_ARCH,
+    opt: str = "O0",
 ) -> None:
-    """Require every selected source function to agree under A32 QEMU."""
+    """Require every selected source function to agree under ARM32 QEMU."""
     results = D.run(
         str(target),
         str(source),
@@ -94,9 +97,9 @@ def _assert_qemu_round_trip(
         seed=1234,
         fuzz=M.FIXTURE_FUZZ,
         reference_so=str(reference),
-        lane=f"{A32_ARCH}:O0",
-        native_cc=A.native_cc(A32_ARCH),
-        native_runner=A.native_runner(A32_ARCH),
+        lane=f"{arch}:{opt}",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
         only=functions,
     )
     assert {
@@ -263,6 +266,67 @@ def test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution(
     )
     assert results[function]["status"] == "pass", results
     assert results[function]["detail"].endswith("cases (native target ABI)"), results
+
+
+@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
+    ("arch", "opt"),
+    (("armv7", "O0"), ("armv7", "O2"), (A32_ARCH, "O0"), (A32_ARCH, "O2")),
+)
+def test_arm32_packet_parser_round_trips_bitfields_rotates_and_smlabb(
+    tmp_path: Path, arch: str, opt: str
+) -> None:
+    """The packet summary stays exact across source, ARM IR/C, and QEMU."""
+    fixture = "07_packet_parser"
+    function = "parse_packet"
+    source, target, reference = _build_arm32_fixture(tmp_path, fixture, arch, opt)
+
+    source_text = source.read_text()
+    assert "sum = (sum << 1) | (sum >> 31);" in source_text
+    assert "+ (int)hdr.type * 7" in source_text
+
+    parse_asm = subprocess.run(
+        [A32_OBJDUMP, "-d", f"--disassemble={function}", str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert parse_asm.returncode == 0, parse_asm.stderr
+    assert re.search(r"\bror(?:\.w)?\b", parse_asm.stdout), parse_asm.stdout
+    if opt == "O2":
+        assert "smlabb" in parse_asm.stdout, parse_asm.stdout
+
+    if opt == "O0":
+        decode_asm = subprocess.run(
+            [A32_OBJDUMP, "-d", "--disassemble=decode_header", str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert decode_asm.returncode == 0, decode_asm.stderr
+        assert decode_asm.stdout.count("bfi") >= 2, decode_asm.stdout
+
+        decoded = _decompile(target, "decode_header")
+        assert decoded.returncode == 0, decoded.stderr
+        assert "intrinsic bfi" not in decoded.stderr, decoded.stderr
+        assert "/* asm: bfi */" not in decoded.stdout, decoded.stdout
+
+    decompiled = _decompile(target, function)
+    assert decompiled.returncode == 0, decompiled.stderr
+    assert "===== prototype-resolved LLIR =====" in decompiled.stderr
+    assert "intrinsic ror" not in decompiled.stderr, decompiled.stderr
+    assert "intrinsic smlabb" not in decompiled.stderr, decompiled.stderr
+    assert "/* asm: ror */" not in decompiled.stdout, decompiled.stdout
+    assert "/* asm: smlabb */" not in decompiled.stdout, decompiled.stdout
+
+    _assert_qemu_round_trip(
+        target,
+        source,
+        reference,
+        fixture,
+        {function},
+        arch=arch,
+        opt=opt,
+    )
 
 
 @pytest.mark.parametrize("arch", ARM32_ARCHES)  # ty: ignore[unresolved-attribute]

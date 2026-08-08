@@ -1321,6 +1321,68 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
         }];
     }
 
+    // --- bitfield insert: bfi Rd, Rn, #lsb, #width ---------------------
+    // Preserve the destination outside the inserted lane and take the lane
+    // itself from the low `width` bits of Rn.  This is a read-modify-write,
+    // not an opaque side effect: GCC uses two BFIs to construct C bitfields at
+    // O0, and dropping them leaves the backing byte uninitialised.
+    if mnem == "bfi" && ops.len() == 4 {
+        if let (Some(dst), Some(src), Some(lsb), Some(width)) = (
+            operand_reg(&ops[0]),
+            operand_to_value(&ops[1]),
+            ops[2].immediate,
+            ops[3].immediate,
+        ) {
+            if (0..32).contains(&lsb) && (1..=32).contains(&width) && lsb + width <= 32 {
+                let lane_mask = if width == 32 {
+                    u32::MAX as i64
+                } else {
+                    (1i64 << width) - 1
+                };
+                let destination_mask = (lane_mask as u64) << lsb;
+                let kept_mask = (u64::from(u32::MAX) & !destination_mask) as i64;
+                let lane = VReg::Temp(0);
+                let mut out = vec![Op::Bin {
+                    dst: lane.clone(),
+                    op: BinOp::And,
+                    lhs: src,
+                    rhs: Value::Const(lane_mask),
+                }];
+                let placed = if lsb == 0 {
+                    Value::Reg(lane)
+                } else {
+                    let placed = VReg::Temp(1);
+                    out.push(Op::Bin {
+                        dst: placed.clone(),
+                        op: BinOp::Shl,
+                        lhs: Value::Reg(lane),
+                        rhs: Value::Const(lsb),
+                    });
+                    Value::Reg(placed)
+                };
+                let kept = VReg::Temp(if lsb == 0 { 1 } else { 2 });
+                out.extend([
+                    Op::Bin {
+                        dst: kept.clone(),
+                        op: BinOp::And,
+                        lhs: Value::Reg(dst.clone()),
+                        rhs: Value::Const(kept_mask),
+                    },
+                    Op::Bin {
+                        dst,
+                        op: BinOp::Or,
+                        lhs: Value::Reg(kept),
+                        rhs: placed,
+                    },
+                ]);
+                return out;
+            }
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+
     // --- or-not: orn Rd, Rn, Op2  ==>  Rd = Rn | ~Op2 -------------------
     if matches!(mnem, "orn" | "orns") && ops.len() == 3 {
         if let (Some(dst), Some(lhs)) = (operand_reg(&ops[0]), operand_to_value(&ops[1])) {
@@ -1358,12 +1420,17 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
     // Expanded as `(x >> n) | (x << (32-n))` over the 32-bit register. The
     // register-amount form is left unmodelled: the complement `32-n` would need
     // a second dynamic computation this arm does not have operands for.
-    if matches!(mnem, "ror" | "rors") && ops.len() == 3 {
-        if let (Some(dst), Some(src), Some(amount)) = (
-            operand_reg(&ops[0]),
-            operand_to_value(&ops[1]),
-            ops[2].immediate,
-        ) {
+    if matches!(mnem, "ror" | "rors") && matches!(ops.len(), 2 | 3) {
+        let decoded = match ops.len() {
+            2 => data_processing_shift(ins, ctx).and_then(|shift| {
+                (shift.kind == ShiftKind::Ror).then_some(i64::from(shift.amount))
+            }),
+            3 => ops[2].immediate,
+            _ => None,
+        };
+        if let (Some(dst), Some(src), Some(amount)) =
+            (operand_reg(&ops[0]), operand_to_value(&ops[1]), decoded)
+        {
             if (1..32).contains(&amount) {
                 let mut out = Vec::new();
                 let rotated = apply_shift(
@@ -1613,6 +1680,79 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
                 Op::Assign {
                     dst: rd_lo,
                     src: Value::Reg(t),
+                },
+            ];
+        }
+        return vec![Op::Unknown {
+            mnemonic: mnem.to_string(),
+        }];
+    }
+    // smlabb Rd, Rn, Rm, Ra: sign-extend the bottom halfword of both
+    // multiplicands, add the signed 32-bit accumulator, and keep the low 32
+    // result bits.  Perform the arithmetic at 64 bits so the emitted C is
+    // defined even where the architectural 32-bit addition wraps.
+    if mnem == "smlabb" && ops.len() == 4 {
+        if let (Some(rd), Some(rn), Some(rm), Some(ra)) = (
+            operand_reg(&ops[0]),
+            operand_to_value(&ops[1]),
+            operand_to_value(&ops[2]),
+            operand_to_value(&ops[3]),
+        ) {
+            let rn16 = VReg::Temp(0);
+            let rn64 = VReg::Temp(1);
+            let rm16 = VReg::Temp(2);
+            let rm64 = VReg::Temp(3);
+            let ra64 = VReg::Temp(4);
+            let product = VReg::Temp(5);
+            let sum = VReg::Temp(6);
+            return vec![
+                Op::Trunc {
+                    dst: rn16.clone(),
+                    src: rn,
+                    from: Width::W32,
+                    to: Width::W16,
+                },
+                Op::SExt {
+                    dst: rn64.clone(),
+                    src: Value::Reg(rn16),
+                    from: Width::W16,
+                    to: Width::W64,
+                },
+                Op::Trunc {
+                    dst: rm16.clone(),
+                    src: rm,
+                    from: Width::W32,
+                    to: Width::W16,
+                },
+                Op::SExt {
+                    dst: rm64.clone(),
+                    src: Value::Reg(rm16),
+                    from: Width::W16,
+                    to: Width::W64,
+                },
+                Op::SExt {
+                    dst: ra64.clone(),
+                    src: ra,
+                    from: Width::W32,
+                    to: Width::W64,
+                },
+                Op::Bin {
+                    dst: product.clone(),
+                    op: BinOp::Mul,
+                    lhs: Value::Reg(rn64),
+                    rhs: Value::Reg(rm64),
+                },
+                Op::Bin {
+                    dst: sum.clone(),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(product),
+                    rhs: Value::Reg(ra64),
+                },
+                Op::Trunc {
+                    dst: rd,
+                    src: Value::Reg(sum),
+                    from: Width::W64,
+                    to: Width::W32,
                 },
             ];
         }
@@ -2742,6 +2882,10 @@ pub fn lift_bytes_in_image(
     }
     out
 }
+
+#[cfg(test)]
+#[path = "lift_arm32/packet_tests.rs"]
+mod packet_tests;
 
 #[cfg(test)]
 mod tests {
