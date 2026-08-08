@@ -2449,3 +2449,53 @@ metric cells. It reports no GED, type-match, or byte-match regression and ends
 with `HEAVY GATE: passed (all five lanes ran)`. Its log is
 `/tmp/glaurung-arm32-packet-evidence/decbench-local-gate.log`, SHA-256
 `17b9134f1d25ea354c597685b69d8920644eff8cb58d829efd86b2eebbb6d5f6`.
+
+## 2026-08-08 14:33 — ARM32 signed long multiply-accumulate
+
+The next exact residual was `30_finite_difference:heat_step_1d` at Thumb and
+A32 O2. Both target binaries fail native case 3 before the repair and both use
+`smlal r3,r7,ip,r2` to implement the source's signed 64-bit stencil term
+`2 * (int64_t)source[i]`. The lifter emitted only `unknown(smlal)`, so recovered
+C dropped the center sample from the weighted sum. Retained source, immutable
+binaries and hashes, disassembly, before/after numbered pass dumps, emitted C,
+and native verdicts are under `/tmp/glaurung-arm32-shared-evidence/`.
+
+The new lowering first joins the raw `RdHi:RdLo` accumulator in 64-bit
+temporaries, sign-extends both 32-bit multiplicands, performs the multiply and
+64-bit modular add, then truncates/extracts the low and high destination words.
+All inputs are materialized before either destination write, preserving the
+architecturally permitted source/destination overlap. Production logic lives
+in the 94-line `lift_arm32/wide_multiply.rs` module instead of further growing
+the 4,700-line parent lifter. Exact Thumb and A32 instruction regressions were
+RED with `Op::Unknown` and are now GREEN; the real product test also requires
+the source expression, exact `smlal` assembly, semantic numbered LLIR, no
+residual intrinsic/comment, and the qemu-arm differential. Both modes pass all
+35 native target-ABI cases.
+
+The controlled Thumb/A32 O2 plus pinned x86 replay changes exactly those two
+cells from fail to pass with zero regressions. A full pre-refresh ratchet
+independently reports the same two improvements and totals 1,757 pass, 43 known
+fail, 228 structural, and six declared unsupported cells. The guarded refresh
+changes only those two baseline lines, and a third full replay matches exactly;
+its log is `/tmp/glaurung-arm32-shared-evidence/full-arch-exact.log`, SHA-256
+`1af19a67c0ebf53165c0189d3963ab7909fb1c20c03fb0f2ce5ee4ccff308bbd`.
+
+`cargo test --all-targets` passes 1,871 library tests and 1,964 total tests;
+its log hashes to
+`f25e0df85d04824a712f62b975dc76082cf626d4b0125a517dbd9077553b0925`.
+The first full Python run exposed only the expected fresh-worktree environment
+effects: the repository-local venv did not yet exist, and its first `uv run`
+reconciled the editable package into tutorial output. After the required local
+release build and one clean preflight, both tests pass and the stable exact-tree
+rerun passes 2,848 tests with 43 declared skips and zero failures. Its log is
+`/tmp/glaurung-arm32-shared-evidence/python-full-stable.log`, SHA-256
+`14dc2073541875f0ff564730b362ead44d88f727ed0bdc1fce54ac42ceae98b8`.
+Rust formatting, owned Python Ruff formatting/lint and type checking, and
+`git diff --check` pass.
+
+The fresh-release five-lane decompiler gate passes its Rust preflight, all 31
+pinned x86 fixtures, the exact architecture ratchet, both executable behavior
+corpora, and all 56 official metric cells with no GED, type-match, or
+byte-match regression. Its log is
+`/tmp/glaurung-arm32-shared-evidence/decbench-local-gate.log`, SHA-256
+`82e5d4a5a494750bfc9605d0a713774dedb3171d24e045e39885c29223b8305a`.

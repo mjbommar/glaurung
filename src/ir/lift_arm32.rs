@@ -29,6 +29,9 @@ use crate::disasm::capstone::CapstoneDisassembler;
 
 use crate::ir::types::*;
 
+#[path = "lift_arm32/wide_multiply.rs"]
+mod wide_multiply;
+
 fn operand_reg(op: &Operand) -> Option<VReg> {
     if matches!(op.kind, OperandKind::Register) {
         op.register.clone().map(VReg::phys)
@@ -1687,6 +1690,13 @@ fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
             mnemonic: mnem.to_string(),
         }];
     }
+    if mnem == "smlal" {
+        return wide_multiply::lift_signed_long_multiply_accumulate(&ops).unwrap_or_else(|| {
+            vec![Op::Unknown {
+                mnemonic: mnem.to_string(),
+            }]
+        });
+    }
     // smlabb Rd, Rn, Rm, Ra: sign-extend the bottom halfword of both
     // multiplicands, add the signed 32-bit accumulator, and keep the low 32
     // result bits.  Perform the arithmetic at 64 bits so the emitted C is
@@ -2886,6 +2896,10 @@ pub fn lift_bytes_in_image(
 #[cfg(test)]
 #[path = "lift_arm32/packet_tests.rs"]
 mod packet_tests;
+
+#[cfg(test)]
+#[path = "lift_arm32/wide_multiply_tests.rs"]
+mod wide_multiply_tests;
 
 #[cfg(test)]
 mod tests {
