@@ -1,5 +1,9 @@
 # 04 - Phased plan
 
+> **Status: historical phased implementation plan.** Multiple phases have
+> landed, while default-backend and broader admission goals remain incomplete.
+> Do not infer current completion from this checklist alone.
+
 Sequenced small-unit-first: a walking skeleton that proves the whole flow
 before any code coupling, then the real native backend, then default, then
 performance, then the Android use case. Each phase has explicit entry and

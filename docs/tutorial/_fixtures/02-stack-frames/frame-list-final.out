@@ -1,6 +1,6 @@
   offset  name                      type                       size  uses  set_by
 ---------------------------------------------------------------------------------
--0x1b0  url_buffer                char[256]                           2  manual
+-0x1b0  service_path              char[48]                            2  manual
 -0x180  var_180                   (unknown)                    48     2  auto
 -0x178  var_178                   (unknown)                     8     1  auto
 -0x170  var_170                   (unknown)                     8     1  auto

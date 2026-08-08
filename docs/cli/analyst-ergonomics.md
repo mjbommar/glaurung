@@ -2,7 +2,8 @@
 
 These commands remove per-session re-derivation of things glaurung already
 owns (symbols, disasm, lock primitives) and make every analysis declare what
-it did *not* model. Origin + rationale: `docs/campaigns/analyst-ergonomics-2026-06-DIFF.md`.
+it did *not* model. Origin and rationale are in the
+[analyst-ergonomics campaign record](../campaigns/analyst-ergonomics-2026-06-DIFF.md).
 
 A cross-cutting rule: each analysis here ends with a **coverage footer**
 (`glaurung.llm.coverage.CoverageFooter`) listing the facts it established and
@@ -18,8 +19,8 @@ names into `function_names` (provenance `pdb`) automatically -- no flag needed.
 A stripped Windows driver should never come back all `sub_XXXX` when a PDB is
 resolvable.
 
-```
-glaurung kickoff driver.sys --db driver.glaurung
+```bash
+uv run glaurung kickoff driver.sys --db driver.glaurung
 ```
 
 - Cache dir resolution: `$GLAURUNG_PDB_CACHE` -> a local `_NT_SYMBOL_PATH`
@@ -37,9 +38,11 @@ Disassemble one function from a `.glaurung` project with call targets and
 RIP-relative references symbol-resolved, bounds taken from the discovered
 function set.
 
-```
-glaurung disasm driver.sys --db driver.glaurung --function VidSchiCheckPendingDeviceCommand
-glaurung disasm driver.sys --db driver.glaurung --function 0x140013f24 --json
+```bash
+uv run glaurung disasm driver.sys --db driver.glaurung \
+  --function VidSchiCheckPendingDeviceCommand
+uv run glaurung disasm driver.sys --db driver.glaurung \
+  --function 0x140013f24 --json
 ```
 
 Annotations: direct `call`/`jmp` targets -> `function_names`; `call [rip+slot]`
@@ -50,8 +53,9 @@ not treated as unresolved. The footer reports resolved/unresolved counts.
 
 Primitive-complete, CFG-aware lock inventory for one function.
 
-```
-glaurung locks driver.sys --db driver.glaurung --function VidSchSignalSyncObjectsFromCpu
+```bash
+uv run glaurung locks driver.sys --db driver.glaurung \
+  --function VidSchSignalSyncObjectsFromCpu
 ```
 
 - Models BOTH raw kernel APIs (`Ke*`/`Ex*AcquireXxx`/`ReleaseXxx`) AND C++ RAII
@@ -73,8 +77,10 @@ Driver families share pools; an out-of-bounds write in one module can corrupt
 an allocation owned by another. `group` reports the pool TAGS shared across
 members (the cross-module corruption surface).
 
-```
-glaurung group --member dxgmms2=dxgmms2.sys --member dxgmms1=dxgmms1.sys
+```bash
+uv run glaurung group \
+  --member dxgmms2=dxgmms2.sys \
+  --member dxgmms1=dxgmms1.sys
 ```
 
 Tags are the `Tag` argument to `ExAllocatePoolWithTag` / `ExAllocatePool2`.
@@ -84,7 +90,7 @@ modeled.
 
 ## `diff` relocation-only flag
 
-`glaurung diff --json` now tags each `changed` row with `relocation_only`:
+`uv run glaurung diff --json` tags each `changed` row with `relocation_only`:
 true when every block matched structurally (`similarity >= 0.999`), i.e. the
 delta is relocation / block-reordering noise rather than a real instruction
 change. Pure relocations already collapse to status `same` (the structural

@@ -1,5 +1,8 @@
 # GLAURUNG Data Model Proposal - GROK4
 
+> **Status: historical model proposal.** Illustrative types below are not the
+> current Rust, Python, triage, or persistence API.
+
 ## Address
 ## Purpose
 Represents a memory address in the binary, supporting virtual, physical, and overlay spaces.

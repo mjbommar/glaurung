@@ -1,48 +1,69 @@
-# Linux System Calls
+# Linux system calls
 
-This document provides an overview of the Linux system call (syscall) interface, how it works, and where to find relevant information.
+> **Status: maintained conceptual reference.** Use this page to interpret
+> syscall instructions and tables. It does not document a shipped Glaurung Linux
+> syscall decoder or emulator.
 
-## Key Characteristics
+Linux system calls form a userspace/kernel ABI. Existing syscall interfaces are
+expected to remain available, but numbers, argument registers, compatibility
+wrappers, and entry instructions are architecture- and ABI-specific. Bind every
+number lookup to an architecture and ABI such as x86-64, i386, x32, AArch64, or
+RISC-V.
 
-The Linux syscall interface is designed to be **stable and reliable**. Unlike other operating systems, the syscall numbers and their corresponding functions are a public Application Binary Interface (ABI) that is rarely changed. This stability is a core design principle, ensuring that compiled applications continue to work across different kernel versions.
+Application code normally calls a libc wrapper. A wrapper can adapt arguments,
+select a newer syscall, or provide userspace behavior. When no wrapper exists,
+Linux exposes `syscall(2)` for a direct call. Therefore a source-level function
+name and a machine-level syscall are related evidence, not always a one-to-one
+mapping.
 
-- **Direct Invocation:** While possible, syscalls are not typically invoked directly by application developers. Instead, they are wrapped by functions in standard libraries like `glibc`. For example, when a programmer calls the `open()` function, the C library handles the low-level details of placing the syscall number and arguments into the correct registers and triggering the kernel trap.
-- **Architecture Specific:** Syscall numbers, calling conventions, and the exact mechanism for entering the kernel (`syscall`, `sysenter`, `int 0x80`) are specific to the hardware architecture (e.g., x86_64, aarch64).
+## Finding authoritative definitions
 
-## Finding Syscall Information
+For the kernel revision being analyzed, use:
 
-The "database" of syscalls is distributed across kernel source code and documentation.
+- `scripts/syscall.tbl` for architectures using the common generated table on
+  current kernels;
+- `include/uapi/asm-generic/unistd.h` for generic UAPI definitions where still
+  applicable;
+- `arch/x86/entry/syscalls/syscall_64.tbl` and `syscall_32.tbl` for x86 ABIs;
+- architecture-specific tables and entry code under `arch/<arch>/`; and
+- `SYSCALL_DEFINEn(name, ...)` implementations plus their UAPI structures.
 
-### 1. Manual Pages (man pages)
+The kernel's
+[adding-syscalls guide](https://www.kernel.org/doc/html/latest/process/adding-syscalls.html)
+documents the common and x86 table locations, compatibility wrappers, and the
+post-6.11 common-table workflow. The
+[ABI guide](https://www.kernel.org/doc/html/latest/admin-guide/abi.html)
+describes the stability expectation. Manual pages document user-visible
+semantics, but the exact kernel tree remains the implementation ground truth.
 
-This is the most direct and authoritative source of documentation for a developer.
+## Calling-convention example
 
-- **`man syscalls`**: Provides a comprehensive list of all system calls available in the kernel.
-- **`man 2 <syscall_name>`**: Provides the detailed manual page for a specific syscall (e.g., `man 2 open`). This includes:
-    - The C function prototype.
-    - A detailed description of its purpose.
-    - An explanation of each argument.
-    - Information on the return value and possible error codes (`errno`).
+On the native x86-64 Linux ABI, the syscall number is placed in `rax`; arguments
+use `rdi`, `rsi`, `rdx`, `r10`, `r8`, and `r9`; the `syscall` instruction enters
+the kernel; and a negative return in the kernel error range is translated by
+libc into `-1` plus `errno`. Do not reuse that register map for i386, x32, ARM,
+or another ABI.
 
-### 2. Online Reference Tables
+Static analysis must also account for indirect wrappers, vDSO calls,
+compatibility entry points, seccomp filtering, and dynamically constructed
+numbers. Seeing a trap instruction establishes a boundary, not the syscall name
+or argument meaning by itself.
 
-For a quick, searchable overview, several community-maintained websites provide excellent syscall tables. These are often the most convenient way to look up a syscall number or find its arguments.
+## Current Glaurung boundary
 
-- **[Filippo Valsorda's Linux Syscall Table (x86_64)](https://filippo.io/linux-syscall-table/)**: An interactive and searchable table for the x86_64 architecture. It includes the syscall number, name, register mapping for arguments, and links to the kernel source code.
+`src/core/instruction.rs` classifies mnemonics such as `syscall`, `sysenter`,
+`int`, and `svc` as system-call instructions. The typed IR can carry a generic
+`syscall` intrinsic name. The current checkout does **not** ship a complete
+Linux syscall-number table, argument decoder, libc-wrapper resolver, or OS
+emulation layer.
 
-### 3. The Kernel Source Code (The Ultimate Ground Truth)
+The OS/syscall layer described under `docs/design/execution-engine/` is design
+work. Do not cite it as implemented behavior. For present analysis, report the
+instruction, architecture/ABI, number evidence, and unresolved argument roles
+separately.
 
-The kernel source code is the definitive reference for how syscalls are implemented.
+Focused instruction classification is covered by:
 
-- **Syscall Table Files**: These files map syscall numbers to their function names. For the x86_64 architecture, the primary file is located at:
-  - `arch/x86/entry/syscalls/syscall_64.tbl`
-
-- **Syscall Definitions**: The actual implementation of a syscall is defined in the kernel code using a family of macros. This makes it easy to find them.
-  - `SYSCALL_DEFINE1(name, ...)`
-  - `SYSCALL_DEFINE2(name, ...)`
-  - `...`
-  - `SYSCALL_DEFINE6(name, ...)`
-
-  The number corresponds to the number of arguments the syscall takes. For example, you can find the implementation of the `read` syscall by searching for `SYSCALL_DEFINE3(read, ...)` in the kernel source, primarily within the `fs/` and `kernel/` directories.
-
-- **Data Structures**: The definitions for structures and types used as arguments in syscalls are found in the kernel header files, primarily under `include/linux/` and `include/uapi/linux/`.
+```bash
+uv run pytest python/tests/test_instruction.py -q
+```

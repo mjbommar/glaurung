@@ -1,5 +1,9 @@
 # #199 -- PE format hardening design
 
+> **Status: historical design record; the four named directory capabilities
+> have shipped.** Current parser source and focused PE tests supersede statements
+> below that describe them as absent.
+
 > Four PE data-directory entries Glaurung does not currently
 > parse. Each gates a class of analysis (or rule encoding) the
 > `agentic-security-bot` (asb) windows-port campaign needs.

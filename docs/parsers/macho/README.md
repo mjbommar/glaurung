@@ -1,5 +1,9 @@
 # Mach-O Parser Documentation
 
+> **Status: historical design record.** The consolidated parser and Rust data
+> model described below were not implemented as `src/formats/macho`. See the
+> [parser index](../README.md) for current triage, symbol, and analysis helpers.
+
 ## Overview
 
 Mach-O (Mach Object) is the native executable format for Apple platforms including macOS, iOS, iPadOS, watchOS, and tvOS. GLAURUNG's Mach-O parser handles executables, dynamic libraries (dylibs), bundles, kernel extensions (kexts), and universal binaries (fat archives).

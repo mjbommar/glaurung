@@ -1,26 +1,26 @@
 ── pseudocode (enclosing function) ──
 fn main {
-    // x86-64 prologue: save rbp, frame 32 bytes
-    local_0 = 0;
-    local_1 = arg0;
-    local_2 = arg1;
-    printf@plt("Hello, World from C!\n");  // proto: int printf(const char * fmt, ...)
-    local_3 = 0;
-    local_4 = 0;
-    ret = local_5;
-    t11 = local_6;
-    if ((ret < t11)) {
-        print_sum(local_7);
-        static_function();
-        ret = 0;
-        rsp = (rsp + 32);
-        pop(rbp);
-        return;
-    }
-    ret = local_2;
-    unknown(movsxd);
-    strlen@plt(*&[ret+arg3*8]);  // proto: size_t strlen(const char * s)
-    arg3 = ret;
-    unknown(movsxd);
-    ret = (ret + arg3);
-    local_3 = ret;
+    // x86-64 prologue: save rbp
+    t32 = (rsp < 32);
+    rsp = (rsp - 32);
+    %sf = (rsp < 0);
+    %of = (t32 ^ %sf);
+    var_4 = 0;
+    var_8 = arg0;
+    var_10 = arg1;
+    var0 = printf@plt("Hello, World from C!\n");  // proto: int printf(const char * fmt, ...)
+    ret = var0;
+    var_14 = 0;
+    var_18 = 0;
+    while (1) {
+        ret = (unsigned long)((unsigned int)(var_18));
+        t11 = var_8;
+        t30 = (long)((int)(ret));
+        t31 = (long)((int)(t11));
+        t35 = (unsigned long)((unsigned int)(ret));
+        t36 = (unsigned long)((unsigned int)(t11));
+        t32 = (t30 < t31);
+        t33 = (ret - t11);
+        t134 = (unsigned long)((unsigned int)(t33));
+        %sf = ((long)((int)(t33)) < 0);
+        %of = (t32 ^ %sf);

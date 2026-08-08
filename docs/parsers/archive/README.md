@@ -1,5 +1,10 @@
 # Archive Format Parser Documentation
 
+> **Status: historical design record.** This page proposes extraction and
+> validation capabilities that are not a current public API. See the
+> [parser index](../README.md) and [triage guide](../../triage/README.md) for
+> bounded container detection and recursion behavior.
+
 ## Overview
 
 Archive formats are container formats that bundle multiple files and directories into a single file. GLAURUNG's archive parser handles various formats including ZIP, TAR, AR, CPIO, and others, providing safe extraction and analysis capabilities.

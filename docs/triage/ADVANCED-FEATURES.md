@@ -1,5 +1,9 @@
 # Advanced Features for GLAURUNG Triage System
 
+> **Status: historical design.** The APIs and capabilities below are proposed
+> architecture, not maintained operator guidance. Start with
+> [`README.md`](README.md) for the current implementation.
+
 ## Overview
 
 This document outlines advanced features that would elevate GLAURUNG's triage system beyond basic binary classification into a comprehensive binary intelligence platform.

@@ -1,209 +1,173 @@
 # §Z — Evidence and citations
 
-The `evidence_log` table is Glaurung's truth ledger. Every memory
-tool the agent calls records a row capturing what was asked, what
-came back, and a one-line summary. The agent's responses cite
-these rows by id.
+`evidence_log` is an append-only record of selected tool observations in a
+persistent `.glaurung` project. It stores the tool name, serialized inputs,
+summary, optional address range, serialized output, and timestamp.
 
-This chapter shows you how to read the log directly — useful for
-spot-checking the agent's claims, building your own analyst
-report, or debugging a session where the agent's answer didn't
-match expectations.
+It is an audit aid, not a truth oracle. A row proves what Glaurung recorded for
+that invocation; it does not prove that the tool interpreted the binary
+correctly or that an agent's conclusion follows from the output.
 
-> **Verified output.** Every block is captured by
-> `scripts/verify_tutorial.py` and stored under
-> [`_fixtures/05-kickoff-anatomy/`](../_fixtures/05-kickoff-anatomy/).
-> The fixtures show the evidence_log on a fresh post-kickoff
-> `.glaurung` (one row, one tool call). After an agent session
-> the table will have many more rows — the schema and shape are
-> the same.
+## Create a verified example
 
-## Reading the log
-
-The `.glaurung` file is SQLite. The evidence table is queryable
-with any sqlite3 client. Right after a fresh `kickoff`:
+From the repository root:
 
 ```bash
-$ sqlite3 demo.glaurung \
-    "SELECT cite_id, tool, summary FROM evidence_log ORDER BY cite_id LIMIT 10;"
+BIN="samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0"
+DB="demo.glaurung"
+
+uv run glaurung kickoff "$BIN" --db "$DB"
 ```
 
-```text
-1|kickoff_analysis|kickoff: 6 fns, 6 named, 90 slots, 18 propagated, 0 structs
-```
-
-(Captured: [`_fixtures/05-kickoff-anatomy/evidence-log-head.out`](../_fixtures/05-kickoff-anatomy/evidence-log-head.out).)
-
-One row, because only one tool has run — `kickoff_analysis`
-itself. After a few rounds of agent chat the log fills up with
-`view_function`, `list_xrefs_to`, `get_function_prototype`, etc.
-rows.
-
-## The full schema
+Kickoff attempts to append one binary-scope row:
 
 ```bash
-$ sqlite3 demo.glaurung ".schema evidence_log"
+sqlite3 "$DB" \
+  "SELECT cite_id, tool, summary FROM evidence_log ORDER BY cite_id LIMIT 10;"
 ```
 
-```sql
-CREATE TABLE evidence_log (
-    cite_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    binary_id INTEGER NOT NULL,
-    tool TEXT NOT NULL,             -- e.g. "view_hex", "decompile_function"
-    args_json TEXT NOT NULL,        -- inputs the tool was called with
-    summary TEXT NOT NULL,          -- short human-readable description
-    va_start INTEGER,               -- nullable: VA range this evidence covers
-    va_end INTEGER,                 -- exclusive end
-    file_offset INTEGER,            -- nullable file-offset alternative
-    output_json TEXT,               -- structured output (caller-defined schema)
-    created_at INTEGER NOT NULL
-);
-CREATE INDEX idx_evidence_binary
-    ON evidence_log(binary_id);
-CREATE INDEX idx_evidence_tool
-    ON evidence_log(binary_id, tool);
-CREATE INDEX idx_evidence_va
-    ON evidence_log(binary_id, va_start);
-```
+The current result is captured in
+[`evidence-log-head.out`](../_fixtures/05-kickoff-anatomy/evidence-log-head.out).
+Analyzer counts are intentionally read from that live fixture rather than
+duplicated here.
 
-(Captured: [`_fixtures/05-kickoff-anatomy/evidence-log-schema.out`](../_fixtures/05-kickoff-anatomy/evidence-log-schema.out).)
-
-Useful columns:
-
-- `cite_id` — the int the agent's responses cite.
-- `tool` — which memory tool was invoked.
-- `args_json` — exactly what the agent passed in.
-- `summary` — one-line digest used in agent responses.
-- `output_json` — the full structured result.
-- `va_start` / `va_end` — for tools anchored to a VA range
-  (decompile, view, xrefs).
-
-A row's `args_json` and `output_json` start with the tool's input
-shape and structured output respectively:
+## Inspect the schema
 
 ```bash
-$ sqlite3 demo.glaurung \
-    "SELECT cite_id, tool, summary, va_start, va_end,
-            substr(args_json, 1, 80) AS args_head,
-            substr(output_json, 1, 80) AS output_head
-     FROM evidence_log ORDER BY cite_id LIMIT 3;"
+sqlite3 "$DB" ".schema evidence_log"
 ```
 
-```text
-1|kickoff_analysis|kickoff: 6 fns, 6 named, 90 slots, 18 propagated, 0 structs|||{"binary_path": "/nas4/data/workspace-infosec/glaurung/samples/binaries/platform|{"arch": "x86_64", "auto_structs_emitted": 0, "by_set_by": {"analyzer": 6}, "cal
-```
+See the verified
+[`evidence-log-schema.out`](../_fixtures/05-kickoff-anatomy/evidence-log-schema.out)
+for the exact schema. The important columns are:
 
-(Captured: [`_fixtures/05-kickoff-anatomy/evidence-log-args-output.out`](../_fixtures/05-kickoff-anatomy/evidence-log-args-output.out).)
+| Column | Meaning |
+| --- | --- |
+| `cite_id` | Database-local integer identifier for the row |
+| `binary_id` | Binary in this project to which the row belongs |
+| `tool` | Recorded tool name |
+| `args_json` | JSON-serialized tool inputs |
+| `summary` | Short display summary |
+| `va_start`, `va_end` | Optional half-open virtual-address range |
+| `file_offset` | Optional file offset when no VA applies |
+| `output_json` | Optional JSON-serialized structured result |
+| `created_at` | Unix timestamp in seconds |
 
-The `va_start` / `va_end` columns are empty for `kickoff_analysis`
-because it's a binary-scope tool, not anchored to a VA range.
-Per-function tools like `view_function` and `list_xrefs_to`
-populate them.
-
-## Verify a citation
-
-> **Illustrative**: the example below assumes the agent has run
-> several tool calls (cite_id 12 in particular). The query shape
-> is what's verified; the row contents will reflect whatever the
-> agent actually saw in your session.
-
-The agent said "C2 endpoints found at 0x4040 (cite 12)." Check it:
+Inspect the structured fields instead of relying only on `summary`:
 
 ```bash
-sqlite3 demo.glaurung "SELECT tool, summary, args_json, output_json
-                       FROM evidence_log WHERE cite_id = 12;"
+sqlite3 -header -column "$DB" \
+  "SELECT cite_id, tool, args_json, output_json
+     FROM evidence_log
+    ORDER BY cite_id
+    LIMIT 3;"
 ```
 
-```
-tool: list_xrefs_to
-summary: xrefs to 0x4040: 6 data_read sites
-args_json: {"va": 16448, "kinds": ["data_read"]}
-output_json: [{"src_va": 4505, "kind": "data_read", ...}, ...]
-```
+The verifier also captures shortened fields in
+[`evidence-log-args-output.out`](../_fixtures/05-kickoff-anatomy/evidence-log-args-output.out).
+Repository paths and timestamps are normalized only in checked-in fixtures;
+your database retains the actual values.
 
-Match? The agent's claim of "C2 endpoints at 0x4040" is grounded
-in `list_xrefs_to(va=0x4040, kinds=['data_read'])` returning 6
-sites. ✓
+## Logging scope and limitations
 
-## Filter by tool
+Persistent logging is best-effort. Logging failures are deliberately prevented
+from breaking analysis, so a missing row does not prove a tool was never run.
+Conversely, a row with an error summary records a failed attempt, not successful
+evidence.
+
+The generic evidence wrapper logs deterministic memory-tool calls only when the
+agent context uses a persistent knowledge base. This distinction matters:
+
+- `kickoff --db PROJECT` uses a persistent project and records its aggregate
+  kickoff observation;
+- `repl BINARY --db PROJECT`, including its `ask` command, reuses that project;
+- standalone `ask BINARY -a QUESTION` currently uses an in-memory knowledge
+  base, so generic tool rows disappear when the command exits; and
+- not every internal helper is necessarily an evidence-wrapped tool.
+
+Therefore, do not promise “one row for every model action.” Check the actual
+project and preserve `--show-tools` output when using standalone `ask`.
+
+## Verify a cited claim
+
+Suppose a report references cite ID 7. Resolve the row first:
 
 ```bash
-sqlite3 demo.glaurung "SELECT cite_id, summary FROM evidence_log
-                       WHERE tool = 'view_function' ORDER BY cite_id;"
+sqlite3 -json "$DB" \
+  "SELECT cite_id, tool, args_json, summary,
+          va_start, va_end, file_offset, output_json, created_at
+     FROM evidence_log
+    WHERE cite_id = 7;"
 ```
 
-Lists every function the agent decompiled this session. Pair this
-with `va_start` to see *which* functions:
+Then review it in this order:
+
+1. Does the row exist in the intended project and for the intended binary?
+2. Do `tool` and `args_json` match the operation the report describes?
+3. Does `output_json` directly support the narrow claim, or is the claim an
+   inference?
+4. If a VA range is present, does independent disassembly or decompilation
+   agree?
+5. Could a tool error, truncation, analysis budget, packer, or missing metadata
+   explain an incomplete result?
+
+If any link is missing, label the statement as unverified or unsupported. A
+confident model sentence does not repair a mismatched citation.
+
+## Useful queries
+
+Recent observations:
 
 ```bash
-sqlite3 demo.glaurung "SELECT cite_id, printf('0x%x', va_start), summary
-                       FROM evidence_log WHERE tool = 'view_function';"
+sqlite3 -header -column "$DB" \
+  "SELECT cite_id, datetime(created_at, 'unixepoch') AS utc, tool, summary
+     FROM evidence_log
+    ORDER BY cite_id DESC
+    LIMIT 20;"
 ```
 
-## Filter by VA range
-
-The agent claimed something at 0x1160. What did it look at near
-that VA?
+Calls for one tool:
 
 ```bash
-sqlite3 demo.glaurung "SELECT cite_id, tool, summary FROM evidence_log
-                       WHERE va_start BETWEEN 0x1100 AND 0x1300
-                       ORDER BY cite_id;"
+sqlite3 -header -column "$DB" \
+  "SELECT cite_id, va_start, va_end, summary
+     FROM evidence_log
+    WHERE tool = 'view_function'
+    ORDER BY cite_id;"
 ```
 
-## Build your own report from the log
-
-Every analyst session leaves a complete audit trail. Generate a
-markdown summary:
+Rows whose recorded VA range contains `0x1160`, plus binary-scope rows:
 
 ```bash
-sqlite3 demo.glaurung -separator $'\t' \
-  "SELECT cite_id, tool, printf('0x%x', va_start), summary
-   FROM evidence_log ORDER BY cite_id;" | \
-  awk -F'\t' '{ printf "- [%s] **%s** %s — %s\n", $1, $2, $3, $4 }'
+sqlite3 -header -column "$DB" \
+  "SELECT cite_id, tool, summary
+     FROM evidence_log
+    WHERE va_start IS NULL
+       OR (va_start <= 0x1160 AND va_end > 0x1160)
+    ORDER BY cite_id;"
 ```
 
-```markdown
-- [1] **kickoff_analysis** — ELF/x86_64, 6 functions, ...
-- [2] **list_strings** — sampled 20 of 38 strings
-- [3] **view_function** 0x1160 — 432-byte frame, snprintf+memcpy
-- [4] **list_xrefs_to** 0x4040 — 6 data_read sites
-- ...
-```
+The `NULL` branch is intentional: binary-scope observations such as kickoff do
+not have a function-specific range.
 
-This is the agent's working transcript. Keep it as part of your
-case file.
+## Preserve and share evidence safely
 
-## What this enables
+A project can contain local paths, analyst comments, model/tool inputs,
+recovered strings, and structured outputs. Treat it as case data:
 
-**Reproducibility.** Re-run the same kickoff on the same binary
-and you get the same `evidence_log`. The agent's answer might
-phrase differently between runs (LLM nondeterminism), but the
-underlying tool calls are deterministic and recorded.
+- record the binary hash, Glaurung commit, command/options, and model name;
+- keep the usage log and standalone `--show-tools` output when applicable;
+- inspect or redact sensitive rows before sharing the database;
+- use access controls appropriate for the underlying binary; and
+- never treat a changed analyzer count after an upgrade as silent proof of a
+  regression—reproduce it on the same revision and options first.
 
-**Audit.** "Why does the agent think 0x4040 is the C2 endpoint
-table?" Look up the citations in evidence_log. If the agent's
-claims trace back to a sequence of tool calls that match the
-binary's actual structure, the conclusion is sound. If the
-citations are vague or unrelated, the answer is suspect.
+Reproducibility is conditional on the binary, Glaurung version, configuration,
+available debug metadata, and any external symbol data. Natural-language model
+responses add another nondeterministic layer. Preserve those inputs if another
+analyst must reproduce the conclusion.
 
-**Sharing.** A `.glaurung` file with its evidence_log is a
-complete artifact of an analysis session. Send it to a teammate
-and they can re-read every tool call you (or your agent) made.
-
-## What's next
-
-You've finished the tutorial track. Next steps are project-
-specific — open a real binary, run kickoff, and start asking
-questions.
-
-For the broader roadmap: see
-[`docs/architecture/IDA_GHIDRA_PARITY.md`](../../architecture/IDA_GHIDRA_PARITY.md)
-for what's shipped and what's pending.
-
-For deeper dives:
-
-- [Tier 4 — Recipes](../04-recipes/) — short copy-paste recipes
-  for diff / export / typed-locals / bench.
-- [Reference](../reference/) — CLI cheatsheet, REPL keymap,
-  set_by ladder, sample corpus.
+This completes the tutorial track. Continue with the
+[CLI cheatsheet](../reference/cli-cheatsheet.md),
+[sample corpus](../reference/sample-corpus.md), or the broader
+[documentation index](../../README.md).

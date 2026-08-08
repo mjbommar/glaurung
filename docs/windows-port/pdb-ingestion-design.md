@@ -1,5 +1,9 @@
 # #179 -- PDB ingestion design
 
+> **Status: historical design record; core ingestion has shipped.** Consult the
+> Windows capability index, current PDB source, and focused tests for the live
+> boundary and retained limitations.
+
 > The Microsoft Program Database (PDB) is the missing leg of
 > Glaurung's typed-symbol coverage. This doc plans the
 > ingestion path: where it lives, what crate it uses, how it

@@ -1,5 +1,9 @@
 # 07 - Decision log
 
+> **Status: living integration decision log.** Read entries in order and prefer
+> the latest accepted or implemented decision when an earlier ADR conflicts.
+> Performance evidence remains bound to its recorded revision and protocol.
+
 ADR-style records of the load-bearing choices, so a future reader (or a
 future us) sees the reasoning, not just the outcome. Status: all
 **Proposed** until the plan is acted on; promote to **Accepted** as each is

@@ -1,5 +1,9 @@
 # WebAssembly Parser Documentation
 
+> **Status: historical design record.** The section parser and data model below
+> are proposed, not current Glaurung APIs. See the
+> [parser index](../README.md) for the current detection boundary.
+
 ## Overview
 
 WebAssembly (WASM) is a binary instruction format designed for safe and efficient execution in web browsers and other environments. GLAURUNG's WASM parser handles standard WebAssembly modules (.wasm files) and provides analysis capabilities for this portable binary format.

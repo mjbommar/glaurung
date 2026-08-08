@@ -1,5 +1,10 @@
 # High-Performance Scriptable Signature Design
 
+> **Status: historical design.** This document proposes a tiered signature
+> engine and includes target timings, not measured guarantees. Current packer
+> behavior is documented in [`README.md`](README.md) and
+> [`packer-config.md`](packer-config.md).
+
 ## Executive Summary
 
 A three-tier signature system balancing performance and flexibility:

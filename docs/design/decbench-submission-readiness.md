@@ -260,9 +260,28 @@ this document has been doing, is not a like comparison. On pairwise-common keys:
 pair; the byte-match row is 158 because the references have **no** byte-match
 score on the 84 ARM32 or 8 PE32 functions at all.)
 
-So: Glaurung's *compile rate* leads every reference decompiler on the common
-x86-64 set and always has — the "97/250 vs Ghidra 125/250" line recorded below
-under-reported it. On byte match Glaurung is now ahead of Binja and has halved
+> **CORRECTION, 2026-08-04 — the two sentences that followed here were FALSE
+> and caused a real misdirection. Re-measured live with the current metric:**
+>
+> | column | x86-64 | ARM32 | PE32 | total |
+> |---|---:|---:|---:|---:|
+> | `glaurung-fix1` | **158/158** | 84/84 | 8/8 | 250/250 |
+> | current build | 133/158 | 48/84 | 4/8 | 185/250 |
+> | `glaurung-24b3826` | **15/158** | 74/84 | 8/8 | 97/250 |
+>
+> The claim "leads every reference decompiler **and always has**" is false: at
+> `24b3826` — the very build the 97/250 line describes — Glaurung compiled
+> **15/158 = 9.5 %** on x86-64, against Ghidra's 79.1 %. And "97/250
+> under-reported it" is backwards: counting the 84 ARM32 and 8 PE32 functions,
+> which no reference decompiler is scored on at all, *inflated* that build's
+> headline from 9.5 % to 38.8 %. The 97/250 line OVER-reported.
+>
+> Glaurung's compile rate did lead every reference at `fix1` (158/158 vs Ghidra
+> 125/158) — and 65 of those functions have since regressed (task #70).
+>
+> Reference denominators are also NOT uniformly 158: ghidra 158, kuna 158,
+> ida 154, angr 152, binja 153, r2dec 133. The table above prints them under one
+> `n=158` header, which is wrong; ranking is unaffected, the rates are not. On byte match Glaurung is now ahead of Binja and has halved
 the gap to Ghidra (`-0.075 -> -0.039`). On type match it has drawn level with
 Kuna and IDA and halved the gap to Ghidra (`-0.094 -> -0.037`), while angr and
 Binja remain ahead. On GED it is now ahead of Binja and the gap to Ghidra has
@@ -960,3 +979,187 @@ decoding three times as many genuine AArch64 functions.
   failures, now measurable per lane.
 * `test_cli_explain`'s four failures: pre-existing, unrelated to decompilation,
   but they make "the suite is green" untrue as a sentence.
+
+## Submission checklist — added 2026-08-04
+
+Written after a 16 % `byte_match` regression reached `master` and survived four
+commits because nothing scored the population the leaderboard scores. Every item
+below is a gate that has caught something real.
+
+### Before any submission
+
+1. `cargo test --lib` — the Rust logic gate.
+2. `tools/fixture_harness.py` — 656 execution-differential cases, x86-64.
+3. `tools/arch_roundtrip.py --check` — the same differential for i386, AArch64
+   and ARMv7. **The control lane must be 328/328.** If x86-64 is not clean, no
+   verdict on any other lane means anything.
+4. `pytest -m slow python/tests/test_decompiler_emission_invariants.py` — 52
+   cases: self-consistency properties of the emitted unit (disjoint frame
+   slots, no unassigned value reaching an observable use, prototypes agreeing
+   with their call sites, recovered arity matching source, determinism,
+   declared-vs-used, join-defined pointers). These exist because every other
+   gate asks what the code *does*, and a regression can live entirely in what
+   the code *claims about itself*.
+5. `tools/decbench_matrix.py --check` — 56 synthetic fixture cells.
+6. **`tools/decbench_holdout.py --check`** — the 250-function holdout, which is
+   what the leaderboard actually scores. Lanes 5 and 6 measure different
+   populations and have moved in opposite directions; passing 5 is not evidence
+   about 6.
+
+Lanes 1-5 are `scripts/decbench-local-gate.sh`; lane 6 joins it under
+`GLAURUNG_RUN_HOLDOUT=1` (opt-in only because the cycle is ~30 min).
+
+### Rules learned the hard way
+
+* **A metric reading 0.00 deserves the same suspicion as one reading 1.00.**
+  Two of this project's largest quality defects were reported as perfect scores
+  by regexes that could not match their own targets.
+* **An empty result must announce itself.** `callcheck` scored zero functions on
+  an entire tier while printing a well-formed table of dashes.
+* **Check the denominator before believing a rate.** A per-binary mean of
+  per-function means manufactured a prototype "regression" that was an
+  improvement, and made RetDec look worst on strings when it is best.
+* **Check the sign before believing an ordering.** `local_<hex>` is a distance
+  BELOW the frame pointer, so a larger label is a lower address; sorting by the
+  label made correctly-tiled frames look like overlapping ones and produced a
+  confident, wrong root cause.
+* **Attribute before fixing.** The `byte_match` drop was blamed on the string
+  work; scoring three trees showed the string work was 11 improved / 0 worse and
+  the loss belonged to earlier commits.
+* **`reeval_typematch.py` prints an empty table for a newly ingested column** —
+  it only aggregates ids already in `function_results.json`. Use `--emit` and
+  read `type_match_new.json`, or you will read "no change" as "no effect".
+* **A lifter that is exact about the machine can still be wrong about the
+  program.** `bsr`/`bsf` preserved the destination on a zero source, which is
+  AMD's behaviour and which Intel explicitly leaves undefined. The self-read
+  that modelling required made the destination live-in, and parameter recovery
+  promotes a live-in argument-slot register to a parameter — so a
+  one-parameter function was emitted with four. Exactness is only worth what it
+  costs everything downstream.
+* **A pass is only as sound as its weakest oracle.** `collapse_undefined_select_arms`
+  was a correct rule (an undefined arm permits any value) resting on
+  `count_assignments`, which was written for a narrower job and does not see a
+  frame slot's definition. It silently rewrote the signed divide-by-4 rounding
+  idiom and broke the control lane. Reusing a helper across purposes needs the
+  helper's *completeness*, not just its correctness, re-checked.
+* **Widen an invariant to the corpus, not just to the fixture it was written
+  for.** Emission invariant #2 forbids exactly the unassigned read the `bsr`
+  defect produced, and did not fire: it compiles one fixture, and the defect was
+  in another. A property gate that runs on one input is a unit test wearing a
+  property's name.
+
+## Measurement defects found on 2026-08-04 — read before citing any figure
+
+Four of the day's most damaging problems were in the *measurement*, not the
+decompiler. Each is reproducible; each had already produced a wrong conclusion
+before it was found.
+
+### 1. Our holdout tool never scored anything
+
+`tools/decbench_holdout.py:152` invokes `scripts/reeval_bytematch.py` bare. That
+script hardcodes `DECOMPILERS = ("angr","ghidra","ida","binja","kuna","r2dec","dewolf")`
+and globs `{dec}_*.c`. **No glaurung column is ever in that list**, so it finds
+zero tasks and writes `{}`. A three-hour run ended with
+`no byte_match rows for column ...`.
+
+Correct invocation — **1.2 s per column**, not hours:
+
+```sh
+DECBENCH_REEVAL_DECOMPILERS=<column> \
+  /nas4/data/workspace-infosec/decbench/.venv/bin/python \
+  scripts/reeval_bytematch.py /tmp/decbench-holdout/tree 16
+```
+
+The hours were `decbench evalkit ingest --evaluate`, which **defaults to true**
+and runs Joern per binary for GED. Re-pickling all 38 checkpoints takes 0.1 s;
+the cost was never the ingest.
+
+### 2. `byte_match`'s cache does not key on compiler version
+
+`ByteMatchMetric._cached_value` keys on the recompiler **name** (`"gcc"`) and
+flags, not the version. Score with gcc-15, re-score with gcc-13, and the second
+run silently returns the first run's numbers. A measured instance: RetDec on zlib
+read 0.1543 cached against a true 0.2960.
+
+**Set `DECBENCH_NO_CACHE=1` for any comparison that varies the compiler.**
+
+### 3. The host compiler dominates the apparent ranking
+
+zlib, 1272 functions, mean byte_match:
+
+| decompiler | gcc-15.2 | gcc-13.4 |
+|---|---|---|
+| glaurung | 0.3072 | 0.3459 |
+| angr | 0.0977 | 0.3369 |
+| RetDec | 0.0956 | 0.3105 |
+
+Under gcc-15 we appear to lead by ~3.2x. Under gcc-13 the spread is ~10%. Two
+post-GCC-13 tightenings do it: C23 makes `long f();` mean *zero* parameters, so
+the fixup's fallback prototype errors; and `-Wint-conversion` became an error in
+GCC 14. On diffutils, **83.9% of all compile failures under the default host
+compiler are toolchain artifacts, not decompiler defects** — and our own share is
+100% artifact (42 gcc-15 failures, 0 failing under both).
+
+Our robustness there is genuine and worth having: we emit real prototypes for
+every callee, so the fixup never has to synthesise the K&R form. But it is a
+different claim from better decompilation, and the two must not be conflated.
+
+### 4. The harness discards everything above a function's signature
+
+`split_c_functions` (`decbench/decompilers/dockerized.py:156`) cuts each snippet
+at the `_FUNC_DEF_RE` match — the signature line. Anything above it is gone
+before the compiler sees it. This cost 43 holdout functions when the
+stack-protector suppression was emitted as a `#define` preamble: the macro was
+correct, was discarded, and left a bare undefined token.
+
+**Rule: everything a function needs must sit at or below its signature line.**
+Enforced by emission invariant #9.
+
+A related trap in the same family, three instances in one day: **signature-matching
+regexes that cannot skip a leading attribute.** DecBench's splitter, our own
+`tools/diff_decompile.py:_FUNCTION_DEFINITION`, and two regexes in the emission
+invariants all required an identifier-only prefix, so `__attribute__((...)) int f(`
+was invisible where `MACRO int f(` matched.
+
+### 5. DecBench's own repair pass corrupts valid C
+
+`fixup.sanitize_tokens`'s `_ARRAY_RET` rule, meant to repair array-return-type
+declarations, rewrites a file-scope array with a trailing attribute:
+
+```c
+static unsigned char g[16] __attribute__((aligned(16)));
+  ->  static unsigned char g *__attribute__((aligned(16)));   // syntax error
+```
+
+Verified directly against the sanitizer. Leading with the attribute passes
+through byte-identical. The `^`-anchored regex means the indented, function-local
+spelling was never affected.
+
+### 6. Two artefacts that penalise every decompiler equally
+
+* At `-O2`, GCC places `main` in `.text.startup`; `binfmt.object_text_bytes`
+  reads `.text`, finds it empty, and returns zero bytes. **`main` scores 0.0 at
+  -O2 for every tool**, even when it compiles perfectly. Confirmed on three
+  independent samples.
+* `object_text_bytes` silently falls back to the ENTIRE `.text` when the
+  requested symbol is absent. Harmless in the one-function-per-object path;
+  it quietly corrupts any whole-TU measurement without an `nm` presence check.
+
+### 7. RetDec is scored at a fraction of its real recovery
+
+`DockerizedDecompiler._build_result` resolves function names via
+`elf_function_symbols()`, which returns **zero symbols on a stripped
+executable**. RetDec names functions `function_<lowpc>`. Measured on zlib:
+DecBench records **176/1272 (13.8%)** where RetDec actually recovers
+**1242/1272 (97.6%)**. Only `.so` files survive, via `.dynsym`. `R2DecDecompiler`
+already has the address-keyed lookup that would fix it.
+
+Any published RetDec figure should be treated as unverified until this is ruled
+out for the run that produced it.
+
+### The rule that prevents all of this
+
+Every DecBench figure needs three tags: **build**, **metric-version**, and
+**population** — and, since 2026-08-04, a fourth: **compiler version**. Two
+numbers that differ in any of them are not comparable, however similar their
+names.

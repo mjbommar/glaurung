@@ -1,5 +1,9 @@
 # Observability, provenance, and cost
 
+> **Status: unimplemented operational contract.** Trace, provenance, and cost
+> fields below are requirements for future runs, not metadata emitted by the
+> current fixed pipeline.
+
 ## Objective
 
 An agent result without a tool and usage trail cannot be debugged, reproduced,

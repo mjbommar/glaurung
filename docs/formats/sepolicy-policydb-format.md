@@ -1,5 +1,10 @@
 # SELinux `policydb` binary format -- implementation spec for the reachability oracle
 
+> **Status: maintained implementation specification.** The format notes are
+> revision-aware research for a future reachability oracle. The shipped
+> parser currently implements only magic/identifier detection and header fields; it
+> does not parse symbol tables, AV rules, attributes, conditionals, or xperms.
+
 This is the reverse-engineered, authoritative on-disk layout of the compiled
 SELinux kernel policy (`policydb`), captured so the `domain->resource`
 reachability query (capability #3, "the load-bearing severity gate") can be
@@ -11,6 +16,10 @@ ground truth; [!] need care for real device policy.
 The header parser + magic detection are already implemented and tested in
 `src/formats/sepolicy/` (`parse_header`, `is_sepolicy`). Everything below is the
 next slice.
+
+In this document, `[OK]` means that the described on-disk layout was decoded or
+checked against the named fixtures. It does **not** mean the Rust parser exposes
+that structure. Only the header section is implemented in the current API.
 
 ## Primitives
 
@@ -63,6 +72,7 @@ sens(6), cats(7)`.
 `avtab_read_item` (v >= 20, `POLICYDB_VERSION_AVTAB`):
 `u16 source_type`, `u16 target_type`, `u16 target_class`, `u16 specified`,
 then:
+
 - if `specified & AVTAB_XPERMS (0x0700)` (v >= `XPERMS_IOCTL`=30):
   `u8 xperms_specified`, `u8 driver`, `u32 perms[8]`;
 - else: `u32 data`.
@@ -76,6 +86,7 @@ type value); xperms `0x0100/0x0200/0x0400`.
 tables. `data` for an AV rule is the permission bitmap (bit `value-1` per perm).
 
 **Validated** on `sepolicy_nomls.33`:
+
 - `allow untrusted_app(1) foo_device(3):chr_file(1) {ioctl,read}` ->
   `src=1,tgt=3,cls=1,spec=ALLOWED,data=0x3`. [OK]
 - `allow system_server(2) bar_device(4):chr_file(1) {ioctl,read,write,open}` ->
@@ -83,7 +94,7 @@ tables. `data` for an AV rule is the permission bitmap (bit `value-1` per perm).
 
 ## The query
 
-```
+```text
 allows(source_type, target_type, class, perm):
   s = types[source_type].value; t = types[target_type].value
   c = classes[class].value;     bit = 1 << (classes[class].perms[perm].value - 1)

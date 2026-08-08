@@ -1,5 +1,9 @@
 # Installation, development setup, and configuration
 
+> **Status: maintained setup reference.** The source-install and clean-room
+> commands below are the supported development path. Revalidate platform-specific
+> details when changing the toolchain or lockfiles.
+
 This is the supported setup reference for a source checkout of Glaurung.
 Commands are written for a POSIX shell and should be run from the repository
 root unless noted otherwise.

@@ -1,5 +1,9 @@
 # PE Parser Migration Guide
 
+> **Status: historical design record.** This migration sketch has not been
+> revalidated against the current PE API. Treat its code as archival, not as a
+> supported example.
+
 ## Overview
 
 This guide helps migrate from the current scattered PE parsing implementations to the new unified PE parser.

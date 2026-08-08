@@ -1,5 +1,8 @@
 # GLAURUNG Data Model Proposal - CLAUDE
 
+> **Status: historical model proposal.** Illustrative types below are not the
+> current Rust, Python, triage, or persistence API.
+
 ## Notes
 - This proposal emphasizes knowledge graph construction, AI-assisted analysis, and multi-modal binary exploration
 - Supports incremental analysis with confidence scoring and provenance tracking throughout

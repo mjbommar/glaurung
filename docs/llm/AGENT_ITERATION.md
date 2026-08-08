@@ -1,5 +1,10 @@
 # Agent Iteration Architecture Analysis
 
+> **Historical design note.** This document predates the implemented
+> single-pass, iterative, and auto strategies. Its “current state” statements
+> are not current. Use [`README.md`](README.md), [`TOOLS.md`](TOOLS.md), and
+> `python/glaurung/llm/agents/` for the maintained architecture.
+
 ## Current State
 
 Our agents currently operate in a **single-pass mode**:

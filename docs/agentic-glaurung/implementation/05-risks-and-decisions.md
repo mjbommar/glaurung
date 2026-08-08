@@ -1,5 +1,9 @@
 # Risks, decisions, and open questions
 
+> **Status: active design risk register.** Accepted design choices constrain
+> future implementation; unresolved questions remain blockers at the phases
+> named here.
+
 ## Risk register
 
 | ID | Risk | Likelihood | Impact | Mitigation | Trigger/owner action |

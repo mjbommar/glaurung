@@ -1,5 +1,8 @@
 # Nested Binaries & Recursion Tree — Data Model Proposal
 
+> **Status: historical data-model proposal.** Current container discovery is
+> represented by the triage artifact and must be checked against `src/triage/`.
+
 This document proposes how to represent “nesting” (containers, embedded children, overlays) as a deterministic, budget-aware tree in the triage data model. It balances fidelity with safety, keeps the default artifact lightweight, and allows progressive disclosure of deeper nodes on demand.
 
 Goals
@@ -217,4 +220,3 @@ Phased Delivery
 
 4) Stabilization:
    - Bump `schema_version`; freeze field names; publish examples in docs.
-

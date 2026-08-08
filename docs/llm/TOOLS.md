@@ -1,394 +1,278 @@
-# Pydantic-AI Tool System in Glaurung
+# Glaurung LLM tool system
 
-## Overview
+This page documents the implemented tool architecture. It is a contributor
+guide, not a generic pydantic-ai tutorial.
 
-The tool system in pydantic-ai allows LLM agents to call Python functions during their execution. This enables agents to:
-- Fetch real-time data
-- Perform calculations
-- Interact with external systems
-- Execute analysis operations
+The core rule is simple: analysis logic lives in typed `MemoryTool` objects that
+can be called directly and tested without a model. `tool_to_pyd_ai` adapts those
+objects for agent use, captures display telemetry, and attempts persistent
+evidence logging.
 
-## Key Concepts
+## Architecture
 
-### 1. Tool Registration
-
-Tools are Python functions registered with an agent that the LLM can call:
-
-```python
-from pydantic_ai import Agent, RunContext
-
-agent = Agent(model="openai:gpt-4.1-mini")
-
-# Register a tool using decorator
-@agent.tool
-def calculate_hash(ctx: RunContext, file_path: str, algorithm: str = "sha256") -> str:
-    """Calculate file hash."""
-    # Implementation here
-    return hash_value
-
-# Or register explicitly
-agent.tool(my_function, name="custom_name")
+```text
+question
+  │
+  ├─ deterministic router (`tool_routing.py`) selects tool names
+  │
+  └─ agent (`agents/memory_agent.py`)
+       │
+       └─ pydantic-ai Tool from `tool_to_pyd_ai`
+            │
+            └─ MemoryTool.run(MemoryContext, KnowledgeBase, Args)
+                 ├─ reads bounded binary/project data
+                 ├─ may add typed KB nodes or edges
+                 └─ returns a Pydantic result model
 ```
 
-### 2. RunContext
+The main implementation points are:
 
-Every tool receives a `RunContext` as its first parameter:
+| Concern | Source |
+| --- | --- |
+| Atomic contract and wrapper | `python/glaurung/llm/tools/base.py` |
+| Context and resource budgets | `python/glaurung/llm/context.py` |
+| In-memory KB | `python/glaurung/llm/kb/store.py` |
+| Persistent SQLite KB | `python/glaurung/llm/kb/persistent.py` |
+| Registration | `python/glaurung/llm/agents/memory_agent.py` |
+| Question routing | `python/glaurung/llm/tool_routing.py` |
+| Operator entry point | `python/glaurung/cli/commands/ask.py` |
+
+## `MemoryTool` contract
+
+Every atomic tool defines:
+
+- `ToolMeta`: stable provider-facing name, description, and optional tags;
+- a Pydantic input model that validates arguments;
+- a Pydantic output model with structured results;
+- `run(ctx, kb, args)`, which performs the operation; and
+- a `build_tool()` factory.
+
+The abstract contract is `MemoryTool[InputModelT, OutputModelT]`. A minimal tool
+has this shape:
 
 ```python
-def my_tool(ctx: RunContext[DepsType], arg1: str, arg2: int) -> str:
-    # Access dependencies
-    deps = ctx.deps
-    
-    # Access retry count
-    retries = ctx.retry
-    
-    # Access tool call ID
-    tool_id = ctx.tool_call_id
-    
-    return result
+from pydantic import BaseModel, Field
+
+from glaurung.llm.context import MemoryContext
+from glaurung.llm.kb.store import KnowledgeBase
+from glaurung.llm.tools.base import MemoryTool, ToolMeta
+
+
+class CountStringsArgs(BaseModel):
+    limit: int = Field(default=200, ge=1, le=10_000)
+
+
+class CountStringsResult(BaseModel):
+    total: int
+    inspected: int
+
+
+class CountStringsTool(MemoryTool[CountStringsArgs, CountStringsResult]):
+    def __init__(self) -> None:
+        super().__init__(
+            ToolMeta(
+                name="count_strings",
+                description="Count strings in the current triage artifact.",
+                tags=("strings", "triage"),
+            ),
+            CountStringsArgs,
+            CountStringsResult,
+        )
+
+    def run(
+        self,
+        ctx: MemoryContext,
+        kb: KnowledgeBase,
+        args: CountStringsArgs,
+    ) -> CountStringsResult:
+        strings = list(ctx.artifact.strings.strings)
+        return CountStringsResult(
+            total=len(strings),
+            inspected=min(len(strings), args.limit),
+        )
+
+
+def build_tool() -> MemoryTool[CountStringsArgs, CountStringsResult]:
+    return CountStringsTool()
 ```
 
-### 3. Tool Schema
+This is an architectural example. Before adding a new tool, search the existing
+tool directory and CLI for equivalent behavior; reuse a deterministic primitive
+instead of duplicating it under a new name.
 
-Pydantic-ai automatically generates tool schemas from:
-- Function signatures
-- Type hints
-- Docstrings (Google/NumPy/Sphinx style)
+## `MemoryContext` and budgets
+
+`MemoryContext` carries the current file path, triage artifact, knowledge base,
+session identifier, and `Budgets`. Tools must honor the applicable caps rather
+than reading or expanding input without bounds. Current budget fields include
+function, block, instruction, disassembly-window, result, read-byte, file-size,
+and timeout limits.
+
+Two KB modes matter:
+
+- `MemoryContext(...)` defaults to an in-memory `KnowledgeBase`. This is what
+  standalone `glaurung ask` currently uses.
+- `MemoryContext.open_persistent(...)` opens a `PersistentKnowledgeBase` over a
+  `.glaurung` SQLite project. The REPL constructs an equivalent context around
+  its already-open project.
+
+Do not infer persistence merely because a tool mutates `ctx.kb`. Confirm how the
+caller built the context.
+
+## Agent adaptation and evidence
+
+`tool_to_pyd_ai(tool)` creates a pydantic-ai `Tool` from the input model's JSON
+schema. Its call wrapper:
+
+1. validates provider arguments through the Pydantic input model;
+2. calls `MemoryTool.run`;
+3. appends a structured entry to `ctx._tool_calls` for CLI display; and
+4. when the KB is persistent, attempts to append an `evidence_log` row.
+
+Evidence logging is best-effort and deliberately cannot break the underlying
+analysis. A missing row is not proof a call did not occur. Failed calls can be
+recorded with an error summary. See the
+[evidence guide](../tutorial/05-agent-workflows/evidence-and-citations.md) for
+the full boundary.
+
+The wrapper derives a VA range or file offset only from recognized input/result
+fields. Use conventional names such as `va`, `va_start`, `entry_va`,
+`function_va`, `length`, or `file_offset` when they accurately describe the
+tool; do not rename fields merely to influence evidence indexing.
+
+## Registration and routing
+
+`register_analysis_tools` is the canonical registry. It registers both wrapped
+`MemoryTool` objects and a smaller number of custom agent functions. A
+`tool_filter` set can restrict registration to exact tool names.
+
+The `ask --route` path calls `route_for_question` and
+`select_tools_for_question`. Routing is deterministic keyword matching, not an
+extra model call. The current intents cover vulnerability discovery, triage,
+function walks, imports, strings, and a broad fallback.
 
 ```python
-def analyze_binary(
-    ctx: RunContext[AnalysisContext],
-    analysis_type: Literal["static", "dynamic"],  # Enum constraint
-    depth: int = 10,  # Default value
-) -> Dict[str, Any]:
-    """Analyze a binary file.
-    
-    Args:
-        ctx: Runtime context
-        analysis_type: Type of analysis to perform
-        depth: Analysis depth level
-        
-    Returns:
-        Analysis results dictionary
-    """
-    # The LLM sees the schema with types and descriptions
+from glaurung.llm.tool_routing import (
+    route_for_question,
+    select_tools_for_question,
+)
+
+question = "Explain function 0x401000 and its callers"
+intent = route_for_question(question)
+tool_names = select_tools_for_question(question)
 ```
 
-### 4. Async vs Sync Tools
+If you add or rename a registered tool:
+
+1. update every relevant routing intent;
+2. keep each intent within the tested routing budget;
+3. ensure each intent retains a lightweight orientation tool;
+4. test unknown filters and provider-specific registration; and
+5. update operator docs only when the user-visible capability changes.
+
+Provider limits are separate from analysis budgets. The wrapper selects relaxed
+strict-schema behavior for Anthropic models, while focused routing keeps the
+tool list manageable for providers with total-tool limits. Do not solve a tool
+limit by silently changing the configured model family.
+
+## Direct integration testing
+
+Test deterministic behavior by calling the real tool on a real checked-in
+sample. This avoids provider cost and separates tool correctness from agent
+selection:
 
 ```python
-# Synchronous tool - for simple operations
-def sync_tool(ctx: RunContext, param: str) -> str:
-    return f"Processed: {param}"
+from pathlib import Path
 
-# Asynchronous tool - for I/O or expensive operations  
-async def async_tool(ctx: RunContext, param: str) -> str:
-    await asyncio.sleep(0.1)  # Simulate I/O
-    return f"Async processed: {param}"
-```
+import glaurung as g
 
-**Performance Note**: When multiple tools are called, pydantic-ai runs them concurrently:
-- Async functions run on the event loop
-- Sync functions are offloaded to threads
-- Use async unless doing blocking I/O or CPU-bound work
+from glaurung.llm.context import Budgets, MemoryContext
+from glaurung.llm.tools.view_hex import BytesViewArgs, build_tool
 
-### 5. Tool Preparation (Dynamic Availability)
 
-Control tool availability per run using `prepare` functions:
-
-```python
-from pydantic_ai.tools import ToolDefinition, ToolPrepareFunc
-
-def prepare_tool(
-    ctx: RunContext[DepsType], 
-    tool_def: ToolDefinition
-) -> Optional[ToolDefinition]:
-    """Decide if tool should be available."""
-    if ctx.deps.allow_dangerous:
-        return tool_def  # Include tool
-    else:
-        return None  # Exclude tool
-
-agent.tool(dangerous_function, prepare=prepare_tool)
-```
-
-### 6. Toolsets
-
-Organize related tools into reusable toolsets:
-
-```python
-from pydantic_ai.tools import ToolSet
-
-class FileAnalysisToolSet(ToolSet):
-    """Tools for file analysis."""
-    
-    async def get_metadata(self, ctx: RunContext, path: str) -> Dict:
-        """Get file metadata."""
-        # Implementation
-        
-    async def extract_strings(self, ctx: RunContext, path: str) -> List[str]:
-        """Extract strings from file."""
-        # Implementation
-
-# Register toolset with agent
-agent.register_toolset(FileAnalysisToolSet())
-```
-
-### 7. Deferred Tools (Approval Required)
-
-For operations requiring human approval:
-
-```python
-from pydantic_ai.tools import DeferredToolRequests, DeferredToolResults
-
-# Mark tool as deferred
-agent.tool(delete_file, defer=True)
-
-# First run - returns DeferredToolRequests
-result = agent.run("Delete malicious file")
-
-if isinstance(result.output, DeferredToolRequests):
-    # Get user approval
-    approvals = {}
-    for tool_call in result.output.approvals:
-        user_approves = input(f"Approve {tool_call.tool_name}?")
-        approvals[tool_call.tool_call_id] = ToolApproved() if user_approves else ToolDenied()
-    
-    # Continue with approvals
-    final = agent.run(
-        result.messages,
-        deferred_tool_results=DeferredToolResults(approvals=approvals)
+def test_view_hex_reads_elf_magic() -> None:
+    sample = Path(
+        "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/"
+        "hello-gcc-O2"
     )
-```
-
-## Glaurung Implementation
-
-### AnalysisContext
-
-Standard context for binary analysis tools:
-
-```python
-@dataclass
-class AnalysisContext:
-    file_path: str              # Path to binary
-    artifact: TriagedArtifact   # Analysis results
-    session_id: str             # Session identifier
-    allow_expensive_ops: bool   # Permission flag
-```
-
-### Core Tool Categories
-
-#### 1. Metadata Tools
-- `get_file_hash`: Calculate file hashes
-- `get_file_info`: Extract file metadata
-- `get_entropy`: Calculate entropy
-
-#### 2. String Analysis
-- `extract_strings`: Extract strings with encoding options
-- `find_patterns`: Search for patterns
-- `extract_iocs`: Extract indicators of compromise
-
-#### 3. Symbol Analysis
-- `check_import`: Check for specific imports
-- `get_exports`: List exported functions
-- `get_libraries`: List linked libraries
-
-#### 4. Disassembly Tools (Expensive)
-- `disassemble_at_address`: Disassemble at VA
-- `analyze_control_flow`: Analyze CFG
-- `find_functions`: Locate functions
-
-#### 5. Security Tools
-- `check_signatures`: Check against signatures
-- `run_yara`: Execute YARA rules
-- `validate_iocs`: Validate detected IOCs
-
-### Usage Examples
-
-#### Basic Analysis Agent
-
-```python
-from glaurung.llm.tools import create_binary_analysis_agent_with_tools
-
-# Create agent
-agent = create_binary_analysis_agent_with_tools(
-    model="gpt-4",
-    allow_expensive=True
-)
-
-# Create context from triage
-context = AnalysisContext(
-    file_path="/path/to/binary",
-    artifact=triaged_artifact,
-    session_id="analysis_001",
-    allow_expensive_ops=True
-)
-
-# Run analysis
-result = agent.run_sync(
-    "Analyze this binary for malicious behavior",
-    deps=context
-)
-
-print(f"Analysis: {result.output}")
-print(f"Tools used: {len(result.tool_calls)}")
-```
-
-#### Custom Tool Registration
-
-```python
-from pydantic_ai import Agent, RunContext
-
-agent = Agent(model="gpt-4", deps_type=AnalysisContext)
-
-@agent.tool
-def custom_analysis(
-    ctx: RunContext[AnalysisContext],
-    technique: str
-) -> Dict[str, Any]:
-    """Perform custom analysis technique."""
-    artifact = ctx.deps.artifact
-    
-    # Custom analysis logic
-    if technique == "packing":
-        return {
-            "packed": artifact.entropy.overall > 7.0,
-            "entropy": artifact.entropy.overall
-        }
-    
-    return {"error": "Unknown technique"}
-```
-
-#### Using Toolsets
-
-```python
-from glaurung.llm.tools import StringAnalysisToolSet, SymbolAnalysisToolSet
-
-agent = Agent(model="gpt-4", deps_type=AnalysisContext)
-
-# Register toolsets
-agent.register_toolset(StringAnalysisToolSet())
-agent.register_toolset(SymbolAnalysisToolSet())
-
-# Tools are now available to the agent
-result = agent.run_sync(
-    "Extract all URLs and check for suspicious imports",
-    deps=context  
-)
-```
-
-## Best Practices
-
-### 1. Tool Design
-
-- **Single Responsibility**: Each tool should do one thing well
-- **Clear Naming**: Use descriptive names that indicate function
-- **Type Safety**: Use type hints and Pydantic models
-- **Error Handling**: Return errors gracefully, don't raise exceptions
-- **Documentation**: Include docstrings with parameter descriptions
-
-### 2. Performance
-
-- Use `async` for I/O operations
-- Use `sync` for CPU-bound operations  
-- Limit expensive operations with preparation functions
-- Cache results when appropriate
-- Set reasonable timeouts
-
-### 3. Security
-
-- Validate all inputs
-- Use deferred tools for dangerous operations
-- Check permissions in context
-- Limit data exposure
-- Audit tool usage
-
-### 4. Testing
-
-```python
-import pytest
-from unittest.mock import Mock
-from pydantic_ai import RunContext
-
-def test_tool():
-    # Create mock context
-    context = AnalysisContext(
-        file_path="/test",
-        artifact=Mock(),
-        session_id="test"
+    artifact = g.triage.analyze_path(str(sample))
+    ctx = MemoryContext(
+        file_path=str(sample),
+        artifact=artifact,
+        budgets=Budgets(max_read_bytes=64),
     )
-    
-    ctx = RunContext(deps=context, retry=0)
-    
-    # Test tool directly
-    result = my_tool(ctx, "param")
-    assert result == expected
+
+    result = build_tool().run(
+        ctx,
+        ctx.kb,
+        BytesViewArgs(file_offset=0, length=4, add_to_kb=True),
+    )
+
+    assert result.bytes_hex == "7f454c46"
+    assert result.evidence_node_id is not None
 ```
 
-## Common Patterns
+Use a temporary persistent project in a second test when evidence logging or
+cross-process persistence is part of the contract. Do not replace binary data,
+the KB, or native analysis with mocks when an inexpensive real fixture exists.
 
-### Pattern 1: Conditional Tools
+Agent registration and routing can use pydantic-ai's local `test` model; that
+checks wiring without sending a provider request. Existing examples are in
+`python/tests/test_tool_routing.py`.
 
-```python
-def prepare_based_on_format(ctx: RunContext, tool_def: ToolDefinition):
-    """Only available for PE files."""
-    if ctx.deps.artifact.verdicts[0].format == "PE":
-        return tool_def
-    return None
+Focused gates:
+
+```bash
+uv run pytest python/tests/test_tool_routing.py -q
+uv run pytest python/tests/test_verify_recovery_tool.py -q
+uvx ruff check python/glaurung/llm/tools python/tests/test_tool_routing.py
+uvx ty check python/glaurung/llm/tools python/tests/test_tool_routing.py
 ```
 
-### Pattern 2: Batch Operations
+These are focused tool gates, not the full repository suite.
 
-```python
-async def batch_analysis(
-    ctx: RunContext,
-    operations: List[str]
-) -> List[Dict]:
-    """Perform multiple operations concurrently."""
-    tasks = [analyze_one(ctx, op) for op in operations]
-    return await asyncio.gather(*tasks)
-```
+## Tool addition checklist
 
-### Pattern 3: Progressive Analysis
+Before implementation:
 
-```python
-@agent.tool
-def quick_check(ctx: RunContext) -> bool:
-    """Quick malware check."""
-    return ctx.deps.artifact.entropy.overall > 7.5
+1. identify the deterministic primitive and search for an existing tool;
+2. define the user question and the narrow structured result it needs;
+3. choose read-only versus mutating behavior explicitly;
+4. define file, byte, function, instruction, result, time, and recursion bounds;
+5. decide whether the tool requires a raw binary, a project DB, or either; and
+6. write a failing real-fixture test.
 
-@agent.tool(prepare=lambda ctx, td: td if ctx.deps.allow_expensive_ops else None)
-def deep_analysis(ctx: RunContext) -> Dict:
-    """Deep analysis (expensive)."""
-    # Only available when explicitly allowed
-```
+During implementation:
 
-## Troubleshooting
+1. validate all arguments in the Pydantic model and in `run` where context is
+   required;
+2. return a typed result for empty, partial, and complete outcomes;
+3. use specific exceptions and avoid logging secrets or full sensitive blobs;
+4. preserve provenance and truncation metadata;
+5. keep mutations explicit and idempotent where practical; and
+6. never call an LLM from a tool described as deterministic.
 
-### Issue: Tool Not Being Called
+Before completion:
 
-- Check tool is registered: `agent.tool(func)`
-- Verify function signature is correct
-- Ensure docstring describes purpose clearly
-- Check prepare function isn't excluding it
+1. pass direct tool tests and negative/limit cases;
+2. test registration and routing by exact name;
+3. test persistent evidence if promised;
+4. run focused format, lint, and type gates;
+5. run the broader relevant agent/CLI tests; and
+6. document provider transmission, cost, side effects, and limitations at the
+   user-facing entry point.
 
-### Issue: Schema Validation Errors
+## Operational safety
 
-- Use proper type hints
-- Ensure all parameters except `ctx` have types
-- Use Pydantic models for complex types
-- Add field descriptions in docstrings
+- Treat model output, decompiler output, and heuristic classifications as
+  hypotheses until independently verified.
+- Do not expose filesystem-wide reads, arbitrary writes, subprocess execution,
+  or network access without narrow validation and an explicit user workflow.
+- Enforce bounds inside the tool even if the caller normally supplies safe
+  defaults.
+- Keep raw binary analysis deterministic where possible; reserve model calls
+  for ambiguity that cannot be resolved by a parser or query.
+- Preserve the distinction between a tool observation, an agent inference, a
+  validated finding, and a demonstrated impact.
 
-### Issue: Performance Problems
-
-- Use async for I/O operations
-- Implement timeouts
-- Cache expensive computations
-- Use preparation functions to limit availability
-
-## Further Reading
-
-- [Pydantic-AI Tools Documentation](https://ai.pydantic.dev/tools/)
-- [Toolsets Documentation](https://ai.pydantic.dev/toolsets/)
-- [Deferred Tools Guide](https://ai.pydantic.dev/tools/#deferred-tools)
-- [MCP Integration](https://ai.pydantic.dev/mcp/)
+For operator usage, return to the [`ask` reference](../cli/ASK_COMMAND.md).

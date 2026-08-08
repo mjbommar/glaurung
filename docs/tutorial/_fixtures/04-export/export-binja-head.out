@@ -11,10 +11,10 @@ def _apply(bv):
 
     # Function renames — uses bv.get_function_at(va).set_user_symbol
     from binaryninja import Symbol, SymbolType
-    f = bv.get_function_at(0x1060)
+    f = bv.get_function_at(0x1000)
     if f is not None:
-        bv.define_user_symbol(Symbol(SymbolType.FunctionSymbol, 0x1060, '_start'))
+        bv.define_user_symbol(Symbol(SymbolType.FunctionSymbol, 0x1000, '_init'))
         summary["renamed_functions"] += 1
-    f = bv.get_function_at(0x1090)
+    f = bv.get_function_at(0x1020)
     if f is not None:
-        bv.define_user_symbol(Symbol(SymbolType.FunctionSymbol, 0x1090, 'deregister_tm_clones'))
+        bv.define_user_symbol(Symbol(SymbolType.FunctionSymbol, 0x1020, 'sub_1020'))

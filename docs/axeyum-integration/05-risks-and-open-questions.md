@@ -1,5 +1,9 @@
 # 05 - Risks and open questions
 
+> **Status: historical risk register.** Some risks were resolved or reframed by
+> later ADRs; use the latest entries in `07-decision-log.md` for current
+> decisions and retain this page as original planning context.
+
 Ranked by how much each could move the plan. Each has a concrete
 mitigation or a probe that resolves it cheaply (usually in P1).
 

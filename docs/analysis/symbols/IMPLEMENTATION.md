@@ -1,5 +1,8 @@
 # M2 - Symbols Implementation Plan (Revised)
 
+> **Status: historical implementation plan.** Phase checklists and proposed
+> types below are retained as design history, not current parser status.
+
 ## Overview
 This document provides a comprehensive implementation plan for the M2 - Symbols milestone, focusing on extracting and analyzing symbols, imports/exports, and metadata from PE, ELF, and Mach-O binaries.
 

@@ -3,7 +3,7 @@ g 0x1150
 l
 q
 ─── glaurung repl stdout ───
-glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+glaurung repl  binary=<repo>/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
                db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
 >   0x1150  main  (set_by=analyzer)
 0x1150>   5 vars in fn@0x1150:
@@ -12,5 +12,5 @@ glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/pla
     -0x010  var_10  (uses=2, by=auto)
     -0x008  var_8  (uses=2, by=auto)
     -0x004  var_4  (uses=3, by=auto)
-0x1150> 
+0x1150>
 saving and exiting…

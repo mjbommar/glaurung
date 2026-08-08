@@ -1,1 +1,1 @@
-  fn@0x1160 -0x1b0 url_buffer: char[256]
+  fn@0x1160 -0x1b0 service_path: char[48]

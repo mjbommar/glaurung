@@ -1,5 +1,9 @@
 # Context, evidence, and memory
 
+> **Status: unimplemented design contract.** Existing project/LLM memory
+> components are inputs to this design, not proof that this agent context model
+> has shipped.
+
 ## Principle
 
 The model may reason freely, but every durable claim must trace to bounded,

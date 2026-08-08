@@ -1,5 +1,10 @@
 # Android DEX/APK Parser Documentation
 
+> **Status: historical design record.** The proposed types, phase checklist,
+> malware-analysis claims, and test matrix below are not current implementation
+> status. See the [parser index](../README.md) for the owned APK, AXML, DEX, and
+> SEPolicy modules and their current access boundary.
+
 ## Overview
 
 Android applications are distributed as APK (Android Package) files, which are ZIP archives containing DEX (Dalvik Executable) files with compiled bytecode for the Android Runtime (ART) or legacy Dalvik VM. GLAURUNG's Android parser handles APK packages, DEX bytecode, and provides deep analysis capabilities for Android malware detection.

@@ -1,5 +1,10 @@
 # Windows PE Resources Capability And Test Plan
 
+> **Status: historical capability plan.** Much of this roadmap has since been
+> implemented. Retain it as design and corpus-planning history; use the
+> [parser index](../README.md), live command help, source, and focused tests for
+> current behavior.
+
 ## Purpose
 
 This plan turns the Windows PE resource survey into concrete Glaurung

@@ -1,5 +1,9 @@
 # Detailed Implementation Plans for Critical Features
 
+> **Status: historical design.** This plan preserves implementation rationale;
+> paths, milestones, and code sketches may no longer match the repository. Use
+> [`README.md`](README.md) and current tests for shipped behavior.
+
 ## 1. Overlay Data Handling
 
 ### Overview

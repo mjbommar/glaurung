@@ -1,5 +1,8 @@
 # Glaurung vs Ghidra Windows Regression Review
 
+> **Status: historical comparison snapshot.** Results are bound to the named
+> May 2026 fixtures and dashboard; they are not a current parity guarantee.
+
 Date: 2026-05-19
 
 Scope: the 10 vendored Windows PE regression fixtures in

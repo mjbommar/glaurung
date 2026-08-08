@@ -1,160 +1,210 @@
-# GLAURUNG Binary Parser Documentation
+# Binary formats and parsers
 
-This directory contains comprehensive documentation for GLAURUNG's binary format parsers. Each parser is designed to safely and efficiently extract structured information from binary files while maintaining security and resource bounds.
+Glaurung handles binary formats at several layers. The universal triage path
+identifies a broad set of file and container formats. Dedicated parsers then
+provide deeper structure for selected formats, while other format-specific
+analysis lives in `src/analysis/`, `src/symbols/`, or the Python package.
 
-## Parser Categories
+This distinction matters: detecting a format does not imply full parsing,
+disassembly, decompilation, or safe extraction of every structure it can
+contain.
 
-### Core Executable Formats (Priority 1)
-- **[ELF](./elf/)** - Executable and Linkable Format (Linux/Unix)
-- **[PE-COFF](./pe-coff/)** - Portable Executable / Common Object File Format (Windows)
-- **[Mach-O](./macho/)** - Mach Object format (macOS/iOS)
+## Start with triage
 
-### Bytecode & Virtual Machine Formats (Priority 2)
-- **[Python](./python/)** - Python bytecode (.pyc, .pyo) files
-- **[Java/JVM](./java/)** - Java class files and JAR archives
-- **[.NET/CLR](./dotnet/)** - .NET assemblies and CLI metadata
-- **[Android](./android/)** - DEX bytecode and APK packages
-- **[WebAssembly](./wasm/)** - WebAssembly binary format
-  
-See also:
-- Design plan for interpreted/VM bytecode (Python/Java/DEX): ../analysis/interpreted/README.md
+Use `triage` for an unfamiliar file:
 
-### Container & Archive Formats (Priority 3)
-- **[Archive](./archive/)** - ZIP, TAR, AR, and other archive formats
-- **[Compression](./compression/)** - GZIP, DEFLATE, XZ, Zstandard, and other compression formats
+```bash
+FILE=samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2
 
-### Dynamic & Shared Libraries (Priority 4)
-- **Shared Objects** - .so (ELF), .dll (PE), .dylib (Mach-O)
-- **Static Libraries** - .a (AR format), .lib (COFF)
-
-### Specialized Formats (Priority 5)
-- **[Firmware](./firmware/)** - UEFI, Android boot images, embedded formats
-- **[Debug Info](./debug-info/)** - DWARF, PDB, and other debug information formats
-- **Kernel Modules** - .ko (Linux), .sys (Windows), .kext (macOS)
-
-### Language-Specific Bytecode (Future)
-- **Lua** - .luac compiled Lua bytecode
-- **Ruby** - .rbc Rubinius bytecode
-- **Erlang/Elixir** - .beam BEAM bytecode
-- **Go** - Embedded metadata in Go binaries
-- **Rust** - Embedded metadata in Rust binaries
-
-## Parser Design Principles
-
-### 1. Safety First
-- **Bounded reads**: Never read beyond file boundaries
-- **Resource limits**: Memory and CPU usage constraints
-- **Timeout protection**: Prevent infinite loops in malformed files
-- **Error recovery**: Graceful handling of corrupt data
-
-### 2. Progressive Parsing
-- **Lazy evaluation**: Parse only what's needed
-- **Incremental analysis**: Build understanding progressively
-- **Early termination**: Stop on critical errors
-
-### 3. Format Validation
-- **Magic number verification**: Check file signatures
-- **Structure validation**: Verify internal consistency
-- **Cross-reference checking**: Validate pointers and offsets
-
-### 4. Rich Error Reporting
-- **Detailed error context**: Offset, expected vs actual values
-- **Recovery suggestions**: How to handle partial data
-- **Validation warnings**: Non-critical issues
-
-## Common Parser Components
-
-### Header Parsing
-Every parser implements header validation:
-```rust
-pub trait HeaderParser {
-    fn parse_header(&self, data: &[u8]) -> Result<Header, ParseError>;
-    fn validate_magic(&self, data: &[u8]) -> bool;
-    fn get_endianness(&self) -> Endianness;
-}
+uv run glaurung triage "$FILE"
+uv run glaurung triage "$FILE" --json
 ```
 
-### Section/Segment Enumeration
-Structured traversal of file regions:
-```rust
-pub trait SectionParser {
-    fn enumerate_sections(&self) -> Vec<Section>;
-    fn parse_section(&self, index: usize) -> Result<SectionData, ParseError>;
-}
+The result combines header checks, content sniffing, bounded parser probes,
+entropy, strings, packer signals, and optional recursive container discovery.
+Inspect nested `containers` in JSON. `--tree` is advertised but is not currently
+wired into plain output. Use `--max-read-bytes`, `--max-file-size`, and
+`--max-depth` to tighten resource limits.
+
+The triage format enum currently includes:
+
+- ELF;
+- PE/COFF;
+- Mach-O;
+- WebAssembly;
+- CPython bytecode;
+- Dalvik DEX;
+- COFF, raw, and unknown fallbacks.
+
+Container detection recognizes ZIP and its JAR/APK/AAB subtypes, TAR, gzip,
+7z, AR, XZ, bzip2, Zstandard, LZ4, CPIO, and RAR signatures. Detection returns
+bounded metadata where implemented; it is not a general archive extraction
+API.
+
+## Current implementation map
+
+- **ELF:** owned parser for headers, sections, segments, symbols, dynamic
+  entries, notes, relocations, Android packed relocations, and security
+  features. Start with `triage`, `symbols`, `disasm`, or `kickoff`.
+- **PE/COFF:** owned PE parser for headers, sections, imports, exports,
+  debug/PDB records, resources, TLS, IAT mapping, security features, and
+  anomalies. Start with `triage`, `pe`, `windows`, or `kickoff`.
+- **Mach-O:** triage plus object/symbol, stub, fixup, signing, and analysis
+  helpers. There is no owned `src/formats/macho` parser module. Start with
+  `triage`, `symbols`, `disasm`, or `kickoff`.
+- **Android APK, AXML, and DEX:** owned parsers for ZIP-backed APK access,
+  binary XML, DEX metadata, strings, classes, methods, and fields. Triage is
+  available through the CLI; deeper parsing is currently a Rust API.
+- **Android SEPolicy:** owned policy-header parser with version-aware tests and
+  real fixtures. This is currently a Rust API.
+- **Java class files and JARs:** classfile and bounded JAR-index analysis outside
+  `src/formats`. Use `classfile`; `java` provides optional LLM workflows.
+- **.NET and CIL:** PE detection plus CLR metadata and method-body analysis
+  outside `src/formats`. Use `kickoff` and the Windows workflows.
+- **Lua bytecode:** header and version parsing outside `src/formats`. Use
+  `luac`.
+- **Go:** native binary analysis plus `gopclntab` recovery outside
+  `src/formats`. Use `kickoff`.
+- **WebAssembly:** header and signature detection in triage. There is no
+  dedicated deep parser in the current tree.
+- **CPython bytecode:** header and signature detection in triage. There is no
+  dedicated marshal or code-object parser in the current tree.
+- **Archives and compression:** signature detection and bounded metadata. Java
+  JAR indexing is a separate analysis path. Use `triage --tree`.
+
+This table describes the current source layout, not a promise of complete
+coverage for every variant of a format. Consult command help and focused tests
+for exact fields and limits.
+
+## Format-specific CLI workflows
+
+### Java class files and JARs
+
+Parse one class as JSON:
+
+```bash
+CLASS=samples/binaries/platforms/linux/amd64/export/java/HelloWorld.class
+uv run glaurung classfile "$CLASS" --json
 ```
 
-### Symbol Resolution
-Extract and resolve symbolic information:
-```rust
-pub trait SymbolParser {
-    fn parse_symbols(&self) -> Vec<Symbol>;
-    fn resolve_symbol(&self, name: &str) -> Option<Symbol>;
-}
+Walk the class entries in a JAR:
+
+```bash
+JAR=samples/binaries/platforms/linux/amd64/export/java/HelloWorld.jar
+uv run glaurung classfile "$JAR"
 ```
 
-## Parser Implementation Status
+The archive path currently emits a text summary even if `--json` is supplied;
+use the single-class path when machine-readable class details are required.
+The `glaurung java` subcommands are LLM-assisted workflows and need provider
+credentials; `classfile` is deterministic and offline.
 
-### Native Executables
-| Format | Triage | Basic Parse | Full Parse | Symbols | Relocations | Resources |
-|--------|--------|-------------|------------|---------|-------------|-----------|
-| ELF    | ✅     | ✅         | ⏳         | ⏳      | ⏳          | N/A       |
-| PE     | ✅     | ✅         | ⏳         | ⏳      | ⏳          | ⏳        |
-| Mach-O | ✅     | ✅         | ⏳         | ⏳      | ⏳          | N/A       |
+See the [Java parser guide](java/README.md) for classfile fields and the
+[agentic Java plan](java/JVM_AGENTIC_ANALYSIS_PLAN.md) for planned work. Do not
+interpret unchecked or planned items in that plan as current CLI behavior.
 
-### Bytecode Formats
-| Format  | Triage | Header | Disassembly | Decompile | Obfuscation | Metadata |
-|---------|--------|--------|-------------|-----------|-------------|----------|
-| Python  | ✅     | ⏳     | ⏳         | ⏳        | ⏳          | ⏳       |
-| Java    | ✅     | ⏳     | ⏳         | ⏳        | ⏳          | ⏳       |
-| .NET    | ✅     | ⏳     | ⏳         | ⏳        | ⏳          | ⏳       |
-| Android | ⏳     | ⏳     | ⏳         | ⏳        | ⏳          | ⏳       |
-| WASM    | ✅     | ⏳     | ⏳         | ⏳        | N/A         | ⏳       |
+### Lua bytecode
 
-### Archive Formats
-| Format | Detection | List | Extract | Nested | Compression | Encryption |
-|--------|-----------|------|---------|--------|-------------|------------|
-| ZIP    | ✅       | ⏳   | ⏳      | ⏳     | ⏳          | ⏳        |
-| TAR    | ✅       | ⏳   | ⏳      | ⏳     | ⏳          | N/A       |
-| AR     | ✅       | ⏳   | ⏳      | N/A    | N/A         | N/A       |
+```bash
+LUA=samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.4.luac
+uv run glaurung luac "$LUA" --json
+```
 
-Legend: ✅ Complete | 🚧 In Progress | ⏳ Planned | N/A Not Applicable
+The command reports the recognized Lua family, endianness, and source marker.
+It is a bytecode-header workflow, not a Lua decompiler.
 
-## Reference Specifications
+### PE resources
 
-All parsers are implemented according to official specifications located in:
-- `/reference/specifications/` - Format specifications and headers
-- `/reference/LIEF/` - Reference parser implementation
-- `/reference/goblin/` - Rust binary parsing examples
+```bash
+PE=samples/binaries/platforms/windows/amd64/export/windows/x86_64/O2/hello-c-mingw64-O2.exe
 
-## Testing Strategy
+uv run glaurung pe resources "$PE" --json
+uv run glaurung pe manifest "$PE" --json
+uv run glaurung pe version "$PE" --json
+```
 
-### Unit Tests
-- Header parsing edge cases
-- Malformed file handling
-- Resource limit enforcement
+These actions are bounded views of the PE resource tree. An empty result is
+valid for a PE with no matching resource. `resources` returns zero for a valid
+PE even when the list is empty. `manifest` and `version` still emit a structured
+result but return status 4 when the requested resource is absent; scripts should
+inspect both the exit status and the JSON `found` or `stop_reasons` fields.
+Broader PE/PDB workflows are covered by the
+[Windows documentation](../windows-port/README.md).
 
-### Integration Tests
-- Real-world binary samples
-- Cross-validation with reference parsers
-- Format compliance verification
+## Developer API layout
 
-### Fuzz Testing
-- Coverage-guided fuzzing with cargo-fuzz
-- Format-aware mutation strategies
-- Crash reproduction and minimization
+The dedicated Rust format modules are exported from `src/formats/mod.rs`:
 
-## Contributing
+```rust
+pub mod apk;
+pub mod axml;
+pub mod dex;
+pub mod elf;
+pub mod pe;
+pub mod sepolicy;
+```
 
-When adding or modifying parsers:
+Related functionality deliberately lives elsewhere:
 
-1. **Document the format**: Link to specifications
-2. **Define the data model**: Use Rust type system
-3. **Implement safety checks**: Bounds, timeouts, validation
-4. **Add comprehensive tests**: Unit, integration, fuzz
-5. **Update status matrix**: Track implementation progress
+- `src/triage/` owns broad detection, parser probes, recursion, container
+  metadata, entropy, signatures, and bounded I/O;
+- `src/analysis/` owns Java class/JAR, CIL, Lua, Go, and Mach-O analysis helpers;
+- `src/symbols/` owns ELF, PE/PDB, and Mach-O symbol collection;
+- `src/debug/` owns DWARF ingestion; and
+- `src/python_bindings/` exposes supported native functionality to Python.
 
-## See Also
+Do not invent a common parser trait based on older design sketches. Additions
+should follow the current owning module's API and data model.
 
-- [Triage Pipeline](../triage/) - How files are identified and routed to parsers
-- [Data Model](../data-model/) - Core types and structures
-- [Error Handling](../../src/error.rs) - Error types and recovery strategies
+## Current ledgers and historical format records
+
+- [Java class files and JARs](java/) — living capability ledger and roadmap.
+- [ELF](elf/) — historical design record; use this index for current entry
+  points.
+- [PE/COFF](pe-coff/) — historical design record; use this index and the
+  Windows documentation for current entry points.
+- [Mach-O](macho/) — historical design record for an unimplemented consolidated
+  parser.
+- [Android APK and DEX](android/) — historical design record; the current owned
+  Rust modules are summarized above.
+- [Archives](archive/) — historical extraction design; current triage is bounded
+  discovery, not a general extraction API.
+- [.NET and CIL](dotnet/) — historical design record.
+- [Python bytecode](python/) — historical deep-parser design; current support is
+  header/signature detection.
+- [WebAssembly](wasm/) — historical deep-parser design; current support is
+  header/signature detection.
+
+The historical pages preserve useful format background, but their proposed Rust
+types, paths, phase checklists, performance claims, and test lists are not
+current API or implementation status.
+
+Format specifications and vendored reference implementations live under
+[`reference/specifications/`](../../reference/specifications/) and
+[`reference/`](../../reference/). They are reference material, not Glaurung's
+public API.
+
+## Safety and validation requirements
+
+Format parsers operate on attacker-controlled bytes. Parser changes must:
+
+- validate offsets, lengths, counts, arithmetic, and string termination;
+- apply explicit file, recursion, allocation, and iteration bounds;
+- return typed errors instead of panicking on malformed input;
+- avoid extracting or executing embedded content implicitly;
+- use real valid and malformed fixtures; and
+- keep detection, parsing, analysis, and decompilation claims separate.
+
+Useful focused gates include:
+
+```bash
+cargo test formats::elf
+cargo test formats::pe
+cargo test --test android_dex_triage
+uv run pytest python/tests/test_triage_integration.py -xvs
+uv run pytest python/tests/test_classfile.py -xvs
+uv run pytest python/tests/test_luac.py -xvs
+```
+
+Run the broader Rust and Python suites required by [`CLAUDE.md`](../../CLAUDE.md)
+before merging parser behavior changes.

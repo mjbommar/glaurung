@@ -1,5 +1,9 @@
 # Model configuration and budgets
 
+> **Status: unimplemented operational contract.** Existing LLM configuration is
+> reusable context, but the autonomous agent's model/budget enforcement has not
+> shipped.
+
 ## Configuration objective
 
 Every result must identify the exact model, provider settings, budgets, prompt,

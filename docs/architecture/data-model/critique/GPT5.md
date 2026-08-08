@@ -1,5 +1,8 @@
 # GLAURUNG Data Model Critique — GPT5
 
+> **Status: historical model critique.** Recommendations below are design input,
+> not current fields or implementation work.
+
 Context: Review and concrete recommendations for docs/data-model/proposals/CLAUDE.md to align with MVP scope, improve consistency, and separate core structural data from advanced/semantic concerns.
 
 Format: Each action includes a verb, target, rationale, and impact.
@@ -198,4 +201,3 @@ Format: Each action includes a verb, target, rationale, and impact.
 - Move: Semantic web content → `docs/semantics/ontology.md` (status: experimental)
 - Add: `docs/data-model/proposals/types-and-decompiler.md` for DataType/Variable/ABI work
 - Add: `docs/pipeline/minimal-artifacts.md` describing Identify/Layout/Symbols/Disassembly/Xrefs/Strings/CFG payloads
-

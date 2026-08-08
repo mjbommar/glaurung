@@ -1,6 +1,6 @@
 # HelloWorld.jar: 1 class file(s)
 
-class HelloWorld  (Java 17 (classfile 61))
+class HelloWorld  (Java 17 (classfile 61.0))
   extends java/lang/Object
   access: public
   fields: 3

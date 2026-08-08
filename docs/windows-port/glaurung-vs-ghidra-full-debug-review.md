@@ -1,5 +1,9 @@
 # Glaurung vs Ghidra 30-File Debug Review
 
+> **Status: historical comparison snapshot.** Counts, timings, recall, and gap
+> classifications are bound to the named May 2026 artifacts and must be
+> regenerated before use as current performance evidence.
+
 Date: 2026-05-19
 
 Scope: all 30 vendored Windows regression fixtures under

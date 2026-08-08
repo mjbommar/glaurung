@@ -1,137 +1,137 @@
-# Glaurung Documentation
+# Glaurung documentation
 
-This directory contains technical documentation, implementation notes, and
-research for the Glaurung binary analysis framework.
+Glaurung is a pre-1.0 reverse-engineering framework with a Rust analysis core,
+Python bindings, a command-line interface, persistent project databases, and
+optional LLM-assisted workflows. Start with the task-oriented material below;
+the `design/`, `campaigns/`, and `sessions/` trees are engineering records, not
+beginner guides or promises of shipped behavior.
 
-## Directory Structure
+Decompiler output is still experimental. Treat pseudocode as an analysis aid
+and verify important conclusions against disassembly and runtime behavior.
 
-### `architecture/`
+## Start here
 
-System design decisions and core data model specifications.
+1. [Install Glaurung from source](tutorial/01-getting-started/install.md).
+2. [Analyze the first checked-in binary](tutorial/01-getting-started/first-binary.md).
+3. Take the [CLI tour](tutorial/01-getting-started/cli-tour.md) or
+   [REPL tour](tutorial/01-getting-started/repl-tour.md).
+4. Continue through the [complete tutorial track](tutorial/README.md).
 
-- `data-model/` - Unified data model design, proposals, and implementation tracking
+For a shorter overview, supported platforms, and a Python API example, use the
+[repository README](../README.md). Installation prerequisites, build modes,
+configuration, and troubleshooting live in the
+[development setup guide](development/setup.md).
 
-### `triage/`
+## Find a workflow
 
-Documentation for the triage analysis pipeline, which processes binaries
-through multiple bounded analysis stages.
+| Goal | Read this |
+| --- | --- |
+| Inspect an unfamiliar binary quickly | [Triage overview](triage/README.md) and [first binary](tutorial/01-getting-started/first-binary.md) |
+| Learn the CLI command surface | [CLI tour](tutorial/01-getting-started/cli-tour.md) and [CLI cheat sheet](tutorial/reference/cli-cheatsheet.md) |
+| Navigate or annotate a project database | [REPL tour](tutorial/01-getting-started/repl-tour.md) and [analyst workflows](cli/analyst-ergonomics.md) |
+| Work with names, types, xrefs, stack frames, or patches | [Daily basics](tutorial/02-daily-basics/) |
+| Understand project data and provenance | [Persistent projects](architecture/PERSISTENT_PROJECT.md), [data model](architecture/data-model/README.md), and [`set_by` precedence](tutorial/reference/set-by-precedence.md) |
+| Understand analysis architecture | [Analysis index](analysis/README.md), [disassembly](analysis/disassembly/README.md), and [decompiler overview](analysis/decompiler/README.md) |
+| Read or test pseudocode output | [Decompiler overview](analysis/decompiler/README.md) and [decompiler testing](development/decompiler-testing.md) |
+| Analyze PE files or Windows software | [Windows analysis](windows-port/README.md) and [Windows configuration](windows-port/windows-analysis-config.md) |
+| Detect packers or compare binaries | [Packer configuration](triage/packer-config.md) and [similarity analysis](triage/similarity.md) |
+| Use an LLM-backed command | [`ask` command](cli/ASK_COMMAND.md), [LLM subsystem](llm/README.md), and [runtime configuration](development/setup.md#runtime-configuration) |
+| Reproduce a guided investigation | [Walkthroughs](tutorial/03-walkthroughs/) and [demos](demos/README.md) |
+| Run source examples | [Executable examples](../examples/README.md) |
+| Use or rebuild the sample corpus | [Sample corpus guide](../samples/README.md) |
+| Contribute code or documentation | [Contributor policy](../CLAUDE.md), [agent policy](../AGENTS.md), and [development guidelines](development/guidelines.md) |
 
-- Implementation plans, advanced features, signature design
-- Packer detection, similarity analysis configurations
+## Documentation by subsystem
 
-### `parsers/`
+### User and operator guides
 
-Binary format parser specifications organized by format type.
+- [`tutorial/`](tutorial/README.md): progressive, real-sample exercises from
+  installation through analyst and agent workflows.
+- [`cli/`](cli/): focused command and analyst-workflow guides.
+- [`triage/`](triage/README.md): first-pass analysis, resource bounds, strings,
+  packer signals, containers, and similarity.
+- [`windows-port/`](windows-port/README.md): PE/PDB workflows, configuration,
+  hardening, and Windows-specific analysis.
+- [`demos/`](demos/README.md): longer malware, vulnerability, and patch-analysis
+  scenarios.
 
-- Native formats: `elf/`, `pe-coff/`, `macho/`
-- Bytecode formats: `java/`, `python/`, `dotnet/`, `wasm/`
-- Container formats: `archive/`, `android/`
-- Additional parsers for compression, debug info, firmware
+### Core analysis and data model
 
-### `analysis/`
+- [`analysis/`](analysis/README.md): current analysis entry points plus clearly
+  separated research checkpoints and historical proposals.
+- [`architecture/`](architecture/README.md): current persistent-project and
+  data-model boundaries plus dated reviews and proposals.
+- [`parsers/`](parsers/README.md): native, bytecode, archive, Android, and
+  managed-runtime parser documentation.
+- [`formats/`](formats/README.md): format and compiler-artifact reference material.
+- [`syscalls/`](syscalls/README.md): Linux and Windows syscall references used by
+  analysis.
 
-Analysis subsystem documentation.
+### AI-assisted and symbolic workflows
 
-- `language-detection/` - Programming language and compiler detection
-- `symbols/` - Symbol extraction and analysis
-- `disassembly/` - Multi-engine disassembly architecture
-- `lifting/` - Binary lifting to intermediate representations (LLVM IR, VEX)
-- `decompiler/` - Decompilation pipeline and AI integration
-- `interpreted/` - Interpreted & VM bytecode (Python/Java/DEX) analysis plan
+- [`llm/`](llm/README.md): maintained operator/contributor guides plus clearly
+  labeled historical design and roadmap records.
+- [`agentic-glaurung/`](agentic-glaurung/README.md): architecture, safety,
+  evaluation, and delivery plan for autonomous source recovery. Its
+  [status page](agentic-glaurung/STATUS.md) is the authority on what is actually
+  implemented.
+- [`axeyum-integration/`](axeyum-integration/README.md): symbolic execution and
+  solver integration design, evidence, and validation material.
 
-### `formats/`
+### Engineering records
 
-Technical reference documentation for binary formats.
+- [`design/`](design/): active and historical design proposals. A proposal can
+  describe behavior that is not implemented yet.
+- [`development/`](development/): setup, repository structure, contributor
+  guidance, testing, and roadmaps.
+- [`campaigns/`](campaigns/): dated multi-change effort records.
+- [`research/`](research/): exploratory designs and investigations.
+- [`sessions/`](sessions/): dated verification or development-session notes.
 
-- `compiler-artifacts.md` - Detailed compiler signatures, magic numbers, and
-  mangling patterns
+## How to interpret status
 
-### `development/`
+Documentation in this repository serves several different purposes:
 
-Development environment setup and project management.
+- User guides should describe commands and behavior available in the current
+  checkout. A limitation should be called out next to the affected workflow.
+- Design, roadmap, and plan documents describe intended work as well as shipped
+  work. Check their status sections and then confirm behavior in code or tests.
+- Campaign and session documents are evidence from a point in time. They may be
+  useful history, but they are not a current compatibility guarantee.
+- Generated pseudocode and LLM output are hypotheses. Neither is a substitute
+  for binary-level evidence.
 
-- `setup.md` - Supported installation, builds, tests, Docker validation, and
-  runtime configuration
-- `guidelines.md` - Error handling, logging, coding standards
-- `project-structure.md` - Repository organization
-- `roadmap.md` - Development milestones and future plans
+When two documents disagree, prefer current command help, current code and
+tests, and the most specific maintained guide. Please file or fix the stale
+document instead of silently relying on the contradiction.
 
-### `cli/`
+## Search the documentation
 
-Per-command CLI guides.
-
-- `analyst-ergonomics.md` - PDB naming on by default, KB-aware `disasm`,
-  `locks` (CFG-aware lock-state), `group` (cross-binary shared pool tags),
-  and the coverage-footer convention
-
-### `campaigns/`
-
-Multi-change effort records (design + as-built status).
-
-- `analyst-ergonomics-2026-06-DIFF.md` - the campaign behind the `cli/` doc above
-
-### `agentic-glaurung/`
-
-Design and delivery plan for the autonomous, tool-using source-recovery agent.
-
-- Canonical execution checklist:
-  [`agentic-glaurung/PLAN.md`](agentic-glaurung/PLAN.md)
-- Current status and exact resume action:
-  [`agentic-glaurung/STATUS.md`](agentic-glaurung/STATUS.md)
-- Separates native raw Glaurung, the fixed LLM rewrite pipeline, and the true
-  PydanticAI agent
-- Defines runtime, tool, safety, tracing, evaluation, and implementation
-  contracts for a DecBench sample-set run
-
-### `research/`
-
-Experimental features and proposals.
-
-- `pyext-separation.md` - PyO3 extension separation design
-
-## Quick Reference
-
-**Working on triage?** → `triage/`
-**Adding a new parser?** → `parsers/[format]/`
-**Improving language detection?** → `analysis/language-detection/`
-**Binary lifting to IR?** → `analysis/lifting/`
-**Understanding the data model?** → `architecture/data-model/`
-**Setting up development?** → `development/setup.md`
-**Configuring models, caches, limits, or Windows analysis?** → `development/setup.md#runtime-configuration`
-**Looking for compiler signatures?** → `formats/compiler-artifacts.md`
-**Planning interpreted/VM support?** → `analysis/interpreted/`
-**Building the autonomous decompiler agent?** →
-[`agentic-glaurung/README.md`](agentic-glaurung/README.md)
-**Resuming autonomous-agent implementation?** →
-[`agentic-glaurung/STATUS.md`](agentic-glaurung/STATUS.md)
-
-## Documentation Standards
-
-- Each major component has its own README
-- Implementation tracking uses checkboxes: ✅ Complete, 🔄 In Progress, ❌ Not Started
-- Technical specs include concrete examples and code snippets
-- Design decisions are documented with rationale
-
-## Finding Information
-
-Use grep or your editor's search to quickly find what you need:
+Run searches from the repository root:
 
 ```bash
-# Find all mentions of a specific topic
-grep -r "symbol extraction" docs/
+# Find a subsystem, command, or API.
+rg -n "symbol extraction" docs python src
 
-# Find implementation status
-grep -r "✅\|🔄\|❌" docs/
+# Find explicit implementation-status language.
+rg -n -i "implemented|in progress|planned|not implemented" docs
 
-# Find TODO items
-grep -r "TODO\|FIXME" docs/
+# Find documentation debt.
+rg -n "TODO|FIXME" docs
 ```
 
-## Contributing
+## Documentation contribution rules
 
-When adding documentation:
+- Put task-oriented instructions near the user workflow and design rationale
+  near the owning subsystem.
+- State whether a feature is available, experimental, optional, or planned.
+- Use real checked-in samples; do not invent output or APIs.
+- Show repository commands with `uv run`, `uvx`, or `cargo` as appropriate.
+- Test copy-paste commands from a clean checkout or clean environment before
+  presenting them as supported.
+- Link new pages from the nearest subsystem README and from this page when they
+  introduce a top-level workflow.
+- Avoid hard-coded test counts and other facts that go stale quickly.
 
-1. Place it in the appropriate component directory
-2. Update the component's README if adding a new file
-3. Use clear, descriptive filenames
-4. Include implementation status markers where relevant
+Contributor commands and project-wide policy are maintained in
+[`CLAUDE.md`](../CLAUDE.md) and [`AGENTS.md`](../AGENTS.md).

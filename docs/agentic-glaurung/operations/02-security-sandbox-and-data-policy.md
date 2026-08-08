@@ -1,5 +1,9 @@
 # Security sandbox and data policy
 
+> **Status: required, unimplemented security contract.** Do not run an
+> autonomous-agent benchmark until these controls have executable tests and
+> terminal evidence.
+
 ## Threat model
 
 Inputs are hostile binaries. They may contain malformed formats, resource bombs,

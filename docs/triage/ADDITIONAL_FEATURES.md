@@ -1,5 +1,9 @@
 # Additional Features from Reference Libraries
 
+> **Status: historical design.** This is a proposal inventory, not a current
+> feature list. Verify shipped triage behavior in [`README.md`](README.md),
+> current source, and tests before relying on an item below.
+
 Beyond signatures and symbols, here are powerful features we should adopt from the reference implementations.
 
 ## 1. 🔴 Overlay Data Handling (LIEF)

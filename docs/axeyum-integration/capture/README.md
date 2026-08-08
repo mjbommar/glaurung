@@ -1,5 +1,9 @@
 # Glaurung QF_BV real-query corpus capture (for axeyum GQ1/GQ10)
 
+> **Status: maintained capture protocol with historical result sections.** Use
+> fresh, empty output directories and record immutable Glaurung/Axeyum revisions;
+> retained counts and timings below are snapshots.
+
 Reproducible procedure for producing the lifter-shaped QF_BV query pack that
 axeyum's `axeyum-bench` (manifest v1) ingests as its client-performance
 corpus. The deduplicated corpus and the ordered native profile below are

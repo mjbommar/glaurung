@@ -1,5 +1,10 @@
 # Glaurung Binary Lifting Architecture
 
+> **Status: historical architecture proposal.** Backend matrices, illustrative
+> APIs, benchmarks, and roadmaps below are not the current lifting contract. See
+> the [decompiler architecture](../decompiler/) and `src/ir/` for the live
+> LLIR/SSA/AST path.
+
 ## Overview
 
 Binary lifting (also called binary translation or binary raising) transforms low-level machine code into higher-level intermediate representations (IR) suitable for program analysis, optimization, and transformation. Unlike decompilation which targets human-readable source code, lifting preserves precise semantics in a machine-analyzable form.

@@ -1,5 +1,9 @@
 # Agent Infrastructure Refactoring Guide
 
+> **Refactor-era record.** This page explains the architecture introduced by a
+> past refactor and may lag current defaults or APIs. For current operator and
+> tool-author guidance, start at [`README.md`](README.md).
+
 ## Overview
 
 The agent infrastructure has been refactored to provide clear separation between single-pass and iterative execution strategies, with comprehensive safety mechanisms and hyperparameter awareness.

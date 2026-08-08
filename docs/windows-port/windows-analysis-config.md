@@ -1,5 +1,9 @@
 # Windows Analysis Config
 
+> **Status: maintained operator guide.** CLI help and
+> `python/glaurung/windows_config.py` are authoritative for accepted keys and
+> precedence; the smoke workflow below uses a checked-in PE fixture.
+
 `python/glaurung/windows_config.py` centralizes the Windows PE resource and
 symbol defaults used by `cfg`, `decompile`, `view`, project xref indexing, and
 `windows bootstrap-project-facts`.

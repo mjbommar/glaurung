@@ -1,8 +1,12 @@
 # JVM and Java Agentic Analysis Plan
 
-Status: active implementation plan
+Status: living implementation diary and roadmap
 Owner area: Java/JVM parser, archive analysis, LLM tools, and runtime analysis
 Primary fixtures: `tmp/minecraft-jars/` copied from local and `w1` Minecraft installs
+
+This is not an operator guide. Earlier “current state” passages are retained as
+implementation history and can lag the capability ledger in
+[`README.md`](README.md). Treat named source and focused tests as authoritative.
 
 ## Purpose
 

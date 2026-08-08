@@ -1,5 +1,9 @@
 # Symbol Extraction Enhancements
 
+> **Status: historical design backlog.** Priorities and proposed APIs below are
+> not current shipped behavior. Use `uv run glaurung symbols --help`, source, and
+> focused tests for the live contract.
+
 ## Overview
 This document outlines 15 critical enhancements to improve the symbol extraction and analysis capabilities in Glaurung's triage system. These improvements focus on security analysis, exploitation detection, and anti-analysis techniques commonly used by malware.
 

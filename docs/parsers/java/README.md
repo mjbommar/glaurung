@@ -1,5 +1,9 @@
 # Java Class File Parser Documentation
 
+> **Status: living capability ledger.** Current claims should stay tied to the
+> named source, tests, and command help. Phase checklists below mix completed
+> capability with roadmap work; unchecked items are not supported behavior.
+
 ## Overview
 
 Java class files (.class) contain Java bytecode that runs on the Java Virtual Machine (JVM). GLAURUNG's Java parser handles class files, JAR archives, and provides analysis capabilities for JVM-based applications including Kotlin, Scala, and other JVM languages.

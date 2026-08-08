@@ -1,5 +1,11 @@
 # Decompiler pipeline
 
+> **Status: historical pipeline snapshot.** This table describes the much
+> smaller pipeline at commit `adde50b` (2026-04-24). The current tree has a
+> consolidated AST-pass pipeline and substantial later type, ABI, loop, proof,
+> and cleanup work. Use the source and focused tests for current execution order;
+> do not append new passes to this numbered list as if it were live.
+
 Glaurung's pseudocode output is produced by a straight-line sequence of
 ~20 small passes over a shared AST. Each pass has a single, narrow
 responsibility; together they turn raw decoded instructions into a

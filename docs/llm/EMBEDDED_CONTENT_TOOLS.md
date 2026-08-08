@@ -1,5 +1,10 @@
 # Embedded Content Extraction (Layers 1.5–3.5)
 
+> **Design and implementation record.** Confirm individual tool availability
+> in `python/glaurung/llm/tools/` and current registration before treating a
+> section below as a shipped operator workflow. See [`TOOLS.md`](TOOLS.md) for
+> the maintained tool contract.
+
 ## The gap
 
 Glaurung's pipeline assumes the file you hand it *is* the binary you

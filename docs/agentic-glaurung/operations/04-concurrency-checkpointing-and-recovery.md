@@ -1,5 +1,8 @@
 # Concurrency, checkpointing, and recovery
 
+> **Status: unimplemented operational contract.** The current runner does not
+> gain these resume or concurrency guarantees from this design document.
+
 ## Objective
 
 The 250-function run must survive interruption without duplicating paid work,

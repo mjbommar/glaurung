@@ -162,6 +162,7 @@ for the decompiler-specific gates.
 - [Documentation index](docs/README.md)
 - [Installation and development setup](docs/development/setup.md)
 - [Tutorial](docs/tutorial/README.md)
+- [Executable examples](examples/README.md)
 - [CLI workflows](docs/cli/analyst-ergonomics.md)
 - [Architecture and data model](docs/architecture/)
 - [Decompiler documentation](docs/analysis/decompiler/README.md)

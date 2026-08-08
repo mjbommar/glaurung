@@ -1,5 +1,9 @@
 # Windows-specific atomic tools for `glaurung/llm/tools/`
 
+> **Status: historical tool-design catalog.** Many proposed tools now exist
+> under `python/glaurung/llm/tools/`; current registration and schemas are
+> authoritative, while this page preserves campaign rationale.
+
 > 12-15 deterministic pydantic-ai tools the `agentic-security-bot`
 > (asb) windows-port campaign adds to `memory_agent`. Each tool
 > encapsulates one tier-1 or tier-2 bug-class invariant from

@@ -1,42 +1,72 @@
-# Windows System Calls
+# Windows system calls
 
-This document provides an overview of the Windows system call (syscall) interface. It differs significantly from its Linux counterpart in its philosophy and usage.
+> **Status: maintained analysis reference.** This page describes build-bound
+> syscall evidence and the current Glaurung Windows tools. It does not present a
+> universal service-number table or instructions for bypassing security controls.
 
-## Key Characteristics: An Unstable, Undocumented Interface
+The supported application boundary on Windows is the documented Win32 API.
+Lower-level Native API entry points, commonly exported by `ntdll.dll` and
+`win32u.dll`, lead to kernel services. Microsoft documents some `Nt*` functions,
+but the numeric service identifiers and stub layouts are not a stable public ABI
+across Windows builds and architectures.
 
-The most critical concept to understand is that the direct syscall interface in Windows is **not a stable, documented, or public API**.
+Treat the exact user-mode module as evidence. Static tooling can extract a
+service number from that artifact; the analyzed program does not have to perform
+runtime resolution. Conversely, a hard-coded number without build identity is
+not portable evidence.
 
-- **No Guaranteed Stability**: Microsoft does not guarantee that syscall numbers (known as System Service Numbers or SSNs) will remain the same between different Windows versions, service packs, or even minor security updates. This is an intentional design choice.
-- **The Public API is WinAPI**: The stable, documented way to interact with the Windows kernel is through the high-level Windows API (`kernel32.dll`, `user32.dll`, etc.). These libraries provide the official, supported programming interface for applications.
-- **`ntdll.dll` as the Gateway**: The WinAPI functions often call functions within `ntdll.dll`. This library, often called the "Native API," contains functions (e.g., `NtCreateFile`, `NtQuerySystemInformation`) that are the final user-mode layer before transitioning to the kernel. While more low-level, the Native API is still largely undocumented and can change. The `ntdll.dll` functions are responsible for placing the correct syscall number into the `eax` register and executing the `syscall` or `sysenter` instruction.
+Microsoft's
+[NtCreateFile reference](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)
+shows a documented user-mode Native API entry point in `ntdll.dll`. The WDK's
+[Nt and Zw guidance](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-nt-and-zw-versions-of-the-native-system-services-routines)
+explains the user-mode system-call boundary and the different kernel-mode
+parameter semantics of `Nt*` and `Zw*` calls.
 
-This design allows Microsoft to add, remove, or change the underlying kernel functions without breaking existing applications, as long as those applications use the stable, high-level WinAPI.
+## Evidence to preserve
 
-## Why and How Syscalls are Used Directly
+For each recovered service, record:
 
-Despite the instability, direct syscalls are frequently used in specific domains, primarily for **security and anti-security purposes**.
+- the exact Windows build and architecture, when known;
+- source module, file hash, export name, RVA/VA, and file offset;
+- the service number and byte or lifted-IR evidence supporting it;
+- dispatch shape, including any compatibility fallback;
+- whether the bytes appear patched or disagree with a trusted clean artifact;
+  and
+- the source of any kernel-handler name or address correlation.
 
-- **Evasion of Security Products**: Endpoint Detection and Response (EDR) and antivirus software often monitor for malicious activity by "hooking" functions in `kernel32.dll` and `ntdll.dll`. By bypassing these libraries and invoking a syscall directly, malware can evade detection.
-- **Research and Debugging**: Security researchers and reverse engineers use syscalls to understand the inner workings of the Windows kernel and to analyze software behavior at the lowest level.
+An x64 stub often contains a move of `rcx` to `r10`, a service number loaded into
+`eax`, and a `syscall` instruction, but Glaurung recognizes several lifted,
+assembly, and raw-byte shapes. Do not require one canonical byte sequence.
 
-### Dynamic Syscall Resolution
+## Current Glaurung support
 
-Because syscall numbers are not stable, any program that uses them directly **must resolve the number at runtime**. Hardcoding a syscall number will cause the application to fail on different Windows versions.
+The Windows tool surface includes:
 
-The standard process for dynamic resolution is:
-1.  Get the base address of the loaded `ntdll.dll` module in memory.
-2.  Parse the module's Export Address Table (EAT) to find the memory address of the target Native API function (e.g., `NtCreateFile`).
-3.  Read the first few bytes of the function's machine code. This code "stub" contains the instruction that moves the syscall number (SSN) into the `eax` register.
-4.  Extract the SSN from that instruction.
-5.  Use the extracted SSN to perform the direct syscall, typically with a small assembly block.
+- `windows_syscall_stub_atlas`, which scans lifted text, assembly, raw x64 stub
+  bytes, and named PE exports;
+- `windows_syscall_atlas_diff`, which compares two build-bound atlas snapshots;
+- `windows_syscall_handler_correlate`, which joins stubs to PDB-backed project
+  function names or an explicit handler map; and
+- `windows_live_kernel_snapshot`, which imports external read-only runtime facts
+  and checks handler/module relationships.
 
-Advanced techniques like "Hell's Gate" and "Halo's Gate" refine this process to be even more evasive, avoiding the use of potentially hooked API calls to perform the resolution itself.
+The implementations live under `python/glaurung/llm/tools/`. The
+[Windows analysis status](../windows-port/README.md) is the capability authority.
+True live SSDT acquisition/comparison is still future work; the current live
+snapshot tool consumes externally collected facts and does not hook or modify a
+system.
 
-## Finding Syscall Information
+## Validation
 
-Since there is no official documentation, this information is curated by the security and reverse engineering community.
+Focused tests cover reduced fixtures and a checked-in real `ntdll` fixture:
 
-- **[j00ru's Syscall Tables](https://j00ru.vexillium.org/syscalls/nt/64/)**: This is the most comprehensive and widely-respected public database of syscalls for nearly every version of Windows, covering both x86 and x64 architectures.
-- **[HFIREF0X's Syscall Tables on GitHub](https://github.com/HFIREF0X/SyscallTables)**: Another excellent, community-maintained collection of syscall tables for various Windows builds.
-- **Process Hacker / System Informer Source Code**: The source code for this popular system analysis tool is a valuable reference for the undocumented structures and function prototypes used by the Native API.
-- **Windows Driver Kit (WDK)**: While not a syscall reference, the WDK documentation is the most official source for some of the kernel-level data structures that are passed as arguments to syscalls.
+```bash
+uv run pytest python/tests/test_windows_syscall_stub_atlas_tool.py -q
+uv run pytest python/tests/test_windows_syscall_atlas_diff_tool.py -q
+uv run pytest python/tests/test_windows_syscall_handler_correlate_tool.py -q
+uv run pytest python/tests/test_windows_live_kernel_snapshot_tool.py -q
+```
+
+Do not infer completeness from one build. For a finding, corroborate static stub
+evidence with exact build identity and, when handler integrity matters, trusted
+runtime or symbol evidence.

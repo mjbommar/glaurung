@@ -1,5 +1,10 @@
 # Triage Roadmap & Checklist
 
+> **Status: historical triage roadmap.** The checkboxes record an earlier
+> planning state and are not a current implementation inventory. In particular,
+> do not infer current CLI support from this list; use `glaurung triage --help`,
+> the triage source, and its tests for current behavior.
+
 Purpose: guide development of a safe, fast, and extensible binary triage pipeline (detection → validation → scoring → recursion) with Python API/CLI, tests, fuzzing, and performance baselines. This file tracks status with checkboxes and organizes work by milestones and cross-cutting concerns.
 
 Legend: [ ] = TODO, [x] = Done

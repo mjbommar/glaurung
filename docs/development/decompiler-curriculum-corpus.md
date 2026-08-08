@@ -1,5 +1,9 @@
 # Decompiler curriculum corpus
 
+> **Status: maintained corpus guide.** The fixtures and selectors are current;
+> capability counts below are a revision-bound snapshot and must be rerun before
+> they are presented as current behavior.
+
 The curriculum corpus extends the focused bug fixtures with recognizable,
 composed programs from an undergraduate computer-science sequence. Its purpose is
 not to reward source-text resemblance. Every exported function crosses the real
@@ -59,7 +63,7 @@ failure, or worker failure is infrastructure debt and may not be baselined.
 
 ## Initial capability map
 
-The first run on Glaurung `1525bdf0` produced 84 function/lane outcomes: 49
+The recorded results at `1525bdf0` produced 84 function/lane outcomes: 49
 passed and 35 failed. Hashing, heaps, union-find, CSR mat-vec, Newton integer
 square root, polynomial arithmetic, and the finite-difference stencil passed all
 four lanes. The explicit-stack traversal family exposed the largest coherent

@@ -1,164 +1,95 @@
-# §X — Agent: one-shot kickoff (deterministic)
+# §X — One-shot kickoff
 
-`glaurung kickoff` is the deterministic-only first-touch pipeline.
-No LLM, no tokens, no API key — just the deterministic analysis
-surface composed into one command. The agent's first turn in any
-chat-driven workflow uses this same data, so understanding what
-kickoff produces (and what it doesn't) is the foundation for the
-rest of Tier 5.
+`kickoff` is Glaurung's bounded, deterministic first pass. It does not call an
+LLM and does not require an API key. It does create or update a SQLite project,
+so give `--db` an explicit path when you want to keep the result.
 
-> **Verified output.** The kickoff summary block is captured by
-> `scripts/verify_tutorial.py` and stored at
-> [`_fixtures/05-kickoff-anatomy/kickoff.out`](../_fixtures/05-kickoff-anatomy/kickoff.out).
-
-## What kickoff does
+This chapter uses the checked-in Linux sample. From the repository root:
 
 ```bash
-glaurung kickoff <binary> --db <project>.glaurung
+BIN="samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0"
+DB="demo.glaurung"
+
+uv run glaurung kickoff "$BIN" --db "$DB"
 ```
 
-In ~300ms on a small binary, this runs:
+The current output is captured in
+[`_fixtures/05-kickoff-anatomy/kickoff.out`](../_fixtures/05-kickoff-anatomy/kickoff.out).
+The tutorial verifier reruns this exact sample; use the fixture instead of
+copying its function or type counts into scripts, because analyzer changes can
+legitimately change those counts.
 
-1. **`detect_packer`** — UPX / Themida / VMProtect / etc. fingerprint
-   match plus generic high-entropy fallback. If packed, the deeper
-   passes short-circuit (see §R).
-2. **Triage** — format / arch / language / IOC string scan. Same
-   primitive `glaurung triage <binary>` runs.
-3. **`analyze_functions_path`** — function discovery + bounded
-   callgraph via the Rust analyzer.
-4. **`index_callgraph`** — write functions and call edges into
-   the SQLite project file. **Then** the format-specific
-   recoveries fire:
-   - **gopclntab** (#212) for stripped Go binaries
-   - **CIL metadata** (#210) for managed .NET PEs
-   - **DWARF type ingestion** (#178) when debug info is present
-5. **Auto-load stdlib bundles** — 192 libc / WinAPI prototypes
-   into `function_prototypes`.
-6. **`demangle_function_names`** — every persisted name gets its
-   `display` form (Itanium / Rust / MSVC manglings).
-7. **Per-function lift (capped)** — for the first N functions:
-   - `discover_stack_vars` — auto-populate stack frame slots.
-   - `propagate_types_at_callsites` — type stack vars from libc
-     call sites.
-   - `recover_struct_candidates` — heuristic struct field
-     discovery.
+## What the pass does
 
-## What kickoff produces
+In order, kickoff:
 
-A single `.glaurung` SQLite file with these tables populated:
+1. checks for known packers and high-entropy packed content;
+2. triages the file format, architecture, entry point, strings, and IOCs;
+3. opens the project database and loads the applicable standard-library type
+   bundle;
+4. discovers functions, indexes call edges, and demangles persisted names;
+5. imports available debug types, including DWARF and optional PDB data;
+6. discovers stack slots, propagates call-site types, and looks for struct
+   candidates for a bounded set of functions; and
+7. appends one `kickoff_analysis` row to `evidence_log` when evidence logging
+   succeeds.
 
-| Table | What's in it after kickoff |
-|---|---|
-| `function_names` | Every analyzer-discovered function + format-specific recoveries (gopclntab/cil/dwarf names) |
-| `xrefs` | Every callgraph edge as a `call` xref |
-| `function_prototypes` | The 192-entry stdlib bundle |
-| `types` | Bundle types + DWARF types |
-| `stack_frame_vars` | Auto-discovered slots for the first N functions |
-| `evidence_log` | One row per kickoff invocation citing the summary |
-
-Crucially, **everything is `set_by="analyzer"` / `"gopclntab"` /
-`"cil"` / `"dwarf"` / `"propagated"` / `"auto"` / `"stdlib"`** —
-zero rows are `set_by="manual"`. That's important for two reasons:
-
-1. **Re-running kickoff is safe.** Subsequent runs respect any
-   manual writes (rename / retype / comment) you make later — the
-   set_by precedence rules ensure manual always wins.
-2. **The agent can build its first turn from kickoff alone.**
-   Every fact in the kickoff summary is grounded in a specific KB
-   row, queryable via deterministic tools — no hallucination
-   surface.
-
-## Read the markdown summary aloud
+The default per-function lift cap is 64. Change it explicitly for a larger or
+smaller first pass:
 
 ```bash
-$ glaurung kickoff samples/.../c2_demo-clang-O0 --db demo.glaurung
+uv run glaurung kickoff "$BIN" --db "$DB" --max-functions 16
 ```
 
-```markdown
-# Kickoff analysis — c2_demo-clang-O0
+Kickoff normally stops before deep analysis when packer detection is positive.
+That is a safety and signal-quality default. `--analyze-packed` overrides it,
+but use that only when you understand why the detector fired.
 
-- format: **ELF**, arch: **x86_64**, size: **16456** bytes
-- entry: **0x1070**
+## Deterministic does not always mean offline
 
-## Functions
-- discovered: **6** (with blocks: 6, named: 6)
-- callgraph edges: **1**
-- name sources: analyzer=6
+The analysis itself contains no model call. For a PE with a CodeView record,
+however, kickoff may fetch a missing PDB from Microsoft's symbol server. To
+make a cache-only run, add `--no-fetch-pdb`; to disable PDB processing entirely,
+add `--no-pdb`:
 
-## Type system
-- stdlib prototypes loaded: **192**
-- DWARF types imported: **0**
-- stack slots discovered: **90**
-- types propagated: **18**
-- auto-struct candidates: **0**
-
-## IOCs (from string scan)
-- **path_posix**: 11
-- **hostname**: 10
-- **java_path**: 10
-- **ipv4**: 4
-- **domain**: 3
-- **url**: 2
-- **email**: 1
-
-_completed in N ms_
+```bash
+uv run glaurung kickoff "$BIN" --db "$DB" --no-fetch-pdb
 ```
 
-(Captured: [`_fixtures/05-kickoff-anatomy/kickoff.out`](../_fixtures/05-kickoff-anatomy/kickoff.out).)
+The ELF sample used here does not take the PDB path.
 
-Every line maps to a specific KB query:
+## Inspect what was persisted
 
-| Summary line | Underlying query |
-|---|---|
-| `format: ELF, arch: x86_64` | `triage.verdicts[0]` |
-| `entry: 0x1070` | `triage.entry_va` |
-| `discovered: 6, named: 6` | `list_function_names(kb)` |
-| `callgraph edges: 1` | `count(xrefs WHERE kind='call')` |
-| `name sources: analyzer=6` | `group_by(set_by)` |
-| `stdlib prototypes loaded: 192` | `list_function_prototypes(kb)` |
-| `DWARF types imported: 0` | `list_types(kb, set_by='dwarf')` |
-| `stack slots discovered: 90` | `count(stack_frame_vars)` |
-| `types propagated: 18` | `count(stack_frame_vars WHERE set_by='propagated')` |
-| `IOCs: 4 ipv4 / 3 domain / 2 url / 1 email` | `triage.ioc_summary` |
+The project is an ordinary SQLite database. Start with the tables and the
+kickoff evidence row:
 
-The agent's first turn in a chat workflow is essentially "run
-kickoff, render the summary, point at the IOCs." Every claim is
-deterministically backed.
+```bash
+sqlite3 "$DB" ".tables"
+sqlite3 "$DB" \
+  "SELECT cite_id, tool, summary FROM evidence_log ORDER BY cite_id;"
+```
 
-## Kickoff is also a memory tool
+The verified row is in
+[`evidence-log-head.out`](../_fixtures/05-kickoff-anatomy/evidence-log-head.out).
+Its `cite_id` identifies a recorded tool observation; it is not, by itself,
+proof that every conclusion drawn from the observation is correct.
 
-The agent has `kickoff_analysis` registered as one of its 50+
-deterministic memory tools (#206). When the agent calls it:
+Useful project tables include `function_names`, `xrefs`,
+`function_prototypes`, `types`, `stack_frame_vars`, and `evidence_log`.
+Population varies by binary format and available metadata. Query the project
+rather than assuming every table has rows.
 
-- Inputs: binary path, optional db_path, optional skip_if_packed.
-- Outputs: the same `KickoffSummary` shape the CLI prints, plus a
-  `cite_id` referencing an evidence_log row.
-- Side effects: the `.glaurung` file is created/updated.
+## Reruns and project ownership
 
-The agent's response can then say "I ran kickoff_analysis (cite 47)
-and found..." — citing the row in evidence_log so the user can
-inspect what the tool actually did.
+Kickoff is designed to update an existing project safely, and provenance fields
+such as `set_by` distinguish analyzer, debug-info, propagated, and manual data.
+An invocation also appends a new evidence row, so rerunning is not a byte-for-byte
+no-op. Keep one database per analysis case unless you intentionally want a
+shared history.
 
-## When kickoff isn't enough
+Kickoff is a first pass, not a whole-program proof. It does not decompile every
+function, validate every recovered type, or turn IOC-like strings into malware
+attribution. Use the deterministic inspection commands from Tiers 2–4 to check
+the interesting addresses before asking an agent to synthesize them.
 
-Kickoff is intentionally **bounded** — it's the fast first-touch
-pipeline. It doesn't do:
-
-- Per-function decompilation across the whole binary (only a
-  capped sample).
-- Cross-binary symbol borrowing (#170) — that's a manual REPL step.
-- Auto-struct recovery v2 (heuristic struct merging) — also
-  manual.
-- Anything LLM-driven.
-
-For deeper analysis, you graduate to the daily-basics floor (Tier 2)
-— the kickoff state is the foundation those commands build on.
-
-## What's next
-
-- [§Y `chat-driven-triage.md`](chat-driven-triage.md) — what the
-  agent does *on top of* kickoff state.
-- [§Z `evidence-and-citations.md`](evidence-and-citations.md) —
-  reading evidence_log directly.
-
-→ [§Y `chat-driven-triage.md`](chat-driven-triage.md)
+Next: [§Y — Chat-driven triage](chat-driven-triage.md).

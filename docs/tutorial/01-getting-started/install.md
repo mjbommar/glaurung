@@ -91,16 +91,21 @@ The complete prerequisite list, Docker clean-room recipe, wheel commands,
 quality gates, and runtime configuration reference are in
 [Installation, development setup, and configuration](../../development/setup.md).
 
-## Next: §B — First binary
+## Verify the checked-in tutorial evidence
 
-The remaining tutorial chapters use the shorter `glaurung ...` command form.
-Activate the environment once before continuing:
+The tutorial verifier runs real commands against the shipped sample corpus. Its
+default and explicit `--check` modes do not rewrite fixtures:
 
 ```bash
-source .venv/bin/activate
-glaurung --version
+uv run python scripts/verify_tutorial.py --check --chapter 01-install
 ```
 
-If you prefer not to activate it, prepend `uv run` to each command instead.
+`--capture` is a maintainer operation for intentionally accepting reviewed
+output drift. It must not be used merely to make a failing check disappear.
+
+## Next: §B — First binary
+
+The remaining chapters keep using `uv run glaurung ...` so commands work from a
+fresh shell without activating the virtual environment.
 
 Continue to [§B — First binary](first-binary.md).

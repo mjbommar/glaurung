@@ -1,5 +1,8 @@
 # File and API change map
 
+> **Status: proposed change map.** Paths and APIs below are intended changes;
+> their appearance here does not mean the files or public interfaces exist.
+
 ## Design principle
 
 Keep generic source-recovery agent code inside `python/glaurung`; keep blinded

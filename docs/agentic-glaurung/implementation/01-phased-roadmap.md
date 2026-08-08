@@ -1,5 +1,8 @@
 # Phased implementation roadmap
 
+> **Status: unstarted implementation plan.** Completion authority is the
+> synchronized `../PLAN.md` and `../STATUS.md`, not prose in this roadmap.
+
 ## Delivery rule
 
 Each phase begins with a failing test or evidence gap, ends with an immutable
@@ -8,7 +11,7 @@ checkpoint, and has an explicit stop condition. Do not begin the official
 
 ## Phase 0: Freeze names, baselines, and policies
 
-### Work
+### Phase 0 work
 
 - Adopt `glaurung-raw`, `glaurung-llm-pipeline`, and `glaurung-agent` identities.
 - Preserve the existing 250-function fixed-pipeline archive and diagnostics.
@@ -17,7 +20,7 @@ checkpoint, and has an explicit stop condition. Do not begin the official
 - Define run/artifact schema v1 and configuration profiles.
 - Record the no-execution, no-source, no-contact boundaries.
 
-### Exit criteria
+### Phase 0 exit criteria
 
 - Baseline artifacts and hashes are retained.
 - No document or CLI calls the fixed pipeline autonomous.
@@ -25,20 +28,20 @@ checkpoint, and has an explicit stop condition. Do not begin the official
 - Open questions that could invalidate implementation are decided or explicitly
   deferred.
 
-### Stop condition
+### Phase 0 stop condition
 
 Stop if the official kit, raw baseline, or naming cannot be distinguished
 without overwriting existing artifacts.
 
 ## Phase 1: Data contracts and deterministic validators
 
-### RED
+### Phase 1 RED
 
 Add failing tests for target identity, output schema, extra definitions, wrong
 addresses, unknown evidence, syntax diagnostics, policy violations, and resume
 compatibility.
 
-### GREEN
+### Phase 1 GREEN
 
 - Implement `RecoveryTarget`, `SourceRecoveryContext`, `EvidenceRecord`,
   `RecoveredFunction`, `FunctionOutcome`, validation records, and usage records.
@@ -46,13 +49,13 @@ compatibility.
 - Implement validator chain V1-V7 without model integration.
 - Implement atomic outcome/checkpoint storage.
 
-### REFACTOR
+### Phase 1 REFACTOR
 
 - Centralize address canonicalization and diagnostic codes.
 - Remove duplicated payload validation from the external runner where the new
   contracts supersede it.
 
-### Exit criteria
+### Phase 1 exit criteria
 
 - Deterministic contract tests are green.
 - Validator accepts valid real-fixture C and rejects every required negative.
@@ -73,7 +76,7 @@ Implement tools one vertical slice at a time:
 For each tool, write the real-binary test first, implement typed bounded output,
 then add trace/evidence recording.
 
-### Exit criteria
+### Phase 2 exit criteria
 
 - Registered names exactly equal tool-policy v1.
 - Every tool has real x86-64 coverage; architecture-specific tools cover ARM
@@ -81,19 +84,19 @@ then add trace/evidence recording.
 - Out-of-scope, truncation, timeout, unsupported, and no-result paths are tested.
 - No tool uses an LLM, arbitrary path, shell, target execution, or mutation.
 
-### Stop condition
+### Phase 2 stop condition
 
 Stop adding tools if model-facing output exceeds budget, registration depends on
 private PydanticAI internals, or a tool cannot enforce target scope.
 
 ## Phase 3: Minimal autonomous agent
 
-### RED
+### Phase 3 RED
 
 Add an authorized live-model test expecting one fixture recovery with at least
 two model-selected tool calls and structured output.
 
-### GREEN
+### Phase 3 GREEN
 
 - Create the dedicated PydanticAI agent.
 - Register only source-recovery tools.
@@ -101,12 +104,12 @@ two model-selected tool calls and structured output.
 - Apply project `UsageLimits` and model settings.
 - Return one `FunctionOutcome` with trace and usage.
 
-### REFACTOR
+### Phase 3 REFACTOR
 
 - Separate provider setup, prompt construction, controller, and persistence.
 - Ensure the generic memory agent remains unchanged.
 
-### Exit criteria
+### Phase 3 exit criteria
 
 - One real function is recovered by a true tool-using agent.
 - The trace proves model-selected tools rather than a fixed sequence.
@@ -114,7 +117,7 @@ two model-selected tool calls and structured output.
 
 ## Phase 4: Validation feedback and repair
 
-### Work
+### Phase 4 work
 
 - Wire the validator chain to PydanticAI output validation.
 - Return stable actionable feedback with `ModelRetry` or the supported PydanticAI
@@ -123,7 +126,7 @@ two model-selected tool calls and structured output.
 - Retain every proposed source and validation result.
 - Make policy/scope violations terminal.
 
-### Exit criteria
+### Phase 4 exit criteria
 
 - A real live-agent fixture repairs a deliberately induced syntax/shape error.
 - An unrecoverable policy violation terminates without retry.
@@ -131,7 +134,7 @@ two model-selected tool calls and structured output.
 
 ## Phase 5: CLI and resumable external runner
 
-### Work
+### Phase 5 work
 
 - Add a single-function CLI/API entry point.
 - Add a new external runner for `glaurung-agent`; retain the fixed-pipeline runner
@@ -140,7 +143,7 @@ two model-selected tool calls and structured output.
   assembly, syntax audit, hashing, and secret scan.
 - Emit run summary and audit archive.
 
-### Exit criteria
+### Phase 5 exit criteria
 
 - Interrupted real-fixture batch resumes without losing or duplicating accepted
   work.
@@ -149,7 +152,7 @@ two model-selected tool calls and structured output.
 
 ## Phase 6: Internal fixture and curriculum gate
 
-### Work
+### Phase 6 work
 
 - Run raw, fixed pipeline, disasm-only agent, and full agent on the frozen
   multi-architecture pilot.
@@ -159,14 +162,14 @@ two model-selected tool calls and structured output.
 - Tune only general contracts and prompts; do not encode function-specific
   answers.
 
-### Exit criteria
+### Phase 6 exit criteria
 
 - Promotion criteria in the scorecard document pass.
 - No raw behavioral regression from shared code.
 - Prompt-injection, secret, and static-only gates pass.
 - Cost and p95 wall time fit the selected profile.
 
-### Stop condition
+### Phase 6 stop condition
 
 Stop if gains exist only on known public fixtures, if agent repairs reduce
 behavioral correctness, or if tool use cannot be attributed.
@@ -195,7 +198,7 @@ No implementation change after freeze enters the same experiment identity.
 - Inspect representative and worst outputs manually.
 - Confirm original kit unchanged and secrets absent.
 
-### Exit criteria
+### Phase 8 exit criteria
 
 - Every target has a terminal state.
 - Package validation has a terminal result.

@@ -1,5 +1,8 @@
 # Detection Failure Analysis
 
+> **Status: historical measurement.** Rates and counts below describe an older
+> sample snapshot and have not been reproduced for the current tree.
+
 ## Current Performance
 - **Detection Rate**: 79.4% (181/228 files)
 - **Failures**: 47 files (20.6%)

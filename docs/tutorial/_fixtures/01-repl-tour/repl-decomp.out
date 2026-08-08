@@ -3,16 +3,20 @@ g 0x11d0
 d
 q
 ─── glaurung repl stdout ───
-glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+glaurung repl  binary=<repo>/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
                db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
 >   0x11d0  print_sum  (set_by=analyzer)
 0x11d0>   fn print_sum {
-      push(rbp);
-      rsp = (rsp - 16);
-      local_0 = arg0;
-      printf@plt("Total argument length: %d\n", local_1);  // proto: int printf(const char * fmt, ...)
+      // x86-64 prologue: save rbp, frame 16 bytes
+      var_4 = arg0;
+      var0 = printf@plt("Total argument length: %d\n", (unsigned long)((unsigned int)(var_4)));  // proto: int printf(const char * fmt, ...)
+      ret = var0;
+      t30 = rsp;
+      t33 = (t30 < 0);
+      t34 = 0;
+      t36 = (t33 == t34);
       // x86-64 epilogue: restore rbp
       return;
   }
-0x11d0> 
+0x11d0>
 saving and exiting…

@@ -1,5 +1,9 @@
 # 00 - Motivation and goals
 
+> **Status: historical motivation and target record.** The native Axeyum
+> backend described as a goal here now exists behind `solver-axeyum`; use the
+> integration index and current source for shipped configuration.
+
 ## The gap this closes
 
 Glaurung's symbolic-execution engine (the IOCTLance-parity line of work:

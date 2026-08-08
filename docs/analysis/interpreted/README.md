@@ -1,8 +1,13 @@
 # Interpreted and VM Bytecode Analysis — Support, Disassembly, Decompilation
 
-Status: Draft
+Status: historical design draft
 Owner: Glaurung AI
 Last updated: 2025-09-04
+
+This proposal predates the current Java capability ledger, native classfile and
+Lua commands, and owned Android parsers. Its APIs, paths, milestones, and metrics
+are not current implementation or CLI contracts. See the
+[parser index](../../parsers/README.md).
 
 ## Overview
 
@@ -238,4 +243,3 @@ Status & references: docs/parsers/java/README.md; JVM Spec; external decompilers
 ---
 
 This plan keeps bytecode support first‑class and consistent with the native pipeline, enabling immediate utility for triage and LLM‑driven analysis while leaving a clean path to deeper features.
-

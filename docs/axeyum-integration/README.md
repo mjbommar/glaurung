@@ -1,23 +1,43 @@
 # axeyum -> glaurung integration
 
-> Plan for embedding **axeyum** (a pure-Rust SMT/SAT solver + prover) as a
-> first-class solver backend for glaurung's symbolic-execution engine.
-> This directory is the design record; it does not itself change code.
+> **Status: maintained integration index.** Axeyum is implemented as an opt-in,
+> pure-Rust in-process backend behind `solver-axeyum`. It is not enabled by the
+> default build or `python-ext`. Dated state, phase, benchmark, and paper pages
+> retain historical evidence; current source and the latest decision-log entry
+> take precedence.
 
 ## One-paragraph summary
 
-Glaurung's symbolic engine already talks to a solver through a small,
-pluggable `Solver` trait (`src/symbolic/solver/mod.rs`). Today the only
-in-process backend links **libz3** (C/C++, feature `solver-z3`) and is
-out of default features and out of the wheel build (`python-ext` pulls
-only the pure-Rust emulator); the fallback shells out over SMT-LIB2
-(`pipe::PipeSolver`). Axeyum is a pure-Rust QF_BV solver with DRAT-checked
-unsat proofs and a WASM-capable build. Adding an `axeyum_backend` that
-implements the same `Solver` trait gives glaurung a **default,
-always-available, pure-Rust (no-C), wheel-shippable, proof-carrying**
-in-process solver, with z3 kept as an opt-in performance backend. The seam is tiny
-(one trait method) and the operator mapping is total, so the risk is
-concentrated in performance and QF_BV coverage, not in wiring.
+Glaurung's symbolic engine routes solving through `Solver` and
+`IncrementalSolver` contracts in `src/symbolic/solver/mod.rs`. The current
+production-capable backends are native Z3 (`solver-z3`), native Axeyum
+(`solver-axeyum`), and the subprocess SMT-LIB fallback. When both native
+features are enabled, selection priority is Z3, then Axeyum, then the pipe
+fallback. `src/symbolic/solver/axeyum_backend.rs` contains direct IR
+translation, model lifting, proof support, retained sessions, and experimental
+warm/direct-delta paths. Cargo pins the Axeyum Git revision.
+
+Axeyum is wheel-shippable without a C solver dependency, but it remains opt-in.
+The default feature set is `triage-core`; `python-ext` includes concrete
+execution, not symbolic execution or a solver. Do not use the earlier target of
+making Axeyum the default as a statement of shipped configuration.
+
+## Current source gate: failing
+
+On 2026-08-07 at Glaurung `fcca960b`, both current feature gates fail during
+compilation:
+
+```bash
+cargo check --features solver-axeyum
+cargo test --features solver-axeyum --lib symbolic::solver::axeyum_backend
+```
+
+`src/ir/types.rs` now defines `BinOp::LogicalAnd` and `BinOp::LogicalOr`, while
+an exhaustive translator match in `src/symbolic/solver/axeyum_backend.rs` does
+not cover them (`E0004`). This is a Glaurung integration/build blocker, not a
+solver verdict. Default-feature and `python-ext` builds do not compile that
+backend, so their focused gates can still pass independently. Rerun both
+commands and update this section when the translator is brought back into sync.
 
 ## Why (the short version)
 
@@ -50,7 +70,7 @@ concentrated in performance and QF_BV coverage, not in wiring.
 | `08-concretization-policy.md` | A0 policy contract, configuration compatibility, trace IDs, and A3/A2 boundaries |
 | `09-taint-provenance-and-finding-labels.md` | Why raw sinks are not finding ground truth; provenance correction and policy-sweep gates |
 
-## Status
+## Historical implementation and evidence status
 
 **Implemented and green (2026-07-17).** P1 (text bridge), P2 (native
 term-translation backend), P3 (differential oracle), proofs (G3), and the P5

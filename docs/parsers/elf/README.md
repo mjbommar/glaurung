@@ -1,5 +1,10 @@
 # ELF Parser Documentation
 
+> **Status: historical design record.** Its unchecked implementation matrix and
+> illustrative Rust types predate the owned ELF parser and are not a current API
+> contract. See the [parser index](../README.md) for supported entry points and
+> the source modules for the current Rust API.
+
 ## Overview
 
 The Executable and Linkable Format (ELF) is the standard binary format for Unix and Unix-like systems including Linux, BSD, Solaris, and others. GLAURUNG's ELF parser provides comprehensive support for analyzing ELF binaries including executables, shared libraries, object files, and core dumps.

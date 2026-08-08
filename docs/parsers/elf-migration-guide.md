@@ -1,5 +1,9 @@
 # ELF Parser Migration Guide
 
+> **Status: historical design record.** This migration sketch has not been
+> revalidated against the current ELF API. Do not copy its code as a supported
+> example without checking the source and focused tests.
+
 This guide provides step-by-step instructions for migrating existing ELF parsing code to the new consolidated parser.
 
 ## Quick Start

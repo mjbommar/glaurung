@@ -1,216 +1,240 @@
-# Glaurung Ask Command - Natural Language Binary Analysis
+# `glaurung ask` reference
 
-The `glaurung ask` command provides a natural language interface for binary analysis. Ask questions in plain English and get intelligent answers powered by LLM analysis tools.
+`ask` sends natural-language questions about one binary to an LLM-backed
+analysis agent. The agent can select Glaurung's deterministic tools, then
+synthesize their results. Use it for bounded synthesis and hypothesis review;
+use direct CLI commands for exact lookups and reproducible automation.
 
-## Features
+Model output is not binary-level proof. Verify consequential claims against
+tool output, disassembly, project data, or runtime behavior.
 
-- **Natural Language Q&A**: Ask questions in plain English
-- **Multiple Output Formats**: plain, rich, JSON, JSONL
-- **Interactive Mode**: Chat-like interface for exploration
-- **Tool Transparency**: Optionally see which tools are used
-- **Batch Processing**: Ask multiple questions at once
+## Prerequisites and data handling
 
-## Basic Usage
+The project default model is `openai:gpt-5.4-mini`, with OpenAI's `flex`
+service tier. Configure the selected provider as described in the
+[development setup guide](../development/setup.md#runtime-configuration).
+Never commit API keys or paste them into examples.
 
-### Single Question
+An invocation can send the question and binary-derived context or tool results
+to the provider, and it can incur charges. Do not analyze material you are not
+authorized to disclose under the provider's terms.
+
+Confirm the installed interface before scripting it:
+
 ```bash
-glaurung ask /path/to/binary --ask "Is this malware?"
+uv run glaurung ask --help
 ```
 
-### Multiple Questions
+## Basic forms
+
+Set a binary once for the examples:
+
 ```bash
-glaurung ask /path/to/binary --multiple \
-  "What type of binary is this?" \
-  "Is it packed?" \
-  "Any network IOCs?"
+BIN="samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
 ```
 
-### Quick Malware Analysis
+Ask one question with `-a/--ask`:
+
 ```bash
-glaurung ask /path/to/binary --quick
+uv run glaurung ask "$BIN" --route -a \
+  "What behavior should I verify first? Distinguish observation from inference."
 ```
-This asks common malware analysis questions automatically.
 
-### Interactive Mode
+Ask related questions in one shared invocation:
+
 ```bash
-glaurung ask /path/to/binary --interactive
+uv run glaurung ask "$BIN" --route --multiple \
+  "Which functions are most central?" \
+  "Which strings do those functions reference?"
 ```
-Enter a chat-like interface where you can ask questions interactively.
 
-## Output Formats
+Read non-empty questions, one per line, from standard input:
 
-### Rich Format (Default)
-Beautiful colored output with panels and formatting:
 ```bash
-glaurung ask /bin/ls --ask "Is this packed?"
+printf '%s\n' \
+  "Is packer detection positive?" \
+  "Which imports deserve review?" |
+  uv run glaurung ask "$BIN" --route --stdin
 ```
 
-### Plain Text
-Simple text output without colors:
+Run the five built-in malware-triage questions:
+
 ```bash
-glaurung ask /bin/ls --ask "Is this packed?" --format plain
+uv run glaurung ask "$BIN" --route --quick
 ```
 
-### JSON
-Structured JSON output for scripting:
+Start an ephemeral interactive session:
+
 ```bash
-glaurung ask /bin/ls --ask "Is this packed?" --format json
+uv run glaurung ask "$BIN" --interactive
 ```
 
-### JSONL
-One JSON object per line for streaming:
+Type `exit`, `quit`, or `q` to leave interactive mode.
+
+Exactly one question-input mode can be selected: `--ask`, `--multiple`,
+`--interactive`, or `--stdin`. `--quick` supplies its own fixed question set and
+takes precedence in the current implementation.
+
+## Route and inspect tools
+
 ```bash
-glaurung ask /bin/ls --multiple "Q1" "Q2" --format jsonl
+uv run glaurung ask "$BIN" --route --show-routing --show-tools -a \
+  "Find suspicious strings and the functions that reference them."
 ```
 
-## Advanced Features
+- `--route` uses deterministic keywords from the first question to choose a
+  focused set of 5–30 tools from the full 163-tool registry.
+- `--show-routing` prints the selected intent and a tool-subset summary.
+- `--all-tools` disables focused routing and overrides `--route`.
+- `--show-tools` includes captured tool calls in the formatted result. It is a
+  review aid, not a guarantee that every internal helper appears.
+- `--show-plan` reports iteration, confidence, and termination metadata. It
+  does not expose provider chain-of-thought.
 
-### Show Tool Calls
-See which analysis tools are being used:
+For `--multiple`, routing is selected from the first question and reused.
+Separate unrelated questions into separate invocations so each can be routed
+appropriately.
+
+## Strategy and analysis budgets
+
+`--strategy` accepts:
+
+- `auto` (default): choose a strategy for the question;
+- `single`: one analysis pass; or
+- `iterative`: refinement up to the configured limits.
+
+The related controls are:
+
+| Option | Current default | Purpose |
+| --- | ---: | --- |
+| `--max-iterations` | 5 | Iterative refinement limit |
+| `--min-confidence` | 0.7 | Iterative confidence threshold |
+| `--timeout` | 120 seconds | Agent execution time limit |
+| `--max-functions` | 5 | Functions available to bounded analysis |
+| `--max-instructions` | 50,000 | Instruction budget |
+| `--disasm-window` | 4,096 bytes | Maximum disassembly window |
+| `--max-read-bytes` | 10,485,760 | Triage read limit |
+| `--max-file-size` | 104,857,600 | Accepted binary-size limit |
+
+Confidence is agent metadata, not a calibrated probability of correctness.
+Timeout or budget exhaustion means the analysis is incomplete, not that the
+requested behavior is absent.
+
+## Model cost controls
+
 ```bash
-glaurung ask /bin/ls --ask "Find IOCs" --show-tools
+uv run glaurung ask "$BIN" --route -a "Summarize the entry path." \
+  --max-cost-usd 0.25 \
+  --usage-log ./glaurung-usage.jsonl
 ```
 
-### Show Planning
-See the LLM's reasoning process:
+`--max-cost-usd` is a circuit breaker for the invocation. It stops a subsequent
+agent call after tracked cost exceeds the limit; it is not a provider quote,
+reservation, or guarantee against accounting lag.
+
+`--usage-log PATH` writes one JSONL record per model call. Without the flag,
+records go under `~/.cache/glaurung/usage/`. Pass `--usage-log -` to disable
+file logging while keeping in-memory accounting.
+
+Override the model only deliberately:
+
 ```bash
-glaurung ask /bin/ls --ask "Analyze this" --show-plan
+uv run glaurung ask "$BIN" --route -a "Summarize the entry path." \
+  --model openai:gpt-5.4-mini
 ```
 
-### Read Questions from STDIN
+The global `GLAURUNG_LLM_MODEL` and `GLAURUNG_OPENAI_SERVICE_TIER` variables
+provide defaults; a command-line `--model` takes precedence where supported.
+
+## Output formats
+
+The default output format is `plain`. Select `rich`, `json`, or `jsonl` with
+`--format`; `--json` is an alias for `--format json`:
+
 ```bash
-echo "Is this malware?" | glaurung ask /bin/ls --stdin
+uv run glaurung ask "$BIN" --route -a "Summarize the file." --format json
 ```
 
-### Custom Model
-Use a different LLM model:
+`--no-color` forces plain formatting, `--quiet` suppresses progress output, and
+`--verbose` includes traceback detail on outer failures. JSONL is a record
+format, not token streaming; results are formatted after analysis completes.
+
+For automation, validate the parsed result rather than grepping prose. The
+current command converts some per-question exceptions into an
+`"Analysis failed: ..."` result and can still exit successfully after the outer
+workflow completes. Treat that answer, missing output, timeout, or an absent
+findings file as failure in your own gate.
+
+## Structured vulnerability findings
+
+`ask` can run a separate structured findings pass after the ordinary Q&A pass:
+
 ```bash
-glaurung ask /bin/ls --ask "Analyze" --model "openai:gpt-4"
+uv run glaurung ask "$BIN" --route -a \
+  "Perform a bounded first-pass vulnerability review." \
+  --findings-json ./findings.json \
+  --max-cost-usd 1.00
 ```
 
-## Examples
+`--findings-json PATH` writes a `FindingsReport`; `-` writes it to standard
+output. This pass uses its own fixed vulnerability-discovery prompt, then
+resolves cited references and critiques the evidence for each finding.
 
-### Example 1: Quick Malware Check
+Current execution still requires an ordinary question source, even though the
+structured pass has its own prompt. Supply `-a`, `--multiple`, `--stdin`,
+`--interactive`, or `--quick`.
+
+For a per-CWE-family sweep:
+
 ```bash
-$ glaurung ask suspicious.exe --quick --format json
-```
-Output:
-```json
-{
-  "binary": "suspicious.exe",
-  "questions": 5,
-  "results": [
-    {
-      "question": "Is this binary likely malicious?",
-      "answer": "Based on analysis...",
-      "tool_calls": [],
-      "reasoning": null
-    }
-  ]
-}
+uv run glaurung ask "$BIN" --route -a "Seed a vulnerability review." \
+  --cwe-sweep \
+  --cwe-sweep-applies userland \
+  --findings-json ./findings.json \
+  --max-cost-usd 5.00
 ```
 
-### Example 2: Interactive Analysis
+- `--cwe-sweep` performs one structured pass per selected CWE family and is
+  substantially more expensive than one broad pass.
+- `--cwe-sweep-applies` filters the catalog to `any`, `userland`, or `kernel`.
+- `--skip-critique` omits the extra critique call per finding, but the
+  cite-or-discard verifier still runs.
+- File-backed sweeps preserve completed partial reports beside the final output
+  after a crash, signal, or cost-budget abort.
+
+Do not promote a structured finding merely because it passed schema validation.
+Review evidence support, reachability, controls, and reproducibility separately.
+
+## Persistence boundary
+
+Standalone `ask` uses an in-memory knowledge base. Multiple questions within
+one invocation share that state, but generic KB changes and evidence rows are
+not saved when the process exits. `--usage-log` persists model accounting only;
+it is not a project database.
+
+Use a persistent REPL when you need durable names, comments, types, and wrapped
+tool evidence:
+
 ```bash
-$ glaurung ask malware.bin --interactive
+DB="analysis.glaurung"
 
-Entering interactive mode. Type 'exit' to quit.
-Ready for questions!
-
-❓ Question: What are the imported functions?
-💬 Answer: The binary imports several suspicious functions...
-
-❓ Question: Check for network IOCs
-💬 Answer: Found the following network indicators...
-
-❓ Question: exit
-Interactive session ended.
+uv run glaurung kickoff "$BIN" --db "$DB"
+uv run glaurung repl "$BIN" --db "$DB"
 ```
 
-### Example 3: Batch Analysis with Tool Visibility
-```bash
-$ glaurung ask sample.exe \
-    --multiple "Is it packed?" "Any IOCs?" \
-    --show-tools \
-    --format plain
-```
+The REPL's `ask` shorthand reuses that project, but it does not expose the
+standalone command's routing and cost flags. See the
+[agent-workflow tutorial](../tutorial/05-agent-workflows/chat-driven-triage.md)
+and [evidence guide](../tutorial/05-agent-workflows/evidence-and-citations.md)
+for the operational distinction.
 
-Output shows questions, tool calls, and answers in plain text.
+## Exit behavior and failure handling
 
-### Example 4: Scripting with JSONL
-```bash
-#!/bin/bash
-# Analyze multiple binaries and collect results
+- `0`: the outer command completed and emitted results; inspect each result for
+  embedded analysis errors.
+- `1`: input validation or the outer analysis workflow failed.
+- `130`: the command handled a keyboard interrupt at the outer level.
 
-for binary in *.exe; do
-    glaurung ask "$binary" \
-        --quick \
-        --format jsonl \
-        --quiet \
-        >> analysis_results.jsonl
-done
-
-# Process results with jq
-jq -s 'group_by(.binary) | map({binary: .[0].binary, suspicious: any(.results[].answer; contains("malicious"))})' analysis_results.jsonl
-```
-
-## Available Analysis Tools
-
-The ask command uses these RE tools automatically:
-- **Navigation**: Navigate to addresses, list functions
-- **Search**: Search strings, search bytes
-- **Analysis**: Analyze functions, check imports, entropy
-- **IOC Detection**: Find URLs, IPs, domains, emails
-- **Memory**: Examine bytes at addresses
-
-## Tips
-
-1. **Start with broad questions**: "What kind of binary is this?"
-2. **Follow up with specifics**: "Show me the suspicious imports"
-3. **Use --quick for rapid triage**: Gets common malware indicators
-4. **Use JSON for automation**: Easy to parse and process
-5. **Use --show-tools for learning**: See how analysis works
-
-## Command Reference
-
-```
-usage: glaurung ask [-h] [--format {plain,rich,json,jsonl}] [--no-color]
-                    [--quiet] [--verbose] [-a QUESTION |
-                    -m QUESTIONS [QUESTIONS ...] | -i | --stdin]
-                    [--show-tools] [--show-plan] [--model MODEL]
-                    [--max-read-bytes MAX_READ_BYTES]
-                    [--max-file-size MAX_FILE_SIZE] [--quick]
-                    path
-
-positional arguments:
-  path                  Path to binary file to analyze
-
-options:
-  -h, --help            show this help message and exit
-  --format {plain,rich,json,jsonl}
-                        Output format (default: rich)
-  --no-color            Disable colored output
-  --quiet, -q           Suppress non-essential output
-  --verbose, -v         Enable verbose output
-  -a, --ask QUESTION    Question to ask about the binary
-  -m, --multiple QUESTIONS [QUESTIONS ...]
-                        Multiple questions to ask
-  -i, --interactive     Interactive Q&A mode
-  --stdin               Read questions from stdin
-  --show-tools          Show tool calls and results
-  --show-plan           Show LLM planning/reasoning
-  --model MODEL         Model to use (default: openai:gpt-4.1-mini)
-  --max-read-bytes MAX_READ_BYTES
-                        Max bytes to read (default: 10MB)
-  --max-file-size MAX_FILE_SIZE
-                        Max file size (default: 100MB)
-  --quick               Quick malware analysis mode
-```
-
-## Integration with Other Commands
-
-The ask command complements other Glaurung commands:
-- Use `glaurung triage` first for detailed analysis
-- Use `glaurung symbols` for symbol-specific queries
-- Use `glaurung disasm` for assembly-level details
-- Use `glaurung ask` for natural language understanding
+Before relying on an answer, preserve the binary hash, Glaurung revision,
+selected model, exact question, tool output, usage record, and independent
+validation. Do not infer “not present” from a partial or failed model run.

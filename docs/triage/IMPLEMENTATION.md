@@ -1,5 +1,9 @@
 # Binary Triage Implementation Plan and Checklist
 
+> **Status: historical design.** This checklist predates the current native
+> triage pipeline and contains obsolete pending/completed claims. It is not the
+> current implementation status; see [`README.md`](README.md).
+
 This document turns the triage design into an actionable plan with clear scope, folder layout, milestones, and test coverage targets. It complements docs/triage/README.md (design/flow) and focuses on “what to build next” and “how we prove it works”.
 
 

@@ -1,126 +1,98 @@
-# Glaurung tutorial track
+# Glaurung tutorial
 
-Welcome. This track teaches you how to use Glaurung the way a working
-reverse engineer uses IDA Pro or Ghidra — but with the Glaurung-
-specific edges (persistent KB with explicit provenance, end-to-end
-undo, agent integration) called out as you go.
+This track starts with a source checkout and builds toward a repeatable binary-
+analysis workflow: inspect a file, create a persistent `.glaurung` project,
+navigate evidence, add analyst knowledge, and export or verify the result.
 
-## Who this is for
+Glaurung is pre-1.0. Command flags and analyzer output can change. The tutorial
+therefore treats `uv run glaurung --help` as the command-line source of truth
+and keeps reproducible command output in [`_fixtures/`](_fixtures/) instead of
+hard-coding volatile counts in the prose.
 
-You should be comfortable on the command line and have a vague idea
-what "reverse engineering a binary" means. You **do not** need:
+## What to expect
 
-- Prior IDA / Ghidra experience (we'll point at analogous concepts).
-- Assembly-language fluency (the decompiler renders pseudocode first;
-  raw disassembly is optional).
-- An LLM API key (Tiers 1-4 are deterministic only; Tier 5 is opt-in).
+- The deterministic workflow does not require an API key.
+- Pseudocode is an experimental analysis result. Confirm important conclusions
+  against disassembly, cross-references, and source-level provenance.
+- All sample paths are repository-relative and should be run from the checkout
+  root.
+- Tutorial commands use `uv run` so they work without activating `.venv`.
 
-## Track shape
+## Learning path
 
-Five tiers, plus a reference. Each tier stands alone — you can stop
-after any tier and have done productive work. Each subsequent tier
-deepens the toolkit without requiring earlier tiers verbatim.
+### [Tier 1: Getting started](01-getting-started/)
 
-### [Tier 1: Getting started](01-getting-started/) (~30 min)
+Start here on a fresh checkout:
 
-Clean install → loaded binary in under five minutes.
+1. [Install and smoke-test](01-getting-started/install.md)
+2. [Analyze your first binary](01-getting-started/first-binary.md)
+3. [Tour the main CLI workflows](01-getting-started/cli-tour.md)
+4. [Navigate and annotate in the REPL](01-getting-started/repl-tour.md)
 
-- §A `install.md`
-- §B `first-binary.md`
-- §C `cli-tour.md`
-- §D `repl-tour.md`
+### [Tier 2: Daily basics](02-daily-basics/)
 
-### [Tier 2: Daily basics](02-daily-basics/) (~2 hours)
+- [Naming and types](02-daily-basics/naming-and-types.md)
+- [Cross-references](02-daily-basics/cross-references.md)
+- [Stack frames](02-daily-basics/stack-frames.md)
+- [Strings and data](02-daily-basics/strings-and-data.md)
+- [Searching](02-daily-basics/searching.md)
+- [Bookmarks and journal](02-daily-basics/bookmarks-and-journal.md)
+- [Undo and redo](02-daily-basics/undo-redo.md)
+- [Patch and verify](02-daily-basics/patch-and-verify.md)
 
-The eight keystroke loops an analyst hits in an hour of real work.
+### [Tier 3: Format and scenario walkthroughs](03-walkthroughs/)
 
-- §E `naming-and-types.md` — rename + retype with auto-rerender (#220)
-- §F `cross-references.md` — the xrefs panel (#219)
-- §G `stack-frames.md` — the frame editor (#221)
-- §H `strings-and-data.md` — the strings panel + data labels (#222 / #181)
-- §I `searching.md` — `glaurung find` across every table (#225)
-- §J `bookmarks-and-journal.md` — analyst notes (#226)
-- §K `undo-redo.md` — the trust floor (#228)
-- §L `patch-and-verify.md` — patch shorthands + re-disasm verify (#224)
+- [Native C with debug information](03-walkthroughs/01-hello-c-clang.md)
+- [Stripped Go](03-walkthroughs/02-stripped-go-binary.md)
+- [Managed .NET PE](03-walkthroughs/03-managed-dotnet-pe.md)
+- [JVM classfile and JAR](03-walkthroughs/04-jvm-classfile.md)
+- [Vulnerable native parser](03-walkthroughs/05-vulnerable-parser.md)
+- [UPX-packed binary](03-walkthroughs/06-upx-packed-binary.md)
+- [Malware-style C2 sample](03-walkthroughs/07-malware-c2-demo.md)
 
-### [Tier 3: Walkthroughs](03-walkthroughs/) (~5 hours total)
+### [Tier 4: Focused recipes](04-recipes/)
 
-Seven CTF-shape transcripts on real samples shipped in this repo.
+- [Diff two binaries](04-recipes/diffing-two-binaries.md)
+- [Export to IDA, Binary Ninja, or Ghidra](04-recipes/exporting-to-ida-ghidra.md)
+- [Recover typed locals from libc use](04-recipes/typed-locals-from-libc.md)
+- [Use the benchmark harness in CI](04-recipes/bench-harness-as-ci.md)
 
-| # | Sample | Demonstrates |
-|---|---|---|
-| §M | `hello-clang-debug` | The full kickoff → annotate loop on a tiny C ELF |
-| §N | stripped Go binary | gopclntab recovery (#212): 0 → 1801 named functions |
-| §O | Mono PE | CIL metadata recovery (#210): `Hello::Main` from a managed PE |
-| §P | Java classfile + JAR | JVM bytecode triage (#209) |
-| §Q | vulnparse | Vulnerability hunting (CTF buffer-overflow analog) |
-| §R | UPX-packed | Anti-analysis: detect → punt to upx → re-analyze |
-| §S | c2_demo | Full malware-triage flagship (Demo 1, agent-aware) |
+### [Tier 5: Optional LLM workflows](05-agent-workflows/)
 
-### [Tier 4: Recipes](04-recipes/) (~30 min each)
+- [One-shot kickoff](05-agent-workflows/one-shot-kickoff.md)
+- [Chat-driven triage](05-agent-workflows/chat-driven-triage.md)
+- [Evidence and citations](05-agent-workflows/evidence-and-citations.md)
 
-Short, copy-paste-driven recipes for specific tasks.
+These chapters require provider credentials where noted. The deterministic
+analysis and project file remain the evidence backbone.
 
-- §T `diffing-two-binaries.md`
-- §U `exporting-to-ida-ghidra.md`
-- §V `typed-locals-from-libc.md`
-- §W `bench-harness-as-ci.md`
+## Reference
 
-### [Tier 5: Agent workflows](05-agent-workflows/) (optional, requires LLM)
+- [CLI cheatsheet](reference/cli-cheatsheet.md) — the current top-level command
+  inventory and safe invocation shapes
+- [REPL keymap](reference/repl-keymap.md) — interactive commands
+- [`set_by` precedence](reference/set-by-precedence.md) — where recovered and
+  analyst-provided names and types came from
+- [Sample corpus](reference/sample-corpus.md) — representative shipped inputs
+  and how to regenerate the full inventory
 
-How the deterministic backbone supports an LLM-driven analyst loop.
+## Verify the tutorial evidence
 
-- §X `one-shot-kickoff.md`
-- §Y `chat-driven-triage.md`
-- §Z `evidence-and-citations.md`
+The verifier runs encoded tutorial recipes against real shipped binaries. Its
+default and `--check` modes are read-only; only `--capture` rewrites fixtures.
 
-### [Reference](reference/)
+```bash
+uv run python scripts/verify_tutorial.py --check --chapter 01-install
+uv run python scripts/verify_tutorial.py --check --chapter 01-first-binary
+```
 
-Lookup material kept here so chapters can cross-link to it.
+Maintainers can intentionally refresh a chapter after reviewing analyzer drift:
 
-- [`cli-cheatsheet.md`](reference/cli-cheatsheet.md) — every `glaurung` subcommand
-- [`repl-keymap.md`](reference/repl-keymap.md) — every REPL keystroke
-- [`set-by-precedence.md`](reference/set-by-precedence.md) — the provenance
-  ladder (manual > dwarf > flirt > ... > stdlib)
-- [`sample-corpus.md`](reference/sample-corpus.md) — every binary in
-  `samples/binaries/` and the chapter that uses it
+```bash
+uv run python scripts/verify_tutorial.py --capture --chapter 01-first-binary
+git diff -- docs/tutorial/_fixtures/01-first-binary
+```
 
-## Conventions
-
-- **Environment.** Chapters after §A show the shorter `glaurung ...` form and
-  assume you ran `source .venv/bin/activate` from the repository root. If the
-  environment is not activated, prepend `uv run` to every Glaurung or Python
-  command.
-- **Copy-paste-driven.** Every step is a one-line shell command or
-  REPL keystroke. No screenshots; no "right-click this button".
-- **Sample binaries ship in this repo.** Every walkthrough names a
-  path under `samples/binaries/...` so a fresh clone is enough.
-- **Provenance is visible.** When the docs show a renamed function,
-  the `set_by` tag is shown too — so you know whether a name came
-  from DWARF (very trustworthy), the analyzer (placeholder), or you
-  (manual, undo-able).
-- **Status notes.** Anything that's a current limitation (a parser
-  we haven't shipped yet, a CLI flag in flight) is flagged inline
-  with a → link to the parity tracker.
-
-## How to read this
-
-Linear is fine — each tier builds on the previous. But if you have a
-specific question, jump straight in:
-
-- **"How do I just open a binary?"** → §B `first-binary.md`
-- **"How do I rename a function?"** → §E `naming-and-types.md`
-- **"How do I find every caller of `recv`?"** → §F `cross-references.md`
-- **"How do I analyze a stripped Go binary?"** → §N walkthrough
-- **"How do I patch out a license check?"** → §L `patch-and-verify.md`
-- **"What's `set_by="cil"` mean?"** → reference/`set-by-precedence.md`
-
-## See also
-
-- [`PLAN.md`](PLAN.md) — the structural plan / functionality
-  requirements for this whole track. Useful if you want to know
-  what's coming next or contribute a chapter.
-- `../architecture/IDA_GHIDRA_PARITY.md` — the engineering tracker
-  for "what Glaurung has, what's still missing."
-- `../demos/` — the three canonical chat-UI demos referenced by
-  Tier 5.
+See [`PLAN.md`](PLAN.md) for the tutorial's coverage plan and
+[`../development/setup.md`](../development/setup.md) for the complete build and
+development setup.

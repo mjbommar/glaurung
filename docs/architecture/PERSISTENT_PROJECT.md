@@ -1,270 +1,138 @@
-# Persistent project database
+# Persistent project databases
 
-## Why
+Glaurung stores analyst and analysis state in a SQLite file with the conventional
+`.glaurung` suffix. The database is separate from the target binary: its binary
+row records the content hash and original path, while analysis tables store
+knowledge, names, types, xrefs, comments, stack variables, bookmarks, journal
+entries, and other subsystem evidence.
 
-Today every Glaurung run starts blank. The agent re-discovers the same
-facts about a binary on every invocation. There is no place to record
-the analyst's decisions — no rename, no comment, no struct definition
-survives the process exit. This is the single biggest gap between
-Glaurung and a real RE workflow tool: an IDA `.idb` or a Ghidra `.gpr`
-holds all of that state and is what an analyst opens every morning.
+The target is never executed by opening a project.
 
-We need the same: an on-disk file that stores a binary's analysis state
-plus the analyst's accumulated work, openable across processes and
-shareable between users.
+## CLI lifecycle
 
-## Goals
+Create and populate an explicit project with the deterministic kickoff workflow:
 
-- A single `.glaurung` file per binary (or shared across binaries) that
-  holds **everything an agent or human discovered or decided**.
-- Survives process exit. Round-trips byte-identical for a write-then-
-  read with no edits.
-- Cheap to open (sub-second on a 100K-function database).
-- Concurrent access is acceptable (SQLite WAL mode).
-- The file format is a *promise we can keep* — schema versioned, with
-  forward-compat reads or explicit migration.
-- Backwards compatible: existing `MemoryContext` + in-memory
-  `KnowledgeBase` keep working when no `.glaurung` file is supplied.
+```bash
+BIN="samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2"
+DB="/tmp/hello-docs.glaurung"
 
-## Non-goals (for v1)
-
-- Multi-user simultaneous writes with merge resolution. (One writer at
-  a time; if two analysts collaborate, they sync via diff/export.)
-- Rich querying language. The Python API is the query language for now.
-- Cloud storage / sharing primitives. The file is local; users move it
-  themselves.
-
-## Data model
-
-The schema is the union of three concerns. They share a `binaries`
-table as the root foreign key.
-
-### Core tables
-
-```sql
--- One row per analysed binary, keyed by content sha256 so two paths
--- pointing at the same bytes share one record.
-CREATE TABLE binaries (
-    binary_id    INTEGER PRIMARY KEY,
-    sha256       TEXT NOT NULL UNIQUE,
-    first_path   TEXT,         -- first path the user gave us
-    format       TEXT,         -- elf, pe, macho, …
-    arch         TEXT,
-    bits         INTEGER,
-    size_bytes   INTEGER,
-    discovered_at INTEGER      -- unix epoch
-);
-
--- Sessions group an analyst's work. Default session is "main".
-CREATE TABLE sessions (
-    session_id   INTEGER PRIMARY KEY,
-    binary_id    INTEGER REFERENCES binaries(binary_id),
-    name         TEXT NOT NULL,
-    created_at   INTEGER,
-    UNIQUE (binary_id, name)
-);
-
--- KB nodes — generalisation of the existing in-memory KnowledgeBase.
-CREATE TABLE kb_nodes (
-    node_pk      INTEGER PRIMARY KEY,
-    session_id   INTEGER REFERENCES sessions(session_id),
-    node_id      TEXT NOT NULL,           -- existing UUID-like id
-    kind         TEXT NOT NULL,
-    label        TEXT,
-    text         TEXT,
-    props_json   TEXT NOT NULL DEFAULT '{}',
-    tags_json    TEXT NOT NULL DEFAULT '[]',
-    UNIQUE (session_id, node_id)
-);
-
-CREATE TABLE kb_edges (
-    edge_pk      INTEGER PRIMARY KEY,
-    session_id   INTEGER REFERENCES sessions(session_id),
-    edge_id      TEXT NOT NULL,
-    src_node_id  TEXT NOT NULL,
-    dst_node_id  TEXT NOT NULL,
-    kind         TEXT NOT NULL,
-    props_json   TEXT NOT NULL DEFAULT '{}',
-    UNIQUE (session_id, edge_id)
-);
-
--- Per-node tags index for fast tag-filter queries.
-CREATE TABLE kb_node_tags (
-    node_pk      INTEGER REFERENCES kb_nodes(node_pk) ON DELETE CASCADE,
-    tag          TEXT NOT NULL,
-    PRIMARY KEY (node_pk, tag)
-);
-
--- FTS index over labels + text for the existing search_text path.
-CREATE VIRTUAL TABLE kb_fts USING fts5(
-    label, text,
-    content='kb_nodes', content_rowid='node_pk'
-);
+uv run glaurung kickoff "$BIN" --db "$DB"
+uv run glaurung repl "$BIN" --db "$DB"
 ```
 
-### Tables added by #153 (type system) and #154 (xrefs)
+`kickoff` uses a temporary database when `--db` is omitted, so supply `--db`
+when the result must persist. `repl` persists by default; without `--db`, it
+appends `.glaurung` to the binary filename (for example,
+`program.exe.glaurung`). Use `--session NAME` to isolate KB nodes and edges for
+different analyst sessions on the same binary.
 
-These are sibling concerns — not part of #152's bare KB persistence —
-but the schema is sketched here so #152's design doesn't preclude them.
+Most daily CLI commands that operate on accumulated analysis take a project
+path. Their positional and `--db` conventions are not uniform, so check the
+specific command help rather than guessing:
 
-```sql
--- #153: Persistent type definitions.
-CREATE TABLE types (
-    type_id      INTEGER PRIMARY KEY,
-    binary_id    INTEGER REFERENCES binaries(binary_id),
-    name         TEXT NOT NULL,
-    kind         TEXT NOT NULL,         -- struct, enum, typedef, …
-    body_json    TEXT NOT NULL,         -- canonical layout
-    confidence   REAL DEFAULT 0.5,
-    source       TEXT,                  -- llm, dwarf, manual, …
-    UNIQUE (binary_id, name)
-);
-
-CREATE TABLE type_field_uses (
-    binary_id    INTEGER,
-    type_name    TEXT,
-    field_name   TEXT,
-    use_va       INTEGER,
-    function_va  INTEGER
-);
-CREATE INDEX idx_type_field_uses_va ON type_field_uses(use_va);
-
--- #154: Persistent cross-references.
-CREATE TABLE xrefs (
-    xref_id      INTEGER PRIMARY KEY,
-    binary_id    INTEGER REFERENCES binaries(binary_id),
-    src_va       INTEGER NOT NULL,
-    dst_va       INTEGER NOT NULL,
-    kind         TEXT NOT NULL,         -- call, jump, data_read,
-                                         -- data_write, struct_field
-    src_function_va INTEGER             -- nullable
-);
-CREATE INDEX idx_xrefs_dst ON xrefs(binary_id, dst_va);
-CREATE INDEX idx_xrefs_src ON xrefs(binary_id, src_va);
-
--- Function namings + comments survive across runs.
-CREATE TABLE function_names (
-    binary_id    INTEGER REFERENCES binaries(binary_id),
-    entry_va     INTEGER NOT NULL,
-    canonical    TEXT NOT NULL,
-    aliases_json TEXT NOT NULL DEFAULT '[]',
-    set_by       TEXT,                   -- llm, dwarf, manual
-    PRIMARY KEY (binary_id, entry_va)
-);
-
-CREATE TABLE comments (
-    binary_id    INTEGER REFERENCES binaries(binary_id),
-    va           INTEGER NOT NULL,
-    body         TEXT NOT NULL,
-    set_at       INTEGER,
-    PRIMARY KEY (binary_id, va)
-);
+```bash
+uv run glaurung xrefs --help
+uv run glaurung frame --help
+uv run glaurung find --help
+uv run glaurung export --help
 ```
 
-### Schema version
-
-```sql
-CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT);
-INSERT INTO schema_meta VALUES ('schema_version', '1');
-INSERT INTO schema_meta VALUES ('glaurung_version', '0.1.0');
-```
+The [tutorial](../tutorial/README.md) exercises project creation, annotations,
+undo/redo, bookmarks, frames, xrefs, search, and export against checked-in
+fixtures.
 
 ## Python API
 
-A new module `python/glaurung/llm/kb/persistent.py`:
+`PersistentKnowledgeBase.open` creates a missing database or opens an existing
+one. A new file requires `binary_path`; an existing file can select its most
+recent binary row when that argument is omitted.
 
 ```python
-class PersistentKnowledgeBase(KnowledgeBase):
-    """SQLite-backed KnowledgeBase. Inherits the in-memory query API
-    (`add_node`, `add_edge`, `search_text`, `nodes`, `edges`) so every
-    existing tool keeps working unchanged. Mutations dirty an in-memory
-    write buffer; `save()` commits the buffer to SQLite in one
-    transaction. `open(path)` loads an existing file; `create(path)`
-    initialises a fresh schema.
-    """
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-    @classmethod
-    def open(cls, path: str | Path, session: str = "main") -> "PersistentKnowledgeBase": ...
+from glaurung.llm.kb.models import Node, NodeKind
+from glaurung.llm.kb.persistent import PersistentKnowledgeBase
 
-    @classmethod
-    def create(cls, path: str | Path, binary_path: str, session: str = "main") -> "PersistentKnowledgeBase": ...
+binary = Path(
+    "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/"
+    "hello-gcc-O2"
+)
 
-    def save(self) -> None: ...
-    def close(self) -> None: ...
+with TemporaryDirectory() as directory:
+    database = Path(directory) / "example.glaurung"
+    with PersistentKnowledgeBase.open(
+        database,
+        binary_path=binary,
+        session="main",
+    ) as knowledge:
+        knowledge.add_node(
+            Node(kind=NodeKind.note, label="reviewed", text="docs example")
+        )
 
-    def __enter__(self) -> "PersistentKnowledgeBase": ...
-    def __exit__(self, *args) -> None: ...
+    with PersistentKnowledgeBase.open(database, session="main") as reopened:
+        assert any(node.label == "reviewed" for node in reopened.nodes())
 ```
 
-`MemoryContext` gets an optional `db_path` argument:
+The context manager saves only on a clean exit. `close()` saves in a `finally`
+path; call `save()` explicitly before a risky operation when durability at that
+point matters.
+
+An analysis tool that needs triage, budgets, and persistent storage together can
+use `MemoryContext.open_persistent`:
 
 ```python
-ctx = MemoryContext(file_path=binary, artifact=art, db_path="malware.glaurung")
-# ctx.kb is now a PersistentKnowledgeBase opened on that file.
-# Closing the context (or program exit) saves outstanding changes.
+from glaurung import triage
+from glaurung.llm.context import MemoryContext
+
+artifact = triage.analyze_path(str(binary))
+context = MemoryContext.open_persistent(
+    file_path=str(binary),
+    artifact=artifact,
+    db_path=database,
+    session="main",
+)
+try:
+    print(context.kb.path)
+finally:
+    context.kb.close()
 ```
 
-When `db_path` is `None`, `MemoryContext` falls back to today's
-in-memory `KnowledgeBase` — every existing test continues to work
-unchanged.
+Keep the database and binary pairing explicit in reusable code. An existing
+multi-binary project opened without `binary_path` selects the most recently
+discovered binary, which may not be the one a caller intended.
 
-## File location convention
+## Storage architecture
 
-- Per-binary default: `<binary>.glaurung` next to the binary.
-- Per-project: `--db /path/to/project.glaurung` flag overrides.
-- The CLI's `glaurung repl <binary>` opens (or creates)
-  `<binary>.glaurung` automatically.
+`PersistentKnowledgeBase` is an in-memory `KnowledgeBase` backed by SQLite:
 
-## Migration strategy
+- opening hydrates the selected session's nodes and edges into memory;
+- node and edge mutations update the in-memory indexes;
+- `save()` writes the current node/edge diff in one transaction;
+- SQLite WAL mode and foreign-key checks are enabled; and
+- subsystem modules create additional tables idempotently for types, xrefs,
+  functions, frames, undo history, and specialized evidence.
 
-`schema_version` lives in `schema_meta`. On open:
+The base schema version is currently `1`. Opening a database with any different
+base version fails closed: migrations are not yet implemented. Some subsystem
+tables evolve through idempotent column/table checks without changing that base
+version, so consumers must use Glaurung APIs rather than treating the SQLite
+layout as a stable third-party schema.
 
-- If version matches → use as-is.
-- If version is older but our migration table covers the gap → run
-  every migration in order, bump the stored version.
-- If version is newer than us → refuse to open, tell the user to
-  upgrade glaurung. We never silently downgrade.
+The content SHA-256 identifies binary rows. Session names are scoped to one
+binary. Core KB nodes/edges are session-specific, while many analysis tables are
+binary-wide and carry their own provenance or precedence fields.
 
-Migrations live in `python/glaurung/llm/kb/migrations/{N→N+1}.sql`.
+## Durability and safety boundaries
 
-## Testing
+- Keep the target binary available at its recorded path for commands that need
+  to reread bytes; the database does not embed the complete binary.
+- Do not edit tables manually while Glaurung is running.
+- Do not copy only the main SQLite file while a writer has an active WAL; close
+  the project or use SQLite's backup facilities.
+- A `.glaurung` file can contain analyst notes, target paths, recovered strings,
+  and other sensitive evidence. Apply the same access controls as the case data.
+- Source revision and command output remain necessary for reproducibility; the
+  database is accumulated state, not a proof that every analysis completed.
 
-- `test_persistent_kb_round_trip` — create, add nodes+edges+tags, save,
-  close, reopen, assert byte-identical content.
-- `test_persistent_kb_concurrent_reads` — two opens, two reads, no
-  blocking.
-- `test_in_memory_kb_unchanged` — every existing test that uses
-  `MemoryContext` without `db_path` still passes.
-- `test_migration_v0_to_v1` — synthetic v0 file loads cleanly after
-  migration.
-
-## Implementation plan
-
-Sprint 1 — `PersistentKnowledgeBase` core (this task #152).
-- Schema creation + opening.
-- `add_node`/`add_edge` write-through.
-- `save()` commits.
-- FTS index for `search_text`.
-- Round-trip test.
-
-Sprint 2 — Wire into MemoryContext (#152 final piece).
-- `db_path` argument.
-- Recover-source pipeline opens the file once and reuses across function
-  passes.
-
-Sprint 3 — Type table (#153).
-- Schema added.
-- Type-aware decompile-render pass.
-- Manual `add_type` API.
-
-Sprint 4 — Xref table (#154).
-- Schema added.
-- One-time index build on first analysis.
-- `list_xrefs_*` tools become SQL queries.
-
-Sprint 5 — REPL (#155).
-- Loads the file, exposes navigation grammar, persists every change.
-
-This document is the blueprint for #152–#155. Subsequent tasks
-(#157 DWARF ingest, #159 benchmark) consume the schema but don't
-extend it.
+Focused persistence coverage lives in `python/tests/test_persistent_kb.py`.

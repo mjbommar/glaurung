@@ -1,11 +1,11 @@
 ─── stdin (keystrokes piped to glaurung repl) ───
-label set 0x4040 g_c2_endpoints char *
+label set 0x4040 primary_c2_server void *
 save
 q
 ─── glaurung repl stdout ───
-glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
+glaurung repl  binary=<repo>/samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0
                db=/tmp/tutorial-fixtures/02-naming-and-types.glaurung  session='main'
->   labelled 0x00004040 -> g_c2_endpoints
+>   labelled 0x00004040 -> primary_c2_server
 > saved.
-> 
+>
 saving and exiting…

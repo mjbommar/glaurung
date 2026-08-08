@@ -1,5 +1,9 @@
 # 02 - Interface mapping
 
+> **Status: maintained mapping with historical phase notes.** Verify exact
+> operator coverage and failure behavior against
+> `src/symbolic/solver/axeyum_backend.rs` and its tests.
+
 The precise, total translation between glaurung's symbolic IR + solver
 trait and axeyum's public API. This is the contract the `axeyum_backend`
 implements. Every glaurung construct has a defined axeyum image; there is

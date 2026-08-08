@@ -1,5 +1,9 @@
 # Triage System Recommendations
 
+> **Status: historical design.** These recommendations and command snippets are
+> research notes, not a supported workflow. Confirm current capabilities in
+> [`README.md`](README.md), CLI help, source, and tests.
+
 Based on analysis of reference implementations (Detect-It-Easy, LIEF, binary-inspector) and current Glaurung triage system.
 
 ## Executive Summary
