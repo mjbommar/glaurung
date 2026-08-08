@@ -64,6 +64,7 @@ pub enum Endian {
 /// * `O`   — overflow
 /// * `P`   — parity
 /// * `A`   — auxiliary carry
+/// * `D`   — x86 string-operation direction (0 increments, 1 decrements)
 /// * `Bit` — internal one-bit predicate for flag-preserving ISA branches such
 ///           as AArch64 `tbz`/`tbnz`; it is not an architectural status flag
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -77,6 +78,7 @@ pub enum Flag {
     O,
     P,
     A,
+    D,
     Bit,
 }
 
@@ -93,6 +95,7 @@ impl Flag {
             Flag::O => "of",
             Flag::P => "pf",
             Flag::A => "af",
+            Flag::D => "df",
             Flag::Bit => "bitpred",
         }
     }
@@ -673,6 +676,7 @@ impl fmt::Display for VReg {
                 Flag::O => write!(f, "%of"),
                 Flag::P => write!(f, "%pf"),
                 Flag::A => write!(f, "%af"),
+                Flag::D => write!(f, "%df"),
                 Flag::Bit => write!(f, "%bitpred"),
             },
             VReg::FlagValue { flag, version } => {

@@ -600,6 +600,66 @@ fn lower_float_value(value: &Value, width: u8) -> Expr {
     }
 }
 
+/// Lower an architecture-neutral repeated scalar memory fill into an exact AST
+/// loop. The lifter supplies private pointer/count scratch values, so mutating
+/// them here cannot overwrite the architectural registers whose post-operation
+/// values are represented by subsequent LLIR operations.
+fn memory_fill_intrinsic(name: &str, ins: &[Value], outs: &[(VReg, Width)]) -> Option<Stmt> {
+    if !outs.is_empty() {
+        return None;
+    }
+    let suffix = name.strip_prefix("memory.fill.")?;
+    let (element_width, word_width) = suffix.split_once(".word")?;
+    let element_width: u8 = element_width.parse().ok()?;
+    let word_width: u8 = word_width.parse().ok()?;
+    if !matches!(element_width, 1 | 2 | 4 | 8) || !matches!(word_width, 4 | 8) {
+        return None;
+    }
+    let [Value::Reg(pointer), Value::Reg(remaining), value, direction] = ins else {
+        return None;
+    };
+    let direction_is_set = Expr::Cmp {
+        op: CmpOp::Ne,
+        lhs: Box::new(lower_value(direction)),
+        rhs: Box::new(Expr::Const(0)),
+    };
+    Some(Stmt::While {
+        cond: Expr::Cmp {
+            op: CmpOp::Ne,
+            lhs: Box::new(Expr::Reg(remaining.clone())),
+            rhs: Box::new(Expr::Const(0)),
+        },
+        body: vec![
+            Stmt::Store {
+                addr: Expr::Reg(pointer.clone()),
+                src: lower_value(value),
+                size: element_width,
+            },
+            Stmt::Assign {
+                dst: pointer.clone(),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(pointer.clone())),
+                    rhs: Box::new(Expr::Select {
+                        cond: Box::new(direction_is_set),
+                        if_true: Box::new(Expr::Const(-i64::from(element_width))),
+                        if_false: Box::new(Expr::Const(i64::from(element_width))),
+                        width: word_width,
+                    }),
+                },
+            },
+            Stmt::Assign {
+                dst: remaining.clone(),
+                src: Expr::Bin {
+                    op: BinOp::Sub,
+                    lhs: Box::new(Expr::Reg(remaining.clone())),
+                    rhs: Box::new(Expr::Const(1)),
+                },
+            },
+        ],
+    })
+}
+
 #[derive(Clone, Copy)]
 enum ScalarFloatOperation {
     Move,
@@ -1347,6 +1407,9 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
         Op::Intrinsic {
             name, ins, outs, ..
         } => {
+            if let Some(statement) = memory_fill_intrinsic(name, ins, outs) {
+                return vec![statement];
+            }
             if let (Some(src), Some((dst, _))) =
                 (byte_swap_intrinsic(name, ins, outs), outs.first())
             {
@@ -9883,6 +9946,10 @@ pub fn render_with_types(f: &Function, tm: &TypeMap) -> String {
 #[cfg(test)]
 #[path = "ast_tests/ilp32_wide.rs"]
 mod ilp32_wide_tests;
+
+#[cfg(test)]
+#[path = "ast_tests/memory_fill.rs"]
+mod memory_fill_tests;
 
 #[cfg(test)]
 mod tests {

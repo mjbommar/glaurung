@@ -158,6 +158,7 @@ fn prune_dead_unversioned_flags(f: &mut Function) {
             Flag::O,
             Flag::P,
             Flag::A,
+            Flag::D,
             Flag::Bit,
         ]
         .into_iter()

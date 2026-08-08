@@ -1544,6 +1544,30 @@ def test_native_worker_refuses_malformed_vectors_and_unknown_integer_widths():
     assert D._native_worker_source(_sig("f", odd_width), [[]], "int") is None
 
 
+def test_native_worker_materializes_flat_struct_pointer_arrays_exactly():
+    """Plain DWARF structs are ABI-stable inputs, not a reason to fall back."""
+    node = {
+        "k": "struct",
+        "w": 8,
+        "name": "Node",
+        "fields": [
+            {"name": "key", "off": 0, "t": _I32},
+            {"name": "color", "off": 4, "t": {"k": "int", "w": 4, "s": False}},
+        ],
+    }
+    sig = _sig("validate", _I32, {"k": "ptr", "p": node, "const": True}, _I32)
+    worker = D._native_worker_source(sig, [[[[7, 0], [9, 1]], 2]], "int")
+
+    assert worker is not None
+    assert "typedef struct Node" in worker
+    assert '_Static_assert(sizeof(Node) == 8, "DWARF layout")' in worker
+    assert '_Static_assert(offsetof(Node, color) == 4, "DWARF field offset")' in worker
+    assert "typedef int32_t (*measured_fn)(const Node *, int32_t);" in worker
+    assert "Node o_0_0[2]" in worker
+    assert ".key = (int32_t)(7)" in worker
+    assert ".color = (uint32_t)(1)" in worker
+
+
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_native_execution_compares_ilp32_returns_and_buffer_effects(tmp_path):
     """Non-vacuity for the generated target worker, using a real i386 process."""

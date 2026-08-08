@@ -146,6 +146,31 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
     let entry_va = func.entry_point.value;
     blocks.sort_by_key(|block| (block.start_va != entry_va, block.start_va));
 
+    // Both the SysV and Microsoft x86 calling conventions require DF clear at
+    // function boundaries. Materialize that ABI fact only for functions that
+    // contain a repeated string-memory effect; CLD/STD instructions then
+    // replace it through ordinary SSA like any other flag definition.
+    let direction_flag = VReg::Flag(Flag::D);
+    let needs_direction_flag = blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .any(|instruction| {
+            let (_, uses) = def_uses(&instruction.op);
+            uses.contains(&direction_flag)
+        });
+    if needs_direction_flag {
+        blocks[0].instrs.insert(
+            0,
+            LlirInstr {
+                va: entry_va,
+                op: Op::Assign {
+                    dst: VReg::Flag(Flag::D),
+                    src: Value::Const(0),
+                },
+            },
+        );
+    }
+
     // Phase 0 (task 0.7): the executable IR has no untyped holes. Rewrite any
     // residual `Op::Unknown` the per-arch lifters emitted into a conservative,
     // footprint-declaring `Op::Intrinsic` so downstream execution/dataflow stays

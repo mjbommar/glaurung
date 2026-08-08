@@ -11,7 +11,7 @@
 //! * `add`, `sub`, `sbb`, `and`, `or`, `xor`, `shl`, `shr`, `sar`, `imul`, `div` → [`Op::Bin`]
 //! * `not`, `neg` → [`Op::Un`]
 //! * `inc`, `dec`, `xadd`, `xchg`, `cmpxchg` on registers / memory → [`Op::Bin`] or load-modify-store
-//! * `movsd` / `stos*` string ops → representative copy/store + pointer advance
+//! * `movsd` / `stos*` string ops → copy/store or exact repeated memory fill
 //! * common SSE moves/zeroing (`movsd`, `movaps`, `xorps`) → assign/load/store/bin
 //! * `cmp` → [`Op::Cmp`] writing `ZF`/`CF`/`SF`
 //! * `test` → [`Op::Cmp`] writing `ZF`/`SF`
@@ -1247,14 +1247,80 @@ fn pop_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     ]
 }
 
-fn stos_ops(mnem: Mnemonic, bits: u32) -> Vec<Op> {
+fn stos_ops(instr: &iced_x86::Instruction, mnem: Mnemonic, bits: u32) -> Vec<Op> {
     let Some(width) = stos_width(mnem) else {
         return vec![Op::Unknown {
             mnemonic: format!("{:?}", mnem).to_ascii_lowercase(),
         }];
     };
     let dst = VReg::phys(if bits == 64 { "rdi" } else { "edi" });
+    let count = VReg::phys(if bits == 64 { "rcx" } else { "ecx" });
     let acc = VReg::phys(accumulator_name_for_width(width, bits));
+    if instr.has_rep_prefix() || instr.has_repne_prefix() {
+        let pointer_width = if bits == 64 { Width::W64 } else { Width::W32 };
+        let pointer_bytes = if bits == 64 { 8 } else { 4 };
+        let pointer = VReg::Temp(0);
+        let remaining = VReg::Temp(1);
+        let byte_count = VReg::Temp(2);
+        let negative_byte_count = VReg::Temp(3);
+        let pointer_delta = VReg::Temp(4);
+        return vec![
+            Op::Assign {
+                dst: pointer.clone(),
+                src: Value::Reg(dst.clone()),
+            },
+            Op::Assign {
+                dst: remaining.clone(),
+                src: Value::Reg(count.clone()),
+            },
+            // One architecture-neutral, typed memory effect. The scratch
+            // pointer/count are private loop state for AST lowering; the
+            // architectural RDI/RCX updates remain ordinary LLIR below so SSA
+            // does not need a multi-output intrinsic exception.
+            Op::Intrinsic {
+                name: format!("memory.fill.{width}.word{pointer_bytes}"),
+                ins: vec![
+                    Value::Reg(pointer),
+                    Value::Reg(remaining),
+                    Value::Reg(acc),
+                    Value::Reg(VReg::Flag(Flag::D)),
+                ],
+                outs: Vec::new(),
+                reads_mem: false,
+                writes_mem: true,
+            },
+            Op::Bin {
+                dst: byte_count.clone(),
+                op: BinOp::Mul,
+                lhs: Value::Reg(count.clone()),
+                rhs: Value::Const(i64::from(width)),
+            },
+            Op::Un {
+                dst: negative_byte_count.clone(),
+                op: UnOp::Neg,
+                src: Value::Reg(byte_count.clone()),
+            },
+            Op::Ite {
+                dst: pointer_delta.clone(),
+                cond: VReg::Flag(Flag::D),
+                t: Value::Reg(negative_byte_count),
+                e: Value::Reg(byte_count),
+                width: pointer_width,
+            },
+            Op::Bin {
+                dst: dst.clone(),
+                op: BinOp::Add,
+                lhs: Value::Reg(dst),
+                rhs: Value::Reg(pointer_delta),
+            },
+            Op::Assign {
+                dst: count,
+                src: Value::Const(0),
+            },
+        ];
+    }
+    let pointer_width = if bits == 64 { Width::W64 } else { Width::W32 };
+    let step = VReg::Temp(0);
     vec![
         Op::Store {
             addr: MemOp {
@@ -1268,14 +1334,19 @@ fn stos_ops(mnem: Mnemonic, bits: u32) -> Vec<Op> {
             },
             src: Value::Reg(acc),
         },
-        // Direction-flag-aware repetition is a future mid-IR concern. The
-        // common compiler pattern clears DF, so advance once to preserve the
-        // observable pointer dataflow without emitting unknown(stos*).
+        // A non-repeated STOS performs exactly one directional step.
+        Op::Ite {
+            dst: step.clone(),
+            cond: VReg::Flag(Flag::D),
+            t: Value::Const(-i64::from(width)),
+            e: Value::Const(i64::from(width)),
+            width: pointer_width,
+        },
         Op::Bin {
             dst: dst.clone(),
             op: BinOp::Add,
             lhs: Value::Reg(dst),
-            rhs: Value::Const(i64::from(width)),
+            rhs: Value::Reg(step),
         },
     ]
 }
@@ -3892,8 +3963,16 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Push => push_ops(instr, bits),
         Mnemonic::Pop => pop_ops(instr, bits),
         Mnemonic::Stosb | Mnemonic::Stosw | Mnemonic::Stosd | Mnemonic::Stosq => {
-            stos_ops(mnem, bits)
+            stos_ops(instr, mnem, bits)
         }
+        Mnemonic::Cld => vec![Op::Assign {
+            dst: VReg::Flag(Flag::D),
+            src: Value::Const(0),
+        }],
+        Mnemonic::Std => vec![Op::Assign {
+            dst: VReg::Flag(Flag::D),
+            src: Value::Const(1),
+        }],
         Mnemonic::Cmpxchg => cmpxchg_ops(instr, bits),
         Mnemonic::Inc => {
             if instr.op_count() == 1 {
@@ -5890,34 +5969,53 @@ mod tests {
     }
 
     #[test]
-    fn stosq_lifts_to_store_and_destination_advance() {
-        // rep stosq  (f3 48 ab). Repetition is not modelled yet, but the
-        // representative store and rdi advance preserve the core dataflow.
+    fn rep_stosq_lifts_to_directional_memory_fill_and_exact_output_updates() {
+        // rep stosq  (f3 48 ab). The repeat count and direction flag are
+        // architectural inputs; one representative store is not equivalent.
         let ops = lift64(&[0xf3, 0x48, 0xab]);
-        assert_eq!(ops.len(), 2, "got: {:#?}", ops);
-        match &ops[0].op {
-            Op::Store {
-                addr:
-                    MemOp {
-                        base: Some(base),
-                        size: 8,
-                        ..
-                    },
-                src: Value::Reg(src),
-            } => {
-                assert_eq!(*base, VReg::phys("rdi"));
-                assert_eq!(*src, VReg::phys("rax"));
-            }
-            other => panic!("expected stosq store, got {:?}", other),
-        }
+        assert_eq!(ops.len(), 8, "got: {:#?}", ops);
         assert!(matches!(
-            &ops[1].op,
+            &ops[2].op,
+            Op::Intrinsic {
+                name,
+                ins,
+                outs,
+                reads_mem: false,
+                writes_mem: true,
+            } if name == "memory.fill.8.word8"
+                && ins == &[
+                    Value::Reg(VReg::Temp(0)),
+                    Value::Reg(VReg::Temp(1)),
+                    Value::Reg(VReg::phys("rax")),
+                    Value::Reg(VReg::Flag(Flag::D)),
+                ]
+                && outs.is_empty()
+        ));
+        assert!(matches!(
+            &ops[6].op,
             Op::Bin {
                 dst,
                 op: BinOp::Add,
                 lhs: Value::Reg(lhs),
-                rhs: Value::Const(8),
+                rhs: Value::Reg(VReg::Temp(4)),
             } if *dst == VReg::phys("rdi") && *lhs == VReg::phys("rdi")
+        ));
+        assert!(matches!(
+            &ops[7].op,
+            Op::Assign {
+                dst,
+                src: Value::Const(0),
+            } if *dst == VReg::phys("rcx")
+        ));
+
+        // F2 is architecturally the same count-controlled repeat for STOS;
+        // only compare-based string instructions give REPNE distinct stopping
+        // semantics.
+        let repne = lift64(&[0xf2, 0x48, 0xab]);
+        assert_eq!(repne.len(), 8, "got: {:#?}", repne);
+        assert!(matches!(
+            &repne[2].op,
+            Op::Intrinsic { name, .. } if name == "memory.fill.8.word8"
         ));
     }
 
