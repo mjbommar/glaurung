@@ -330,6 +330,48 @@ def test_arm32_packet_parser_round_trips_bitfields_rotates_and_smlabb(
 
 
 @pytest.mark.parametrize("arch", ARM32_ARCHES)  # ty: ignore[unresolved-attribute]
+def test_arm32_o2_finite_difference_round_trips_signed_long_accumulate(
+    tmp_path: Path, arch: str
+) -> None:
+    """The signed 64-bit stencil survives split ARM32 destination registers."""
+    fixture = "30_finite_difference"
+    function = "heat_step_1d"
+    source, target, reference = _build_arm32_fixture(tmp_path, fixture, arch, "O2")
+
+    source_text = source.read_text()
+    assert "int64_t weighted" in source_text
+    assert "2 * (int64_t)source[i]" in source_text
+
+    disassembled = subprocess.run(
+        [A32_OBJDUMP, "-d", f"--disassemble={function}", str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert disassembled.returncode == 0, disassembled.stderr
+    assert re.search(r"\bsmlal\b", disassembled.stdout), disassembled.stdout
+
+    decompiled = _decompile(target, function)
+    assert decompiled.returncode == 0, decompiled.stderr
+    assert "===== prepared numbered LLIR =====" in decompiled.stderr
+    assert "intrinsic smlal" not in decompiled.stderr, decompiled.stderr
+    assert "unknown(smlal)" not in decompiled.stderr, decompiled.stderr
+    assert "<< 32" in decompiled.stderr, decompiled.stderr
+    assert ">> 32" in decompiled.stderr, decompiled.stderr
+    assert "/* asm: smlal */" not in decompiled.stdout, decompiled.stdout
+
+    _assert_qemu_round_trip(
+        target,
+        source,
+        reference,
+        fixture,
+        {function},
+        arch=arch,
+        opt="O2",
+    )
+
+
+@pytest.mark.parametrize("arch", ARM32_ARCHES)  # ty: ignore[unresolved-attribute]
 def test_arm32_o0_rb_validate_round_trips_split_frame_addresses(
     tmp_path: Path, arch: str
 ) -> None:

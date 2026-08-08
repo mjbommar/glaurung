@@ -2727,13 +2727,13 @@
     "heat_step_1d": "pass"
   },
   "30_finite_difference:armv7:O2": {
-    "heat_step_1d": "fail"
+    "heat_step_1d": "pass"
   },
   "30_finite_difference:armv7_a32:O0": {
     "heat_step_1d": "pass"
   },
   "30_finite_difference:armv7_a32:O2": {
-    "heat_step_1d": "fail"
+    "heat_step_1d": "pass"
   },
   "30_finite_difference:i386:O0": {
     "heat_step_1d": "pass"
