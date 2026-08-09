@@ -127,6 +127,47 @@ STALE BUILD: src/ir/structure.rs is newer than the built extension.
   Override: --allow-stale (or GLAURUNG_ALLOW_STALE=1)
 ```
 
+## Pass-attributed output health
+
+`GLAURUNG_PASS_HEALTH=1` emits one schema-versioned JSON record to stderr at
+every shared AST boundary. It measures the AST itself rather than parsing
+formatted C: parameter and declaration counts, generated temporaries, remaining
+physical registers, definition-before-use violations, gotos, unresolved
+transfers, statement count, verified CFG-edge fidelity, and structuring safety
+fallbacks. Named definition violations are retained so a count cannot hide one
+identifier replacing another.
+
+```bash
+GLAURUNG_PASS_HEALTH=1 .venv/bin/glaurung decompile \
+  samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0 \
+  --func main --style decbench --no-color \
+  >/tmp/hello-main.c 2>/tmp/hello-main.health.jsonl
+tools/pass_health_report.py /tmp/hello-main.health.jsonl \
+  --output /tmp/hello-main.health-report.json
+```
+
+The report groups records by function and names the first pass that changed each
+counter and the first pass that introduced each final definition violation.
+Ordinary stderr is ignored, but a trace with no health records, an unknown schema,
+or malformed counters fails loudly. To include the output/source-CFG size ratio,
+pass a JSON object keyed by hexadecimal entry VA:
+
+```json
+{"0x2549": 22}
+```
+
+```bash
+tools/pass_health_report.py /tmp/hello-main.health.jsonl \
+  --source-cfg-sizes /tmp/source-cfg-sizes.json
+```
+
+The CFG counters describe the region actually lowered to C. If speculative
+structuring is rejected, the labelled-CFG fallback should therefore report zero
+uncovered and invented edges while `structure_fallbacks` records the rejection.
+Tracing is diagnostic-only: the integration test runs the same real binary with
+and without the environment variable, requires byte-identical stdout, and
+requires the disabled run to emit no health records.
+
 ## `tools/arch_roundtrip.py` — the other three architectures
 
 The gate above is x86-64 in every lane. Glaurung lifts three architecture

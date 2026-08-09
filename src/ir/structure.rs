@@ -607,6 +607,19 @@ pub fn verify_structure(lf: &LlirFunction, ssa: &SsaInfo) -> Vec<StructError> {
 /// remain diagnostics because they still express executable control flow. This is
 /// the single production entry the decompile paths should call.
 pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
+    recover_verified_with_health(lf, ssa).0
+}
+
+/// [`recover_verified`] plus immutable fidelity counters for the selected output.
+///
+/// Candidate findings are used to decide whether to fall back. The returned edge
+/// counts describe the region that will actually be lowered; a separate fallback
+/// counter keeps a rejected speculative structure visible without falsely claiming
+/// that labelled-CFG output dropped or invented its edges.
+pub fn recover_verified_with_health(
+    lf: &LlirFunction,
+    ssa: &SsaInfo,
+) -> (Region, crate::ir::health::CfgHealth) {
     let cfg = Cfg::from(lf, ssa);
     let region = build_full(lf, &cfg);
     let errors = verify_region(&cfg.succs, 0, &region);
@@ -626,6 +639,8 @@ pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
     // than a speculative While, but it is the only semantics-preserving result.
     let acct = crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
     let is_unsound = structure_accounting_is_unsound(&acct);
+    let region_is_fallback = !lf.blocks.is_empty()
+        && matches!(&region, Region::Unstructured(blocks) if blocks.len() == lf.blocks.len());
     if std::env::var_os("GLAURUNG_ACCOUNT_STRUCTURE").is_some() && !acct.is_empty() {
         // stderr, not `tracing`: no subscriber is installed on the CLI or PyO3
         // paths, so a `tracing::warn!` here reached nobody — a diagnostic that
@@ -637,10 +652,21 @@ pub fn recover_verified(lf: &LlirFunction, ssa: &SsaInfo) -> Region {
             acct
         );
     }
-    if is_unsound {
-        return Region::Unstructured((0..lf.blocks.len()).collect());
-    }
-    region
+    let selected = if is_unsound {
+        Region::Unstructured((0..lf.blocks.len()).collect())
+    } else {
+        region
+    };
+    let selected_accounting = if is_unsound {
+        crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &selected)
+    } else {
+        acct
+    };
+    let health = crate::ir::health::cfg_health_from_accounting(
+        &selected_accounting,
+        region_is_fallback || is_unsound,
+    );
+    (selected, health)
 }
 
 /// Whether accounting found a semantic control-flow defect rather than a
@@ -3352,9 +3378,13 @@ mod tests {
             (0x1700, vec![Op::Return], vec![]),           // found
         ]);
 
-        let r = recover_for(&lf);
+        let ssa = compute_ssa(&lf);
+        let (r, health) = recover_verified_with_health(&lf, &ssa);
         assert_eq!(r, Region::Unstructured((0..8).collect()), "{r:#?}");
-        assert!(verify_structure(&lf, &compute_ssa(&lf)).is_empty());
+        assert_eq!(health.structure_fallbacks, 1);
+        assert_eq!(health.uncovered_cfg_edges, 0);
+        assert_eq!(health.invented_cfg_edges, 0);
+        assert!(verify_structure(&lf, &ssa).is_empty());
     }
 
     #[test]

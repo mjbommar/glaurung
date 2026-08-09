@@ -45,6 +45,7 @@ pub mod expression_width;
 pub mod function_tables;
 pub mod guard_chain;
 pub mod guarded_switch;
+pub mod health;
 pub mod high_variables;
 pub mod label_prune;
 pub mod lift_arm32;
@@ -52,6 +53,7 @@ pub mod lift_arm64;
 pub mod lift_function;
 pub mod lift_x86;
 pub mod loop_form;
+pub(crate) mod machine_register;
 pub mod name_resolve;
 pub mod naming;
 pub mod pdb_fields;
@@ -79,5 +81,8 @@ pub mod verify_defs;
 pub mod widen;
 pub mod winapi_prototypes;
 pub mod x86_prologue;
+
+#[cfg(test)]
+mod health_tests;
 
 pub use types::*;

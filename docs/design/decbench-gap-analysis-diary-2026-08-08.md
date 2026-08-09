@@ -453,3 +453,44 @@ One reproducibility caveat is now explicit instead of inferred: the evaluation k
 ships prebuilt binaries but does not record their compiler versions. The dataset
 revision and kit manifest hash identify those binaries, but a future kit revision
 must capture compiler identities before compilation.
+
+## 22:45–23:25 — Phase 0 implementation: pass-attributed output health
+
+The old `GLAURUNG_DUMP_PASSES` stream was useful to a person but unsuitable for a
+regression ledger: it rendered large C bodies, had no schema, and could not say
+which pass first changed a measurable risk. I added an opt-in JSONL trace at the
+single shared AST pipeline and at the DecBench preparation/render boundaries.
+The counters are computed from the AST and the production definition oracle, not
+from regular expressions over emitted C.
+
+The trace now records parameters, declarations, temporaries, raw physical
+registers, named definition violations, gotos, unresolved transfers, recursive
+statement count, uncovered and invented CFG edges, and verified-structuring
+fallbacks. Region recovery carries CFG fidelity explicitly into the AST pipeline.
+The edge counters describe the region actually emitted: rejecting an unsound
+candidate in favor of labelled CFG increments `structure_fallbacks` but does not
+misreport the lossless fallback as having missing edges.
+
+`tools/pass_health_report.py` rejects missing, stale, or malformed evidence,
+groups events per function, attributes the first change in each counter and the
+first appearance of each final violation, and optionally computes the
+output/source-CFG size ratio. Its canonical JSON is byte-stable.
+
+The real `hello-gcc-O0:main` canary produced 22 pipeline events from a 22-block
+source CFG. The final AST has 69 statements (ratio `3.136`), 41 declarations, 35
+temporaries, two gotos, no physical registers, no unresolved transfers, and zero
+uncovered or invented CFG edges. It also exposed two final never-defined values,
+`var105` and `var93`; both first appear at `apply_role_names`. This is a concrete
+semantic lead for the later definedness/value-identity phase, not merely a new
+counter.
+
+The integration test runs the checked-in binary with tracing enabled and disabled,
+requires byte-identical stdout, and requires no health prefix in the disabled
+stderr. All 1,876 Rust library tests pass, as do all 14 focused ledger/health
+Python tests. The full Python suite reached 100% and retained exactly four known,
+unrelated `test_suspicious_symbols` fixture failures: those cross-compiled
+`suspicious_win-*` samples contain none of the APIs that their test requires,
+even under its final raw-byte fallback. Repository-wide Ruff and ty remain
+non-green at their pre-existing 3,710 and 2,159 diagnostics respectively; both
+are clean on the new Python files. Phase 0 still needs the seven named
+score/output canaries and the cold/warm resource baseline before it closes.

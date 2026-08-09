@@ -370,6 +370,7 @@ fn inline_soft_helper_calls_in(
 /// macro. Debugging `--all` used to produce no dump at all.
 fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
+    cfg_health: crate::ir::health::CfgHealth,
     cc: crate::ir::call_args::CallConv,
     prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     param_slots: &mut std::collections::HashSet<usize>,
@@ -399,11 +400,13 @@ fn run_ast_passes(
     }
     macro_rules! dp {
         ($n:expr) => {
+            crate::ir::health::trace_pass($n, f, cfg_health);
             if dump {
                 eprintln!("\n===== after {} =====\n{}", $n, crate::ir::ast::render(f));
             }
         };
     }
+    crate::ir::health::trace_pass("ast_pipeline_entry", f, cfg_health);
     // Packed XMM moves use four scalar lane operations so arithmetic remains
     // analyzable.  Rejoin an untouched four-lane load/store pair before copy
     // propagation erases the common 16-byte transport identity.
@@ -665,6 +668,7 @@ fn normalize_definedness_and_compute_ssa(
 /// address/range decompilation from observing different return identities.
 struct PreparedLlir {
     region: crate::ir::structure::Region,
+    cfg_health: crate::ir::health::CfgHealth,
     numbered: crate::ir::types::LlirFunction,
     definition_widths: std::collections::HashMap<crate::ir::types::VReg, u8>,
     parameter_slots: std::collections::HashSet<usize>,
@@ -709,7 +713,7 @@ fn prepare_llir_for_lowering(
             }
         }
     }
-    let region = crate::ir::structure::recover_verified(function, &ssa);
+    let (region, cfg_health) = crate::ir::structure::recover_verified_with_health(function, &ssa);
     let (numbered, definition_widths, mut parameter_slots) = if recover_semantic_prototype {
         crate::ir::value_number::value_number_with_parameter_slots(function, &ssa, cc)
     } else {
@@ -731,6 +735,7 @@ fn prepare_llir_for_lowering(
     lock_parameter_slots_from_prototype(prototype.as_ref(), &mut parameter_slots);
     PreparedLlir {
         region,
+        cfg_health,
         numbered,
         definition_widths,
         parameter_slots,
@@ -863,6 +868,7 @@ fn decompile_at_py(
     );
     let PreparedLlir {
         region,
+        cfg_health,
         numbered: lf,
         definition_widths,
         parameter_slots: mut param_slots,
@@ -895,6 +901,7 @@ fn decompile_at_py(
     let dump_passes = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
     macro_rules! dp {
         ($n:expr) => {
+            crate::ir::health::trace_pass($n, &f, cfg_health);
             if dump_passes {
                 eprintln!("\n===== after {} =====\n{}", $n, crate::ir::ast::render(&f));
             }
@@ -912,6 +919,7 @@ fn decompile_at_py(
     );
     let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
+        cfg_health,
         cc,
         prototype.as_ref(),
         &mut param_slots,
@@ -971,6 +979,7 @@ fn decompile_at_py(
             .and_then(dwarf_render_prototype);
         decbench_text(
             &f,
+            cfg_health,
             &exception_sites,
             decl,
             width,
@@ -1110,6 +1119,7 @@ fn decompile_range_at_py(
     );
     let PreparedLlir {
         region,
+        cfg_health,
         numbered: lf,
         definition_widths,
         parameter_slots: mut param_slots,
@@ -1137,6 +1147,7 @@ fn decompile_range_at_py(
     );
     let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
+        cfg_health,
         cc,
         prototype.as_ref(),
         &mut param_slots,
@@ -1180,6 +1191,7 @@ fn decompile_range_at_py(
             .and_then(dwarf_render_prototype);
         decbench_text(
             &f,
+            cfg_health,
             &exception_sites,
             decl,
             width,
@@ -1407,6 +1419,7 @@ fn remap_type_map_impl(
 /// names the recovered `TypeMap` keys were remapped against.
 fn decbench_text(
     f: &crate::ir::ast::Function,
+    cfg_health: crate::ir::health::CfgHealth,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
     decl: Option<&crate::ir::types_recover::TypeMap>,
     width: Option<&crate::ir::types_recover::TypeMap>,
@@ -1448,6 +1461,7 @@ fn decbench_text(
             crate::ir::ast::render(&prepared)
         );
     }
+    crate::ir::health::trace_pass("prepare_for_decbench", &prepared, cfg_health);
     // Preparation exposes the actual expression dataflow (notably parameter
     // spill coalescing and folded returns), so only now can high-half uses and
     // wide return definitions safely override a misleading narrow sub-register
@@ -1489,6 +1503,7 @@ fn decbench_text(
             crate::ir::ast::render(&prepared)
         );
     }
+    crate::ir::health::trace_pass("fold_guarded_readonly_lookups", &prepared, cfg_health);
     if let Some(tm) = refined_decl.as_ref() {
         crate::ir::guarded_switch::collapse_range_guards_with_types(&mut prepared, tm);
     }
@@ -1524,6 +1539,7 @@ fn decbench_text(
     );
     crate::ir::exception_recover::recover_typed_handlers(&mut prepared, exception_sites);
     crate::ir::exception_recover::recover_throws(&mut prepared);
+    crate::ir::health::trace_pass("ready_to_render", &prepared, cfg_health);
     let violations = crate::ir::verify_defs::check(&prepared);
     let body = crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types(
         &prepared,
@@ -2567,6 +2583,7 @@ fn decompile_all_py(
         );
         let PreparedLlir {
             region,
+            cfg_health,
             numbered: lf,
             definition_widths,
             parameter_slots: mut param_slots,
@@ -2600,6 +2617,7 @@ fn decompile_all_py(
         );
         let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
+            cfg_health,
             cc,
             prototype.as_ref(),
             &mut param_slots,
@@ -2637,6 +2655,7 @@ fn decompile_all_py(
                 .and_then(dwarf_render_prototype);
             decbench_text(
                 &f,
+                cfg_health,
                 &exception_sites,
                 Some(&decl),
                 Some(&width),
@@ -2779,6 +2798,7 @@ fn decompile_many_py(
         );
         let PreparedLlir {
             region,
+            cfg_health,
             numbered: lf,
             definition_widths,
             parameter_slots: mut param_slots,
@@ -2819,6 +2839,7 @@ fn decompile_many_py(
         );
         let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
+            cfg_health,
             cc,
             prototype.as_ref(),
             &mut param_slots,
@@ -2860,6 +2881,7 @@ fn decompile_many_py(
                 .and_then(dwarf_render_prototype);
             decbench_text(
                 &f,
+                cfg_health,
                 &exception_sites,
                 Some(&decl),
                 Some(&width),

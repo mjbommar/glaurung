@@ -7296,6 +7296,10 @@ struct DecIdents {
     /// Every non-argument identifier that will appear in the body, as the exact
     /// (sanitised) spelling the writer emits. `BTreeSet` for stable output.
     locals: std::collections::BTreeSet<String>,
+    /// Generated `varN`, lifter `tN`, and versioned predicate identifiers.
+    temporaries: std::collections::BTreeSet<String>,
+    /// Raw ISA registers which survived naming and will become C locals.
+    physical_registers: std::collections::BTreeSet<String>,
     /// Recovered address-taken stack objects and their required byte extents.
     /// Kept separate from scalar locals so the C declaration reserves the
     /// complete object storage.
@@ -7304,6 +7308,10 @@ struct DecIdents {
     labels: std::collections::BTreeSet<u64>,
     /// VAs that appear as `Stmt::Goto` targets (used labels).
     gotos: std::collections::BTreeSet<u64>,
+    /// Direct goto occurrences (not merely unique targets).
+    goto_count: usize,
+    /// Computed transfers and unsupported instructions retained in the AST.
+    unresolved_transfer_count: usize,
     /// At least one expression contains an explicit unknown/poison value and
     /// therefore needs the C23-compatible helper declaration.
     has_unknown_value: bool,
@@ -7344,6 +7352,14 @@ pub(crate) fn parse_arg_index(name: &str) -> Option<usize> {
     // enough for unusually large generated-C interfaces while rejecting the
     // multi-million/billion indices produced by corrupt displacements.
     (index < 1024).then_some(index)
+}
+
+fn is_generated_temporary(name: &str) -> bool {
+    is_high_variable(name)
+        || name.strip_prefix('t').is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        || name.starts_with("pred_")
 }
 
 /// An exact source-value identity introduced from an SSA-versioned register.
@@ -7395,13 +7411,27 @@ fn collect_reg(v: &VReg, ids: &mut DecIdents) {
                 ids.max_arg = Some(ids.max_arg.map_or(idx, |m| m.max(idx)));
                 return;
             }
+            if crate::ir::machine_register::is_machine_register_name(n) {
+                ids.physical_registers.insert(n.clone());
+            }
+            if is_generated_temporary(n) {
+                ids.temporaries.insert(n.clone());
+            }
             sanitize_c_ident(n)
         }
-        VReg::Temp(i) => format!("t{}", i),
+        VReg::Temp(i) => {
+            let name = format!("t{i}");
+            ids.temporaries.insert(name.clone());
+            name
+        }
         VReg::Flag(fl) => flag_ident(fl).to_string(),
-        VReg::FlagValue { .. } => v
-            .predicate_ident()
-            .expect("FlagValue always has a predicate identifier"),
+        VReg::FlagValue { .. } => {
+            let name = v
+                .predicate_ident()
+                .expect("FlagValue always has a predicate identifier");
+            ids.temporaries.insert(name.clone());
+            name
+        }
     };
     ids.locals.insert(spelling);
 }
@@ -7623,8 +7653,12 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         Stmt::Goto { target } => {
             ids.gotos.insert(*target);
+            ids.goto_count = ids.goto_count.saturating_add(1);
         }
-        Stmt::IndirectGoto { target } => collect_idents_expr(target, ids),
+        Stmt::IndirectGoto { target } => {
+            ids.unresolved_transfer_count = ids.unresolved_transfer_count.saturating_add(1);
+            collect_idents_expr(target, ids);
+        }
         Stmt::Throw { value } => collect_idents_expr(value, ids),
         Stmt::TryCatch { try_body, catches } => {
             for statement in try_body {
@@ -7641,12 +7675,37 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         // Push/Pop/Nop are elided by the renderer; Unknown/Comment become
         // comments; none introduce a declared identifier.
-        Stmt::Push { .. }
-        | Stmt::Pop { .. }
-        | Stmt::Break
-        | Stmt::Nop
-        | Stmt::Unknown(_)
-        | Stmt::Comment(_) => {}
+        Stmt::Push { .. } | Stmt::Pop { .. } | Stmt::Break | Stmt::Nop | Stmt::Comment(_) => {}
+        Stmt::Unknown(_) => {
+            ids.unresolved_transfer_count = ids.unresolved_transfer_count.saturating_add(1);
+        }
+    }
+}
+
+/// Identifier/control-flow counts shared by health instrumentation and rendering.
+pub(crate) struct HealthIdentifiers {
+    pub parameters: usize,
+    pub declarations: usize,
+    pub temporaries: usize,
+    pub physical_registers: usize,
+    pub gotos: usize,
+    pub unresolved_transfers: usize,
+    pub statements: usize,
+}
+
+pub(crate) fn health_identifiers(function: &Function) -> HealthIdentifiers {
+    let mut identifiers = DecIdents::default();
+    for statement in &function.body {
+        collect_idents_stmt(statement, &mut identifiers);
+    }
+    HealthIdentifiers {
+        parameters: identifiers.max_arg.map_or(0, |index| index + 1),
+        declarations: identifiers.locals.len(),
+        temporaries: identifiers.temporaries.len(),
+        physical_registers: identifiers.physical_registers.len(),
+        gotos: identifiers.goto_count,
+        unresolved_transfers: identifiers.unresolved_transfer_count,
+        statements: identifiers.statement_count,
     }
 }
 
