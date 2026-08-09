@@ -186,14 +186,16 @@ corrected byte perfects, and 67 union perfects from the pinned inputs.
   CFG-size, and head-to-head summaries.
 - [x] Stable overlapping top-40 GED/type/byte and current-perfect canary sets.
 - [x] Per-function output-health counters and first-changing-pass attribution.
-- [ ] Focused output canaries spanning official and local regression corpora.
+- [x] Focused output canaries spanning four official functions and three local
+  regression cells (eleven real functions total).
 - [x] Cold/warm time, RSS, allocation availability, parse-count, and pass-time
   baselines across small, large, ARM32, debug-heavy, and stripped cases.
 - [x] Metric implementation revision and source hash in every ledger.
 
 The checked-in score baseline reproduces the four required headline counts and has
-byte-identical output across reordered or repeated inputs. Phase 0 remains open
-until the focused named output canaries are implemented. The health trace
+byte-identical output across reordered or repeated inputs. Phase 0 is complete.
+The focused canary gate pins input/compiler provenance, output identity, and final
+health for all seven named cases and reports exact function/field deltas. The health trace
 now covers every requested AST/CFG counter, names final definition violations,
 records verified-structuring fallback separately from emitted edge defects, and
 proves diagnostic enablement leaves real decompiler stdout byte-identical.

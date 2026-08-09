@@ -1,0 +1,623 @@
+{
+  "cases": [
+    {
+      "functions": [
+        {
+          "entry_va": "0x8680",
+          "final_violations": [
+            {
+              "kind": "never_defined",
+              "name": "local_190"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var0"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var1"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var2"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var3"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var5"
+            }
+          ],
+          "first_violation_passes": {
+            "never_defined:local_190": "promote_stack_locals",
+            "never_defined:var0": "apply_role_names",
+            "never_defined:var1": "apply_role_names",
+            "never_defined:var2": "apply_role_names",
+            "never_defined:var3": "apply_role_names",
+            "never_defined:var5": "apply_role_names"
+          },
+          "health": {
+            "declarations": 175,
+            "gotos": 91,
+            "invented_cfg_edges": 0,
+            "parameters": 24,
+            "physical_registers": 1,
+            "statements": 593,
+            "structure_fallbacks": 1,
+            "temporaries": 148,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 6,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "copy_reg",
+          "output_bytes": 31338,
+          "output_lines": 869,
+          "output_sha256": "fe3a9a32da5f1eaacd8db34ac150631ce0fd06afe3de5cd55a835e86198cfc13",
+          "rendered_function": "sub_8680",
+          "signature": "unsigned int sub_8680(long * arg0, char * arg1, int arg2, char * arg3, char * arg4, long * arg5, int arg6, long arg7, long arg8, long arg9, long arg10, long arg11, long arg12, long arg13, long arg14, long arg15, long arg16, long arg17, long arg18, long arg19, long arg20, long arg21, long arg22, long arg23) {"
+        }
+      ],
+      "name": "copy_reg",
+      "provenance": {
+        "binary_sha256": "58446bf503003e3b7d5868083b1fbe7fb97e17347b492582be895ccb720c0f6b",
+        "kind": "external",
+        "path": "binaries/bin_039.elf"
+      }
+    },
+    {
+      "functions": [
+        {
+          "entry_va": "0x253e0",
+          "final_violations": [
+            {
+              "kind": "never_defined",
+              "name": "local_4c8"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4cc"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4d0"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4d4"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4d8"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4dc"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4e0"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4e4"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4e8"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4ec"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4f0"
+            },
+            {
+              "kind": "never_defined",
+              "name": "local_4f4"
+            },
+            {
+              "kind": "never_defined",
+              "name": "stack_0"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var0"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var168"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var178"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var182"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var184"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var185"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var195"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var257"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var281"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var3"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var4"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var5"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var8"
+            },
+            {
+              "kind": "undefined_value",
+              "name": "of_61"
+            }
+          ],
+          "first_violation_passes": {
+            "never_defined:local_4c8": "promote_stack_locals",
+            "never_defined:local_4cc": "promote_stack_locals",
+            "never_defined:local_4d0": "promote_stack_locals",
+            "never_defined:local_4d4": "promote_stack_locals",
+            "never_defined:local_4d8": "promote_stack_locals",
+            "never_defined:local_4dc": "promote_stack_locals",
+            "never_defined:local_4e0": "promote_stack_locals",
+            "never_defined:local_4e4": "promote_stack_locals",
+            "never_defined:local_4e8": "promote_stack_locals",
+            "never_defined:local_4ec": "promote_stack_locals",
+            "never_defined:local_4f0": "promote_stack_locals",
+            "never_defined:local_4f4": "promote_stack_locals",
+            "never_defined:stack_0": "promote_stack_locals",
+            "never_defined:var0": "apply_role_names",
+            "never_defined:var168": "prepare_for_decbench",
+            "never_defined:var178": "prepare_for_decbench",
+            "never_defined:var182": "prepare_for_decbench",
+            "never_defined:var184": "prepare_for_decbench",
+            "never_defined:var185": "prepare_for_decbench",
+            "never_defined:var195": "prepare_for_decbench",
+            "never_defined:var257": "prepare_for_decbench",
+            "never_defined:var281": "apply_role_names",
+            "never_defined:var3": "apply_role_names",
+            "never_defined:var4": "apply_role_names",
+            "never_defined:var5": "apply_role_names",
+            "never_defined:var8": "apply_role_names",
+            "undefined_value:of_61": "lower"
+          },
+          "health": {
+            "declarations": 111,
+            "gotos": 54,
+            "invented_cfg_edges": 0,
+            "parameters": 5,
+            "physical_registers": 2,
+            "statements": 378,
+            "structure_fallbacks": 1,
+            "temporaries": 74,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 27,
+            "unresolved_transfers": 1
+          },
+          "health_event_count": 22,
+          "label": "yyparse",
+          "output_bytes": 16367,
+          "output_lines": 523,
+          "output_sha256": "f7a42be5c83f62f2cd362975e7d5a6d7646db03e0cd445bbb5b03df3f5f235d6",
+          "rendered_function": "sub_253e0",
+          "signature": "unsigned long sub_253e0(long * arg0, long arg1, long arg2, long arg3, unsigned int arg4) {"
+        }
+      ],
+      "name": "yyparse",
+      "provenance": {
+        "binary_sha256": "d37e886e88e0819d474b751beb9e6d80c26d4c713df1e7826668cb94ff1343eb",
+        "kind": "external",
+        "path": "binaries/bin_093.elf"
+      }
+    },
+    {
+      "functions": [
+        {
+          "entry_va": "0x80002f8",
+          "final_violations": [
+            {
+              "kind": "never_defined",
+              "name": "var0"
+            }
+          ],
+          "first_violation_passes": {
+            "never_defined:var0": "apply_role_names"
+          },
+          "health": {
+            "declarations": 3,
+            "gotos": 0,
+            "invented_cfg_edges": 0,
+            "parameters": 1,
+            "physical_registers": 0,
+            "statements": 12,
+            "structure_fallbacks": 0,
+            "temporaries": 2,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 1,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "console_getc",
+          "output_bytes": 738,
+          "output_lines": 19,
+          "output_sha256": "ba083da78267497c43227b87f047c1586ea20f36efd5a554cf7c95ecd7afe1b9",
+          "rendered_function": "sub_80002f8",
+          "signature": "unsigned int sub_80002f8(int * arg0) {"
+        }
+      ],
+      "name": "console_getc",
+      "provenance": {
+        "binary_sha256": "48e29a81cb175c3efef32895f9300a2a59679aa25837bafd452b000222538b99",
+        "kind": "external",
+        "path": "binaries/bin_110.elf"
+      }
+    },
+    {
+      "functions": [
+        {
+          "entry_va": "0x4800",
+          "final_violations": [
+            {
+              "kind": "never_defined",
+              "name": "var0"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var1"
+            }
+          ],
+          "first_violation_passes": {
+            "never_defined:var0": "apply_role_names",
+            "never_defined:var1": "apply_role_names"
+          },
+          "health": {
+            "declarations": 21,
+            "gotos": 1,
+            "invented_cfg_edges": 0,
+            "parameters": 0,
+            "physical_registers": 1,
+            "statements": 22,
+            "structure_fallbacks": 0,
+            "temporaries": 17,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 2,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "statdb_write",
+          "output_bytes": 1529,
+          "output_lines": 62,
+          "output_sha256": "3cda68f49461d35cee63609ee8ddaeda73401612c0c98de24d77cbc30362ca1f",
+          "rendered_function": "sub_4800",
+          "signature": "long sub_4800(void) {"
+        }
+      ],
+      "name": "statdb_write",
+      "provenance": {
+        "binary_sha256": "8b6cb29147ba1ac74df2a6f033bf928ba80d08b7d96c7f01c59ae4700654e9b3",
+        "kind": "external",
+        "path": "binaries/bin_174.elf"
+      }
+    },
+    {
+      "functions": [
+        {
+          "entry_va": "0x10f9",
+          "final_violations": [],
+          "first_violation_passes": {},
+          "health": {
+            "declarations": 0,
+            "gotos": 0,
+            "invented_cfg_edges": 0,
+            "parameters": 3,
+            "physical_registers": 0,
+            "statements": 7,
+            "structure_fallbacks": 0,
+            "temporaries": 0,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 0,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "addmul",
+          "output_bytes": 216,
+          "output_lines": 6,
+          "output_sha256": "04ad6bc3b3ee83dc480fc0353d51021b52c3725de6eb075824ad47fe5db62394",
+          "rendered_function": "addmul",
+          "signature": "long int addmul(long int arg0, long int arg1, long int arg2) {"
+        },
+        {
+          "entry_va": "0x1130",
+          "final_violations": [],
+          "first_violation_passes": {},
+          "health": {
+            "declarations": 1,
+            "gotos": 0,
+            "invented_cfg_edges": 0,
+            "parameters": 2,
+            "physical_registers": 0,
+            "statements": 7,
+            "structure_fallbacks": 0,
+            "temporaries": 1,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 0,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "shifts",
+          "output_bytes": 329,
+          "output_lines": 8,
+          "output_sha256": "db22f2b617706fb80811874dc31b5aacc71294a76b047ba629f14c3a1154c38b",
+          "rendered_function": "shifts",
+          "signature": "unsigned int shifts(unsigned int arg0, int arg1) {"
+        },
+        {
+          "entry_va": "0x114c",
+          "final_violations": [],
+          "first_violation_passes": {},
+          "health": {
+            "declarations": 1,
+            "gotos": 0,
+            "invented_cfg_edges": 0,
+            "parameters": 2,
+            "physical_registers": 0,
+            "statements": 7,
+            "structure_fallbacks": 0,
+            "temporaries": 1,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 0,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "signs",
+          "output_bytes": 537,
+          "output_lines": 8,
+          "output_sha256": "3c24177f1337b11d3b24a240370b7b2cb6387aa70fe0f9e4d61285ea8e583369",
+          "rendered_function": "signs",
+          "signature": "int signs(int arg0, int arg1) {"
+        }
+      ],
+      "name": "arith-gcc-O0",
+      "provenance": {
+        "binary_sha256": "10e01be9fb52e44b3f4040d35bc21ee72e1cedf096d68f43151e0f0e4c91ba53",
+        "compiler": "gcc",
+        "compiler_version": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+        "flags": [
+          "-shared",
+          "-fPIC",
+          "-g",
+          "-O0"
+        ],
+        "kind": "build",
+        "source": "tests/decbench_corpus/src/arith.c",
+        "source_sha256": "d83d502fccb4e0db7e18bc69c17afec1e3f75a782fa8c84124183dceb013120c"
+      }
+    },
+    {
+      "functions": [
+        {
+          "entry_va": "0x1400",
+          "final_violations": [
+            {
+              "kind": "never_defined",
+              "name": "var1"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var2"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var3"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var4"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var6"
+            }
+          ],
+          "first_violation_passes": {
+            "never_defined:var1": "apply_role_names",
+            "never_defined:var2": "apply_role_names",
+            "never_defined:var3": "apply_role_names",
+            "never_defined:var4": "apply_role_names",
+            "never_defined:var6": "apply_role_names"
+          },
+          "health": {
+            "declarations": 54,
+            "gotos": 54,
+            "invented_cfg_edges": 0,
+            "parameters": 2,
+            "physical_registers": 1,
+            "statements": 253,
+            "structure_fallbacks": 1,
+            "temporaries": 44,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 5,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "ackermann",
+          "output_bytes": 6126,
+          "output_lines": 345,
+          "output_sha256": "b473dd28590e92dbfa30ff57117ae8942e9ac1ec2b35eed0377fd356441e1ee4",
+          "rendered_function": "ackermann",
+          "signature": "long int ackermann(long int arg0, long int arg1) {"
+        },
+        {
+          "entry_va": "0x1100",
+          "final_violations": [
+            {
+              "kind": "never_defined",
+              "name": "var0"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var1"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var2"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var3"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var5"
+            }
+          ],
+          "first_violation_passes": {
+            "never_defined:var0": "apply_role_names",
+            "never_defined:var1": "apply_role_names",
+            "never_defined:var2": "apply_role_names",
+            "never_defined:var3": "apply_role_names",
+            "never_defined:var5": "apply_role_names"
+          },
+          "health": {
+            "declarations": 110,
+            "gotos": 18,
+            "invented_cfg_edges": 0,
+            "parameters": 1,
+            "physical_registers": 1,
+            "statements": 259,
+            "structure_fallbacks": 1,
+            "temporaries": 82,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 5,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "fib",
+          "output_bytes": 10784,
+          "output_lines": 389,
+          "output_sha256": "092dcb7b3957488c7757268ad1d7eb24d9fafca8367672818ab7b5c720c1ec1b",
+          "rendered_function": "fib",
+          "signature": "long int fib(int arg0) {"
+        }
+      ],
+      "name": "recursion-gcc-O2",
+      "provenance": {
+        "binary_sha256": "bb1188c3fbeee6ca7650f80e5e3206cf48aef3765e00c2bcb71e9c3e05aa463e",
+        "compiler": "gcc",
+        "compiler_version": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+        "flags": [
+          "-shared",
+          "-fPIC",
+          "-g",
+          "-O2"
+        ],
+        "kind": "build",
+        "source": "tests/decbench_corpus/src/recursion.c",
+        "source_sha256": "977f09fdda6244cb50ddb47bd956ea0568a35e08f2144b807c75f2d864277290"
+      }
+    },
+    {
+      "functions": [
+        {
+          "entry_va": "0x1140",
+          "final_violations": [],
+          "first_violation_passes": {},
+          "health": {
+            "declarations": 1,
+            "gotos": 1,
+            "invented_cfg_edges": 0,
+            "parameters": 2,
+            "physical_registers": 0,
+            "statements": 13,
+            "structure_fallbacks": 1,
+            "temporaries": 0,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 0,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "list_find",
+          "output_bytes": 608,
+          "output_lines": 25,
+          "output_sha256": "163a42ebdb1af9102efe4a6d5a00ead60b7bd87db9d202d3e3528c2141c90c9c",
+          "rendered_function": "list_find",
+          "signature": "node * list_find(node * arg0, int arg1) {"
+        },
+        {
+          "entry_va": "0x1100",
+          "final_violations": [],
+          "first_violation_passes": {},
+          "health": {
+            "declarations": 1,
+            "gotos": 0,
+            "invented_cfg_edges": 0,
+            "parameters": 1,
+            "physical_registers": 0,
+            "statements": 8,
+            "structure_fallbacks": 0,
+            "temporaries": 0,
+            "uncovered_cfg_edges": 0,
+            "undefined_uses": 0,
+            "unresolved_transfers": 0
+          },
+          "health_event_count": 22,
+          "label": "list_sum",
+          "output_bytes": 483,
+          "output_lines": 20,
+          "output_sha256": "b883719f4bd6bfb3f4ff955f2e0df787e529b39800de3832f83038b4e349992e",
+          "rendered_function": "list_sum",
+          "signature": "int list_sum(const node * arg0) {"
+        }
+      ],
+      "name": "linkedlist-clang-O0",
+      "provenance": {
+        "binary_sha256": "3a10c8e72adc9691227aa094d10128a101b266b8c7d97e9f681b723e9bb932e7",
+        "compiler": "clang",
+        "compiler_version": "Ubuntu clang version 21.1.8 (6ubuntu1)",
+        "flags": [
+          "-shared",
+          "-fPIC",
+          "-g",
+          "-O0"
+        ],
+        "kind": "build",
+        "source": "tests/decbench_corpus/src/linkedlist.c",
+        "source_sha256": "bd9c934db1c7f83e3aa92b904283c4e4fbf379966356864fb2dd52c78afc89e3"
+      }
+    }
+  ],
+  "git": {
+    "dirty": false,
+    "revision": "f163e3473b1f881a855b226bec7c26a1ae9b4977"
+  },
+  "schema": "glaurung-output-canary-report-v1"
+}

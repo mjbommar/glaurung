@@ -546,3 +546,53 @@ Validation at this checkpoint: 1,880/1,880 Rust library tests pass, all 13 focus
 profile/health Python tests pass, focused Ruff and formatting are clean, and the
 remote branch contains the instrumentation commits. Phase 0 now has one remaining
 task: materialize the seven named score/output canaries.
+
+## 23:55–00:20 — Phase 0 closure: named output canaries
+
+The remaining Phase 0 task is now a checked, executable gate rather than a list of
+interesting names. `tests/decompiler_output_canaries/manifest.json` pins four
+official sample-set binaries by SHA-256 and three locally built cells by source
+hash, exact compiler version, and flags. The seven cases cover eleven concrete
+functions:
+
+- official: `copy_reg`, `yyparse`, `console_getc`, and `statdb_write`;
+- `arith:gcc:O0`: `addmul`, `shifts`, and `signs`;
+- `recursion:gcc:O2`: `ackermann` and `fib`; and
+- `linkedlist:clang:O0`: `list_find` and `list_sum`.
+
+For each function the baseline records the resolved entry, signature, byte and
+line count, output SHA-256, final health counters, final definition violations,
+and first-introducing pass. Two complete captures were byte-identical. The final
+baseline is rooted at clean revision `f163e34`, has SHA-256
+`8cd9624620ef55b7133aa2117dbe303158c0129c9aa8b81de42e187ec03728a4`, and the
+check regenerates all eleven observations.
+
+The gate preserves the defects we intend to repair as visible evidence rather
+than normalizing them away. `copy_reg` currently has 24 parameters, 175
+declarations, 91 gotos, 593 statements, one physical register, and six undefined
+uses. `yyparse` has five parameters, 111 declarations, 54 gotos, 378 statements,
+two physical registers, and 27 undefined uses. `console_getc` still renders
+`unsigned int sub_80002f8(int * arg0)` instead of `char console_getc(int wait)`,
+and `statdb_write` still renders `long sub_4800(void)` with one goto. All eleven
+functions nevertheless have zero uncovered and zero invented CFG edges, so later
+improvements can distinguish output simplification/type repair from lost control
+flow.
+
+`tools/decompiler_output_canaries.py` fails on missing external inputs, source or
+binary hash drift, compiler drift, missing symbols, empty output, absent health
+events, or any baseline field change. It reports the exact case, function, and
+field that moved. Baseline refresh is therefore an explicit review action, not an
+automatic side effect of a test run.
+
+With the score ledger, pass attribution, resource baseline, and focused canaries
+all materialized, Phase 0 is complete. The next implementation phase is the
+single-owner `ProgramImage`/`ProgramSession` seam; its first measured acceptance
+target is reducing one session from 188–22,873 base parses to exactly one while
+keeping every canary output byte-identical.
+
+The repository-wide Python gate completed after the canary baseline was added.
+It retained exactly the same four unrelated `test_suspicious_symbols` failures
+already documented above (the riscv64, armhf, arm64, and exported-riscv64
+`suspicious_win-*` binaries contain none of the APIs the test requires, including
+under its raw-byte fallback). No new failure appeared. The focused canary suite is
+4/4 green, and the combined ledger/health/profile/canary suite is 26/26 green.

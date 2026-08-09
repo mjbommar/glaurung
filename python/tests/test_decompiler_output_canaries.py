@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 TOOL = ROOT / "tools/decompiler_output_canaries.py"
+BASELINE = ROOT / "tests/decompiler_output_canaries/baseline.json"
 
 
 def _load_tool():
@@ -82,3 +83,32 @@ def test_report_comparison_names_the_exact_changed_function(canary_module):
     differences = canary_module.compare_reports(current, expected)
 
     assert differences == ["x:f output_bytes: 10 -> 11"]
+
+
+def test_checked_baseline_covers_every_named_canary_and_real_function():
+    report = json.loads(BASELINE.read_text(encoding="utf-8"))
+
+    assert report["git"] == {
+        "dirty": False,
+        "revision": "f163e3473b1f881a855b226bec7c26a1ae9b4977",
+    }
+    expected_functions = {
+        "copy_reg": ["copy_reg"],
+        "yyparse": ["yyparse"],
+        "console_getc": ["console_getc"],
+        "statdb_write": ["statdb_write"],
+        "arith-gcc-O0": ["addmul", "shifts", "signs"],
+        "recursion-gcc-O2": ["ackermann", "fib"],
+        "linkedlist-clang-O0": ["list_find", "list_sum"],
+    }
+    assert {
+        case["name"]: [function["label"] for function in case["functions"]]
+        for case in report["cases"]
+    } == expected_functions
+    for case in report["cases"]:
+        assert case["provenance"]["binary_sha256"]
+        for function in case["functions"]:
+            assert function["output_sha256"]
+            assert function["health_event_count"] >= 20
+            assert function["health"]["uncovered_cfg_edges"] == 0
+            assert function["health"]["invented_cfg_edges"] == 0
