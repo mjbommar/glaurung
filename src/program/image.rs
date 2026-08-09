@@ -16,6 +16,40 @@ struct FileMapping {
     file_start: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IndexedSection {
+    name: String,
+    address: u64,
+    file_range: Range<usize>,
+}
+
+/// A file-backed object section borrowed from an indexed [`ProgramImage`].
+///
+/// The section metadata and byte range are validated when the image is built,
+/// so consumers can inspect section data without parsing the object again.
+#[derive(Debug, Clone, Copy)]
+pub struct ProgramSection<'a> {
+    section: &'a IndexedSection,
+    bytes: &'a [u8],
+}
+
+impl ProgramSection<'_> {
+    /// Object-declared section name, or an empty string when unnamed.
+    pub fn name(&self) -> &str {
+        &self.section.name
+    }
+
+    /// Object-declared virtual address.
+    pub fn address(&self) -> u64 {
+        self.section.address
+    }
+
+    /// Exact file-backed section bytes.
+    pub fn data(&self) -> &[u8] {
+        &self.bytes[self.section.file_range.clone()]
+    }
+}
+
 impl FileMapping {
     fn new(va_start: u64, size: u64, file_start: u64) -> Option<Self> {
         if size == 0 {
@@ -81,6 +115,7 @@ pub struct ProgramImage {
     segment_mappings: Arc<[FileMapping]>,
     section_mappings: Arc<[FileMapping]>,
     code_mappings: Arc<[FileMapping]>,
+    sections: Arc<[IndexedSection]>,
     executable_ranges: Arc<[Range<u64>]>,
     defined_text_symbols_by_name: Arc<HashMap<String, u64>>,
     defined_symbols_by_va: Arc<HashMap<u64, String>>,
@@ -128,6 +163,7 @@ impl ProgramImage {
 
         let mut section_mappings = Vec::new();
         let mut code_mappings = Vec::new();
+        let mut sections = Vec::new();
         let mut executable_ranges = Vec::new();
         for section in object.sections() {
             let address = section.address();
@@ -140,6 +176,19 @@ impl ProgramImage {
             let Some((file_start, file_size)) = section.file_range() else {
                 continue;
             };
+            if let (Ok(file_start), Ok(file_size)) =
+                (usize::try_from(file_start), usize::try_from(file_size))
+            {
+                if let Some(file_end) = file_start.checked_add(file_size) {
+                    if file_end <= bytes.len() {
+                        sections.push(IndexedSection {
+                            name: section.name().unwrap_or("").to_string(),
+                            address,
+                            file_range: file_start..file_end,
+                        });
+                    }
+                }
+            }
             if is_code && size != 0 {
                 if let Some(end) = address.checked_add(size) {
                     executable_ranges.push(address..end);
@@ -191,6 +240,7 @@ impl ProgramImage {
             segment_mappings: segment_mappings.into(),
             section_mappings: section_mappings.into(),
             code_mappings: code_mappings.into(),
+            sections: sections.into(),
             executable_ranges: executable_ranges.into(),
             defined_text_symbols_by_name: Arc::new(defined_text_symbols_by_name),
             defined_symbols_by_va: Arc::new(defined_symbols_by_va),
@@ -245,6 +295,14 @@ impl ProgramImage {
     /// Executable section ranges in object order.
     pub fn executable_ranges(&self) -> impl Iterator<Item = &Range<u64>> {
         self.executable_ranges.iter()
+    }
+
+    /// Iterate all valid file-backed sections in object order.
+    pub fn sections(&self) -> impl Iterator<Item = ProgramSection<'_>> {
+        self.sections.iter().map(|section| ProgramSection {
+            section,
+            bytes: self.bytes(),
+        })
     }
 
     /// Translate a code VA, preferring executable sections for relocatable files.

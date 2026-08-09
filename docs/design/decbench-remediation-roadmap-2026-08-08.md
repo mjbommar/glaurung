@@ -261,6 +261,24 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   measured small-x86 query from 3,679 to 47 object parses (98.7%). The full
   five-shape rerun reduced parses from 188–22,873 to 22–55; cold time improved
   1.3–6.9%, warm median improved 2.0–16.5%, and output hashes remained stable.
+- [x] Indexed validated file-backed sections once in `ProgramImage` and routed
+  string-pool and read-only-data collection through borrowed image views,
+  removing two more repeated whole-object parses from all four Python entry
+  points. Real ELF, ARM32 ELF, PE, and Mach-O fixtures prove parser parity. The
+  measured small-x86 query is now 45 parses with identical output; do not mark
+  the one-parse acceptance criterion complete while the other 44 owners remain.
+- [x] Added a conservative ARM alignment-save classifier at the LLIR
+  input-definition seam: a proven balanced `push {r3, lr}` no longer invents a
+  fourth source parameter, while a restored-and-consumed `r3` remains live-in
+  evidence. A conditional-exit near miss is also rejected. The focused
+  `arm_input_evidence` module is covered by a checked-in real ARM binary plus
+  both controls and advances the value-keyed prototype work without adding an
+  AST signature heuristic or another subsystem to `value_number`.
+- [ ] Recover pass-through arguments at indirect calls from value-keyed target
+  and prototype evidence. The alignment repair narrows real `serialWrite` from
+  four parameters to one but leaves its second source argument unknown and its
+  type score at zero; treating every untouched call register as an argument is
+  explicitly rejected as unsound.
 - [ ] Move relocation, read-only-range, debug, environment, and remaining
   object-backed facts behind the image/session boundary and reach one base parse.
 - [ ] Add `ProgramSession`, shared discovery/fact caches, and reusable Python

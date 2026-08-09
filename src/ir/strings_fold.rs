@@ -47,70 +47,75 @@ pub fn collect_string_pool(data: &[u8]) -> HashMap<u64, String> {
         return out;
     };
     for section in obj.sections() {
-        let name = section.name().unwrap_or("").to_ascii_lowercase();
-        let rodata_like = name == ".rodata"
-            || name == ".rdata"
-            || name.contains("rodata")
-            || name.contains("cstring")
-            || name == "__cstring"
-            || name == "__text.__cstring";
-        if !rodata_like {
-            continue;
-        }
-        let base = section.address();
         let Ok(bytes) = section.data() else {
             continue;
         };
-        // Walk for null-terminated printable runs.
-        let mut cursor = 0usize;
-        while cursor < bytes.len() {
-            // Skip NULs until the next candidate string start.
-            while cursor < bytes.len() && bytes[cursor] == 0 {
-                cursor += 1;
-            }
-            let start = cursor;
-            // Gather printable characters until NUL or section end.
-            while cursor < bytes.len() && bytes[cursor] != 0 {
-                cursor += 1;
-            }
-            let run = &bytes[start..cursor];
-            if run.len() < MIN_STRING_LEN {
-                continue;
-            }
-            if !is_printable_cstring(run) {
-                continue;
-            }
-            let s = match std::str::from_utf8(run) {
-                Ok(s) => s.to_string(),
-                Err(_) => continue,
-            };
-            let va = base.saturating_add(start as u64);
-            out.entry(va).or_insert(s);
-
-            // Index every suffix of the run as well, because linkers merge a
-            // string that is a suffix of another into the same storage. In a
-            // real `getconf`, `"%s = %lu\n"` sits at 0x3000 and `"%lu\n"` is
-            // *the same bytes* at 0x3005 — there is no separate copy. Indexing
-            // only run starts left every such reference rendering as a bare
-            // integer (`printf((const char *)(0x3005), ...)`), which is most of
-            // why string recovery read 1.52 per function against Ghidra's 5.63
-            // on x86-64, where addresses already arrive complete.
-            //
-            // Suffixes are only indexed down to `MIN_STRING_LEN`, so this adds
-            // at most `run.len()` entries and cannot manufacture one- or
-            // two-character "strings" out of arbitrary integers.
-            let mut offset = 1usize;
-            while offset + MIN_STRING_LEN <= run.len() {
-                let tail = &run[offset..];
-                if let Ok(t) = std::str::from_utf8(tail) {
-                    let tail_va = base.saturating_add((start + offset) as u64);
-                    out.entry(tail_va).or_insert_with(|| t.to_string());
-                }
-                offset += 1;
-            }
-        }
+        collect_section_strings(
+            &mut out,
+            section.name().unwrap_or(""),
+            section.address(),
+            bytes,
+        );
     }
     out
+}
+
+/// Build a VA to C-string map from an already indexed program image.
+pub fn collect_string_pool_from_image(
+    image: &crate::program::image::ProgramImage,
+) -> HashMap<u64, String> {
+    let mut out = HashMap::new();
+    for section in image.sections() {
+        collect_section_strings(&mut out, section.name(), section.address(), section.data());
+    }
+    out
+}
+
+fn collect_section_strings(out: &mut HashMap<u64, String>, name: &str, base: u64, bytes: &[u8]) {
+    let name = name.to_ascii_lowercase();
+    let rodata_like = name == ".rodata"
+        || name == ".rdata"
+        || name.contains("rodata")
+        || name.contains("cstring")
+        || name == "__cstring"
+        || name == "__text.__cstring";
+    if !rodata_like {
+        return;
+    }
+
+    // Walk for null-terminated printable runs.
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        // Skip NULs until the next candidate string start.
+        while cursor < bytes.len() && bytes[cursor] == 0 {
+            cursor += 1;
+        }
+        let start = cursor;
+        // Gather printable characters until NUL or section end.
+        while cursor < bytes.len() && bytes[cursor] != 0 {
+            cursor += 1;
+        }
+        let run = &bytes[start..cursor];
+        if run.len() < MIN_STRING_LEN || !is_printable_cstring(run) {
+            continue;
+        }
+        let Ok(string) = std::str::from_utf8(run) else {
+            continue;
+        };
+        let va = base.saturating_add(start as u64);
+        out.entry(va).or_insert_with(|| string.to_string());
+
+        // Index suffixes too: linkers can merge one string into another's tail.
+        let mut offset = 1usize;
+        while offset + MIN_STRING_LEN <= run.len() {
+            let tail = &run[offset..];
+            if let Ok(string) = std::str::from_utf8(tail) {
+                let tail_va = base.saturating_add((start + offset) as u64);
+                out.entry(tail_va).or_insert_with(|| string.to_string());
+            }
+            offset += 1;
+        }
+    }
 }
 
 fn is_printable_cstring(bytes: &[u8]) -> bool {
@@ -490,6 +495,20 @@ mod tests {
                 .chars()
                 .all(|c| c == '\t' || c == '\n' || c == '\r' || (' '..='~').contains(&c)));
         }
+    }
+
+    #[test]
+    fn indexed_image_string_pool_matches_the_legacy_collector() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2");
+        let data = std::fs::read(path).expect("read checked-in ELF");
+        let image = crate::program::image::ProgramImage::from_bytes(data.clone())
+            .expect("index checked-in ELF");
+
+        assert_eq!(
+            collect_string_pool_from_image(&image),
+            collect_string_pool(&data)
+        );
     }
 
     /// Linkers merge a string that is a suffix of another into shared storage,

@@ -914,8 +914,8 @@ fn decompile_at_py(
         };
     }
     dp!("lower");
-    let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
+    let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
@@ -1146,8 +1146,8 @@ fn decompile_range_at_py(
     // hoisting them is order-preserving.
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
+    let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
@@ -2564,8 +2564,8 @@ fn decompile_all_py(
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
+    let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
@@ -2777,8 +2777,8 @@ fn decompile_many_py(
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let str_pool = crate::ir::strings_fold::collect_string_pool(&data);
-    let readonly_data = crate::ir::readonly_fold::collect_readonly_data(&data);
+    let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
+    let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let mut callee_layout_cache = std::collections::HashMap::new();
     // PDB-only public-symbol map for the `// PDB:` provenance comment; built

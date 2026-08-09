@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use super::image::{ProgramImage, ProgramImageError};
 use crate::core::binary::{Arch, Format};
+use object::{Object, ObjectSection};
 
 fn hello_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -152,4 +153,73 @@ fn llir_lifting_reuses_the_owned_image_without_changing_instructions() {
         crate::ir::lift_function::lift_function_from_image(&image, function, Arch::X86_64);
 
     assert_eq!(indexed, legacy);
+}
+
+#[test]
+fn indexed_sections_reuse_exact_file_backed_rodata_without_reparsing() {
+    let data = std::fs::read(hello_binary()).expect("read real ELF");
+    let object = crate::decompile::profile::parse_object(&data).expect("parse control ELF");
+    let expected = object
+        .sections()
+        .find(|section| section.name() == Ok(".rodata"))
+        .expect("control ELF has .rodata");
+    let expected_address = expected.address();
+    let expected_data = expected.data().expect("read control .rodata").to_vec();
+    drop(object);
+
+    let image = ProgramImage::from_bytes(data).expect("index real ELF");
+    let actual = image
+        .sections()
+        .find(|section| section.name() == ".rodata")
+        .expect("indexed image retains .rodata");
+
+    assert_eq!(actual.address(), expected_address);
+    assert_eq!(actual.data(), expected_data);
+}
+
+#[test]
+fn indexed_section_bytes_match_the_parser_across_object_formats() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let binaries = [
+        hello_binary(),
+        root.join("samples/binaries/platforms/linux/amd64/cross/armhf/hello-armhf-gcc"),
+        root.join(
+            "samples/binaries/platforms/windows/i386/export/windows/i686/O0/hello-c-mingw32-O0.exe",
+        ),
+        root.join("samples/binaries/platforms/darwin/amd64/export/native/multi_import-macho"),
+    ];
+
+    for binary in binaries {
+        let data = std::fs::read(&binary).expect("read checked-in object");
+        let object = crate::decompile::profile::parse_object(&data).expect("parse control object");
+        let expected = object
+            .sections()
+            .filter_map(|section| {
+                let (offset, size) = section.file_range()?;
+                let end = offset.checked_add(size)?;
+                (end <= data.len() as u64).then(|| {
+                    (
+                        section.name().unwrap_or("").to_string(),
+                        section.address(),
+                        section.data().expect("read control section").to_vec(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        drop(object);
+
+        let image = ProgramImage::from_bytes(data).expect("index checked-in object");
+        let actual = image
+            .sections()
+            .map(|section| {
+                (
+                    section.name().to_string(),
+                    section.address(),
+                    section.data().to_vec(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, expected, "{}", binary.display());
+    }
 }

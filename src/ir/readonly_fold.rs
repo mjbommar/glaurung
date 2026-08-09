@@ -43,28 +43,53 @@ pub fn collect_readonly_data(data: &[u8]) -> ReadonlyData {
     let little_endian = object.is_little_endian();
     let mut regions = Vec::new();
     for section in object.sections() {
-        let name = section.name().unwrap_or("").to_ascii_lowercase();
-        let readonly_data = name == ".rodata"
-            || name == ".rdata"
-            || name.contains("rodata")
-            || name.contains("__const")
-            || name == "__text.__const";
-        if !readonly_data {
-            continue;
-        }
         let Ok(bytes) = section.data() else {
             continue;
         };
-        if !bytes.is_empty() {
-            regions.push(ReadonlyRegion {
-                base: section.address(),
-                bytes: bytes.to_vec(),
-            });
-        }
+        collect_readonly_region(
+            &mut regions,
+            section.name().unwrap_or(""),
+            section.address(),
+            bytes,
+        );
     }
     ReadonlyData {
         regions,
         little_endian,
+    }
+}
+
+/// Collect constant-data sections from an already indexed program image.
+pub fn collect_readonly_data_from_image(
+    image: &crate::program::image::ProgramImage,
+) -> ReadonlyData {
+    let mut regions = Vec::new();
+    for section in image.sections() {
+        collect_readonly_region(
+            &mut regions,
+            section.name(),
+            section.address(),
+            section.data(),
+        );
+    }
+    ReadonlyData {
+        regions,
+        little_endian: image.endianness() == crate::core::binary::Endianness::Little,
+    }
+}
+
+fn collect_readonly_region(regions: &mut Vec<ReadonlyRegion>, name: &str, base: u64, bytes: &[u8]) {
+    let name = name.to_ascii_lowercase();
+    let readonly_data = name == ".rodata"
+        || name == ".rdata"
+        || name.contains("rodata")
+        || name.contains("__const")
+        || name == "__text.__const";
+    if readonly_data && !bytes.is_empty() {
+        regions.push(ReadonlyRegion {
+            base,
+            bytes: bytes.to_vec(),
+        });
     }
 }
 
@@ -582,6 +607,24 @@ mod fallthrough_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_image_readonly_regions_match_the_legacy_collector() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2");
+        let bytes = std::fs::read(path).expect("read checked-in ELF");
+        let image = crate::program::image::ProgramImage::from_bytes(bytes.clone())
+            .expect("index checked-in ELF");
+        let expected = collect_readonly_data(&bytes);
+        let actual = collect_readonly_data_from_image(&image);
+
+        assert_eq!(actual.little_endian, expected.little_endian);
+        assert_eq!(actual.regions.len(), expected.regions.len());
+        for (actual, expected) in actual.regions.iter().zip(&expected.regions) {
+            assert_eq!(actual.base, expected.base);
+            assert_eq!(actual.bytes, expected.bytes);
+        }
+    }
 
     #[test]
     fn direct_readonly_scalar_load_becomes_a_portable_constant() {

@@ -133,11 +133,12 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
     // the copy is an ordinary `Assign`, so the `Op::Call` guard below never sees
     // it, and its source is the bare (version-zero) live-in name.
     let really_read = architecturally_read_names(lf);
+    let alignment_padding = crate::ir::arm_input_evidence::ArmAlignmentPadding::classify(lf, cc);
     // slot -> is_param (true = first touch was a read). First touch wins.
     let mut decided: std::collections::HashMap<usize, bool> = std::collections::HashMap::new();
     let base_slot = |name: &str| slot_of.get(name.split('#').next().unwrap_or(name)).copied();
-    for block in &lf.blocks {
-        for ins in &block.instrs {
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, ins) in block.instrs.iter().enumerate() {
             // `xor reg, reg` and `sub reg, reg` are architectural zero idioms:
             // their result does not depend on the incoming register value even
             // though the generic Bin representation has two syntactic uses.
@@ -198,6 +199,15 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
             // Reads first, then the def — a use and a def of the same slot in one
             // op (`rdx = rdx + 1`) counts as a read (the incoming value is used).
             for u in &uses {
+                if alignment_padding.excludes_use(
+                    InstrAddr {
+                        block_idx,
+                        instr_idx,
+                    },
+                    u,
+                ) {
+                    continue;
+                }
                 if let VReg::Phys(n) = u {
                     if let Some(slot) = base_slot(n) {
                         decided.entry(slot).or_insert(true);
@@ -3993,6 +4003,108 @@ mod tests {
             !params.contains(&2),
             "zero-initialized rdx is scratch, not a parameter: {:?}",
             params
+        );
+    }
+
+    #[test]
+    fn real_arm_alignment_save_does_not_invent_four_parameters() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/cross/armhf/hello-armhf-gcc");
+        let image = crate::program::image::ProgramImage::from_path(&path)
+            .expect("index checked-in ARM ELF");
+        let budgets = crate::analysis::cfg::Budgets {
+            max_functions: 1,
+            max_blocks: 16,
+            max_instructions: 128,
+            timeout_ms: 1_000,
+            total_timeout_ms: 0,
+        };
+        let (functions, _) =
+            crate::analysis::cfg::analyze_functions_image_with_seeds(&image, &budgets, &[0x5d4]);
+        let function = functions
+            .iter()
+            .find(|function| function.entry_point.value == 0x5d4)
+            .expect("discover real _fini");
+        let lifted = crate::ir::lift_function::lift_function_from_image(
+            &image,
+            function,
+            crate::core::binary::Arch::ARM,
+        )
+        .expect("lift real _fini");
+
+        assert_eq!(
+            live_in_arg_slots_llir(&lifted, CallConv::ArmHardFloat),
+            HashSet::new(),
+            "the balanced push/pop of caller-saved r3 is stack alignment, not arg3"
+        );
+    }
+
+    #[test]
+    fn arm_r3_save_restored_and_used_remains_parameter_evidence() {
+        use crate::ir::types::MemOp;
+
+        let saved_r3 = MemOp::plain(Some(VReg::phys("sp")), None, 0, 0, 4);
+        let saved_lr = MemOp::plain(Some(VReg::phys("sp")), None, 0, 4, 4);
+        let mut function = mk(vec![
+            Op::Store {
+                addr: saved_r3.clone(),
+                src: Value::Reg(VReg::phys("r3")),
+            },
+            Op::Store {
+                addr: saved_lr,
+                src: Value::Reg(VReg::phys("lr")),
+            },
+            Op::Load {
+                dst: VReg::phys("r3"),
+                addr: saved_r3,
+            },
+            Op::Assign {
+                dst: VReg::phys("r0"),
+                src: Value::Reg(VReg::phys("r3")),
+            },
+            Op::Return,
+        ]);
+        // Both stores are the expansion of one `push {r3, lr}` instruction.
+        function.blocks[0].instrs[1].va = function.blocks[0].instrs[0].va;
+
+        assert!(
+            live_in_arg_slots_llir(&function, CallConv::ArmHardFloat).contains(&3),
+            "a restored value consumed by the function is not alignment padding"
+        );
+    }
+
+    #[test]
+    fn arm_r3_save_with_a_conditional_exit_is_not_proven_alignment_padding() {
+        use crate::ir::types::MemOp;
+
+        let saved_r3 = MemOp::plain(Some(VReg::phys("sp")), None, 0, 0, 4);
+        let saved_lr = MemOp::plain(Some(VReg::phys("sp")), None, 0, 4, 4);
+        let mut function = mk(vec![
+            Op::Store {
+                addr: saved_r3.clone(),
+                src: Value::Reg(VReg::phys("r3")),
+            },
+            Op::Store {
+                addr: saved_lr,
+                src: Value::Reg(VReg::phys("lr")),
+            },
+            Op::Load {
+                dst: VReg::phys("r3"),
+                addr: saved_r3,
+            },
+            Op::CondJump {
+                cond: VReg::phys("z"),
+                inverted: false,
+                target: 0x2000,
+            },
+            Op::Return,
+        ]);
+        // Both stores are the expansion of one `push {r3, lr}` instruction.
+        function.blocks[0].instrs[1].va = function.blocks[0].instrs[0].va;
+
+        assert!(
+            live_in_arg_slots_llir(&function, CallConv::ArmHardFloat).contains(&3),
+            "a conditional control-flow suffix is not a proven balanced exit"
         );
     }
 

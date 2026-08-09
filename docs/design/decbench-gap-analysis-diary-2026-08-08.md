@@ -1,10 +1,12 @@
 # Glaurung DecBench gap-analysis diary — 2026-08-08
 
-**Status:** evidence complete for the pinned submission candidate
+**Status:** original pinned evidence complete; fresh `45b233cf` replay in progress
 
 **Companion plan:** [decbench-remediation-roadmap-2026-08-08.md](decbench-remediation-roadmap-2026-08-08.md)
 
 **Glaurung:** `c1cfdc97fdf51a5028aff5f7507033d70d16ad42`
+
+**Current replay candidate:** `45b233cf818ad07454bf87a1feedd7b2af90a75d`
 
 **DecBench main:** `0a4e85bc8a0a1ff5246f6299697f59d30634fcaf`
 
@@ -648,3 +650,123 @@ Ruff formatting and lint are clean through the repository's `uvx` tool path.
 Targeted `ty` remains non-green only on its three existing missing-attribute
 diagnostics for `pytest.fixture`, `pytest.mark`, and `pytest.raises`; it reports
 no diagnostic in the new test body.
+
+## 00:50–01:05 — fresh-corpus replay and the next parse owner
+
+The first image increment was committed as `45b233cf818ad07454bf87a1feedd7b2af90a75d`.
+I discarded the prior score artifacts as evidence for that revision and rebuilt
+all 122 available project/optimization cells. The rebuilt tree contains 880
+binaries and 11,909 preprocessed `.i`/`.ii` sources. The official 250-function
+membership was resolved independently against its manifest before decompilation;
+all 250 keys map to ground-truth functions. Two evaluation lanes then started:
+
+- the authoritative sample-set lane imports fresh raw output from all 224
+  stripped kit binaries into a clean copy of the pinned official unstripped
+  source/DWARF tree;
+- a diagnostic lane runs the same Glaurung revision over the rebuilt modern
+  corpus to expose compiler- and corpus-shape drift, without presenting those
+  results as directly comparable to the public board.
+
+The raw sample-set extraction returned 250/250 requested functions from 224/224
+binaries with zero invocation failures. The package SHA-256 is
+`c08c3985591b97dc6f9ff0fa7602bf5aacfb94feb14829842d4b86231d485096`.
+The scorer must use the separate unstripped tree: the eval-kit binaries are
+intentionally stripped and therefore cannot provide their own DWARF ground
+truth. This distinction is now an explicit replay invariant rather than an
+ambient evaluator assumption.
+
+The remaining object parses after `ProgramImage` were traced to two whole-image
+collectors in every Python entry point. `collect_string_pool` and
+`collect_readonly_data` reopened the object even though the image already owned
+the validated section ranges. The next additive increment indexes file-backed
+section name, address, and byte range once in `ProgramImage`, exposes borrowed
+`ProgramSection` views, and gives both collectors image-based adapters sharing
+their existing section semantics. Real ELF, ARM32 ELF, PE, and Mach-O fixtures
+prove exact parser parity, while the legacy byte APIs remain compatibility
+adapters. This removes two repeated base parses per decompilation without adding
+another object owner.
+
+## 01:05–01:20 — ARM32 alignment padding is not argument evidence
+
+The fresh official trace exposed a concrete type-recovery defect in
+`cleanflight:clang:O0:serialWrite`. Its source contract is
+`void serialWrite(serialPort_t *instance, uint8_t ch)`, but stripped Glaurung
+rendered four parameters:
+
+```c
+int *sub_80101b4(int *arg0, long arg1, long arg2, int *arg3)
+```
+
+The machine function begins with Thumb `push {r3, lr}` and ends with the balanced
+restore. GCC is using caller-saved `r3` only as four bytes of padding to preserve
+the ARM ABI's eight-byte public stack alignment. The LLIR live-in scan treated
+the initial store of `r3` as a genuine read, selected argument slot 3, and the C
+signature planner filled every positional slot through `arg3`. This is a general
+machine-model boundary defect: a storage read is not necessarily a source-level
+function input.
+
+The checked-in real ARM fixture `hello-armhf-gcc:_fini @ 0x5d4` reproduces the
+same `push {r3, lr}` / `pop {r3, pc}` shape and went RED with inferred slot set
+`{3}`. The repair suppresses only the particular `r3` store when the same LLIR
+block proves all of the following: ARM/AAPCS calling convention, a same-VA
+adjacent link-register save, an exact same-slot `r3` restore, no post-restore
+`r3` read, no call or indirect transfer, and an unconditional return. An
+intervening genuine `r3` read is still seen by the ordinary first-touch scan. A
+near-miss test restores and consumes `r3` and proves slot 3 remains parameter
+evidence.
+
+The focused real and negative tests are green, and the complete Rust library
+gate is 1,895/1,895. The Python extension, exact output canaries, profile matrix,
+and score cell remain deliberately unrefreshed until the revision-pinned
+baseline evaluation processes release the installed executable.
+
+## 01:20–01:35 — measured candidate behavior and rejected score evidence
+
+After the revision-pinned diagnostic lane released the executable, the candidate
+extension was rebuilt from the dirty worktree and its loaded native-module path
+was verified. The real outputs changed exactly as predicted:
+
+| Function | Before | Candidate |
+|---|---|---|
+| `hello-armhf-gcc:_fini` | four positional parameters | `void _fini(void)` |
+| `cleanflight:serialWrite` | four positional parameters | one evidenced pointer parameter |
+
+The corrected type metric for `serialWrite` remains `0.0`: the source has a
+second pass-through `uint8_t` argument whose value is never defined in this
+function, and stripped Glaurung does not yet have a sound indirect-call
+prototype or aggregate-field owner from which to recover it. Nevertheless, the
+metric confusion matrix moves from two false positives to one false positive plus
+one false negative, and the emitted contract no longer claims three unsupported
+inputs. This is a safety/correctness repair, not a score win. Inferring all
+untouched AAPCS call registers would merely recreate the same phantom-parameter
+bug; the next score-bearing owner is value-keyed indirect-call prototype evidence
+from `ProgramEnv`/aggregate access paths.
+
+The image-section increment reduces the real small-x86 query from 47 to exactly
+45 object parses, matching the two migrated collectors. Its cold time is 278.1
+ms and three-run warm median is 85.3 ms; both remain within the Phase-1 ceiling
+and the output hash is unchanged. All eleven high-risk output canaries are
+byte-identical. Eighteen focused ARM/ILP32/definedness Python tests and the full
+Rust suite, including every integration test, pass.
+
+The ARM classifier lives in the focused 149-line `arm_input_evidence` module
+instead of adding another machine-idiom subsystem to the 4,000-line
+`value_number` owner. A third near-miss test proves that even a balanced save and
+restore is not suppressed when the suffix contains conditional control flow;
+the classifier now requires a straight-line, unconditional return.
+
+The first authoritative sample-set scoring attempt is rejected in full. While
+the old worktree-local Rust target occupied `/tmp`, PyJoern exhausted that
+filesystem's quota during the latter projects and logged source-CFG extraction
+and evaluation failures. A zero process exit does not make those partial metrics
+valid. The 224/224 raw package remains valid because extraction had completed
+before scoring and does not use PyJoern. Scoring is being rerun from that package
+with `TMPDIR` on the main disk; acceptance requires the evaluator audit to prove
+all 250 manifest functions, the expected metric denominators, and zero evaluation
+failures.
+
+The rebuilt-modern diagnostic lane completed independently with 224 binaries and
+241 resolved manifest rows; nine official names were renamed or removed in the
+new builds. Its initial 27.8% union is explicitly provisional because finalization
+reported all three corrected overlay files missing. Re-evaluation, not the inline
+checkpoint columns, is the required evidence for that lane.
