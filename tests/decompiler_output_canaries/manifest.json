@@ -1,0 +1,81 @@
+{
+  "schema": "glaurung-output-canaries-v1",
+  "cases": [
+    {
+      "name": "copy_reg",
+      "kind": "external",
+      "path": "binaries/bin_039.elf",
+      "binary_sha256": "58446bf503003e3b7d5868083b1fbe7fb97e17347b492582be895ccb720c0f6b",
+      "functions": [
+        {"label": "copy_reg", "entry_va": "0x8680"}
+      ]
+    },
+    {
+      "name": "yyparse",
+      "kind": "external",
+      "path": "binaries/bin_093.elf",
+      "binary_sha256": "d37e886e88e0819d474b751beb9e6d80c26d4c713df1e7826668cb94ff1343eb",
+      "functions": [
+        {"label": "yyparse", "entry_va": "0x253e0"}
+      ]
+    },
+    {
+      "name": "console_getc",
+      "kind": "external",
+      "path": "binaries/bin_110.elf",
+      "binary_sha256": "48e29a81cb175c3efef32895f9300a2a59679aa25837bafd452b000222538b99",
+      "functions": [
+        {"label": "console_getc", "entry_va": "0x80002f8"}
+      ]
+    },
+    {
+      "name": "statdb_write",
+      "kind": "external",
+      "path": "binaries/bin_174.elf",
+      "binary_sha256": "8b6cb29147ba1ac74df2a6f033bf928ba80d08b7d96c7f01c59ae4700654e9b3",
+      "functions": [
+        {"label": "statdb_write", "entry_va": "0x4800"}
+      ]
+    },
+    {
+      "name": "arith-gcc-O0",
+      "kind": "build",
+      "source": "tests/decbench_corpus/src/arith.c",
+      "source_sha256": "d83d502fccb4e0db7e18bc69c17afec1e3f75a782fa8c84124183dceb013120c",
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+      "flags": ["-shared", "-fPIC", "-g", "-O0"],
+      "functions": [
+        {"label": "addmul"},
+        {"label": "shifts"},
+        {"label": "signs"}
+      ]
+    },
+    {
+      "name": "recursion-gcc-O2",
+      "kind": "build",
+      "source": "tests/decbench_corpus/src/recursion.c",
+      "source_sha256": "977f09fdda6244cb50ddb47bd956ea0568a35e08f2144b807c75f2d864277290",
+      "compiler": "gcc",
+      "compiler_version": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+      "flags": ["-shared", "-fPIC", "-g", "-O2"],
+      "functions": [
+        {"label": "ackermann"},
+        {"label": "fib"}
+      ]
+    },
+    {
+      "name": "linkedlist-clang-O0",
+      "kind": "build",
+      "source": "tests/decbench_corpus/src/linkedlist.c",
+      "source_sha256": "bd9c934db1c7f83e3aa92b904283c4e4fbf379966356864fb2dd52c78afc89e3",
+      "compiler": "clang",
+      "compiler_version": "Ubuntu clang version 21.1.8 (6ubuntu1)",
+      "flags": ["-shared", "-fPIC", "-g", "-O0"],
+      "functions": [
+        {"label": "list_find"},
+        {"label": "list_sum"}
+      ]
+    }
+  ]
+}
