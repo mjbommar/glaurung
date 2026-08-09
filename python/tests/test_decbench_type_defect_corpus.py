@@ -31,6 +31,32 @@ def test_type_distance_one_corpus_is_complete_and_owner_grouped() -> None:
         "integer_width": 2,
         "missing_parameter": 1,
     }
+    assert payload["fresh_validation"] == {
+        "metric": "official TypeMatchMetric cache_version 4 with caching disabled",
+        "scope": "all 29 functions, address-scoped from their real official binaries",
+        "parent_revision": "58cf71d80b8a725e5aa64c4a3560e38168a33d32",
+        "parent_perfect": 11,
+        "current_perfect": 13,
+        "current_open": 16,
+    }
     assert [
         defect["key"] for defect in defects if defect["status"] == "verified_fixed"
-    ] == ["chibios::O2-noinline::ch::nvicEnableVector"]
+    ] == [
+        "bash::O2-noinline::bash::allocerr",
+        "chibios::O2-noinline::ch::nvicEnableVector",
+        "crazyflie::O2-noinline::firmware::ld_word",
+        "cronie::O2::crontab::strcmp_until",
+        "diffutils::O0::diff3::try_help",
+        "diffutils::O2-noinline::diff::stophandler",
+        "diffutils::O2-noinline::sdiff::lf_skip",
+        "diffutils::O2::diff3::try_help",
+        "findutils::O0::find::prec_name",
+        "kmod::O2::kmod::mod_free",
+        "libexpat::O0::xmlwf::codepageConvert",
+        "libopencm3::O2-noinline::timer::timer_disable_preload",
+        "libopencm3::O2::cryptobasic::usart_set_databits",
+    ]
+    assert Counter(defect["status"] for defect in defects) == {
+        "verified_fixed": 13,
+        "open": 16,
+    }

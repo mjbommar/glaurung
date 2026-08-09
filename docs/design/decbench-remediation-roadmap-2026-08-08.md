@@ -300,7 +300,15 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   parameter. Its first invariant repair qualifies direct LSR use of an exact
   AAPCS core-register live-in as unsigned-word prototype evidence; the official
   evaluator moves `nvicEnableVector` from `0.5`/distance one to `1.0`/distance
-  zero without a function-name or signature patch.
+  zero without a function-name or signature patch. A fresh address-scoped replay
+  at parent `58cf71d` found 11 of the historical 29 already perfect, rather than
+  trusting stale row statuses. The value-keyed call-contract and opaque-tag
+  alias repair advances the current count to 13 perfect / 16 open. Across the
+  full 250-function corpus it moves TypeMatch perfects 27→30 and mean
+  `0.32579001→0.35462582`, with 31 improvements and zero regressions; all 36
+  changed outputs retain isomorphic CFGs and identical no-cache ByteMatch
+  outcomes. Continue from the 16 verified-open rows and refresh status through
+  real-binary evaluation after every general repair.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the

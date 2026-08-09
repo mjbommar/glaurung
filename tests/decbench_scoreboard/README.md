@@ -16,7 +16,10 @@ The files have distinct roles:
   code or schema change cannot silently redefine the baseline.
 - `type-distance-one-9c25fcb.json` is the owner-grouped defect corpus for all
   29 fresh official functions one type edit from perfection. Its source-overlay
-  checksum, membership, cluster counts, and verified-fix status are tested.
+  checksum, membership, cluster counts, and verified-fix status are tested. A
+  fresh address-scoped replay records 13 verified-perfect rows and 16 open rows;
+  historical membership is retained even when later general repairs close a
+  row.
 
 The two generated evidence files use canonical single-line JSON. This keeps
 large machine data out of repository line-count and source-file-size reports;

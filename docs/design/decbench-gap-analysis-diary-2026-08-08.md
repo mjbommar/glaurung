@@ -1006,3 +1006,76 @@ filesystem traversal selects eight different fixtures. The new corpus contract
 passes scoped Ruff format/lint and `ty`; repository-wide Ruff formatting remains
 red on 309 pre-existing files and repository-wide `ty` reports 2,063 existing
 diagnostics, so neither unrelated baseline was rewritten in this increment.
+
+## 05:20–06:15 — fresh type-corpus replay and value-keyed call contracts
+
+The 29-row distance-one file was a valid historical cohort but a stale status
+ledger. Before selecting another row by inspection, I re-decompiled every entry
+at its recorded address from the real official binary and scored it with the
+unmodified `TypeMatchMetric` cache version 4 with caching disabled. Parent
+`58cf71d80b8a725e5aa64c4a3560e38168a33d32` already makes 11/29 perfect. The
+current increment makes 13/29 perfect and leaves 16, not 28, open. The checked
+ledger now records those exact 13 identities and rejects any status-count drift.
+
+The next repeated owner was a call-contract transport seam. In diffutils
+`lf_skip`, source parameter `arg0` is copied into `var2`; raw byte-offset uses
+correctly keep `var2` machine-word typed, but a recovered `lf_refill(char *)`
+contract is authoritative evidence that the exact source value came from a
+pointer parameter. Pointer refinement previously inspected only direct `argN`
+call operands, so it discarded that evidence. The repair walks prepared
+definitions backward through pure copies to one unique source parameter. It
+fails closed on arithmetic, calls, cycles, multiple definitions with different
+origins, or an unsafe use of the source parameter. The intermediate value
+therefore remains a word and the renderer emits the required explicit cast;
+only the source parameter becomes a pointer.
+
+The associated output seam was general opaque-tag spelling. DecBench ground
+truth uses typedef names such as `line_filter *` and `mod *`, while Glaurung
+rendered authoritative incomplete types as `struct line_filter *` and
+`struct mod *`. Complete aggregates already used a self-contained typedef
+alias. Explicitly tagged opaque prototype pointers now follow the same rule:
+emit `typedef struct T T;` (or the union equivalent) and render `T *`. This is
+prototype/type-environment behavior, not a function-name or benchmark patch.
+
+TDD evidence was RED/GREEN at both owners:
+
+- a recovered pointer contract transported through one exact copy initially
+  left `arg0` untyped; it now recovers an eight-byte pointer while `var2` stays
+  non-pointer, and a conflicting-origin control remains untyped;
+- an opaque `struct record *` prototype initially emitted only
+  `struct record; void consume(struct record * arg0)`; it now emits the
+  standalone typedef and `void consume(record * arg0)`.
+
+All 13 `ir::high_variables::tests`, the opaque-tag renderer regression, and the
+29-row corpus contract pass. Real official output moves `lf_skip` from type
+score `0.5` to `1.0` and `mod_free` from `0.0` to `1.0`. A fresh parent/current
+address-scoped extraction then covered all 250 functions in 224 real binaries
+with zero errors:
+
+| TypeMatch result | parent `58cf71d` | current | Delta |
+|---|---:|---:|---:|
+| measured | 235 | 235 | 0 |
+| perfect | 27 | 30 | +3 |
+| mean | 0.32579001 | 0.35462582 | +0.02883581 |
+| functions improved | — | 31 | +31 |
+| functions regressed | — | 0 | 0 |
+
+The third newly perfect full-corpus function is
+`grep:O2-noinline:grep:finalize_input`; 36 artifacts change in total because the
+opaque alias rule improves or normalizes other authoritative signatures too.
+Safety was checked on that entire changed set, not only on the two cohort wins.
+All 36 parent/current decompiled CFGs are topology-isomorphic (31 were directly
+identical under Joern's node identities; five had different internal identities
+but identical isomorphic graphs), so the official GED inputs and results cannot
+change. Fresh no-cache ByteMatch evaluation also gives identical parent/current
+scores for every changed function: the same 12 compile, the same 24 report the
+same compilation failure, and neither score nor coverage regresses.
+
+The mandatory heavy gate passed without a waiver after rebuilding the release
+extension from this exact source. Full Rust tests and the 31-test x86 fixture
+matrix passed. The architecture ratchet matched its baseline exactly: 1,757
+behavioral passes, the same 43 known failures, 228 structural cases, zero lane
+errors, and explicit AArch64, Thumb ARMv7, A32 `-marm`, i386, GCC 11 control,
+and GCC 15 control coverage. Both legacy and curriculum executable matrices
+passed, followed by no per-cell GED/type/byte regressions across all 56/56
+DecBench cells.

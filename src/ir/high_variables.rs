@@ -59,7 +59,7 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
 
     let mut unsafe_uses = HashSet::new();
     collect_unsafe_pointer_uses(&function.body, &mut unsafe_uses);
-    refine_authoritative_pointer_parameters(&function.body, &unsafe_uses, types);
+    refine_authoritative_pointer_parameters(&function.body, &definitions, &unsafe_uses, types);
 
     for _ in 0..=definitions.len() {
         let mut learned = Vec::new();
@@ -100,6 +100,7 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
 /// fail-closed.
 fn refine_authoritative_pointer_parameters(
     body: &[Stmt],
+    definitions: &HashMap<String, Vec<Definition>>,
     unsafe_uses: &HashSet<String>,
     types: &mut TypeMap,
 ) {
@@ -123,7 +124,7 @@ fn refine_authoritative_pointer_parameters(
                         let Expr::Reg(VReg::Phys(argument_name)) = argument else {
                             continue;
                         };
-                        if crate::ir::ast::parse_arg_index(argument_name).is_none() {
+                        if !is_trusted_copy_source(argument_name) {
                             continue;
                         }
                         let c_type = recovered
@@ -174,21 +175,25 @@ fn refine_authoritative_pointer_parameters(
     let mut candidates = HashMap::new();
     collect(body, &mut candidates);
     for (name, widths) in candidates {
-        if unsafe_uses.contains(&name) {
-            continue;
-        }
         let width = widths.iter().copied().max().unwrap_or(0);
-        if widths
+        if !widths
             .iter()
             .all(|candidate| *candidate == 0 || width == 0 || *candidate == width)
         {
-            types.refine_from_value(
-                VReg::phys(name),
-                TypeHint::Pointer {
-                    pointee_width: width,
-                },
-            );
+            continue;
         }
+        let Some(origin) = single_exact_parameter_origin(&name, definitions) else {
+            continue;
+        };
+        if unsafe_uses.contains(&origin) {
+            continue;
+        }
+        types.refine_from_value(
+            VReg::phys(origin),
+            TypeHint::Pointer {
+                pointee_width: width,
+            },
+        );
     }
 }
 
@@ -209,6 +214,52 @@ impl Definition {
     fn is_null_initializer(&self) -> bool {
         matches!(self, Self::Assignment(Expr::Const(0)))
     }
+}
+
+/// Resolve one prepared value to a unique source parameter through pure copies.
+///
+/// This is deliberately not generic reaching definitions. Multiple distinct
+/// origins, arithmetic, calls, and cycles all fail closed: without dominance
+/// information, an overwritten copy must not type a parameter that never
+/// reaches the authoritative call boundary.
+fn single_exact_parameter_origin(
+    name: &str,
+    definitions: &HashMap<String, Vec<Definition>>,
+) -> Option<String> {
+    fn visit(
+        name: &str,
+        definitions: &HashMap<String, Vec<Definition>>,
+        visiting: &mut HashSet<String>,
+    ) -> Option<String> {
+        if crate::ir::ast::parse_arg_index(name).is_some() {
+            return Some(name.to_string());
+        }
+        if !is_source_value_local(name) || !visiting.insert(name.to_string()) {
+            return None;
+        }
+        let result = (|| {
+            let value_definitions = definitions.get(name)?;
+            let mut origin: Option<String> = None;
+            for definition in value_definitions {
+                let Definition::Assignment(Expr::Reg(VReg::Phys(source))) = definition else {
+                    return None;
+                };
+                if !is_trusted_copy_source(source) {
+                    return None;
+                }
+                let next = visit(source, definitions, visiting)?;
+                if origin.as_ref().is_some_and(|current| current != &next) {
+                    return None;
+                }
+                origin = Some(next);
+            }
+            origin
+        })();
+        visiting.remove(name);
+        result
+    }
+
+    visit(name, definitions, &mut HashSet::new())
 }
 
 fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>) {
@@ -706,6 +757,100 @@ mod tests {
         refine_pointer_high_variables(&function, &mut types);
 
         assert_eq!(pointer_width(&types, "arg0"), Some(4));
+    }
+
+    #[test]
+    fn recovered_callee_pointer_flows_back_through_one_exact_parameter_copy() {
+        // Real shape: diffutils `lf_skip(struct line_filter *lf, lin lines)`.
+        // The incoming pointer is copied to a numbered value, used in raw byte
+        // address arithmetic, and passed to a helper whose recovered contract
+        // is the only source-level pointer witness. Keep the numbered value a
+        // machine word so `+ 8` remains byte-addressed, but recover the source
+        // parameter transported into it.
+        let recovered = CallPrototype {
+            return_type: "int".into(),
+            parameter_types: vec!["long *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let function = Function {
+            name: "lf_skip_shape".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var2"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "refill".into(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("var2"))],
+                    dst: Some(VReg::phys("ret")),
+                    call_spec: Some(CallSiteSpec {
+                        call_prototype: recovered.clone(),
+                        callee_prototype: Some(recovered),
+                    }),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var3"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("var2"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+
+        refine_pointer_high_variables(&function, &mut types);
+
+        assert_eq!(pointer_width(&types, "arg0"), Some(8));
+        assert_eq!(pointer_width(&types, "var2"), None);
+    }
+
+    #[test]
+    fn recovered_callee_pointer_rejects_a_copy_with_conflicting_origins() {
+        let recovered = CallPrototype {
+            return_type: "int".into(),
+            parameter_types: vec!["long *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let function = Function {
+            name: "overwritten_forwarder".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var2"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var2"),
+                    src: Expr::Reg(VReg::phys("arg1")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "consume_pointer".into(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("var2"))],
+                    dst: None,
+                    call_spec: Some(CallSiteSpec {
+                        call_prototype: recovered.clone(),
+                        callee_prototype: Some(recovered),
+                    }),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+
+        refine_pointer_high_variables(&function, &mut types);
+
+        assert_eq!(pointer_width(&types, "arg0"), None);
+        assert_eq!(pointer_width(&types, "arg1"), None);
     }
 
     #[test]

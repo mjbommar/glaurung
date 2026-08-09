@@ -9,6 +9,14 @@
     "integer_width": 2,
     "missing_parameter": 1
   },
+  "fresh_validation": {
+    "metric": "official TypeMatchMetric cache_version 4 with caching disabled",
+    "scope": "all 29 functions, address-scoped from their real official binaries",
+    "parent_revision": "58cf71d80b8a725e5aa64c4a3560e38168a33d32",
+    "parent_perfect": 11,
+    "current_perfect": 13,
+    "current_open": 16
+  },
   "defects": [
     {
       "key": "bash::O0::mksyntax::wcomment",
@@ -24,7 +32,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "call_contract_propagation",
       "mismatch": "argument 0: char * recovered as long",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "chibios::O2-noinline::ch::nvicEnableVector",
@@ -80,7 +88,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "memory_access_width",
       "mismatch": "argument 0: byte pointer recovered as short *",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "crazyflie::O2::firmware::sensorsInit",
@@ -96,7 +104,7 @@
       "failure_cluster": "integer_width",
       "evidence_owner": "scalar_width_semantics",
       "mismatch": "argument 2: char recovered as long",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "diffutils::O0::diff3::try_help",
@@ -104,7 +112,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "call_contract_propagation",
       "mismatch": "argument 1: char * recovered as long",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "diffutils::O2-noinline::diff::stophandler",
@@ -112,7 +120,7 @@
       "failure_cluster": "missing_parameter",
       "evidence_owner": "calling_convention_definedness",
       "mismatch": "argument sig: int is absent from the recovered prototype",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "diffutils::O2-noinline::sdiff::lf_skip",
@@ -120,7 +128,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "call_contract_propagation",
       "mismatch": "argument 0: line_filter * recovered as long",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "diffutils::O2::diff3::try_help",
@@ -128,7 +136,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "call_contract_propagation",
       "mismatch": "argument 1: char * recovered as long",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "findutils::O0::find::prec_name",
@@ -136,7 +144,7 @@
       "failure_cluster": "integer_width",
       "evidence_owner": "scalar_width_semantics",
       "mismatch": "argument 0: short recovered as int",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "freertos::O0::RTOSDemo::prvCheckTasksWaitingTermination",
@@ -176,7 +184,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "aggregate_type_environment",
       "mismatch": "argument 0: aggregate pointer recovered as long *",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "libexpat::O0::xmlwf::codepageConvert",
@@ -184,7 +192,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "call_contract_propagation",
       "mismatch": "argument 1: char * recovered as long",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "libopencm3::O0::tick_blink::pwr_set_vos_scale",
@@ -216,7 +224,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "memory_region_model",
       "mismatch": "argument 0: uint32_t MMIO base recovered as int *",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "libopencm3::O2::cryptobasic::usart_set_databits",
@@ -224,7 +232,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "memory_region_model",
       "mismatch": "argument 0: uint32_t MMIO base recovered as int *",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "libselinux::O0::libselinux.so::get_class_cache_entry_name",

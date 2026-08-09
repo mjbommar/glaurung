@@ -6721,12 +6721,20 @@ fn source_prototype_forward_declarations(
                         .chars()
                         .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
                 {
-                    declarations.insert(format!("{} {};", pair[0], name));
+                    declarations.insert(format!("typedef {} {} {};", pair[0], name, name));
                 }
             }
         }
     }
     declarations
+}
+
+fn explicitly_tagged_pointer_name(c_type: &str) -> Option<&str> {
+    let name = pointed_struct_name(c_type)?;
+    c_type
+        .split_whitespace()
+        .any(|word| matches!(word, "struct" | "union"))
+        .then_some(name)
 }
 
 fn valid_c_identifier(name: &str) -> bool {
@@ -6977,6 +6985,19 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
         .keys()
         .cloned()
         .collect::<std::collections::BTreeSet<_>>();
+    // Complete layouts already emit `typedef struct T T;`. Give an explicit
+    // opaque `struct T *`/`union T *` source contract the same standalone alias
+    // so parameter spelling does not depend on whether every field layout was
+    // safely renderable.
+    let mut source_type_aliases = complete_structs.clone();
+    if let Some(prototype) = declared_prototype {
+        source_type_aliases.extend(
+            std::iter::once(&prototype.return_type)
+                .chain(&prototype.parameter_types)
+                .filter_map(|c_type| explicitly_tagged_pointer_name(c_type))
+                .map(str::to_string),
+        );
+    }
     DEC_RENDERABLE_STRUCTS.with(|selected| *selected.borrow_mut() = complete_structs.clone());
     DEC_STRUCT_PTR_TYPES.with(|selected| {
         let mut exact = std::collections::HashMap::new();
@@ -7082,7 +7103,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
             }
         },
         |prototype| {
-            source_type_with_complete_struct_alias(&prototype.return_type, &complete_structs)
+            source_type_with_complete_struct_alias(&prototype.return_type, &source_type_aliases)
         },
     );
     DEC_RETURN_CTYPE.with(|selected| *selected.borrow_mut() = return_type.clone());
@@ -7114,7 +7135,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
                 .and_then(|prototype| prototype.parameter_types.get(i))
                 .filter(|c_type| dwarf_prototype_type_is_renderable(c_type, false, dwarf_types))
                 .map_or_else(recovered_type, |c_type| {
-                    source_type_with_complete_struct_alias(c_type, &complete_structs)
+                    source_type_with_complete_struct_alias(c_type, &source_type_aliases)
                 });
             if aty.ends_with('*') {
                 DEC_PTR_ARGS.with(|m| m.borrow_mut().insert(aname.clone(), aty.clone()));
@@ -13582,6 +13603,65 @@ function f @ 0x1000 {
 
         assert!(text.contains("local_8 = arg0;"), "{text}");
         assert!(!text.contains("(long)local_8 ="), "{text}");
+    }
+
+    #[test]
+    fn opaque_tagged_parameter_uses_a_self_contained_typedef_alias() {
+        use crate::debug::dwarf::{DwarfField, DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let f = Function {
+            name: "consume".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let prototype = CallPrototype {
+            return_type: "void".to_string(),
+            parameter_types: vec!["struct record *".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        // A named layout makes the prototype authoritative, but the ABI-
+        // dependent `long` field intentionally prevents emitting a guessed
+        // complete definition. The tagged pointer still needs standalone C.
+        let layout = DwarfType {
+            kind: DwarfTypeKind::Struct,
+            name: "record".to_string(),
+            byte_size: 8,
+            fields: vec![DwarfField {
+                offset: 0,
+                name: "value".to_string(),
+                c_type: "long".to_string(),
+                size: 8,
+            }],
+            variants: Vec::new(),
+            typedef_target: None,
+            source_file: Some("record.c".to_string()),
+        };
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &f,
+            None,
+            None,
+            RecoveredOutputKind::Void,
+            Some(&prototype),
+            &[layout],
+            8,
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(text.contains("typedef struct record record;"), "{text}");
+        assert!(text.contains("void consume(record * arg0)"), "{text}");
+        assert!(
+            !text.contains("void consume(struct record * arg0)"),
+            "{text}"
+        );
     }
 
     #[test]
