@@ -53,7 +53,7 @@ def test_promoted_x86_frame_has_no_raw_machine_state(
     for machine_name in ("rsp", "rbp", "stack_0"):
         assert machine_name not in code, code
     # GCC and Clang choose different frame offsets for the same two source
-    # locals.  The semantic invariant is that both survive as typed locals;
-    # their physical offsets are deliberately not part of the assertion.
-    locals_found = re.findall(r"^    int local_[0-9a-f]+;$", code, re.MULTILINE)
-    assert len(locals_found) >= 2, code
+    # locals.  DWARF names are authoritative, so the semantic invariant is that
+    # both survive as typed source locals; physical offsets are not observable.
+    assert re.search(r"^    int i;$", code, re.MULTILINE), code
+    assert re.search(r"^    int s;$", code, re.MULTILINE), code

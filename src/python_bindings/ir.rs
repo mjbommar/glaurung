@@ -22,8 +22,18 @@
 //! This matches the Rust `Display` impl so the Python output round-trips
 //! through tests.
 
+mod dwarf_contracts;
+
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+
+#[cfg(test)]
+use dwarf_contracts::dwarf_return_hint;
+use dwarf_contracts::{
+    calling_convention_pointer_width, dwarf_output_contracts, dwarf_render_prototype,
+    dwarf_return_hint_with_env, dwarf_source_register_lifetimes, dwarf_stack_object_hints,
+    merge_dwarf_register_local_facts, DwarfPrototypeContract,
+};
 
 use crate::ir::abi::machine_word_bytes;
 use crate::ir::types::{BinOp, CallTarget, CmpOp, Flag, LlirInstr, MemOp, Op, UnOp, VReg, Value};
@@ -395,7 +405,7 @@ fn run_ast_passes(
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
     stack_object_hints: &[crate::ir::stack_locals::StackObjectHint],
 ) -> (
-    std::collections::HashMap<String, u8>,
+    crate::ir::stack_locals::StackLocalFacts,
     std::collections::HashMap<String, String>,
 ) {
     let dump = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
@@ -480,9 +490,9 @@ fn run_ast_passes(
     // Stack-slot promotion runs before register renaming so the aliases (`stack_0`,
     // `local_0`, ...) it allocates cannot collide with the role names (`arg0`, `ret`,
     // `varN`) the naming pass introduces.
-    let slot_sizes = pass!(
+    let stack_facts = pass!(
         "promote_stack_locals",
-        crate::ir::stack_locals::promote_stack_locals_typed_with_parameter_count_and_objects(
+        crate::ir::stack_locals::promote_stack_locals_with_facts(
             f,
             Some(cc),
             locked_parameter_count,
@@ -543,7 +553,7 @@ fn run_ast_passes(
         crate::ir::stack_idiom::rematerialise_stack_ops(f);
         crate::ir::label_prune::prune_unreferenced_labels(f);
     });
-    (slot_sizes, role_names)
+    (stack_facts, role_names)
 }
 
 /// Collapse architecture-specific machine frames after stack-slot promotion.
@@ -737,7 +747,13 @@ fn prepare_llir_for_lowering(
     }
     let (region, cfg_health) = crate::ir::structure::recover_verified_with_health(function, &ssa);
     let (numbered, definition_widths, mut parameter_slots) = if recover_semantic_prototype {
-        crate::ir::value_number::value_number_with_parameter_slots(function, &ssa, cc)
+        let source_lifetimes = dwarf_source_register_lifetimes(declared, cc);
+        crate::ir::value_number::value_number_with_parameter_slots_and_lifetimes(
+            function,
+            &ssa,
+            cc,
+            &source_lifetimes,
+        )
     } else {
         (
             function.clone(),
@@ -930,7 +946,7 @@ fn decompile_at_py(
             .and_then(|outputs| outputs.get(&func_va)),
         cc,
     );
-    let (slot_sizes, role_names) = run_ast_passes(
+    let (mut stack_facts, role_names) = run_ast_passes(
         &mut f,
         &mut profiler,
         cfg_health,
@@ -943,6 +959,15 @@ fn decompile_at_py(
         &str_pool,
         &function_tables,
         &stack_object_hints,
+    );
+    merge_dwarf_register_local_facts(
+        &mut stack_facts,
+        dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&func_va)),
+        &lf,
+        &role_names,
+        arch,
     );
     if style == "decbench" {
         crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
@@ -978,7 +1003,10 @@ fn decompile_at_py(
                 prototype.as_ref().expect("typed DecBench prototype"),
                 cc,
                 &param_slots,
-                &slot_sizes,
+                &stack_facts.sizes,
+                &stack_facts.source_types,
+                &stack_facts.source_names,
+                dwarf_type_env.as_ref(),
                 &role_names,
                 &definition_widths,
             )
@@ -1006,6 +1034,8 @@ fn decompile_at_py(
             ),
             declared_render.as_ref(),
             dwarf_types.as_deref().unwrap_or(&[]),
+            &stack_facts.source_types,
+            &stack_facts.source_names,
             cc,
             &addr_map,
         )
@@ -1166,7 +1196,7 @@ fn decompile_range_at_py(
             .and_then(|outputs| outputs.get(&func_va)),
         cc,
     );
-    let (slot_sizes, role_names) = run_ast_passes(
+    let (mut stack_facts, role_names) = run_ast_passes(
         &mut f,
         &mut profiler,
         cfg_health,
@@ -1179,6 +1209,15 @@ fn decompile_range_at_py(
         &str_pool,
         &function_tables,
         &stack_object_hints,
+    );
+    merge_dwarf_register_local_facts(
+        &mut stack_facts,
+        dwarf_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.get(&func_va)),
+        &lf,
+        &role_names,
+        arch,
     );
     if style == "decbench" {
         crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
@@ -1198,7 +1237,10 @@ fn decompile_range_at_py(
                 prototype.as_ref().expect("typed DecBench prototype"),
                 cc,
                 &param_slots,
-                &slot_sizes,
+                &stack_facts.sizes,
+                &stack_facts.source_types,
+                &stack_facts.source_names,
+                dwarf_type_env.as_ref(),
                 &role_names,
                 &definition_widths,
             )
@@ -1226,6 +1268,8 @@ fn decompile_range_at_py(
             ),
             declared_render.as_ref(),
             dwarf_types.as_deref().unwrap_or(&[]),
+            &stack_facts.source_types,
+            &stack_facts.source_names,
             cc,
             &addr_map,
         )
@@ -1440,6 +1484,30 @@ fn remap_type_map_impl(
 ///
 /// The type maps are computed by the caller from the UNPREPARED function, whose
 /// names the recovered `TypeMap` keys were remapped against.
+fn select_renderable_dwarf_local_facts(
+    local_types: &std::collections::HashMap<String, String>,
+    local_names: &std::collections::HashMap<String, String>,
+    dwarf_types: &[crate::debug::dwarf::DwarfType],
+) -> (
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, String>,
+) {
+    let type_env = crate::ir::dwarf_type_env::DwarfTypeEnv::new(dwarf_types);
+    let selected_types = local_types
+        .iter()
+        .filter(|(_name, c_type)| {
+            crate::ir::ast::dwarf_prototype_type_is_renderable(c_type, false, &type_env)
+        })
+        .map(|(name, c_type)| (name.clone(), c_type.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let selected_names = local_names
+        .iter()
+        .filter(|(internal_name, _source_name)| selected_types.contains_key(*internal_name))
+        .map(|(internal_name, source_name)| (internal_name.clone(), source_name.clone()))
+        .collect();
+    (selected_types, selected_names)
+}
+
 fn decbench_text(
     f: &crate::ir::ast::Function,
     profiler: &mut crate::decompile::profile::FunctionProfiler,
@@ -1452,9 +1520,13 @@ fn decbench_text(
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
     dwarf_types: &[crate::debug::dwarf::DwarfType],
+    dwarf_local_types: &std::collections::HashMap<String, String>,
+    dwarf_local_names: &std::collections::HashMap<String, String>,
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
 ) -> String {
+    let (dwarf_local_types, dwarf_local_names) =
+        select_renderable_dwarf_local_facts(dwarf_local_types, dwarf_local_names, dwarf_types);
     let mut prepared = profiler.measure("prepare_for_decbench", || {
         let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
         // Preparation is also where a PC-relative address arithmetic sequence
@@ -1560,18 +1632,38 @@ fn decbench_text(
     // string folding, promoted objects, and pointer facts are represented on
     // the exact call boundary the verifier and C renderer consume.
     crate::ir::call_contracts::refine_call_site_specs(&mut prepared, decl);
-    let dwarf_pointer_types = crate::ir::dwarf_fields::annotate_function_fields(
+    let mut dwarf_pointer_types = crate::ir::dwarf_fields::annotate_function_fields(
         &mut prepared,
         declared_prototype,
         dwarf_types,
         calling_convention_pointer_width(cc),
     );
+    for (internal_name, source_name) in &dwarf_local_names {
+        let internal = crate::ir::types::VReg::phys(internal_name);
+        if let Some(pointer_type) = dwarf_pointer_types.remove(&internal) {
+            dwarf_pointer_types.insert(crate::ir::types::VReg::phys(source_name), pointer_type);
+        }
+    }
+    crate::ir::naming::apply_authoritative_local_names(&mut prepared, &dwarf_local_names);
+    let rendered_local_types = dwarf_local_types
+        .iter()
+        .map(|(internal_name, c_type)| {
+            (
+                dwarf_local_names
+                    .get(internal_name)
+                    .unwrap_or(internal_name)
+                    .clone(),
+                c_type.clone(),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     crate::ir::exception_recover::recover_typed_handlers(&mut prepared, exception_sites);
     crate::ir::exception_recover::recover_throws(&mut prepared);
+    crate::ir::dead_stores::prune_unobserved_promoted_object_stores(&mut prepared);
     crate::ir::health::trace_pass("ready_to_render", &prepared, cfg_health);
     let violations = profiler.measure("verify_defs", || crate::ir::verify_defs::check(&prepared));
     let body = profiler.measure("render_decbench", || {
-        crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+        crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
             &prepared,
             decl,
             width,
@@ -1580,6 +1672,7 @@ fn decbench_text(
             dwarf_types,
             calling_convention_pointer_width(cc),
             &dwarf_pointer_types,
+            &rendered_local_types,
         )
     });
     if violations.is_empty() {
@@ -1600,220 +1693,6 @@ fn decbench_text(
         return body;
     }
     crate::ir::verify_defs::splice_verify_comments(&body, &violations)
-}
-
-/// Index authoritative DWARF prototype contracts once per binary analysis.
-///
-/// Batch decompilation must not reparse debug sections for every function.
-/// The CFG analyser already consumes DWARF for boundaries and names; this
-/// compact companion map carries parameter and output facts to typed recovery.
-#[derive(Debug, Clone)]
-struct DwarfPrototypeContract {
-    /// Whether the producer marked this as a complete function prototype.
-    /// This distinguishes `f(void)` from an old-style `f()` when both have no
-    /// formal-parameter DIEs.
-    prototyped: bool,
-    parameter_types: Vec<crate::debug::dwarf::DwarfParameterType>,
-    return_type: crate::debug::dwarf::DwarfReturnType,
-    stack_objects: Vec<crate::debug::dwarf::DwarfStackObject>,
-}
-
-fn dwarf_output_contracts(data: &[u8]) -> std::collections::HashMap<u64, DwarfPrototypeContract> {
-    crate::debug::dwarf::extract_dwarf_functions(data)
-        .into_iter()
-        .map(|function| {
-            (
-                function.entry_va,
-                DwarfPrototypeContract {
-                    prototyped: function.prototyped,
-                    parameter_types: function.parameter_types,
-                    return_type: function.return_type,
-                    stack_objects: function.stack_objects,
-                },
-            )
-        })
-        .collect()
-}
-
-fn dwarf_stack_object_hints(
-    contract: Option<&DwarfPrototypeContract>,
-    cc: crate::ir::call_args::CallConv,
-) -> Vec<crate::ir::stack_locals::StackObjectHint> {
-    use crate::debug::dwarf::DwarfStackBase;
-    use crate::ir::call_args::CallConv;
-
-    let Some(contract) = contract else {
-        return Vec::new();
-    };
-    contract
-        .stack_objects
-        .iter()
-        .filter(|object| object.aggregate)
-        .filter_map(|object| {
-            let (base, adjustment) = match (cc, object.base) {
-                (CallConv::SysVAmd64 | CallConv::Win64, DwarfStackBase::Register(6)) => ("rbp", 0),
-                (CallConv::SysVAmd64 | CallConv::Win64, DwarfStackBase::CallFrameCfa) => {
-                    ("rbp", 16)
-                }
-                (CallConv::Cdecl32, DwarfStackBase::Register(5)) => ("ebp", 0),
-                (CallConv::Cdecl32, DwarfStackBase::CallFrameCfa) => ("ebp", 8),
-                (CallConv::Aarch64, DwarfStackBase::Register(29)) => ("x29", 0),
-                // DW_OP_fbreg is relative to the call-frame address, which is
-                // the architectural entry SP. The stack-local pass retains
-                // this coordinate for proven aggregates and reconciles it with
-                // the current-SP delta without globally rebasing AArch64's
-                // ordinary own-frame slots.
-                (CallConv::Aarch64, DwarfStackBase::CallFrameCfa) => ("entry_sp", 0),
-                (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::Register(11 | 7)) => {
-                    ("fp", 0)
-                }
-                (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::CallFrameCfa) => {
-                    ("entry_sp", 0)
-                }
-                _ => return None,
-            };
-            Some(crate::ir::stack_locals::StackObjectHint {
-                base: base.to_string(),
-                disp: object.offset.checked_add(adjustment)?,
-                size: object.byte_size,
-            })
-        })
-        .collect()
-}
-
-fn calling_convention_pointer_width(cc: crate::ir::call_args::CallConv) -> u8 {
-    use crate::ir::call_args::CallConv;
-    match cc {
-        CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => 4,
-        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => 8,
-    }
-}
-
-/// Translate only DWARF scalar spellings that the current renderer can express
-/// exactly. An unrepresentable declared type still locks the output as non-void;
-/// it simply leaves machine-code recovery responsible for the concrete C type.
-#[cfg(test)]
-fn dwarf_return_hint(
-    c_type: &str,
-    cc: crate::ir::call_args::CallConv,
-) -> Option<crate::ir::types_recover::TypeHint> {
-    dwarf_return_hint_with_env(c_type, cc, None)
-}
-
-fn dwarf_return_hint_with_env(
-    c_type: &str,
-    cc: crate::ir::call_args::CallConv,
-    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
-) -> Option<crate::ir::types_recover::TypeHint> {
-    use crate::ir::types_recover::TypeHint;
-
-    let normalized = c_type
-        .split_whitespace()
-        .filter(|word| !matches!(*word, "const" | "volatile" | "restrict"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let c_long_width = match cc {
-        crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Aarch64 => 8,
-        crate::ir::call_args::CallConv::Win64
-        | crate::ir::call_args::CallConv::Cdecl32
-        | crate::ir::call_args::CallConv::Arm
-        | crate::ir::call_args::CallConv::ArmHardFloat => 4,
-    };
-    if let Some(pointee) = normalized.strip_suffix('*').map(str::trim) {
-        let pointee_width = match dwarf_return_hint_with_env(pointee, cc, type_env) {
-            Some(TypeHint::Int { width, .. } | TypeHint::Float { width }) => width,
-            Some(TypeHint::BoolLike) => 1,
-            Some(TypeHint::Pointer { .. } | TypeHint::CodePointer) => c_long_width,
-            None => 1,
-        };
-        return Some(TypeHint::Pointer { pointee_width });
-    }
-    let scalar = type_env
-        .and_then(|env| env.scalar_spelling(&normalized))
-        .unwrap_or(normalized);
-    match scalar.as_str() {
-        "_Bool" | "bool" => Some(TypeHint::BoolLike),
-        "char" | "signed char" | "int8_t" => Some(TypeHint::Int {
-            signed: true,
-            width: 1,
-        }),
-        "unsigned char" | "uint8_t" => Some(TypeHint::Int {
-            signed: false,
-            width: 1,
-        }),
-        "short" | "short int" | "signed short" | "signed short int" | "int16_t" => {
-            Some(TypeHint::Int {
-                signed: true,
-                width: 2,
-            })
-        }
-        "unsigned short" | "unsigned short int" | "uint16_t" => Some(TypeHint::Int {
-            signed: false,
-            width: 2,
-        }),
-        "int" | "signed" | "signed int" | "int32_t" => Some(TypeHint::Int {
-            signed: true,
-            width: 4,
-        }),
-        "unsigned" | "unsigned int" | "uint32_t" => Some(TypeHint::Int {
-            signed: false,
-            width: 4,
-        }),
-        "long" | "long int" | "signed long" | "signed long int" => Some(TypeHint::Int {
-            signed: true,
-            width: c_long_width,
-        }),
-        "unsigned long" | "unsigned long int" | "long unsigned" | "long unsigned int" => {
-            Some(TypeHint::Int {
-                signed: false,
-                width: c_long_width,
-            })
-        }
-        "long long" | "long long int" | "signed long long" | "signed long long int" | "int64_t" => {
-            Some(TypeHint::Int {
-                signed: true,
-                width: 8,
-            })
-        }
-        "unsigned long long"
-        | "unsigned long long int"
-        | "long long unsigned"
-        | "long long unsigned int"
-        | "uint64_t" => Some(TypeHint::Int {
-            signed: false,
-            width: 8,
-        }),
-        "float" => Some(TypeHint::Float { width: 4 }),
-        "double" => Some(TypeHint::Float { width: 8 }),
-        _ => None,
-    }
-}
-
-fn dwarf_render_prototype(
-    declared: &DwarfPrototypeContract,
-) -> Option<crate::ir::call_contracts::CallPrototype> {
-    use crate::debug::dwarf::{DwarfParameterType, DwarfReturnType};
-    use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
-
-    let return_type = match &declared.return_type {
-        DwarfReturnType::Void => "void".to_string(),
-        DwarfReturnType::Type(c_type) => c_type.clone(),
-        DwarfReturnType::Unknown => return None,
-    };
-    let parameter_types = declared
-        .parameter_types
-        .iter()
-        .map(|parameter| match parameter {
-            DwarfParameterType::Type(c_type) => Some(c_type.clone()),
-            DwarfParameterType::Unknown => None,
-        })
-        .collect::<Option<Vec<_>>>()?;
-    Some(CallPrototype {
-        return_type,
-        parameter_types,
-        variadic: false,
-        authority: CallPrototypeAuthority::Authoritative,
-    })
 }
 
 /// Recover machine-code prototype facts, then apply a stronger declared output
@@ -2389,6 +2268,9 @@ fn decbench_type_maps(
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
     slot_sizes: &std::collections::HashMap<String, u8>,
+    source_types: &std::collections::HashMap<String, String>,
+    source_names: &std::collections::HashMap<String, String>,
+    dwarf_type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     role_names: &std::collections::HashMap<String, String>,
     definition_widths: &std::collections::HashMap<crate::ir::types::VReg, u8>,
 ) -> (
@@ -2431,6 +2313,7 @@ fn decbench_type_maps(
         }
     }
     merge_slot_sizes(&mut decl, slot_sizes, cc);
+    apply_stack_source_types(&mut decl, source_types, source_names, cc, dwarf_type_env);
     merge_exact_definition_widths(&mut decl, definition_widths, role_names, cc);
     crate::ir::call_contracts::refine_call_result_types(f, &mut decl);
     refine_float_copy_types(&f.body, &mut decl);
@@ -2456,6 +2339,7 @@ fn decbench_type_maps(
         }
     }
     merge_slot_sizes(&mut width, slot_sizes, cc);
+    apply_stack_source_types(&mut width, source_types, source_names, cc, dwarf_type_env);
     merge_exact_definition_widths(&mut width, definition_widths, role_names, cc);
     crate::ir::call_contracts::refine_call_result_types(f, &mut width);
     refine_float_copy_types(&f.body, &mut width);
@@ -2495,6 +2379,24 @@ fn decbench_type_maps(
     }
     let exact_value_widths = integer_widths_by_role(&width);
     (decl, width, exact_value_widths)
+}
+
+fn apply_stack_source_types(
+    types: &mut crate::ir::types_recover::TypeMap,
+    source_types: &std::collections::HashMap<String, String>,
+    source_names: &std::collections::HashMap<String, String>,
+    cc: crate::ir::call_args::CallConv,
+    dwarf_type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
+) {
+    for (internal_name, c_type) in source_types {
+        let Some(hint) = dwarf_return_hint_with_env(c_type, cc, dwarf_type_env) else {
+            continue;
+        };
+        types.apply_locked_fact(crate::ir::types::VReg::phys(internal_name), hint);
+        if let Some(source_name) = source_names.get(internal_name) {
+            types.apply_locked_fact(crate::ir::types::VReg::phys(source_name), hint);
+        }
+    }
 }
 
 /// Extract scalar widths from the final per-value expression map.
@@ -2667,7 +2569,7 @@ fn decompile_all_py(
             &mut addr_map,
             &mut callee_layout_cache,
         );
-        let (slot_sizes, role_names) = run_ast_passes(
+        let (mut stack_facts, role_names) = run_ast_passes(
             &mut f,
             &mut profiler,
             cfg_health,
@@ -2680,6 +2582,15 @@ fn decompile_all_py(
             &str_pool,
             &function_tables,
             &stack_object_hints,
+        );
+        merge_dwarf_register_local_facts(
+            &mut stack_facts,
+            dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func.entry_point.value)),
+            &lf,
+            &role_names,
+            arch,
         );
         if style == "decbench" {
             crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
@@ -2698,7 +2609,10 @@ fn decompile_all_py(
                 prototype.as_ref().expect("DecBench prototype"),
                 cc,
                 &param_slots,
-                &slot_sizes,
+                &stack_facts.sizes,
+                &stack_facts.source_types,
+                &stack_facts.source_names,
+                dwarf_type_env.as_ref(),
                 &role_names,
                 &definition_widths,
             );
@@ -2721,6 +2635,8 @@ fn decompile_all_py(
                     .output_kind(),
                 declared_render.as_ref(),
                 dwarf_types.as_deref().unwrap_or(&[]),
+                &stack_facts.source_types,
+                &stack_facts.source_names,
                 cc,
                 &addr_map,
             )
@@ -2900,7 +2816,7 @@ fn decompile_many_py(
             &mut addr_map,
             &mut callee_layout_cache,
         );
-        let (slot_sizes, role_names) = run_ast_passes(
+        let (mut stack_facts, role_names) = run_ast_passes(
             &mut f,
             &mut profiler,
             cfg_health,
@@ -2913,6 +2829,15 @@ fn decompile_many_py(
             &str_pool,
             &function_tables,
             &stack_object_hints,
+        );
+        merge_dwarf_register_local_facts(
+            &mut stack_facts,
+            dwarf_outputs
+                .as_ref()
+                .and_then(|outputs| outputs.get(&func_va)),
+            &lf,
+            &role_names,
+            arch,
         );
         if style == "decbench" {
             crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
@@ -2935,7 +2860,10 @@ fn decompile_many_py(
                 prototype.as_ref().expect("DecBench prototype"),
                 cc,
                 &param_slots,
-                &slot_sizes,
+                &stack_facts.sizes,
+                &stack_facts.source_types,
+                &stack_facts.source_names,
+                dwarf_type_env.as_ref(),
                 &role_names,
                 &definition_widths,
             );
@@ -2958,6 +2886,8 @@ fn decompile_many_py(
                     .output_kind(),
                 declared_render.as_ref(),
                 dwarf_types.as_deref().unwrap_or(&[]),
+                &stack_facts.source_types,
+                &stack_facts.source_names,
                 cc,
                 &addr_map,
             )
@@ -3001,8 +2931,10 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
 mod tests {
     use super::{
         dwarf_return_hint, dwarf_return_hint_with_env, dwarf_stack_object_hints,
-        imported_symbol_base, integer_widths_by_role, merge_exact_definition_widths,
-        refine_numbered_declaration, retain_empty_direct_callee_layout, DwarfPrototypeContract,
+        imported_symbol_base, integer_widths_by_role, merge_dwarf_register_local_facts,
+        merge_exact_definition_widths, refine_numbered_declaration,
+        retain_empty_direct_callee_layout, select_renderable_dwarf_local_facts,
+        DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
     use crate::ir::call_args::CallConv;
@@ -3018,12 +2950,52 @@ mod tests {
     }
 
     #[test]
+    fn source_local_rename_requires_a_renderable_authoritative_type() {
+        use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
+
+        let dwarf_types = [DwarfType {
+            kind: DwarfTypeKind::Typedef,
+            name: "COLUMN".to_string(),
+            byte_size: 0,
+            fields: Vec::new(),
+            variants: Vec::new(),
+            typedef_target: Some("struct column".to_string()),
+            source_file: Some("locals.c".to_string()),
+        }];
+        let local_types = HashMap::from([
+            ("local_4".to_string(), "uch".to_string()),
+            ("local_8".to_string(), "unsigned int".to_string()),
+            ("local_10".to_string(), "COLUMN *".to_string()),
+        ]);
+        let local_names = HashMap::from([
+            ("local_4".to_string(), "byte".to_string()),
+            ("local_8".to_string(), "count".to_string()),
+            ("local_10".to_string(), "column".to_string()),
+        ]);
+
+        let (selected_types, selected_names) =
+            select_renderable_dwarf_local_facts(&local_types, &local_names, &dwarf_types);
+
+        assert!(!selected_types.contains_key("local_4"));
+        assert!(!selected_names.contains_key("local_4"));
+        assert_eq!(
+            selected_names.get("local_8").map(String::as_str),
+            Some("count")
+        );
+        assert_eq!(
+            selected_names.get("local_10").map(String::as_str),
+            Some("column")
+        );
+    }
+
+    #[test]
     fn only_a_complete_void_parameter_list_authorizes_an_empty_callee_layout() {
         let complete = DwarfPrototypeContract {
             prototyped: true,
             parameter_types: Vec::new(),
             return_type: DwarfReturnType::Type("int".to_string()),
             stack_objects: Vec::new(),
+            register_locals: Vec::new(),
         };
         let old_style = DwarfPrototypeContract {
             prototyped: false,
@@ -3405,18 +3377,23 @@ mod tests {
             prototyped: true,
             parameter_types: Vec::new(),
             return_type: DwarfReturnType::Void,
+            register_locals: Vec::new(),
             stack_objects: vec![
                 DwarfStackObject {
                     base: DwarfStackBase::Register(11),
                     offset: -24,
                     byte_size: 16,
                     aggregate: true,
+                    source_name: None,
+                    c_type: None,
                 },
                 DwarfStackObject {
                     base: DwarfStackBase::Register(7),
                     offset: -8,
                     byte_size: 8,
                     aggregate: true,
+                    source_name: None,
+                    c_type: None,
                 },
             ],
         };
@@ -3438,11 +3415,14 @@ mod tests {
             prototyped: true,
             parameter_types: Vec::new(),
             return_type: DwarfReturnType::Void,
+            register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
                 base: DwarfStackBase::CallFrameCfa,
                 offset: -40,
                 byte_size: 16,
                 aggregate: true,
+                source_name: None,
+                c_type: None,
             }],
         };
 
@@ -3460,11 +3440,14 @@ mod tests {
             prototyped: true,
             parameter_types: Vec::new(),
             return_type: DwarfReturnType::Void,
+            register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
                 base: DwarfStackBase::CallFrameCfa,
                 offset: -24,
                 byte_size: 8,
                 aggregate: true,
+                source_name: None,
+                c_type: None,
             }],
         };
 
@@ -3476,5 +3459,198 @@ mod tests {
             assert_eq!(hints[0].disp, -24);
             assert_eq!(hints[0].size, 8);
         }
+    }
+
+    #[test]
+    fn dwarf_scalar_stack_objects_retain_their_authoritative_coordinate() {
+        let contract = DwarfPrototypeContract {
+            prototyped: true,
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            register_locals: Vec::new(),
+            stack_objects: vec![DwarfStackObject {
+                base: DwarfStackBase::CallFrameCfa,
+                offset: -12,
+                byte_size: 4,
+                aggregate: false,
+                source_name: Some("reg32".to_string()),
+                c_type: Some("int".to_string()),
+            }],
+        };
+
+        let hints = dwarf_stack_object_hints(Some(&contract), CallConv::Arm);
+
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].base, "entry_sp");
+        assert_eq!(hints[0].disp, -12);
+        assert_eq!(hints[0].size, 4);
+        assert!(!hints[0].aggregate);
+        assert_eq!(hints[0].source_name.as_deref(), Some("reg32"));
+        assert_eq!(hints[0].c_type.as_deref(), Some("int"));
+    }
+
+    #[test]
+    fn dwarf_register_range_selects_the_numbered_value_role() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation};
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let contract = DwarfPrototypeContract {
+            prototyped: true,
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: Vec::new(),
+            register_locals: vec![DwarfRegisterLocal {
+                source_name: "i".to_string(),
+                c_type: "unsigned int".to_string(),
+                locations: vec![DwarfRegisterLocation {
+                    start: 0x105,
+                    end: 0x110,
+                    register: 4,
+                }],
+            }],
+        };
+        let numbered = LlirFunction {
+            entry_va: 0x100,
+            blocks: vec![LlirBlock {
+                start_va: 0x100,
+                end_va: 0x110,
+                instrs: vec![LlirInstr {
+                    va: 0x108,
+                    op: Op::Assign {
+                        dst: VReg::phys("r0#1"),
+                        src: Value::Reg(VReg::phys("r4#1")),
+                    },
+                }],
+                succs: Vec::new(),
+            }],
+        };
+        let mut facts = crate::ir::stack_locals::StackLocalFacts::default();
+
+        merge_dwarf_register_local_facts(
+            &mut facts,
+            Some(&contract),
+            &numbered,
+            &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
+            Arch::ARM,
+        );
+
+        assert_eq!(
+            facts.source_names.get("var1").map(String::as_str),
+            Some("i")
+        );
+        assert_eq!(
+            facts.source_types.get("var1").map(String::as_str),
+            Some("unsigned int")
+        );
+    }
+
+    #[test]
+    fn dwarf_register_name_rejects_a_role_used_outside_the_source_lifetime() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation};
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let contract = DwarfPrototypeContract {
+            prototyped: true,
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: Vec::new(),
+            register_locals: vec![DwarfRegisterLocal {
+                source_name: "result".to_string(),
+                c_type: "struct sensor *".to_string(),
+                locations: vec![DwarfRegisterLocation {
+                    start: 0x105,
+                    end: 0x110,
+                    register: 4,
+                }],
+            }],
+        };
+        let numbered = LlirFunction {
+            entry_va: 0x80,
+            blocks: vec![LlirBlock {
+                start_va: 0x80,
+                end_va: 0x110,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x90,
+                        op: Op::Assign {
+                            dst: VReg::phys("r0#1"),
+                            src: Value::Reg(VReg::phys("r4#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x108,
+                        op: Op::Assign {
+                            dst: VReg::phys("r1#1"),
+                            src: Value::Reg(VReg::phys("r4#1")),
+                        },
+                    },
+                ],
+                succs: Vec::new(),
+            }],
+        };
+        let mut facts = crate::ir::stack_locals::StackLocalFacts::default();
+
+        merge_dwarf_register_local_facts(
+            &mut facts,
+            Some(&contract),
+            &numbered,
+            &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
+            Arch::ARM,
+        );
+
+        assert!(facts.source_names.is_empty());
+        assert!(facts.source_types.is_empty());
+    }
+
+    #[test]
+    fn dwarf_register_name_rejects_an_unsafe_source_identifier() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation};
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let contract = DwarfPrototypeContract {
+            prototyped: true,
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: Vec::new(),
+            register_locals: vec![DwarfRegisterLocal {
+                source_name: "return".to_string(),
+                c_type: "int".to_string(),
+                locations: vec![DwarfRegisterLocation {
+                    start: 0x100,
+                    end: 0x110,
+                    register: 4,
+                }],
+            }],
+        };
+        let numbered = LlirFunction {
+            entry_va: 0x100,
+            blocks: vec![LlirBlock {
+                start_va: 0x100,
+                end_va: 0x110,
+                instrs: vec![LlirInstr {
+                    va: 0x108,
+                    op: Op::Assign {
+                        dst: VReg::phys("r0#1"),
+                        src: Value::Reg(VReg::phys("r4#1")),
+                    },
+                }],
+                succs: Vec::new(),
+            }],
+        };
+        let mut facts = crate::ir::stack_locals::StackLocalFacts::default();
+
+        merge_dwarf_register_local_facts(
+            &mut facts,
+            Some(&contract),
+            &numbered,
+            &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
+            Arch::ARM,
+        );
+
+        assert!(facts.source_names.is_empty());
+        assert!(facts.source_types.is_empty());
     }
 }

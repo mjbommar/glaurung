@@ -317,6 +317,28 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   after body values preserve source typedef identity. Continue from the nine
   verified-open rows and refresh status through real-binary evaluation after
   every general repair.
+- [x] Close the nine remaining historical type-distance-one rows through shared
+  DWARF local contracts, lifetime-aware value identity, dead promoted-object
+  stores, source-unit pointer arithmetic, and aggregate-name safety. Fresh v15
+  evaluation scores all 29 rows: 27 are officially perfect and two emit the
+  exact expected ordinary-typedef pointer declarations that TypeMatch v5 does
+  not parse. The ledger records all 29 product repairs and keeps the two metric
+  false negatives visible. Across the full replay, current TypeMatch has 68
+  perfects and mean `0.56153998`, versus 41 and `0.40518645` at accepted parent
+  `acc3e24`; 123 common rows improve and none regress. Coverage changes from 235
+  to 233 scored rows because two x0r requests return no artifact and is not
+  disguised by comparing unlike denominators.
+- [x] Audit ByteMatch and CFG consequences rather than treating type-only work
+  as output-neutral. Fresh ByteMatch rises from 10 to 11 perfect and mean
+  `0.16168974→0.19063337`; 33 common rows improve and nine compiler-shape rows
+  regress. The audit found and fixed incorrect native pointer scaling and an
+  aggregate typedef/local-name compilation collision. A bounded CFG audit names
+  seven lifetime-SSA control-skeleton canaries; declaration-only differences
+  are contracted separately. These canaries remain required until execution or
+  semantic equivalence evidence retires them.
+- [x] Extract the cohesive DWARF contract importer from
+  `python_bindings/ir.rs` into a 449-line owner, reducing the binding module to
+  3,656 lines while keeping bindings thin and avoiding a forwarding-only split.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the

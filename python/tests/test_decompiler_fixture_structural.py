@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -459,7 +460,7 @@ def test_sum_array_recovers_a_for_loop(tmp_path):
     )
 
     assert S.has_for_loop(result.stdout), result.stdout
-    assert "++" in result.stdout, result.stdout
+    assert re.search(r"\bi\s*=.*\bi\b.*\+\s*1", result.stdout), result.stdout
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 

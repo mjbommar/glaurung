@@ -249,7 +249,9 @@ def test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution(
         )
     else:
         assert re.search(
-            r"\bt\d+\s*=\s*var\d+;\s*\n\s*var\d+\s*=.*\+ 1", decompiled.stdout
+            r"\b(var\d+)\s*=\s*\(\*\(int \*\)\([^\n]+\)\s*\+\s*1\);"
+            r"\s*\n\s*\*\(int \*\)\([^\n]+\)\s*=\s*\1;",
+            decompiled.stdout,
         ), decompiled.stdout
 
     results = D.run(

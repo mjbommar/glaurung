@@ -1156,3 +1156,88 @@ signature was always the second output line; a correct typedef declaration now
 precedes aggregate signatures. The test now locates both affected signatures
 by function name and passes. The other four are the pre-existing suspicious
 cross-sample failures, unrelated to decompilation or this change.
+
+## 08:00–13:20 — close the 29-row type cohort and audit score side effects
+
+The remaining nine rows were not nine isolated spelling bugs. They shared four
+missing semantic owners: source-local DWARF contracts, lifetime-aware value
+identity, elimination of unobserved promoted-object stores, and pointer
+arithmetic expressed in source element units. The repair therefore imports
+DWARF local names, types, byte extents, register locations, and location ranges;
+keeps values from disjoint source lifetimes out of the same phi/value-number
+class; permits declaration-only optimized constants; and removes stores only
+when the promoted object has no read, escape, or other observer. Exact-address
+DecBench requests also bypass the section-name filter because real functions
+may live in compiler-generated executable sections outside `.text`.
+
+Two rendering safety seams were exposed by RED tests. Native pointer arithmetic
+must convert the machine byte displacement into a C element displacement, but
+only when the authoritative scalar pointee width equals the recovered width;
+opaque aggregate pointers retain explicit byte arithmetic. Separately, a local
+whose name equals an aggregate typedef, such as `struct passwd *passwd`, must
+use the tagged spelling so the declaration does not hide its own type. Both
+rules are centralized and fail closed. A deliberately broad scalar-typedef and
+array rollout was rejected after it caused 23 TypeMatch regressions. A broad
+pointer-cast experiment was also rejected after it introduced compilation
+regressions.
+
+Fresh cache-version-15 evaluation on the 29 checked real binaries scores all 29:
+27 are perfect and two emit the exact expected declarations,
+`COLUMN *p;` and `discover_class_node *node;`. TypeMatch v5 scores those two as
+`0.8` and `0.5` because its declaration parser recognizes selected typedef
+forms but not these ordinary typedef pointers. The corpus ledger therefore
+records 29 Glaurung-side resolutions, 27 verified perfect rows, and two metric
+false negatives rather than leaving product defects open.
+
+The full 250-function replay uses 224 freshly processed binaries with Glaurung
+caching disabled and no extraction errors. Against accepted parent `acc3e24`,
+common scored functions have 123 improvements and zero regressions:
+
+| TypeMatch result | parent `acc3e24` | current | Delta |
+|---|---:|---:|---:|
+| measured | 235 | 233 | -2 |
+| perfect | 41 | 68 | +27 |
+| mean | 0.40518645 | 0.56153998 | +0.15635353 |
+
+The different measured denominators are explicit: two x0r address/name
+requests return no Glaurung artifact, while 17 total rows remain unscored due to
+available DWARF/metric input. The improvement/regression count is computed only
+over keys scored on both revisions.
+
+ByteMatch was rerun fresh because source-equivalent type repairs can still alter
+compiler shape. Parent scores 250 rows, 10 perfect, mean `0.16168974`; current
+scores 248 rows, 11 perfect, mean `0.19063337`. On 248 common rows, 33 improve
+and nine regress. This audit found and repaired two genuine emission defects:
+native pointer scaling had rendered an eight-byte displacement as eight
+elements in `env_free`, and a typedef/local collision made `user_name`
+uncompilable. The remaining nine changes are bounded compiler-shape tradeoffs,
+not silently called neutral; their TypeMatch generally improves substantially
+(for example `gpio_toggle` `0.667→1.0`, `write_power_mode` `0.2→1.0`, and
+`dwc_poll` `0.143→1.0`).
+
+The final CFG audit parses all 175 parent/current pairs for which both artifacts
+contain code. A bounded directed structural fingerprint is identical for 148;
+contracting straight-line declaration blocks raises that to 168. Seven
+functions have real control-skeleton changes from the lifetime-aware SSA/value
+repair: `diversion_add`, `grep::main`, `revoked_certs_generate`,
+`oslib_test_009_004_execute`, `mspProcessInCommand`, `ssh_agent_sign`, and
+`USB_OTG_FlushRxFifo`. They are retained as behavior-changing canaries rather
+than mislabeled GED-neutral. Unbounded exact graph isomorphism was rejected as
+a gate after it stalled on a large symmetric graph.
+
+Finally, the first cohesive DWARF-contract owner was extracted from
+`python_bindings/ir.rs` into a 449-line module, reducing the binding owner to
+3,656 lines without creating a forwarding-only fragment. Full Rust testing with
+the Python extension enabled passes 2,008 library tests plus every integration
+and documentation test. Focused Python formatting/lint and the owned DecBench
+tests pass. The repository-wide Python run reports 2,864 passed, 44 skipped,
+and 12 failures. Eight decompiler failures were obsolete shape assertions: they
+required anonymous `local_x` names or one transient temporary even though the
+new output recovered authoritative source names and still reached the existing
+compile/execute oracle. Those eight tests now assert the source-level semantic
+invariant and pass in a focused rerun. The four remaining failures are the known
+cross-architecture `suspicious_win` sample-content failures and do not execute
+the changed decompiler path. Repository-wide `ty check` remains a baseline-red
+gate with 2,064 diagnostics. Strict Clippy is also baseline-red (193 warnings
+under `-D warnings`); `--all-features` additionally requires the external pinned
+Bitwuzla library. These failures are reported rather than recast as green.

@@ -50,6 +50,9 @@ fn aarch64_wide_load_at_a_bounded_byte_object_uses_the_object_value() {
         base: "entry_sp".to_string(),
         disp: -8,
         size: 1,
+        aggregate: true,
+        source_name: None,
+        c_type: None,
     }];
 
     promote_stack_locals_typed_with_parameter_count_and_objects(
@@ -118,6 +121,9 @@ fn aarch64_interior_or_cross_frame_wide_loads_remain_conservative() {
             base: "entry_sp".to_string(),
             disp: hint_disp,
             size: 1,
+            aggregate: true,
+            source_name: None,
+            c_type: None,
         }];
 
         promote_stack_locals_typed_with_parameter_count_and_objects(

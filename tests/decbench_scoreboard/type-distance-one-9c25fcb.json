@@ -10,12 +10,14 @@
     "missing_parameter": 1
   },
   "fresh_validation": {
-    "metric": "official TypeMatchMetric cache_version 4 with caching disabled",
+    "metric": "official TypeMatchMetric cache_version 5 with caching disabled",
     "scope": "all 29 functions, address-scoped from their real official binaries",
     "parent_revision": "acc3e241cf1314312b18acd165d766bd8ab6ed34",
     "parent_perfect": 13,
-    "current_perfect": 20,
-    "current_open": 9
+    "current_perfect": 27,
+    "current_open": 2,
+    "glaurung_side_resolved": 29,
+    "metric_false_negatives": 2
   },
   "defects": [
     {
@@ -48,7 +50,7 @@
       "failure_cluster": "missing_local_identity",
       "evidence_owner": "stack_coordinate_and_local_identity",
       "mismatch": "local i: int has no recovered local with matching identity",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "cleanflight::O0::cleanflight_DALRCF405::icm20689SpiAccDetect",
@@ -64,7 +66,7 @@
       "failure_cluster": "missing_local_identity",
       "evidence_owner": "stack_coordinate_and_local_identity",
       "mismatch": "local i: int has no recovered local with matching identity",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "cleanflight::O2-noinline::cleanflight_DALRCF405::m25p16_enable",
@@ -80,7 +82,8 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "stack_coordinate_and_local_identity",
       "mismatch": "stack local p: COLUMN * recovered as long",
-      "status": "open"
+      "status": "metric_false_negative",
+      "metric_evidence": "Glaurung emits the exact declaration `COLUMN * p;`; TypeMatch v5's declaration regex accepts arbitrary pointer typedefs only when their names end in `_t`."
     },
     {
       "key": "crazyflie::O2-noinline::firmware::ld_word",
@@ -96,7 +99,7 @@
       "failure_cluster": "missing_local_identity",
       "evidence_owner": "stack_coordinate_and_local_identity",
       "mismatch": "local result: aggregate pointer has no recovered local with matching identity",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "cronie::O2::crontab::strcmp_until",
@@ -152,7 +155,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "aggregate_extent_and_stack_coordinate",
       "mismatch": "stack local pxTCB: aggregate pointer is represented as an unrelated byte local",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "freertos::O0::RTOSDemo::vListInitialise",
@@ -176,7 +179,7 @@
       "failure_cluster": "missing_local_identity",
       "evidence_owner": "stack_coordinate_and_local_identity",
       "mismatch": "local len: int has no recovered local with matching identity",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "kmod::O2::kmod::mod_free",
@@ -200,7 +203,7 @@
       "failure_cluster": "missing_local_identity",
       "evidence_owner": "stack_coordinate_and_local_identity",
       "mismatch": "local reg32: integer has no recovered local with matching identity",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "libopencm3::O0::usart_console::main",
@@ -208,7 +211,7 @@
       "failure_cluster": "missing_local_identity",
       "evidence_owner": "stack_coordinate_and_local_identity",
       "mismatch": "local len: int is absent while the adjacent 128-byte buffer is recovered",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "libopencm3::O0::usbmidi::usbd_ep_nak_set",
@@ -240,7 +243,8 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "aggregate_extent_and_stack_coordinate",
       "mismatch": "stack local node: aggregate pointer recovered as long",
-      "status": "open"
+      "status": "metric_false_negative",
+      "metric_evidence": "Glaurung emits the exact declaration `discover_class_node * node;`; TypeMatch v5's declaration regex accepts arbitrary pointer typedefs only when their names end in `_t`."
     },
     {
       "key": "rsyslog::O2::rsyslogd::beginTransaction",

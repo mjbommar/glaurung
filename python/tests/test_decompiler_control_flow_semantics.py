@@ -57,9 +57,8 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
     functions = D.exported_functions(str(binary))
     code = D.decompiled_c(str(binary), functions["fsm"])
     assert code is not None
-    assert "signed char local_1d;" in code, code
-    assert "local_2c" not in code, code
-    assert "local_4" not in code, code
+    assert "signed char c;" in code, code
+    assert "int i;" in code and "int st;" in code, code
 
     # The preferred recovery is a structured switch whose C `break`s flow to
     # one latch after the switch.  Requiring a particular number of gotos made
@@ -100,7 +99,7 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
     )
     for_latch = re.search(
         r"(?m)^\s*for\s*\([^;\n]*;[^;\n]*;\s*([A-Za-z_]\w*)\s*=.*"
-        r"\(\1\s*\+\s*1\).*\)\s*\{",
+        r"\(\1\).*\+\s*1.*\)\s*\{",
         code[:switch_at],
     )
     for_increment = re.search(
@@ -283,7 +282,7 @@ def test_array_address_chain_folds_and_round_trips(tmp_path: Path) -> None:
     functions = D.exported_functions(str(binary))
     code = D.decompiled_c(str(binary), functions["sum_array"])
     assert code is not None
-    assert "arg0[" in code and "local_4" in code, code
+    assert "arg0[" in code and "int i;" in code and "int s;" in code, code
     assert "long var3;" not in code and "long var6;" not in code, code
     assert (
         D.build_so(code, tmp_path, "dec_sum_array", link_against=str(binary))

@@ -79,7 +79,8 @@ int main(void) {
     assert "locale_name_length(void)" in generated, generated
     assert "extern char * setlocale(int, const char *);" in generated, generated
     assert "extern long setlocale" not in generated, generated
-    assert generated.count("char * local_") >= 2, generated
+    assert "char * old_locale;" in generated, generated
+    assert "char * saved_locale;" in generated, generated
 
     rebuilt_source = tmp_path / "rebuilt.c"
     rebuilt_source.write_text(

@@ -183,6 +183,89 @@ pub fn apply_role_names_with_parameter_roles(
     role
 }
 
+/// Replace internal promoted-local identities with validated source names at
+/// the final presentation boundary.
+///
+/// Stack promotion and all semantic passes intentionally keep the `local_N`
+/// identity because that spelling carries storage-class and frame-offset
+/// meaning throughout the IR. Applying debug names only after those passes
+/// avoids turning a scalar assignment into a pointer store merely because its
+/// source identifier no longer begins with `local_`.
+pub fn apply_authoritative_local_names(f: &mut Function, source_names: &HashMap<String, String>) {
+    rewrite_body(&mut f.body, source_names);
+}
+
+/// Whether a debug-provided local name can safely enter the generated C namespace.
+///
+/// Source names that collide with C keywords, ABI roles, or identities reserved
+/// by earlier decompiler passes are rejected instead of being sanitized into a
+/// potentially different variable. Callers remain responsible for enforcing
+/// uniqueness within the function.
+pub(crate) fn valid_authoritative_local_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        && !matches!(
+            name,
+            "auto"
+                | "break"
+                | "case"
+                | "char"
+                | "const"
+                | "continue"
+                | "default"
+                | "do"
+                | "double"
+                | "else"
+                | "enum"
+                | "extern"
+                | "float"
+                | "for"
+                | "goto"
+                | "if"
+                | "inline"
+                | "int"
+                | "long"
+                | "register"
+                | "restrict"
+                | "return"
+                | "short"
+                | "signed"
+                | "sizeof"
+                | "static"
+                | "struct"
+                | "switch"
+                | "typedef"
+                | "union"
+                | "unsigned"
+                | "void"
+                | "volatile"
+                | "while"
+                | "_Bool"
+                | "_Complex"
+                | "_Imaginary"
+                | "ret"
+                | "lr"
+                | "rbp"
+                | "ebp"
+                | "rsp"
+                | "esp"
+                | "sp"
+                | "fp"
+        )
+        && parse_arg_index(name).is_none()
+        && !name
+            .strip_prefix("var")
+            .or_else(|| name.strip_prefix('t'))
+            .is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
+            })
+        && !name.starts_with("local_")
+        && !name.starts_with("stack_")
+}
+
 fn collect_direct_return_carriers(body: &[Stmt], out: &mut Vec<String>) {
     for statement in body {
         match statement {
@@ -834,6 +917,56 @@ mod tests {
         let text = render(&f);
         assert!(text.contains("%var0 = 1;"), "got: {}", text);
         assert!(text.contains("%var1 = %var0;"), "got: {}", text);
+    }
+
+    #[test]
+    fn authoritative_local_name_is_applied_only_at_the_presentation_boundary() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: reg("local_c"),
+                src: Expr::Const(1),
+            }],
+        };
+
+        apply_authoritative_local_names(
+            &mut f,
+            &HashMap::from([("local_c".to_string(), "reg32".to_string())]),
+        );
+
+        assert_eq!(
+            f.body[0],
+            Stmt::Assign {
+                dst: reg("reg32"),
+                src: Expr::Const(1)
+            }
+        );
+    }
+
+    #[test]
+    fn authoritative_local_names_reject_c_and_decompiler_namespaces() {
+        for valid in ["i", "result", "_source_value", "reg32"] {
+            assert!(valid_authoritative_local_name(valid), "rejected {valid}");
+        }
+        for invalid in [
+            "",
+            "two words",
+            "3d",
+            "return",
+            "arg2",
+            "var4",
+            "t17",
+            "local_c",
+            "stack_0",
+            "ret",
+            "sp",
+        ] {
+            assert!(
+                !valid_authoritative_local_name(invalid),
+                "accepted {invalid}"
+            );
+        }
     }
 
     #[test]

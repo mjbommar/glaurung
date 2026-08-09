@@ -22,6 +22,8 @@
 //! * We never remove flag-VReg writes — those are handled by the dedicated
 //!   `dce` pass which already understands their locality.
 
+use std::collections::HashSet;
+
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::{BinOp, VReg};
@@ -308,6 +310,62 @@ pub fn prune_callee_saved_spills(f: &mut Function) {
     }
 
     prune_orphaned_stack_pointer_arithmetic(f);
+}
+
+/// Remove writes to a promoted local object whose value and address never escape.
+///
+/// Stack promotion can conservatively group callee-save slots into an addressed
+/// byte object before machine-frame cleanup runs. Once later preparation has
+/// removed the matching epilogue, those field writes are ordinary dead local
+/// stores. The proof here is storage-based: every remaining mention of the
+/// object must be the destination address of one such store.
+pub fn prune_unobserved_promoted_object_stores(f: &mut Function) {
+    fn field_store_base(statement: &Stmt) -> Option<&VReg> {
+        let Stmt::Store { addr, src, .. } = statement else {
+            return None;
+        };
+        let Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } = addr
+        else {
+            return None;
+        };
+        let object = match (lhs.as_ref(), rhs.as_ref()) {
+            (Expr::StackAddr { object, .. }, Expr::Const(_))
+            | (Expr::Const(_), Expr::StackAddr { object, .. }) => object,
+            _ => return None,
+        };
+        let VReg::Phys(name) = object else {
+            return None;
+        };
+        if !(name.starts_with("local_") || name.starts_with("stack_")) || expr_reads(src, object) {
+            return None;
+        }
+        Some(object)
+    }
+
+    let candidates = f
+        .body
+        .iter()
+        .filter_map(field_store_base)
+        .cloned()
+        .collect::<HashSet<_>>();
+    let doomed = candidates
+        .into_iter()
+        .filter(|object| {
+            !f.body.iter().any(|statement| {
+                field_store_base(statement) != Some(object) && stmt_reads(statement, object)
+            })
+        })
+        .collect::<HashSet<_>>();
+    if doomed.is_empty() {
+        return;
+    }
+    f.body.retain(|statement| {
+        !field_store_base(statement).is_some_and(|object| doomed.contains(object))
+    });
 }
 
 /// Drop stack-pointer adjustments that nothing observes.
@@ -1021,5 +1079,67 @@ mod tests {
             before,
             "removed a spill that ordinary code reads"
         );
+    }
+
+    #[test]
+    fn unobserved_promoted_object_field_stores_are_removed() {
+        let field = |offset| Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::StackAddr {
+                object: reg("local_10"),
+                size: 16,
+            }),
+            rhs: Box::new(Expr::Const(offset)),
+        };
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: field(8),
+                    src: Expr::Reg(reg("var0")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: field(12),
+                    src: Expr::Reg(reg("lr")),
+                    size: 4,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_unobserved_promoted_object_stores(&mut f);
+
+        assert_eq!(f.body, vec![Stmt::Return { value: None }]);
+    }
+
+    #[test]
+    fn observed_promoted_object_field_store_is_kept() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::StackAddr {
+                            object: reg("local_10"),
+                            size: 16,
+                        }),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                    src: Expr::Reg(reg("var0")),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_10"))),
+                },
+            ],
+        };
+
+        prune_unobserved_promoted_object_stores(&mut f);
+
+        assert_eq!(f.body.len(), 2);
     }
 }

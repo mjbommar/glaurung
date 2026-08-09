@@ -145,7 +145,17 @@ class GlaurungDecompiler(Decompiler):
                 continue
             if not isinstance(code, str) or not code.strip():
                 continue
-            if common.should_skip_function(name, address, text_range):
+            address_requested = address in requested_addresses or any(
+                (address & ~1) == (requested & ~1) for requested in requested_addresses
+            )
+            # Some embedded linkers retain one section per function instead of
+            # folding every `.text.*` input section into the output `.text`.
+            # An exact source/DWARF address request is stronger evidence than
+            # the ordinary whole-binary `.text` filter in that case.
+            if (
+                common.should_skip_function(name, address, text_range)
+                and not address_requested
+            ):
                 continue
             if requested and (name, address) not in requested:
                 continue

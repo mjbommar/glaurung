@@ -129,3 +129,60 @@ print(json.dumps(sorted(result.functions)))
     assert expected_mode in argv
     assert expected_value in argv
     assert ({"--vas", "--all"} - {expected_mode}).isdisjoint(argv)
+
+
+@pytest.mark.slow
+def test_address_requested_function_outside_plain_text_is_not_filtered(
+    tmp_path: Path,
+) -> None:
+    """Exact DWARF requests remain valid when the linker uses function sections."""
+    checkout = _decbench_checkout()
+    python = checkout / ".venv" / "bin" / "python"
+    glaurung = ROOT / ".venv" / "bin" / "glaurung"
+    if not python.is_file() or not glaurung.is_file():
+        pytest.skip("local DecBench and Glaurung executables are required")
+
+    binary = tmp_path / "arith-sections.so"
+    built = subprocess.run(
+        [
+            "gcc",
+            "-shared",
+            "-fPIC",
+            "-g",
+            "-O0",
+            "-w",
+            "-ffunction-sections",
+            "-Wl,--unique=.text.*",
+            "-o",
+            binary,
+            SOURCE,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    script = f"""
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, {str(ADAPTER.parent)!r})
+from decbench_glaurung import GlaurungDecompiler
+result = GlaurungDecompiler().decompile_binary(
+    Path({str(binary)!r}), functions=[('addmul', 0x10f9)]
+)
+print(json.dumps(sorted(result.functions)))
+"""
+    probe = subprocess.run(
+        [python, "-c", script],
+        cwd=checkout,
+        env={**os.environ, "GLAURUNG_BIN": str(glaurung), "NO_COLOR": "1"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert json.loads(probe.stdout) == ["addmul"]

@@ -26,6 +26,16 @@ use crate::ir::ssa::SsaValue;
 use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, InstrAddr};
 
+/// A source variable's authoritative residence in one machine register.
+///
+/// Value numbering uses these ranges only to keep distinct source lifetimes
+/// from being coalesced back into one C identity after SSA destruction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceRegisterLifetime {
+    pub register: String,
+    pub ranges: Vec<(u64, u64)>,
+}
+
 /// The registers that carry a return value under `cc` (all width sub-names).
 fn return_reg_names(cc: CallConv) -> &'static [&'static str] {
     crate::ir::abi::return_registers(cc)
@@ -736,6 +746,16 @@ pub fn value_number_with_parameter_slots(
     ssa: &crate::ir::ssa::SsaInfo,
     cc: CallConv,
 ) -> (LlirFunction, HashMap<VReg, u8>, HashSet<usize>) {
+    value_number_with_parameter_slots_and_lifetimes(lf, ssa, cc, &[])
+}
+
+/// Value-number while preserving authoritative source-register lifetime splits.
+pub fn value_number_with_parameter_slots_and_lifetimes(
+    lf: &LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    cc: CallConv,
+    source_lifetimes: &[SourceRegisterLifetime],
+) -> (LlirFunction, HashMap<VReg, u8>, HashSet<usize>) {
     let ret_names = return_reg_names(cc);
     // Keep bare only return-register defs which still reach an operand-free
     // return. This compatibility path is required until prototype recovery can
@@ -824,6 +844,7 @@ pub fn value_number_with_parameter_slots(
         &mut definition_widths,
         &definition_widths_by_site,
         &phi_copies.incoming_widths,
+        source_lifetimes,
     );
     (out, definition_widths, parameter_slots)
 }
@@ -1591,6 +1612,24 @@ fn coalesce_phi_copies(
         definition_widths,
         &DefinitionWidthsBySite::new(),
         &[],
+        &[],
+    );
+}
+
+#[cfg(test)]
+fn coalesce_phi_copies_with_lifetimes(
+    out: &mut LlirFunction,
+    copies: &[(VReg, VReg)],
+    definition_widths: &mut HashMap<VReg, u8>,
+    lifetimes: &[SourceRegisterLifetime],
+) {
+    coalesce_phi_copies_with_definition_sites(
+        out,
+        copies,
+        definition_widths,
+        &DefinitionWidthsBySite::new(),
+        &[],
+        lifetimes,
     );
 }
 
@@ -1607,6 +1646,7 @@ fn coalesce_phi_copies_with_definition_sites(
     definition_widths: &mut HashMap<VReg, u8>,
     definition_widths_by_site: &DefinitionWidthsBySite,
     incoming_widths: &[Option<u8>],
+    source_lifetimes: &[SourceRegisterLifetime],
 ) {
     if copies.is_empty() {
         return;
@@ -1641,6 +1681,36 @@ fn coalesce_phi_copies_with_definition_sites(
         return;
     }
     let n = names.len();
+
+    // One machine register may hold unrelated source variables in disjoint
+    // lexical ranges. Record, for each SSA value, whether each occurrence is
+    // inside or outside an authoritative source lifetime. Exact signatures may
+    // coalesce; crossing a boundary may not, even when machine liveness says
+    // the storage reuse itself is safe.
+    let mut lifetime_signatures = vec![std::collections::BTreeSet::new(); n];
+    for block in &out.blocks {
+        for instruction in &block.instrs {
+            let (definition, uses) = def_uses(&instruction.op);
+            for value in definition.into_iter().chain(uses) {
+                let Some(&value_index) = index.get(&value) else {
+                    continue;
+                };
+                let Some((base, _version)) = coalescable(&value) else {
+                    continue;
+                };
+                for (lifetime_index, lifetime) in source_lifetimes.iter().enumerate() {
+                    if lifetime.register != base {
+                        continue;
+                    }
+                    let inside = lifetime
+                        .ranges
+                        .iter()
+                        .any(|&(start, end)| instruction.va >= start && instruction.va < end);
+                    lifetime_signatures[value_index].insert((lifetime_index, inside));
+                }
+            }
+        }
+    }
 
     // --- Backward liveness over the candidate values -------------------------
     let succs = successor_indices(out);
@@ -1739,6 +1809,7 @@ fn coalesce_phi_copies_with_definition_sites(
     let mut already_joined = 0usize;
     let mut refused_interference = 0usize;
     let mut refused_width = 0usize;
+    let mut refused_lifetime = 0usize;
     let mut merged = 0usize;
     for (d, s) in pairs.iter().copied() {
         attempted += 1;
@@ -1749,6 +1820,10 @@ fn coalesce_phi_copies_with_definition_sites(
         }
         if members[b].iter().any(|m| interferes[a].contains(m)) {
             refused_interference += 1;
+            continue;
+        }
+        if lifetime_signatures[a] != lifetime_signatures[b] {
+            refused_lifetime += 1;
             continue;
         }
         let Some(merged_width) = width[a].merge(width[b]) else {
@@ -1784,7 +1859,7 @@ fn coalesce_phi_copies_with_definition_sites(
         eprintln!(
             "phi-coalesce-stats attempted={attempted} merged={merged} \
              interference={refused_interference} width={refused_width} \
-             joined={already_joined}"
+             lifetime={refused_lifetime} joined={already_joined}"
         );
         for (&root, &rep) in &representative {
             let class: Vec<&VReg> = members[root].iter().map(|&member| &names[member]).collect();
@@ -2543,6 +2618,60 @@ mod tests {
             register_copies(&lf).contains(&("rax#2".to_string(), "rax#1".to_string())),
             "the copy must survive: rax#1 is live across a later definition of \
              rax#2, so one name would report 9 where 1 was written: {lf:#?}"
+        );
+    }
+
+    #[test]
+    fn source_register_lifetime_blocks_cross_variable_phi_coalescing() {
+        let mut widths = HashMap::new();
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1030,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::phys("r4#1"),
+                            src: Value::Const(1),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1020,
+                        op: Op::Assign {
+                            dst: VReg::phys("r4#2"),
+                            src: Value::Reg(VReg::phys("r4#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1024,
+                        op: Op::Assign {
+                            dst: VReg::phys("r0#1"),
+                            src: Value::Reg(VReg::phys("r4#2")),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+
+        coalesce_phi_copies_with_lifetimes(
+            &mut lf,
+            &[(VReg::phys("r4#2"), VReg::phys("r4#1"))],
+            &mut widths,
+            &[SourceRegisterLifetime {
+                register: "r4".to_string(),
+                ranges: vec![(0x1020, 0x1030)],
+            }],
+        );
+
+        assert_eq!(
+            register_copies(&lf),
+            vec![
+                ("r4#2".to_string(), "r4#1".to_string()),
+                ("r0#1".to_string(), "r4#2".to_string()),
+            ]
         );
     }
 

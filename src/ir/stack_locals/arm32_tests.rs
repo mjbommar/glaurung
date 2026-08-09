@@ -89,6 +89,9 @@ fn a32_frame_pointer_address_rejoins_the_entry_cfa_object() {
             base: "entry_sp".into(),
             disp: -332,
             size: 64,
+            aggregate: true,
+            source_name: None,
+            c_type: None,
         }],
     );
 

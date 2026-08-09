@@ -57,6 +57,9 @@ pub struct DwarfFunction {
     /// Source variables with a fixed frame-relative location and known size.
     /// These are authoritative object boundaries for stack-slot promotion.
     pub stack_objects: Vec<DwarfStackObject>,
+    /// Source locals whose optimized value resides in a machine register over
+    /// one or more address ranges.
+    pub register_locals: Vec<DwarfRegisterLocal>,
 }
 
 /// Coordinate used by a variable's ``DW_OP_fbreg`` location.
@@ -69,12 +72,34 @@ pub enum DwarfStackBase {
 }
 
 /// One fixed-size source object resident in a function's stack frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DwarfStackObject {
     pub base: DwarfStackBase,
     pub offset: i64,
     pub byte_size: u16,
     pub aggregate: bool,
+    pub source_name: Option<String>,
+    pub c_type: Option<String>,
+}
+
+/// One source local recovered from debug information.
+///
+/// `locations` is empty only when DWARF explicitly describes the optimized
+/// value as a constant stack value. Such a local retains its declaration but
+/// has no machine-register identity to rename.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DwarfRegisterLocation {
+    pub start: u64,
+    pub end: u64,
+    pub register: u16,
+}
+
+/// An optimized source local described by a DWARF location list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DwarfRegisterLocal {
+    pub source_name: String,
+    pub c_type: String,
+    pub locations: Vec<DwarfRegisterLocation>,
 }
 
 /// Source-level output contract attached to a DWARF subprogram.
@@ -306,8 +331,18 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 })
                 .collect::<Vec<_>>();
             let param_count = parameter_types.len() as u32;
-            let stack_objects =
-                dwarf_stack_objects_for_subprogram(&unit, &entry, variable_offsets.into_iter());
+            let stack_objects = dwarf_stack_objects_for_subprogram(
+                &dwarf,
+                &unit,
+                &entry,
+                variable_offsets.iter().copied(),
+            );
+            let register_locals = dwarf_register_locals_for_subprogram(
+                &dwarf,
+                &unit,
+                &chunks,
+                variable_offsets.into_iter(),
+            );
 
             funcs.push(DwarfFunction {
                 entry_va,
@@ -320,6 +355,7 @@ pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
                 prototyped,
                 return_type,
                 stack_objects,
+                register_locals,
             });
         }
     }
@@ -481,6 +517,7 @@ fn dwarf_array_element_count<'a>(unit: &Unit<'a>, offset: gimli::UnitOffset<usiz
 }
 
 fn dwarf_stack_objects_for_subprogram<'a>(
+    dwarf: &gimli::Dwarf<Slice<'a>>,
     unit: &Unit<'a>,
     subprogram: &gimli::DebuggingInformationEntry<Slice<'a>, usize>,
     variables: impl Iterator<Item = gimli::UnitOffset<usize>>,
@@ -501,20 +538,155 @@ fn dwarf_stack_objects_for_subprogram<'a>(
                 Some(gimli::Operation::FrameOffset { offset }) => offset,
                 _ => return None,
             };
-            let (byte_size, aggregate) = inherited_attr_value(unit, &variable, gimli::DW_AT_type)
-                .and_then(|value| referenced_type_info(unit, value))?;
+            let type_attr = inherited_attr_value(unit, &variable, gimli::DW_AT_type)?;
+            let (byte_size, aggregate) = referenced_type_info(unit, type_attr)?;
             let byte_size = u16::try_from(byte_size).ok().filter(|size| *size != 0)?;
             Some(DwarfStackObject {
                 base,
                 offset,
                 byte_size,
                 aggregate,
+                source_name: inherited_name_of(dwarf, unit, &variable),
+                c_type: _resolve_type_string(dwarf, unit, type_attr),
             })
         })
         .collect::<Vec<_>>();
-    objects.sort_by_key(|object| (object.offset, object.byte_size));
-    objects.dedup();
-    objects
+    objects.sort_by_key(|object| (object.offset, object.byte_size, object.aggregate));
+    let mut merged: Vec<DwarfStackObject> = Vec::new();
+    for object in objects {
+        if let Some(existing) = merged.last_mut().filter(|existing| {
+            existing.base == object.base
+                && existing.offset == object.offset
+                && existing.byte_size == object.byte_size
+                && existing.aggregate == object.aggregate
+        }) {
+            if existing.source_name != object.source_name {
+                existing.source_name = None;
+            }
+            if existing.c_type != object.c_type {
+                existing.c_type = None;
+            }
+        } else {
+            merged.push(object);
+        }
+    }
+    merged
+}
+
+fn dwarf_register_locals_for_subprogram<'a>(
+    dwarf: &gimli::Dwarf<Slice<'a>>,
+    unit: &Unit<'a>,
+    subprogram_ranges: &[DwarfRange],
+    variables: impl Iterator<Item = gimli::UnitOffset<usize>>,
+) -> Vec<DwarfRegisterLocal> {
+    let mut locals = Vec::new();
+    for offset in variables {
+        let Ok(variable) = unit.entry(offset) else {
+            continue;
+        };
+        let Some(source_name) = inherited_name_of(dwarf, unit, &variable) else {
+            continue;
+        };
+        let Some(type_attr) = inherited_attr_value(unit, &variable, gimli::DW_AT_type) else {
+            continue;
+        };
+        let Some(c_type) = _resolve_type_string(dwarf, unit, type_attr) else {
+            continue;
+        };
+        let Some(location_attr) = inherited_attr_value(unit, &variable, gimli::DW_AT_location)
+        else {
+            continue;
+        };
+        let mut locations = Vec::new();
+        let mut declaration_only = false;
+        if let gimli::AttributeValue::Exprloc(expression) = location_attr {
+            if let Some(register) = single_register_expression(unit, expression.clone()) {
+                locations.extend(subprogram_ranges.iter().filter_map(|range| {
+                    let end = range.start.checked_add(range.size)?;
+                    (range.start < end).then_some(DwarfRegisterLocation {
+                        start: range.start,
+                        end,
+                        register,
+                    })
+                }));
+            } else {
+                declaration_only = constant_stack_value_expression(unit.encoding(), expression);
+            }
+        } else if let Ok(Some(mut entries)) = dwarf.attr_locations(unit, location_attr) {
+            while let Ok(Some(entry)) = entries.next() {
+                let Some(register) = single_register_expression(unit, entry.data.clone()) else {
+                    declaration_only |=
+                        constant_stack_value_expression(unit.encoding(), entry.data);
+                    continue;
+                };
+                if entry.range.begin >= entry.range.end {
+                    continue;
+                }
+                locations.push(DwarfRegisterLocation {
+                    start: entry.range.begin,
+                    end: entry.range.end,
+                    register,
+                });
+            }
+        }
+        if locations.is_empty() && !declaration_only {
+            continue;
+        }
+        locations.sort_by_key(|location| (location.start, location.end, location.register));
+        locations.dedup();
+        locals.push(DwarfRegisterLocal {
+            source_name,
+            c_type,
+            locations,
+        });
+    }
+    locals.sort_by(|left, right| left.source_name.cmp(&right.source_name));
+    locals
+}
+
+fn single_register_expression<'a>(
+    unit: &Unit<'a>,
+    expression: gimli::Expression<Slice<'a>>,
+) -> Option<u16> {
+    let mut operations = expression.operations(unit.encoding());
+    let gimli::Operation::Register { register } = operations.next().ok()?? else {
+        return None;
+    };
+    if operations.next().ok()?.is_some() {
+        return None;
+    }
+    Some(register.0)
+}
+
+fn constant_stack_value_expression<'a>(
+    encoding: gimli::Encoding,
+    expression: gimli::Expression<Slice<'a>>,
+) -> bool {
+    let mut operations = expression.operations(encoding);
+    if !matches!(
+        operations.next(),
+        Ok(Some(
+            gimli::Operation::UnsignedConstant { .. } | gimli::Operation::SignedConstant { .. }
+        ))
+    ) {
+        return false;
+    }
+    matches!(operations.next(), Ok(Some(gimli::Operation::StackValue)))
+        && matches!(operations.next(), Ok(None))
+}
+
+fn inherited_name_of<'a>(
+    dwarf: &gimli::Dwarf<Slice<'a>>,
+    unit: &Unit<'a>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'a>, usize>,
+) -> Option<String> {
+    let value = inherited_attr_value(unit, entry, gimli::DW_AT_name)?;
+    dwarf
+        .attr_string(unit, value)
+        .ok()?
+        .to_string()
+        .ok()
+        .map(|name| name.to_string())
 }
 
 fn pick_name<'a>(
@@ -1085,6 +1257,25 @@ mod tests {
             prepend_type_qualifier("const char *", "const"),
             "const char *"
         );
+    }
+
+    #[test]
+    fn literal_stack_value_is_a_declaration_only_local_location() {
+        let bytes = [
+            gimli::constants::DW_OP_lit0.0 as u8,
+            gimli::constants::DW_OP_stack_value.0 as u8,
+        ];
+        let expression = gimli::Expression(gimli::EndianSlice::new(
+            &bytes,
+            gimli::RunTimeEndian::Little,
+        ));
+        let encoding = gimli::Encoding {
+            format: gimli::Format::Dwarf32,
+            version: 4,
+            address_size: 4,
+        };
+
+        assert!(constant_stack_value_expression(encoding, expression));
     }
 
     #[test]

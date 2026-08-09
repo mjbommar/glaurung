@@ -16,10 +16,15 @@ use std::fmt::{self, Write};
 use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 use crate::ir::structure::Region;
 use crate::ir::types::{
-    is_promoted_local_name as is_promoted_local, BinOp, CallTarget, CmpOp, Flag, LlirBlock,
-    LlirFunction, LlirInstr, MemOp, Op, UnOp, VReg, Value, Width,
+    is_promoted_local_name as is_internal_promoted_local, BinOp, CallTarget, CmpOp, Flag,
+    LlirBlock, LlirFunction, LlirInstr, MemOp, Op, UnOp, VReg, Value, Width,
 };
 use crate::ir::types_recover::{TypeHint, TypeMap};
+
+fn is_promoted_local(name: &str) -> bool {
+    is_internal_promoted_local(name)
+        || DEC_SOURCE_LOCALS.with(|locals| locals.borrow().contains(name))
+}
 
 mod width_semantics;
 
@@ -6647,7 +6652,7 @@ fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
         || (base == "void" && (allow_void || pointer))
 }
 
-fn dwarf_prototype_type_is_renderable(
+pub(crate) fn dwarf_prototype_type_is_renderable(
     c_type: &str,
     allow_void: bool,
     dwarf_type_env: &crate::ir::dwarf_type_env::DwarfTypeEnv<'_>,
@@ -6810,6 +6815,38 @@ fn source_type_with_complete_struct_alias(
         .unwrap_or_else(|| c_type.to_string())
 }
 
+fn collision_safe_local_aggregate_type(
+    local_name: &str,
+    c_type: &str,
+    dwarf_type_env: &crate::ir::dwarf_type_env::DwarfTypeEnv<'_>,
+) -> Option<String> {
+    let pointer = dwarf_type_env.aggregate_pointer(c_type)?;
+    if sanitize_c_ident(local_name) != sanitize_c_ident(pointer.source_name) {
+        return None;
+    }
+    let keyword = match pointer.kind {
+        crate::debug::dwarf::DwarfTypeKind::Struct => "struct",
+        crate::debug::dwarf::DwarfTypeKind::Union => "union",
+        crate::debug::dwarf::DwarfTypeKind::Enum | crate::debug::dwarf::DwarfTypeKind::Typedef => {
+            return None
+        }
+    };
+    let qualifiers = c_type
+        .find(pointer.source_name)
+        .map(|index| c_type[..index].trim())
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter(|token| matches!(*token, "const" | "volatile"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let qualifiers = if qualifiers.is_empty() {
+        String::new()
+    } else {
+        format!("{qualifiers} ")
+    };
+    Some(format!("{qualifiers}{keyword} {} *", pointer.tag_name))
+}
+
 /// Typed DecBench renderer with an explicit recovered output contract.
 pub fn render_decbench_typed_with_output(
     f: &Function,
@@ -6857,12 +6894,50 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     pointer_width: u8,
     dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
 ) -> String {
+    render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+        f,
+        tm,
+        width_tm,
+        output_kind,
+        declared_prototype,
+        dwarf_types,
+        pointer_width,
+        dwarf_pointer_types,
+        &std::collections::HashMap::new(),
+    )
+}
+
+/// Typed DecBench renderer with exact source spellings for promoted locals.
+pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+    f: &Function,
+    tm: Option<&TypeMap>,
+    width_tm: Option<&TypeMap>,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    declared_prototype: Option<&CallPrototype>,
+    dwarf_types: &[crate::debug::dwarf::DwarfType],
+    pointer_width: u8,
+    dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
+    dwarf_local_types: &std::collections::HashMap<String, String>,
+) -> String {
+    DEC_SOURCE_LOCALS.with(|locals| {
+        *locals.borrow_mut() = dwarf_local_types.keys().cloned().collect();
+    });
     DEC_POINTER_WIDTH.with(|width| width.set(pointer_width));
     let dwarf_type_env = crate::ir::dwarf_type_env::DwarfTypeEnv::new(dwarf_types);
     let mut ids = DecIdents::default();
     for s in &f.body {
         collect_idents_stmt(s, &mut ids);
     }
+    // A debug local can be optimized into a constant or a different induction
+    // variable and therefore have no surviving AST use. Its authoritative
+    // source declaration is still useful and safe to emit; unlike an invented
+    // value, an unused C local changes neither control flow nor dataflow.
+    ids.locals.extend(
+        dwarf_local_types
+            .keys()
+            .filter(|name| crate::ir::naming::valid_authoritative_local_name(name.as_str()))
+            .cloned(),
+    );
     DEC_GLOBAL_ADDRS
         .with(|addresses| *addresses.borrow_mut() = ids.global_addresses.keys().copied().collect());
     DEC_WIDE_LOCALS.with(|locals| *locals.borrow_mut() = ids.wide_locals.iter().cloned().collect());
@@ -6922,6 +6997,12 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
                 .map(|pointer| pointer.source_name.to_string()),
         );
     }
+    source_type_aliases.extend(
+        dwarf_local_types
+            .values()
+            .filter_map(|c_type| dwarf_type_env.aggregate_pointer(c_type))
+            .map(|pointer| pointer.source_name.to_string()),
+    );
     DEC_RENDERABLE_STRUCTS.with(|selected| *selected.borrow_mut() = complete_structs.clone());
     DEC_STRUCT_PTR_TYPES.with(|selected| {
         let mut exact = std::collections::HashMap::new();
@@ -6935,18 +7016,58 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
                 exact.insert(sanitize_c_ident(name), c_type);
             }
         }
+        for (name, c_type) in dwarf_local_types {
+            if dwarf_type_env.aggregate_pointer(c_type).is_none()
+                || !dwarf_prototype_type_is_renderable(c_type, false, &dwarf_type_env)
+            {
+                continue;
+            }
+            let c_type = collision_safe_local_aggregate_type(name, c_type, &dwarf_type_env)
+                .unwrap_or_else(|| {
+                    source_type_with_complete_struct_alias(c_type, &source_type_aliases)
+                });
+            exact.insert(name.clone(), c_type.clone());
+            exact.insert(sanitize_c_ident(name), c_type);
+        }
         *selected.borrow_mut() = exact;
     });
 
     let mut out = String::new();
     // Provenance as a C comment (valid, and the harness maps by address anyway).
     let _ = writeln!(out, "// glaurung: {} @ 0x{:x}", f.name, f.entry_va);
+    let mut source_declarations = std::collections::BTreeSet::new();
     if let Some(prototype) = declared_prototype {
-        for declaration in
-            source_prototype_forward_declarations(prototype, &complete_structs, &dwarf_type_env)
-        {
-            let _ = writeln!(out, "{declaration}");
+        source_declarations.extend(source_prototype_forward_declarations(
+            prototype,
+            &complete_structs,
+            &dwarf_type_env,
+        ));
+    }
+    for (local_name, c_type) in dwarf_local_types {
+        if let Some(pointer) = dwarf_type_env.aggregate_pointer(c_type) {
+            if !complete_structs.contains(pointer.source_name) {
+                if collision_safe_local_aggregate_type(local_name, c_type, &dwarf_type_env)
+                    .is_some()
+                {
+                    let keyword = match pointer.kind {
+                        crate::debug::dwarf::DwarfTypeKind::Struct => "struct",
+                        crate::debug::dwarf::DwarfTypeKind::Union => "union",
+                        crate::debug::dwarf::DwarfTypeKind::Enum
+                        | crate::debug::dwarf::DwarfTypeKind::Typedef => {
+                            unreachable!("aggregate pointers resolve only to struct or union")
+                        }
+                    };
+                    source_declarations.insert(format!("{keyword} {};", pointer.tag_name));
+                } else {
+                    source_declarations.insert(dwarf_type_env.forward_declaration(pointer));
+                }
+            }
+        } else if let Some(declaration) = dwarf_type_env.typedef_declaration(c_type) {
+            source_declarations.insert(declaration);
         }
+    }
+    for declaration in source_declarations {
+        let _ = writeln!(out, "{declaration}");
     }
     for (name, layout) in &aggregate_layouts {
         let guard = format!("GLAURUNG_STRUCT_{name}_DEFINED");
@@ -7228,6 +7349,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     DEC_NAMED_CALL_PROTOTYPES.with(|selected| selected.borrow_mut().clear());
     DEC_RENDERABLE_STRUCTS.with(|selected| selected.borrow_mut().clear());
     DEC_STRUCT_PTR_TYPES.with(|selected| selected.borrow_mut().clear());
+    DEC_SOURCE_LOCALS.with(|locals| locals.borrow_mut().clear());
     DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow_mut().clear());
     DEC_WIDE_LOCALS.with(|locals| locals.borrow_mut().clear());
     DEC_POINTER_WIDTH.with(|width| width.set(8));
@@ -7900,6 +8022,12 @@ thread_local! {
     static DEC_PTR_ARGS: std::cell::RefCell<std::collections::HashMap<String, String>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 
+    /// Source-renamed promoted locals for the current render. Semantic passes
+    /// retain their offset-bearing internal names; this presentation-only set
+    /// preserves scalar assignment semantics after the final DWARF rename.
+    static DEC_SOURCE_LOCALS: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+
     /// Names that are *declared as pointers* in the current render (arguments and
     /// promoted pointer locals) → their pointee width in bytes. Consulted by the
     /// array-index render to rewrite `*(T*)(base + i*sizeof(T))` as `base[i]`.
@@ -8386,6 +8514,71 @@ fn write_reg_dec(v: &VReg, out: &mut String) {
     write_reg_lvalue_dec(v, out);
 }
 
+/// Render an operand of machine-level byte arithmetic.
+///
+/// Exact DWARF local types can turn a machine address into a C pointer after
+/// the AST was built.  A literal displacement in this IR is still measured in
+/// bytes, so allowing C to scale `pointer + displacement` by the pointee size
+/// would change the recovered program.  Keep ordinary pointer values intact at
+/// calls and memory boundaries; cross to the integer representation only here.
+fn write_machine_arithmetic_operand_dec(expr: &Expr, out: &mut String) {
+    if let Expr::Reg(reg @ VReg::Phys(_)) = expr {
+        if declared_reg_ctype(reg).ends_with('*') {
+            out.push_str("(long)");
+            write_reg_lvalue_dec(reg, out);
+            return;
+        }
+    }
+    write_expr_dec(expr, out);
+}
+
+/// Prefer native C pointer arithmetic when an exact pointee width can express
+/// the IR's byte displacement without loss.  This is equivalent to the
+/// integer-address form but lets the compiler recover the original increment
+/// shape (`p + 1` for an eight-byte pointer slot, not `(long)p + 8`).
+fn write_scaled_pointer_offset_dec(op: BinOp, lhs: &Expr, rhs: &Expr, out: &mut String) -> bool {
+    if !matches!(op, BinOp::Add | BinOp::Sub) {
+        return false;
+    }
+    let Expr::Reg(reg @ VReg::Phys(name)) = lhs else {
+        return false;
+    };
+    let Expr::Const(displacement) = rhs else {
+        return false;
+    };
+    let Some(width) = dec_ptr_width(name).filter(|width| *width > 0) else {
+        return false;
+    };
+    let declared = declared_reg_ctype(reg);
+    let Some(mut pointee) = declared.strip_suffix('*').map(str::trim) else {
+        return false;
+    };
+    while let Some(unqualified) = pointee
+        .strip_prefix("const ")
+        .or_else(|| pointee.strip_prefix("volatile "))
+    {
+        pointee = unqualified.trim();
+    }
+    let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+    let declared_pointee_width =
+        crate::ir::call_contracts::integer_c_type_width(pointee, pointer_width).or(match pointee {
+            "float" => Some(4),
+            "double" => Some(8),
+            _ => None,
+        });
+    if declared_pointee_width != Some(width) {
+        return false;
+    }
+    let width = i64::from(width);
+    if displacement % width != 0 {
+        return false;
+    }
+    write_reg_lvalue_dec(reg, out);
+    let _ = write!(out, " {} ", binop_sym_c(op));
+    write_const_dec(displacement / width, out);
+    true
+}
+
 /// Render a register in **lvalue** position (assignment target) — never cast,
 /// since a cast is not a valid lvalue.
 fn write_reg_lvalue_dec(v: &VReg, out: &mut String) {
@@ -8706,9 +8899,11 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                     _ => (*op, *rhs.clone()),
                 };
                 out.push('(');
-                write_expr_dec(lhs, out);
-                let _ = write!(out, " {} ", binop_sym_c(shown_op));
-                write_expr_dec(&shown_rhs, out);
+                if !write_scaled_pointer_offset_dec(shown_op, lhs, &shown_rhs, out) {
+                    write_machine_arithmetic_operand_dec(lhs, out);
+                    let _ = write!(out, " {} ", binop_sym_c(shown_op));
+                    write_machine_arithmetic_operand_dec(&shown_rhs, out);
+                }
                 out.push(')');
             }
         }
@@ -13544,6 +13739,220 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn dwarf_local_pointer_keeps_its_source_name_and_typedef() {
+        use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let f = Function {
+            name: "balance".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("p")),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let types = [DwarfType {
+            kind: DwarfTypeKind::Typedef,
+            name: "COLUMN".to_string(),
+            byte_size: 0,
+            fields: Vec::new(),
+            variants: Vec::new(),
+            typedef_target: Some("struct column".to_string()),
+            source_file: Some("balance.c".to_string()),
+        }];
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("p"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+            &f,
+            Some(&tm),
+            Some(&tm),
+            RecoveredOutputKind::Void,
+            None,
+            &types,
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::from([("p".to_string(), "COLUMN *".to_string())]),
+        );
+
+        assert!(text.contains("typedef struct column COLUMN;"), "{text}");
+        assert!(text.contains("COLUMN * p;"), "{text}");
+        assert!(text.contains("p = (COLUMN *)(arg0);"), "{text}");
+        assert!(!text.contains("*(long *)((long)p) ="), "{text}");
+    }
+
+    #[test]
+    fn dwarf_local_pointer_arithmetic_keeps_machine_byte_offsets() {
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let f = Function {
+            name: "advance".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("p"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("p"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("p"), TypeHint::Pointer { pointee_width: 8 });
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+            &f,
+            Some(&tm),
+            Some(&tm),
+            RecoveredOutputKind::Void,
+            None,
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::from([("p".to_string(), "long *".to_string())]),
+        );
+
+        assert!(
+            text.contains("p = (long *)(p + 1);") || text.contains("p = (long *)((p + 1));"),
+            "an exact pointee width must scale the machine byte displacement:\n{text}"
+        );
+        assert!(!text.contains("p = (long *)(p + 8);"), "{text}");
+    }
+
+    #[test]
+    fn opaque_aggregate_pointer_does_not_guess_c_pointee_scaling() {
+        use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let f = Function {
+            name: "advance_column".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("p"),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(VReg::phys("p"))),
+                    rhs: Box::new(Expr::Const(8)),
+                },
+            }],
+        };
+        let types = [DwarfType {
+            kind: DwarfTypeKind::Typedef,
+            name: "COLUMN".to_string(),
+            byte_size: 0,
+            fields: Vec::new(),
+            variants: Vec::new(),
+            typedef_target: Some("struct column".to_string()),
+            source_file: Some("column.c".to_string()),
+        }];
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("p"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+            &f,
+            Some(&tm),
+            Some(&tm),
+            RecoveredOutputKind::Void,
+            None,
+            &types,
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::from([("p".to_string(), "COLUMN *".to_string())]),
+        );
+
+        assert!(
+            text.contains("(long)p + 8"),
+            "an opaque aggregate must keep byte arithmetic until its size is known:\n{text}"
+        );
+        assert!(!text.contains("((p + 8))"), "{text}");
+    }
+
+    #[test]
+    fn aggregate_local_name_may_shadow_alias_without_breaking_casts() {
+        use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let f = Function {
+            name: "lookup_user".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("passwd"),
+                src: Expr::Reg(VReg::phys("arg0")),
+            }],
+        };
+        let types = [DwarfType {
+            kind: DwarfTypeKind::Struct,
+            name: "passwd".to_string(),
+            byte_size: 0,
+            fields: Vec::new(),
+            variants: Vec::new(),
+            typedef_target: None,
+            source_file: Some("pwd.h".to_string()),
+        }];
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("passwd"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+            &f,
+            Some(&tm),
+            Some(&tm),
+            RecoveredOutputKind::Void,
+            None,
+            &types,
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::from([(
+                "passwd".to_string(),
+                "struct passwd *".to_string(),
+            )]),
+        );
+
+        assert!(text.contains("struct passwd * passwd;"), "{text}");
+        assert!(text.contains("passwd = (struct passwd *)(arg0);"), "{text}");
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn optimized_away_dwarf_local_keeps_its_source_declaration() {
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let f = Function {
+            name: "wait".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return { value: None }],
+        };
+        let mut tm = TypeMap::default();
+        tm.apply_locked_fact(
+            VReg::phys("i"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+            &f,
+            Some(&tm),
+            Some(&tm),
+            RecoveredOutputKind::Void,
+            None,
+            &[],
+            4,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::from([("i".to_string(), "unsigned int".to_string())]),
+        );
+
+        assert!(text.contains("    unsigned int i;"), "{text}");
+    }
+
+    #[test]
     fn opaque_tagged_parameter_uses_a_self_contained_typedef_alias() {
         use crate::debug::dwarf::{DwarfField, DwarfType, DwarfTypeKind};
         use crate::ir::types_recover::RecoveredOutputKind;
@@ -16309,9 +16718,10 @@ function f @ 0x1000 {
         let rendered = super::render_decbench_typed(&function, Some(&types), None);
 
         assert!(
-            rendered.contains("apply((int *)(((long)arg0 + 64)))"),
-            "recovered pointer arithmetic crossed the call boundary as an integer:\n{rendered}"
+            rendered.contains("apply((int *)((arg0 + 16)))"),
+            "exact pointee scaling was not preserved at the call boundary:\n{rendered}"
         );
+        assert!(!rendered.contains("arg0 + 64"), "{rendered}");
     }
 
     #[test]

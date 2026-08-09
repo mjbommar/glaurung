@@ -75,6 +75,11 @@ struct SlotVal {
     /// frame base; that extent may support the escaped cursor itself, but must
     /// not absorb unrelated current-SP accesses through coordinate aliasing.
     bounded_object: bool,
+    /// Exact source spelling recovered from authoritative debug information.
+    /// This remains separate from machine width: `COLUMN *` and `long` can
+    /// both occupy eight bytes while having fundamentally different C types.
+    source_type: Option<String>,
+    source_name: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -99,6 +104,28 @@ pub struct StackObjectHint {
     pub base: String,
     pub disp: i64,
     pub size: u16,
+    pub aggregate: bool,
+    pub source_name: Option<String>,
+    pub c_type: Option<String>,
+}
+
+/// Source-level facts recovered while promoting frame storage.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StackLocalFacts {
+    pub sizes: HashMap<String, u8>,
+    pub source_types: HashMap<String, String>,
+    pub source_names: HashMap<String, String>,
+}
+
+fn merge_source_type(current: &mut Option<String>, incoming: Option<&str>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    match current {
+        None => *current = Some(incoming.to_string()),
+        Some(existing) if existing == incoming => {}
+        Some(_) => *current = None,
+    }
 }
 
 fn is_active_stack_base(name: &str, ctx: StackContext) -> bool {
@@ -195,6 +222,17 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
     parameter_count: Option<usize>,
     object_hints: &[StackObjectHint],
 ) -> HashMap<String, u8> {
+    promote_stack_locals_with_facts(f, cc, parameter_count, object_hints).sizes
+}
+
+/// Promote stack storage and retain authoritative source types alongside the
+/// traditional machine-size map.
+pub fn promote_stack_locals_with_facts(
+    f: &mut Function,
+    cc: Option<CallConv>,
+    parameter_count: Option<usize>,
+    object_hints: &[StackObjectHint],
+) -> StackLocalFacts {
     let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
     let mut names = SlotNames::default();
     let ctx = StackContext {
@@ -215,18 +253,38 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
             base: hint.base.clone(),
             disp: hint.disp,
         };
-        let name = alloc_name(&hint.base, hint.disp, &mut names, ctx);
+        let source_name = reserve_source_local_name(hint.source_name.as_deref(), &mut names);
+        let name = map.get(&key).map_or_else(
+            || alloc_name(&hint.base, hint.disp, &mut names, ctx),
+            |slot| slot.name.clone(),
+        );
+        let scalar_size = (!hint.aggregate)
+            .then(|| u8::try_from(hint.size).ok())
+            .flatten();
+        if !hint.aggregate && scalar_size.is_none() {
+            continue;
+        }
         map.entry(key)
             .and_modify(|slot| {
-                slot.object_size = Some(slot.object_size.unwrap_or(0).max(hint.size));
+                if hint.aggregate {
+                    slot.object_size = Some(slot.object_size.unwrap_or(0).max(hint.size));
+                } else if slot.object_size.is_none() {
+                    let size = scalar_size.expect("validated scalar size");
+                    slot.declared_size = slot.declared_size.max(size);
+                    slot.span_size = slot.span_size.max(size);
+                }
                 slot.bounded_object = true;
+                merge_source_type(&mut slot.source_type, hint.c_type.as_deref());
+                merge_source_type(&mut slot.source_name, source_name.as_deref());
             })
             .or_insert(SlotVal {
                 name,
-                declared_size: 1,
-                span_size: 1,
-                object_size: Some(hint.size),
+                declared_size: scalar_size.unwrap_or(1),
+                span_size: scalar_size.unwrap_or(1),
+                object_size: hint.aggregate.then_some(hint.size),
                 bounded_object: true,
+                source_type: hint.c_type.clone(),
+                source_name,
             });
     }
     let address_defs = collect_stack_address_defs(&f.body, ctx);
@@ -255,14 +313,32 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
     // by that final identity explicitly. A bare `collect()` made HashMap
     // iteration order choose the declaration width, so identical inputs could
     // alternate between `char` and `long` across processes.
-    let mut sizes = HashMap::new();
+    let mut facts = StackLocalFacts::default();
     for slot in map.into_values() {
-        sizes
-            .entry(slot.name)
+        let name = slot.name;
+        facts
+            .sizes
+            .entry(name.clone())
             .and_modify(|size: &mut u8| *size = (*size).max(slot.declared_size))
             .or_insert(slot.declared_size);
+        if let Some(source_type) = slot.source_type {
+            match facts.source_types.entry(name.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(source_type);
+                }
+                std::collections::hash_map::Entry::Occupied(entry)
+                    if entry.get() != &source_type =>
+                {
+                    entry.remove();
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {}
+            }
+        }
+        if let Some(source_name) = slot.source_name {
+            facts.source_names.insert(name, source_name);
+        }
     }
-    sizes
+    facts
 }
 
 /// Where a calling convention puts the arguments that do not fit in registers:
@@ -824,6 +900,8 @@ fn seed_indexed_stack_objects(
             span_size: 1,
             object_size: Some(size),
             bounded_object: partitions.get(index + 1).is_some(),
+            source_type: None,
+            source_name: None,
         });
     }
 }
@@ -1236,6 +1314,8 @@ fn rewrite_expr(
                         span_size: size_val,
                         object_size: None,
                         bounded_object: false,
+                        source_type: None,
+                        source_name: None,
                     },
                 );
                 *e = Expr::Reg(VReg::phys(alias));
@@ -1305,6 +1385,9 @@ fn reconcile_late_address_taken_objects(body: &mut [Stmt], map: &HashMap<SlotKey
         .collect::<Vec<_>>();
     let mut objects: HashMap<VReg, ObjectView> = HashMap::new();
     for (key, slot) in map {
+        if slot.bounded_object && slot.object_size.is_none() {
+            continue;
+        }
         let Some((root, object, size)) = roots
             .iter()
             .filter(|(root, _, size)| {
@@ -1569,6 +1652,8 @@ fn promote_address_taken_stack_object(
         span_size: pointer_size,
         object_size: None,
         bounded_object: false,
+        source_type: None,
+        source_name: None,
     });
     let object = VReg::phys(entry.name.clone());
     // A frame-local object starts at a negative offset and grows toward the
@@ -2058,6 +2143,27 @@ fn containing_stack_object<'a>(
         .max_by_key(|(start, _, _)| *start)
 }
 
+fn bounded_scalar_contains(
+    map: &HashMap<SlotKey, SlotVal>,
+    base: &str,
+    disp: i64,
+    access_size: u8,
+) -> bool {
+    let Some(access_end) = disp.checked_add(i64::from(access_size)) else {
+        return false;
+    };
+    map.iter().any(|(key, slot)| {
+        let Some(slot_end) = key.disp.checked_add(i64::from(slot.span_size)) else {
+            return false;
+        };
+        key.base == base
+            && slot.bounded_object
+            && slot.object_size.is_none()
+            && key.disp <= disp
+            && access_end <= slot_end
+    })
+}
+
 /// Materialise an access inside a seeded stack region as byte-pointer
 /// arithmetic rooted at one [`Expr::StackAddr`].
 fn stack_object_address(
@@ -2073,6 +2179,13 @@ fn stack_object_address(
         return None;
     }
     let alternate = aapcs_entry_stack_coordinate(&base, disp, sp_delta, ctx);
+    if bounded_scalar_contains(map, &base, disp, access_size)
+        || alternate.is_some_and(|(alternate_base, alternate_disp)| {
+            bounded_scalar_contains(map, alternate_base, alternate_disp, access_size)
+        })
+    {
+        return None;
+    }
     let (object_disp, start, slot, object_size) = alternate
         .and_then(|(alternate_base, alternate_disp)| {
             containing_stack_object(
@@ -2377,6 +2490,8 @@ fn try_promote_lea_to_local(
         span_size: size,
         object_size: None,
         bounded_object: false,
+        source_type: None,
+        source_name: None,
     });
     entry.declared_size = entry.declared_size.min(size);
     entry.span_size = entry.span_size.max(size);
@@ -2548,6 +2663,16 @@ fn alloc_name(base: &str, disp: i64, names: &mut SlotNames, ctx: StackContext) -
     let name = format!("stack_{}", n);
     names.taken.insert(name.clone());
     name
+}
+
+fn reserve_source_local_name(name: Option<&str>, names: &mut SlotNames) -> Option<String> {
+    let name = name?;
+    if !crate::ir::naming::valid_authoritative_local_name(name)
+        || !names.taken.insert(name.to_string())
+    {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 /// Frame-slot name allocation state for one function.
@@ -4552,6 +4677,9 @@ mod tests {
             base: "rbp".into(),
             disp: -0x20,
             size: 16,
+            aggregate: true,
+            source_name: None,
+            c_type: None,
         }];
 
         promote_stack_locals_typed_with_parameter_count_and_objects(
@@ -4589,6 +4717,66 @@ mod tests {
                         if object == &reg("local_20"))
             ),
             "closure call lost the 16-byte object: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn debug_scalar_boundary_keeps_scalar_storage() {
+        let mut f = Function {
+            name: "scalar".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -0xc),
+                    src: Expr::Reg(reg("edi")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: deref_of("rbp", -0xc, 4),
+                },
+            ],
+        };
+        let hints = [
+            StackObjectHint {
+                base: "rbp".into(),
+                disp: -0x18,
+                size: 24,
+                aggregate: true,
+                source_name: None,
+                c_type: None,
+            },
+            StackObjectHint {
+                base: "rbp".into(),
+                disp: -0xc,
+                size: 4,
+                aggregate: false,
+                source_name: Some("reg32".into()),
+                c_type: Some("int".into()),
+            },
+        ];
+
+        let facts =
+            promote_stack_locals_with_facts(&mut f, Some(CallConv::SysVAmd64), None, &hints);
+
+        assert_eq!(facts.sizes.get("local_c"), Some(&4));
+        assert_eq!(
+            facts.source_types.get("local_c").map(String::as_str),
+            Some("int")
+        );
+        assert_eq!(
+            facts.source_names.get("local_c").map(String::as_str),
+            Some("reg32")
+        );
+        assert!(
+            matches!(&f.body[0], Stmt::Store { addr: Expr::Reg(object), .. }
+                if object == &reg("local_c")),
+            "scalar hint incorrectly became aggregate storage: {f:#?}"
+        );
+        assert!(
+            matches!(&f.body[1], Stmt::Assign { src: Expr::Reg(object), .. }
+                if object == &reg("local_c")),
+            "scalar load lost its promoted identity: {f:#?}"
         );
     }
 
@@ -4632,6 +4820,9 @@ mod tests {
             base: "entry_sp".into(),
             disp: -40,
             size: 16,
+            aggregate: true,
+            source_name: None,
+            c_type: None,
         }];
 
         promote_stack_locals_typed_with_parameter_count_and_objects(
@@ -4754,6 +4945,9 @@ mod tests {
             base: "entry_sp".into(),
             disp: -364,
             size: 64,
+            aggregate: true,
+            source_name: None,
+            c_type: None,
         }];
 
         promote_stack_locals_typed_with_parameter_count_and_objects(
@@ -4848,6 +5042,9 @@ mod tests {
                 base: "entry_sp".into(),
                 disp: -292,
                 size: 128,
+                aggregate: true,
+                source_name: None,
+                c_type: None,
             }],
         );
 
@@ -4932,6 +5129,9 @@ mod tests {
                 base: "entry_sp".into(),
                 disp: -164,
                 size: 128,
+                aggregate: true,
+                source_name: None,
+                c_type: None,
             }],
         );
 
@@ -5009,6 +5209,9 @@ mod tests {
             base: "entry_sp".into(),
             disp: -24,
             size: 12,
+            aggregate: true,
+            source_name: None,
+            c_type: None,
         }];
 
         promote_stack_locals_typed_with_parameter_count_and_objects(
@@ -5050,6 +5253,8 @@ mod tests {
                 span_size: 1,
                 object_size: Some(64),
                 bounded_object: true,
+                source_type: None,
+                source_name: None,
             },
         )]);
         let cursor = reg("x9#1");
@@ -5120,6 +5325,9 @@ mod tests {
             base: "entry_sp".into(),
             disp: -40,
             size: 16,
+            aggregate: true,
+            source_name: None,
+            c_type: None,
         }];
 
         promote_stack_locals_typed_with_parameter_count_and_objects(

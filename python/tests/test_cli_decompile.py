@@ -191,7 +191,8 @@ def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> Non
     )
 
     assert " frame_return(int arg0)" in text.splitlines()[1], text
-    assert "return (int)((signed char)(*(char *)((&local_" in text, text
+    assert "signed char c;" in text, text
+    assert "return c;" in text, text
     assert "arg0 = " not in text, text
     assert "return 0;" not in text, text
 
@@ -886,9 +887,7 @@ def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> Non
         timeout_ms=8000,
     )
 
-    signature = next(
-        line for line in text.splitlines() if "arm_narrow_params(" in line
-    )
+    signature = next(line for line in text.splitlines() if "arm_narrow_params(" in line)
     assert "unsigned char arg1" in signature, text
     assert "unsigned char arg2" in signature, text
 
