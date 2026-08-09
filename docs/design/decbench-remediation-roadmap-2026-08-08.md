@@ -1,6 +1,8 @@
 # Glaurung decompiler remediation and redesign roadmap — 2026-08-08
 
-**Status:** proposed, ranked execution plan
+**Status:** active, ranked execution plan; Phase 0 mechanisms and multiple
+Phase 1 increments are implemented, but the redesign definition of done remains
+open
 
 **Evidence:** [decbench-gap-analysis-diary-2026-08-08.md](decbench-gap-analysis-diary-2026-08-08.md)
 **Historical evidence baseline:** Glaurung `c1cfdc97`, DecBench main `0a4e85b`,
@@ -339,6 +341,23 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
 - [x] Extract the cohesive DWARF contract importer from
   `python_bindings/ir.rs` into a 449-line owner, reducing the binding module to
   3,656 lines while keeping bindings thin and avoiding a forwarding-only split.
+- [x] Add a reusable `ProgramSession` over one immutable `ProgramImage`, with a
+  bounded exact-key discovery cache and a Python `DecompilerSession` whose
+  rendered-artifact cache includes address, budgets, type mode, and style.
+  Diagnostic requests bypass rendered reuse. Real compiled-ELF tests prove
+  standalone/session output identity, cache partitioning and reset behavior,
+  and invalid-image rejection. A checked-in hello query measures 13.438 ms for
+  the standalone median, 12.884 ms for first session use, and 0.001136 ms for
+  an exact rendered cache hit with one output digest. The 11,826.9x exact-hit
+  speedup is not generalized to uncached analysis.
+- [x] Land definition-safe immediate repairs through the intended owners:
+  symmetric reaching checks for mutable parameter homes, preservation of
+  indirect-store lvalue category, unique-winner DWARF roles and semantic local
+  order, and a typed loop-carrier proof. Full verification reports 2,037 Rust
+  tests, complete x86/legacy/curriculum execution, no architecture regression,
+  and a real i386 `heap_push` improvement that advances the ratchet to 1,758
+  pass / 42 known failures. Fresh isolated official metrics report no per-cell
+  GED, TypeMatch, or ByteMatch regression across 56/56 cells.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the
@@ -360,8 +379,9 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   repaired upstream.
 - [ ] Move relocation, read-only-range, debug, environment, and remaining
   object-backed facts behind the image/session boundary and reach one base parse.
-- [ ] Add `ProgramSession`, shared discovery/fact caches, and reusable Python
-  session APIs.
+- [ ] Extend `ProgramSession` beyond exact discovery/rendered artifacts to
+  shared debug, relocation, call-contract, type, and lowered-function facts;
+  then route range, many, and all queries through the reusable public session.
 - [ ] Add typed partial artifacts, a single `DecompilerEngine` path, explicit
   stage fingerprinting, and the direct-object-parse architecture gate.
 

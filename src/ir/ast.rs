@@ -4470,7 +4470,7 @@ fn write_for_clause_c(s: &Stmt, out: &mut String, prefer_increment: bool) {
             return;
         }
     };
-    if prefer_increment && write_unit_step(dst, src, out, write_reg_c) {
+    if prefer_increment && write_unit_step(dst, src, out, write_reg_c, false) {
         return;
     }
     write_reg_c(dst, out);
@@ -5690,20 +5690,42 @@ pub fn render_decbench(f: &Function) -> String {
 /// register-sourced store is `local_X = argN` — that local *is* the parameter:
 /// rename every `local_X` to `argN` and drop the resulting self-assignment. The
 /// parameter is then used directly, matching the compiler's own `-O0` codegen.
-fn coalesce_param_spills(body: &mut Vec<Stmt>) {
+fn coalesce_param_spills(
+    body: &mut Vec<Stmt>,
+    protected_locals: &std::collections::HashSet<String>,
+) {
     coalesce_frame_object_param_spills(body);
+    coalesce_named_param_spills(body, protected_locals);
+}
+
+/// Coalesce promoted named slots without reopening frame-object alias proofs.
+fn coalesce_named_param_spills(
+    body: &mut Vec<Stmt>,
+    protected_locals: &std::collections::HashSet<String>,
+) {
     // local name -> the single argument it is spilled from ("" = disqualified).
     let mut home: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     collect_param_homes(body, &mut home);
     let map: std::collections::HashMap<String, String> = home
         .into_iter()
         .filter(|(_, arg)| !arg.is_empty())
+        // An authoritative source local remains a distinct C object even when
+        // its first value is copied from a parameter. Collapsing `child = n`
+        // into the parameter is unsound when `child` is later mutated and the
+        // original `n` is still read (for example heap insertion's return).
+        .filter(|(slot, _)| !protected_locals.contains(slot))
         .filter(|(slot, arg)| {
-            !crate::ir::structured_reaching::read_may_observe_prior_write(
-                body,
-                &VReg::phys(slot.clone()),
-                &VReg::phys(arg.clone()),
-            )
+            let slot = VReg::phys(slot.clone());
+            let argument = VReg::phys(arg.clone());
+            // Substitution is safe only while the two names remain
+            // interchangeable in both directions. A later slot write must not
+            // reach an argument read, and an ABI-register overwrite (for
+            // example a recursive call result in arg0) must not reach a later
+            // reload of the saved slot.
+            !crate::ir::structured_reaching::read_may_observe_prior_write(body, &argument, &slot)
+                && !crate::ir::structured_reaching::read_may_observe_prior_write(
+                    body, &slot, &argument,
+                )
         })
         .collect();
     if map.is_empty() {
@@ -6119,9 +6141,12 @@ fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMa
     }
 }
 
-/// Populate `home[local] = arg` for promoted locals whose only register-sourced
-/// store is `Store { local, Reg(argN) }`. A local spilled from two different
-/// args, or also stored from another register, is disqualified (value "").
+/// Populate `home[local] = arg` for promoted parameter-home candidates.
+///
+/// The first store must carry an incoming parameter identity. Repeated stores
+/// from a different parameter disqualify it; ordinary in-place updates remain
+/// candidates because the symmetric reaching-definitions check at the caller
+/// can prove whether the original argument and slot are still interchangeable.
 fn collect_param_homes(body: &[Stmt], home: &mut std::collections::HashMap<String, String>) {
     collect_param_homes_with_aliases(body, home, &mut std::collections::HashMap::new());
 }
@@ -6165,9 +6190,7 @@ fn collect_param_homes_with_aliases(
                 addr: Expr::Reg(VReg::Phys(local)),
                 src,
                 ..
-            } if is_promoted_local(local)
-                && (matches!(src, Expr::Reg(_)) || parameter_alias(src, aliases).is_some()) =>
-            {
+            } if is_promoted_local(local) => {
                 let argument = parameter_alias(src, aliases);
                 let entry = home.entry(local.clone());
                 match entry {
@@ -6175,12 +6198,6 @@ fn collect_param_homes_with_aliases(
                         v.insert(argument.unwrap_or_default());
                     }
                     std::collections::hash_map::Entry::Occupied(mut o) => {
-                        // A later value computed in a scratch is an ordinary
-                        // reassignment of this parameter home (`cursor += n`).
-                        // Only evidence for a DIFFERENT incoming argument can
-                        // disqualify the identity. Whether the computation was
-                        // folded into an expression or still named by a scratch
-                        // register must not change that decision.
                         if argument
                             .as_ref()
                             .is_some_and(|candidate| candidate != o.get())
@@ -6191,9 +6208,8 @@ fn collect_param_homes_with_aliases(
                 }
                 aliases.remove(&VReg::phys(local.clone()));
             }
-            // A store to a promoted local from a NON-register expression is a
-            // real reassignment of the parameter (`n = n - 1`) — allowed, it does
-            // not disqualify the home. Recurse into nested bodies.
+            // Recurse into nested bodies. Any store seen on any path contributes
+            // to the shared, fail-closed home decision.
             Stmt::If {
                 then_body,
                 else_body,
@@ -6499,13 +6515,31 @@ pub fn prepare_for_decbench_with_output(
     f: &Function,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
 ) -> Function {
+    prepare_for_decbench_with_output_and_protected_locals(
+        f,
+        output_kind,
+        &std::collections::HashSet::new(),
+    )
+}
+
+/// Prepare output while preserving debug-proven source-local identities.
+///
+/// Source locals may be initialized from a parameter without being that
+/// parameter's home storage. The protected set is deliberately internal-slot
+/// names: semantic passes retain those names until the final presentation
+/// boundary, where authoritative source spellings are applied.
+pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
+    f: &Function,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    protected_locals: &std::collections::HashSet<String>,
+) -> Function {
     let mut owned = f.clone();
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
         crate::ir::direct_output::clear_return_values(&mut owned);
     } else {
         crate::ir::direct_output::materialize_direct_output(&mut owned);
     }
-    coalesce_param_spills(&mut owned.body);
+    coalesce_param_spills(&mut owned.body, protected_locals);
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
@@ -6522,6 +6556,11 @@ pub fn prepare_for_decbench_with_output(
             break;
         }
     }
+    // Folding can prove that an initially composite narrow-register rebuild is
+    // exactly its incoming argument (`(arg & ~255) | (arg & 255) == arg`). Run
+    // the same guarded home analysis again so byte/halfword parameter spills
+    // exposed only at the fixpoint do not survive as fake source locals.
+    coalesce_named_param_spills(&mut owned.body, protected_locals);
     // A spill carried through a scratch can become `arg0 = arg0` only after
     // the copy fixpoint. The earlier coalescing cleanup cannot see it yet.
     drop_self_stores(&mut owned.body);
@@ -6598,6 +6637,7 @@ pub fn prepare_for_decbench_with_output(
     // pass. The recovery is exact and idempotent; rerun it on the final AST so
     // phi-coalesced cursors retain their source-level pre-test.
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
+    crate::ir::latch_predicate::fold_latched_predicates(&mut owned);
     remove_redundant_return_constant_assignments(&mut owned.body);
     owned
 }
@@ -6932,12 +6972,15 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // variable and therefore have no surviving AST use. Its authoritative
     // source declaration is still useful and safe to emit; unlike an invented
     // value, an unused C local changes neither control flow nor dataflow.
-    ids.locals.extend(
-        dwarf_local_types
-            .keys()
-            .filter(|name| crate::ir::naming::valid_authoritative_local_name(name.as_str()))
-            .cloned(),
-    );
+    let mut declaration_only_locals = dwarf_local_types
+        .keys()
+        .filter(|name| crate::ir::naming::valid_authoritative_local_name(name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    declaration_only_locals.sort();
+    for local in declaration_only_locals {
+        insert_local(&mut ids, local);
+    }
     DEC_GLOBAL_ADDRS
         .with(|addresses| *addresses.borrow_mut() = ids.global_addresses.keys().copied().collect());
     DEC_WIDE_LOCALS.with(|locals| *locals.borrow_mut() = ids.wide_locals.iter().cloned().collect());
@@ -7301,7 +7344,11 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // definition agrees and no integer/address-arithmetic use exists. Physical
     // frame/ABI registers and unproven values stay `long` to preserve C
     // parseability (`rsp & -16`, `rbp + ret`, etc.).
-    for local in &ids.locals {
+    for local in ids.source_local_order.iter().chain(
+        ids.locals
+            .iter()
+            .filter(|local| !ids.source_local_members.contains(*local)),
+    ) {
         if let Some(size) = ids.stack_objects.get(local) {
             let _ = writeln!(out, "    unsigned char {}[{}];", local, size);
             continue;
@@ -7362,9 +7409,15 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
 struct DecIdents {
     /// Highest `argN` index seen (drives the synthesised signature arity).
     max_arg: Option<usize>,
-    /// Every non-argument identifier that will appear in the body, as the exact
-    /// (sanitised) spelling the writer emits. `BTreeSet` for stable output.
+    /// Every non-argument identifier that will appear in the body. Synthetic
+    /// values retain their stable lexical order.
     locals: std::collections::BTreeSet<String>,
+    /// Authoritative source locals in semantic first-use order. Declaration
+    /// order affects stack layout and therefore recompilation fidelity at O0;
+    /// sorting after a DWARF rename (`local_10` -> `s`, `local_14` -> `i`)
+    /// reverses the original storage order merely because `i < s` lexically.
+    source_local_order: Vec<String>,
+    source_local_members: std::collections::HashSet<String>,
     /// Generated `varN`, lifter `tN`, and versioned predicate identifiers.
     temporaries: std::collections::BTreeSet<String>,
     /// Raw ISA registers which survived naming and will become C locals.
@@ -7502,7 +7555,21 @@ fn collect_reg(v: &VReg, ids: &mut DecIdents) {
             name
         }
     };
-    ids.locals.insert(spelling);
+    insert_local(ids, spelling);
+}
+
+fn insert_local(ids: &mut DecIdents, spelling: String) {
+    ids.locals.insert(spelling.clone());
+    let source_local = DEC_SOURCE_LOCALS.with(|locals| locals.borrow().contains(&spelling));
+    if source_local && ids.source_local_members.insert(spelling.clone()) {
+        ids.source_local_order.push(spelling);
+    }
+}
+
+fn remove_local(ids: &mut DecIdents, spelling: &str) {
+    ids.locals.remove(spelling);
+    ids.source_local_members.remove(spelling);
+    ids.source_local_order.retain(|local| local != spelling);
 }
 
 fn local_reg_spelling(v: &VReg) -> Option<String> {
@@ -7738,7 +7805,7 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
                     collect_idents_stmt(statement, ids);
                 }
                 if let VReg::Phys(name) = &catch.binding {
-                    ids.locals.remove(&sanitize_c_ident(name));
+                    remove_local(ids, &sanitize_c_ident(name));
                 }
             }
         }
@@ -8529,30 +8596,34 @@ fn write_machine_arithmetic_operand_dec(expr: &Expr, out: &mut String) {
             return;
         }
     }
+    // A nested native-pointer step still produces a pointer. The enclosing IR
+    // operation is byte arithmetic, so cross back to an integer address before
+    // adding a dynamic byte offset; otherwise C scales that offset a second
+    // time (`(p + 1) + i*4` advances by `i*16` for `int *`).
+    if let Expr::Bin { op, lhs, rhs } = expr {
+        if scaled_pointer_offset(*op, lhs, rhs).is_some() {
+            out.push_str("(long)(");
+            write_expr_dec(expr, out);
+            out.push(')');
+            return;
+        }
+    }
     write_expr_dec(expr, out);
 }
 
-/// Prefer native C pointer arithmetic when an exact pointee width can express
-/// the IR's byte displacement without loss.  This is equivalent to the
-/// integer-address form but lets the compiler recover the original increment
-/// shape (`p + 1` for an eight-byte pointer slot, not `(long)p + 8`).
-fn write_scaled_pointer_offset_dec(op: BinOp, lhs: &Expr, rhs: &Expr, out: &mut String) -> bool {
+fn scaled_pointer_offset<'a>(op: BinOp, lhs: &'a Expr, rhs: &Expr) -> Option<(&'a VReg, i64)> {
     if !matches!(op, BinOp::Add | BinOp::Sub) {
-        return false;
+        return None;
     }
     let Expr::Reg(reg @ VReg::Phys(name)) = lhs else {
-        return false;
+        return None;
     };
     let Expr::Const(displacement) = rhs else {
-        return false;
+        return None;
     };
-    let Some(width) = dec_ptr_width(name).filter(|width| *width > 0) else {
-        return false;
-    };
+    let width = dec_ptr_width(name).filter(|width| *width > 0)?;
     let declared = declared_reg_ctype(reg);
-    let Some(mut pointee) = declared.strip_suffix('*').map(str::trim) else {
-        return false;
-    };
+    let mut pointee = declared.strip_suffix('*').map(str::trim)?;
     while let Some(unqualified) = pointee
         .strip_prefix("const ")
         .or_else(|| pointee.strip_prefix("volatile "))
@@ -8567,15 +8638,23 @@ fn write_scaled_pointer_offset_dec(op: BinOp, lhs: &Expr, rhs: &Expr, out: &mut 
             _ => None,
         });
     if declared_pointee_width != Some(width) {
-        return false;
+        return None;
     }
     let width = i64::from(width);
-    if displacement % width != 0 {
+    (displacement % width == 0).then_some((reg, displacement / width))
+}
+
+/// Prefer native C pointer arithmetic when an exact pointee width can express
+/// the IR's byte displacement without loss.  This is equivalent to the
+/// integer-address form but lets the compiler recover the original increment
+/// shape (`p + 1` for an eight-byte pointer slot, not `(long)p + 8`).
+fn write_scaled_pointer_offset_dec(op: BinOp, lhs: &Expr, rhs: &Expr, out: &mut String) -> bool {
+    let Some((reg, scaled_displacement)) = scaled_pointer_offset(op, lhs, rhs) else {
         return false;
-    }
+    };
     write_reg_lvalue_dec(reg, out);
     let _ = write!(out, " {} ", binop_sym_c(op));
-    write_const_dec(displacement / width, out);
+    write_const_dec(scaled_displacement, out);
     true
 }
 
@@ -10092,7 +10171,7 @@ fn write_for_clause_dec(s: &Stmt, out: &mut String, prefer_increment: bool) {
             return;
         }
     };
-    if prefer_increment && write_unit_step(dst, src, out, write_reg_lvalue_dec) {
+    if prefer_increment && write_unit_step(dst, src, out, write_reg_lvalue_dec, true) {
         return;
     }
     write_reg_lvalue_dec(dst, out);
@@ -10105,10 +10184,17 @@ fn write_unit_step(
     src: &Expr,
     out: &mut String,
     write_reg: fn(&VReg, &mut String),
+    allow_source_locals: bool,
 ) -> bool {
     let integer_local = match dst {
         VReg::Temp(_) => true,
-        VReg::Phys(name) => name.starts_with("local_") || name.starts_with("stack_"),
+        VReg::Phys(name) => {
+            name.starts_with("local_")
+                || name.starts_with("stack_")
+                || (allow_source_locals
+                    && DEC_SOURCE_LOCALS.with(|locals| locals.borrow().contains(name))
+                    && !declared_reg_ctype(dst).ends_with('*'))
+        }
         VReg::Flag(_) | VReg::FlagValue { .. } => false,
     };
     if !integer_local {
@@ -12366,6 +12452,39 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn prepare_keeps_a_mutated_parameter_home_when_the_entry_value_remains_live() {
+        let f = Function {
+            name: "mutable_parameter_home".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_14")),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_14")),
+                    src: Expr::Const(7),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("local_14"))),
+                        rhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    }),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+        let text = render(&prepared);
+
+        assert!(text.contains("%local_14"), "{text}");
+        assert!(!text.contains("%arg0 = 7"), "{text}");
+    }
+
+    #[test]
     fn prepare_keeps_a_saved_parameter_home_across_output_register_reuse() {
         // AArch64 recursively calls through x0/arg0 after preserving the entry
         // parameter in x4 and spilling x4 around the call. The compatibility
@@ -12495,6 +12614,65 @@ function f @ 0x1000 {
                 } if dst == src
             )),
             "late copy propagation must not leave a self-assignment: {prepared:#?}"
+        );
+    }
+
+    #[test]
+    fn a_protected_pointer_home_preserves_an_indirect_output_store() {
+        let protected =
+            std::collections::HashSet::from(["local_10".to_string(), "local_20".to_string()]);
+        let function = Function {
+            name: "copy_output".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_10")),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_20")),
+                    src: Expr::Reg(VReg::phys("arg2")),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Reg(VReg::phys("local_10")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("value"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Reg(VReg::phys("ret"))),
+                        size: 4,
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Reg(VReg::phys("local_20")),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("ret")),
+                    src: Expr::Reg(VReg::phys("value")),
+                    size: 4,
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench_with_output_and_protected_locals(
+            &function,
+            crate::ir::types_recover::RecoveredOutputKind::Void,
+            &protected,
+        );
+
+        assert!(
+            prepared.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::Phys(address)),
+                    ..
+                } if address == "ret"
+            )),
+            "the output write must remain indirect: {prepared:#?}"
         );
     }
 
@@ -13824,6 +14002,239 @@ function f @ 0x1000 {
             "an exact pointee width must scale the machine byte displacement:\n{text}"
         );
         assert!(!text.contains("p = (long *)(p + 8);"), "{text}");
+    }
+
+    #[test]
+    fn nested_scaled_pointer_offset_returns_to_byte_arithmetic() {
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let f = Function {
+            name: "indexed_after_advance".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("result"),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(VReg::phys("p"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    }),
+                    rhs: Box::new(Expr::Bin {
+                        op: BinOp::Mul,
+                        lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    }),
+                },
+            }],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("p"), TypeHint::Pointer { pointee_width: 8 });
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+            &f,
+            Some(&tm),
+            Some(&tm),
+            RecoveredOutputKind::Void,
+            None,
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::from([("p".to_string(), "long *".to_string())]),
+        );
+
+        assert!(
+            text.contains("(long)(p + 1)") || text.contains("(long)((p + 1))"),
+            "a scaled pointer subexpression must return to a byte address before \
+             the enclosing machine addition:\n{text}"
+        );
+        assert!(!text.contains("((p + 1) + (i * 8))"), "{text}");
+    }
+
+    #[test]
+    fn authoritative_local_is_not_coalesced_with_its_initializer_parameter() {
+        let f = Function {
+            name: "mutable_copy".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_4")),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_4")),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("arg0"))),
+                },
+            ],
+        };
+        let protected = std::collections::HashSet::from(["local_4".to_string()]);
+
+        let prepared = prepare_for_decbench_with_output_and_protected_locals(
+            &f,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            &protected,
+        );
+        let text = render(&prepared);
+
+        assert!(text.contains("local_4"), "{text}");
+        assert!(text.contains("return %arg0"), "{text}");
+        assert!(!text.contains("%arg0 = 0"), "{text}");
+    }
+
+    #[test]
+    fn parameter_home_exposed_by_folding_is_coalesced_after_copy_fixpoint() {
+        let f = Function {
+            name: "narrow_spill".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: Expr::Bin {
+                        op: BinOp::Or,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg1"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_5")),
+                    src: Expr::Reg(VReg::phys("var1")),
+                    size: 1,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("local_5"))),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench_with_output(
+            &f,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+        );
+        let text = render(&prepared);
+
+        assert!(!text.contains("local_5"), "{text}");
+        assert!(text.contains("return %arg1"), "{text}");
+    }
+
+    #[test]
+    fn source_local_declarations_follow_semantic_first_use_not_renamed_spelling() {
+        let f = Function {
+            name: "ordered_locals".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("s"),
+                    src: Expr::Const(0),
+                },
+                Stmt::For {
+                    init: Box::new(Stmt::Assign {
+                        dst: VReg::phys("i"),
+                        src: Expr::Const(0),
+                    }),
+                    cond: Expr::Cmp {
+                        op: CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                    step: Box::new(Stmt::Assign {
+                        dst: VReg::phys("i"),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                            rhs: Box::new(Expr::Const(1)),
+                        },
+                    }),
+                    body: vec![Stmt::Assign {
+                        dst: VReg::phys("s"),
+                        src: Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(VReg::phys("s"))),
+                            rhs: Box::new(Expr::Reg(VReg::phys("i"))),
+                        },
+                    }],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("s"))),
+                },
+            ],
+        };
+        let local_types = std::collections::HashMap::from([
+            ("i".to_string(), "int".to_string()),
+            ("s".to_string(), "int".to_string()),
+        ]);
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+            &f,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            None,
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+            &local_types,
+        );
+
+        let sum = text.find("long s;").expect("sum declaration");
+        let index = text.find("long i;").expect("index declaration");
+        assert!(
+            sum < index,
+            "the first-defined stack object must stay first:\n{text}"
+        );
+    }
+
+    #[test]
+    fn authoritative_integer_local_keeps_unit_step_syntax() {
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let i = VReg::phys("i");
+        let f = Function {
+            name: "count".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::For {
+                init: Box::new(Stmt::Assign {
+                    dst: i.clone(),
+                    src: Expr::Const(0),
+                }),
+                cond: Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(i.clone())),
+                    rhs: Box::new(Expr::Const(3)),
+                },
+                step: Box::new(Stmt::Assign {
+                    dst: i.clone(),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(i)),
+                            rhs: Box::new(Expr::Const(1)),
+                        }),
+                    },
+                }),
+                body: Vec::new(),
+            }],
+        };
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
+            &f,
+            None,
+            None,
+            RecoveredOutputKind::Void,
+            None,
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::from([("i".to_string(), "int".to_string())]),
+        );
+
+        assert!(text.contains("; i++)"), "{text}");
     }
 
     #[test]

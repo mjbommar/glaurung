@@ -1241,3 +1241,84 @@ the changed decompiler path. Repository-wide `ty check` remains a baseline-red
 gate with 2,064 diagnostics. Strict Clippy is also baseline-red (193 warnings
 under `-D warnings`); `--all-features` additionally requires the external pinned
 Bitwuzla library. These failures are reported rather than recast as green.
+
+## 13:20–16:20 — reusable session and definition-safe emission repairs
+
+The next Phase 1 increment adds an actual `ProgramSession`, rather than another
+temporary byte-oriented entry point. One immutable `ProgramImage` now owns a
+bounded, exact-key discovery cache. Its key includes every discovery budget and
+the normalized, sorted function seed set, and its 256-entry LRU exposes hits,
+misses, entries, and evictions. The Python `DecompilerSession` uses that same
+owner and adds an exact rendered-artifact cache keyed by address, limits, type
+mode, style, and function budget. Requests with pass-health, pipeline-profile,
+definition-verification, or other diagnostic modes bypass the render cache so a
+cached string cannot suppress requested evidence. Module-level compatibility
+calls still construct a temporary session.
+
+Real compiled ELF tests prove that exact repeated queries are output-identical
+to the compatibility API, that style and budget changes do not collide, that
+invalid images fail during session construction, and that clearing caches resets
+both artifacts and counters. On the checked-in O0 hello binary, three standalone
+queries had a 13.438 ms median, the first session query took 12.884 ms, and ten
+exact cache hits had a 0.001136 ms median. All fourteen outputs had the same
+SHA-256 digest. This 11,826.9x exact-query result measures the rendered-artifact
+cache, not general warm analysis; broader discovery and fact caching remains
+open and must not inherit this number.
+
+The same batch repaired four correctness owners found by executing real
+DecBench outputs rather than by optimizing metrics:
+
+1. Parameter-home coalescing now asks a symmetric structured reaching-definition
+   query before treating a promoted source object and its incoming argument as
+   interchangeable. A mutation remains distinct when the entry value is still
+   live, while an exact `home = arg` initializer is not misclassified as both a
+   write and an independent read in goto-heavy bodies.
+2. Copy propagation preserves an indirect store's lvalue category. Replacing a
+   pointer scratch with the bare name of a promoted object can no longer turn
+   `*pointer = value` into `local = value`; this was the direct cause of the
+   AArch64 and A32 `heap_pop` buffer corruptions.
+3. Source-local DWARF identities are protected through preparation, selected
+   only on a unique evidence winner, and declared in semantic first-use order
+   rather than renamed lexical order. Equal location evidence remains
+   declaration-only instead of arbitrarily rewriting one machine value.
+4. Loop recovery has a narrow typed owner for carried-value latches and
+   source-variable updates. It requires one dominating scratch definition,
+   compatible proven widths, no old-carrier read after the definition, no later
+   scratch use, straight-line update statements, and no unsafe cross-region
+   transfer. This restores source `i++` without a renderer heuristic.
+
+The first loop-update implementation exposed an official regression in
+`arrays:gcc:O2`: ByteMatch fell from 0.49 to 0.20 because a wide scratch remained
+as the rendered loop variable. The typed carrier proof removes that scratch and
+the fresh cell is back to the accepted triple: GED 8.33, TypeMatch 0.93,
+ByteMatch 0.49. The historical `linkedlist:clang:O0` concern was also rerun in
+the complete matrix and now scores GED 0.0, TypeMatch 1.0, ByteMatch 0.31; it is
+no longer the unexplained 0.10 candidate, but it remains below the earlier 0.47
+observation and should stay a compiler-shape canary.
+
+The final unstructured-reaching repair was verified through every required
+local gate. Rust reports 2,037/2,037 library tests. The focused reusable-session
+and real structural fixtures pass. The complete x86 fixture/structural matrix,
+the legacy executable matrix, and all 64 curriculum behavior lanes pass. The
+cross-architecture matrix has zero new failures and one independently reproduced
+improvement: parent `30c9951` fails `18_binary_heap:i386:O0:heap_push`, while the
+candidate passes it under the same GCC 15.2/qemu-i386 lane. The accepted ratchet
+therefore advances from 1,757 pass / 43 known failures to 1,758 / 42; AArch64 is
+328/328, and both AArch64 and A32 `heap_pop` pass their focused real executions.
+
+Finally, a fresh isolated four-worker DecBench run recomputed GED, TypeMatch,
+and ByteMatch for every official cell. It completed 56/56 with no per-cell
+regression. This is publication evidence for the current batch, not evidence
+that the remaining optimized GED cliffs or unscored TypeMatch cells are solved.
+
+The repository-wide Python suite reaches 100% with exactly four failures, all
+in `test_suspicious_symbols_if_present` for the known cross-compiled
+`suspicious_win` sample-content mismatch; no changed decompiler/session test
+fails. Repository-wide `ty check python/` remains baseline-red with 1,939
+diagnostics, and the pre-existing monolithic `__init__.pyi` Ruff baseline has
+247 modernization findings. The new session test passes focused Ruff and ty,
+Rust formatting is clean, and `git diff --check` passes. These baseline failures
+remain explicit rather than being waived as a green repository-wide gate.
+The loop proof's 504-line RED/negative-control suite lives in a separate child
+test module, leaving the production owner at 803 lines instead of adding another
+source file above the roadmap's 1,000-line threshold.

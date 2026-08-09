@@ -1257,10 +1257,13 @@ fn rewrite_expr(
             if let Some((key_base, key_disp)) =
                 resolved_memory_slot(addr.as_ref(), sp_delta, ctx, address_defs)
             {
-                let key = SlotKey {
+                let ordinary_key = SlotKey {
                     base: key_base.clone(),
                     disp: key_disp,
                 };
+                let key = bounded_scalar_slot(map, &key_base, key_disp, size_val, sp_delta, ctx)
+                    .map(|(key, _)| key)
+                    .unwrap_or(ordinary_key);
                 if let Some(entry) = map.get_mut(&key) {
                     // A narrower load at the same starting address is a view
                     // into a previously wider scalar spill, not evidence that
@@ -1585,6 +1588,39 @@ fn promote_address_taken_stack_object(
     sp_delta: Option<i64>,
     address_defs: &HashMap<VReg, (String, i64)>,
 ) {
+    // A debug scalar is seeded in CFA/entry-SP coordinates before the body is
+    // walked. If its address escapes through the post-prologue SP spelling,
+    // promote that exact seeded slot into an addressable object instead of
+    // creating a second, uninitialised current-SP object beside it.
+    let scalar_address = resolved_memory_address(expr, sp_delta, ctx, address_defs).or_else(|| {
+        resolve_stack_address(expr, sp_delta, ctx, address_defs)
+            .map(|(base, disp)| (base, disp, None, 1))
+    });
+    if let Some((base, disp, index, _scale)) = scalar_address {
+        if index.is_none() {
+            if let Some((key, relative)) = bounded_scalar_slot(map, &base, disp, 0, sp_delta, ctx) {
+                let entry = map
+                    .get_mut(&key)
+                    .expect("bounded scalar key came from this map");
+                let size = u16::from(entry.span_size);
+                entry.object_size = Some(size);
+                let object = Expr::StackAddr {
+                    object: VReg::phys(entry.name.clone()),
+                    size,
+                };
+                *expr = if relative == 0 {
+                    object
+                } else {
+                    Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(object),
+                        rhs: Box::new(Expr::Const(relative)),
+                    }
+                };
+                return;
+            }
+        }
+    }
     // A call can receive a slice whose start is computed dynamically, e.g.
     // `memcpy(rsp + index*4 + 48, src, n)`.  This is the same address shape as
     // an indexed load/store, but there is no dereference node for
@@ -2143,25 +2179,50 @@ fn containing_stack_object<'a>(
         .max_by_key(|(start, _, _)| *start)
 }
 
-fn bounded_scalar_contains(
+fn bounded_scalar_at_coordinate(
     map: &HashMap<SlotKey, SlotVal>,
     base: &str,
     disp: i64,
     access_size: u8,
-) -> bool {
+) -> Option<(SlotKey, i64)> {
     let Some(access_end) = disp.checked_add(i64::from(access_size)) else {
-        return false;
+        return None;
     };
-    map.iter().any(|(key, slot)| {
-        let Some(slot_end) = key.disp.checked_add(i64::from(slot.span_size)) else {
-            return false;
-        };
-        key.base == base
-            && slot.bounded_object
-            && slot.object_size.is_none()
-            && key.disp <= disp
-            && access_end <= slot_end
-    })
+    map.iter()
+        .filter_map(|(key, slot)| {
+            let slot_end = key.disp.checked_add(i64::from(slot.span_size))?;
+            (key.base == base
+                && slot.bounded_object
+                && slot.object_size.is_none()
+                // A scalar hint can become a C lvalue only for a whole-value
+                // access at its exact base. Partial/interior machine-word
+                // transports need byte-object semantics that this path does
+                // not yet model; collapsing them loses untouched bytes.
+                && key.disp == disp
+                && (access_size == 0 || access_size == slot.span_size)
+                && if access_size == 0 {
+                    disp < slot_end
+                } else {
+                    access_end <= slot_end
+                })
+            .then_some((key.clone(), disp - key.disp))
+        })
+        .max_by_key(|(key, _)| key.disp)
+}
+
+fn bounded_scalar_slot(
+    map: &HashMap<SlotKey, SlotVal>,
+    base: &str,
+    disp: i64,
+    access_size: u8,
+    sp_delta: Option<i64>,
+    ctx: StackContext,
+) -> Option<(SlotKey, i64)> {
+    aapcs_entry_stack_coordinate(base, disp, sp_delta, ctx)
+        .and_then(|(alternate_base, alternate_disp)| {
+            bounded_scalar_at_coordinate(map, alternate_base, alternate_disp, access_size)
+        })
+        .or_else(|| bounded_scalar_at_coordinate(map, base, disp, access_size))
 }
 
 /// Materialise an access inside a seeded stack region as byte-pointer
@@ -2179,11 +2240,7 @@ fn stack_object_address(
         return None;
     }
     let alternate = aapcs_entry_stack_coordinate(&base, disp, sp_delta, ctx);
-    if bounded_scalar_contains(map, &base, disp, access_size)
-        || alternate.is_some_and(|(alternate_base, alternate_disp)| {
-            bounded_scalar_contains(map, alternate_base, alternate_disp, access_size)
-        })
-    {
+    if bounded_scalar_slot(map, &base, disp, access_size, sp_delta, ctx).is_some() {
         return None;
     }
     let (object_disp, start, slot, object_size) = alternate
@@ -2480,10 +2537,13 @@ fn try_promote_lea_to_local(
     let Some((key_base, key_disp)) = resolved_memory_slot(addr, sp_delta, ctx, address_defs) else {
         return;
     };
-    let key = SlotKey {
+    let ordinary_key = SlotKey {
         base: key_base.clone(),
         disp: key_disp,
     };
+    let key = bounded_scalar_slot(map, &key_base, key_disp, size, sp_delta, ctx)
+        .map(|(key, _)| key)
+        .unwrap_or(ordinary_key);
     let entry = map.entry(key).or_insert_with(|| SlotVal {
         name: alloc_name(&key_base, key_disp, names, ctx),
         declared_size: size,
@@ -4861,6 +4921,122 @@ mod tests {
                         if actual == &object)
             ),
             "closure call lost the CFA-owned object: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn aarch64_cfa_scalar_unifies_current_sp_initializer_and_address_escape() {
+        // DWARF names the scalar against the entry SP while instructions use
+        // the post-prologue SP. Both spellings must resolve to one object when
+        // the scalar's address escapes into a closure.
+        let address = reg("x8#1");
+        let mut f = Function {
+            name: "capture_aarch64_scalar".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(48)),
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("sp", 0),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: address.clone(),
+                    src: lea("sp", 0),
+                },
+                Stmt::Call {
+                    target: Expr::Addr(0x1000),
+                    args: vec![Expr::Reg(address)],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+        let hints = [StackObjectHint {
+            base: "entry_sp".into(),
+            disp: -48,
+            size: 4,
+            aggregate: false,
+            source_name: Some("acc".into()),
+            c_type: Some("int".into()),
+        }];
+
+        let facts = promote_stack_locals_with_facts(&mut f, Some(CallConv::Aarch64), None, &hints);
+
+        let source_slot = facts
+            .source_names
+            .iter()
+            .find_map(|(slot, name)| (name == "acc").then_some(reg(slot)))
+            .expect("DWARF scalar fact");
+        assert!(
+            matches!(&f.body[1], Stmt::Store {
+                addr: Expr::StackAddr { object, size: 4 }, ..
+            } if object == &source_slot),
+            "initializer and DWARF scalar used different storage: {f:#?}"
+        );
+        assert!(
+            matches!(&f.body[3], Stmt::Call { args, .. }
+                if matches!(args.as_slice(), [Expr::StackAddr { object, size: 4 }]
+                    if object == &source_slot)),
+            "escaped address did not use the initialized DWARF scalar: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn arm32_wide_scalar_half_stores_do_not_collapse_to_one_c_assignment() {
+        // A 64-bit source scalar is transported as two 32-bit words on ARM32.
+        // Until the IR can express partial scalar stores, mapping both halves
+        // to the same C lvalue loses the low half entirely.
+        let mut f = Function {
+            name: "wide_result".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp"))),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                },
+                Stmt::Store {
+                    addr: lea("sp", 0),
+                    src: Expr::Reg(reg("r0")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("sp", 4),
+                    src: Expr::Reg(reg("r1")),
+                    size: 4,
+                },
+            ],
+        };
+        let hints = [StackObjectHint {
+            base: "entry_sp".into(),
+            disp: -8,
+            size: 8,
+            aggregate: false,
+            source_name: Some("r".into()),
+            c_type: Some("unsigned long long".into()),
+        }];
+
+        promote_stack_locals_with_facts(&mut f, Some(CallConv::Arm), None, &hints);
+
+        let (Stmt::Store { addr: low, .. }, Stmt::Store { addr: high, .. }) =
+            (&f.body[1], &f.body[2])
+        else {
+            panic!("expected the two transported stores: {f:#?}");
+        };
+        assert_ne!(
+            low, high,
+            "two machine-word halves collapsed into one source assignment: {f:#?}"
         );
     }
 

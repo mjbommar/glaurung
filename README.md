@@ -108,6 +108,23 @@ Run it inside the project environment:
 uv run python example.py
 ```
 
+For repeated decompiler queries, retain one immutable program session so exact
+discovery and rendered artifacts can be reused safely:
+
+```python
+import glaurung as g
+
+session = g.ir.DecompilerSession(sample)
+functions, _ = g.analysis.analyze_functions_path(sample)
+entry = int(functions[0].entry_point.value)
+print(session.decompile_at(entry, style="decbench"))
+print(session.artifact_cache_stats)
+```
+
+The cache key includes the function address, every discovery budget, type/style
+options, and normalized architecture address. Diagnostic runs and PDB overlays
+bypass rendered-output reuse so current evidence is never hidden by a cache hit.
+
 ## Configuration
 
 Deterministic analysis needs no credentials. Resource limits are normally set

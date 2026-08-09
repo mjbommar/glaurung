@@ -50,6 +50,7 @@ pub mod guarded_switch;
 pub mod health;
 pub mod high_variables;
 pub mod label_prune;
+pub(crate) mod latch_predicate;
 pub mod lift_arm32;
 pub mod lift_arm64;
 pub mod lift_function;

@@ -42,6 +42,61 @@ class _SymbolsModule:
 
 symbols: _SymbolsModule
 
+class DecompilerSession:
+    """Reusable exact analysis session for one immutable binary image."""
+
+    def __init__(self, path: str) -> None: ...
+    @property
+    def path(self) -> str: ...
+    @property
+    def discovery_cache_stats(self) -> dict[str, int]: ...
+    @property
+    def artifact_cache_stats(self) -> dict[str, int]: ...
+    def clear_caches(self) -> None: ...
+    def decompile_at(
+        self,
+        func_va: int,
+        max_blocks: int = 4096,
+        max_instructions: int = 200_000,
+        timeout_ms: int = 5000,
+        types: bool = True,
+        style: str = "",
+        pdb_cache: str = "",
+        max_functions: int = 1,
+    ) -> str: ...
+
+class _IrModule:
+    DecompilerSession: type[DecompilerSession]
+    def decompile_at(
+        self,
+        path: str,
+        func_va: int,
+        max_blocks: int = 4096,
+        max_instructions: int = 200_000,
+        timeout_ms: int = 5000,
+        types: bool = True,
+        style: str = "",
+        pdb_cache: str = "",
+        max_functions: int = 1,
+    ) -> str: ...
+
+ir: _IrModule
+
+class _AnalysisModule:
+    def analyze_functions_path(
+        self,
+        path: str,
+        max_read_bytes: int = 10_485_760,
+        max_file_size: int = 104_857_600,
+        max_functions: int = 0,
+        max_blocks: int = 2048,
+        max_instructions: int = 50_000,
+        timeout_ms: int = 100,
+        total_timeout_ms: int = 0,
+    ) -> tuple[list[Function], CallGraph]: ...
+
+analysis: _AnalysisModule
+
 # ============================================================================
 # Enumerations
 # ============================================================================

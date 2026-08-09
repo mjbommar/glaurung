@@ -460,7 +460,10 @@ def test_sum_array_recovers_a_for_loop(tmp_path):
     )
 
     assert S.has_for_loop(result.stdout), result.stdout
-    assert re.search(r"\bi\s*=.*\bi\b.*\+\s*1", result.stdout), result.stdout
+    assert re.search(
+        r"\bi\s*=.*\bi\b.*\+\s*1|\bi\s*\+\+",
+        result.stdout,
+    ), result.stdout
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 

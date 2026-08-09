@@ -26,7 +26,7 @@ pub fn read_may_observe_prior_write(
     written_value: &VReg,
 ) -> bool {
     if contains_unstructured_control(body) {
-        return body_writes(body, written_value) && body_reads(body, read_value);
+        return unstructured_has_both_events(body, read_value, written_value);
     }
     analyze_body(body, read_value, written_value, false).observed
 }
@@ -91,6 +91,16 @@ fn analyze_statement(
                 saw_read |= observed(addr, read_value, written);
             }
             saw_read |= observed(src, read_value, written);
+            // A promoted local is still spelled as `store &local = value` at
+            // this stage. Count that as a definition of the local. The exact
+            // `local = arg` home initializer is the alias-establishing copy,
+            // not a mutation; later stores to the same local are mutations
+            // whose effect can reach subsequent reads of the original arg.
+            let writes_promoted_value =
+                matches!(addr, Expr::Reg(register) if register == written_value);
+            let establishes_home = writes_promoted_value
+                && matches!(src, Expr::Reg(register) if register == read_value);
+            written |= writes_promoted_value && !establishes_home;
         }
         Stmt::Call {
             target, args, dst, ..
@@ -243,111 +253,108 @@ fn expression_reads(expression: &Expr, value: &VReg) -> bool {
     }
 }
 
-fn body_writes(body: &[Stmt], value: &VReg) -> bool {
-    fn statement_writes(statement: &Stmt, value: &VReg) -> bool {
-        match statement {
-            Stmt::Assign { dst, .. } => dst == value,
-            Stmt::Call { dst, .. } => dst.as_ref() == Some(value),
-            Stmt::Pop { target } => target == value,
-            Stmt::If {
-                then_body,
-                else_body,
-                ..
-            } => {
-                body_writes(then_body, value)
-                    || else_body
-                        .as_deref()
-                        .is_some_and(|body| body_writes(body, value))
+fn unstructured_has_both_events(body: &[Stmt], read: &VReg, written: &VReg) -> bool {
+    fn scan(body: &[Stmt], read: &VReg, written: &VReg, events: &mut (bool, bool)) {
+        for statement in body {
+            match statement {
+                Stmt::Assign { dst, src } => {
+                    events.0 |= dst == written;
+                    events.1 |= expression_reads(src, read);
+                }
+                Stmt::Store { addr, src, .. } => {
+                    // `home = arg` establishes the alias under consideration;
+                    // it is neither a conflicting mutation nor an independent
+                    // read. Treating it as both made every goto-containing
+                    // parameter home fail closed before any real conflict.
+                    if matches!(addr, Expr::Reg(register) if register == written)
+                        && matches!(src, Expr::Reg(register) if register == read)
+                    {
+                        continue;
+                    }
+                    events.0 |= matches!(addr, Expr::Reg(register) if register == written);
+                    events.1 |= (!matches!(addr, Expr::Reg(register) if register == read)
+                        && expression_reads(addr, read))
+                        || expression_reads(src, read);
+                }
+                Stmt::Call {
+                    target, args, dst, ..
+                } => {
+                    events.0 |= dst.as_ref() == Some(written);
+                    events.1 |= expression_reads(target, read)
+                        || args.iter().any(|argument| expression_reads(argument, read));
+                }
+                Stmt::Return { value } => {
+                    events.1 |= value
+                        .as_ref()
+                        .is_some_and(|expression| expression_reads(expression, read));
+                }
+                Stmt::If {
+                    cond,
+                    then_body,
+                    else_body,
+                } => {
+                    events.1 |= expression_reads(cond, read);
+                    scan(then_body, read, written, events);
+                    if let Some(else_body) = else_body {
+                        scan(else_body, read, written, events);
+                    }
+                }
+                Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
+                    events.1 |= expression_reads(cond, read);
+                    scan(body, read, written, events);
+                }
+                Stmt::For {
+                    init,
+                    cond,
+                    step,
+                    body,
+                } => {
+                    scan(std::slice::from_ref(init.as_ref()), read, written, events);
+                    events.1 |= expression_reads(cond, read);
+                    scan(body, read, written, events);
+                    scan(std::slice::from_ref(step.as_ref()), read, written, events);
+                }
+                Stmt::Switch {
+                    discriminant,
+                    cases,
+                    default,
+                } => {
+                    events.1 |= expression_reads(discriminant, read);
+                    for (_, body) in cases {
+                        scan(body, read, written, events);
+                    }
+                    if let Some(default) = default {
+                        scan(default, read, written, events);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    scan(try_body, read, written, events);
+                    for catch in catches {
+                        events.0 |= &catch.binding == written;
+                        scan(&catch.body, read, written, events);
+                    }
+                }
+                Stmt::Pop { target } => events.0 |= target == written,
+                Stmt::Push { value } | Stmt::Throw { value } => {
+                    events.1 |= expression_reads(value, read)
+                }
+                Stmt::IndirectGoto { target } => events.1 |= expression_reads(target, read),
+                Stmt::Label(_)
+                | Stmt::Goto { .. }
+                | Stmt::Break
+                | Stmt::Nop
+                | Stmt::Unknown(_)
+                | Stmt::Comment(_) => {}
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body_writes(body, value),
-            Stmt::For {
-                init, step, body, ..
-            } => {
-                statement_writes(init, value)
-                    || body_writes(body, value)
-                    || statement_writes(step, value)
+            if events.0 && events.1 {
+                return;
             }
-            Stmt::Switch { cases, default, .. } => {
-                cases.iter().any(|(_, body)| body_writes(body, value))
-                    || default
-                        .as_deref()
-                        .is_some_and(|body| body_writes(body, value))
-            }
-            Stmt::TryCatch { try_body, catches } => {
-                body_writes(try_body, value)
-                    || catches.iter().any(|catch| body_writes(&catch.body, value))
-            }
-            _ => false,
         }
     }
-    body.iter()
-        .any(|statement| statement_writes(statement, value))
-}
 
-fn body_reads(body: &[Stmt], value: &VReg) -> bool {
-    fn statement_reads(statement: &Stmt, value: &VReg) -> bool {
-        match statement {
-            Stmt::Assign { src, .. } => expression_reads(src, value),
-            Stmt::Store { addr, src, .. } => {
-                (!matches!(addr, Expr::Reg(register) if register == value)
-                    && expression_reads(addr, value))
-                    || expression_reads(src, value)
-            }
-            Stmt::Call { target, args, .. } => {
-                expression_reads(target, value)
-                    || args
-                        .iter()
-                        .any(|argument| expression_reads(argument, value))
-            }
-            Stmt::Return { value: Some(expr) }
-            | Stmt::Push { value: expr }
-            | Stmt::Throw { value: expr }
-            | Stmt::IndirectGoto { target: expr } => expression_reads(expr, value),
-            Stmt::If {
-                cond,
-                then_body,
-                else_body,
-            } => {
-                expression_reads(cond, value)
-                    || body_reads(then_body, value)
-                    || else_body
-                        .as_deref()
-                        .is_some_and(|body| body_reads(body, value))
-            }
-            Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
-                expression_reads(cond, value) || body_reads(body, value)
-            }
-            Stmt::For {
-                init,
-                cond,
-                step,
-                body,
-            } => {
-                statement_reads(init, value)
-                    || expression_reads(cond, value)
-                    || statement_reads(step, value)
-                    || body_reads(body, value)
-            }
-            Stmt::Switch {
-                discriminant,
-                cases,
-                default,
-            } => {
-                expression_reads(discriminant, value)
-                    || cases.iter().any(|(_, body)| body_reads(body, value))
-                    || default
-                        .as_deref()
-                        .is_some_and(|body| body_reads(body, value))
-            }
-            Stmt::TryCatch { try_body, catches } => {
-                body_reads(try_body, value)
-                    || catches.iter().any(|catch| body_reads(&catch.body, value))
-            }
-            _ => false,
-        }
-    }
-    body.iter()
-        .any(|statement| statement_reads(statement, value))
+    let mut events = (false, false);
+    scan(body, read, written, &mut events);
+    events.0 && events.1
 }
 
 fn contains_unstructured_control(body: &[Stmt]) -> bool {
@@ -447,6 +454,80 @@ mod tests {
             &body,
             &reg("home"),
             &reg("value")
+        ));
+    }
+
+    #[test]
+    fn a_promoted_home_reassignment_reaches_a_later_read_of_the_original_argument() {
+        let body = vec![
+            Stmt::Store {
+                addr: Expr::Reg(reg("home")),
+                src: Expr::Reg(reg("arg0")),
+                size: 4,
+            },
+            Stmt::Store {
+                addr: Expr::Reg(reg("home")),
+                src: Expr::Const(7),
+                size: 4,
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("arg0"))),
+            },
+        ];
+
+        assert!(read_may_observe_prior_write(
+            &body,
+            &reg("arg0"),
+            &reg("home")
+        ));
+    }
+
+    #[test]
+    fn an_unstructured_home_initializer_alone_is_not_a_conflicting_write() {
+        let body = vec![
+            Stmt::Label(0x1000),
+            Stmt::Store {
+                addr: Expr::Reg(reg("home")),
+                src: Expr::Reg(reg("arg0")),
+                size: 4,
+            },
+            Stmt::Goto { target: 0x1000 },
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("arg0"))),
+            },
+        ];
+
+        assert!(!read_may_observe_prior_write(
+            &body,
+            &reg("arg0"),
+            &reg("home")
+        ));
+    }
+
+    #[test]
+    fn an_unstructured_home_mutation_and_argument_read_fail_closed() {
+        let body = vec![
+            Stmt::Label(0x1000),
+            Stmt::Store {
+                addr: Expr::Reg(reg("home")),
+                src: Expr::Reg(reg("arg0")),
+                size: 4,
+            },
+            Stmt::Store {
+                addr: Expr::Reg(reg("home")),
+                src: Expr::Const(7),
+                size: 4,
+            },
+            Stmt::Goto { target: 0x1000 },
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("arg0"))),
+            },
+        ];
+
+        assert!(read_may_observe_prior_write(
+            &body,
+            &reg("arg0"),
+            &reg("home")
         ));
     }
 }

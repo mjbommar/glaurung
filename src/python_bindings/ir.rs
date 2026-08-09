@@ -23,6 +23,7 @@
 //! through tests.
 
 mod dwarf_contracts;
+mod session;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -43,6 +44,22 @@ fn load_program_image(path: &str) -> PyResult<crate::program::image::ProgramImag
     use crate::program::image::{ProgramImage, ProgramImageError};
 
     ProgramImage::from_path(std::path::Path::new(path)).map_err(|error| match error {
+        ProgramImageError::Io(error) => {
+            pyo3::exceptions::PyIOError::new_err(format!("read error: {error}"))
+        }
+        ProgramImageError::Parse(error) => {
+            pyo3::exceptions::PyValueError::new_err(format!("image parse failed: {error}"))
+        }
+    })
+}
+
+pub(super) fn load_program_session(
+    path: &str,
+) -> PyResult<crate::program::session::ProgramSession> {
+    use crate::program::image::ProgramImageError;
+    use crate::program::session::ProgramSession;
+
+    ProgramSession::from_path(std::path::Path::new(path)).map_err(|error| match error {
         ProgramImageError::Io(error) => {
             pyo3::exceptions::PyIOError::new_err(format!("read error: {error}"))
         }
@@ -805,13 +822,43 @@ fn decompile_at_py(
     pdb_cache: &str,
     max_functions: usize,
 ) -> PyResult<String> {
+    let session = load_program_session(&path)?;
+    decompile_at_session(
+        py,
+        &session,
+        &path,
+        func_va,
+        max_blocks,
+        max_instructions,
+        timeout_ms,
+        types,
+        style,
+        pdb_cache,
+        max_functions,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn decompile_at_session(
+    py: Python<'_>,
+    session: &crate::program::session::ProgramSession,
+    path: &str,
+    func_va: u64,
+    max_blocks: usize,
+    max_instructions: usize,
+    timeout_ms: u64,
+    types: bool,
+    style: &str,
+    pdb_cache: &str,
+    max_functions: usize,
+) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
-    use crate::analysis::cfg::{analyze_functions_image_with_seeds, Budgets};
+    use crate::analysis::cfg::Budgets;
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
 
-    let image = load_program_image(&path)?;
+    let image = session.image().clone();
     let data = image.bytes();
     // An ARM32 Thumb symbol's value carries the Thumb bit; the entry it denotes
     // is one lower. Anything resolving a callee through `.symtab` hands us that
@@ -836,8 +883,7 @@ fn decompile_at_py(
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
     // the closure boundary. See `python_bindings::analysis`.
-    let (funcs, _cg) =
-        py.detach(|| analyze_functions_image_with_seeds(&image, &budgets, &[func_va]));
+    let funcs = py.detach(|| session.discover_functions(&budgets, &[func_va]));
     let func = funcs
         .iter()
         .find(|f| f.entry_point.value == func_va)
@@ -1527,8 +1573,16 @@ fn decbench_text(
 ) -> String {
     let (dwarf_local_types, dwarf_local_names) =
         select_renderable_dwarf_local_facts(dwarf_local_types, dwarf_local_names, dwarf_types);
+    let protected_locals = dwarf_local_names
+        .keys()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
     let mut prepared = profiler.measure("prepare_for_decbench", || {
-        let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
+        let mut prepared = crate::ir::ast::prepare_for_decbench_with_output_and_protected_locals(
+            f,
+            output_kind,
+            &protected_locals,
+        );
         // Preparation is also where a PC-relative address arithmetic sequence
         // finally becomes an absolute address. On AArch64 the stack guard is reached
         // through its GOT slot (`adrp`/`ldr`/`ldr`), so at the earlier
@@ -1574,6 +1628,17 @@ fn decbench_text(
             exact_value_widths,
         );
         crate::ir::high_variables::refine_pointer_high_variables(&prepared, tm);
+        crate::ir::latch_predicate::coalesce_loop_entry_copies(
+            &mut prepared,
+            &protected_locals,
+            tm,
+        );
+        crate::ir::latch_predicate::coalesce_source_loop_updates(
+            &mut prepared,
+            &protected_locals,
+            tm,
+            exact_value_widths,
+        );
     }
     if let Some(tm) = refined_width.as_mut() {
         crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
@@ -2917,6 +2982,7 @@ use crate::ir::name_resolve::resolve_outer_function_name;
 /// Register LLIR-related Python bindings under the `ir` submodule.
 pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let ir_mod = pyo3::types::PyModule::new(py, "ir")?;
+    ir_mod.add_class::<session::PyDecompilerSession>()?;
     ir_mod.add_function(wrap_pyfunction!(lift_bytes_py, &ir_mod)?)?;
     ir_mod.add_function(wrap_pyfunction!(lift_window_at_py, &ir_mod)?)?;
     ir_mod.add_function(wrap_pyfunction!(decompile_at_py, &ir_mod)?)?;
@@ -3542,6 +3608,161 @@ mod tests {
         assert_eq!(
             facts.source_types.get("var1").map(String::as_str),
             Some("unsigned int")
+        );
+    }
+
+    #[test]
+    fn dwarf_register_family_with_reused_role_becomes_declaration_only() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation};
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let contract = DwarfPrototypeContract {
+            prototyped: true,
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: Vec::new(),
+            register_locals: vec![DwarfRegisterLocal {
+                source_name: "i".to_string(),
+                c_type: "int".to_string(),
+                locations: vec![DwarfRegisterLocation {
+                    start: 0x100,
+                    end: 0x110,
+                    register: 0,
+                }],
+            }],
+        };
+        let numbered = LlirFunction {
+            entry_va: 0x80,
+            blocks: vec![LlirBlock {
+                start_va: 0x80,
+                end_va: 0x110,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x90,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx#1"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x104,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx#3"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x108,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx#2"),
+                            src: Value::Reg(VReg::phys("rax#2")),
+                        },
+                    },
+                ],
+                succs: Vec::new(),
+            }],
+        };
+        let roles = std::collections::HashMap::from([
+            ("rax#1".to_string(), "ret".to_string()),
+            ("rax#2".to_string(), "var4".to_string()),
+        ]);
+        let mut facts = crate::ir::stack_locals::StackLocalFacts::default();
+
+        merge_dwarf_register_local_facts(
+            &mut facts,
+            Some(&contract),
+            &numbered,
+            &roles,
+            Arch::X86_64,
+        );
+
+        assert!(facts.source_names.is_empty());
+        assert_eq!(facts.source_types.get("i").map(String::as_str), Some("int"));
+    }
+
+    #[test]
+    fn dwarf_register_unique_winner_survives_a_reused_sibling_role() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation};
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let contract = DwarfPrototypeContract {
+            prototyped: true,
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: Vec::new(),
+            register_locals: vec![DwarfRegisterLocal {
+                source_name: "i".to_string(),
+                c_type: "int".to_string(),
+                locations: vec![DwarfRegisterLocation {
+                    start: 0x100,
+                    end: 0x110,
+                    register: 0,
+                }],
+            }],
+        };
+        let numbered = LlirFunction {
+            entry_va: 0x80,
+            blocks: vec![LlirBlock {
+                start_va: 0x80,
+                end_va: 0x110,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x90,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx#1"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x104,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx#2"),
+                            src: Value::Reg(VReg::phys("rax#1")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x108,
+                        op: Op::Bin {
+                            dst: VReg::phys("rcx#3"),
+                            op: crate::ir::types::BinOp::Add,
+                            lhs: Value::Reg(VReg::phys("rax#2")),
+                            rhs: Value::Reg(VReg::phys("rax#2")),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x10c,
+                        op: Op::Assign {
+                            dst: VReg::phys("rcx#4"),
+                            src: Value::Reg(VReg::phys("rax#2")),
+                        },
+                    },
+                ],
+                succs: Vec::new(),
+            }],
+        };
+        let roles = std::collections::HashMap::from([
+            ("rax#1".to_string(), "ret".to_string()),
+            ("rax#2".to_string(), "var4".to_string()),
+        ]);
+        let mut facts = crate::ir::stack_locals::StackLocalFacts::default();
+
+        merge_dwarf_register_local_facts(
+            &mut facts,
+            Some(&contract),
+            &numbered,
+            &roles,
+            Arch::X86_64,
+        );
+
+        assert_eq!(
+            facts.source_names.get("var4").map(String::as_str),
+            Some("i")
+        );
+        assert_eq!(
+            facts.source_types.get("var4").map(String::as_str),
+            Some("int")
         );
     }
 

@@ -95,17 +95,7 @@ pub(super) fn merge_dwarf_register_local_facts(
     };
     for local in &contract.register_locals {
         if local.locations.is_empty() {
-            if crate::ir::naming::valid_authoritative_local_name(&local.source_name)
-                && !facts
-                    .source_names
-                    .values()
-                    .any(|name| name == &local.source_name)
-            {
-                facts
-                    .source_types
-                    .entry(local.source_name.clone())
-                    .or_insert_with(|| local.c_type.clone());
-            }
+            record_declaration_only(facts, local);
             continue;
         }
         let mut counts = std::collections::HashMap::<String, usize>::new();
@@ -148,6 +138,7 @@ pub(super) fn merge_dwarf_register_local_facts(
             if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
                 eprintln!("DWARF register local {:?}: no numbered role", local);
             }
+            record_declaration_only(facts, local);
             continue;
         };
         if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
@@ -159,8 +150,14 @@ pub(super) fn merge_dwarf_register_local_facts(
         let Some(role) = winners.next() else {
             continue;
         };
+        if winners.next().is_some() {
+            // Equal evidence cannot select one machine value as the source
+            // identity. Keep the authoritative declaration without rewriting
+            // either candidate's dataflow.
+            record_declaration_only(facts, local);
+            continue;
+        }
         if !crate::ir::naming::valid_authoritative_local_name(&local.source_name)
-            || winners.next().is_some()
             || crate::ir::ast::parse_arg_index(&role).is_some()
             || facts.source_names.contains_key(&role)
             || facts.source_types.contains_key(&role)
@@ -177,6 +174,23 @@ pub(super) fn merge_dwarf_register_local_facts(
             .source_names
             .insert(role.clone(), local.source_name.clone());
         facts.source_types.insert(role, local.c_type.clone());
+    }
+}
+
+fn record_declaration_only(
+    facts: &mut crate::ir::stack_locals::StackLocalFacts,
+    local: &crate::debug::dwarf::DwarfRegisterLocal,
+) {
+    if crate::ir::naming::valid_authoritative_local_name(&local.source_name)
+        && !facts
+            .source_names
+            .values()
+            .any(|name| name == &local.source_name)
+    {
+        facts
+            .source_types
+            .entry(local.source_name.clone())
+            .or_insert_with(|| local.c_type.clone());
     }
 }
 

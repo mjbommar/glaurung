@@ -785,7 +785,7 @@ fn propagate_run(stmts: &mut [Stmt]) -> Copies {
                 }
             }
             Stmt::Store { addr, src, .. } => {
-                subst(addr, &copies);
+                subst_store_addr(addr, &copies);
                 subst(src, &copies);
                 // A store to a bare promoted local writes that variable.
                 if let Expr::Reg(r) = addr {
@@ -960,7 +960,7 @@ fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies) {
                 }
             }
             Stmt::Store { addr, src, .. } => {
-                subst(addr, &copies);
+                subst_store_addr(addr, &copies);
                 subst(src, &copies);
                 copies.clear();
             }
@@ -1062,7 +1062,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                 }
             }
             Stmt::Store { addr, src, .. } => {
-                subst(addr, &copies);
+                subst_store_addr(addr, &copies);
                 subst(src, &copies);
                 if let Expr::Reg(r) = addr {
                     invalidate(&mut copies, r);
@@ -1567,6 +1567,48 @@ fn count_reads_body(body: &[Stmt], reads: &mut HashMap<VReg, usize>) {
     }
 }
 
+/// Substitute copies in an indirect-store address without changing its lvalue
+/// category into a promoted-local assignment.
+///
+/// Stack promotion currently represents `local_x = value` as a `Store` whose
+/// address is the bare promoted-local register. A machine pointer scratch can
+/// also contain `local_x` as its scalar value: `p = local_x; *p = value`.
+/// Replacing that top-level `p` with bare `local_x` would silently turn the
+/// indirect write into an assignment. Keep the scratch in that one ambiguous
+/// case; substitutions nested inside arithmetic addresses remain safe because
+/// the address expression cannot be mistaken for local storage.
+fn subst_store_addr(address: &mut Expr, copies: &Copies) {
+    if let Expr::Lea {
+        base: Some(register),
+        index: None,
+        scale,
+        disp,
+        ..
+    } = address
+    {
+        if *scale == 1 && *disp == 0 {
+            if let Some(Expr::Reg(replacement)) = copies.get(register) {
+                if is_promoted_local_reg(replacement) {
+                    // Preserve the explicit address container while removing
+                    // the scratch. General `subst` deliberately collapses a
+                    // trivial Lea to its value, which is incorrect only at
+                    // this overloaded Store-lvalue boundary.
+                    *register = replacement.clone();
+                    return;
+                }
+            }
+        }
+    }
+    if matches!(
+        address,
+        Expr::Reg(register)
+            if matches!(copies.get(register), Some(Expr::Reg(replacement)) if is_promoted_local_reg(replacement))
+    ) {
+        return;
+    }
+    subst(address, copies);
+}
+
 /// Substitute every active copy `dst -> src` into `e`.
 fn subst(e: &mut Expr, copies: &Copies) {
     if copies.is_empty() {
@@ -1986,6 +2028,57 @@ mod tests {
         assert_eq!(
             cond, &original_guard,
             "the cursor is loop-carried, not arg0"
+        );
+    }
+
+    #[test]
+    fn a_pointer_scratch_store_does_not_become_a_promoted_local_assignment() {
+        // Stack promotion overloads a bare promoted-local Store address as an
+        // assignment to that local. `address = local_20; *address = value` is
+        // instead an indirect write through the pointer held in local_20.
+        // Replacing the address scratch by a bare local changes the lvalue kind
+        // and corrupts output parameters such as heap_pop's `removed` buffer.
+        let address = reg("ret");
+        let local = reg("local_20");
+        let mut function = Function {
+            name: "write_output".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: address.clone(),
+                    src: Expr::Reg(local),
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(address.clone()),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(7),
+                    size: 4,
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        assert!(
+            matches!(
+                function.body.as_slice(),
+                [Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(store_address),
+                        index: None,
+                        disp: 0,
+                        ..
+                    },
+                    ..
+                }] if store_address == &reg("local_20")
+            ),
+            "the indirect store must retain an address expression: {:#?}",
+            function.body
         );
     }
 

@@ -2275,7 +2275,7 @@
   },
   "18_binary_heap:i386:O0": {
     "heap_pop": "pass",
-    "heap_push": "fail"
+    "heap_push": "pass"
   },
   "18_binary_heap:i386:O2": {
     "heap_pop": "pass",
