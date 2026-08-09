@@ -40,6 +40,9 @@ def test_profile_harness_captures_cold_warm_rss_parse_and_stage_evidence(tmp_pat
     assert report["warm_runs"] == 2
     case = report["cases"][0]
     assert case["name"] == "hello"
+    assert case["path"] == (
+        "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0"
+    )
     assert case["binary_sha256"]
     assert case["cold"]["process_wall_ns"] > case["cold"]["decompile_ns"][0]
     assert case["cold"]["max_rss_kib"] > 0

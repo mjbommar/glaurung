@@ -176,12 +176,47 @@ def _git_provenance(root: Path) -> JsonObject:
     }
 
 
-def build_benchmark(cases: list[Case], warm_runs: int, root: Path) -> JsonObject:
+def _report_path(path: Path, root: Path, aliases: list[tuple[Path, str]]) -> str:
+    try:
+        return str(path.relative_to(root.resolve()))
+    except ValueError:
+        pass
+    for actual_root, label in aliases:
+        try:
+            relative = path.relative_to(actual_root)
+        except ValueError:
+            continue
+        return str(Path(label) / relative)
+    return str(path)
+
+
+def _parse_path_alias(value: str) -> tuple[Path, str]:
+    try:
+        actual, label = value.split("=", 1)
+    except ValueError as error:
+        raise DecompilerProfileError(
+            f"invalid path alias {value!r}; expected ACTUAL=LABEL"
+        ) from error
+    actual_root = Path(actual).resolve()
+    if not actual_root.is_dir() or not label or Path(label).is_absolute():
+        raise DecompilerProfileError(
+            f"invalid path alias {value!r}; expected existing ACTUAL=relative-LABEL"
+        )
+    return actual_root, label
+
+
+def build_benchmark(
+    cases: list[Case],
+    warm_runs: int,
+    root: Path,
+    path_aliases: list[tuple[Path, str]] | None = None,
+) -> JsonObject:
     """Run each case in isolated cold and warm worker processes."""
     if not cases:
         raise DecompilerProfileError("at least one --case is required")
     if warm_runs < 1:
         raise DecompilerProfileError("--warm-runs must be positive")
+    aliases = path_aliases or []
     results = []
     for case in cases:
         cold = _run_worker(case, 1)
@@ -189,7 +224,7 @@ def build_benchmark(cases: list[Case], warm_runs: int, root: Path) -> JsonObject
         results.append(
             {
                 "name": case.name,
-                "path": str(case.path),
+                "path": _report_path(case.path, root, aliases),
                 "entry_va": hex(case.entry_va),
                 "binary_size": case.path.stat().st_size,
                 "binary_sha256": _sha256(case.path),
@@ -223,6 +258,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--warm-runs", type=int, default=5)
     parser.add_argument("--output", type=Path)
     parser.add_argument(
+        "--path-alias",
+        action="append",
+        default=[],
+        metavar="ACTUAL=LABEL",
+        help="replace an external absolute root with a stable relative label",
+    )
+    parser.add_argument(
         "--worker",
         nargs=3,
         metavar=("PATH", "VA", "ITERATIONS"),
@@ -239,7 +281,8 @@ def main(argv: list[str] | None = None) -> int:
         return _worker(Path(path), int(va, 0), int(iterations))
     try:
         cases = [parse_case(value) for value in args.case]
-        report = build_benchmark(cases, args.warm_runs, Path.cwd())
+        aliases = [_parse_path_alias(value) for value in args.path_alias]
+        report = build_benchmark(cases, args.warm_runs, Path.cwd(), aliases)
     except (OSError, DecompilerProfileError, ValueError) as error:
         raise SystemExit(f"decompiler profile failed: {error}") from error
     rendered = json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n"
