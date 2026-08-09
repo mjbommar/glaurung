@@ -158,6 +158,23 @@ Acceptance:
 Stop if the ledger cannot reproduce 59 GED perfects, 13 type perfects, seven
 corrected byte perfects, and 67 union perfects from the pinned inputs.
 
+### Implementation status — 2026-08-08
+
+- [x] Pinned manifest with all 250 function keys, repository and metric
+  revisions, evaluator versions, kit identity, and raw-package checksum.
+- [x] Deterministic score ledger with overall, architecture, optimization,
+  CFG-size, and head-to-head summaries.
+- [x] Stable overlapping top-40 GED/type/byte and current-perfect canary sets.
+- [ ] Per-function output-health counters and first-changing-pass attribution.
+- [ ] Focused output canaries spanning official and local regression corpora.
+- [ ] Cold/warm time, RSS, allocation, parse-count, and pass-time baselines.
+- [x] Metric implementation revision and source hash in every ledger.
+
+The checked-in baseline reproduces the four required headline counts and has
+byte-identical output across reordered or repeated inputs. Phase 0 remains open
+until the three unchecked instrumentation tasks are implemented; the ledger
+increment changes no decompiler semantics.
+
 ## Phase 1 — install one session and one pipeline seam
 
 **Goal:** improve composition and repeated-query performance without changing

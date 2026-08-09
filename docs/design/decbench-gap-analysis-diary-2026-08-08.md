@@ -419,3 +419,37 @@ Ranked by expected correctness and scoreboard leverage:
 The companion roadmap converts these findings into dependency-ordered work with
 tests, metric targets, performance budgets, file-size fitness checks, and stop
 conditions.
+
+## 22:05–22:40 — Phase 0 implementation: reproducible score ledger
+
+The original gap analysis was reproducible only while its scratch result tree and
+one-off analyzer survived under `/tmp`. I converted that evidence into a checked-in,
+fail-closed experiment contract:
+
+- `tests/decbench_scoreboard/manifest.json` pins the three repository revisions,
+  the PR #61 byte-metric implementation and source hash, evaluation-kit identity,
+  tool versions, raw ZIP checksum, all 250 ordered function keys, and overlapping
+  worst/perfect canary sets;
+- `tools/decbench_score_ledger.py` recomputes aggregates from the 250 function rows
+  instead of trusting stored summary fields;
+- the ledger now reports architecture, optimization, CFG-size, and head-to-head
+  slices in addition to headline statistics; and
+- the checked-in canonical ledger is byte-identical across repeated runs.
+
+Two contract errors were found during TDD. First, regenerating the “stable” canary
+set from every new score would reject the very improvements the canaries are meant
+to observe. The manifest now owns immutable identities and the ledger reports their
+current metrics. Second, requiring the baseline Glaurung revision on every run would
+make before/after comparison impossible. Dataset, DecBench, function denominator,
+and metric schema remain pinned; Glaurung is the explicit independent variable.
+`--check-baseline` restores exact-revision checking when reproducing the baseline.
+
+The verified baseline remains 59 GED perfects, 13 type perfects, seven PR #61 byte
+perfects, and 67 union perfects. The two canonical runs produced the same SHA-256,
+`14df97b5e11bfc674893a1c57dd08297fb98c1b6a51884d14cbbbe13be3e5e5d`.
+The raw package checksum also matched. This phase changes no decompiler semantics.
+
+One reproducibility caveat is now explicit instead of inferred: the evaluation kit
+ships prebuilt binaries but does not record their compiler versions. The dataset
+revision and kit manifest hash identify those binaries, but a future kit revision
+must capture compiler identities before compilation.
