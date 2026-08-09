@@ -494,3 +494,55 @@ even under its final raw-byte fallback. Repository-wide Ruff and ty remain
 non-green at their pre-existing 3,710 and 2,159 diagnostics respectively; both
 are clean on the new Python files. Phase 0 still needs the seven named
 score/output canaries and the cold/warm resource baseline before it closes.
+
+## 23:25–23:55 — Phase 0 implementation: resource and pipeline baseline
+
+Callgrind on the checked-in `hello-gcc-O0:main` first showed 3,679 calls to
+`object::read::File::parse`; 3,541 originated below
+`analysis::entry::va_to_code_file_offset`. That was strong but external evidence,
+and it could not cheaply measure every corpus shape. I routed all 67 direct Rust
+call sites through one transparent `parse_object` adapter and added an opt-in
+`GLAURUNG_PIPELINE_PROFILE=1` JSONL stream at the four public decompilation entry
+points and the already-shared AST/render pipeline. The adapter still delegates
+directly to `object`; it changes no ownership or caching semantics yet.
+
+The native count for the same function is exactly 3,679, independently matching
+callgrind. Profiling enabled and disabled produce byte-identical C. The parser and
+benchmark tools fail closed on missing or stale events, use fresh worker processes
+for cold measurements, repeat queries in one process for warm measurements, hash
+every output, and record process RSS. Nested and concurrent runs are isolated by a
+thread-local monotone parse counter; an outer run includes nested work while each
+nested run retains its own delta.
+
+The clean-revision `4b6838f` baseline covers five real binaries:
+
+| Case | Cold | Warm median | RSS cold/warm | Parses per query |
+|---|---:|---:|---:|---:|
+| `hello-gcc-O0:main`, small x86-64 | 289.3 ms | 98.8 ms | 88.0 / 87.7 MiB | 3,679 |
+| DecBench `bin_039:copy_reg`, stripped x86-64 | 1,049.8 ms | 946.5 ms | 92.7 / 93.9 MiB | 16,225 |
+| DecBench `bin_093:yyparse`, large stripped x86-64 | 901.2 ms | 707.7 ms | 119.2 / 119.2 MiB | 18,252 |
+| DecBench `bin_110:console_getc`, ARM32 | 17.5 ms | 16.5 ms | 49.5 / 49.7 MiB | 188 |
+| `hello-rust-debug:main`, debug-heavy | 1,395.3 ms | 1,205.4 ms | 108.8 / 128.4 MiB | 22,873 |
+
+All three warm outputs per case have one hash, and every warm parse count equals
+the cold count. Warm process state therefore amortizes imports and lazy globals,
+but no binary/session analysis. The scale of repeated parsing tracks binary
+analysis breadth rather than function AST size: the tiny Rust `main` triggers
+22,873 parses because the debug-heavy image is repeatedly reopened by program
+fact consumers.
+
+The stage trace found a second, independent cold-path cost. The first x86-64
+`apply_known_call_contracts` takes 187–191 ms because a failed libc lookup lazily
+deserializes the 19.7 MB, 20,764-entry WinAPI JSON catalog. ARM32 does not reach
+that fallback in this corpus. The durable fix is target-aware catalog ownership
+in `ProgramEnv`; preloading the catalog would merely move the same cost earlier.
+
+The production extension exposes no allocator counter. The artifact records this
+as unavailable; it does not present Python allocator data as native allocations.
+The complete machine-readable baseline, binary hashes, output hashes, stage times,
+host facts, and exact rerun command live under `tests/decompiler_profile/`.
+
+Validation at this checkpoint: 1,880/1,880 Rust library tests pass, all 13 focused
+profile/health Python tests pass, focused Ruff and formatting are clean, and the
+remote branch contains the instrumentation commits. Phase 0 now has one remaining
+task: materialize the seven named score/output canaries.

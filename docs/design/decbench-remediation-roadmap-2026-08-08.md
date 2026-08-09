@@ -63,6 +63,26 @@ IDA's current 29.9%; the long target reaches angr's current 32.7%.
 No phase may buy mean speed by silently timing out more functions. Report
 coverage, completeness, and tail latency with every performance result.
 
+The function-query diagnostic baseline at clean revision `4b6838f` is checked in
+at `tests/decompiler_profile/baseline-2026-08-08.json`. Times are one cold run
+and the median of three same-process warm runs; RSS is process high-water mark.
+
+| Case | Cold | Warm median | Cold RSS | Object parses/query |
+|---|---:|---:|---:|---:|
+| small x86-64 | 289.3 ms | 98.8 ms | 88.0 MiB | 3,679 |
+| stripped x86-64 | 1,049.8 ms | 946.5 ms | 92.7 MiB | 16,225 |
+| large stripped x86-64 | 901.2 ms | 707.7 ms | 119.2 MiB | 18,252 |
+| ARM32 | 17.5 ms | 16.5 ms | 49.5 MiB | 188 |
+| debug-heavy Rust | 1,395.3 ms | 1,205.4 ms | 108.8 MiB | 22,873 |
+
+The production extension has no allocator counter, so the baseline records
+allocation evidence as unavailable rather than substituting Python-only data.
+Every warm output hash is stable. Parse counts are identical on all cold and
+warm repetitions, proving the current API redoes image work instead of reusing a
+session. On the four x86-64 cases, first-use WinAPI catalog initialization inside
+`apply_known_call_contracts` costs 187–191 ms; target-aware catalog selection is
+therefore a separate measured opportunity from `ProgramImage` parse reuse.
+
 ### Code-size fitness baseline and targets
 
 | Measure | Baseline | End target |
@@ -167,12 +187,13 @@ corrected byte perfects, and 67 union perfects from the pinned inputs.
 - [x] Stable overlapping top-40 GED/type/byte and current-perfect canary sets.
 - [x] Per-function output-health counters and first-changing-pass attribution.
 - [ ] Focused output canaries spanning official and local regression corpora.
-- [ ] Cold/warm time, RSS, allocation, parse-count, and pass-time baselines.
+- [x] Cold/warm time, RSS, allocation availability, parse-count, and pass-time
+  baselines across small, large, ARM32, debug-heavy, and stripped cases.
 - [x] Metric implementation revision and source hash in every ledger.
 
-The checked-in baseline reproduces the four required headline counts and has
+The checked-in score baseline reproduces the four required headline counts and has
 byte-identical output across reordered or repeated inputs. Phase 0 remains open
-until the two unchecked instrumentation tasks are implemented. The health trace
+until the focused named output canaries are implemented. The health trace
 now covers every requested AST/CFG counter, names final definition violations,
 records verified-structuring fallback separately from emitted edge defects, and
 proves diagnostic enablement leaves real decompiler stdout byte-identical.

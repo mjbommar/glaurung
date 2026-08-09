@@ -8,6 +8,31 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 TOOL = ROOT / "tools/decompiler_profile.py"
+BASELINE = ROOT / "tests/decompiler_profile/baseline-2026-08-08.json"
+
+
+def test_checked_baseline_has_complete_stable_provenance():
+    report = json.loads(BASELINE.read_text(encoding="utf-8"))
+
+    assert report["schema"] == "glaurung-decompiler-profile-v1"
+    assert report["git"] == {
+        "dirty": False,
+        "revision": "4b6838f91ab8bac96aa979d93c3ee0677435b625",
+    }
+    assert report["allocations"]["status"] == "unavailable"
+    assert [case["name"] for case in report["cases"]] == [
+        "small-x86",
+        "stripped-x86",
+        "large-stripped-x86",
+        "arm32",
+        "debug-heavy-rust",
+    ]
+    for case in report["cases"]:
+        assert not Path(case["path"]).is_absolute()
+        assert case["binary_sha256"]
+        assert case["cold"]["object_parse_count"][0] > 0
+        assert len(set(case["warm"]["output_sha256"])) == 1
+        assert "render_decbench" in case["cold"]["stage_duration_ns"]
 
 
 def test_profile_harness_captures_cold_warm_rss_parse_and_stage_evidence(tmp_path):

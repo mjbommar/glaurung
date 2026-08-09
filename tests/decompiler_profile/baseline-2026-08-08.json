@@ -1,0 +1,507 @@
+{
+  "allocations": {
+    "reason": "the production Python extension exposes no allocator counter",
+    "status": "unavailable"
+  },
+  "cases": [
+    {
+      "binary_sha256": "ecb06722e4db3fc9cd9c0071bbc698a426a0195b84bbbd33e5548ec1c0e1fff5",
+      "binary_size": 44104,
+      "cold": {
+        "decompile_median_ns": 289348524,
+        "decompile_ns": [
+          289348524
+        ],
+        "max_rss_kib": 90144,
+        "native_run_ns": [
+          289222605
+        ],
+        "object_parse_count": [
+          3679
+        ],
+        "output_sha256": [
+          "edf693bfb1168a2b70f73cffa662437c49b9d14c6d3576d6c54390d89b22c014"
+        ],
+        "process_wall_ns": 354741055,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 189292669,
+          "apply_role_names": 257559,
+          "canary+strings": 113854,
+          "eliminate_dead_stores": 99158,
+          "fold_boolean_masks": 4901,
+          "fold_constants": 13587,
+          "fold_guarded_readonly_lookups": 239763,
+          "lower": 293780,
+          "materialize_direct_output": 3291,
+          "prepare_for_decbench": 1455844,
+          "promote_stack_locals": 425862,
+          "prune_dead_flags": 230339,
+          "recognise_machine_frame": 39185,
+          "reconstruct": 339178,
+          "reconstruct_args": 139568,
+          "recover_resolved_tail_calls": 23577,
+          "recover_wide_copies": 7389,
+          "render_decbench": 592714,
+          "split_argument_storage_reuse": 96255,
+          "split_call_result_lifetimes": 163820,
+          "stack_idiom+label_prune": 16194,
+          "verify_defs": 63626
+        }
+      },
+      "entry_va": "0x2549",
+      "name": "small-x86",
+      "path": "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0",
+      "warm": {
+        "decompile_median_ns": 98829412,
+        "decompile_ns": [
+          289864166,
+          98829412,
+          98095683
+        ],
+        "max_rss_kib": 89776,
+        "native_run_ns": [
+          289755368,
+          98790737,
+          98062760
+        ],
+        "object_parse_count": [
+          3679,
+          3679,
+          3679
+        ],
+        "output_sha256": [
+          "edf693bfb1168a2b70f73cffa662437c49b9d14c6d3576d6c54390d89b22c014",
+          "edf693bfb1168a2b70f73cffa662437c49b9d14c6d3576d6c54390d89b22c014",
+          "edf693bfb1168a2b70f73cffa662437c49b9d14c6d3576d6c54390d89b22c014"
+        ],
+        "process_wall_ns": 542587275,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 190187751,
+          "apply_role_names": 748553,
+          "canary+strings": 333502,
+          "eliminate_dead_stores": 317702,
+          "fold_boolean_masks": 23358,
+          "fold_constants": 45169,
+          "fold_guarded_readonly_lookups": 720375,
+          "lower": 823027,
+          "materialize_direct_output": 7413,
+          "prepare_for_decbench": 4239930,
+          "promote_stack_locals": 1174177,
+          "prune_dead_flags": 736810,
+          "recognise_machine_frame": 102607,
+          "reconstruct": 959605,
+          "reconstruct_args": 442053,
+          "recover_resolved_tail_calls": 83408,
+          "recover_wide_copies": 20678,
+          "render_decbench": 1693661,
+          "split_argument_storage_reuse": 300567,
+          "split_call_result_lifetimes": 423351,
+          "stack_idiom+label_prune": 53062,
+          "verify_defs": 169373
+        }
+      }
+    },
+    {
+      "binary_sha256": "58446bf503003e3b7d5868083b1fbe7fb97e17347b492582be895ccb720c0f6b",
+      "binary_size": 149664,
+      "cold": {
+        "decompile_median_ns": 1049840187,
+        "decompile_ns": [
+          1049840187
+        ],
+        "max_rss_kib": 94956,
+        "native_run_ns": [
+          1049703190
+        ],
+        "object_parse_count": [
+          16225
+        ],
+        "output_sha256": [
+          "fe3a9a32da5f1eaacd8db34ac150631ce0fd06afe3de5cd55a835e86198cfc13"
+        ],
+        "process_wall_ns": 1107067977,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 187362255,
+          "apply_role_names": 1174540,
+          "canary+strings": 198043,
+          "eliminate_dead_stores": 340106,
+          "fold_boolean_masks": 61698,
+          "fold_constants": 158987,
+          "fold_guarded_readonly_lookups": 2154318,
+          "lower": 2645660,
+          "materialize_direct_output": 10052,
+          "prepare_for_decbench": 18382214,
+          "promote_stack_locals": 1923385,
+          "prune_dead_flags": 66693072,
+          "recognise_machine_frame": 77822,
+          "reconstruct": 32687388,
+          "reconstruct_args": 2878533,
+          "recover_resolved_tail_calls": 151264,
+          "recover_wide_copies": 62488,
+          "render_decbench": 2511740,
+          "split_argument_storage_reuse": 541811,
+          "split_call_result_lifetimes": 764622,
+          "stack_idiom+label_prune": 154109,
+          "verify_defs": 370572
+        }
+      },
+      "entry_va": "0x8680",
+      "name": "stripped-x86",
+      "path": "decbench-sample-set/binaries/bin_039.elf",
+      "warm": {
+        "decompile_median_ns": 946454322,
+        "decompile_ns": [
+          1051521552,
+          946454322,
+          857851554
+        ],
+        "max_rss_kib": 96188,
+        "native_run_ns": [
+          1051386171,
+          946395203,
+          857792431
+        ],
+        "object_parse_count": [
+          16225,
+          16225,
+          16225
+        ],
+        "output_sha256": [
+          "fe3a9a32da5f1eaacd8db34ac150631ce0fd06afe3de5cd55a835e86198cfc13",
+          "fe3a9a32da5f1eaacd8db34ac150631ce0fd06afe3de5cd55a835e86198cfc13",
+          "fe3a9a32da5f1eaacd8db34ac150631ce0fd06afe3de5cd55a835e86198cfc13"
+        ],
+        "process_wall_ns": 2907710704,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 190625003,
+          "apply_role_names": 3517508,
+          "canary+strings": 636405,
+          "eliminate_dead_stores": 944954,
+          "fold_boolean_masks": 132441,
+          "fold_constants": 411422,
+          "fold_guarded_readonly_lookups": 6481357,
+          "lower": 7527382,
+          "materialize_direct_output": 32292,
+          "prepare_for_decbench": 54819438,
+          "promote_stack_locals": 5875912,
+          "prune_dead_flags": 198934849,
+          "recognise_machine_frame": 231188,
+          "reconstruct": 95933340,
+          "reconstruct_args": 8575526,
+          "recover_resolved_tail_calls": 434400,
+          "recover_wide_copies": 213480,
+          "render_decbench": 7529967,
+          "split_argument_storage_reuse": 1688970,
+          "split_call_result_lifetimes": 1811508,
+          "stack_idiom+label_prune": 448901,
+          "verify_defs": 1111426
+        }
+      }
+    },
+    {
+      "binary_sha256": "d37e886e88e0819d474b751beb9e6d80c26d4c713df1e7826668cb94ff1343eb",
+      "binary_size": 285824,
+      "cold": {
+        "decompile_median_ns": 901244490,
+        "decompile_ns": [
+          901244490
+        ],
+        "max_rss_kib": 122032,
+        "native_run_ns": [
+          901106618
+        ],
+        "object_parse_count": [
+          18252
+        ],
+        "output_sha256": [
+          "f7a42be5c83f62f2cd362975e7d5a6d7646db03e0cd445bbb5b03df3f5f235d6"
+        ],
+        "process_wall_ns": 958092172,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 191124069,
+          "apply_role_names": 989576,
+          "canary+strings": 117105,
+          "eliminate_dead_stores": 291605,
+          "fold_boolean_masks": 32200,
+          "fold_constants": 96545,
+          "fold_guarded_readonly_lookups": 1427382,
+          "lower": 2028812,
+          "materialize_direct_output": 10406,
+          "prepare_for_decbench": 17795226,
+          "promote_stack_locals": 2437988,
+          "prune_dead_flags": 34419000,
+          "recognise_machine_frame": 1979000,
+          "reconstruct": 16295883,
+          "reconstruct_args": 907178,
+          "recover_resolved_tail_calls": 121335,
+          "recover_wide_copies": 86261,
+          "render_decbench": 1433604,
+          "split_argument_storage_reuse": 458628,
+          "split_call_result_lifetimes": 720605,
+          "stack_idiom+label_prune": 166836,
+          "verify_defs": 241371
+        }
+      },
+      "entry_va": "0x253e0",
+      "name": "large-stripped-x86",
+      "path": "decbench-sample-set/binaries/bin_093.elf",
+      "warm": {
+        "decompile_median_ns": 707747872,
+        "decompile_ns": [
+          898908977,
+          707747872,
+          704411585
+        ],
+        "max_rss_kib": 122056,
+        "native_run_ns": [
+          898776462,
+          707690218,
+          704358508
+        ],
+        "object_parse_count": [
+          18252,
+          18252,
+          18252
+        ],
+        "output_sha256": [
+          "f7a42be5c83f62f2cd362975e7d5a6d7646db03e0cd445bbb5b03df3f5f235d6",
+          "f7a42be5c83f62f2cd362975e7d5a6d7646db03e0cd445bbb5b03df3f5f235d6",
+          "f7a42be5c83f62f2cd362975e7d5a6d7646db03e0cd445bbb5b03df3f5f235d6"
+        ],
+        "process_wall_ns": 2364163892,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 189601369,
+          "apply_role_names": 2966283,
+          "canary+strings": 294754,
+          "eliminate_dead_stores": 929524,
+          "fold_boolean_masks": 101453,
+          "fold_constants": 293892,
+          "fold_guarded_readonly_lookups": 3923298,
+          "lower": 5425679,
+          "materialize_direct_output": 29486,
+          "prepare_for_decbench": 52145672,
+          "promote_stack_locals": 7435913,
+          "prune_dead_flags": 103603116,
+          "recognise_machine_frame": 5975551,
+          "reconstruct": 49009295,
+          "reconstruct_args": 2780071,
+          "recover_resolved_tail_calls": 369398,
+          "recover_wide_copies": 257358,
+          "render_decbench": 4186361,
+          "split_argument_storage_reuse": 1376092,
+          "split_call_result_lifetimes": 1519903,
+          "stack_idiom+label_prune": 504590,
+          "verify_defs": 703650
+        }
+      }
+    },
+    {
+      "binary_sha256": "48e29a81cb175c3efef32895f9300a2a59679aa25837bafd452b000222538b99",
+      "binary_size": 16992,
+      "cold": {
+        "decompile_median_ns": 17541916,
+        "decompile_ns": [
+          17541916
+        ],
+        "max_rss_kib": 50692,
+        "native_run_ns": [
+          17436522
+        ],
+        "object_parse_count": [
+          188
+        ],
+        "output_sha256": [
+          "ba083da78267497c43227b87f047c1586ea20f36efd5a554cf7c95ecd7afe1b9"
+        ],
+        "process_wall_ns": 66372752,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 1702,
+          "apply_role_names": 68121,
+          "canary+strings": 5813,
+          "eliminate_dead_stores": 23953,
+          "fold_boolean_masks": 3209,
+          "fold_constants": 11023,
+          "fold_guarded_readonly_lookups": 31357,
+          "lower": 89214,
+          "materialize_direct_output": 6856,
+          "prepare_for_decbench": 404169,
+          "promote_stack_locals": 193206,
+          "prune_dead_flags": 182836,
+          "recognise_machine_frame": 12308,
+          "reconstruct": 47286,
+          "reconstruct_args": 12054,
+          "recover_resolved_tail_calls": 9173,
+          "recover_wide_copies": 4633,
+          "render_decbench": 112615,
+          "split_argument_storage_reuse": 24115,
+          "split_call_result_lifetimes": 30068,
+          "stack_idiom+label_prune": 7178,
+          "verify_defs": 25567
+        }
+      },
+      "entry_va": "0x80002f8",
+      "name": "arm32",
+      "path": "decbench-sample-set/binaries/bin_110.elf",
+      "warm": {
+        "decompile_median_ns": 16495924,
+        "decompile_ns": [
+          17471638,
+          16425640,
+          16495924
+        ],
+        "max_rss_kib": 50900,
+        "native_run_ns": [
+          17360921,
+          16404637,
+          16479936
+        ],
+        "object_parse_count": [
+          188,
+          188,
+          188
+        ],
+        "output_sha256": [
+          "ba083da78267497c43227b87f047c1586ea20f36efd5a554cf7c95ecd7afe1b9",
+          "ba083da78267497c43227b87f047c1586ea20f36efd5a554cf7c95ecd7afe1b9",
+          "ba083da78267497c43227b87f047c1586ea20f36efd5a554cf7c95ecd7afe1b9"
+        ],
+        "process_wall_ns": 99633316,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 4165,
+          "apply_role_names": 193373,
+          "canary+strings": 6649,
+          "eliminate_dead_stores": 68508,
+          "fold_boolean_masks": 8505,
+          "fold_constants": 29025,
+          "fold_guarded_readonly_lookups": 92645,
+          "lower": 201740,
+          "materialize_direct_output": 9342,
+          "prepare_for_decbench": 1157582,
+          "promote_stack_locals": 542616,
+          "prune_dead_flags": 536207,
+          "recognise_machine_frame": 30337,
+          "reconstruct": 136689,
+          "reconstruct_args": 30553,
+          "recover_resolved_tail_calls": 15594,
+          "recover_wide_copies": 12109,
+          "render_decbench": 212548,
+          "split_argument_storage_reuse": 68593,
+          "split_call_result_lifetimes": 82357,
+          "stack_idiom+label_prune": 18807,
+          "verify_defs": 54620
+        }
+      }
+    },
+    {
+      "binary_sha256": "2219a0c882b3694c412cd016f5e20648f6d20b707935799259a74ac60cc9ec87",
+      "binary_size": 4524528,
+      "cold": {
+        "decompile_median_ns": 1395314720,
+        "decompile_ns": [
+          1395314720
+        ],
+        "max_rss_kib": 111420,
+        "native_run_ns": [
+          1395206655
+        ],
+        "object_parse_count": [
+          22873
+        ],
+        "output_sha256": [
+          "56061ff12e44f56712bd1704cd86b43be85fc5395d3bf1e095abe8c578d9de9d"
+        ],
+        "process_wall_ns": 1454484484,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 187540449,
+          "apply_role_names": 37994,
+          "canary+strings": 17486,
+          "eliminate_dead_stores": 7737,
+          "fold_boolean_masks": 1221,
+          "fold_constants": 17375,
+          "fold_guarded_readonly_lookups": 17852,
+          "lower": 36117,
+          "materialize_direct_output": 3062,
+          "prepare_for_decbench": 154037,
+          "promote_stack_locals": 75792,
+          "prune_dead_flags": 21414,
+          "recognise_machine_frame": 20907,
+          "reconstruct": 12011,
+          "reconstruct_args": 38769,
+          "recover_resolved_tail_calls": 7044,
+          "recover_wide_copies": 2548,
+          "render_decbench": 107225,
+          "split_argument_storage_reuse": 20747,
+          "split_call_result_lifetimes": 36050,
+          "stack_idiom+label_prune": 4235,
+          "verify_defs": 24301
+        }
+      },
+      "entry_va": "0x22830",
+      "name": "debug-heavy-rust",
+      "path": "samples/binaries/platforms/linux/amd64/export/rust/hello-rust-debug",
+      "warm": {
+        "decompile_median_ns": 1205379334,
+        "decompile_ns": [
+          1409156115,
+          1201744195,
+          1205379334
+        ],
+        "max_rss_kib": 131432,
+        "native_run_ns": [
+          1409043044,
+          1201700467,
+          1205341224
+        ],
+        "object_parse_count": [
+          22873,
+          22873,
+          22873
+        ],
+        "output_sha256": [
+          "56061ff12e44f56712bd1704cd86b43be85fc5395d3bf1e095abe8c578d9de9d",
+          "56061ff12e44f56712bd1704cd86b43be85fc5395d3bf1e095abe8c578d9de9d",
+          "56061ff12e44f56712bd1704cd86b43be85fc5395d3bf1e095abe8c578d9de9d"
+        ],
+        "process_wall_ns": 3870041070,
+        "stage_duration_ns": {
+          "apply_known_call_contracts": 188383853,
+          "apply_role_names": 103928,
+          "canary+strings": 23840,
+          "eliminate_dead_stores": 17507,
+          "fold_boolean_masks": 3752,
+          "fold_constants": 25893,
+          "fold_guarded_readonly_lookups": 52662,
+          "lower": 76498,
+          "materialize_direct_output": 6628,
+          "prepare_for_decbench": 435286,
+          "promote_stack_locals": 114518,
+          "prune_dead_flags": 89290,
+          "recognise_machine_frame": 47881,
+          "reconstruct": 38274,
+          "reconstruct_args": 115667,
+          "recover_resolved_tail_calls": 11059,
+          "recover_wide_copies": 7745,
+          "render_decbench": 300513,
+          "split_argument_storage_reuse": 50559,
+          "split_call_result_lifetimes": 59093,
+          "stack_idiom+label_prune": 11647,
+          "verify_defs": 60615
+        }
+      }
+    }
+  ],
+  "clock": "time.perf_counter_ns",
+  "git": {
+    "dirty": false,
+    "revision": "4b6838f91ab8bac96aa979d93c3ee0677435b625"
+  },
+  "host": {
+    "executable": "/tmp/glaurung-decbench-c1cfdc9/.venv/bin/python",
+    "machine": "x86_64",
+    "platform": "Linux-7.0.0-27-generic-x86_64-with-glibc2.43",
+    "python": "3.14.3"
+  },
+  "rss_unit": "KiB on Linux (resource.ru_maxrss)",
+  "schema": "glaurung-decompiler-profile-v1",
+  "warm_runs": 3
+}
