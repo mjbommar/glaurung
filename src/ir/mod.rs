@@ -40,6 +40,7 @@ pub mod dead_stores;
 pub mod definedness;
 pub mod direct_output;
 pub mod dwarf_fields;
+pub(crate) mod dwarf_type_env;
 pub mod exception_recover;
 pub mod expr_reconstruct;
 pub mod expression_width;

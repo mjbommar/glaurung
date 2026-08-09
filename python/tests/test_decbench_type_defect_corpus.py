@@ -34,16 +34,19 @@ def test_type_distance_one_corpus_is_complete_and_owner_grouped() -> None:
     assert payload["fresh_validation"] == {
         "metric": "official TypeMatchMetric cache_version 4 with caching disabled",
         "scope": "all 29 functions, address-scoped from their real official binaries",
-        "parent_revision": "58cf71d80b8a725e5aa64c4a3560e38168a33d32",
-        "parent_perfect": 11,
-        "current_perfect": 13,
-        "current_open": 16,
+        "parent_revision": "acc3e241cf1314312b18acd165d766bd8ab6ed34",
+        "parent_perfect": 13,
+        "current_perfect": 20,
+        "current_open": 9,
     }
     assert [
         defect["key"] for defect in defects if defect["status"] == "verified_fixed"
     ] == [
+        "bash::O0::mksyntax::wcomment",
         "bash::O2-noinline::bash::allocerr",
         "chibios::O2-noinline::ch::nvicEnableVector",
+        "cleanflight::O0::cleanflight_DALRCF405::icm20689SpiAccDetect",
+        "cleanflight::O2-noinline::cleanflight_DALRCF405::m25p16_enable",
         "crazyflie::O2-noinline::firmware::ld_word",
         "cronie::O2::crontab::strcmp_until",
         "diffutils::O0::diff3::try_help",
@@ -51,12 +54,16 @@ def test_type_distance_one_corpus_is_complete_and_owner_grouped() -> None:
         "diffutils::O2-noinline::sdiff::lf_skip",
         "diffutils::O2::diff3::try_help",
         "findutils::O0::find::prec_name",
+        "freertos::O0::RTOSDemo::vListInitialise",
+        "freertos::O2::RTOSDemo::vListInitialiseItem",
         "kmod::O2::kmod::mod_free",
         "libexpat::O0::xmlwf::codepageConvert",
+        "libopencm3::O0::usbmidi::usbd_ep_nak_set",
         "libopencm3::O2-noinline::timer::timer_disable_preload",
         "libopencm3::O2::cryptobasic::usart_set_databits",
+        "rsyslog::O2::rsyslogd::beginTransaction",
     ]
     assert Counter(defect["status"] for defect in defects) == {
-        "verified_fixed": 13,
-        "open": 16,
+        "verified_fixed": 20,
+        "open": 9,
     }

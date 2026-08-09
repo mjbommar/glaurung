@@ -24,6 +24,7 @@ pub fn annotate_function_fields(
     let Some(prototype) = prototype else {
         return HashMap::new();
     };
+    let type_env = crate::ir::dwarf_type_env::DwarfTypeEnv::new(types);
     let layouts = types
         .iter()
         .filter(|layout| layout.kind == DwarfTypeKind::Struct && !layout.fields.is_empty())
@@ -35,8 +36,14 @@ pub fn annotate_function_fields(
 
     let mut pointer_types = HashMap::<VReg, String>::new();
     for (slot, c_type) in prototype.parameter_types.iter().enumerate() {
-        if let Some(name) = pointed_struct_name(c_type).filter(|name| layouts.contains_key(*name)) {
-            pointer_types.insert(VReg::phys(format!("arg{slot}")), name.to_string());
+        if let Some(pointer) = type_env
+            .aggregate_pointer(c_type)
+            .filter(|pointer| pointer.layout.is_some())
+        {
+            pointer_types.insert(
+                VReg::phys(format!("arg{slot}")),
+                pointer.tag_name.to_string(),
+            );
         }
     }
 
@@ -187,22 +194,6 @@ fn pointer_expression_compatible(
     }
 }
 
-fn pointed_struct_name(c_type: &str) -> Option<&str> {
-    let normalized = c_type.trim();
-    let pointee = normalized.strip_suffix('*')?.trim();
-    let pointee = pointee
-        .strip_prefix("const ")
-        .or_else(|| pointee.strip_prefix("volatile "))
-        .unwrap_or(pointee)
-        .trim();
-    let name = pointee
-        .strip_prefix("struct ")
-        .or_else(|| pointee.strip_prefix("union "))
-        .unwrap_or(pointee)
-        .trim();
-    (!name.is_empty()).then_some(name)
-}
-
 fn infer_body(
     body: &[Stmt],
     layouts: &HashMap<String, &DwarfType>,
@@ -294,7 +285,7 @@ fn pointer_source_type(
         field.offset == offset
             && c_type_width(&field.c_type, pointer_width).is_some_and(|width| width == *size)
     })?;
-    pointed_struct_name(&field.c_type)
+    crate::ir::dwarf_type_env::pointed_type_name(&field.c_type)
         .filter(|name| layouts.contains_key(*name))
         .map(str::to_string)
 }

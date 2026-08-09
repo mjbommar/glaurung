@@ -12,10 +12,10 @@
   "fresh_validation": {
     "metric": "official TypeMatchMetric cache_version 4 with caching disabled",
     "scope": "all 29 functions, address-scoped from their real official binaries",
-    "parent_revision": "58cf71d80b8a725e5aa64c4a3560e38168a33d32",
-    "parent_perfect": 11,
-    "current_perfect": 13,
-    "current_open": 16
+    "parent_revision": "acc3e241cf1314312b18acd165d766bd8ab6ed34",
+    "parent_perfect": 13,
+    "current_perfect": 20,
+    "current_open": 9
   },
   "defects": [
     {
@@ -24,7 +24,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "program_symbol_type_environment",
       "mismatch": "argument 0: FILE * recovered as void *",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "bash::O2-noinline::bash::allocerr",
@@ -56,7 +56,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "aggregate_type_environment",
       "mismatch": "argument acc: aggregate pointer recovered as int",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "cleanflight::O0::cleanflight_DALRCF405::sendAccel",
@@ -72,7 +72,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "aggregate_type_environment",
       "mismatch": "argument bus: aggregate pointer recovered as int *",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "coreutils::O0::pr::balance",
@@ -160,7 +160,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "aggregate_type_environment",
       "mismatch": "argument 0: aggregate pointer recovered as int *",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "freertos::O2::RTOSDemo::vListInitialiseItem",
@@ -168,7 +168,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "aggregate_type_environment",
       "mismatch": "argument 0: aggregate pointer recovered as int *",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "gzip::O2-noinline::gzip::fill_inbuf",
@@ -216,7 +216,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "aggregate_type_environment",
       "mismatch": "argument 0: aggregate pointer recovered as int *",
-      "status": "open"
+      "status": "verified_fixed"
     },
     {
       "key": "libopencm3::O2-noinline::timer::timer_disable_preload",
@@ -248,7 +248,7 @@
       "failure_cluster": "pointer_category",
       "evidence_owner": "aggregate_type_environment",
       "mismatch": "argument 0: aggregate pointer recovered as long",
-      "status": "open"
+      "status": "verified_fixed"
     }
   ]
 }

@@ -1079,3 +1079,80 @@ errors, and explicit AArch64, Thumb ARMv7, A32 `-marm`, i386, GCC 11 control,
 and GCC 15 control coverage. Both legacy and curriculum executable matrices
 passed, followed by no per-cell GED/type/byte regressions across all 56/56
 DecBench cells.
+
+## 06:35–08:00 — program-level DWARF type relationships
+
+The next six verified-open cohort rows all had authoritative aggregate pointer
+prototypes, but the public spelling was a typedef while the layout was keyed by
+its private tag: `accDev_t -> struct accDev_s`, `busDevice_t -> struct
+busDevice_s`, `List_t -> struct xLIST`, `ListItem_t -> struct xLIST_ITEM`,
+`usbd_device -> struct _usbd_device`, and `wrkrInstanceData_t -> struct
+wrkrInstanceData`. The renderer and DWARF field pass compared those spellings
+directly. A valid typedef pointer was consequently discarded even though both
+records already existed in the same binary.
+
+`DwarfTypeEnv` is the first reusable program-level repair for that ownership
+gap. It builds one conflict-aware index over typedef edges and struct, union,
+and enum tags; follows alias chains with cycle detection; rejects multiple
+indirection and malformed names; preserves pointer qualifiers; and supplies the
+same resolved identity to signature rendering and field recovery. Opaque
+layouts emit a real typedef forward declaration without inventing members.
+Named enum typedefs use measured DWARF byte size and the presence of negative
+enumerators to emit a compact ABI-equivalent alias. This lets rsyslog retain
+`rsRetVal` without copying 313 enumerators into every function.
+
+The RED tests exposed two additional composition seams. First,
+`Record_t *arg0` copied into a recovered `char *` local produced an invalid
+implicit conversion; assignment rendering now emits an explicit zero-cost cast
+when two concrete pointer types differ. Second, the direct-callee prototype
+path initially recovered `doTryResume` as returning `unsigned long` even after
+the outer function resolved `rsRetVal`. The same type environment now feeds
+prototype ABI hints at all four decompilation entry points, so the callee and
+outer return value agree on a signed four-byte result.
+
+An attempted broader scalar-typedef rollout was rejected by measurement. It
+made `size_t` authoritative in `console_read`, and GCC changed the equivalent
+loop test from the original `cmp r2,r3; blo` to `cmp r3,r2; bhi`, reducing the
+official byte score by `0.01145`. Ordinary scalar aliases therefore remain
+fail-closed until body values preserve their source typedef identity; enum and
+aggregate relationships are enabled now because they pass the safety gates.
+
+Fresh unmodified TypeMatch cache-version-4 scoring, with caching disabled,
+moves the historical 29-row cohort from 13 to 20 perfect and leaves nine open.
+All seven newly fixed rows are real-binary results: `wcomment`,
+`icm20689SpiAccDetect`, `m25p16_enable`, `vListInitialise`,
+`vListInitialiseItem`, `usbd_ep_nak_set`, and `beginTransaction`. The complete
+250-function parent/current replay against exact parent `acc3e24` has zero
+extraction errors:
+
+| TypeMatch result | parent `acc3e24` | current | Delta |
+|---|---:|---:|---:|
+| measured | 235 | 235 | 0 |
+| perfect | 30 | 41 | +11 |
+| mean | 0.35462582 | 0.40518645 | +0.05056063 |
+| functions improved | — | 32 | +32 |
+| functions regressed | — | 0 | 0 |
+
+Sixty-seven of 250 artifacts change. Joern parses every parent/current member
+of that changed set and all 67 CFG pairs are topology-isomorphic, so GED does
+not regress. Fresh no-cache ByteMatch produces identical scores and identical
+compile/failure coverage for all 67. This includes `beginTransaction`, which
+moves TypeMatch from zero to one while retaining byte score
+`0.35714285714285715`.
+
+The publication gate then passed every source and execution lane: full Rust
+tests, the 31-test x86 fixture/structure matrix, the architecture ratchet at
+its exact 1,757-pass/43-known-failure baseline, and both legacy and curriculum
+executable matrices. The first four-worker metric invocation exposed a
+`pyjoern` first-use extraction race: four workers concurrently unzipped the
+same bundled CLI, so the four `arith` cells errored while the other 52 scored.
+That partial result was not credited. After verifying the CLI installation, a
+fresh four-worker invocation scored all cells and reported no per-cell GED,
+TypeMatch, or ByteMatch regressions across 56/56 cells.
+
+The repository-wide Python run then completed with five failures. One was a
+lane-owned brittle ARM32 assertion that assumed a
+signature was always the second output line; a correct typedef declaration now
+precedes aggregate signatures. The test now locates both affected signatures
+by function name and passes. The other four are the pre-existing suspicious
+cross-sample failures, unrelated to decompilation or this change.

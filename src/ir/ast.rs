@@ -6643,98 +6643,36 @@ fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
             && name.is_some_and(valid_c_identifier)
             && words.next().is_none();
     }
-    matches!(
-        base.as_str(),
-        "_Bool"
-            | "bool"
-            | "char"
-            | "signed char"
-            | "unsigned char"
-            | "short"
-            | "short int"
-            | "signed short"
-            | "signed short int"
-            | "unsigned short"
-            | "unsigned short int"
-            | "int"
-            | "signed"
-            | "signed int"
-            | "unsigned"
-            | "unsigned int"
-            | "long"
-            | "long int"
-            | "signed long"
-            | "signed long int"
-            | "unsigned long"
-            | "unsigned long int"
-            | "long unsigned"
-            | "long unsigned int"
-            | "long long"
-            | "long long int"
-            | "signed long long"
-            | "signed long long int"
-            | "unsigned long long"
-            | "unsigned long long int"
-            | "long long unsigned"
-            | "long long unsigned int"
-            | "int8_t"
-            | "uint8_t"
-            | "int16_t"
-            | "uint16_t"
-            | "int32_t"
-            | "uint32_t"
-            | "int64_t"
-            | "uint64_t"
-            | "float"
-            | "double"
-    ) || (base == "void" && (allow_void || pointer))
+    crate::ir::dwarf_type_env::builtin_scalar_type(&base)
+        || (base == "void" && (allow_void || pointer))
 }
 
 fn dwarf_prototype_type_is_renderable(
     c_type: &str,
     allow_void: bool,
-    dwarf_types: &[crate::debug::dwarf::DwarfType],
+    dwarf_type_env: &crate::ir::dwarf_type_env::DwarfTypeEnv<'_>,
 ) -> bool {
     source_prototype_type_is_renderable(c_type, allow_void)
-        || pointed_struct_name(c_type).is_some_and(|name| {
-            dwarf_types.iter().any(|layout| {
-                layout.kind == crate::debug::dwarf::DwarfTypeKind::Struct
-                    && layout.name == name
-                    && !layout.fields.is_empty()
-            })
-        })
+        || dwarf_type_env.aggregate_pointer(c_type).is_some()
+        || dwarf_type_env.typedef_declaration(c_type).is_some()
 }
 
 fn source_prototype_forward_declarations(
     prototype: &CallPrototype,
     complete_structs: &std::collections::BTreeSet<String>,
+    dwarf_type_env: &crate::ir::dwarf_type_env::DwarfTypeEnv<'_>,
 ) -> std::collections::BTreeSet<String> {
     let mut declarations = std::collections::BTreeSet::new();
     for c_type in std::iter::once(&prototype.return_type).chain(&prototype.parameter_types) {
-        let words = c_type.split_whitespace().collect::<Vec<_>>();
-        for pair in words.windows(2) {
-            if matches!(pair[0], "struct" | "union") {
-                let name = pair[1].trim_end_matches('*');
-                if !complete_structs.contains(name)
-                    && !name.is_empty()
-                    && name
-                        .chars()
-                        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-                {
-                    declarations.insert(format!("typedef {} {} {};", pair[0], name, name));
-                }
+        if let Some(pointer) = dwarf_type_env.aggregate_pointer(c_type) {
+            if !complete_structs.contains(pointer.source_name) {
+                declarations.insert(dwarf_type_env.forward_declaration(pointer));
             }
+        } else if let Some(declaration) = dwarf_type_env.typedef_declaration(c_type) {
+            declarations.insert(declaration);
         }
     }
     declarations
-}
-
-fn explicitly_tagged_pointer_name(c_type: &str) -> Option<&str> {
-    let name = pointed_struct_name(c_type)?;
-    c_type
-        .split_whitespace()
-        .any(|word| matches!(word, "struct" | "union"))
-        .then_some(name)
 }
 
 fn valid_c_identifier(name: &str) -> bool {
@@ -6776,19 +6714,7 @@ fn dwarf_scalar_width(c_type: &str, pointer_width: u8) -> Option<u64> {
 }
 
 fn pointed_struct_name(c_type: &str) -> Option<&str> {
-    let normalized = c_type.trim();
-    let pointee = normalized.strip_suffix('*')?.trim();
-    let pointee = pointee
-        .strip_prefix("const ")
-        .or_else(|| pointee.strip_prefix("volatile "))
-        .unwrap_or(pointee)
-        .trim();
-    let name = pointee
-        .strip_prefix("struct ")
-        .or_else(|| pointee.strip_prefix("union "))
-        .unwrap_or(pointee)
-        .trim();
-    valid_c_identifier(name).then_some(name)
+    crate::ir::dwarf_type_env::pointed_type_name(c_type)
 }
 
 fn align_up(value: u64, alignment: u64) -> Option<u64> {
@@ -6804,6 +6730,7 @@ fn align_up(value: u64, alignment: u64) -> Option<u64> {
 fn renderable_dwarf_structs<'a>(
     prototype: Option<&CallPrototype>,
     dwarf_types: &'a [crate::debug::dwarf::DwarfType],
+    dwarf_type_env: &crate::ir::dwarf_type_env::DwarfTypeEnv<'a>,
     pointer_width: u8,
 ) -> std::collections::BTreeMap<String, &'a crate::debug::dwarf::DwarfType> {
     let Some(prototype) = prototype else {
@@ -6811,7 +6738,9 @@ fn renderable_dwarf_structs<'a>(
     };
     let referenced = std::iter::once(&prototype.return_type)
         .chain(&prototype.parameter_types)
-        .filter_map(|c_type| pointed_struct_name(c_type))
+        .filter_map(|c_type| dwarf_type_env.aggregate_pointer(c_type))
+        .filter(|pointer| pointer.kind == crate::debug::dwarf::DwarfTypeKind::Struct)
+        .map(|pointer| pointer.tag_name)
         .collect::<std::collections::BTreeSet<_>>();
     let mut selected =
         std::collections::BTreeMap::<String, &'a crate::debug::dwarf::DwarfType>::new();
@@ -6877,18 +6806,8 @@ fn source_type_with_complete_struct_alias(
     if !complete_structs.contains(name) {
         return c_type.to_string();
     }
-    let pointee = c_type.trim().strip_suffix('*').unwrap_or(c_type).trim();
-    let prefix = pointee.strip_suffix(name).unwrap_or("").trim();
-    let qualifiers = prefix
-        .strip_suffix("struct")
-        .or_else(|| prefix.strip_suffix("union"))
-        .unwrap_or(prefix)
-        .trim();
-    if qualifiers.is_empty() {
-        format!("{name} *")
-    } else {
-        format!("{qualifiers} {name} *")
-    }
+    crate::ir::dwarf_type_env::render_pointer_name(c_type, name)
+        .unwrap_or_else(|| c_type.to_string())
 }
 
 /// Typed DecBench renderer with an explicit recovered output contract.
@@ -6939,6 +6858,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
 ) -> String {
     DEC_POINTER_WIDTH.with(|width| width.set(pointer_width));
+    let dwarf_type_env = crate::ir::dwarf_type_env::DwarfTypeEnv::new(dwarf_types);
     let mut ids = DecIdents::default();
     for s in &f.body {
         collect_idents_stmt(s, &mut ids);
@@ -6966,7 +6886,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     }
     let declared_prototype = declared_prototype.filter(|prototype| {
         prototype.parameter_types.len() == arg_count
-            && dwarf_prototype_type_is_renderable(&prototype.return_type, true, dwarf_types)
+            && dwarf_prototype_type_is_renderable(&prototype.return_type, true, &dwarf_type_env)
             && ((output_kind == crate::ir::types_recover::RecoveredOutputKind::Void
                 && prototype.return_type == "void")
                 || (output_kind != crate::ir::types_recover::RecoveredOutputKind::Void
@@ -6976,11 +6896,15 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
         prototype
             .parameter_types
             .iter()
-            .all(|c_type| dwarf_prototype_type_is_renderable(c_type, false, dwarf_types))
+            .all(|c_type| dwarf_prototype_type_is_renderable(c_type, false, &dwarf_type_env))
     });
 
-    let aggregate_layouts =
-        renderable_dwarf_structs(declared_prototype, dwarf_types, pointer_width);
+    let aggregate_layouts = renderable_dwarf_structs(
+        declared_prototype,
+        dwarf_types,
+        &dwarf_type_env,
+        pointer_width,
+    );
     let complete_structs = aggregate_layouts
         .keys()
         .cloned()
@@ -6994,8 +6918,8 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
         source_type_aliases.extend(
             std::iter::once(&prototype.return_type)
                 .chain(&prototype.parameter_types)
-                .filter_map(|c_type| explicitly_tagged_pointer_name(c_type))
-                .map(str::to_string),
+                .filter_map(|c_type| dwarf_type_env.aggregate_pointer(c_type))
+                .map(|pointer| pointer.source_name.to_string()),
         );
     }
     DEC_RENDERABLE_STRUCTS.with(|selected| *selected.borrow_mut() = complete_structs.clone());
@@ -7018,7 +6942,9 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     // Provenance as a C comment (valid, and the harness maps by address anyway).
     let _ = writeln!(out, "// glaurung: {} @ 0x{:x}", f.name, f.entry_va);
     if let Some(prototype) = declared_prototype {
-        for declaration in source_prototype_forward_declarations(prototype, &complete_structs) {
+        for declaration in
+            source_prototype_forward_declarations(prototype, &complete_structs, &dwarf_type_env)
+        {
             let _ = writeln!(out, "{declaration}");
         }
     }
@@ -7133,7 +7059,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
             let recovered_type = || ctype_for(&aname, tm).to_string();
             let aty = declared_prototype
                 .and_then(|prototype| prototype.parameter_types.get(i))
-                .filter(|c_type| dwarf_prototype_type_is_renderable(c_type, false, dwarf_types))
+                .filter(|c_type| dwarf_prototype_type_is_renderable(c_type, false, &dwarf_type_env))
                 .map_or_else(recovered_type, |c_type| {
                     source_type_with_complete_struct_alias(c_type, &source_type_aliases)
                 });
@@ -9488,6 +9414,18 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
     let destination_is_pointer = destination_type.ends_with('*');
     let source_is_pointer = expression_has_pointer_representation(src);
     if destination_is_pointer && source_is_pointer {
+        if let Expr::Reg(reg @ VReg::Phys(_)) = src {
+            let source_type = declared_reg_ctype(reg);
+            if source_type.ends_with('*')
+                && source_type != destination_type
+                && source_type != "void *"
+                && destination_type != "void *"
+            {
+                let _ = write!(out, "({destination_type})");
+                write_reg_lvalue_dec(reg, out);
+                return;
+            }
+        }
         match src {
             // Register rvalues are normally rendered as machine words so byte
             // arithmetic remains valid.  At a pointer boundary, use the
@@ -13662,6 +13600,187 @@ function f @ 0x1000 {
             !text.contains("void consume(struct record * arg0)"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn aggregate_typedef_parameter_resolves_through_its_tagged_layout() {
+        use crate::debug::dwarf::{DwarfField, DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let f = Function {
+            name: "initialise".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let prototype = CallPrototype {
+            return_type: "void".to_string(),
+            parameter_types: vec!["List_t *const".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let types = vec![
+            DwarfType {
+                kind: DwarfTypeKind::Typedef,
+                name: "List_t".to_string(),
+                byte_size: 0,
+                fields: Vec::new(),
+                variants: Vec::new(),
+                typedef_target: Some("struct xLIST".to_string()),
+                source_file: Some("list.h".to_string()),
+            },
+            DwarfType {
+                kind: DwarfTypeKind::Struct,
+                name: "xLIST".to_string(),
+                byte_size: 4,
+                // Keep the layout intentionally opaque: an unsupported nested
+                // typedef must not prevent using the authoritative pointer
+                // contract or cause the renderer to invent a field layout.
+                fields: vec![DwarfField {
+                    offset: 0,
+                    name: "item".to_string(),
+                    c_type: "OpaqueItem_t".to_string(),
+                    size: 4,
+                }],
+                variants: Vec::new(),
+                typedef_target: None,
+                source_file: Some("list.h".to_string()),
+            },
+        ];
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &f,
+            None,
+            None,
+            RecoveredOutputKind::Void,
+            Some(&prototype),
+            &types,
+            4,
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(text.contains("typedef struct xLIST List_t;"), "{text}");
+        assert!(
+            text.contains("void initialise(List_t * const arg0)"),
+            "{text}"
+        );
+        assert!(!text.contains("struct xLIST {"), "{text}");
+    }
+
+    #[test]
+    fn aggregate_parameter_copy_to_different_pointer_type_is_explicit() {
+        use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};
+
+        let f = Function {
+            name: "consume".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let prototype = CallPrototype {
+            return_type: "void".to_string(),
+            parameter_types: vec!["Record_t *".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let types = [DwarfType {
+            kind: DwarfTypeKind::Typedef,
+            name: "Record_t".to_string(),
+            byte_size: 0,
+            fields: Vec::new(),
+            variants: Vec::new(),
+            typedef_target: Some("struct record".to_string()),
+            source_file: Some("record.h".to_string()),
+        }];
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("var0"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &f,
+            Some(&tm),
+            Some(&tm),
+            RecoveredOutputKind::Void,
+            Some(&prototype),
+            &types,
+            8,
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(text.contains("var0 = (char *)arg0;"), "{text}");
+    }
+
+    #[test]
+    fn enum_typedef_return_keeps_its_authoritative_name() {
+        use crate::debug::dwarf::{DwarfEnumVariant, DwarfType, DwarfTypeKind};
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let f = Function {
+            name: "begin_transaction".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "Status".to_string(),
+            parameter_types: Vec::new(),
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let types = vec![
+            DwarfType {
+                kind: DwarfTypeKind::Typedef,
+                name: "Status".to_string(),
+                byte_size: 0,
+                fields: Vec::new(),
+                variants: Vec::new(),
+                typedef_target: Some("enum Status_".to_string()),
+                source_file: Some("status.h".to_string()),
+            },
+            DwarfType {
+                kind: DwarfTypeKind::Enum,
+                name: "Status_".to_string(),
+                byte_size: 4,
+                fields: Vec::new(),
+                variants: vec![
+                    DwarfEnumVariant {
+                        name: "STATUS_ERROR".to_string(),
+                        value: -1,
+                    },
+                    DwarfEnumVariant {
+                        name: "STATUS_OK".to_string(),
+                        value: 0,
+                    },
+                ],
+                typedef_target: None,
+                source_file: Some("status.h".to_string()),
+            },
+        ];
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &f,
+            None,
+            None,
+            RecoveredOutputKind::Direct,
+            Some(&prototype),
+            &types,
+            8,
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(text.contains("typedef int Status;"), "{text}");
+        assert!(text.contains("Status begin_transaction(void)"), "{text}");
     }
 
     #[test]

@@ -307,8 +307,16 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   full 250-function corpus it moves TypeMatch perfects 27→30 and mean
   `0.32579001→0.35462582`, with 31 improvements and zero regressions; all 36
   changed outputs retain isomorphic CFGs and identical no-cache ByteMatch
-  outcomes. Continue from the 16 verified-open rows and refresh status through
-  real-binary evaluation after every general repair.
+  outcomes. The next program-level DWARF type-environment increment resolves
+  typedef-to-tag relationships once for rendering, field recovery, and ABI
+  prototype hints. It advances the cohort from 13 to 20 perfect / nine open and
+  the full corpus from 30 to 41 TypeMatch perfects, with 32 improvements and
+  zero regressions. All 67 changed outputs retain isomorphic CFGs and identical
+  no-cache ByteMatch outcomes. Ordinary scalar typedefs remain deliberately
+  fail-closed after a measured `console_read` byte regression; enable them only
+  after body values preserve source typedef identity. Continue from the nine
+  verified-open rows and refresh status through real-binary evaluation after
+  every general repair.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the

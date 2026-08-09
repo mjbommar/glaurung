@@ -702,6 +702,7 @@ fn prepare_llir_for_lowering(
     recover_semantic_prototype: bool,
     arm_vfp_args: bool,
     declared: Option<&DwarfPrototypeContract>,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
 ) -> PreparedLlir {
     let mut ssa = normalize_definedness_and_compute_ssa(function, exception_sites, cc);
     let provisional_slots = if recover_semantic_prototype {
@@ -717,6 +718,7 @@ fn prepare_llir_for_lowering(
             &provisional_slots,
             arm_vfp_args,
             declared,
+            type_env,
         )
     });
     if prototype.as_ref().is_some_and(|prototype| {
@@ -804,6 +806,9 @@ fn decompile_at_py(
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let dwarf_types =
         (style == "decbench" && types).then(|| crate::debug::dwarf::extract_dwarf_types(&data));
+    let dwarf_type_env = dwarf_types
+        .as_deref()
+        .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
     let budgets = Budgets {
         max_functions,
         max_blocks,
@@ -870,6 +875,7 @@ fn decompile_at_py(
         dwarf_outputs
             .as_ref()
             .and_then(|outputs| outputs.get(&func_va)),
+        dwarf_type_env.as_ref(),
     );
     let PreparedLlir {
         region,
@@ -892,6 +898,7 @@ fn decompile_at_py(
         arm_vfp_args,
         &budgets,
         dwarf_outputs.as_ref(),
+        dwarf_type_env.as_ref(),
         &mut addr_map,
         &mut callee_layout_cache,
     );
@@ -1066,6 +1073,9 @@ fn decompile_range_at_py(
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let dwarf_types =
         (style == "decbench" && types).then(|| crate::debug::dwarf::extract_dwarf_types(&data));
+    let dwarf_type_env = dwarf_types
+        .as_deref()
+        .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
     let (arch, cc) = detect_arch_and_call_conv(&image);
     let arm_vfp_args = image.arm_hard_float();
     let bits = match arch {
@@ -1125,6 +1135,7 @@ fn decompile_range_at_py(
         dwarf_outputs
             .as_ref()
             .and_then(|outputs| outputs.get(&func_va)),
+        dwarf_type_env.as_ref(),
     );
     let PreparedLlir {
         region,
@@ -1681,9 +1692,18 @@ fn calling_convention_pointer_width(cc: crate::ir::call_args::CallConv) -> u8 {
 /// Translate only DWARF scalar spellings that the current renderer can express
 /// exactly. An unrepresentable declared type still locks the output as non-void;
 /// it simply leaves machine-code recovery responsible for the concrete C type.
+#[cfg(test)]
 fn dwarf_return_hint(
     c_type: &str,
     cc: crate::ir::call_args::CallConv,
+) -> Option<crate::ir::types_recover::TypeHint> {
+    dwarf_return_hint_with_env(c_type, cc, None)
+}
+
+fn dwarf_return_hint_with_env(
+    c_type: &str,
+    cc: crate::ir::call_args::CallConv,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
 ) -> Option<crate::ir::types_recover::TypeHint> {
     use crate::ir::types_recover::TypeHint;
 
@@ -1700,7 +1720,7 @@ fn dwarf_return_hint(
         | crate::ir::call_args::CallConv::ArmHardFloat => 4,
     };
     if let Some(pointee) = normalized.strip_suffix('*').map(str::trim) {
-        let pointee_width = match dwarf_return_hint(pointee, cc) {
+        let pointee_width = match dwarf_return_hint_with_env(pointee, cc, type_env) {
             Some(TypeHint::Int { width, .. } | TypeHint::Float { width }) => width,
             Some(TypeHint::BoolLike) => 1,
             Some(TypeHint::Pointer { .. } | TypeHint::CodePointer) => c_long_width,
@@ -1708,7 +1728,10 @@ fn dwarf_return_hint(
         };
         return Some(TypeHint::Pointer { pointee_width });
     }
-    match normalized.as_str() {
+    let scalar = type_env
+        .and_then(|env| env.scalar_spelling(&normalized))
+        .unwrap_or(normalized);
+    match scalar.as_str() {
         "_Bool" | "bool" => Some(TypeHint::BoolLike),
         "char" | "signed char" | "int8_t" => Some(TypeHint::Int {
             signed: true,
@@ -1803,6 +1826,7 @@ fn recover_decbench_prototype(
     param_slots: &std::collections::HashSet<usize>,
     arm_vfp_args: bool,
     declared: Option<&DwarfPrototypeContract>,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
 ) -> crate::ir::types_recover::RecoveredPrototype {
     use crate::debug::dwarf::{DwarfParameterType, DwarfReturnType};
     use crate::ir::types_recover::RecoveredOutputKind;
@@ -1819,7 +1843,9 @@ fn recover_decbench_prototype(
             .parameter_types
             .iter()
             .map(|parameter| match parameter {
-                DwarfParameterType::Type(c_type) => dwarf_return_hint(c_type, cc),
+                DwarfParameterType::Type(c_type) => {
+                    dwarf_return_hint_with_env(c_type, cc, type_env)
+                }
                 DwarfParameterType::Unknown => None,
             })
             .collect::<Vec<_>>();
@@ -1830,8 +1856,10 @@ fn recover_decbench_prototype(
             prototype.apply_locked_output(RecoveredOutputKind::Void, None);
         }
         Some(DwarfReturnType::Type(c_type)) => {
-            prototype
-                .apply_locked_output(RecoveredOutputKind::Direct, dwarf_return_hint(c_type, cc));
+            prototype.apply_locked_output(
+                RecoveredOutputKind::Direct,
+                dwarf_return_hint_with_env(c_type, cc, type_env),
+            );
         }
         Some(DwarfReturnType::Unknown) | None => {}
     }
@@ -2002,6 +2030,7 @@ fn recover_direct_callee_layouts(
     arm_vfp_args: bool,
     budgets: &crate::analysis::cfg::Budgets,
     dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     address_names: &mut std::collections::HashMap<u64, String>,
     cache: &mut std::collections::HashMap<
         u64,
@@ -2100,6 +2129,7 @@ fn recover_direct_callee_layouts(
                     &parameter_slots,
                     arm_vfp_args,
                     dwarf_outputs.and_then(|outputs| outputs.get(&body_va)),
+                    type_env,
                 );
                 let layout: Vec<crate::ir::types::VReg> = prototype
                     .parameters()
@@ -2543,6 +2573,9 @@ fn decompile_all_py(
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
     let dwarf_types =
         (style == "decbench").then(|| crate::debug::dwarf::extract_dwarf_types(&data));
+    let dwarf_type_env = dwarf_types
+        .as_deref()
+        .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
     let budgets = Budgets {
         max_functions: limit.max(1),
         max_blocks,
@@ -2593,6 +2626,7 @@ fn decompile_all_py(
             dwarf_outputs
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func.entry_point.value)),
+            dwarf_type_env.as_ref(),
         );
         let PreparedLlir {
             region,
@@ -2629,6 +2663,7 @@ fn decompile_all_py(
             arm_vfp_args,
             &budgets,
             dwarf_outputs.as_ref(),
+            dwarf_type_env.as_ref(),
             &mut addr_map,
             &mut callee_layout_cache,
         );
@@ -2740,6 +2775,9 @@ fn decompile_many_py(
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
     let dwarf_types =
         (style == "decbench").then(|| crate::debug::dwarf::extract_dwarf_types(&data));
+    let dwarf_type_env = dwarf_types
+        .as_deref()
+        .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
     // Zero is the public address-scoped default: process exactly the unique
     // requested entries. Direct-callee prototype evidence is recovered lazily
     // by `recover_direct_callee_layouts`, so unrelated automatic seeds never
@@ -2816,6 +2854,7 @@ fn decompile_many_py(
             dwarf_outputs
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func_va)),
+            dwarf_type_env.as_ref(),
         );
         let PreparedLlir {
             region,
@@ -2857,6 +2896,7 @@ fn decompile_many_py(
             arm_vfp_args,
             &budgets,
             dwarf_outputs.as_ref(),
+            dwarf_type_env.as_ref(),
             &mut addr_map,
             &mut callee_layout_cache,
         );
@@ -2960,9 +3000,9 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
 #[cfg(test)]
 mod tests {
     use super::{
-        dwarf_return_hint, dwarf_stack_object_hints, imported_symbol_base, integer_widths_by_role,
-        merge_exact_definition_widths, refine_numbered_declaration,
-        retain_empty_direct_callee_layout, DwarfPrototypeContract,
+        dwarf_return_hint, dwarf_return_hint_with_env, dwarf_stack_object_hints,
+        imported_symbol_base, integer_widths_by_role, merge_exact_definition_widths,
+        refine_numbered_declaration, retain_empty_direct_callee_layout, DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
     use crate::ir::call_args::CallConv;
@@ -3316,6 +3356,45 @@ mod tests {
             Some(TypeHint::Int {
                 signed: true,
                 width: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn dwarf_enum_typedef_keeps_its_measured_scalar_abi() {
+        use crate::debug::dwarf::{DwarfEnumVariant, DwarfType, DwarfTypeKind};
+        use crate::ir::dwarf_type_env::DwarfTypeEnv;
+
+        let types = vec![
+            DwarfType {
+                kind: DwarfTypeKind::Typedef,
+                name: "Status".to_string(),
+                byte_size: 0,
+                fields: Vec::new(),
+                variants: Vec::new(),
+                typedef_target: Some("enum Status_".to_string()),
+                source_file: None,
+            },
+            DwarfType {
+                kind: DwarfTypeKind::Enum,
+                name: "Status_".to_string(),
+                byte_size: 4,
+                fields: Vec::new(),
+                variants: vec![DwarfEnumVariant {
+                    name: "ERROR".to_string(),
+                    value: -1,
+                }],
+                typedef_target: None,
+                source_file: None,
+            },
+        ];
+        let env = DwarfTypeEnv::new(&types);
+
+        assert_eq!(
+            dwarf_return_hint_with_env("Status", CallConv::SysVAmd64, Some(&env)),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
             })
         );
     }
