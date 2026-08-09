@@ -248,6 +248,30 @@ Acceptance:
 Immediate safe repairs may land here only if they use the new pipeline seam and
 include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
 
+### Implementation status — first Phase 1 increment
+
+- [x] Added an owned `ProgramImage` with one base parse, checked file/VA
+  mappings, executable ranges, target metadata, and defined-symbol indices.
+- [x] Routed CFG discovery, targeted callee discovery, LLIR lifting, and all four
+  Python decompilation entry points through the image while retaining compatible
+  byte-oriented Rust adapters.
+- [x] Added real ELF, PE, ARM32/Thumb, malformed-input, overflow, CFG-parity, and
+  LLIR-parity tests.
+- [x] Kept all eleven focused output canaries byte-identical and reduced the
+  measured small-x86 query from 3,679 to 47 object parses (98.7%). The full
+  five-shape rerun reduced parses from 188–22,873 to 22–55; cold time improved
+  1.3–6.9%, warm median improved 2.0–16.5%, and output hashes remained stable.
+- [ ] Move relocation, read-only-range, debug, environment, and remaining
+  object-backed facts behind the image/session boundary and reach one base parse.
+- [ ] Add `ProgramSession`, shared discovery/fact caches, and reusable Python
+  session APIs.
+- [ ] Add typed partial artifacts, a single `DecompilerEngine` path, explicit
+  stage fingerprinting, and the direct-object-parse architecture gate.
+
+This is a measured additive seam, not Phase 1 completion. The acceptance target
+remains exactly one base parse per session and identical behavior across all
+entry-point shapes before the legacy owners can be removed.
+
 ## Phase 2 — canonical target and exact lifted semantics
 
 **Goal:** make ARM32 a peer and remove architecture inference from strings.

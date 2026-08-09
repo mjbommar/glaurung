@@ -62,6 +62,7 @@ pub mod exec;
 #[cfg(feature = "symbolic")]
 pub mod symbolic;
 
+pub mod program;
 /// Python bindings module
 #[cfg(feature = "python-ext")]
 pub mod python_bindings;

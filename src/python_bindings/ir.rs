@@ -29,6 +29,19 @@ use crate::ir::abi::machine_word_bytes;
 use crate::ir::types::{BinOp, CallTarget, CmpOp, Flag, LlirInstr, MemOp, Op, UnOp, VReg, Value};
 use crate::ir::{lift_arm64, lift_x86};
 
+fn load_program_image(path: &str) -> PyResult<crate::program::image::ProgramImage> {
+    use crate::program::image::{ProgramImage, ProgramImageError};
+
+    ProgramImage::from_path(std::path::Path::new(path)).map_err(|error| match error {
+        ProgramImageError::Io(error) => {
+            pyo3::exceptions::PyIOError::new_err(format!("read error: {error}"))
+        }
+        ProgramImageError::Parse(error) => {
+            pyo3::exceptions::PyValueError::new_err(format!("image parse failed: {error}"))
+        }
+    })
+}
+
 fn flag_repr(f: Flag) -> &'static str {
     match f {
         Flag::Z => "%zf",
@@ -611,41 +624,29 @@ fn lift_window_at_py(
     bits: u32,
     arch: &str,
 ) -> PyResult<PyObject> {
-    let data = std::fs::read(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
-    let foff =
-        crate::analysis::entry::va_to_code_file_offset(&data, start_va).ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err(format!("no mapping for VA 0x{:x}", start_va))
-        })?;
+    let image = load_program_image(&path)?;
+    let data = image.bytes();
+    let foff = image.va_to_code_file_offset(start_va).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!("no mapping for VA 0x{:x}", start_va))
+    })?;
     let end = foff.saturating_add(window_bytes).min(data.len());
     lift_bytes_py(py, &data[foff..end], start_va, bits, arch)
 }
 
 fn detect_arch_and_call_conv(
-    data: &[u8],
+    image: &crate::program::image::ProgramImage,
 ) -> (crate::core::binary::Arch, crate::ir::call_args::CallConv) {
     use crate::core::binary::Arch as BArch;
 
-    let mut is_pe = false;
-    let arch = if let Ok(obj) = crate::decompile::profile::parse_object(data) {
-        use object::Object;
-        is_pe = obj.format() == object::BinaryFormat::Pe;
-        match obj.architecture() {
-            object::Architecture::I386 => BArch::X86,
-            object::Architecture::X86_64 => BArch::X86_64,
-            object::Architecture::Aarch64 => BArch::AArch64,
-            object::Architecture::Arm => BArch::ARM,
-            _ => BArch::X86_64,
-        }
-    } else {
-        BArch::X86_64
+    let arch = match image.arch() {
+        BArch::X86 | BArch::X86_64 | BArch::AArch64 | BArch::ARM => image.arch(),
+        _ => BArch::X86_64,
     };
+    let is_pe = image.format() == crate::core::binary::Format::PE;
 
     let cc = match (arch, is_pe) {
         (BArch::AArch64, _) => crate::ir::call_args::CallConv::Aarch64,
-        (BArch::ARM, _) if arm_uses_vfp_arguments(data) => {
-            crate::ir::call_args::CallConv::ArmHardFloat
-        }
+        (BArch::ARM, _) if image.arm_hard_float() => crate::ir::call_args::CallConv::ArmHardFloat,
         (BArch::ARM, _) => crate::ir::call_args::CallConv::Arm,
         (BArch::X86, _) => crate::ir::call_args::CallConv::Cdecl32,
         (BArch::X86_64, true) => crate::ir::call_args::CallConv::Win64,
@@ -762,22 +763,6 @@ fn prepare_llir_for_lowering(
     }
 }
 
-fn arm_uses_vfp_arguments(data: &[u8]) -> bool {
-    use object::Object;
-
-    let Ok(file) = crate::decompile::profile::parse_object(data) else {
-        return false;
-    };
-    if file.architecture() != object::Architecture::Arm {
-        return false;
-    }
-    matches!(
-        file.flags(),
-        object::FileFlags::Elf { e_flags, .. }
-            if e_flags & object::elf::EF_ARM_ABI_FLOAT_HARD != 0
-    )
-}
-
 /// Run the full decompiler pipeline on the function whose entry is `func_va`
 /// in `path`, returning the rendered pseudocode.
 ///
@@ -803,18 +788,18 @@ fn decompile_at_py(
     max_functions: usize,
 ) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
-    use crate::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
+    use crate::analysis::cfg::{analyze_functions_image_with_seeds, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
-    use crate::ir::lift_function::lift_function_from_bytes;
+    use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
 
-    let data = std::fs::read(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let image = load_program_image(&path)?;
+    let data = image.bytes();
     // An ARM32 Thumb symbol's value carries the Thumb bit; the entry it denotes
     // is one lower. Anything resolving a callee through `.symtab` hands us that
     // value verbatim, and decoding one byte in recovers a body with no
     // parameters at all. See `arm32_mode::normalise_entry`.
-    let func_va = crate::analysis::arm32_mode::normalise_entry(&data, func_va);
+    let func_va = image.normalize_function_entry(func_va);
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let dwarf_types =
@@ -831,7 +816,7 @@ fn decompile_at_py(
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
     // the closure boundary. See `python_bindings::analysis`.
     let (funcs, _cg) =
-        py.detach(|| analyze_functions_bytes_with_seeds(&data, &budgets, &[func_va]));
+        py.detach(|| analyze_functions_image_with_seeds(&image, &budgets, &[func_va]));
     let func = funcs
         .iter()
         .find(|f| f.entry_point.value == func_va)
@@ -842,8 +827,8 @@ fn decompile_at_py(
                 func_va
             ))
         })?;
-    let (arch, cc) = detect_arch_and_call_conv(&data);
-    let arm_vfp_args = arm_uses_vfp_arguments(&data);
+    let (arch, cc) = detect_arch_and_call_conv(&image);
+    let arm_vfp_args = image.arm_hard_float();
     // Build the address map first so we can apply a PDB public-symbol name
     // to the *outer* function header before lowering. The map already
     // includes PDB symbols when a cache is configured, plus exports / IAT
@@ -855,7 +840,7 @@ fn decompile_at_py(
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
-    let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
+    let lf_raw = lift_function_from_image(&image, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
     // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
@@ -899,7 +884,7 @@ fn decompile_at_py(
     }
     let mut callee_layout_cache = std::collections::HashMap::new();
     let callee_facts = recover_direct_callee_layouts(
-        &data,
+        &image,
         &funcs,
         &lf_raw,
         arch,
@@ -1055,7 +1040,7 @@ fn decompile_range_at_py(
     use crate::core::basic_block::BasicBlock;
     use crate::core::function::{Function, FunctionKind};
     use crate::ir::ast::{lower, render, render_with_types};
-    use crate::ir::lift_function::lift_function_from_bytes;
+    use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
 
     if range_end <= range_start {
@@ -1075,14 +1060,14 @@ fn decompile_range_at_py(
     }
     let _ = timeout_ms;
 
-    let data = std::fs::read(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let image = load_program_image(&path)?;
+    let data = image.bytes();
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
     let dwarf_types =
         (style == "decbench" && types).then(|| crate::debug::dwarf::extract_dwarf_types(&data));
-    let (arch, cc) = detect_arch_and_call_conv(&data);
-    let arm_vfp_args = arm_uses_vfp_arguments(&data);
+    let (arch, cc) = detect_arch_and_call_conv(&image);
+    let arm_vfp_args = image.arm_hard_float();
     let bits = match arch {
         crate::core::binary::Arch::X86 | crate::core::binary::Arch::ARM => 32,
         crate::core::binary::Arch::X86_64 | crate::core::binary::Arch::AArch64 => 64,
@@ -1115,7 +1100,7 @@ fn decompile_range_at_py(
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
-    let lf_raw = lift_function_from_bytes(&data, &func, arch).ok_or_else(|| {
+    let lf_raw = lift_function_from_image(&image, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
     // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
@@ -1890,19 +1875,11 @@ fn imported_symbol_base(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-fn defined_text_symbol_address(data: &[u8], name: &str) -> Option<u64> {
-    use object::{Object, ObjectSymbol};
-
-    let object = crate::decompile::profile::parse_object(data).ok()?;
-    object
-        .symbols()
-        .chain(object.dynamic_symbols())
-        .find(|symbol| {
-            symbol.is_definition()
-                && symbol.kind() == object::SymbolKind::Text
-                && symbol.name().is_ok_and(|symbol_name| symbol_name == name)
-        })
-        .map(|symbol| symbol.address())
+fn defined_text_symbol_address(
+    image: &crate::program::image::ProgramImage,
+    name: &str,
+) -> Option<u64> {
+    image.defined_text_symbol_address(name)
 }
 
 /// Fixed Itanium C++ runtime layouts whose imported PLT stubs have no body from
@@ -2017,7 +1994,7 @@ fn retain_empty_direct_callee_layout(declared: Option<&DwarfPrototypeContract>) 
 /// decompilation, so only callees of the function currently being rendered are
 /// analyzed and repeated callees in batch modes reuse the result.
 fn recover_direct_callee_layouts(
-    data: &[u8],
+    image: &crate::program::image::ProgramImage,
     functions: &[crate::core::function::Function],
     caller: &crate::ir::types::LlirFunction,
     arch: crate::core::binary::Arch,
@@ -2035,7 +2012,7 @@ fn recover_direct_callee_layouts(
         )>,
     >,
 ) -> DirectCalleeFacts {
-    use crate::ir::lift_function::lift_function_from_bytes;
+    use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::ssa::compute_ssa;
 
     let mut facts = DirectCalleeFacts::default();
@@ -2072,7 +2049,7 @@ fn recover_direct_callee_layouts(
             .get(&callee_va)
             .map(|name| imported_symbol_base(name))
             .and_then(|name| {
-                defined_text_symbol_address(data, name).or_else(|| {
+                defined_text_symbol_address(image, name).or_else(|| {
                     functions
                         .iter()
                         .find(|function| {
@@ -2088,7 +2065,7 @@ fn recover_direct_callee_layouts(
                 })
             })
             .unwrap_or(callee_va);
-        let body_va = crate::analysis::arm32_mode::normalise_entry(data, body_va);
+        let body_va = image.normalize_function_entry(body_va);
         if dump {
             eprintln!(
                 "callee 0x{callee_va:x} {:?} -> body 0x{body_va:x}",
@@ -2105,13 +2082,13 @@ fn recover_direct_callee_layouts(
                 {
                     Some(callee) => callee,
                     None => {
-                        targeted = crate::analysis::cfg::discover_function_bytes_at(
-                            data, budgets, body_va,
+                        targeted = crate::analysis::cfg::discover_function_image_at(
+                            image, budgets, body_va,
                         )?;
                         &targeted
                     }
                 };
-                let mut lifted = lift_function_from_bytes(data, callee, arch)?;
+                let mut lifted = lift_function_from_image(image, callee, arch)?;
                 inline_soft_helper_calls_in(&mut lifted, &*address_names);
                 crate::ir::abi::annotate_calls(&mut lifted, cc);
                 let ssa = compute_ssa(&lifted);
@@ -2556,12 +2533,12 @@ fn decompile_all_py(
     style: &str,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
-    use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
+    use crate::analysis::cfg::{analyze_functions_image, Budgets};
     use crate::ir::ast::{lower, render};
-    use crate::ir::lift_function::lift_function_from_bytes;
+    use crate::ir::lift_function::lift_function_from_image;
 
-    let data = std::fs::read(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let image = load_program_image(&path)?;
+    let data = image.bytes();
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
     let dwarf_types =
@@ -2577,9 +2554,9 @@ fn decompile_all_py(
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
     // the closure boundary. See `python_bindings::analysis`.
-    let (funcs, _cg) = py.detach(|| analyze_functions_bytes(&data, &budgets));
-    let (arch, cc) = detect_arch_and_call_conv(&data);
-    let arm_vfp_args = arm_uses_vfp_arguments(&data);
+    let (funcs, _cg) = py.detach(|| analyze_functions_image(&image, &budgets));
+    let (arch, cc) = detect_arch_and_call_conv(&image);
+    let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
@@ -2598,7 +2575,7 @@ fn decompile_all_py(
         // never notices a signal. This is the supported way to stay
         // interruptible without releasing: it raises `KeyboardInterrupt` here.
         py.check_signals()?;
-        let Some(lf_raw) = lift_function_from_bytes(&data, func, arch) else {
+        let Some(lf_raw) = lift_function_from_image(&image, func, arch) else {
             continue;
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
@@ -2644,7 +2621,7 @@ fn decompile_all_py(
             cc,
         );
         let callee_facts = recover_direct_callee_layouts(
-            &data,
+            &image,
             &funcs,
             &lf_raw,
             arch,
@@ -2746,18 +2723,18 @@ fn decompile_many_py(
     // analyse once, then run the same per-function pipeline as `decompile_at`
     // for each requested VA. Returns a list of (name, va, c_or_ir_text) for
     // every requested VA that resolves to a known function.
-    use crate::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
+    use crate::analysis::cfg::{analyze_functions_image_with_seeds, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
-    use crate::ir::lift_function::lift_function_from_bytes;
+    use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
     use std::collections::HashSet;
 
-    let data = std::fs::read(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("read error: {}", e)))?;
+    let image = load_program_image(&path)?;
+    let data = image.bytes();
     // See `decompile_at`: an ARM32 Thumb `.symtab` value carries the Thumb bit.
     let func_vas: Vec<u64> = func_vas
         .into_iter()
-        .map(|va| crate::analysis::arm32_mode::normalise_entry(&data, va))
+        .map(|va| image.normalize_function_entry(va))
         .collect();
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
@@ -2789,9 +2766,10 @@ fn decompile_many_py(
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
     // the closure boundary. See `python_bindings::analysis`.
-    let (funcs, _cg) = py.detach(|| analyze_functions_bytes_with_seeds(&data, &budgets, &func_vas));
-    let (arch, cc) = detect_arch_and_call_conv(&data);
-    let arm_vfp_args = arm_uses_vfp_arguments(&data);
+    let (funcs, _cg) =
+        py.detach(|| analyze_functions_image_with_seeds(&image, &budgets, &func_vas));
+    let (arch, cc) = detect_arch_and_call_conv(&image);
+    let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
@@ -2820,7 +2798,7 @@ fn decompile_many_py(
         if !wanted.contains(&func_va) {
             continue;
         }
-        let Some(lf_raw) = lift_function_from_bytes(&data, func, arch) else {
+        let Some(lf_raw) = lift_function_from_image(&image, func, arch) else {
             continue;
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
@@ -2871,7 +2849,7 @@ fn decompile_many_py(
             cc,
         );
         let callee_facts = recover_direct_callee_layouts(
-            &data,
+            &image,
             &funcs,
             &lf_raw,
             arch,

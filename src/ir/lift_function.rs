@@ -75,6 +75,24 @@ fn clip_block_to_owned_ranges(func: &Function, start: u64, end: u64) -> Option<(
 /// mapped segment) are skipped silently; the function's other blocks still
 /// produce LLIR.
 pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Option<LlirFunction> {
+    lift_function(data, func, arch, None)
+}
+
+/// Lift a function while reusing the immutable indices in `image`.
+pub fn lift_function_from_image(
+    image: &crate::program::image::ProgramImage,
+    func: &Function,
+    arch: Arch,
+) -> Option<LlirFunction> {
+    lift_function(image.bytes(), func, arch, Some(image))
+}
+
+fn lift_function(
+    data: &[u8],
+    func: &Function,
+    arch: Arch,
+    image: Option<&crate::program::image::ProgramImage>,
+) -> Option<LlirFunction> {
     if !supports_arch(arch) {
         return None;
     }
@@ -87,7 +105,10 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
         else {
             continue;
         };
-        let Some(foff) = va_to_code_file_offset(data, start) else {
+        let Some(foff) = image.map_or_else(
+            || va_to_code_file_offset(data, start),
+            |image| image.va_to_code_file_offset(start),
+        ) else {
             continue;
         };
         let size = (end - start) as usize;
@@ -132,7 +153,7 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
 
     recover_proven_direct_tail_calls(&mut blocks, func);
     resolve_pc_thunk_calls(&mut blocks, |target| {
-        image_pc_thunk_register(data, arch, target)
+        image_pc_thunk_register(image, data, arch, target)
     });
     annotate_resolved_switch_indices(&mut blocks);
 
@@ -530,11 +551,19 @@ fn resolve_pc_thunk_calls(
 /// The PC-thunk destination register for the function at `va` in `data`, if it
 /// is one. Only 32-bit x86 has the idiom: x86-64 addresses everything
 /// RIP-relative and never emits it, so the 64-bit lane is left untouched.
-fn image_pc_thunk_register(data: &[u8], arch: Arch, va: u64) -> Option<String> {
+fn image_pc_thunk_register(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    arch: Arch,
+    va: u64,
+) -> Option<String> {
     if arch != Arch::X86 {
         return None;
     }
-    let offset = va_to_code_file_offset(data, va)?;
+    let offset = image.map_or_else(
+        || va_to_code_file_offset(data, va),
+        |image| image.va_to_code_file_offset(va),
+    )?;
     let end = offset.saturating_add(4).min(data.len());
     lift_x86::pc_thunk_register(data.get(offset..end)?).map(str::to_string)
 }
@@ -656,8 +685,11 @@ mod tests {
         )
         .expect("sample binary");
         let entry = 0u64;
-        assert_eq!(image_pc_thunk_register(&data, Arch::X86_64, entry), None);
-        assert_eq!(image_pc_thunk_register(&data, Arch::ARM, entry), None);
+        assert_eq!(
+            image_pc_thunk_register(None, &data, Arch::X86_64, entry),
+            None
+        );
+        assert_eq!(image_pc_thunk_register(None, &data, Arch::ARM, entry), None);
     }
 
     #[test]

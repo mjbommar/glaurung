@@ -496,6 +496,33 @@ fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Optio
     (regions, arch, endian, entry)
 }
 
+fn parse_exec_regions_in(
+    image: &crate::program::image::ProgramImage,
+) -> (Vec<ExecRegion>, BArch, Endianness, Option<Address>) {
+    let arch = image.arch();
+    let endianness = image.endianness();
+    let regions: Vec<ExecRegion> = image
+        .executable_ranges()
+        .map(|range| ExecRegion {
+            start: range.start,
+            end: range.end,
+            _file_off_start: image
+                .va_to_code_file_offset(range.start)
+                .and_then(|offset| u64::try_from(offset).ok())
+                .unwrap_or(0),
+        })
+        .collect();
+    if regions.is_empty() {
+        return parse_exec_regions(image.bytes());
+    }
+    let entry_va = image.normalize_function_entry(image.entry_va());
+    let bits = if arch.is_64_bit() { 64 } else { 32 };
+    let entry = (entry_va != 0)
+        .then(|| Address::new(AddressKind::VA, entry_va, bits, None, None).ok())
+        .flatten();
+    (regions, arch, endianness, entry)
+}
+
 fn in_exec_regions(regions: &[ExecRegion], va: u64) -> Option<&ExecRegion> {
     regions.iter().find(|r| va >= r.start && va < r.end)
 }
@@ -819,9 +846,35 @@ fn memory_operand_va(ins: &Instruction) -> Option<u64> {
     })
 }
 
-fn read_pointer_at_va(data: &[u8], va: u64, bits: u8) -> Option<u64> {
-    let file_off = crate::analysis::entry::va_to_file_offset(data, va)
-        .or_else(|| pe_va_to_file_off(data, va))?;
+fn indexed_file_offset(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    va: u64,
+) -> Option<usize> {
+    image.map_or_else(
+        || crate::analysis::entry::va_to_file_offset(data, va),
+        |image| image.va_to_file_offset(va),
+    )
+}
+
+fn indexed_code_offset(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    va: u64,
+) -> Option<usize> {
+    image.map_or_else(
+        || crate::analysis::entry::va_to_code_file_offset(data, va),
+        |image| image.va_to_code_file_offset(va),
+    )
+}
+
+fn read_pointer_at_va(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    va: u64,
+    bits: u8,
+) -> Option<u64> {
+    let file_off = indexed_file_offset(image, data, va).or_else(|| pe_va_to_file_off(data, va))?;
     if bits >= 64 {
         let raw = data.get(file_off..file_off + 8)?;
         Some(u64::from_le_bytes(raw.try_into().ok()?))
@@ -831,9 +884,14 @@ fn read_pointer_at_va(data: &[u8], va: u64, bits: u8) -> Option<u64> {
     }
 }
 
-fn indirect_memory_target(data: &[u8], ins: &Instruction, bits: u8) -> Option<u64> {
+fn indirect_memory_target(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    ins: &Instruction,
+    bits: u8,
+) -> Option<u64> {
     let slot_va = memory_operand_va(ins)?;
-    read_pointer_at_va(data, slot_va, bits)
+    read_pointer_at_va(image, data, slot_va, bits)
 }
 
 fn is_code_padding_terminator(mnemonic: &str, arch: BArch) -> bool {
@@ -865,11 +923,16 @@ fn pe_tail_target_looks_like_function_start(data: &[u8], target_va: u64) -> bool
 /// recognised prologue is much narrower and survives fully stripping the local
 /// symbol.  This is the shape produced by sibling-call wrappers in current GCC
 /// and Clang output (for example DecBench libedit's `em_inc_search_prev`).
-fn elf_x86_tail_target_looks_like_function_start(data: &[u8], target_va: u64, arch: BArch) -> bool {
+fn elf_x86_tail_target_looks_like_function_start(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    target_va: u64,
+    arch: BArch,
+) -> bool {
     if !matches!(arch, BArch::X86 | BArch::X86_64) || !data.starts_with(b"\x7fELF") {
         return false;
     }
-    let Some(file_off) = crate::analysis::entry::va_to_code_file_offset(data, target_va) else {
+    let Some(file_off) = indexed_code_offset(image, data, target_va) else {
         return false;
     };
     let Some(head) = data.get(file_off..) else {
@@ -1020,6 +1083,7 @@ struct TentativeDispatchEdges {
 /// resolution. That second check is what makes a late conflicting back-edge
 /// fail closed instead of leaving already-added, unsound successors behind.
 fn replay_dispatch_block(
+    image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
     arch: BArch,
     endianness: Endianness,
@@ -1044,7 +1108,7 @@ fn replay_dispatch_block(
     tracker.inherit_addresses(addresses);
     let mut cur_va = start_va;
     while cur_va < end_va {
-        let file_offset = crate::analysis::entry::va_to_code_file_offset(data, cur_va)?;
+        let file_offset = indexed_code_offset(image, data, cur_va)?;
         let bytes = data.get(file_offset..)?;
         let address = Address::new(AddressKind::VA, cur_va, bits, None, None).ok()?;
         let instruction = backend.disassemble_instruction(&address, bytes).ok()?;
@@ -1071,6 +1135,9 @@ fn replay_dispatch_block(
 }
 
 struct DiscoveryFacts<'a> {
+    // Program-scoped address index. Legacy byte-only analysis leaves this empty;
+    // session-backed entry points always supply it.
+    image: Option<&'a crate::program::image::ProgramImage>,
     // Jump tables discovered once for the whole binary, indexed by table VA.
     //
     // These used to be consumed only as function-discovery seeds. Keeping the
@@ -1322,7 +1389,7 @@ fn discover_function(
             // Map VA -> file offset using shared helper for robustness. The CODE
             // resolver: in a relocatable object every section shares address 0, and
             // the general one would hand back whichever section is listed first.
-            let fo = match crate::analysis::entry::va_to_code_file_offset(data, cur_va) {
+            let fo = match indexed_code_offset(facts.image, data, cur_va) {
                 Some(v) => v,
                 None => break 'block,
             };
@@ -1363,8 +1430,8 @@ fn discover_function(
                 // resolved noreturn import ends the block and the function:
                 // decoding its lexical successor would cross into padding or a
                 // neighbouring function on optimized stripped binaries.
-                let resolved_target =
-                    immediate_target(&ins).or_else(|| indirect_memory_target(data, &ins, bits));
+                let resolved_target = immediate_target(&ins)
+                    .or_else(|| indirect_memory_target(facts.image, data, &ins, bits));
                 if let Some(tgt) = resolved_target {
                     call_edges.push(FunctionXref {
                         callsite_va: cur_va,
@@ -1396,7 +1463,12 @@ fn discover_function(
                         && !facts.owns(tgt)
                         && tgt != entry.value
                         && is_exec_target
-                        && elf_x86_tail_target_looks_like_function_start(data, tgt, arch);
+                        && elf_x86_tail_target_looks_like_function_start(
+                            facts.image,
+                            data,
+                            tgt,
+                            arch,
+                        );
                     let is_elf_arm_tail_target = unconditional
                         && !facts.owns(tgt)
                         && tgt != entry.value
@@ -1422,7 +1494,7 @@ fn discover_function(
                         );
                     }
                 } else if unconditional {
-                    if let Some(tgt) = indirect_memory_target(data, &ins, bits) {
+                    if let Some(tgt) = indirect_memory_target(facts.image, data, &ins, bits) {
                         call_edges.push(FunctionXref {
                             callsite_va: cur_va,
                             target_va: tgt,
@@ -1640,6 +1712,7 @@ fn discover_function(
         };
         final_bound_inputs.insert(block_start, input.clone());
         let Some((tracker, _)) = replay_dispatch_block(
+            facts.image,
             data,
             arch,
             end,
@@ -1696,6 +1769,7 @@ fn discover_function(
             .cloned()
             .unwrap_or_default();
         let Some((tracker, _)) = replay_dispatch_block(
+            facts.image,
             data,
             arch,
             end,
@@ -1735,6 +1809,7 @@ fn discover_function(
             .get(&dispatch_edge.block_start)
             .and_then(|(block_end, _)| {
                 replay_dispatch_block(
+                    facts.image,
                     data,
                     arch,
                     end,
@@ -2233,6 +2308,7 @@ const AARCH64_BTI_JC: u32 = 0xd503_24df;
 /// earlier, which is the true entry, so we rewind to it. A bare `BTI c` is *not*
 /// used as a seed: it also guards internal branch targets and would over-generate.
 fn scan_aarch64_prologue_function_starts(
+    image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
     regions: &[ExecRegion],
     arch: BArch,
@@ -2242,7 +2318,7 @@ fn scan_aarch64_prologue_function_starts(
     }
     let read_word = |va: u64| -> Option<u32> {
         // Scanning for function starts reads instructions, so resolve as code.
-        let off = crate::analysis::entry::va_to_code_file_offset(data, va)?;
+        let off = indexed_code_offset(image, data, va)?;
         let b = data.get(off..off + 4)?;
         Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     };
@@ -2348,7 +2424,12 @@ fn scan_pe_prologue_function_starts(data: &[u8], regions: &[ExecRegion], arch: B
 /// Candidates are emitted as ordinary `Prologue` seeds, which remain
 /// body-overlap gated: unlike an `.eh_frame` FDE start this is a heuristic, and
 /// it must never split a function that a trusted seed already proved.
-fn scan_elf_prologue_function_starts(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<u64> {
+fn scan_elf_prologue_function_starts(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    regions: &[ExecRegion],
+    arch: BArch,
+) -> Vec<u64> {
     if data.len() < 4 || &data[..4] != b"\x7fELF" {
         return Vec::new();
     }
@@ -2361,7 +2442,7 @@ fn scan_elf_prologue_function_starts(data: &[u8], regions: &[ExecRegion], arch: 
                 // slowdown for candidates that are almost all false.
                 let mut va = align_up_u64(region.start, 16);
                 while va < region.end {
-                    if let Some(off) = crate::analysis::entry::va_to_code_file_offset(data, va) {
+                    if let Some(off) = indexed_code_offset(image, data, va) {
                         if off < data.len()
                             && has_function_boundary_marker(data, off)
                             && elf_x86_prologue_head(&data[off..])
@@ -2380,7 +2461,7 @@ fn scan_elf_prologue_function_starts(data: &[u8], regions: &[ExecRegion], arch: 
             for region in regions {
                 let mut va = align_up_u64(region.start, 4);
                 while va + 4 <= region.end {
-                    if let Some(off) = crate::analysis::entry::va_to_code_file_offset(data, va) {
+                    if let Some(off) = indexed_code_offset(image, data, va) {
                         if let Some(b) = data.get(off..off + 4) {
                             let word = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
                             if aarch64_unhardened_prologue(word) {
@@ -3724,6 +3805,7 @@ fn attach_exception_landing_pads(
         // the protected call must terminate its own block so its normal and
         // landing-pad successors describe the two possible continuations.
         if split_parent_block_at(
+            facts.image,
             data,
             arch,
             end,
@@ -3758,6 +3840,7 @@ fn attach_exception_landing_pads(
             regions,
             budgets,
             &DiscoveryFacts {
+                image: facts.image,
                 tables: facts.tables,
                 noreturn_targets: facts.noreturn_targets,
                 owned_ranges: Some(&ranges),
@@ -3784,7 +3867,14 @@ fn attach_exception_landing_pads(
         }
 
         let parent = &mut functions[parent_index];
-        split_parent_blocks_at_handler_leaders(data, arch, end, parent, &handler.basic_blocks);
+        split_parent_blocks_at_handler_leaders(
+            facts.image,
+            data,
+            arch,
+            end,
+            parent,
+            &handler.basic_blocks,
+        );
         for block in handler.basic_blocks {
             if !parent
                 .basic_blocks
@@ -3826,6 +3916,7 @@ fn attach_exception_landing_pads(
 /// before the normal epilogue jump, which is a new leader even though normal
 /// entry-rooted discovery originally swept across it.
 fn split_parent_blocks_at_handler_leaders(
+    image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
     arch: BArch,
     endianness: Endianness,
@@ -3839,11 +3930,12 @@ fn split_parent_blocks_at_handler_leaders(
     leaders.sort_unstable();
     leaders.dedup();
     for leader in leaders {
-        split_parent_block_at(data, arch, endianness, parent, leader);
+        split_parent_block_at(image, data, arch, endianness, parent, leader);
     }
 }
 
 fn split_parent_block_at(
+    image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
     arch: BArch,
     endianness: Endianness,
@@ -3861,12 +3953,12 @@ fn split_parent_block_at(
     let old_end = parent.basic_blocks[index].end_address.clone();
     let old_successors = parent.basic_blocks[index].successor_ids.clone();
     let Some(head_count) =
-        count_machine_instructions(data, arch, endianness, source_start.value, leader)
+        count_machine_instructions(image, data, arch, endianness, source_start.value, leader)
     else {
         return false;
     };
     let Some(tail_count) =
-        count_machine_instructions(data, arch, endianness, leader, old_end.value)
+        count_machine_instructions(image, data, arch, endianness, leader, old_end.value)
     else {
         return false;
     };
@@ -3912,6 +4004,7 @@ fn split_parent_block_at(
 }
 
 fn count_machine_instructions(
+    image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
     arch: BArch,
     endianness: Endianness,
@@ -3934,7 +4027,7 @@ fn count_machine_instructions(
     let mut cursor = start;
     let mut count = 0_u32;
     while cursor < end {
-        let offset = crate::analysis::entry::va_to_code_file_offset(data, cursor)?;
+        let offset = indexed_code_offset(image, data, cursor)?;
         let bytes = data.get(offset..)?;
         let address = Address::new(AddressKind::VA, cursor, bits, None, None).ok()?;
         let instruction = backend.disassemble_instruction(&address, bytes).ok()?;
@@ -4136,22 +4229,49 @@ pub fn analyze_functions_bytes_with_seeds(
     (functions, cg)
 }
 
-/// Discover exactly one trusted executable function entry.
+/// Analyze one already indexed program image with caller-provided entry seeds.
+///
+/// Unlike the compatibility byte-slice entry point, every inner CFG address
+/// translation reuses the image's immutable mapping index.
+pub fn analyze_functions_image_with_seeds(
+    image: &crate::program::image::ProgramImage,
+    budgets: &Budgets,
+    requested_vas: &[u64],
+) -> (Vec<Function>, CallGraph) {
+    let (functions, cg, _stats) = analyze_functions_bytes_within(
+        image.bytes(),
+        budgets,
+        requested_vas,
+        Deadline::start(budgets),
+        Some(image),
+    );
+    (functions, cg)
+}
+
+/// Analyze every discoverable function in one already indexed program image.
+pub fn analyze_functions_image(
+    image: &crate::program::image::ProgramImage,
+    budgets: &Budgets,
+) -> (Vec<Function>, CallGraph) {
+    analyze_functions_image_with_seeds(image, budgets, &[])
+}
+
+/// Discover one trusted function while reusing a program-scoped address index.
 ///
 /// Address-scoped consumers already know the entry they need. Running the
 /// whole seed pipeline merely to recover one direct callee processes unrelated
 /// symbols, vtables, and function starts before the caller's budget can stop
 /// it. This path performs only the bounded CFG walk for `entry_va`; direct
-/// xrefs are still recorded on the returned Function, while whole-binary seed
-/// augmentation remains the responsibility of the public analysis routines.
+/// xrefs are still recorded on the returned Function.
 #[cfg(feature = "python-ext")]
-pub(crate) fn discover_function_bytes_at(
-    data: &[u8],
+pub(crate) fn discover_function_image_at(
+    image: &crate::program::image::ProgramImage,
     budgets: &Budgets,
     entry_va: u64,
 ) -> Option<Function> {
+    let data = image.bytes();
     let deadline = Deadline::start(budgets);
-    let (regions, arch, end, _entry) = parse_exec_regions(data);
+    let (regions, arch, end, _entry) = parse_exec_regions_in(image);
     if regions.is_empty() || in_exec_regions(&regions, entry_va).is_none() {
         return None;
     }
@@ -4160,6 +4280,7 @@ pub(crate) fn discover_function_bytes_at(
     let tables = std::collections::BTreeMap::new();
     let noreturn_targets = crate::analysis::call_semantics::imported_noreturn_targets(data);
     let facts = DiscoveryFacts {
+        image: Some(image),
         tables: &tables,
         noreturn_targets: &noreturn_targets,
         owned_ranges: None,
@@ -4171,18 +4292,8 @@ pub(crate) fn discover_function_bytes_at(
 
     // Preserve the same exact-address symbol naming as whole-binary discovery
     // without paying for its unrelated seed work.
-    if let Ok(object) = crate::decompile::profile::parse_object(data) {
-        for symbol in object.symbols().chain(object.dynamic_symbols()) {
-            if !symbol.is_definition() || code_addr(symbol.address(), arch) != entry_va {
-                continue;
-            }
-            if let Ok(name) = symbol.name() {
-                if !name.is_empty() {
-                    function.name = name.to_string();
-                    break;
-                }
-            }
-        }
+    if let Some(name) = image.defined_symbol_name_at(entry_va) {
+        function.name = name.to_string();
     }
     Some(function)
 }
@@ -4202,7 +4313,7 @@ fn analyze_functions_bytes_with_stats_and_seeds(
 ) -> (Vec<Function>, CallGraph, FunctionDiscoveryStats) {
     // Started before ANY work, including `parse_exec_regions`: a budget that only
     // begins once the expensive part is under way is not a budget.
-    analyze_functions_bytes_within(data, budgets, requested_vas, Deadline::start(budgets))
+    analyze_functions_bytes_within(data, budgets, requested_vas, Deadline::start(budgets), None)
 }
 
 /// Whole-binary discovery, stopped by an EXTERNAL cancellation flag as well as by
@@ -4224,6 +4335,7 @@ pub fn analyze_functions_bytes_cancellable(
         budgets,
         requested_vas,
         Deadline::start(budgets).with_cancel(cancel),
+        None,
     )
 }
 
@@ -4232,8 +4344,10 @@ fn analyze_functions_bytes_within(
     budgets: &Budgets,
     requested_vas: &[u64],
     deadline: Deadline<'_>,
+    image: Option<&crate::program::image::ProgramImage>,
 ) -> (Vec<Function>, CallGraph, FunctionDiscoveryStats) {
-    let (regions, arch, end, entry) = parse_exec_regions(data);
+    let (regions, arch, end, entry) =
+        image.map_or_else(|| parse_exec_regions(data), parse_exec_regions_in);
     let mut functions: Vec<Function> = Vec::new();
     let mut cg = CallGraph::new();
     let mut stats = FunctionDiscoveryStats {
@@ -4538,12 +4652,12 @@ fn analyze_functions_bytes_within(
     // Alpine's `busybox`, whose `.eh_frame` is four bytes long. Discovery recall
     // against the full DWARF function set was 0.514 with `.eh_frame` alone.
     prologue_starts.extend(scan_within(deadline, &mut stats, || {
-        scan_elf_prologue_function_starts(data, &regions, arch)
+        scan_elf_prologue_function_starts(image, data, &regions, arch)
     }));
     // AArch64 ELF PAC prologues recover functions on stripped hardened binaries
     // (Pixel device .so files) where the PE-specific scan does not apply.
     prologue_starts.extend(scan_within(deadline, &mut stats, || {
-        scan_aarch64_prologue_function_starts(data, &regions, arch)
+        scan_aarch64_prologue_function_starts(image, data, &regions, arch)
     }));
     stats.prologue_scan_candidates = prologue_starts.len();
     for va in prologue_starts {
@@ -4769,6 +4883,7 @@ fn analyze_functions_bytes_within(
     // by a positive `max_functions` while still propagating xrefs to a
     // fixed point. `max_functions == 0` means no function-count cap.
     let discovery_facts = DiscoveryFacts {
+        image,
         tables: &jump_table_index,
         noreturn_targets: &noreturn_targets,
         owned_ranges: None,
@@ -6607,6 +6722,7 @@ mod degenerate_block_tests {
         let tables = std::collections::BTreeMap::new();
         let noreturn_targets = std::collections::HashSet::new();
         let facts = DiscoveryFacts {
+            image: None,
             tables: &tables,
             noreturn_targets: &noreturn_targets,
             owned_ranges: None,
@@ -6714,7 +6830,7 @@ mod elf_prologue_scan_tests {
         }
         let data = std::fs::read(&path).expect("read fixture");
         let (regions, arch, _, _) = parse_exec_regions(&data);
-        let starts = scan_elf_prologue_function_starts(&data, &regions, arch);
+        let starts = scan_elf_prologue_function_starts(None, &data, &regions, arch);
         assert!(
             !starts.is_empty(),
             "no prologue candidates on a real unstripped C++ binary"
@@ -6736,7 +6852,8 @@ mod elf_prologue_scan_tests {
             _file_off_start: 0,
         }];
         assert!(
-            scan_elf_prologue_function_starts(b"MZ\x90\x00", &regions, BArch::X86_64).is_empty()
+            scan_elf_prologue_function_starts(None, b"MZ\x90\x00", &regions, BArch::X86_64)
+                .is_empty()
         );
     }
 }

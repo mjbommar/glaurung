@@ -133,3 +133,42 @@ def test_real_profile_is_output_transparent_and_counts_all_object_parses(report_
     assert report["runs"][0]["object_parse_count"] > 0
     assert report["functions"][0]["stage_event_count"] >= 20
     assert report["functions"][0]["stage_duration_ns"]["render_decbench"] > 0
+
+
+def test_decompile_at_reuses_one_program_image_for_address_translation(report_module):
+    binary = (
+        ROOT
+        / "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0"
+    )
+    script = (
+        "import glaurung as g; "
+        f"g.ir.decompile_at({str(binary)!r}, 0x2549, style='decbench')"
+    )
+    environment = os.environ.copy()
+    environment["GLAURUNG_PIPELINE_PROFILE"] = "1"
+    profiled = subprocess.run(
+        [str(ROOT / ".venv/bin/python"), "-c", script],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert profiled.returncode == 0, profiled.stderr
+    report = report_module.build_report(
+        report_module.parse_trace(profiled.stderr.splitlines())
+    )
+    # Object-backed analyses still parse independently while ProgramImage is
+    # introduced incrementally, but address translation must never reopen the
+    # object once per decoded instruction (3,679 parses on this fixture before
+    # the program-scoped index existed, versus 47 after this migration).
+    assert report["runs"] == [
+        {
+            "duration_ns": report["runs"][0]["duration_ns"],
+            "entry_point": "decompile_at",
+            "object_parse_count": report["runs"][0]["object_parse_count"],
+        }
+    ]
+    assert report["runs"][0]["object_parse_count"] < 100

@@ -1,0 +1,299 @@
+//! Owned binary image and immutable indices shared by one analysis session.
+
+use std::collections::HashMap;
+use std::ops::Range;
+use std::path::Path;
+use std::sync::Arc;
+
+use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol, SectionKind, SymbolKind};
+
+use crate::core::binary::{Arch, Endianness, Format};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileMapping {
+    va_start: u64,
+    va_end: u64,
+    file_start: u64,
+}
+
+impl FileMapping {
+    fn new(va_start: u64, size: u64, file_start: u64) -> Option<Self> {
+        if size == 0 {
+            return None;
+        }
+        Some(Self {
+            va_start,
+            va_end: va_start.checked_add(size)?,
+            file_start,
+        })
+    }
+
+    fn translate(self, va: u64, byte_len: usize) -> Option<usize> {
+        if va < self.va_start || va >= self.va_end {
+            return None;
+        }
+        let offset = self.file_start.checked_add(va - self.va_start)?;
+        let offset = usize::try_from(offset).ok()?;
+        (offset < byte_len).then_some(offset)
+    }
+}
+
+/// Failure to load or parse a program image.
+#[derive(Debug)]
+pub enum ProgramImageError {
+    /// The image could not be read from storage.
+    Io(std::io::Error),
+    /// The bytes are not an object format supported by the `object` crate.
+    Parse(String),
+}
+
+impl std::fmt::Display for ProgramImageError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "image read failed: {error}"),
+            Self::Parse(error) => write!(formatter, "image parse failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ProgramImageError {}
+
+impl From<std::io::Error> for ProgramImageError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+/// Immutable program bytes plus target and address indices derived by one parse.
+///
+/// `object::File` borrows its input and therefore cannot safely be stored beside
+/// an owned `Vec<u8>` without a self-referential allocation. `ProgramImage`
+/// extracts durable, owned indices during construction instead. Consumers query
+/// these indices and never reopen the object merely to translate an address.
+#[derive(Debug, Clone)]
+pub struct ProgramImage {
+    bytes: Arc<Vec<u8>>,
+    format: Format,
+    arch: Arch,
+    endianness: Endianness,
+    entry_va: u64,
+    arm_hard_float: bool,
+    segment_mappings: Arc<[FileMapping]>,
+    section_mappings: Arc<[FileMapping]>,
+    code_mappings: Arc<[FileMapping]>,
+    executable_ranges: Arc<[Range<u64>]>,
+    defined_text_symbols_by_name: Arc<HashMap<String, u64>>,
+    defined_symbols_by_va: Arc<HashMap<u64, String>>,
+}
+
+impl ProgramImage {
+    /// Read and index one image from disk.
+    pub fn from_path(path: &Path) -> Result<Self, ProgramImageError> {
+        Self::from_bytes(std::fs::read(path)?)
+    }
+
+    /// Own and index one object image without copying the supplied vector.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, ProgramImageError> {
+        let object = crate::decompile::profile::parse_object(&bytes)
+            .map_err(|error| ProgramImageError::Parse(error.to_string()))?;
+        let format = map_format(object.format());
+        let arch = map_arch(object.architecture());
+        let endianness = if object.is_little_endian() {
+            Endianness::Little
+        } else {
+            Endianness::Big
+        };
+        let entry_va = object.entry();
+        let arm_hard_float = matches!(
+            object.flags(),
+            object::FileFlags::Elf { e_flags, .. }
+                if arch == Arch::ARM && e_flags & object::elf::EF_ARM_ABI_FLOAT_HARD != 0
+        );
+
+        let mut segment_mappings = Vec::new();
+        let mut segment_ranges = Vec::new();
+        for segment in object.segments() {
+            let (file_start, file_size) = segment.file_range();
+            let file_backed_size = segment.size().min(file_size);
+            if let Some(mapping) = FileMapping::new(segment.address(), file_backed_size, file_start)
+            {
+                segment_mappings.push(mapping);
+            }
+            if segment.size() != 0 {
+                if let Some(end) = segment.address().checked_add(segment.size()) {
+                    segment_ranges.push(segment.address()..end);
+                }
+            }
+        }
+
+        let mut section_mappings = Vec::new();
+        let mut code_mappings = Vec::new();
+        let mut executable_ranges = Vec::new();
+        for section in object.sections() {
+            let address = section.address();
+            let size = section.size();
+            let name_is_code = section.name().is_ok_and(|name| {
+                let name = name.to_ascii_lowercase();
+                name.contains(".text") || name.contains("code") || name == "text"
+            });
+            let is_code = section.kind() == SectionKind::Text || name_is_code;
+            let Some((file_start, file_size)) = section.file_range() else {
+                continue;
+            };
+            if is_code && size != 0 {
+                if let Some(end) = address.checked_add(size) {
+                    executable_ranges.push(address..end);
+                }
+            }
+            let Some(mapping) = FileMapping::new(address, size.min(file_size), file_start) else {
+                continue;
+            };
+            section_mappings.push(mapping);
+            if is_code {
+                code_mappings.push(mapping);
+            }
+        }
+        if executable_ranges.is_empty() {
+            executable_ranges = segment_ranges;
+        }
+
+        let mut defined_text_symbols_by_name = HashMap::new();
+        let mut defined_symbols_by_va = HashMap::new();
+        for symbol in object.symbols().chain(object.dynamic_symbols()) {
+            if !symbol.is_definition() {
+                continue;
+            }
+            let Ok(name) = symbol.name() else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            let address = normalize_function_entry(format, arch, symbol.address());
+            defined_symbols_by_va
+                .entry(address)
+                .or_insert_with(|| name.to_string());
+            if symbol.kind() == SymbolKind::Text {
+                defined_text_symbols_by_name
+                    .entry(name.to_string())
+                    .or_insert(address);
+            }
+        }
+        drop(object);
+
+        Ok(Self {
+            bytes: Arc::new(bytes),
+            format,
+            arch,
+            endianness,
+            entry_va,
+            arm_hard_float,
+            segment_mappings: segment_mappings.into(),
+            section_mappings: section_mappings.into(),
+            code_mappings: code_mappings.into(),
+            executable_ranges: executable_ranges.into(),
+            defined_text_symbols_by_name: Arc::new(defined_text_symbols_by_name),
+            defined_symbols_by_va: Arc::new(defined_symbols_by_va),
+        })
+    }
+
+    /// Original immutable file bytes.
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+
+    /// Parsed object format.
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
+    /// Parsed instruction-set architecture.
+    pub fn arch(&self) -> Arch {
+        self.arch
+    }
+
+    /// Parsed byte order.
+    pub fn endianness(&self) -> Endianness {
+        self.endianness
+    }
+
+    /// Object-declared program entry virtual address.
+    pub fn entry_va(&self) -> u64 {
+        self.entry_va
+    }
+
+    /// Whether an ARM ELF advertises the AAPCS hard-float calling convention.
+    pub fn arm_hard_float(&self) -> bool {
+        self.arm_hard_float
+    }
+
+    /// Normalize an external function symbol value to its instruction address.
+    pub fn normalize_function_entry(&self, va: u64) -> u64 {
+        normalize_function_entry(self.format, self.arch, va)
+    }
+
+    /// Look up the first defined text symbol with `name`.
+    pub fn defined_text_symbol_address(&self, name: &str) -> Option<u64> {
+        self.defined_text_symbols_by_name.get(name).copied()
+    }
+
+    /// Look up the first defined symbol naming an exact code address.
+    pub fn defined_symbol_name_at(&self, va: u64) -> Option<&str> {
+        self.defined_symbols_by_va.get(&va).map(String::as_str)
+    }
+
+    /// Executable section ranges in object order.
+    pub fn executable_ranges(&self) -> impl Iterator<Item = &Range<u64>> {
+        self.executable_ranges.iter()
+    }
+
+    /// Translate a code VA, preferring executable sections for relocatable files.
+    pub fn va_to_code_file_offset(&self, va: u64) -> Option<usize> {
+        self.code_mappings
+            .iter()
+            .find_map(|mapping| mapping.translate(va, self.bytes.len()))
+            .or_else(|| self.va_to_file_offset(va))
+    }
+
+    /// Translate an arbitrary mapped, file-backed VA to its byte offset.
+    pub fn va_to_file_offset(&self, va: u64) -> Option<usize> {
+        self.segment_mappings
+            .iter()
+            .chain(self.section_mappings.iter())
+            .find_map(|mapping| mapping.translate(va, self.bytes.len()))
+    }
+}
+
+fn normalize_function_entry(format: Format, arch: Arch, va: u64) -> u64 {
+    if format == Format::ELF && arch == Arch::ARM {
+        va & !1
+    } else {
+        va
+    }
+}
+
+fn map_format(format: object::BinaryFormat) -> Format {
+    match format {
+        object::BinaryFormat::Elf => Format::ELF,
+        object::BinaryFormat::Coff => Format::COFF,
+        object::BinaryFormat::Pe => Format::PE,
+        object::BinaryFormat::MachO => Format::MachO,
+        _ => Format::Unknown,
+    }
+}
+
+fn map_arch(arch: object::Architecture) -> Arch {
+    match arch {
+        object::Architecture::I386 => Arch::X86,
+        object::Architecture::X86_64 => Arch::X86_64,
+        object::Architecture::Arm => Arch::ARM,
+        object::Architecture::Aarch64 => Arch::AArch64,
+        object::Architecture::Mips => Arch::MIPS,
+        object::Architecture::Mips64 => Arch::MIPS64,
+        object::Architecture::PowerPc => Arch::PPC,
+        object::Architecture::PowerPc64 => Arch::PPC64,
+        object::Architecture::Riscv32 => Arch::RISCV,
+        object::Architecture::Riscv64 => Arch::RISCV64,
+        _ => Arch::Unknown,
+    }
+}

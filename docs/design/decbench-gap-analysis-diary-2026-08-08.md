@@ -596,3 +596,55 @@ already documented above (the riscv64, armhf, arm64, and exported-riscv64
 `suspicious_win-*` binaries contain none of the APIs the test requires, including
 under its raw-byte fallback). No new failure appeared. The focused canary suite is
 4/4 green, and the combined ledger/health/profile/canary suite is 26/26 green.
+
+## 00:20–00:50 — Phase 1 increment: one indexed program image
+
+I introduced `ProgramImage` as an owned, immutable base-image index and routed
+the CFG, targeted-callee, lifter, and four Python decompilation entry points
+through it. The image owns the input bytes and records format, architecture,
+endianness, entry address, ARM hard-float metadata, file-backed segment and
+section mappings, executable ranges, and defined-symbol indices after one base
+parse. Existing byte-oriented Rust APIs remain compatibility adapters; new image
+APIs let one caller carry those facts through discovery and lifting without
+reopening the object for every address translation.
+
+The first implementation deliberately stops short of claiming a complete
+`ProgramSession`. Relocation, read-only-range, debug-handle, environment, and
+analysis-cache ownership still live in their existing modules, and 47 secondary
+object parses remain on the measured x86-64 query. The remaining calls are now
+bounded analysis consumers rather than the former instruction-proportional
+address mapper. `ProgramSession`, typed partial artifacts, a shared engine, and
+the direct-object-parse dependency gate remain Phase 1 work.
+
+The real `hello-gcc-O0:main` regression went RED against the old extension at
+3,679 parses. After the migration it records 47 parses per query, a 98.7%
+reduction. Against the clean same-host baseline, cold decompilation moved from
+289.3 ms to 273.8 ms (5.3% faster), and the three-run warm median moved from
+98.8 ms to 82.5 ms (16.5% faster). Cold/warm maximum RSS is 88.3/87.8 MiB,
+effectively unchanged. Every run retained output SHA-256
+`edf693bfb1168a2b70f73cffa662437c49b9d14c6d3576d6c54390d89b22c014`.
+
+The complete same-host five-shape rerun improved every measured cold and warm
+time while preserving one output hash per case:
+
+| Case | Cold before/after | Warm before/after | Parses before/after |
+|---|---:|---:|---:|
+| small x86-64 | 289.3 / 273.8 ms | 98.8 / 82.5 ms | 3,679 / 47 |
+| stripped x86-64 | 1,049.8 / 992.5 ms | 946.5 / 801.1 ms | 16,225 / 55 |
+| large stripped x86-64 | 901.2 / 842.4 ms | 707.7 / 638.1 ms | 18,252 / 33 |
+| ARM32 | 17.5 / 17.3 ms | 16.5 / 16.2 ms | 188 / 32 |
+| debug-heavy Rust | 1,395.3 / 1,298.4 ms | 1,205.4 / 1,089.4 ms | 22,873 / 22 |
+
+The reductions range from 1.3–6.9% cold and 2.0–16.5% warm. This is not yet the
+promised reusable-session speedup: compatibility calls still construct a fresh
+image, so warm runs save initialization but repeat image and analysis work.
+
+Eight Rust tests cover malformed input, checked address arithmetic, real ELF,
+PE, ARM32/Thumb and hard-float metadata, legacy address parity, CFG parity, and
+LLIR parity. The exact eleven-function output-canary gate passed without a
+baseline refresh. All 1,888 Rust library tests and every Rust integration test
+passed; all eight focused Python profile/harness/canary tests passed. Focused
+Ruff formatting and lint are clean through the repository's `uvx` tool path.
+Targeted `ty` remains non-green only on its three existing missing-attribute
+diagnostics for `pytest.fixture`, `pytest.mark`, and `pytest.raises`; it reports
+no diagnostic in the new test body.

@@ -17,6 +17,17 @@ pub struct EntryInfo {
     pub file_offset: Option<usize>,
 }
 
+/// Return entry metadata already indexed by a program-scoped image.
+pub fn detect_entry_in(image: &crate::program::image::ProgramImage) -> Option<EntryInfo> {
+    Some(EntryInfo {
+        format: image.format(),
+        arch: image.arch(),
+        endianness: image.endianness(),
+        entry_va: image.entry_va(),
+        file_offset: image.va_to_file_offset(image.entry_va()),
+    })
+}
+
 /// Detect the entrypoint VA and map it to a file offset when possible.
 pub fn detect_entry(data: &[u8]) -> Option<EntryInfo> {
     use object::read::Object;
@@ -121,6 +132,14 @@ pub fn va_to_code_file_offset(data: &[u8], va: u64) -> Option<usize> {
     va_to_file_offset(data, va)
 }
 
+/// Translate a code address through an already parsed program image.
+pub fn va_to_code_file_offset_in(
+    image: &crate::program::image::ProgramImage,
+    va: u64,
+) -> Option<usize> {
+    image.va_to_code_file_offset(va)
+}
+
 /// Map an arbitrary virtual address to a file offset using segments, then sections.
 /// Returns Some(file_offset) if the VA is within a mapped file-backed region; otherwise None.
 ///
@@ -162,6 +181,11 @@ pub fn va_to_file_offset(data: &[u8], va: u64) -> Option<usize> {
         }
     }
     None
+}
+
+/// Translate an arbitrary address through an already parsed program image.
+pub fn va_to_file_offset_in(image: &crate::program::image::ProgramImage, va: u64) -> Option<usize> {
+    image.va_to_file_offset(va)
 }
 
 #[cfg(test)]
