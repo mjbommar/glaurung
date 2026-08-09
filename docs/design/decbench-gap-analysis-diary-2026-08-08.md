@@ -1,12 +1,12 @@
 # Glaurung DecBench gap-analysis diary — 2026-08-08
 
-**Status:** original pinned evidence complete; fresh `45b233cf` replay in progress
+**Status:** original pinned evidence complete; fresh baseline/current replay complete
 
 **Companion plan:** [decbench-remediation-roadmap-2026-08-08.md](decbench-remediation-roadmap-2026-08-08.md)
 
 **Glaurung:** `c1cfdc97fdf51a5028aff5f7507033d70d16ad42`
 
-**Current replay candidate:** `45b233cf818ad07454bf87a1feedd7b2af90a75d`
+**Current replay candidate:** `9c25fcb860fb433b59bb24b3f880e8ae3a38a972`
 
 **DecBench main:** `0a4e85bc8a0a1ff5246f6299697f59d30634fcaf`
 
@@ -90,6 +90,10 @@ This creates two reporting rules:
   is recomputed under the same metric revision.
 
 ## 16:05–16:40 — projected scoreboard
+
+This section records the original `c1cfdc97` projection. It is retained as diary
+history, but its 59-GED/67-Union result is superseded by the fresh `9c25fcb`
+replay in “03:00–03:45 — authoritative GED, union, and live-board placement.”
 
 The scoreboard's headline is the percentage of evaluated functions perfect on at
 least one metric. It is not the mean of the three metrics and it rewards exact
@@ -770,3 +774,171 @@ The rebuilt-modern diagnostic lane completed independently with 224 binaries and
 new builds. Its initial 27.8% union is explicitly provisional because finalization
 reported all three corrected overlay files missing. Re-evaluation, not the inline
 checkpoint columns, is the required evidence for that lane.
+
+## 02:00–02:25 — current-revision kit and corrected metric controls
+
+The section-index and ARM-input increment was committed and pushed as
+`9c25fcb860fb433b59bb24b3f880e8ae3a38a972`. Local HEAD, the tracking ref, and
+the live remote ref matched exactly. Its final gates were 1,895/1,895 Rust
+library tests plus every integration target and doc test, 18 focused Python
+tests, all 11 output canaries, `cargo fmt --check`, and `git diff --check`.
+
+Because `9c25fcb` advanced the implementation while the fresh `45b233cf`
+baseline was scoring, I built a second blinded submission instead of presenting
+the baseline as current. A clean DecBench export attempt failed because the host
+`strip` could not recognize the ARM cleanflight input. The fallback did not
+substitute or restrip binaries: it copied the already-verified blinded kit while
+excluding every generated result, log, diagnostic, cache, and package. All 224
+binary hashes and the `functions.json` hash match the baseline kit, the result
+directory began empty, and both live driver contract tests passed.
+
+The full current extraction returned exactly 250/250 functions from 224/224
+binaries in 228 seconds with zero errors. `package.py` independently accepted
+the package; its SHA-256 is
+`ac6e092cbfb74cd61177d1a402d424bce6ac057401f8e9b45dd92f0018f79700`.
+Only five of the 224 emitted C artifacts differ from `45b233cf`, all ARM32:
+cleanflight O0 and O2-noinline, betaflight O0 and O2, and RIOT-OS O0. The other
+219 artifacts are byte-identical.
+
+The corrected type and byte overlays were run independently for both revisions
+on separate copies of the frozen 250-function ground-truth tree:
+
+| Metric | Coverage | `45b233cf` | `9c25fcb` | Per-function delta |
+|---|---:|---:|---:|---:|
+| type-match mean | 235 measurable | 0.17399256 | 0.17399256 | 0/235 changed |
+| type-match median | 235 measurable | 0.01282051 | 0.01282051 | 0/235 changed |
+| byte-match mean | 250 | 0.23761268 | 0.23761268 | 0/250 changed |
+| byte-match median | 250 | 0.20578221 | 0.20578221 | 0/250 changed |
+| recompiles | 250 | 208 (83.2%) | 208 (83.2%) | 0/250 changed |
+
+Type-match has 13 perfect rows and 117 zero rows; byte-match has 7 exact rows
+and 66 zero rows. This proves the ARM repair is score-neutral on the two
+completed official metrics: it removes unsupported inputs without buying a
+metric win or introducing an emission regression.
+
+The aggregate hides a useful architectural split. Type-match averages 0.1953
+on 151 x86-64 rows, 0.1455 on 76 ARM32 rows, and 0.0417 on eight PE32 rows.
+Optimization is an even stronger separator: O0 averages 0.3131, O2-noinline
+0.0955, and O2 0.0764. By contrast, ARM32 is the strongest byte-match group:
+0.2714 mean with 82/84 recompiling, versus x86-64 at 0.2214 with 118/158
+recompiling. The evidence does not support treating ARM lifting or emission as
+the single dominant problem. ARM/PE types and optimized cross-function type
+evidence are the sharper boundary: exactly the territory owned by program-level
+prototypes, reaching definitions, stack objects, and aggregate recovery.
+
+The byte overlay required an additional reliability control. Its resumable
+driver treats a checkpoint filename as sufficient and does not compare its
+mtime or input content, unlike the GED driver. A cloned score tree initially
+reported zero pending tasks and silently reused the `45b233cf` byte results.
+That output was rejected. Re-running all 224 tasks in a revision-specific
+checkpoint directory produced the accepted `9c25fcb` figures above. Any future
+benchmark automation must make metric caches content-addressed by the emitted C,
+binary, metric version, and toolchain; a revision label alone is insufficient.
+
+The first all-source corrected GED attempt was stopped and is not accepted as a
+result. Source-CFG extraction covered 3,747 preprocessed translation units and
+wrote project caches only after the whole extraction stage, so an interrupted
+run lost its in-memory partial progress. The completed target-aware replay below
+supersedes this in-progress note.
+
+A read-only ownership walk quantified the avoidable work. Using the frozen
+manifest plus each selected binary's `DW_AT_decl_file`, 242/250 target functions
+resolve to only 188 unique `(project, source file)` owners. The eight unresolved
+targets are confined to dexter, mydoom, and x0r-usb; scanning every O0
+preprocessed unit in those three fallback projects adds only 19 files. A
+target-aware source-CFG plan therefore appeared to need at most 207 candidate
+units instead of 3,747. The executed coverage-checked plan required 454 units;
+the completed measurements and why the bound expanded are recorded next.
+
+## 03:00–03:45 — authoritative GED, union, and live-board placement
+
+The corrected GED replay is complete for both the `45b233cf` baseline and the
+current `9c25fcb` candidate. The source-cache builder changed only source-unit
+selection: it called the same `extract_cfgs_from_source` parser as DecBench and
+the final metric run used the unmodified `scripts/reeval_ged.py` scorer. No
+Glaurung result checkpoint was shared between revisions.
+
+The cache build resolved 242/250 manifest functions through binary DWARF. Its
+first pass selected 223/3,794 preprocessed units. A manifest-level CFG coverage
+check then rejected three under-selected projects and conservatively expanded
+all units for coreutils, libopencm3, and RIOT-OS. The accepted cache contains 454
+translation units, an 88.0% reduction from an all-source pass. Five source CFGs
+remain explicitly unavailable even after fallback:
+
+- `coreutils:compare_files`;
+- `libopencm3:__swrite`;
+- `riot-os:__swrite`; and
+- `u-boot:fs_ls_generic` plus `u-boot:mmc_send_ext_csd`, whose project has no O0
+  source tree in this materialization.
+
+The unchanged scorer started from zero GED checkpoints for each revision and
+processed all 224/224 binary slices. Both revisions produced exactly the same
+243 function results and the same value for every function:
+
+| GED result | `45b233cf` | `9c25fcb` | Delta |
+|---|---:|---:|---:|
+| measured | 243 | 243 | 0 |
+| perfect | 60 | 60 | 0 |
+| perfect rate | 24.69% | 24.69% | 0 |
+| mean edit distance | 23.7942 | 23.7942 | 0 |
+| median edit distance | 10.0 | 10.0 | 0 |
+
+The two additional unmeasured rows beyond the five source misses are
+decompiled-C CFG parse misses: `cleanflight:serialWrite` and
+`freertos:Default_Handler`. They are absent rather than assigned favorable
+values. The five changed ARM artifacts in `9c25fcb` therefore have no structural
+score effect, which is consistent with a prototype-evidence correction that does
+not change control flow.
+
+Directly joining the three fresh, revision-specific overlays on the frozen
+manifest gives the current result:
+
+| Metric | Perfect | Measured | Perfect rate | Mean | Median |
+|---|---:|---:|---:|---:|---:|
+| GED distance, lower is better | 60 | 243 | 24.69% | 23.7942 | 10.0 |
+| type-match score, higher is better | 13 | 235 | 5.53% | 0.17399 | 0.01282 |
+| byte-match score, higher is better | 7 | 250 | 2.80% | 0.23761 | 0.20578 |
+| union | 69 | 250 | 27.60% | — | — |
+
+The union is independently reproducible from the exact-win sets: GED contributes
+60, type contributes 13, and byte contributes seven; GED/type overlap on five,
+GED/byte overlap on five, and type/byte overlap on one, with no triple overlap.
+`serialWrite` is the single byte-only win. Raw byte checkpoints contain all 250
+functions and 208 recompilable outputs (83.2%). The derived function-data layer
+drops the non-perfect `freertos:Default_Handler` byte row, so its 249-row compile
+rate must not replace the complete raw-overlay denominator.
+
+Against the live `sample-set|0` aggregate generated at
+`2026-08-09T03:22:00.811118`, adding Glaurung produces this Union ordering:
+
+| Projected rank | Decompiler | Union perfect | Denominator | Rate |
+|---:|---|---:|---:|---:|
+| 1 | Codex | 143 | 250 | 57.2% |
+| 2 | Claude Code | 141 | 250 | 56.4% |
+| 3 | angr | 71 | 250 | 28.4% |
+| 3 | IDA | 71 | 250 | 28.4% |
+| 5 | Kuna | 70 | 250 | 28.0% |
+| **6** | **Glaurung** | **69** | **250** | **27.6%** |
+| 7 | Binary Ninja | 63 | 250 | 25.2% |
+| 8 | Ghidra | 58 | 250 | 23.2% |
+
+Thus Glaurung is one exact function behind Kuna, two behind angr/IDA, six
+functions/2.4 points ahead of Binary Ninja, and 11 functions/4.4 points ahead of
+Ghidra on the actual headline definition. It would rank sixth overall and fourth
+among traditional
+decompilers. This remains a projection until PR #56 is accepted and the
+maintainer publishes Glaurung; Glaurung is not yet a live scoreboard row.
+
+Canonical finalization exposed two DecBench integration caveats rather than a
+metric uncertainty. `finalize_results.py --audit` reports zero `SILENT-DROP`
+findings after the write and five explicit GED `OVERLAY-GAP`s corresponding to
+the source misses above. Direct inspection confirms those five published rows
+contain type/byte values but no stale GED value. However, this evaluator branch
+does not repopulate `FunctionData.metrics`/`perfect_values` from external
+overlays, so its generated
+`scoreboard.toml` has an empty metric registry even though
+`function_results.json` holds the values. It also omits the one byte row named
+above. The 69/250 result therefore comes from the primary overlay artifacts, not
+that malformed derived TOML. Those publisher defects must be fixed in the
+submission integration before an upstream render; they do not alter the joined
+perfect sets or the Glaurung baseline/current equality.

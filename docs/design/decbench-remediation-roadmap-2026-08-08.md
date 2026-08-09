@@ -3,8 +3,11 @@
 **Status:** proposed, ranked execution plan
 
 **Evidence:** [decbench-gap-analysis-diary-2026-08-08.md](decbench-gap-analysis-diary-2026-08-08.md)
-**Baseline:** Glaurung `c1cfdc97`, DecBench main `0a4e85b`, dataset `0a2d996`,
-with ARM `byte_match` recomputed using pending DecBench PR #61
+**Historical evidence baseline:** Glaurung `c1cfdc97`, DecBench main `0a4e85b`,
+dataset `0a2d996`, with ARM `byte_match` recomputed using pending DecBench PR #61
+
+**Current planning baseline:** Glaurung `9c25fcb`, frozen 250-function replay,
+all three corrected metric overlays recomputed from revision-specific artifacts
 
 ## Outcome
 
@@ -37,17 +40,19 @@ is deleted rather than wrapped forever.
 
 | Measure | Baseline | First competitive target | Long target |
 |---|---:|---:|---:|
-| union perfect | 67 / 250, 26.8% | at least 75 / 250, 30% | at least 82 / 250, 32.8% |
-| GED mean | 32.46 | at most 25.6 | at most 20.0 |
-| O2-noinline GED mean | 52.41 | at most 40 | at most 30 |
+| union perfect | 69 / 250, 27.6% | at least 75 / 250, 30% | at least 82 / 250, 32.8% |
+| GED mean | 23.79 | at most 20 | at most 15 |
+| O2-noinline GED mean | 34.61 | at most 28 | at most 22 |
 | type mean | 0.174 | at least 0.231 | at least 0.30 |
 | type perfect | 13 / 235 | at least 20 / scored | at least 30 / scored |
 | byte mean, corrected metric | 0.238 | at least 0.30 | at least 0.40 |
-| unique union perfects | 0 | at least 1 | sustained growth |
+| unique union perfects vs live board | not freshly recomputed | at least 1 | sustained growth |
 
 These are engineering targets, not promises to game DecBench. A score change is
-accepted only with behavioral or semantic evidence. The first union target passes
-IDA's current 29.9%; the long target reaches angr's current 32.7%.
+accepted only with behavioral or semantic evidence. On the live 2026-08-09
+sample-set snapshot, the first union target passes the current 28.4% traditional
+leaders; the long target establishes a wider margin rather than chasing a stale
+denominator.
 
 ### Performance baseline and targets
 
@@ -175,8 +180,8 @@ Acceptance:
 - the canary report names which pass first changed each output; and
 - no semantic output changes in this phase.
 
-Stop if the ledger cannot reproduce 59 GED perfects, 13 type perfects, seven
-corrected byte perfects, and 67 union perfects from the pinned inputs.
+Stop if the current replay cannot reproduce 60 GED perfects, 13 type perfects,
+seven corrected byte perfects, and 69 union perfects from the pinned inputs.
 
 ### Implementation status — 2026-08-08
 
@@ -192,8 +197,13 @@ corrected byte perfects, and 67 union perfects from the pinned inputs.
   baselines across small, large, ARM32, debug-heavy, and stripped cases.
 - [x] Metric implementation revision and source hash in every ledger.
 
-The checked-in score baseline reproduces the four required headline counts and has
-byte-identical output across reordered or repeated inputs. Phase 0 is complete.
+The historical checked-in score baseline reproduces its original four headline
+counts and has byte-identical output across reordered or repeated inputs. The
+fresh `9c25fcb` external replay supersedes its planning numbers with 60 GED, 13
+type, seven byte, and 69 union perfects. Refreshing the checked-in ledger/canary
+material to that candidate is now the remaining Phase-0 publication task; do not
+call the old 59/67 fixture the current score. The other Phase-0 mechanisms are
+complete.
 The focused canary gate pins input/compiler provenance, output identity, and final
 health for all seven named cases and reports exact function/field deltas. The health trace
 now covers every requested AST/CFG counter, names final definition violations,
@@ -279,6 +289,31 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   four parameters to one but leaves its second source argument unknown and its
   type score at zero; treating every untouched call register as an argument is
   explicitly rejected as unsound.
+- [ ] Turn the 29 official functions exactly one type edit from perfection into
+  a typed defect corpus, grouped by missing evidence owner rather than project
+  name. Prioritize fixes that close a repeated invariant cluster (prototype,
+  stack coordinate, aggregate extent, or definedness) and reject one-function
+  signature patches; this cohort is the shortest path to verified perfect-rate
+  movement without scoreboard overfitting.
+- [ ] Make every evaluation cache key include the decompiled artifact digest,
+  binary digest, metric version, and toolchain identity. The byte re-evaluator
+  currently reuses any same-named checkpoint even after the C changes; the
+  `9c25fcb` replay had to use a fresh revision-specific checkpoint directory to
+  prevent silent reuse of `45b233cf` results. GED source extraction also needs
+  per-translation-unit durable checkpoints rather than an all-or-nothing
+  project write after 3,747 files. For manifest-scoped runs, use
+  `DW_AT_decl_file`, but validate target CFG presence before accepting the
+  selection. The owner-only estimate was 207 units; the completed conservative
+  run expanded three under-covered projects and required 454/3,794 units, still
+  an 88.0% reduction. The executed coverage check, not the estimate, is the
+  planning baseline.
+- [ ] Make external-overlay finalization populate `FunctionData.metrics` and
+  `perfect_values`, retain every manifest metric row, and fail if the derived
+  scoreboard is empty while overlay values exist. The completed `9c25fcb` replay
+  found 250 raw byte rows but only 249 derived rows (`freertos:Default_Handler`
+  was omitted), and generated an empty-metric `scoreboard.toml`; direct overlay
+  joining remains the authoritative 69/250 result until this publisher seam is
+  repaired upstream.
 - [ ] Move relocation, read-only-range, debug, environment, and remaining
   object-backed facts behind the image/session boundary and reach one base parse.
 - [ ] Add `ProgramSession`, shared discovery/fact caches, and reusable Python
@@ -419,9 +454,10 @@ Acceptance:
   uncertainty, never 24 inferred parameters;
 - `statdb_write` is correctly `void` and preserves terminal control;
 - type mean reaches at least `0.231` with no canary regression;
-- GED mean reaches at most `28` in the first increment and `25.6` before phase
+- GED mean reaches at most `20` in the first increment and `15` before phase
   closure;
-- O2-noinline GED mean falls below `40`;
+- O2-noinline GED mean falls below `28` in the first increment and `22` before
+  phase closure;
 - union reaches at least 30%; and
 - `yyparse`/other 250+ node functions show bounded declaration/output growth and
   zero missing/invented CFG edges, even if goto-heavy.
