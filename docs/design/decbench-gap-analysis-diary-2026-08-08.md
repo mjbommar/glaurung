@@ -1,0 +1,421 @@
+# Glaurung DecBench gap-analysis diary — 2026-08-08
+
+**Status:** evidence complete for the pinned submission candidate
+
+**Companion plan:** [decbench-remediation-roadmap-2026-08-08.md](decbench-remediation-roadmap-2026-08-08.md)
+
+**Glaurung:** `c1cfdc97fdf51a5028aff5f7507033d70d16ad42`
+
+**DecBench main:** `0a4e85bc8a0a1ff5246f6299697f59d30634fcaf`
+
+**DecBench ARM correction:** PR [Noelo-Lab/decbench#61](https://github.com/Noelo-Lab/decbench/pull/61), commit `cc680f886bbe5cf6791a86b146bbeb5dc0547134`
+**Dataset:** `0a2d996de2e85452c457af3cc52d8c4b0d376944`
+
+This is an evidence log, not a claim that Glaurung is already present on the
+public scoreboard. PR [Noelo-Lab/decbench#56](https://github.com/Noelo-Lab/decbench/pull/56)
+is the submission and remains maintainer-controlled. The ranks below are
+projections obtained by adding the fresh Glaurung results to the pinned official
+function-results snapshot. PR #61 must also be merged and the full board
+recomputed before ARM `byte_match` comparisons are final.
+
+## Review questions
+
+The review was organized around five requested epics and three engineering goals:
+
+1. a program-level symbol and type environment;
+2. contextual symbolization of constant operands, not only calls;
+3. aggregate and structure recovery;
+4. an architecture-parametric machine model, using ARM32 as the stress case;
+5. a sound definedness and reaching-definitions oracle;
+6. better ownership, composition, and DRY code;
+7. fewer mixed-responsibility thousand-line files; and
+8. better performance, safety, and reliability.
+
+## 15:10–15:35 — repository and artifact boundary
+
+The primary checkout was dirty and behind the current remote. All review work was
+therefore performed in the isolated worktree
+`/tmp/glaurung-decbench-c1cfdc9`, branched as
+`codex/decbench-gap-roadmap-20260808` from current `origin/master`.
+
+The fresh external run covered all 224 binaries and 250 selected functions. Its
+raw package is `glaurung-c1cfdc97-results.zip`, SHA-256
+`a2c5d731b532373315e16bbcd0458d4a5a2612780550120466569f7b46a24d38`.
+All invocations returned successfully and the package was deterministic.
+
+The raw execution profile was:
+
+| Measurement | Result |
+|---|---:|
+| wall time, 12 workers | 64.04 s |
+| per-binary mean | 3.37 s |
+| per-binary median | 2.82 s |
+| per-binary p95 | 5.10 s |
+| slowest binary | 18.77 s |
+| failed invocations | 0 / 224 |
+| returned functions | 250 / 250 |
+
+This is an end-to-end CLI profile, not a microbenchmark. It includes process
+startup and repeated program setup, which is precisely why a reusable program
+session is a performance priority.
+
+## 15:35–16:05 — metric soundness correction
+
+DecBench main still decoded ARM functions without honoring the Thumb-state bit in
+the ELF function symbol. PR #61 corrects original and relocatable-object byte
+extraction, chooses A32 versus Thumb from the authoritative symbol, and increments
+the metric cache version. Contrary to an earlier diagnosis, DecBench does not
+award a free perfect score when both disassemblies are empty; it falls back to raw
+bytes. The concrete bug is mode/address handling.
+
+I reran `byte_match` against the same stored Glaurung output using PR #61 rather
+than carrying forward the main-branch numbers:
+
+```text
+decbench evaluate-tree fresh-materialized \
+  --metric byte_match --decompiler glaurung --workers 12
+```
+
+The correction changed Glaurung's byte mean from `0.1845` to `0.2376`, the median
+from `0.1305` to `0.2058`, perfects from 6 to 7, and zeros from 84 to 66. It also
+removed one old byte-only union perfect; all seven corrected byte perfects overlap
+a GED or type perfect. The corrected union is therefore 67, not 68.
+
+This creates two reporting rules:
+
+- use the PR #61 Glaurung byte results for diagnosis;
+- do not treat byte head-to-head ranks as final until every published decompiler
+  is recomputed under the same metric revision.
+
+## 16:05–16:40 — projected scoreboard
+
+The scoreboard's headline is the percentage of evaluated functions perfect on at
+least one metric. It is not the mean of the three metrics and it rewards exact
+hits rather than broad partial quality.
+
+| Projected rank | Decompiler | Union perfect | Evaluated | Percentage |
+|---:|---|---:|---:|---:|
+| 1 | Codex | 143 | 250 | 57.2% |
+| 2 | Claude Code | 141 | 249 | 56.6% |
+| 3 | angr | 72 | 220 | 32.7% |
+| 4 | IDA | 70 | 234 | 29.9% |
+| 5 | Kuna | 67 | 234 | 28.6% |
+| 6 | Binary Ninja | 63 | 221 | 28.5% |
+| **7** | **Glaurung** | **67** | **250** | **26.8%** |
+| 8 | Ghidra | 59 | 234 | 25.2% |
+| 9 | r2dec | 45 | 204 | 22.1% |
+| 10 | dewolf | 13 | 171 | 7.6% |
+
+Coverage denominators differ. Glaurung's 250-function denominator is complete;
+several published tools abstain on functions or metrics. Rank therefore needs to
+be read together with coverage and raw means.
+
+Glaurung's corrected metric profile is:
+
+| Metric | Perfect | Coverage | Perfect rate | Mean | Median | Zero |
+|---|---:|---:|---:|---:|---:|---:|
+| GED, lower is better | 59 | 239 | 24.69% | 32.46 | 10.0 | 59 |
+| type match | 13 | 235 | 5.53% | 0.1740 | 0.0128 | 117 |
+| byte match, PR #61 | 7 | 250 | 2.80% | 0.2376 | 0.2058 | 66 |
+| union | 67 | 250 | 26.80% | — | — | — |
+
+The headline narrowly exceeds Ghidra, but the distribution is weaker:
+
+- Glaurung's GED mean is `32.46`; Ghidra's published mean is `25.64`.
+- Glaurung's type mean is `0.174`; Ghidra's is `0.231`.
+- On the 158 shared x86-64 byte cells, Glaurung's mean is `0.221`; Ghidra's is
+  `0.311`.
+- Glaurung has no unique union-perfect function: every one of its 67 exact wins
+  is also exact for at least one published competitor.
+
+The defensible verdict is “competitive lower-middle placement with unusually
+complete coverage,” not “better decompilation than Ghidra.”
+
+## 16:40–17:10 — architecture, optimization, and corpus splits
+
+| Slice | Functions | Union perfect | GED mean | Type mean | Byte mean |
+|---|---:|---:|---:|---:|---:|
+| ARM32 ELF | 84 | 42.86% | 11.16 | 0.145 | 0.271 |
+| x86-64 ELF | 158 | 19.62% | 43.16 | 0.195 | 0.221 |
+| x86-32 PE | 8 | 0.00% | 19.38 | 0.0417 | 0.203 |
+| O0 | 100 | 41.00% | 11.16 | 0.313 | 0.276 |
+| O2 | 50 | 22.00% | 34.71 | 0.0764 | 0.255 |
+| O2-noinline | 100 | 15.00% | 52.41 | 0.0955 | 0.191 |
+
+ARM's strong union is mostly tiny CFG equality, not recovered source semantics:
+51 of 76 scored ARM functions have type score zero, while 34 of 74 have GED zero.
+The current ARM repair campaign was valuable, but it should not be mistaken for a
+complete architecture-parametric analysis model.
+
+Optimization is the more powerful predictor. O0 type mean is four times O2's,
+and O2-noinline GED mean is nearly five times O0's. The current pipeline depends
+heavily on compiler-preserved stack/register shapes and loses identity when
+register allocation, lifetime reuse, CFG transformations, and inlining-related
+shape changes become stronger.
+
+## 17:10–17:35 — the function-size cliff
+
+| Source-CFG node bin | Functions | Union perfect | GED mean | Type mean | Byte mean |
+|---|---:|---:|---:|---:|---:|---:|
+| under 10 | 36 | 83.33% | 3.17 | 0.302 | 0.445 |
+| 10–49 | 118 | 29.66% | 9.55 | 0.201 | 0.267 |
+| 50–99 | 22 | 4.55% | 24.52 | 0.102 | 0.195 |
+| 100–249 | 53 | 1.89% | 59.53 | 0.109 | 0.112 |
+| 250 or more | 21 | 0.00% | 146.25 | 0.104 | 0.0777 |
+
+This is the central empirical finding. Glaurung is already effective on tiny
+functions. Incremental opcode work can protect those wins, but it cannot close
+the scoreboard gap. The missing capability is stable value, memory, and region
+reasoning as graph size and optimization increase.
+
+Projects with no union perfect include OpenSSH, sysvinit, U-Boot, x0r-usb,
+findutils, libselinux, tar, both PE malware projects, and NuttX. GnuTLS has one
+perfect in eleven and a GED mean of `132.82`.
+
+## 17:35–18:15 — representative output traces
+
+### `gnutls:O2-noinline:certtool:yyparse`
+
+- source CFG size: 884;
+- Glaurung: GED `601`, type `0`, byte `0`;
+- best published competitor: GED `172`, type `0.30`;
+- emitted function: 525 lines with a long declaration prelude, machine flags,
+  stack aliases, and hundreds of numbered temporaries.
+
+This is not an isolated wrong branch. It is a scaling failure across value
+identity, DCE, region ownership, and source-variable construction.
+
+### `coreutils:O2-noinline:cp:copy_reg`
+
+- source CFG size: 590;
+- Glaurung: GED `106`, type `0.118`, byte `0`;
+- best published competitor: GED `26`, type `0.559`;
+- emitted signature: 24 parameters;
+- emitted function: 871 lines.
+
+The source does not have 24 independent parameters. Register live-ins and
+scratch/call lifetimes are being projected into source parameters because the
+pipeline still reconciles physical storage, SSA sidecars, names, and recovered
+types after the fact.
+
+### `libopencm3:O0:usart_irq_console:console_getc`
+
+The source is `char console_getc(int wait)`. Glaurung emits
+`unsigned int console_getc(int *arg0)`, scoring type `0`. The body compares the
+argument to zero; it does not dereference it. A later lifetime using the same
+storage has contaminated the argument's type category. This is a compact
+reproduction of the need for SSA-value-keyed type constraints and an explicit
+function-input definition.
+
+### `dpkg:O2:dpkg-statoverride:statdb_write`
+
+The source is `static void statdb_write(void)`. Glaurung emits `long
+statdb_write(void)` and ends in a synthetic `goto L_35d0` without a source-level
+return. GED is `4`, byte is `0`, while another tool reaches byte `0.976` and GED
+zero. A nearly correct CFG score can still hide a wrong function contract and
+terminal structure.
+
+### Global reference inconsistency
+
+One fresh output declares and reads `glaurung_global_d0e8`, then writes the same
+location as `*(int *)(0xd0e8)`. The raw address and named object are the same
+program fact but reach the AST through different operand shapes. This is the
+remaining core of EPIC 2: symbolization is broad over `Expr::Addr`, but it is not
+yet a contextual reference service over exact machine values and use sites.
+
+### Gate canaries
+
+The broad regression gate remains valuable because aggregate metrics can improve
+while individual semantics regress. Two known metric ratchets still need root
+causes:
+
+- `arith:gcc:O0.ged`: `0.0 -> 0.33`;
+- `recursion:gcc:O2.ged`: `149.0 -> 199.5`.
+
+Neither should be waived merely because the 250-function union moves upward.
+
+## 18:15–18:55 — current architecture trace
+
+The committed middle-architecture proposal remains directionally correct:
+Glaurung needs an authoritative typed SSA/MIR between machine LLIR and semantic
+HIR. The current code has made real progress since that proposal:
+
+- all decompilation entry points share `prepare_llir_for_lowering` and
+  `run_ast_passes` helpers;
+- calls carry explicit register effects before SSA;
+- `TypeMapV` adds SSA-value-keyed type evidence alongside the legacy map;
+- explicit return values, conditional definitions, and a bit-demand oracle now
+  exist;
+- ARM32 frame/CFA aggregate coordinates and several wide arithmetic semantics
+  are fixed;
+- indirect jumps and conditional return forms exist; and
+- DWARF stack-object bounds and aggregate typedef fields survive farther into
+  lowering.
+
+Those are substantive fixes. They also expose the remaining transitional seams.
+
+### EPIC 1 — program-level symbols and types: foundation missing
+
+There is still no `ProgramSession`, `ProgramEnv`, canonical symbol store, or
+canonical type store in the decompiler path. Each top-level operation constructs
+flat address maps, strings, readonly regions, function tables, DWARF contracts,
+and callee caches. There are 68 object parse calls in 31 Rust files.
+
+Addresses usually collapse to `HashMap<u64, String>`, losing range, kind, aliases,
+relocation addends, import/thunk relations, authority, and conflicts. Recursive
+`core::DataType`, debug-specific models, `TypeHint`, C type strings, and Python KB
+records still lack one identity and precedence model.
+
+### EPIC 2 — contextual constant references: partially delivered
+
+`name_resolve` now walks calls, assignments, stores, returns, conditions, loops,
+switches, casts, dereferences, and nested expressions. That is broader than call
+targets and should be retained.
+
+The semantic boundary is still `Expr::Addr` versus `Expr::Const`. Readonly folding,
+string folding, function tables, and some architecture idioms reinterpret those
+bits independently. Resolution has no operand/use ID, relocation provenance,
+alternative interpretation, or symbol-plus-addend fact. The same address can
+therefore render named on one path and numeric on another.
+
+### EPIC 3 — aggregate recovery: useful debug path, no unified object model
+
+DWARF/PDB-backed stack aggregates now retain bounds and fields more successfully,
+including ARM current-SP/CFA unification. But the system still lacks stable
+`ObjectId`, `TypeId`, access paths, a layout constraint solver, and semantic
+field/index HIR shared by debug-backed and inferred layouts.
+
+The benchmark sources heavily exercise field and indexed accesses. The source-CFG
+extractor itself records many unsupported field nodes, so GED is not a complete
+aggregate metric; type and byte behavior plus dedicated object-layout fixtures
+must gate this work.
+
+### EPIC 4 — architecture-parametric machine model: ARM32 remains second-class
+
+Architecture identity remains split across `core::binary::Arch`,
+`core::disassembler::Architecture`, and `ir::regview::Arch`. `regview` supports
+only x86-64 and AArch64. ARM32 has a large lifter and ABI-specific repairs but no
+shared register-view/alias contract with SSA and execution.
+
+Scattered register strings and calling-convention matches still decide widths,
+aliases, frames, and roles. ARM32 conformance requires one target model covering
+A32/Thumb mode, endian, PC semantics, GPR/VFP register banks, soft/hard-float ABI,
+stack/CFA rules, and explicit unsupported effects. The official
+[AAPCS32](https://github.com/ARM-software/abi-aa/blob/main/aapcs32/aapcs32.rst)
+is the contract, not x86-shaped generalization.
+
+### EPIC 5 — definedness/reaching definitions: improved sidecars, no sound service
+
+`BitDemandOracle` is a conservative and useful proof for demanded lanes. It is
+not a general definition oracle. `use_def` is explicitly intra-block; SSA is a
+sidecar over register storage; memory is not SSA-versioned; version-zero/live-in,
+undefined, poison, unknown effects, and explicit function input are not one
+queryable definition lattice; and `def_uses` exposes only the first output of a
+multi-output intrinsic.
+
+Several late AST passes still answer reaching-definition questions with local
+maps and backward scans. The correct home is verified CFG-based MIR with complete
+register and memory effects.
+
+## 18:55–19:15 — code ownership and size
+
+Current product-code measurements include Rust under `src/` and Python under
+`python/glaurung/`:
+
+| Scope | Files | LOC | Mean | Median | >1,000 LOC | >2,000 LOC | LOC in >1,000 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| product code | 656 | 362,707 | 552.9 | 302.0 | 73 | 21 | 47.9% |
+| top-level `src/ir` modules | 58 | 104,114 | 1,795.1 | 997.5 | 29 | — | 85.4% |
+
+Largest IR owners are `ast.rs` (16,268), `lift_x86.rs` (7,715), `call_args.rs`
+(7,060), `types_recover.rs` (5,791), `stack_locals.rs` (5,390), `structure.rs`
+(4,894), `lift_arm32.rs` (4,621), and `value_number.rs` (4,135).
+
+Since the 2026-08-05 snapshot, product code grew by about 10,500 lines and 18
+files. The mean stayed flat, but files above 1,000 lines increased from 71 to 73;
+IR files above 1,000 increased from 27 to 29. The repair campaign is adding tests
+and real capability, but local fixes are not improving composition.
+
+Moving inline tests alone is insufficient. Production prefixes remain roughly
+9,945 lines in `ast.rs`, 4,347 in `lift_x86.rs`, 3,185 in `call_args.rs`, 3,188 in
+`types_recover.rs`, 2,541 in `structure.rs`, and 2,895 in `lift_arm32.rs`.
+
+The responsibility mixtures are the real problem:
+
+- `ast.rs` owns the model, lowering, semantic cleanup, verification, multiple
+  renderers, declarations, output-specific preparation, and tests;
+- lifters mix decoder adaptation, instruction families, register semantics,
+  flags, ABI-adjacent policy, and tests;
+- `call_args.rs` mixes ABI classification, reaching evidence, call rewriting,
+  prototype policy, and rendering-facing repair;
+- `types_recover.rs` mixes evidence, lattice decisions, ABI rules, prototype
+  recovery, SSA reconciliation, and C spelling;
+- `stack_locals.rs` mixes frame analysis, object discovery, coordinate systems,
+  aggregate bounds, transformation, naming, and tests; and
+- new HIR variants require many hand-written recursive walkers.
+
+## 19:15–19:45 — primary-reference synthesis
+
+The redesign is consistent with mature decompiler and compiler architectures:
+
+- Ghidra's [P-code reference](https://ghidra.re/ghidra_docs/languages/html/pcoderef.html)
+  makes address space, offset, and exact size part of every varnode identity.
+  Constants retain precision and only acquire interpretation from operations.
+- Binary Ninja separates lifted IL, LLIL, LLIL SSA, typed MLIL/MLIL SSA, and
+  structured HLIL; its [official BNIL overview](https://docs.binary.ninja/dev/bnil-overview.html)
+  explicitly assigns variables, types, calls, and data flow to the middle layer.
+- LLVM [MemorySSA](https://llvm.org/docs/MemorySSA.html) uses explicit memory
+  definitions, uses, and phis plus a clobber walker, while deliberately trading
+  precision for speed. Glaurung should start with conservative regions rather
+  than demand perfect alias analysis before gaining sound memory versions.
+- [Retypd](https://arxiv.org/abs/1603.05495) demonstrates that machine-code type
+  recovery needs constraints, recursive types, subtyping, and polymorphism;
+  [TIE](https://users.ece.cmu.edu/~aavgerin/papers/tie-ndss-2011.pdf) derives
+  conservative types from use and control-flow evidence. Both argue against a
+  flow-insensitive last-hint-wins map keyed by physical register name.
+- Phoenix's [semantics-preserving structural analysis](https://edmcman.github.io/papers/usenix13.pdf)
+  treats preservation as an explicit property; DREAM's
+  [pattern-independent structuring](https://www.ndss-symposium.org/ndss2015/ndss-2015-programme/no-more-gotos-decompilation-using-pattern-independent-control-flow-structuring-and-semantics/)
+  shows why a growing bag of local CFG shapes does not scale. Glaurung should
+  use graph boundaries and retain honest gotos when proof fails.
+- Current [Kuna](https://github.com/Noelo-Lab/kuna/tree/82dd39a72b04d7df9b0e5ae15d58727a670e34c4)
+  organizes the engine into explicit knowledge, lift, data-flow, variable,
+  structure, and emission phases with stable program/function substrates. Its
+  large files are not a layout template, but its semantic identities and phase
+  contracts are useful comparison points.
+
+## Final findings register
+
+Ranked by expected correctness and scoreboard leverage:
+
+1. **Large optimized functions collapse.** The 0% union-perfect rate at 250+
+   nodes and O2-noinline GED mean of 52.4 dominate the gap.
+2. **Function contracts are unsoundly reconstructed.** Phantom parameters,
+   pointer/scalar contamination, and wrong void/return decisions suppress type,
+   byte, and often GED together.
+3. **There is no authoritative value/memory definition service.** Existing SSA,
+   bit demand, and local reaching maps solve subsets but cannot safely compose.
+4. **Program facts are rebuilt and flattened.** This causes inconsistent symbols,
+   duplicate work, weak interprocedural types, and non-reusable analyst knowledge.
+5. **The structurer scales by accumulated shape rules.** Shared joins, large loops,
+   switches, and unresolved transfers produce declaration and goto explosions.
+6. **ARM32 correctness improved without architectural parity.** The score proves
+   the fixes, while register/model seams show the next architecture would repeat
+   the campaign.
+7. **Aggregate recovery is metadata-specific.** There is no common object/access
+   model for debug, inference, calls, and rendering.
+8. **Contextual references remain lossy.** The same address can become a named
+   object or a raw integer depending on AST path.
+9. **The implementation is concentrating, not decomposing.** Nearly half of all
+   product LOC and 85% of IR LOC live in files above 1,000 lines.
+10. **Performance is dominated by repeated setup and rescans.** A session, shared
+    indices, pass change sets, and dependency-aware caches should precede local
+    representation tuning.
+11. **Metric-only optimization is unsafe.** GED has known parser blind spots and
+    the canary gate already found two regressions invisible in the headline.
+12. **The submitted placement is provisional.** PR #56 is not merged, PR #61 is
+    not merged, and no published competitors have been recomputed under #61.
+
+The companion roadmap converts these findings into dependency-ordered work with
+tests, metric targets, performance budgets, file-size fitness checks, and stop
+conditions.
