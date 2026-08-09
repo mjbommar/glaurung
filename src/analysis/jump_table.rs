@@ -56,7 +56,7 @@ where
         return None;
     }
 
-    let object = object::read::File::parse(data).ok()?;
+    let object = crate::decompile::profile::parse_object(data).ok()?;
     let little_endian = object.is_little_endian();
     let byte_count = entry_count.checked_mul(4)?;
     for section in object.sections() {
@@ -139,7 +139,7 @@ where
     }
     let byte_count = entry_count.checked_mul(usize::from(entry_size))?;
 
-    let object = object::read::File::parse(data).ok()?;
+    let object = crate::decompile::profile::parse_object(data).ok()?;
     let little_endian = object.is_little_endian();
     for section in object.sections() {
         let Some(section_offset) = table_va.checked_sub(section.address()) else {
@@ -239,7 +239,7 @@ pub fn discover_jump_tables<F>(data: &[u8], is_executable_va: F) -> Vec<JumpTabl
 where
     F: Fn(u64) -> bool,
 {
-    let obj = match object::read::File::parse(data) {
+    let obj = match crate::decompile::profile::parse_object(data) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };

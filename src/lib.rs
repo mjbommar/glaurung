@@ -43,6 +43,9 @@ pub mod disasm;
 /// Low-Level Intermediate Representation (Phase 2)
 pub mod ir;
 
+/// Shared decompilation pipeline and diagnostics.
+pub mod decompile;
+
 /// Binary format parsers
 pub mod formats;
 
@@ -100,7 +103,7 @@ fn symbol_address_map_py(
     let data = crate::triage::io::IOUtils::read_file_with_limit(&path, limit)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{:?}", e)))?;
     let mut out: Vec<(u64, String)> = Vec::new();
-    if let Ok(obj) = object::read::File::parse(&data[..]) {
+    if let Ok(obj) = crate::decompile::profile::parse_object(&data[..]) {
         for sym in obj.symbols() {
             if sym.is_definition() {
                 if let (Ok(name), addr) = (sym.name(), sym.address()) {

@@ -488,7 +488,7 @@ fn section_data_range(
 
 /// Build non-executable, file-backed data ranges in VA form.
 pub fn data_ranges_for_xrefs(data: &[u8]) -> Vec<(u64, u64)> {
-    let Ok(obj) = object::read::File::parse(data) else {
+    let Ok(obj) = crate::decompile::profile::parse_object(data) else {
         return Vec::new();
     };
     let pe_semantics = is_pe(data);
@@ -516,7 +516,7 @@ pub fn function_data_xrefs(
     funcs: &[Function],
     max_xrefs: usize,
 ) -> Vec<FunctionDataXref> {
-    let Ok(obj) = object::read::File::parse(data) else {
+    let Ok(obj) = crate::decompile::profile::parse_object(data) else {
         return Vec::new();
     };
     let arch = arch_from_object(&obj);
@@ -1018,7 +1018,7 @@ mod tests {
         // Build readable-data ranges from the object's sections whose names
         // suggest read-only data (.rodata, .data, .data.rel.ro).
         let mut ranges: Vec<(u64, u64)> = Vec::new();
-        if let Ok(obj) = object::read::File::parse(&data[..]) {
+        if let Ok(obj) = crate::decompile::profile::parse_object(&data[..]) {
             for s in obj.sections() {
                 let name = s.name().unwrap_or("").to_ascii_lowercase();
                 if name.contains(".rodata") || name.contains(".data") || name.contains(".bss") {

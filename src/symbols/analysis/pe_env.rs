@@ -11,7 +11,7 @@ pub struct PeEnv {
 
 pub fn analyze_pe_env(data: &[u8]) -> Option<PeEnv> {
     // Parse using object for pdb info and imports; TLS via manual read.
-    let obj = match object::read::File::parse(data) {
+    let obj = match crate::decompile::profile::parse_object(data) {
         Ok(o) => o,
         Err(_) => return None,
     };

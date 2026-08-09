@@ -130,7 +130,7 @@ pub fn map_linux_ioctl_surface(data: &[u8]) -> LinuxIoctlSurface {
 }
 
 fn map_inner(data: &[u8]) -> Option<LinuxIoctlSurface> {
-    let obj = object::read::File::parse(data).ok()?;
+    let obj = crate::decompile::profile::parse_object(data).ok()?;
     let is_aarch64 = obj.architecture() == object::Architecture::Aarch64;
 
     // Index symbols by index for relocation-target resolution, and collect the

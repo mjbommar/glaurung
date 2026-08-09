@@ -148,7 +148,7 @@ pub struct DwarfEnumVariant {
 /// an empty Vec if the binary has no DWARF or parsing fails — callers
 /// should treat this as "DWARF unavailable, fall back to symbols/heuristics."
 pub fn extract_dwarf_functions(data: &[u8]) -> Vec<DwarfFunction> {
-    let obj = match object::read::File::parse(data) {
+    let obj = match crate::decompile::profile::parse_object(data) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
@@ -665,7 +665,7 @@ fn collect_ranges(
 /// `extract_dwarf_functions`, this is best-effort — malformed CUs are
 /// silently skipped.
 pub fn extract_dwarf_types(data: &[u8]) -> Vec<DwarfType> {
-    let obj = match object::read::File::parse(data) {
+    let obj = match crate::decompile::profile::parse_object(data) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };

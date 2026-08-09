@@ -3806,7 +3806,8 @@ mod tests {
         );
 
         let data = std::fs::read(&binary).expect("read GCC output");
-        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse GCC ELF");
         let entry = object
             .dynamic_symbols()
             .find(|symbol| symbol.name().ok() == Some("vec_sum"))
@@ -3872,7 +3873,8 @@ mod tests {
         );
 
         let data = std::fs::read(&binary).expect("read output-recovery fixture");
-        let object = object::read::File::parse(data.as_slice()).expect("parse fixture ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse fixture ELF");
         let entries: HashMap<String, u64> = object
             .dynamic_symbols()
             .filter_map(|symbol| Some((symbol.name().ok()?.to_owned(), symbol.address())))
@@ -3956,7 +3958,8 @@ mod tests {
             );
 
             let data = std::fs::read(&binary).expect("read optimized fixture");
-            let object = object::read::File::parse(data.as_slice()).expect("parse fixture ELF");
+            let object = crate::decompile::profile::parse_object(data.as_slice())
+                .expect("parse fixture ELF");
             let entries: HashMap<String, u64> = object
                 .dynamic_symbols()
                 .filter_map(|symbol| Some((symbol.name().ok()?.to_owned(), symbol.address())))
@@ -4041,7 +4044,8 @@ int never_returns(void) { for (;;) {} }
         );
 
         let data = std::fs::read(&binary).expect("read no-return fixture");
-        let object = object::read::File::parse(data.as_slice()).expect("parse fixture ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse fixture ELF");
         let entries: HashMap<String, u64> = object
             .dynamic_symbols()
             .filter_map(|symbol| Some((symbol.name().ok()?.to_owned(), symbol.address())))
@@ -4382,7 +4386,8 @@ int never_returns(void) { for (;;) {} }
         );
 
         let data = std::fs::read(&binary).expect("read hard-float fixture");
-        let object = object::read::File::parse(data.as_slice()).expect("parse hard-float ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse hard-float ELF");
         let entry = object
             .symbols()
             .find(|symbol| symbol.name().ok() == Some("square"))
@@ -4471,7 +4476,8 @@ int never_returns(void) { for (;;) {} }
             );
 
             let data = std::fs::read(&binary).expect("read x86 float fixture");
-            let object = object::read::File::parse(data.as_slice()).expect("parse x86 float ELF");
+            let object = crate::decompile::profile::parse_object(data.as_slice())
+                .expect("parse x86 float ELF");
             let entry = object
                 .dynamic_symbols()
                 .find(|symbol| symbol.name().ok() == Some("square"))
@@ -4547,7 +4553,8 @@ int never_returns(void) { for (;;) {} }
         );
 
         let data = std::fs::read(&binary).expect("read GCC output");
-        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse GCC ELF");
         let entry = object
             .dynamic_symbols()
             .find(|symbol| symbol.name().ok() == Some("str_cmp"))

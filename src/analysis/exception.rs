@@ -54,7 +54,7 @@ pub struct ExceptionCallSite {
 /// metadata from an untrusted binary, so no parse failure may panic or create a
 /// guessed edge.
 pub fn extract_exception_call_sites(data: &[u8]) -> Vec<ExceptionCallSite> {
-    let object = match object::read::File::parse(data) {
+    let object = match crate::decompile::profile::parse_object(data) {
         Ok(object) => object,
         Err(_) => return Vec::new(),
     };
@@ -270,7 +270,7 @@ pub struct EhFrameFunction {
 /// C program. That is why exception recovery being wired up did not give
 /// discovery these boundaries for free.
 pub fn eh_frame_functions(data: &[u8]) -> Vec<EhFrameFunction> {
-    let Ok(object) = object::read::File::parse(data) else {
+    let Ok(object) = crate::decompile::profile::parse_object(data) else {
         return Vec::new();
     };
     let Some(eh_section) = object.section_by_name(".eh_frame") else {
@@ -895,7 +895,7 @@ mod tests {
 
         // The entry point is generated code with unwind info in every glibc
         // link, so it anchors the result to something externally checkable.
-        let obj = object::read::File::parse(&*data).expect("parse");
+        let obj = crate::decompile::profile::parse_object(&*data).expect("parse");
         let entry = obj.entry();
         assert!(
             funcs.iter().any(|f| f.start <= entry && entry < f.end),

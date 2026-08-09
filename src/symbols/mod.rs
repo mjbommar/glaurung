@@ -65,7 +65,7 @@ pub fn list_symbols_py(
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{:?}", e)))?;
 
     // Try to parse with the object crate for generic symbol extraction
-    if let Ok(obj) = object::read::File::parse(&data[..]) {
+    if let Ok(obj) = crate::decompile::profile::parse_object(&data[..]) {
         // Collect all symbols
         for sym in obj.symbols() {
             if let Ok(name) = sym.name() {

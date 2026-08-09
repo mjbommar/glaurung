@@ -43,7 +43,7 @@ const MIN_STRING_LEN: usize = 3;
 /// rodata-like sections expose. Returns an empty map on parse failure.
 pub fn collect_string_pool(data: &[u8]) -> HashMap<u64, String> {
     let mut out: HashMap<u64, String> = HashMap::new();
-    let Ok(obj) = object::read::File::parse(data) else {
+    let Ok(obj) = crate::decompile::profile::parse_object(data) else {
         return out;
     };
     for section in obj.sections() {

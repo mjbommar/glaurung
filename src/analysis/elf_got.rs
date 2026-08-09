@@ -11,7 +11,7 @@ use object::ObjectSection;
 /// Supports ELF64 RELA and ELF32 REL formats. Returns empty on failure.
 pub fn elf_got_map(data: &[u8]) -> Vec<(u64, String)> {
     let mut out: Vec<(u64, String)> = Vec::new();
-    let Ok(obj) = object::read::File::parse(data) else {
+    let Ok(obj) = crate::decompile::profile::parse_object(data) else {
         return out;
     };
     if obj.format() != object::BinaryFormat::Elf {

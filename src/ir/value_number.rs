@@ -3172,7 +3172,8 @@ mod tests {
         );
 
         let data = std::fs::read(&binary).expect("read GCC output");
-        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse GCC ELF");
         let entry = object
             .dynamic_symbols()
             .find(|symbol| symbol.name().ok() == Some("nested_carry"))
@@ -3236,7 +3237,8 @@ mod tests {
         );
 
         let data = std::fs::read(&binary).expect("read GCC output");
-        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse GCC ELF");
         let entry = object
             .dynamic_symbols()
             .find(|symbol| symbol.name().ok() == Some("call_chain_in_loop"))

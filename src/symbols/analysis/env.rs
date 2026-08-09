@@ -48,7 +48,7 @@ pub struct BinaryEnv {
 
 /// Analyze ELF environment information.
 fn analyze_elf_env(data: &[u8]) -> Option<BinaryEnv> {
-    let obj = object::read::File::parse(data).ok()?;
+    let obj = crate::decompile::profile::parse_object(data).ok()?;
 
     // Extract libraries from imports
     let mut libs = Vec::new();
@@ -80,7 +80,7 @@ fn analyze_elf_env(data: &[u8]) -> Option<BinaryEnv> {
 
 /// Analyze PE environment information.
 fn analyze_pe_env(data: &[u8]) -> Option<BinaryEnv> {
-    let obj = object::read::File::parse(data).ok()?;
+    let obj = crate::decompile::profile::parse_object(data).ok()?;
 
     // Extract libraries from imports
     let mut libs = Vec::new();
@@ -111,7 +111,7 @@ fn analyze_pe_env(data: &[u8]) -> Option<BinaryEnv> {
 
 /// Analyze Mach-O environment information.
 fn analyze_macho_env(data: &[u8]) -> Option<BinaryEnv> {
-    let obj = object::read::File::parse(data).ok()?;
+    let obj = crate::decompile::profile::parse_object(data).ok()?;
 
     // Extract libraries from imports
     let mut libs = Vec::new();

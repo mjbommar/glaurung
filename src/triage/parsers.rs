@@ -6,7 +6,7 @@ pub fn parse(data: &[u8]) -> Vec<ParserResult> {
     let mut results: Vec<ParserResult> = Vec::new();
 
     // object
-    let obj_res = match object::File::parse(data) {
+    let obj_res = match crate::decompile::profile::parse_object(data) {
         Ok(_f) => ParserResult::new(ParserKind::Object, true, None),
         Err(e) => ParserResult::new(
             ParserKind::Object,

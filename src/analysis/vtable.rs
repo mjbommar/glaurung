@@ -59,7 +59,7 @@ pub fn discover_vtables<F>(data: &[u8], is_executable_va: F) -> Vec<VtableEntry>
 where
     F: Fn(u64) -> bool,
 {
-    let obj = match object::read::File::parse(data) {
+    let obj = match crate::decompile::profile::parse_object(data) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
@@ -175,7 +175,7 @@ mod tests {
         }
         let data = std::fs::read(&path).expect("read hello-cpp-g++-O0");
 
-        let obj = object::read::File::parse(&*data).expect("parse ELF");
+        let obj = crate::decompile::profile::parse_object(&*data).expect("parse ELF");
         let exec: Vec<(u64, u64)> = obj
             .sections()
             .filter(|s| s.kind() == SectionKind::Text)

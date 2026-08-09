@@ -389,7 +389,7 @@ fn parse_exec_regions(data: &[u8]) -> (Vec<ExecRegion>, BArch, Endianness, Optio
     let mut arch = BArch::Unknown;
     let mut endian = Endianness::Little;
     let mut entry: Option<Address> = None;
-    if let Ok(obj) = object::read::File::parse(data) {
+    if let Ok(obj) = crate::decompile::profile::parse_object(data) {
         arch = match obj.architecture() {
             object::Architecture::I386 => BArch::X86,
             object::Architecture::X86_64 => BArch::X86_64,
@@ -906,7 +906,7 @@ fn elf_arm_tail_target_is_plt_stub(data: &[u8], target_va: u64, arch: BArch) -> 
     if !matches!(arch, BArch::ARM) || !data.starts_with(b"\x7fELF") {
         return false;
     }
-    let Ok(object) = object::read::File::parse(data) else {
+    let Ok(object) = crate::decompile::profile::parse_object(data) else {
         return false;
     };
     object.sections().any(|section| {
@@ -3578,7 +3578,7 @@ fn code_addr(va: u64, arch: BArch) -> u64 {
 fn parse_function_seeds(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec<Address> {
     let bits = if arch.is_64_bit() { 64 } else { 32 };
     let mut seeds: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
-    if let Ok(obj) = object::read::File::parse(data) {
+    if let Ok(obj) = crate::decompile::profile::parse_object(data) {
         // Symbols defined in executable regions. We do NOT special-case
         // addr==0: `in_exec_regions` already excludes address 0 in linked
         // binaries (where it is never executable), while keeping a genuine
@@ -4171,7 +4171,7 @@ pub(crate) fn discover_function_bytes_at(
 
     // Preserve the same exact-address symbol naming as whole-binary discovery
     // without paying for its unrelated seed work.
-    if let Ok(object) = object::read::File::parse(data) {
+    if let Ok(object) = crate::decompile::profile::parse_object(data) {
         for symbol in object.symbols().chain(object.dynamic_symbols()) {
             if !symbol.is_definition() || code_addr(symbol.address(), arch) != entry_va {
                 continue;
@@ -4908,7 +4908,7 @@ fn analyze_functions_bytes_within(
     stats.seeds_remaining = worklist.len();
 
     // Post-process: rename functions by matching defined symbol names at their entry VAs
-    if let Ok(obj) = object::read::File::parse(data) {
+    if let Ok(obj) = crate::decompile::profile::parse_object(data) {
         use object::read::ObjectSymbol;
         // Build VA->name map from defined symbols in executable regions
         let mut sym_by_va: std::collections::HashMap<u64, String> =
@@ -5890,7 +5890,8 @@ mod gcc_dispatch_corpus_tests {
         );
 
         let data = std::fs::read(&binary).expect("read Clang output");
-        let object = object::read::File::parse(data.as_slice()).expect("parse Clang ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse Clang ELF");
         let fsm = object
             .dynamic_symbols()
             .find(|symbol| symbol.name().ok() == Some("fsm"))
@@ -6061,7 +6062,8 @@ mod gcc_dispatch_corpus_tests {
         );
 
         let data = std::fs::read(&binary).expect("read GCC output");
-        let object = object::read::File::parse(data.as_slice()).expect("parse GCC ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse GCC ELF");
         let dispatch_va = object
             .dynamic_symbols()
             .find(|symbol| symbol.name().ok() == Some("dispatch"))
@@ -6300,7 +6302,8 @@ mod gcc_dispatch_corpus_tests {
         );
 
         let data = std::fs::read(&binary).expect("read Clang output");
-        let object = object::read::File::parse(data.as_slice()).expect("parse Clang ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse Clang ELF");
         let dense_va = object
             .dynamic_symbols()
             .find(|symbol| symbol.name().ok() == Some("dense_compute"))
@@ -6423,7 +6426,8 @@ mod gcc_dispatch_corpus_tests {
         );
 
         let data = std::fs::read(&binary).expect("read Clang output");
-        let object = object::read::File::parse(data.as_slice()).expect("parse Clang ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse Clang ELF");
         let dense_va = object
             .dynamic_symbols()
             .find(|symbol| symbol.name().ok() == Some("dense_compute"))
@@ -6517,7 +6521,8 @@ mod gcc_dispatch_corpus_tests {
         );
 
         let data = std::fs::read(&binary).expect("read Clang output");
-        let object = object::read::File::parse(data.as_slice()).expect("parse Clang ELF");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse Clang ELF");
         let fsm_va = object
             .dynamic_symbols()
             .find(|symbol| symbol.name().ok() == Some("fsm"))

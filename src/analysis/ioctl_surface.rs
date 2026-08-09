@@ -433,7 +433,7 @@ fn harvest_call_handlers(insns: &[Instruction], pdata_starts: &BTreeSet<u64>) ->
 
 /// Map the IOCTL attack surface of a Windows driver PE.
 pub fn map_ioctl_surface(data: &[u8], min_codes: usize, all_functions: bool) -> IoctlSurface {
-    let obj = match object::read::File::parse(data) {
+    let obj = match crate::decompile::profile::parse_object(data) {
         Ok(o) => o,
         Err(_) => return IoctlSurface::default(),
     };

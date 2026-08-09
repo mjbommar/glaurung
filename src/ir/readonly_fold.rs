@@ -37,7 +37,7 @@ pub struct ReadonlyData {
 
 /// Collect constant-data sections once per input object.
 pub fn collect_readonly_data(data: &[u8]) -> ReadonlyData {
-    let Ok(object) = object::read::File::parse(data) else {
+    let Ok(object) = crate::decompile::profile::parse_object(data) else {
         return ReadonlyData::default();
     };
     let little_endian = object.is_little_endian();

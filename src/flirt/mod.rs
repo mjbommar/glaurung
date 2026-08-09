@@ -127,7 +127,7 @@ pub fn load_default_library() -> Option<FlirtLibrary> {
 /// projection for the binary, used to map VA ↔ file offset.
 fn build_va_map(data: &[u8]) -> Vec<(u64, u64, u64)> {
     use object::{Object, ObjectSection, ObjectSegment};
-    let obj = match object::read::File::parse(data) {
+    let obj = match crate::decompile::profile::parse_object(data) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
@@ -185,7 +185,7 @@ pub fn discover_flirt_seeds(
 ) -> Vec<(u64, String)> {
     use object::{Object, ObjectSection, SectionKind};
 
-    let obj = match object::read::File::parse(data) {
+    let obj = match crate::decompile::profile::parse_object(data) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };

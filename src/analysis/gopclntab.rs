@@ -73,7 +73,7 @@ pub enum GoPclnError {
 /// Returns Ok(Vec<GoFunc>) on success — possibly empty if nfunc=0.
 /// Returns Err(GoPclnError) if the section is missing or malformed.
 pub fn extract_go_functions(data: &[u8]) -> Result<Vec<GoFunc>, GoPclnError> {
-    let obj = object::read::File::parse(data).map_err(|_| GoPclnError::NoSection)?;
+    let obj = crate::decompile::profile::parse_object(data).map_err(|_| GoPclnError::NoSection)?;
 
     // Section name varies by format. ELF: .gopclntab. Mach-O: __gopclntab.
     // PE: rdata-embedded, named runtime.pclntab — searchable via symbol.

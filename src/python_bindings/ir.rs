@@ -370,6 +370,7 @@ fn inline_soft_helper_calls_in(
 /// macro. Debugging `--all` used to produce no dump at all.
 fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
+    profiler: &mut crate::decompile::profile::FunctionProfiler,
     cfg_health: crate::ir::health::CfgHealth,
     cc: crate::ir::call_args::CallConv,
     prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
@@ -398,87 +399,99 @@ fn run_ast_passes(
         );
         eprintln!("\n===== stack object hints =====\n{stack_object_hints:#?}");
     }
-    macro_rules! dp {
-        ($n:expr) => {
+    macro_rules! pass {
+        ($n:expr, $operation:expr) => {{
+            let result = profiler.measure($n, || $operation);
             crate::ir::health::trace_pass($n, f, cfg_health);
             if dump {
                 eprintln!("\n===== after {} =====\n{}", $n, crate::ir::ast::render(f));
             }
-        };
+            result
+        }};
     }
     crate::ir::health::trace_pass("ast_pipeline_entry", f, cfg_health);
     // Packed XMM moves use four scalar lane operations so arithmetic remains
     // analyzable.  Rejoin an untouched four-lane load/store pair before copy
     // propagation erases the common 16-byte transport identity.
-    crate::ir::vector_copy::recover_wide_copies(f);
-    dp!("recover_wide_copies");
-    crate::ir::expr_reconstruct::reconstruct(f);
-    dp!("reconstruct");
-    crate::ir::const_fold::fold_constants(f);
-    dp!("fold_constants");
-    crate::ir::select_fold::fold_boolean_masks(f);
-    dp!("fold_boolean_masks");
+    pass!(
+        "recover_wide_copies",
+        crate::ir::vector_copy::recover_wide_copies(f)
+    );
+    pass!("reconstruct", crate::ir::expr_reconstruct::reconstruct(f));
+    pass!("fold_constants", crate::ir::const_fold::fold_constants(f));
+    pass!(
+        "fold_boolean_masks",
+        crate::ir::select_fold::fold_boolean_masks(f)
+    );
     // Per-definition first: it removes writes an unread overwrite supersedes, which the
     // per-name pass below cannot see (flags are un-versioned, so one read keeps every
     // write of that name alive).
-    crate::ir::dce::prune_overwritten_flags(f);
-    crate::ir::dce::prune_dead_flags(f);
-    dp!("prune_dead_flags");
+    pass!("prune_dead_flags", {
+        crate::ir::dce::prune_overwritten_flags(f);
+        crate::ir::dce::prune_dead_flags(f);
+    });
     // A direct jump into a PLT stub lowers to that stub's terminal GOT
     // dereference. Resolve the slot before argument reconstruction, then recover
     // only symbol-backed terminal jumps as tail calls so the ordinary call pass
     // can see their argument-register setup and returned value.
-    crate::ir::name_resolve::resolve_names(f, addr_map);
-    crate::ir::function_tables::resolve_function_table_entries(f, function_tables);
-    crate::ir::call_args::recover_resolved_direct_tail_calls(f, cc, addr_map);
-    crate::ir::call_args::recover_resolved_tail_calls(f, cc);
-    dp!("recover_resolved_tail_calls");
-    crate::ir::call_args::reconstruct_args_with_params_and_callee_layouts(
-        f,
-        cc,
-        param_slots,
-        &callee_facts.layouts,
-    );
-    dp!("reconstruct_args");
-    crate::ir::call_contracts::apply_recovered_callee_prototypes(f, &callee_facts.prototypes);
+    pass!("recover_resolved_tail_calls", {
+        crate::ir::name_resolve::resolve_names(f, addr_map);
+        crate::ir::function_tables::resolve_function_table_entries(f, function_tables);
+        crate::ir::call_args::recover_resolved_direct_tail_calls(f, cc, addr_map);
+        crate::ir::call_args::recover_resolved_tail_calls(f, cc);
+    });
+    pass!("reconstruct_args", {
+        crate::ir::call_args::reconstruct_args_with_params_and_callee_layouts(
+            f,
+            cc,
+            param_slots,
+            &callee_facts.layouts,
+        );
+    });
     // ABI liveness supplies candidate call inputs/outputs; an authoritative
     // library prototype wins when one is known. This mirrors Ghidra's locked
     // FuncProto and angr's callee-prototype priority rather than asking the C
     // renderer to paper over a semantically impossible AST result.
-    crate::ir::call_contracts::apply_known_call_contracts(f);
-    dp!("apply_known_call_contracts");
-    crate::ir::call_result_split::split_call_result_lifetimes(f, cc);
-    dp!("split_call_result_lifetimes");
-    crate::ir::strings_fold::fold_string_literals(f, str_pool);
-    crate::ir::canary::recognise_canary(f);
-    dp!("canary+strings");
+    pass!("apply_known_call_contracts", {
+        crate::ir::call_contracts::apply_recovered_callee_prototypes(f, &callee_facts.prototypes);
+        crate::ir::call_contracts::apply_known_call_contracts(f);
+    });
+    pass!(
+        "split_call_result_lifetimes",
+        crate::ir::call_result_split::split_call_result_lifetimes(f, cc)
+    );
+    pass!("canary+strings", {
+        crate::ir::strings_fold::fold_string_literals(f, str_pool);
+        crate::ir::canary::recognise_canary(f);
+    });
     // Stack-slot promotion runs before register renaming so the aliases (`stack_0`,
     // `local_0`, ...) it allocates cannot collide with the role names (`arg0`, `ret`,
     // `varN`) the naming pass introduces.
-    let slot_sizes =
+    let slot_sizes = pass!(
+        "promote_stack_locals",
         crate::ir::stack_locals::promote_stack_locals_typed_with_parameter_count_and_objects(
             f,
             Some(cc),
             locked_parameter_count,
             stack_object_hints,
-        );
-    dp!("promote_stack_locals");
+        )
+    );
     // Frame-relative storage is source-level state; the push/mov/sub sequence
     // that establishes its machine frame is not.  Recognise the machine prologue
     // here, while stack promotion has made the storage identities explicit but
     // before dead-store elimination removes the now-unused `rbp = rsp` witness.
     // A second call after the remaining passes still handles epilogues exposed
     // by stack-op rematerialisation.
-    recognise_machine_frame(f, cc);
-    dp!("recognise_machine_frame");
+    pass!("recognise_machine_frame", recognise_machine_frame(f, cc));
     // Project a prototype-proven result while the raw ABI output register is
     // still present. ARM32/AArch64 reuse arg0's register for the result; the
     // following spill-role split must rename both its final definition and the
     // return use together, rather than orphaning the result as scratch.
-    if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
-        crate::ir::direct_output::materialize_prototype_output(f, cc, prototype);
-    }
-    dp!("materialize_direct_output");
+    pass!("materialize_direct_output", {
+        if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
+            crate::ir::direct_output::materialize_prototype_output(f, cc, prototype);
+        }
+    });
     // Reconstructed expressions now carry their explicit machine width. Make
     // the dual-role decision here rather than at pipeline entry, where a wide
     // result may still be hidden behind widthless temporaries.
@@ -490,27 +503,33 @@ fn run_ast_passes(
              split_unspilled_dual_role={split_unspilled_dual_role}"
         );
     }
-    crate::ir::value_split::split_argument_storage_reuse(f, cc, split_unspilled_dual_role);
-    dp!("split_argument_storage_reuse");
-    let role_names = crate::ir::naming::apply_role_names_with_parameter_roles(
-        f,
-        cc,
-        param_slots,
-        &parameter_roles,
+    pass!(
+        "split_argument_storage_reuse",
+        crate::ir::value_split::split_argument_storage_reuse(f, cc, split_unspilled_dual_role)
     );
-    dp!("apply_role_names");
-    crate::ir::canary::collapse_canary_save(f);
-    if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
-        crate::ir::arm64_prologue::recognise_arm64_prologue(f);
-    }
+    let role_names = pass!(
+        "apply_role_names",
+        crate::ir::naming::apply_role_names_with_parameter_roles(
+            f,
+            cc,
+            param_slots,
+            &parameter_roles,
+        )
+    );
     // Dead-store elimination runs *after* naming so it sees the aliased return register
     // (`ret` / `arg0`) rather than the raw physical one; that removes the common pre-call
     // `%ret = 0` idiom entirely.
-    crate::ir::dead_stores::eliminate_dead_stores(f, cc);
-    dp!("eliminate_dead_stores");
-    crate::ir::stack_idiom::rematerialise_stack_ops(f);
-    crate::ir::label_prune::prune_unreferenced_labels(f);
-    dp!("stack_idiom+label_prune");
+    pass!("eliminate_dead_stores", {
+        crate::ir::canary::collapse_canary_save(f);
+        if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
+            crate::ir::arm64_prologue::recognise_arm64_prologue(f);
+        }
+        crate::ir::dead_stores::eliminate_dead_stores(f, cc);
+    });
+    pass!("stack_idiom+label_prune", {
+        crate::ir::stack_idiom::rematerialise_stack_ops(f);
+        crate::ir::label_prune::prune_unreferenced_labels(f);
+    });
     (slot_sizes, role_names)
 }
 
@@ -608,7 +627,7 @@ fn detect_arch_and_call_conv(
     use crate::core::binary::Arch as BArch;
 
     let mut is_pe = false;
-    let arch = if let Ok(obj) = object::read::File::parse(data) {
+    let arch = if let Ok(obj) = crate::decompile::profile::parse_object(data) {
         use object::Object;
         is_pe = obj.format() == object::BinaryFormat::Pe;
         match obj.architecture() {
@@ -746,7 +765,7 @@ fn prepare_llir_for_lowering(
 fn arm_uses_vfp_arguments(data: &[u8]) -> bool {
     use object::Object;
 
-    let Ok(file) = object::read::File::parse(data) else {
+    let Ok(file) = crate::decompile::profile::parse_object(data) else {
         return false;
     };
     if file.architecture() != object::Architecture::Arm {
@@ -783,6 +802,7 @@ fn decompile_at_py(
     pdb_cache: &str,
     max_functions: usize,
 ) -> PyResult<String> {
+    let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
     use crate::analysis::cfg::{analyze_functions_bytes_with_seeds, Budgets};
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_bytes;
@@ -893,7 +913,8 @@ fn decompile_at_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
-    let mut f = lower(&lf, &region, outer_name);
+    let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
+    let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
     crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
     // Pass-by-pass AST dump for debugging the decbench lowering pipeline. Set
     // GLAURUNG_DUMP_PASSES=1 to print the rendered body after each pass to stderr
@@ -919,6 +940,7 @@ fn decompile_at_py(
     );
     let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
+        &mut profiler,
         cfg_health,
         cc,
         prototype.as_ref(),
@@ -979,6 +1001,7 @@ fn decompile_at_py(
             .and_then(dwarf_render_prototype);
         decbench_text(
             &f,
+            &mut profiler,
             cfg_health,
             &exception_sites,
             decl,
@@ -995,7 +1018,7 @@ fn decompile_at_py(
             &addr_map,
         )
     } else if style == "c" {
-        let body = crate::ir::ast::render_c(&f);
+        let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
         match pdb_outer_name {
             Some(name) => format!("// PDB: {}\n{}", name, body),
             None => body,
@@ -1005,9 +1028,9 @@ fn decompile_at_py(
         // raw LLIR is the canonical one; remap the TypeMap keys from raw physical
         // regs into the role-based names the AST now uses.
         let renamed = remap_type_map(&recover_types_for(&lf_raw, cc), &f, cc, &param_slots);
-        render_with_types(&f, &renamed)
+        profiler.measure("render_with_types", || render_with_types(&f, &renamed))
     } else {
-        render(&f)
+        profiler.measure("render", || render(&f))
     })
 }
 
@@ -1026,6 +1049,7 @@ fn decompile_range_at_py(
     style: &str,
     pdb_cache: &str,
 ) -> PyResult<String> {
+    let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_range_at");
     use crate::core::address::{Address, AddressKind};
     use crate::core::address_range::AddressRange;
     use crate::core::basic_block::BasicBlock;
@@ -1125,7 +1149,8 @@ fn decompile_range_at_py(
         parameter_slots: mut param_slots,
         prototype,
     } = prepared_llir;
-    let mut f = lower(&lf, &region, func.name.clone());
+    let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(&func.name, func_va);
+    let mut f = profiler.measure("lower", || lower(&lf, &region, func.name.clone()));
     crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
     // An explicit byte range has no discovered callee Function objects from
     // which to recover cross-function storage layouts.
@@ -1147,6 +1172,7 @@ fn decompile_range_at_py(
     );
     let (slot_sizes, role_names) = run_ast_passes(
         &mut f,
+        &mut profiler,
         cfg_health,
         cc,
         prototype.as_ref(),
@@ -1191,6 +1217,7 @@ fn decompile_range_at_py(
             .and_then(dwarf_render_prototype);
         decbench_text(
             &f,
+            &mut profiler,
             cfg_health,
             &exception_sites,
             decl,
@@ -1207,12 +1234,12 @@ fn decompile_range_at_py(
             &addr_map,
         )
     } else if style == "c" {
-        crate::ir::ast::render_c(&f)
+        profiler.measure("render_c", || crate::ir::ast::render_c(&f))
     } else if types {
         let renamed = remap_type_map(&recover_types_for(&lf_raw, cc), &f, cc, &param_slots);
-        render_with_types(&f, &renamed)
+        profiler.measure("render_with_types", || render_with_types(&f, &renamed))
     } else {
-        render(&f)
+        profiler.measure("render", || render(&f))
     })
 }
 
@@ -1419,6 +1446,7 @@ fn remap_type_map_impl(
 /// names the recovered `TypeMap` keys were remapped against.
 fn decbench_text(
     f: &crate::ir::ast::Function,
+    profiler: &mut crate::decompile::profile::FunctionProfiler,
     cfg_health: crate::ir::health::CfgHealth,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
     decl: Option<&crate::ir::types_recover::TypeMap>,
@@ -1431,30 +1459,33 @@ fn decbench_text(
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
 ) -> String {
-    let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
-    // Preparation is also where a PC-relative address arithmetic sequence
-    // finally becomes an absolute address. On AArch64 the stack guard is reached
-    // through its GOT slot (`adrp`/`ldr`/`ldr`), so at the earlier
-    // `resolve_names` the slot was still `%x0 + 0xfd8` and no name could attach;
-    // only now is it the constant an `R_AARCH64_GLOB_DAT` relocation names.
-    // Re-resolve, then let the canary pass recognise it — without this the
-    // guard renders as a portable zero-filled object that the recovered C
-    // dereferences, and every `-fstack-protector` function takes SIGSEGV.
-    //
-    // Folding first is what makes the address a single constant: preparation is
-    // where the `adrp` page and the `add` of the low 12 bits finally meet in one
-    // expression, and until they are folded there is no VA for `resolve_names`
-    // to look up and no address for the renderer to back with a portable object.
-    // `read_counter` emitted `*(int *)(0x20000 + 28)` — a dereference of a raw
-    // original-image address, which is a wild pointer once recompiled.
-    crate::ir::const_fold::fold_constants(&mut prepared);
-    crate::ir::name_resolve::resolve_names(&mut prepared, addr_map);
-    crate::ir::canary::recognise_canary(&mut prepared);
-    // Source-level preparation folds GCC's multi-statement reload/sub/flag
-    // sequence into a direct comparison of the promoted canary slot. Re-run
-    // the idempotent canary pass here so the earlier collapsed save cannot
-    // leave that now-recognisable check reading an uninitialised C local.
-    crate::ir::canary::collapse_canary_save(&mut prepared);
+    let mut prepared = profiler.measure("prepare_for_decbench", || {
+        let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
+        // Preparation is also where a PC-relative address arithmetic sequence
+        // finally becomes an absolute address. On AArch64 the stack guard is reached
+        // through its GOT slot (`adrp`/`ldr`/`ldr`), so at the earlier
+        // `resolve_names` the slot was still `%x0 + 0xfd8` and no name could attach;
+        // only now is it the constant an `R_AARCH64_GLOB_DAT` relocation names.
+        // Re-resolve, then let the canary pass recognise it — without this the
+        // guard renders as a portable zero-filled object that the recovered C
+        // dereferences, and every `-fstack-protector` function takes SIGSEGV.
+        //
+        // Folding first is what makes the address a single constant: preparation is
+        // where the `adrp` page and the `add` of the low 12 bits finally meet in one
+        // expression, and until they are folded there is no VA for `resolve_names`
+        // to look up and no address for the renderer to back with a portable object.
+        // `read_counter` emitted `*(int *)(0x20000 + 28)` — a dereference of a raw
+        // original-image address, which is a wild pointer once recompiled.
+        crate::ir::const_fold::fold_constants(&mut prepared);
+        crate::ir::name_resolve::resolve_names(&mut prepared, addr_map);
+        crate::ir::canary::recognise_canary(&mut prepared);
+        // Source-level preparation folds GCC's multi-statement reload/sub/flag
+        // sequence into a direct comparison of the promoted canary slot. Re-run
+        // the idempotent canary pass here so the earlier collapsed save cannot
+        // leave that now-recognisable check reading an uninitialised C local.
+        crate::ir::canary::collapse_canary_save(&mut prepared);
+        prepared
+    });
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!(
             "\n===== after prepare_for_decbench =====\n{}",
@@ -1490,13 +1521,15 @@ fn decbench_text(
         crate::ir::const_fold::fold_typed_comparison_extensions(&mut prepared, tm);
         crate::ir::const_fold::fold_constants(&mut prepared);
     }
-    crate::ir::readonly_fold::fold_guarded_readonly_lookups(&mut prepared, readonly_data);
-    // Read-only folding can turn an image load into a literal after the main
-    // expression pipeline has already run. Re-propagate and fold immediately so
-    // consumers such as packed byte-table permutations see the literal index
-    // rather than rendering a dynamic 16-way lookup for a compiler-emitted mask.
-    crate::ir::copy_prop::propagate_copies(&mut prepared);
-    crate::ir::const_fold::fold_constants(&mut prepared);
+    profiler.measure("fold_guarded_readonly_lookups", || {
+        crate::ir::readonly_fold::fold_guarded_readonly_lookups(&mut prepared, readonly_data);
+        // Read-only folding can turn an image load into a literal after the main
+        // expression pipeline has already run. Re-propagate and fold immediately so
+        // consumers such as packed byte-table permutations see the literal index
+        // rather than rendering a dynamic 16-way lookup for a compiler-emitted mask.
+        crate::ir::copy_prop::propagate_copies(&mut prepared);
+        crate::ir::const_fold::fold_constants(&mut prepared);
+    });
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!(
             "\n===== after fold_guarded_readonly_lookups =====\n{}",
@@ -1540,17 +1573,19 @@ fn decbench_text(
     crate::ir::exception_recover::recover_typed_handlers(&mut prepared, exception_sites);
     crate::ir::exception_recover::recover_throws(&mut prepared);
     crate::ir::health::trace_pass("ready_to_render", &prepared, cfg_health);
-    let violations = crate::ir::verify_defs::check(&prepared);
-    let body = crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types(
-        &prepared,
-        decl,
-        width,
-        output_kind,
-        declared_prototype,
-        dwarf_types,
-        calling_convention_pointer_width(cc),
-        &dwarf_pointer_types,
-    );
+    let violations = profiler.measure("verify_defs", || crate::ir::verify_defs::check(&prepared));
+    let body = profiler.measure("render_decbench", || {
+        crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &prepared,
+            decl,
+            width,
+            output_kind,
+            declared_prototype,
+            dwarf_types,
+            calling_convention_pointer_width(cc),
+            &dwarf_pointer_types,
+        )
+    });
     if violations.is_empty() {
         return body;
     }
@@ -1858,7 +1893,7 @@ fn imported_symbol_base(name: &str) -> &str {
 fn defined_text_symbol_address(data: &[u8], name: &str) -> Option<u64> {
     use object::{Object, ObjectSymbol};
 
-    let object = object::read::File::parse(data).ok()?;
+    let object = crate::decompile::profile::parse_object(data).ok()?;
     object
         .symbols()
         .chain(object.dynamic_symbols())
@@ -2520,6 +2555,7 @@ fn decompile_all_py(
     pdb_cache: &str,
     style: &str,
 ) -> PyResult<PyObject> {
+    let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
     use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
     use crate::ir::ast::{lower, render};
     use crate::ir::lift_function::lift_function_from_bytes;
@@ -2590,7 +2626,11 @@ fn decompile_all_py(
             prototype,
         } = prepared_llir;
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
-        let mut f = lower(&lf, &region, outer_name.clone());
+        let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(
+            &outer_name,
+            func.entry_point.value,
+        );
+        let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name.clone()));
         crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
         // One pass list, shared with every other entry point — see `run_ast_passes`.
         // This site used to run dead-flag pruning before constant folding and never
@@ -2617,6 +2657,7 @@ fn decompile_all_py(
         );
         let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
+            &mut profiler,
             cfg_health,
             cc,
             prototype.as_ref(),
@@ -2655,6 +2696,7 @@ fn decompile_all_py(
                 .and_then(dwarf_render_prototype);
             decbench_text(
                 &f,
+                &mut profiler,
                 cfg_health,
                 &exception_sites,
                 Some(&decl),
@@ -2671,7 +2713,7 @@ fn decompile_all_py(
                 &addr_map,
             )
         } else {
-            render(&f)
+            profiler.measure("render", || render(&f))
         };
         list.append((outer_name, func.entry_point.value, text))?;
     }
@@ -2694,6 +2736,7 @@ fn decompile_many_py(
     pdb_cache: &str,
     max_functions: usize,
 ) -> PyResult<PyObject> {
+    let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_many");
     // Decompile an arbitrary SUBSET of functions in a SINGLE analysis pass.
     //
     // `decompile_at` re-runs `analyze_functions_bytes` (and the PDB/addr-map
@@ -2805,7 +2848,9 @@ fn decompile_many_py(
             prototype,
         } = prepared_llir;
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
-        let mut f = lower(&lf, &region, outer_name);
+        let mut profiler =
+            crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
+        let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
         crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
         // One pass list, shared with every other entry point — see `run_ast_passes`.
         // This site used to run dead-flag pruning before constant folding and never
@@ -2839,6 +2884,7 @@ fn decompile_many_py(
         );
         let (slot_sizes, role_names) = run_ast_passes(
             &mut f,
+            &mut profiler,
             cfg_health,
             cc,
             prototype.as_ref(),
@@ -2881,6 +2927,7 @@ fn decompile_many_py(
                 .and_then(dwarf_render_prototype);
             decbench_text(
                 &f,
+                &mut profiler,
                 cfg_health,
                 &exception_sites,
                 Some(&decl),
@@ -2897,7 +2944,7 @@ fn decompile_many_py(
                 &addr_map,
             )
         } else if style == "c" {
-            let body = crate::ir::ast::render_c(&f);
+            let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
             match pdb_outer_name {
                 Some(name) => format!("// PDB: {}\n{}", name, body),
                 None => body,
@@ -2906,9 +2953,9 @@ fn decompile_many_py(
             match tm {
                 Some(tm) => {
                     let renamed = remap_type_map(&tm, &f, cc, &param_slots);
-                    render_with_types(&f, &renamed)
+                    profiler.measure("render_with_types", || render_with_types(&f, &renamed))
                 }
-                None => render(&f),
+                None => profiler.measure("render", || render(&f)),
             }
         };
         let name = resolve_outer_function_name(&func.name, func_va, &addr_map);

@@ -30,7 +30,7 @@ pub struct FunctionPointerTable {
 
 /// Collect complete local function-pointer tables from an object.
 pub fn collect_function_pointer_tables(data: &[u8]) -> Vec<FunctionPointerTable> {
-    let Ok(object) = object::read::File::parse(data) else {
+    let Ok(object) = crate::decompile::profile::parse_object(data) else {
         return Vec::new();
     };
     let Some(pointer_size) = object
@@ -788,7 +788,7 @@ mod tests {
     fn elf32_rel_relocations_read_their_addend_from_the_relocated_place() {
         const SAMPLE: &str = "samples/binaries/platforms/linux/amd64/cross/armhf/c2_demo-armhf-gcc";
         let data = std::fs::read(SAMPLE).unwrap_or_else(|_| panic!("missing sample {SAMPLE}"));
-        let object = object::read::File::parse(&*data).expect("parse armhf sample");
+        let object = crate::decompile::profile::parse_object(&*data).expect("parse armhf sample");
         assert_eq!(
             object.architecture().address_size().map(|s| s.bytes()),
             Some(4)
@@ -1014,7 +1014,7 @@ mod tests {
         const SAMPLE: &str =
             "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-c-gcc-O0";
         let data = std::fs::read(SAMPLE).unwrap_or_else(|_| panic!("missing sample {SAMPLE}"));
-        let object = object::read::File::parse(&*data).expect("parse amd64 sample");
+        let object = crate::decompile::profile::parse_object(&*data).expect("parse amd64 sample");
         let targets = relocation_targets(&object, 8);
         assert!(
             targets.values().any(|&target| target != 0),

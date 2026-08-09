@@ -48,7 +48,7 @@ pub enum CilError {
 
 /// Parse a .NET PE and return every recoverable method's (RVA, full name).
 pub fn extract_cil_methods(data: &[u8]) -> Result<Vec<CilMethod>, CilError> {
-    let obj = object::read::File::parse(data).map_err(|_| CilError::NoCom)?;
+    let obj = crate::decompile::profile::parse_object(data).map_err(|_| CilError::NoCom)?;
 
     // Locate the CLR data directory. object's PE support exposes the
     // 16 data dirs through `pe_data_directories`. Index 14 is

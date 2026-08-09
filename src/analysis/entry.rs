@@ -20,7 +20,7 @@ pub struct EntryInfo {
 /// Detect the entrypoint VA and map it to a file offset when possible.
 pub fn detect_entry(data: &[u8]) -> Option<EntryInfo> {
     use object::read::Object;
-    let obj = object::read::File::parse(data).ok()?;
+    let obj = crate::decompile::profile::parse_object(data).ok()?;
     let fmt = match obj.format() {
         object::BinaryFormat::Elf => Format::ELF,
         object::BinaryFormat::Coff => Format::COFF,
@@ -103,7 +103,7 @@ pub fn detect_entry(data: &[u8]) -> Option<EntryInfo> {
 pub fn va_to_code_file_offset(data: &[u8], va: u64) -> Option<usize> {
     use object::read::{Object, ObjectSection};
     use object::SectionKind;
-    if let Ok(obj) = object::read::File::parse(data) {
+    if let Ok(obj) = crate::decompile::profile::parse_object(data) {
         for sec in obj.sections() {
             if sec.kind() != SectionKind::Text || sec.size() == 0 {
                 continue;
@@ -129,7 +129,7 @@ pub fn va_to_code_file_offset(data: &[u8], va: u64) -> Option<usize> {
 /// first — including a string or debug section.
 pub fn va_to_file_offset(data: &[u8], va: u64) -> Option<usize> {
     use object::read::Object;
-    let obj = object::read::File::parse(data).ok()?;
+    let obj = crate::decompile::profile::parse_object(data).ok()?;
     // Try program headers (segments) first
     for seg in obj.segments() {
         let addr = seg.address();

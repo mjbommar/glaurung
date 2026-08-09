@@ -212,7 +212,7 @@ pub fn collect_address_map(data: &[u8], path: &str) -> HashMap<u64, String> {
     let mut out = HashMap::new();
     // Defined symbols (functions + exported vars). Several symbols routinely share
     // one address, so the FIRST one seen must not simply win — see `symbol_rank`.
-    if let Ok(obj) = object::read::File::parse(data) {
+    if let Ok(obj) = crate::decompile::profile::parse_object(data) {
         use object::{Object, ObjectSymbol};
         let mut rank: HashMap<u64, u8> = HashMap::new();
         let mut consider =

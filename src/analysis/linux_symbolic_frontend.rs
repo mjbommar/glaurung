@@ -116,7 +116,7 @@ pub fn admit_linux_aarch64_handler(
     data: &[u8],
     symbol: &str,
 ) -> Result<LinuxSymbolicFunction, LinuxSymbolicFrontendError> {
-    let object = object::read::File::parse(data)
+    let object = crate::decompile::profile::parse_object(data)
         .map_err(|error| LinuxSymbolicFrontendError::Parse(error.to_string()))?;
     if object.format() != BinaryFormat::Elf || object.kind() != ObjectKind::Relocatable {
         return Err(LinuxSymbolicFrontendError::NotRelocatable(format!(
@@ -821,7 +821,8 @@ mod tests {
     #[test]
     fn trap_intrinsic_terminates_its_cfg_block() {
         let mut data = real_ko();
-        let object = object::read::File::parse(data.as_slice()).expect("parse fixture");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse fixture");
         let text = object.section_by_name(".text").expect("text section");
         let (file_offset, _) = text.file_range().expect("file-backed text");
         drop(object);
@@ -847,7 +848,8 @@ mod tests {
     #[test]
     fn rejects_unmodeled_control_before_cfg_recovery() {
         let mut data = real_ko();
-        let object = object::read::File::parse(data.as_slice()).expect("parse fixture");
+        let object =
+            crate::decompile::profile::parse_object(data.as_slice()).expect("parse fixture");
         let text = object.section_by_name(".text").expect("text section");
         let (file_offset, _) = text.file_range().expect("file-backed text");
         drop(object);

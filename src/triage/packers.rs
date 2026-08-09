@@ -120,7 +120,7 @@ pub fn detect_packers(data: &[u8], cfg: &PackerConfig) -> Vec<PackerMatch> {
     }
 
     // Section heuristics using object crate where possible (best-effort; may fail on truncated buffers)
-    if let Ok(obj) = object::read::File::parse(hay) {
+    if let Ok(obj) = crate::decompile::profile::parse_object(hay) {
         use object::{Object, ObjectSection};
         // Bump specific packers based on section names
         for sec in obj.sections() {

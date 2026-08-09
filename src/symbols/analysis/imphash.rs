@@ -4,7 +4,7 @@ use object::read::Object;
 // no object kind filtering necessary; compute on any file with imports
 
 pub fn pe_imphash(data: &[u8]) -> Option<String> {
-    let obj = object::read::File::parse(data).ok()?;
+    let obj = crate::decompile::profile::parse_object(data).ok()?;
     let imports = obj.imports().ok()?;
     let mut entries: Vec<String> = Vec::new();
     for imp in imports {

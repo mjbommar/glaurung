@@ -22,7 +22,7 @@ pub(crate) enum Arm32Mode {
 }
 
 fn mapping_symbol_mode(data: &[u8], va: u64) -> Option<Arm32Mode> {
-    let object = object::read::File::parse(data).ok()?;
+    let object = crate::decompile::profile::parse_object(data).ok()?;
     let target_section = object.sections().find(|section| {
         let start = section.address();
         va >= start && va < start.saturating_add(section.size())
@@ -102,7 +102,7 @@ pub fn normalise_entry(data: &[u8], va: u64) -> u64 {
     if va & 1 == 0 {
         return va;
     }
-    let is_arm32_elf = object::read::File::parse(data).is_ok_and(|object| {
+    let is_arm32_elf = crate::decompile::profile::parse_object(data).is_ok_and(|object| {
         object.format() == object::BinaryFormat::Elf
             && object.architecture() == object::Architecture::Arm
     });

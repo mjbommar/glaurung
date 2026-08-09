@@ -170,7 +170,7 @@ impl LiftCtx<'_> {
 /// The little-endian word at `va` in an executable section of `image`.
 fn text_word(image: &[u8], va: u64) -> Option<u32> {
     use object::read::{Object, ObjectSection};
-    let obj = object::read::File::parse(image).ok()?;
+    let obj = crate::decompile::profile::parse_object(image).ok()?;
     for section in obj.sections() {
         if section.kind() != object::SectionKind::Text || section.size() == 0 {
             continue;

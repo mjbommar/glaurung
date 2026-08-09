@@ -9,7 +9,7 @@ use object::read::Object;
 /// Currently supports ELF x86_64 with `.plt` and `.rela.plt` sections.
 pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
     let mut out: Vec<(u64, String)> = Vec::new();
-    let Ok(obj) = object::read::File::parse(data) else {
+    let Ok(obj) = crate::decompile::profile::parse_object(data) else {
         return out;
     };
     if obj.format() != object::BinaryFormat::Elf {
