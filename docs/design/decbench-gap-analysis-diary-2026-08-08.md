@@ -942,3 +942,67 @@ above. The 69/250 result therefore comes from the primary overlay artifacts, not
 that malformed derived TOML. Those publisher defects must be fixed in the
 submission integration before an upstream render; they do not alter the joined
 perfect sets or the Glaurung baseline/current equality.
+
+## 04:00–04:20 — first owner-grouped type repair
+
+The fresh type overlay contains exactly 29 functions at edit distance one. They
+are now pinned in `tests/decbench_scoreboard/type-distance-one-9c25fcb.json`,
+including the source overlay SHA-256
+`4cbb9613344bf365df9cc6c8e72993a62eb1d14a360576daa89736d991cf596c`.
+The executable corpus contract requires 29 unique keys grouped by semantic
+owner: 20 pointer-category failures, six missing-local identities, two integer
+widths, and one missing parameter. This closes the roadmap's corpus task while
+leaving 28 rows explicitly open.
+
+The first repair targets ChibiOS `nvicEnableVector(uint32_t n, uint32_t prio)`.
+Its exact `r0#0` value is consumed by LSR (`n >> 5`) and also participates in a
+derived MMIO address. Pointer propagation previously won the raw-register merge
+and rendered `char *`. The valued type engine already treated LSR as exact
+unsigned evidence after an O0 spill/reload, but direct live-ins never crossed
+the qualified parameter-evidence boundary. One shared AAPCS live-in predicate
+now covers both paths and requires SSA version zero, so later scratch lifetimes
+cannot qualify a source parameter.
+
+Evidence is RED/GREEN at three levels:
+
+- the new LLIR regression failed with `Pointer { pointee_width: 1 }` before the
+  repair and passes as unsigned four-byte integer afterward;
+- all 54 `ir::types_recover::tests` pass, including the existing ARM spill path
+  and the x86 isolation control; and
+- the real stripped kit binary now emits
+  `void nvicEnableVector(uint32_t arg0, uint32_t arg1)`. The unmodified official
+  `TypeMatchMetric` reports `1.0`, `tp=2`, `fp=0`, `fn=0`, replacing the pinned
+  `0.5`/distance-one result.
+
+A fresh static extraction covered 250/250 requested functions across all
+224/224 kit binaries. Compared byte-for-byte with the accepted `9c25fcb`
+submission, 248 function artifacts are unchanged. The only changes are
+`nvicEnableVector` and `spekShouldBind`'s inferred declaration for `IOGetByTag`;
+DWARF identifies that callee's source argument as the unsigned `ioTag_t`
+(`uint8_t`), so changing its declaration from signed to unsigned is directionally
+correct. `spekShouldBind` retains exactly its prior type score `0.0`/distance two
+and byte score `0.3529411765`/distance 33. `nvicEnableVector` remains byte score
+zero, so this increment raises type perfects from 13 to 14 but does not raise the
+69-function union: that function was already one of the 60 perfect GED rows.
+
+The first focused GED attempt was not accepted: that evaluator environment
+lacked Joern and attempted a 1.79 GB bootstrap, which was stopped. Re-running in
+the provisioned evaluator environment gives `nvicEnableVector` GED `0.0`
+(perfect) and `spekShouldBind` GED `14.0`, exactly matching their prior values.
+The mandatory five-lane decompiler gate also passed without a waiver: full Rust
+tests, x86 differential fixtures, the AArch64/ARMv7/A32/i386/control round trip
+(1,757 passes and the same 43 known failures), both executable behavior
+matrices, and no per-cell regression across all 56/56 GED/type/byte cells.
+
+The repository-wide Python run completed with 2,871 passes, 44 skips, and four
+failures in `test_suspicious_symbols_if_present`. Those four are a pre-existing
+fixture-selection defect, not a type-recovery regression: discovery uses
+unsorted recursive traversal and truncates at eight, so this worktree selected
+four cross-built `suspicious_win` ELF files that contain none of the required
+APIs. A detached build of parent `11041a8` produces identical symbol/import
+results and all four assertions fail when invoked directly against the same
+byte-identical fixtures. The parent file-level run happens to pass because its
+filesystem traversal selects eight different fixtures. The new corpus contract
+passes scoped Ruff format/lint and `ty`; repository-wide Ruff formatting remains
+red on 309 pre-existing files and repository-wide `ty` reports 2,063 existing
+diagnostics, so neither unrelated baseline was rewritten in this increment.

@@ -2447,6 +2447,21 @@ fn live_phi_values(lf: &LlirFunction, ssa: &SsaInfo) -> HashSet<SsaValue> {
     live
 }
 
+/// Whether `value` is one exact caller-supplied AAPCS core-register word.
+///
+/// ARM32 spells all four integer argument containers `r0` through `r3`, so
+/// their names carry neither source signedness nor a narrower view. Keep this
+/// predicate exact: later versions are scratch lifetimes. The AAPCS boundary,
+/// rather than the architecture-neutral register spelling, supplies the
+/// four-byte container width.
+fn is_aapcs_core_word_live_in(value: &SsaValue) -> bool {
+    value.version == 0
+        && matches!(
+            &value.base,
+            VReg::Phys(name) if matches!(name.as_str(), "r0" | "r1" | "r2" | "r3")
+        )
+}
+
 /// Recover type facts per SSA definition.
 ///
 /// The inference rules deliberately mirror the established raw-register pass,
@@ -2624,13 +2639,19 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                             _ => unreachable!(),
                         };
                         logical_shift_values.insert(lhs_value.clone());
-                        tm.upsert(
-                            lhs_value,
-                            TypeHint::Int {
-                                signed: false,
-                                width: reg_width_bytes(raw),
-                            },
-                        );
+                        let hint = TypeHint::Int {
+                            signed: false,
+                            width: reg_width_bytes(raw),
+                        };
+                        tm.upsert(lhs_value.clone(), hint);
+                        // AAPCS core registers do not encode signedness or a
+                        // narrower source type in their names. Consuming the
+                        // exact caller-supplied word with LSR is direct
+                        // unsigned-word evidence, even when pointer arithmetic
+                        // later derives an MMIO address from the same value.
+                        if is_aapcs_core_word_live_in(&lhs_value) {
+                            tm.upsert_parameter_refinement(lhs_value, hint);
+                        }
                     }
                     if let Some(rhs_value) = operand_value(rhs, &values, &mut cursor) {
                         let raw = match rhs {
@@ -2985,11 +3006,7 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                                     let aapcs_unsigned_word = !signed
                                         && *stored_width == 4
                                         && logical_shift_values.contains(dst)
-                                        && matches!(
-                                            &source.base,
-                                            VReg::Phys(name)
-                                                if matches!(name.as_str(), "r0" | "r1" | "r2" | "r3")
-                                        );
+                                        && is_aapcs_core_word_live_in(source);
                                     if !narrow_exact && !aapcs_unsigned_word {
                                         continue;
                                     }
@@ -4925,6 +4942,49 @@ int never_returns(void) { for (;;) {} }
                 signed: false,
                 width: 4,
             })
+        );
+    }
+
+    #[test]
+    fn arm_direct_logical_shift_outweighs_derived_address_use() {
+        // Real shape: ChibiOS `nvicEnableVector(uint32_t n, uint32_t prio)`.
+        // `n >> 5` consumes the caller-supplied value as an unsigned word,
+        // while `NVIC_BASE + n` derives an MMIO address from the same value.
+        // The derived address must not turn the source parameter into `char *`.
+        let lf = mk_block(vec![
+            Op::Bin {
+                dst: VReg::phys("r3"),
+                op: BinOp::Shr,
+                lhs: Value::Reg(VReg::phys("r0")),
+                rhs: Value::Const(5),
+            },
+            Op::Bin {
+                dst: VReg::phys("r12"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("r0")),
+                rhs: Value::Const(0xe000_e100),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("r12")), None, 0, 0x300, 1),
+                src: Value::Reg(VReg::phys("r1")),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::Arm,
+            &HashSet::from([0, 1]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 4,
+            }),
+            "direct unsigned-word evidence must own r0: {prototype:#?}"
         );
     }
 

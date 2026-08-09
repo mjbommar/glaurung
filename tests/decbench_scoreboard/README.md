@@ -14,6 +14,9 @@ The files have distinct roles:
   the pinned result tree. It contains the PR #61 ARM `byte_match` correction.
 - `baseline-ledger.json` is derived output. Its byte identity is tested so a
   code or schema change cannot silently redefine the baseline.
+- `type-distance-one-9c25fcb.json` is the owner-grouped defect corpus for all
+  29 fresh official functions one type edit from perfection. Its source-overlay
+  checksum, membership, cluster counts, and verified-fix status are tested.
 
 The two generated evidence files use canonical single-line JSON. This keeps
 large machine data out of repository line-count and source-file-size reports;

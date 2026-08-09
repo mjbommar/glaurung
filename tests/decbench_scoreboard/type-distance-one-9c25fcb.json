@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "glaurung_revision": "9c25fcb860fb433b59bb24b3f880e8ae3a38a972",
+  "source_type_overlay_sha256": "4cbb9613344bf365df9cc6c8e72993a62eb1d14a360576daa89736d991cf596c",
+  "selection": "All fresh official sample-set functions whose DecBench type_match edit distance is exactly one.",
+  "cluster_counts": {
+    "pointer_category": 20,
+    "missing_local_identity": 6,
+    "integer_width": 2,
+    "missing_parameter": 1
+  },
+  "defects": [
+    {
+      "key": "bash::O0::mksyntax::wcomment",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "program_symbol_type_environment",
+      "mismatch": "argument 0: FILE * recovered as void *",
+      "status": "open"
+    },
+    {
+      "key": "bash::O2-noinline::bash::allocerr",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "call_contract_propagation",
+      "mismatch": "argument 0: char * recovered as long",
+      "status": "open"
+    },
+    {
+      "key": "chibios::O2-noinline::ch::nvicEnableVector",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "prototype_value_evidence",
+      "mismatch": "argument 0: uint32_t recovered as char * after its value also derives an MMIO address",
+      "status": "verified_fixed"
+    },
+    {
+      "key": "chibios::O2::ch::test_wait_threads",
+      "distance": 1,
+      "failure_cluster": "missing_local_identity",
+      "evidence_owner": "stack_coordinate_and_local_identity",
+      "mismatch": "local i: int has no recovered local with matching identity",
+      "status": "open"
+    },
+    {
+      "key": "cleanflight::O0::cleanflight_DALRCF405::icm20689SpiAccDetect",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "aggregate_type_environment",
+      "mismatch": "argument acc: aggregate pointer recovered as int",
+      "status": "open"
+    },
+    {
+      "key": "cleanflight::O0::cleanflight_DALRCF405::sendAccel",
+      "distance": 1,
+      "failure_cluster": "missing_local_identity",
+      "evidence_owner": "stack_coordinate_and_local_identity",
+      "mismatch": "local i: int has no recovered local with matching identity",
+      "status": "open"
+    },
+    {
+      "key": "cleanflight::O2-noinline::cleanflight_DALRCF405::m25p16_enable",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "aggregate_type_environment",
+      "mismatch": "argument bus: aggregate pointer recovered as int *",
+      "status": "open"
+    },
+    {
+      "key": "coreutils::O0::pr::balance",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "stack_coordinate_and_local_identity",
+      "mismatch": "stack local p: COLUMN * recovered as long",
+      "status": "open"
+    },
+    {
+      "key": "crazyflie::O2-noinline::firmware::ld_word",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "memory_access_width",
+      "mismatch": "argument 0: byte pointer recovered as short *",
+      "status": "open"
+    },
+    {
+      "key": "crazyflie::O2::firmware::sensorsInit",
+      "distance": 1,
+      "failure_cluster": "missing_local_identity",
+      "evidence_owner": "stack_coordinate_and_local_identity",
+      "mismatch": "local result: aggregate pointer has no recovered local with matching identity",
+      "status": "open"
+    },
+    {
+      "key": "cronie::O2::crontab::strcmp_until",
+      "distance": 1,
+      "failure_cluster": "integer_width",
+      "evidence_owner": "scalar_width_semantics",
+      "mismatch": "argument 2: char recovered as long",
+      "status": "open"
+    },
+    {
+      "key": "diffutils::O0::diff3::try_help",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "call_contract_propagation",
+      "mismatch": "argument 1: char * recovered as long",
+      "status": "open"
+    },
+    {
+      "key": "diffutils::O2-noinline::diff::stophandler",
+      "distance": 1,
+      "failure_cluster": "missing_parameter",
+      "evidence_owner": "calling_convention_definedness",
+      "mismatch": "argument sig: int is absent from the recovered prototype",
+      "status": "open"
+    },
+    {
+      "key": "diffutils::O2-noinline::sdiff::lf_skip",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "call_contract_propagation",
+      "mismatch": "argument 0: line_filter * recovered as long",
+      "status": "open"
+    },
+    {
+      "key": "diffutils::O2::diff3::try_help",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "call_contract_propagation",
+      "mismatch": "argument 1: char * recovered as long",
+      "status": "open"
+    },
+    {
+      "key": "findutils::O0::find::prec_name",
+      "distance": 1,
+      "failure_cluster": "integer_width",
+      "evidence_owner": "scalar_width_semantics",
+      "mismatch": "argument 0: short recovered as int",
+      "status": "open"
+    },
+    {
+      "key": "freertos::O0::RTOSDemo::prvCheckTasksWaitingTermination",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "aggregate_extent_and_stack_coordinate",
+      "mismatch": "stack local pxTCB: aggregate pointer is represented as an unrelated byte local",
+      "status": "open"
+    },
+    {
+      "key": "freertos::O0::RTOSDemo::vListInitialise",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "aggregate_type_environment",
+      "mismatch": "argument 0: aggregate pointer recovered as int *",
+      "status": "open"
+    },
+    {
+      "key": "freertos::O2::RTOSDemo::vListInitialiseItem",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "aggregate_type_environment",
+      "mismatch": "argument 0: aggregate pointer recovered as int *",
+      "status": "open"
+    },
+    {
+      "key": "gzip::O2-noinline::gzip::fill_inbuf",
+      "distance": 1,
+      "failure_cluster": "missing_local_identity",
+      "evidence_owner": "stack_coordinate_and_local_identity",
+      "mismatch": "local len: int has no recovered local with matching identity",
+      "status": "open"
+    },
+    {
+      "key": "kmod::O2::kmod::mod_free",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "aggregate_type_environment",
+      "mismatch": "argument 0: aggregate pointer recovered as long *",
+      "status": "open"
+    },
+    {
+      "key": "libexpat::O0::xmlwf::codepageConvert",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "call_contract_propagation",
+      "mismatch": "argument 1: char * recovered as long",
+      "status": "open"
+    },
+    {
+      "key": "libopencm3::O0::tick_blink::pwr_set_vos_scale",
+      "distance": 1,
+      "failure_cluster": "missing_local_identity",
+      "evidence_owner": "stack_coordinate_and_local_identity",
+      "mismatch": "local reg32: integer has no recovered local with matching identity",
+      "status": "open"
+    },
+    {
+      "key": "libopencm3::O0::usart_console::main",
+      "distance": 1,
+      "failure_cluster": "missing_local_identity",
+      "evidence_owner": "stack_coordinate_and_local_identity",
+      "mismatch": "local len: int is absent while the adjacent 128-byte buffer is recovered",
+      "status": "open"
+    },
+    {
+      "key": "libopencm3::O0::usbmidi::usbd_ep_nak_set",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "aggregate_type_environment",
+      "mismatch": "argument 0: aggregate pointer recovered as int *",
+      "status": "open"
+    },
+    {
+      "key": "libopencm3::O2-noinline::timer::timer_disable_preload",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "memory_region_model",
+      "mismatch": "argument 0: uint32_t MMIO base recovered as int *",
+      "status": "open"
+    },
+    {
+      "key": "libopencm3::O2::cryptobasic::usart_set_databits",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "memory_region_model",
+      "mismatch": "argument 0: uint32_t MMIO base recovered as int *",
+      "status": "open"
+    },
+    {
+      "key": "libselinux::O0::libselinux.so::get_class_cache_entry_name",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "aggregate_extent_and_stack_coordinate",
+      "mismatch": "stack local node: aggregate pointer recovered as long",
+      "status": "open"
+    },
+    {
+      "key": "rsyslog::O2::rsyslogd::beginTransaction",
+      "distance": 1,
+      "failure_cluster": "pointer_category",
+      "evidence_owner": "aggregate_type_environment",
+      "mismatch": "argument 0: aggregate pointer recovered as long",
+      "status": "open"
+    }
+  ]
+}

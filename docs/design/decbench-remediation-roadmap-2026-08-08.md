@@ -289,12 +289,18 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   four parameters to one but leaves its second source argument unknown and its
   type score at zero; treating every untouched call register as an argument is
   explicitly rejected as unsound.
-- [ ] Turn the 29 official functions exactly one type edit from perfection into
+- [x] Turn the 29 official functions exactly one type edit from perfection into
   a typed defect corpus, grouped by missing evidence owner rather than project
   name. Prioritize fixes that close a repeated invariant cluster (prototype,
   stack coordinate, aggregate extent, or definedness) and reject one-function
   signature patches; this cohort is the shortest path to verified perfect-rate
-  movement without scoreboard overfitting.
+  movement without scoreboard overfitting. The checked corpus pins the exact
+  `9c25fcb` overlay checksum and classifies 20 pointer-category defects, six
+  missing-local identities, two integer-width defects, and one missing
+  parameter. Its first invariant repair qualifies direct LSR use of an exact
+  AAPCS core-register live-in as unsigned-word prototype evidence; the official
+  evaluator moves `nvicEnableVector` from `0.5`/distance one to `1.0`/distance
+  zero without a function-name or signature patch.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the
