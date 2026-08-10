@@ -1559,3 +1559,79 @@ ByteMatch regression across 56/56 cells. The final release-build extraction
 takes 67.36 s at eight workers; its per-binary median is 2.155 s, mean 2.389 s,
 and maximum 3.739 s. Those timings establish the current artifact's performance
 and completeness, but are not attributed solely to this type-recovery change.
+
+## 22:50–00:10 — program-level callback contracts cross the pinned threshold
+
+The next distance-one row, `diffutils:O2-noinline:diff:stophandler`, proved the
+limit of function-local prototype recovery. Its source contract is
+`void stophandler(int sig)`, but optimization removes every use of `sig`; the
+callee body therefore contains no honest evidence from which to reconstruct the
+parameter. The surviving evidence is in another function: `stophandler` is
+stored in `struct sigaction.sa_handler` and that object is passed to
+`sigaction`.
+
+The retained repair adds an immutable, session-cached `ProgramEnvironment` for
+cross-function semantic facts. A bounded abstract interpreter follows concrete
+stack-object offsets, scalar flags, and code-pointer sets through the function
+that registers a callback. A raw direct-call/code-reference scan is only a
+prefilter: a fact is emitted only after the registration site is assigned to an
+exact `.eh_frame` owner, that owner is lifted, and its LLIR proves the matching
+data flow. Ordinary calls clear the target ABI's centralized caller-saved
+register set, joins retain only agreeing facts, code-target unions are capped,
+and conflicting contracts are discarded. The `sigaction` rule additionally
+requires concrete flags proving `SA_SIGINFO` clear; three-argument handlers are
+left unknown rather than misdeclared as one-argument callbacks. `signal` uses
+the same evidence path. The byte scanners now translate each contiguous code
+range once instead of performing a VA lookup for every byte.
+
+The real RED fixture compiles three host-GCC `-O2` callbacks, strips the binary,
+and decompiles all three together. The registered one-argument handler now
+renders `int arg0`; a merely address-taken `void` callback remains `void`; and a
+registered `SA_SIGINFO` callback remains `void` until a sound three-argument
+contract is implemented. A separate unit regression requires both arms of a
+conditional value to agree before the program analysis retains a fact.
+
+An eager prototype lifted every registration owner in every query and was
+rejected after a full replay raised median/mean/max extraction time to
+2.602/2.887/19.235 seconds. The retained demand-driven design intersects a
+registration owner with an owner that references one of the requested callback
+addresses before lifting it. A fresh optimized replay from an empty result
+directory emits all 250 functions across all 224 binaries with zero failures.
+Exactly one generated C file changes, and its only semantic diff is:
+
+```c
+-void sub_d620(void) {
++void sub_d620(int arg0) {
+```
+
+The package SHA-256 is
+`d259581d5e1c021e45a62a93f84b9687666b548ce5d3579c5401c200718fc662`,
+the diagnostic ledger is
+`604e82530ad57a70b3675804f54905f83a868faf5034222aeac9a3b693f33b61`,
+and the result manifest is
+`78c5ed54905db1822cf9da4f2fbf83f72a8b7f24e8799541f14c5ff4cfcf0cbf`.
+The eight-worker run took 69.89 seconds while the full Python suite was also
+active; per-binary median/mean/max were 2.263/2.479/4.170 seconds. Mean is 3.8%
+above the prior 2.389-second release replay and remains inside the Phase 1 cold
+guardrail; the overlapping workload makes this conservative performance
+evidence rather than a clean microbenchmark.
+
+With `DECBENCH_NO_CACHE=1`, TypeMatch v5 freshly scores `stophandler` at exactly
+`1.0` (`tp=1`, `fp=0`, `fn=0`). ByteMatch v6 remains `0.7777778`, and its CFG
+body is unchanged. Because this row was not already perfect under GED or
+ByteMatch, the exact union advances 72→73/250 (`28.8%→29.2%`). Against the
+pinned public snapshot this crosses Kuna's 29.1% by 0.1 percentage point. It is
+still a projection, not a live DecBench leaderboard claim, and fresh GED remains
+unavailable until the evaluation tree contains preprocessed sources.
+
+Final verification passes 2,052 Rust library tests plus every integration
+target, all 31 CLI/decompiler tests, the exact six-lane architecture ratchet
+(1,758 pass / 42 known fail / 228 structural / zero lane errors), all 56 legacy
+and 64 curriculum behavior cells, and the fresh 56/56-cell metric ratchet with
+no GED, TypeMatch, or ByteMatch regression. The full Python suite has only the
+four known cross-sample `suspicious_win` content failures after its one
+load-induced Windows truncation passes alone. Rust/Python formatting, targeted
+Ruff, and `git diff --check` pass. Targeted `ty` remains at the exact 30 existing
+diagnostics in `test_cli_decompile.py`, with none on the new fixture; global
+Ruff and `ty` remain baseline-red repository debt rather than being mislabeled
+as green.

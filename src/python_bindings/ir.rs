@@ -729,6 +729,7 @@ fn prepare_llir_for_lowering(
     recover_semantic_prototype: bool,
     arm_vfp_args: bool,
     declared: Option<&DwarfPrototypeContract>,
+    program_fact: Option<&crate::program::environment::FunctionPrototypeFact>,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
 ) -> PreparedLlir {
     let mut ssa = normalize_definedness_and_compute_ssa(function, exception_sites, cc);
@@ -738,7 +739,7 @@ fn prepare_llir_for_lowering(
         crate::ir::value_number::live_in_arg_slots_llir(function, cc)
     };
     let prototype = recover_semantic_prototype.then(|| {
-        recover_decbench_prototype(
+        let mut prototype = recover_decbench_prototype(
             function,
             &ssa,
             cc,
@@ -746,7 +747,19 @@ fn prepare_llir_for_lowering(
             arm_vfp_args,
             declared,
             type_env,
-        )
+        );
+        // Debug declarations remain the strongest source.  A registration API
+        // supplies the missing contract only when local/debug recovery did not
+        // already lock one, which keeps conflicting evidence fail-closed.
+        if let Some(fact) = program_fact {
+            if !prototype.parameter_arity_is_locked() {
+                prototype.apply_locked_parameters(cc, &fact.parameter_hints);
+            }
+            if !prototype.output_is_locked() {
+                prototype.apply_locked_output(fact.output_kind, None);
+            }
+        }
+        prototype
     });
     if prototype.as_ref().is_some_and(|prototype| {
         crate::ir::types_recover::materialize_return_values(function, cc, prototype) != 0
@@ -907,6 +920,8 @@ pub(super) fn decompile_at_session(
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let program_environment = (style == "decbench" && types)
+        .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
     let lf_raw = lift_function_from_image(&image, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
@@ -937,6 +952,9 @@ pub(super) fn decompile_at_session(
         dwarf_outputs
             .as_ref()
             .and_then(|outputs| outputs.get(&func_va)),
+        program_environment
+            .as_deref()
+            .and_then(|environment| environment.prototype_for(func_va)),
         dwarf_type_env.as_ref(),
     );
     let PreparedLlir {
@@ -1144,6 +1162,8 @@ fn decompile_range_at_py(
     let _ = timeout_ms;
 
     let image = load_program_image(&path)?;
+    let session = crate::program::session::ProgramSession::from_image(image);
+    let image = session.image().clone();
     let data = image.bytes();
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
@@ -1186,6 +1206,15 @@ fn decompile_range_at_py(
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let addr_map =
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
+    let budgets = crate::analysis::cfg::Budgets {
+        max_functions: 1,
+        max_blocks,
+        max_instructions,
+        timeout_ms,
+        total_timeout_ms: 0,
+    };
+    let program_environment = (style == "decbench" && types)
+        .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
     let lf_raw = lift_function_from_image(&image, &func, arch).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
@@ -1211,6 +1240,9 @@ fn decompile_range_at_py(
         dwarf_outputs
             .as_ref()
             .and_then(|outputs| outputs.get(&func_va)),
+        program_environment
+            .as_deref()
+            .and_then(|environment| environment.prototype_for(func_va)),
         dwarf_type_env.as_ref(),
     );
     let PreparedLlir {
@@ -2530,11 +2562,13 @@ fn decompile_all_py(
     style: &str,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
-    use crate::analysis::cfg::{analyze_functions_image, Budgets};
+    use crate::analysis::cfg::Budgets;
     use crate::ir::ast::{lower, render};
     use crate::ir::lift_function::lift_function_from_image;
 
     let image = load_program_image(&path)?;
+    let session = crate::program::session::ProgramSession::from_image(image);
+    let image = session.image().clone();
     let data = image.bytes();
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
@@ -2554,7 +2588,7 @@ fn decompile_all_py(
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
     // the closure boundary. See `python_bindings::analysis`.
-    let (funcs, _cg) = py.detach(|| analyze_functions_image(&image, &budgets));
+    let funcs = py.detach(|| session.discover_functions(&budgets, &[]));
     let (arch, cc) = detect_arch_and_call_conv(&image);
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
@@ -2562,6 +2596,13 @@ fn decompile_all_py(
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let environment_targets = funcs
+        .iter()
+        .take(limit)
+        .map(|function| function.entry_point.value)
+        .collect::<Vec<_>>();
+    let program_environment = (style == "decbench")
+        .then(|| session.environment(&budgets, cc, &addr_map, &environment_targets));
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
@@ -2593,6 +2634,9 @@ fn decompile_all_py(
             dwarf_outputs
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func.entry_point.value)),
+            program_environment
+                .as_deref()
+                .and_then(|environment| environment.prototype_for(func.entry_point.value)),
             dwarf_type_env.as_ref(),
         );
         let PreparedLlir {
@@ -2739,13 +2783,15 @@ fn decompile_many_py(
     // analyse once, then run the same per-function pipeline as `decompile_at`
     // for each requested VA. Returns a list of (name, va, c_or_ir_text) for
     // every requested VA that resolves to a known function.
-    use crate::analysis::cfg::{analyze_functions_image_with_seeds, Budgets};
+    use crate::analysis::cfg::Budgets;
     use crate::ir::ast::{lower, render, render_with_types};
     use crate::ir::lift_function::lift_function_from_image;
     use crate::ir::types_recover::recover_types_for;
     use std::collections::HashSet;
 
     let image = load_program_image(&path)?;
+    let session = crate::program::session::ProgramSession::from_image(image);
+    let image = session.image().clone();
     let data = image.bytes();
     // See `decompile_at`: an ARM32 Thumb `.symtab` value carries the Thumb bit.
     let func_vas: Vec<u64> = func_vas
@@ -2785,8 +2831,7 @@ fn decompile_many_py(
     // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
     // the closure boundary. See `python_bindings::analysis`.
-    let (funcs, _cg) =
-        py.detach(|| analyze_functions_image_with_seeds(&image, &budgets, &func_vas));
+    let funcs = py.detach(|| session.discover_functions(&budgets, &func_vas));
     let (arch, cc) = detect_arch_and_call_conv(&image);
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
@@ -2794,6 +2839,8 @@ fn decompile_many_py(
         crate::ir::name_resolve::collect_address_map_with_pdb_cache(&data, &path, pdb_cache);
     crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let program_environment = (style == "decbench" && types)
+        .then(|| session.environment(&budgets, cc, &addr_map, &func_vas));
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
@@ -2835,6 +2882,9 @@ fn decompile_many_py(
             dwarf_outputs
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func_va)),
+            program_environment
+                .as_deref()
+                .and_then(|environment| environment.prototype_for(func_va)),
             dwarf_type_env.as_ref(),
         );
         let PreparedLlir {

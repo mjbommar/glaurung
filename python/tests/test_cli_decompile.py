@@ -942,6 +942,116 @@ def test_real_stripped_x86_word_parameter_home_recovers_short(
     assert "(unsigned short arg0)" not in generated, generated
 
 
+def test_real_stripped_sigaction_callback_recovers_external_int_contract(
+    tmp_path: Path,
+) -> None:
+    """Recover an optimized-away callback parameter from its registration.
+
+    The callback deliberately never reads ``signal_number``, so its own stripped
+    machine body contains no parameter evidence.  ``sigaction`` is the surviving
+    program-level contract.  The ordinary address-taken no-argument callback is
+    the fail-closed control: merely storing a code pointer must not invent an
+    argument.
+    """
+    compiler = shutil.which("gcc")
+    strip = shutil.which("strip")
+    if compiler is None or strip is None:
+        pytest.skip("host gcc and strip are required")
+
+    source = tmp_path / "registered_callback.c"
+    binary = tmp_path / "registered_callback"
+    stripped = tmp_path / "registered_callback.stripped"
+    source.write_text(
+        "#include <signal.h>\n"
+        "volatile sig_atomic_t observed;\n"
+        "void (*volatile ordinary_slot)(void);\n"
+        "__attribute__((noinline, used)) void quiet_handler(int signal_number) {\n"
+        "    (void)signal_number;\n"
+        "    observed++;\n"
+        "}\n"
+        "__attribute__((noinline, used)) void noarg_callback(void) {\n"
+        "    observed += 2;\n"
+        "}\n"
+        "__attribute__((noinline, used)) void info_handler(\n"
+        "    int signal_number, siginfo_t *info, void *context) {\n"
+        "    (void)signal_number; (void)info; (void)context;\n"
+        "    observed += 3;\n"
+        "}\n"
+        "int main(void) {\n"
+        "    struct sigaction action = {0};\n"
+        "    struct sigaction info_action = {0};\n"
+        "    action.sa_handler = quiet_handler;\n"
+        "    action.sa_flags = SA_RESTART;\n"
+        "    sigemptyset(&action.sa_mask);\n"
+        "    info_action.sa_sigaction = info_handler;\n"
+        "    info_action.sa_flags = SA_RESTART | SA_SIGINFO;\n"
+        "    sigemptyset(&info_action.sa_mask);\n"
+        "    ordinary_slot = noarg_callback;\n"
+        "    int first = sigaction(SIGUSR1, &action, 0);\n"
+        "    return first + sigaction(SIGUSR2, &info_action, 0);\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            compiler,
+            "-O2",
+            "-fno-inline",
+            "-g",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=64)
+    quiet = next(
+        (function for function in functions if function.name == "quiet_handler"), None
+    )
+    noarg = next(
+        (function for function in functions if function.name == "noarg_callback"), None
+    )
+    info = next(
+        (function for function in functions if function.name == "info_handler"), None
+    )
+    assert quiet is not None, [function.name for function in functions]
+    assert noarg is not None, [function.name for function in functions]
+    assert info is not None, [function.name for function in functions]
+
+    shutil.copy2(binary, stripped)
+    stripped_result = subprocess.run(
+        [strip, "--strip-all", str(stripped)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert stripped_result.returncode == 0, stripped_result.stderr
+
+    results = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+        str(stripped),
+        [
+            int(quiet.entry_point.value),
+            int(noarg.entry_point.value),
+            int(info.entry_point.value),
+        ],
+        style="decbench",
+        timeout_ms=8000,
+    )
+    rendered = {int(va): text for _, va, text in results}
+    quiet_text = rendered[int(quiet.entry_point.value)]
+    noarg_text = rendered[int(noarg.entry_point.value)]
+    info_text = rendered[int(info.entry_point.value)]
+
+    assert f"sub_{int(quiet.entry_point.value):x}(int arg0)" in quiet_text, quiet_text
+    assert f"sub_{int(noarg.entry_point.value):x}(void)" in noarg_text, noarg_text
+    assert "arg0" not in noarg_text.split("{", 1)[0], noarg_text
+    assert f"sub_{int(info.entry_point.value):x}(void)" in info_text, info_text
+    assert "arg0" not in info_text.split("{", 1)[0], info_text
+
+
 def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> None:
     """Use AAPCS spill width and reload extension to recover byte arguments."""
     compiler = shutil.which("arm-none-eabi-gcc")

@@ -4263,7 +4263,6 @@ pub fn analyze_functions_image(
 /// symbols, vtables, and function starts before the caller's budget can stop
 /// it. This path performs only the bounded CFG walk for `entry_va`; direct
 /// xrefs are still recorded on the returned Function.
-#[cfg(feature = "python-ext")]
 pub(crate) fn discover_function_image_at(
     image: &crate::program::image::ProgramImage,
     budgets: &Budgets,

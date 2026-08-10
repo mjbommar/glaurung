@@ -7,6 +7,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::analysis::cfg::{analyze_functions_image_with_seeds, Budgets};
 use crate::core::function::Function;
+use crate::ir::call_args::CallConv;
+use crate::program::environment::{
+    callback_api_identity, recover_program_environment, ProgramEnvironment,
+};
 use crate::program::image::{ProgramImage, ProgramImageError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -17,6 +21,49 @@ struct DiscoveryKey {
     timeout_ms: u64,
     total_timeout_ms: u64,
     seeds: Box<[u64]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct EnvironmentKey {
+    max_blocks: usize,
+    max_instructions: usize,
+    timeout_ms: u64,
+    calling_convention: u8,
+    callback_apis: Box<[(u64, &'static str)]>,
+    requested_vas: Box<[u64]>,
+}
+
+impl EnvironmentKey {
+    fn new(
+        image: &ProgramImage,
+        budgets: &Budgets,
+        calling_convention: CallConv,
+        address_names: &HashMap<u64, String>,
+        requested_vas: &[u64],
+    ) -> Self {
+        let calling_convention = match calling_convention {
+            CallConv::SysVAmd64 => 0,
+            CallConv::Win64 => 1,
+            CallConv::Cdecl32 => 2,
+            CallConv::Aarch64 => 3,
+            CallConv::Arm => 4,
+            CallConv::ArmHardFloat => 5,
+        };
+        let mut requested_vas = requested_vas
+            .iter()
+            .map(|address| image.normalize_function_entry(*address))
+            .collect::<Vec<_>>();
+        requested_vas.sort_unstable();
+        requested_vas.dedup();
+        Self {
+            max_blocks: budgets.max_blocks,
+            max_instructions: budgets.max_instructions,
+            timeout_ms: budgets.timeout_ms,
+            calling_convention,
+            callback_apis: callback_api_identity(address_names),
+            requested_vas: requested_vas.into_boxed_slice(),
+        }
+    }
 }
 
 impl DiscoveryKey {
@@ -39,6 +86,7 @@ impl DiscoveryKey {
 }
 
 const MAX_DISCOVERY_CACHE_ENTRIES: usize = 256;
+const MAX_ENVIRONMENT_CACHE_ENTRIES: usize = 256;
 
 #[derive(Debug, Default)]
 struct DiscoveryCacheState {
@@ -121,6 +169,7 @@ pub struct DiscoveryCacheStats {
 pub struct ProgramSession {
     image: ProgramImage,
     discovery: Arc<DiscoveryCache>,
+    environments: Arc<Mutex<HashMap<EnvironmentKey, Arc<ProgramEnvironment>>>>,
 }
 
 impl ProgramSession {
@@ -134,6 +183,7 @@ impl ProgramSession {
         Self {
             image,
             discovery: Arc::new(DiscoveryCache::default()),
+            environments: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -167,8 +217,56 @@ impl ProgramSession {
         }
     }
 
+    /// Recover or reuse immutable program-level symbol/type/callback facts.
+    pub fn environment(
+        &self,
+        budgets: &Budgets,
+        calling_convention: CallConv,
+        address_names: &HashMap<u64, String>,
+        requested_vas: &[u64],
+    ) -> Arc<ProgramEnvironment> {
+        let key = EnvironmentKey::new(
+            &self.image,
+            budgets,
+            calling_convention,
+            address_names,
+            requested_vas,
+        );
+        if let Some(environment) = self
+            .environments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .cloned()
+        {
+            return environment;
+        }
+        let environment = Arc::new(recover_program_environment(
+            &self.image,
+            budgets,
+            calling_convention,
+            address_names,
+            &key.requested_vas,
+        ));
+        let mut environments = self
+            .environments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if environments.len() >= MAX_ENVIRONMENT_CACHE_ENTRIES {
+            environments.clear();
+        }
+        environments
+            .entry(key)
+            .or_insert_with(|| environment.clone())
+            .clone()
+    }
+
     /// Drop all reusable analysis artifacts and reset their counters.
     pub fn clear_caches(&self) {
         self.discovery.clear();
+        self.environments
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 }

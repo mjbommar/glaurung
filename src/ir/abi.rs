@@ -104,6 +104,25 @@ pub fn argument_registers(cc: CallConv) -> &'static [&'static str] {
     }
 }
 
+/// General-purpose registers an ordinary call may overwrite.
+///
+/// These are canonical storage names, not every sub-register spelling.  The
+/// executable IR records only the result register as a value-producing DEF,
+/// while program-level abstract interpreters also need to discard transient
+/// facts held in every caller-saved register across the call boundary.
+pub fn caller_saved_registers(cc: CallConv) -> &'static [&'static str] {
+    match cc {
+        CallConv::SysVAmd64 => &["rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11"],
+        CallConv::Win64 => &["rax", "rcx", "rdx", "r8", "r9", "r10", "r11"],
+        CallConv::Cdecl32 => &["rax", "rcx", "rdx"],
+        CallConv::Aarch64 => &[
+            "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13",
+            "x14", "x15", "x16", "x17", "x18", "x30",
+        ],
+        CallConv::Arm | CallConv::ArmHardFloat => &["r0", "r1", "r2", "r3", "r12", "lr"],
+    }
+}
+
 /// Every spelling of each argument slot, in ABI order: the 64-bit name first, then
 /// the narrower aliases that write the same logical parameter.
 ///

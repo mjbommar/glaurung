@@ -403,6 +403,18 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   executable behavior matrices pass all 56 legacy and 64 curriculum cells, and
   the fresh metric ratchet reports zero GED/TypeMatch/ByteMatch regression
   across 56/56 cells.
+- [x] Add a session-cached program environment for optimized-away callback
+  contracts instead of guessing from callee bodies. Registration recovery is
+  bounded and fail-closed: exact owner attribution plus lifted LLIR data flow is
+  required, caller-saved facts are killed at calls, joins require agreement,
+  `SA_SIGINFO` blocks the one-argument rule, and ordinary address-taken
+  functions remain untouched. A real stripped-GCC RED/GREEN fixture covers the
+  positive and both negative controls. A fresh optimized 250/250 replay changes
+  only `diffutils:O2-noinline:diff:stophandler`; no-cache TypeMatch v5 moves it
+  to 1.0 and the union rises 72→73 (`29.2%`), just above Kuna's 29.1% in the
+  pinned public snapshot. An eager 19.2-second-owner design was rejected; the
+  demand-driven implementation keeps mean full-replay time within the Phase 1
+  5% guardrail.
 - [ ] Convert the new compile-coverage gain into exact wins without weakening
   the boundary contracts. The highest-leverage immediate cohort is the 28
   newly nonzero ByteMatch rows, especially `copy_reg`, `yyparse`,

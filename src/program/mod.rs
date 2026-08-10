@@ -1,5 +1,6 @@
 //! Program-scoped image, target, environment, and analysis ownership.
 
+pub mod environment;
 pub mod image;
 pub mod session;
 
