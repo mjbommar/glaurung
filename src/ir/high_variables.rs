@@ -11,7 +11,7 @@
 //! resolve to a compatible pointer, and any use in integer/address arithmetic
 //! prevents changing its C declaration.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{is_promoted_local_name as is_promoted_local, VReg};
@@ -174,20 +174,23 @@ fn refine_authoritative_pointer_parameters(
 
     let mut candidates = HashMap::new();
     collect(body, &mut candidates);
+    let mut widths_by_origin: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for (name, widths) in candidates {
-        let width = widths.iter().copied().max().unwrap_or(0);
-        if !widths
-            .iter()
-            .all(|candidate| *candidate == 0 || width == 0 || *candidate == width)
-        {
+        let Some(width) = compatible_pointer_width(&widths) else {
             continue;
-        }
+        };
         let Some(origin) = single_exact_parameter_origin(&name, definitions) else {
             continue;
         };
         if unsafe_uses.contains(&origin) {
             continue;
         }
+        widths_by_origin.entry(origin).or_default().push(width);
+    }
+    for (origin, widths) in widths_by_origin {
+        let Some(width) = compatible_pointer_width(&widths) else {
+            continue;
+        };
         types.refine_from_value(
             VReg::phys(origin),
             TypeHint::Pointer {
@@ -195,6 +198,14 @@ fn refine_authoritative_pointer_parameters(
             },
         );
     }
+}
+
+fn compatible_pointer_width(widths: &[u8]) -> Option<u8> {
+    let width = widths.iter().copied().max()?;
+    widths
+        .iter()
+        .all(|candidate| *candidate == 0 || width == 0 || *candidate == width)
+        .then_some(width)
 }
 
 #[derive(Debug)]
@@ -861,6 +872,61 @@ mod tests {
 
         assert_eq!(pointer_width(&types, "arg0"), Some(8));
         assert_eq!(pointer_width(&types, "var2"), None);
+    }
+
+    #[test]
+    fn conflicting_alias_contracts_do_not_randomly_retype_their_parameter() {
+        let recovered = CallPrototype {
+            return_type: "int".into(),
+            parameter_types: vec!["long *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let function = Function {
+            name: "conflicting_alias_contracts".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("var1"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var2"),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "strcmp@plt".into(),
+                    },
+                    args: vec![
+                        Expr::Reg(VReg::phys("var1")),
+                        Expr::StringLit {
+                            value: "known".into(),
+                        },
+                    ],
+                    dst: Some(VReg::phys("cmp")),
+                    call_spec: None,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "consume_longs".into(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("var2"))],
+                    dst: Some(VReg::phys("ret")),
+                    call_spec: Some(CallSiteSpec {
+                        call_prototype: recovered.clone(),
+                        callee_prototype: Some(recovered),
+                    }),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+
+        refine_pointer_high_variables(&function, &mut types);
+
+        assert_eq!(pointer_width(&types, "arg0"), None);
     }
 
     #[test]
