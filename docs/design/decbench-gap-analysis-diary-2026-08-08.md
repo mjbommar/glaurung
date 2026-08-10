@@ -2509,3 +2509,18 @@ manifest is
 `68cab832221b7e3089d4f44dce1ee0e7c045be6139082960cb7fb1a16c34dc2d`, and the
 diagnostic ledger is
 `0c8bdf009604d9a8b71a613c5eb99fbea91cd0951e89fa98471501664750b05f`.
+
+The retained code, fixture, and evidence were committed as
+`b986d3cf87bd75e5ce2ca25b89a2676b35d7419d` and pushed with an identical
+remote branch hash.  Rebuilding the native extension from that exact revision
+and replaying an otherwise empty kit reproduced 224/224 binaries and 250/250
+functions with zero extraction failures in 67.704 seconds.  Every one of the
+224 generated C files is byte-identical to the independently scored worktree
+candidate.  The validated exact-revision archive SHA-256 is
+`fc1dffa4c2ef7a116fb39a894d66049979f38b3f9e929ff828189275969f7a5e`, its
+result manifest is
+`bfccec5cd86cbca2ce9cb7d38d87d26a9ba3674fc2e8ac7ec9642aedb3e72d2f`, the
+diagnostic ledger is
+`bd808e212b17c69102d16c8ad1f57f13bcb324d1604753062a26bbc4f53a117f`, and
+the stable C-tree digest is
+`5fb36ff83892a1643c5fa7983d2675999e746c60022528917645e5cad6fb9517`.
