@@ -499,7 +499,10 @@ fn recover_proven_direct_tail_calls(blocks: &mut [LlirBlock], func: &Function) {
         let va = last.va;
         last.op = Op::Call {
             target: CallTarget::Direct(target),
-            effects: None,
+            effects: Some(CallEffects {
+                is_tail_call: true,
+                ..CallEffects::default()
+            }),
         };
         block.instrs.push(LlirInstr { va, op: Op::Return });
     }
@@ -882,7 +885,10 @@ mod tests {
             blocks[0].instrs[1].op,
             Op::Call {
                 target: CallTarget::Direct(0x5000),
-                effects: None
+                effects: Some(CallEffects {
+                    is_tail_call: true,
+                    ..
+                })
             }
         ));
         assert!(matches!(blocks[0].instrs[2].op, Op::Return));

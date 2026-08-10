@@ -91,8 +91,13 @@ fn architecturally_read_names(lf: &LlirFunction) -> HashSet<String> {
     let mut phi_copies: Vec<(&str, &str)> = Vec::new();
     for block in &lf.blocks {
         for ins in &block.instrs {
-            if matches!(ins.op, Op::Call { .. }) {
-                continue;
+            if let Op::Call { effects, .. } = &ins.op {
+                if !effects
+                    .as_ref()
+                    .is_some_and(|effects| effects.args_are_exact)
+                {
+                    continue;
+                }
             }
             if let Some(pair) = phi_copy_operands(&ins.op) {
                 phi_copies.push(pair);
@@ -184,8 +189,13 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
             // either way — the first touch of an argument register in these functions
             // is its `-O0` spill, which precedes any call). Kept because the inference
             // should not depend on `def_uses` continuing to under-report call effects.
-            if matches!(ins.op, Op::Call { .. }) {
-                continue;
+            if let Op::Call { effects, .. } = &ins.op {
+                if !effects
+                    .as_ref()
+                    .is_some_and(|effects| effects.args_are_exact)
+                {
+                    continue;
+                }
             }
             // ... and a phi copy is that same may-use laundered into an ordinary
             // `Assign`. `insert_phi_copies` materialises a copy for every phi
@@ -2185,6 +2195,9 @@ mod tests {
                 effects: Some(crate::ir::types::CallEffects {
                     args: vec![VReg::phys("rdx")],
                     result: None,
+                    result_is_source_value: false,
+                    args_are_exact: true,
+                    is_tail_call: false,
                 }),
             },
         ]);

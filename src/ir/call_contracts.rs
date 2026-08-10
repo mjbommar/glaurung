@@ -11,6 +11,8 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 
 use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::call_args::CallConv;
+use crate::ir::types::{CallTarget, LlirFunction, Op, VReg};
 use crate::ir::types_recover::{c_type_for_hint, TypeHint, TypeMap};
 
 #[derive(Debug, Deserialize)]
@@ -310,6 +312,82 @@ fn clean_symbol_name(name: &str) -> String {
 /// Apply authoritative library contracts to named calls in `function`.
 pub fn apply_known_call_contracts(function: &mut Function) {
     apply_body(&mut function.body);
+}
+
+/// Narrow LLIR call effects using an authoritative resolved library contract.
+///
+/// The convention-wide annotation is deliberately an over-approximation: an
+/// unknown SysV call may read all six integer argument registers and produce a
+/// result in `rax`. Once a direct target resolves to a catalog declaration,
+/// retaining that approximation corrupts the caller's own prototype recovery:
+/// a tail call to `void free(void *)`, for example, looks like a six-parameter
+/// function returning the synthetic post-call `rax` value.
+///
+/// Fixed scalar declarations are exact enough to narrow the register inputs.
+/// Variadic, floating-point, wide, aggregate, and stack-passed declarations
+/// remain on the conservative ABI effects until their complete storage layout
+/// is representable. A declared `void` result is exact independently of the
+/// parameter layout. It marks the ABI result-register DEF as a machine clobber,
+/// rather than deleting that DEF and allowing stale pre-call state to survive.
+pub fn apply_known_llir_call_contracts(
+    function: &mut LlirFunction,
+    cc: CallConv,
+    address_names: &HashMap<u64, String>,
+) {
+    for instruction in function
+        .blocks
+        .iter_mut()
+        .flat_map(|block| block.instrs.iter_mut())
+    {
+        let Op::Call {
+            target: CallTarget::Direct(target),
+            effects: Some(effects),
+        } = &mut instruction.op
+        else {
+            continue;
+        };
+        let Some(contract) = address_names.get(target).and_then(|name| lookup(name)) else {
+            continue;
+        };
+
+        if let Some(args) = fixed_scalar_argument_registers(&contract, cc) {
+            effects.args = args;
+            effects.args_are_exact = true;
+        }
+        if contract.return_type.trim().eq_ignore_ascii_case("void") {
+            effects.result_is_source_value = false;
+        }
+    }
+}
+
+/// Exact register storage for a fixed, one-word scalar declaration.
+///
+/// This intentionally describes only the common prefix shared by the supported
+/// integer ABIs. Rejecting an unrepresented layout is safer than truncating its
+/// liveness: the existing convention-wide call effects remain intact.
+fn fixed_scalar_argument_registers(contract: &CallContract, cc: CallConv) -> Option<Vec<VReg>> {
+    if contract.is_variadic {
+        return None;
+    }
+    let registers = crate::ir::abi::argument_registers(cc);
+    if contract.params.len() > registers.len() {
+        return None;
+    }
+    let word_bytes = crate::ir::abi::machine_word_bytes(cc);
+    for parameter in &contract.params {
+        let c_type = standalone_c_type(&parameter.c_type)?;
+        let fits_one_integer_register = c_type.ends_with('*')
+            || integer_c_type_width(&c_type, word_bytes).is_some_and(|width| width <= word_bytes);
+        if !fits_one_integer_register {
+            return None;
+        }
+    }
+    Some(
+        registers[..contract.params.len()]
+            .iter()
+            .map(|name| VReg::phys(*name))
+            .collect(),
+    )
 }
 
 /// Refine nominal pointer spellings on the current function from compatible
@@ -879,12 +957,16 @@ fn apply_body(body: &mut [Stmt]) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::{
-        apply_known_call_contracts, libc_prototypes, lookup, opaque_pointer_typedef,
-        refine_opaque_parameter_types_from_calls, standalone_c_type, CallPrototype,
-        CallPrototypeAuthority,
+        apply_known_call_contracts, apply_known_llir_call_contracts, libc_prototypes, lookup,
+        opaque_pointer_typedef, refine_opaque_parameter_types_from_calls, standalone_c_type,
+        CallPrototype, CallPrototypeAuthority,
     };
     use crate::ir::ast::{Expr, Function, Stmt};
+    use crate::ir::call_args::CallConv;
+    use crate::ir::types::{CallTarget, LlirBlock, LlirFunction, LlirInstr, Op};
     use crate::ir::types_recover::{TypeHint, TypeMap};
     use crate::ir::VReg;
 
@@ -919,6 +1001,89 @@ mod tests {
         };
         assert_eq!(args, &[Expr::Const(1)]);
         assert_eq!(*dst, None);
+    }
+
+    #[test]
+    fn resolved_void_contract_narrows_llir_effects_before_ssa() {
+        let mut function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1004,
+                instrs: vec![LlirInstr {
+                    va: 0x1000,
+                    op: Op::Call {
+                        target: CallTarget::Direct(0x2000),
+                        effects: None,
+                    },
+                }],
+                succs: vec![],
+            }],
+        };
+        crate::ir::abi::annotate_calls(&mut function, CallConv::SysVAmd64);
+        apply_known_llir_call_contracts(
+            &mut function,
+            CallConv::SysVAmd64,
+            &HashMap::from([(0x2000, "free@plt".to_string())]),
+        );
+
+        let Op::Call {
+            effects: Some(effects),
+            ..
+        } = &function.blocks[0].instrs[0].op
+        else {
+            panic!("expected annotated call")
+        };
+        assert_eq!(effects.args, [VReg::phys("rdi")]);
+        assert_eq!(effects.result, Some(VReg::phys("rax")));
+        assert!(!effects.result_is_source_value);
+    }
+
+    #[test]
+    fn unresolved_and_variadic_llir_calls_keep_conservative_effects() {
+        let mut function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1008,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Call {
+                            target: CallTarget::Direct(0x2000),
+                            effects: None,
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Call {
+                            target: CallTarget::Direct(0x3000),
+                            effects: None,
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        crate::ir::abi::annotate_calls(&mut function, CallConv::SysVAmd64);
+        apply_known_llir_call_contracts(
+            &mut function,
+            CallConv::SysVAmd64,
+            &HashMap::from([(0x2000, "printf@plt".to_string())]),
+        );
+
+        for instruction in &function.blocks[0].instrs {
+            let Op::Call {
+                effects: Some(effects),
+                ..
+            } = &instruction.op
+            else {
+                panic!("expected annotated call")
+            };
+            assert_eq!(effects.args.len(), 6);
+            assert_eq!(effects.result, Some(VReg::phys("rax")));
+            assert!(effects.result_is_source_value);
+        }
     }
 
     #[test]

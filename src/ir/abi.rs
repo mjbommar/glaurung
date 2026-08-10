@@ -247,10 +247,13 @@ pub fn is_return_register(cc: CallConv, name: &str) -> bool {
 pub fn call_effects(cc: CallConv) -> CallEffects {
     CallEffects {
         result: Some(VReg::phys(return_register(cc))),
+        result_is_source_value: true,
         args: argument_registers(cc)
             .iter()
             .map(|n| VReg::phys(*n))
             .collect(),
+        args_are_exact: false,
+        is_tail_call: false,
     }
 }
 
@@ -315,11 +318,17 @@ pub fn annotate_calls(lf: &mut LlirFunction, cc: CallConv) {
                 effects.result = Some(hard_float_result_consumed_after(block, index));
             }
             let instr = &mut block.instrs[index];
-            if let Op::Call {
-                effects: slot @ None,
-                ..
-            } = &mut instr.op
-            {
+            if let Op::Call { effects: slot, .. } = &mut instr.op {
+                let tail_marker = slot.as_ref().is_some_and(|current| {
+                    current.is_tail_call
+                        && current.result.is_none()
+                        && current.args.is_empty()
+                        && !current.args_are_exact
+                });
+                if slot.is_some() && !tail_marker {
+                    continue;
+                }
+                effects.is_tail_call = tail_marker;
                 *slot = Some(effects.clone());
             }
         }
@@ -432,7 +441,10 @@ mod tests {
         if let Op::Call { effects, .. } = &mut lf.blocks[0].instrs[0].op {
             *effects = Some(CallEffects {
                 result: Some(VReg::phys("rax")),
+                result_is_source_value: true,
                 args: vec![VReg::phys("rdi")],
+                args_are_exact: true,
+                is_tail_call: false,
             });
         }
         annotate_calls(&mut lf, CallConv::SysVAmd64);

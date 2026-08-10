@@ -441,6 +441,20 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   ratchet reports no regression. Performance remains explicitly inconclusive
   under a heavily contended host rather than being declared inside the 5%
   guardrail from noisy timing.
+- [x] Resolve address-taken x86-64 imports through `.plt.got` and preserve
+  CFG-proven nonlocal branches as explicit tail-call effects. The loader now
+  joins each decoded RIP-relative stub to its exact `GLOB_DAT` GOT slot instead
+  of guessing by relocation order; CFG discovery recognizes only matching ELF
+  architecture/PLT-section targets. Call effects separately represent the ABI
+  result-register clobber, source-level result availability, exact fixed scalar
+  inputs, and tail transfer. This makes official `statdb_write` correctly
+  `void`, renders its terminal `free` call without a dangling goto, and retains
+  sound SSA definedness across ordinary declared-void calls. A real optimized,
+  CET/IBT, stripped host-GCC fixture recompiles and executes. Fresh 250-function
+  scoring is deliberately recorded as mixed: GED and ByteMatch means improve
+  slightly, TypeMatch mean declines slightly in one row, no exact win is lost,
+  and the exact union remains 75/250. This closes the named `statdb_write`
+  correctness acceptance item, not the Phase 4 GED/type targets.
 - [ ] Convert the new compile-coverage gain into exact wins without weakening
   the boundary contracts. The highest-leverage immediate cohort is the 28
   newly nonzero ByteMatch rows, especially `copy_reg`, `yyparse`,

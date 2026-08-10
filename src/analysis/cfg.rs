@@ -951,30 +951,40 @@ fn elf_x86_tail_target_looks_like_function_start(
         || matches!(after_landing_pad, [0x53 | 0x55 | 0x56 | 0x57, ..])
 }
 
-/// Is this ARM32 branch target a PLT stub — i.e. is the branch a tail call?
+/// Is this ELF branch target a PLT stub — i.e. is the branch a tail call?
 ///
 /// A PLT entry is linker-generated import glue. No compiler places one inside a
 /// function body, so an unconditional branch to one always leaves the function
 /// for good. GCC lowers `return f(x);` for an imported `f` to exactly
-/// `b.w f@plt`, and ARM has no CET landing pad for
-/// [`elf_x86_tail_target_looks_like_function_start`] to key on — so without this
-/// the branch stayed an intra-function edge, and `call_forward_result`
-/// decompiled to `goto L_49c; L_49c: ;` with no return value at all.
+/// `b.w f@plt`, while x86-64 may use a compact `.plt.got` stub for an
+/// address-taken import. Neither target can be an intra-function block.
 ///
-/// Deliberately restricted to ARM32 and to the stub SECTIONS: the test is a
-/// property of where the target lives, not a guess about the bytes there, and
-/// no other architecture's classification is touched.
-fn elf_arm_tail_target_is_plt_stub(data: &[u8], target_va: u64, arch: BArch) -> bool {
+/// This is deliberately a section-membership proof rather than a byte-pattern
+/// guess. The object architecture must also agree with the active decoder so a
+/// mismatched caller cannot classify unrelated bytes as a tail target.
+fn elf_tail_target_is_plt_stub(data: &[u8], target_va: u64, arch: BArch) -> bool {
     use object::{Object, ObjectSection};
-    if !matches!(arch, BArch::ARM) || !data.starts_with(b"\x7fELF") {
+    if !data.starts_with(b"\x7fELF") {
         return false;
     }
     let Ok(object) = crate::decompile::profile::parse_object(data) else {
         return false;
     };
+    let architecture_matches = matches!(
+        (arch, object.architecture()),
+        (BArch::ARM, object::Architecture::Arm)
+            | (BArch::AArch64, object::Architecture::Aarch64)
+            | (BArch::X86, object::Architecture::I386)
+            | (BArch::X86_64, object::Architecture::X86_64)
+    );
+    if !architecture_matches {
+        return false;
+    }
     object.sections().any(|section| {
-        matches!(section.name(), Ok(".plt" | ".plt.sec" | ".iplt"))
-            && section.size() != 0
+        matches!(
+            section.name(),
+            Ok(".plt" | ".plt.sec" | ".plt.got" | ".iplt")
+        ) && section.size() != 0
             && target_va >= section.address()
             && target_va < section.address().saturating_add(section.size())
     })
@@ -1469,12 +1479,12 @@ fn discover_function(
                             tgt,
                             arch,
                         );
-                    let is_elf_arm_tail_target = unconditional
+                    let is_elf_plt_tail_target = unconditional
                         && !facts.owns(tgt)
                         && tgt != entry.value
                         && is_exec_target
-                        && elf_arm_tail_target_is_plt_stub(data, tgt, arch);
-                    if is_pe_tail_target || is_elf_x86_tail_target || is_elf_arm_tail_target {
+                        && elf_tail_target_is_plt_stub(data, tgt, arch);
+                    if is_pe_tail_target || is_elf_x86_tail_target || is_elf_plt_tail_target {
                         call_edges.push(FunctionXref {
                             callsite_va: cur_va,
                             target_va: tgt,
@@ -5768,26 +5778,21 @@ mod arm_tail_call_tests {
     #[test]
     fn an_arm_branch_into_the_plt_is_a_tail_call() {
         let data = sample("armhf/c2_demo-armhf-gcc");
-        assert!(elf_arm_tail_target_is_plt_stub(&data, 0x4ec, BArch::ARM));
-        assert!(elf_arm_tail_target_is_plt_stub(&data, 0x540, BArch::ARM));
-        assert!(!elf_arm_tail_target_is_plt_stub(&data, 0x4d0, BArch::ARM));
-        assert!(!elf_arm_tail_target_is_plt_stub(&data, 0x698, BArch::ARM));
+        assert!(elf_tail_target_is_plt_stub(&data, 0x4ec, BArch::ARM));
+        assert!(elf_tail_target_is_plt_stub(&data, 0x540, BArch::ARM));
+        assert!(!elf_tail_target_is_plt_stub(&data, 0x4d0, BArch::ARM));
+        assert!(!elf_tail_target_is_plt_stub(&data, 0x698, BArch::ARM));
     }
 
-    /// The rule is ARM32-only, so no other architecture's branch
-    /// classification can move because of it.
+    /// A decoder/object architecture mismatch must never reclassify a target.
     #[test]
-    fn no_other_architecture_is_reclassified() {
+    fn matching_architectures_are_required_and_supported() {
         let data = sample("armhf/c2_demo-armhf-gcc");
         for arch in [BArch::X86_64, BArch::X86, BArch::AArch64] {
-            assert!(!elf_arm_tail_target_is_plt_stub(&data, 0x4ec, arch));
+            assert!(!elf_tail_target_is_plt_stub(&data, 0x4ec, arch));
         }
         let arm64 = sample("arm64/c2_demo-arm64-gcc");
-        assert!(!elf_arm_tail_target_is_plt_stub(
-            &arm64,
-            0x810,
-            BArch::AArch64
-        ));
+        assert!(elf_tail_target_is_plt_stub(&arm64, 0x810, BArch::AArch64));
     }
 }
 

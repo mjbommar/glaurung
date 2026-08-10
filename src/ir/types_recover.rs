@@ -971,7 +971,14 @@ fn arm_vfp_live_in_slots(lf: &LlirFunction) -> Vec<usize> {
             // parameter evidence comes from machine instructions before the
             // call; counting the conservative s0-s15 call footprint here
             // inflated every hard-float caller to sixteen parameters.
-            if !matches!(instruction.op, Op::Call { .. }) {
+            let conservative_call = matches!(
+                &instruction.op,
+                Op::Call { effects, .. }
+                    if !effects
+                        .as_ref()
+                        .is_some_and(|effects| effects.args_are_exact)
+            );
+            if !conservative_call {
                 for used in uses {
                     if let Some(slot) = arm_single_vfp_slot(&used) {
                         first_touch.entry(slot).or_insert(true);
@@ -1264,6 +1271,15 @@ fn output_trial_is_dedicated(
             }
         );
         if !forwards_same_storage {
+            if matches!(
+                op,
+                Op::Call {
+                    effects: Some(effects),
+                    ..
+                } if !effects.result_is_source_value
+            ) {
+                return false;
+            }
             return true;
         }
         let Some(source) = ssa.use_value(lf, addr, 0) else {
@@ -1295,8 +1311,11 @@ fn call_result_has_only_guard_uses(
         return false;
     };
     if !matches!(
-        lf.blocks[definition.block_idx].instrs[definition.instr_idx].op,
-        Op::Call { .. }
+        &lf.blocks[definition.block_idx].instrs[definition.instr_idx].op,
+        Op::Call {
+            effects: Some(effects),
+            ..
+        } if effects.result_is_source_value
     ) {
         return false;
     }
@@ -1561,6 +1580,9 @@ fn call_effect_use_floor(op: &Op) -> Option<usize> {
     match op {
         Op::Call { target, effects } => {
             let effects = effects.as_ref()?;
+            if effects.args_are_exact {
+                return None;
+            }
             let target_uses = usize::from(matches!(
                 target,
                 crate::ir::types::CallTarget::Indirect(crate::ir::types::Value::Reg(_))
@@ -1569,6 +1591,39 @@ fn call_effect_use_floor(op: &Op) -> Option<usize> {
         }
         _ => None,
     }
+}
+
+/// Whether every apparent return is the structural terminator of a proven
+/// tail call to a declared-void callee.
+///
+/// LLIR represents a nonlocal tail transfer as `Call + Return` so ordinary CFG
+/// and structuring consumers see a closed block. That `Return` is not a machine
+/// observation of the caller's result register. Without the explicit tail and
+/// void-result facts, a definition from an earlier unrelated call can appear to
+/// reach it and invent a scalar source result.
+fn all_returns_are_known_void_tail_calls(function: &LlirFunction) -> bool {
+    let mut saw_return = false;
+    for block in &function.blocks {
+        for (index, instruction) in block.instrs.iter().enumerate() {
+            if !instruction.op.is_return() {
+                continue;
+            }
+            saw_return = true;
+            let known_void_tail = index.checked_sub(1).is_some_and(|call_index| {
+                matches!(
+                    &block.instrs[call_index].op,
+                    Op::Call {
+                        effects: Some(effects),
+                        ..
+                    } if effects.is_tail_call && !effects.result_is_source_value
+                )
+            });
+            if !known_void_tail {
+                return false;
+            }
+        }
+    }
+    saw_return
 }
 
 /// Recover a prototype with the binary-level ARM VFP argument contract.
@@ -1763,26 +1818,30 @@ pub fn recover_prototype_with_arm_vfp_args(
     };
     has_unsupported_output_trial |=
         has_packed_zero_bridge_trial && !direct_storage_classes.contains(&ResultHintClass::Integer);
-    let output_kind = match (
-        has_machine_return,
-        result_values.is_empty(),
-        has_unsupported_output_trial || direct_storage_classes.len() > 1,
-        has_opaque_semantics,
-    ) {
-        // A tail-call wrapper, a source-level non-returning function, and an
-        // incomplete CFG all have no machine RET. None provides evidence for
-        // `void`; keep the source result unknown until call/prototype recovery
-        // can distinguish them.
-        (false, _, _, _) => RecoveredOutputKind::Unknown,
-        // Mixed integer/FP storage can be an aggregate result.  Until that
-        // source shape is representable, guessing either half is unsound.
-        (true, _, true, _) => RecoveredOutputKind::Unknown,
-        // A footprint-free intrinsic is a fact gap, not evidence that no
-        // result exists.  A dedicated modeled return trial can still prove a
-        // direct result; without one, fail closed rather than inventing void.
-        (true, true, false, true) => RecoveredOutputKind::Unknown,
-        (true, true, false, false) => RecoveredOutputKind::Void,
-        (true, false, false, _) => RecoveredOutputKind::Direct,
+    let output_kind = if all_returns_are_known_void_tail_calls(lf) {
+        RecoveredOutputKind::Void
+    } else {
+        match (
+            has_machine_return,
+            result_values.is_empty(),
+            has_unsupported_output_trial || direct_storage_classes.len() > 1,
+            has_opaque_semantics,
+        ) {
+            // A tail-call wrapper, a source-level non-returning function, and an
+            // incomplete CFG all have no machine RET. None provides evidence for
+            // `void`; keep the source result unknown until call/prototype recovery
+            // can distinguish them.
+            (false, _, _, _) => RecoveredOutputKind::Unknown,
+            // Mixed integer/FP storage can be an aggregate result.  Until that
+            // source shape is representable, guessing either half is unsound.
+            (true, _, true, _) => RecoveredOutputKind::Unknown,
+            // A footprint-free intrinsic is a fact gap, not evidence that no
+            // result exists.  A dedicated modeled return trial can still prove a
+            // direct result; without one, fail closed rather than inventing void.
+            (true, true, false, true) => RecoveredOutputKind::Unknown,
+            (true, true, false, false) => RecoveredOutputKind::Void,
+            (true, false, false, _) => RecoveredOutputKind::Direct,
+        }
     };
     let result = match output_kind {
         RecoveredOutputKind::Direct => Some(RecoveredResult {
@@ -3477,7 +3536,9 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
 mod tests {
     use super::*;
     use crate::ir::ssa::{compute_ssa, SsaValue};
-    use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
+    use crate::ir::types::{
+        CallEffects, CallTarget, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value,
+    };
 
     #[test]
     fn frame_bases_cover_arm32_and_ignore_the_ssa_suffix() {
@@ -3519,6 +3580,76 @@ mod tests {
                 succs: vec![],
             }],
         }
+    }
+
+    #[test]
+    fn known_void_tail_call_rejects_stale_result_register_residue() {
+        let function = mk_block(vec![
+            Op::Assign {
+                dst: VReg::phys("rax"),
+                src: Value::Const(7),
+            },
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(CallEffects {
+                    result: Some(VReg::phys("rax")),
+                    result_is_source_value: false,
+                    args: vec![VReg::phys("rdi")],
+                    args_are_exact: true,
+                    is_tail_call: true,
+                }),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&function);
+        let slots = crate::ir::value_number::live_in_arg_slots_llir(
+            &function,
+            crate::ir::call_args::CallConv::SysVAmd64,
+        );
+
+        let prototype = recover_prototype(
+            &function,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &slots,
+        );
+
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Void);
+        assert_eq!(
+            prototype
+                .parameters()
+                .iter()
+                .map(|parameter| parameter.slot)
+                .collect::<Vec<_>>(),
+            [0]
+        );
+    }
+
+    #[test]
+    fn ordinary_known_void_call_clobber_is_not_a_source_result() {
+        let function = mk_block(vec![
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(CallEffects {
+                    result: Some(VReg::phys("rax")),
+                    result_is_source_value: false,
+                    args: vec![],
+                    args_are_exact: true,
+                    is_tail_call: false,
+                }),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&function);
+
+        let prototype = recover_prototype(
+            &function,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::new(),
+        );
+
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::Void);
     }
 
     #[test]

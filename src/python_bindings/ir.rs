@@ -392,6 +392,21 @@ fn inline_soft_helper_calls_in(
     });
 }
 
+/// Attach convention-wide call effects, then narrow resolved library calls.
+///
+/// This must precede SSA and prototype recovery. Keeping the two layers in one
+/// helper prevents an entry point from observing the ABI's conservative
+/// six/eight-register approximation after another already applied the exact
+/// program-level symbol contract.
+fn annotate_calls_in(
+    function: &mut crate::ir::types::LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+    address_names: &std::collections::HashMap<u64, String>,
+) {
+    crate::ir::abi::annotate_calls(function, cc);
+    crate::ir::call_contracts::apply_known_llir_call_contracts(function, cc, address_names);
+}
+
 /// THE AST pass pipeline. Every public decompile entry point runs exactly this.
 ///
 /// It used to be copy-pasted into four functions — `decompile_at`, `decompile_range_at`,
@@ -932,7 +947,7 @@ pub(super) fn decompile_at_session(
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
     inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-    crate::ir::abi::annotate_calls(&mut lf_raw, cc);
+    annotate_calls_in(&mut lf_raw, cc, &addr_map);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
     // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
@@ -1222,7 +1237,7 @@ fn decompile_range_at_py(
     // pass having to special-case it (see `ir::abi`).
     let mut lf_raw = lf_raw;
     inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-    crate::ir::abi::annotate_calls(&mut lf_raw, cc);
+    annotate_calls_in(&mut lf_raw, cc, &addr_map);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
     // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
@@ -2128,7 +2143,7 @@ fn recover_direct_callee_layouts(
                 };
                 let mut lifted = lift_function_from_image(image, callee, arch)?;
                 inline_soft_helper_calls_in(&mut lifted, &*address_names);
-                crate::ir::abi::annotate_calls(&mut lifted, cc);
+                annotate_calls_in(&mut lifted, cc, &*address_names);
                 let ssa = compute_ssa(&lifted);
                 let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lifted, cc);
                 let prototype = recover_decbench_prototype(
@@ -2655,7 +2670,7 @@ fn decompile_all_py(
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-        crate::ir::abi::annotate_calls(&mut lf_raw, cc);
+        annotate_calls_in(&mut lf_raw, cc, &addr_map);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(
@@ -2900,7 +2915,7 @@ fn decompile_many_py(
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-        crate::ir::abi::annotate_calls(&mut lf_raw, cc);
+        annotate_calls_in(&mut lf_raw, cc, &addr_map);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(

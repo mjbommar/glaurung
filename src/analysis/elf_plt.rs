@@ -1,12 +1,14 @@
 //! ELF PLT mapping helpers (best-effort for x86_64).
 //!
 //! Provides a conservative mapper from PLT entry VAs to imported function names
-//! by pairing `.rela.plt` entries with `.plt` stubs in order.
+//! by pairing `.rela.plt` entries with `.plt` stubs in order and decoding
+//! GOT-backed `.plt.got` stubs against their exact dynamic relocations.
 
 use object::read::Object;
 
 /// Build a best-effort map of PLT entry addresses to imported function names.
-/// Currently supports ELF x86_64 with `.plt` and `.rela.plt` sections.
+/// Currently supports ELF x86_64 `.plt`, `.plt.sec`, and `.plt.got` sections,
+/// plus decoded ARM32 PLT stubs.
 pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
     let mut out: Vec<(u64, String)> = Vec::new();
     let Ok(obj) = crate::decompile::profile::parse_object(data) else {
@@ -26,6 +28,7 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
     // `.plt.sec` has NO reserved slot: entry i pairs with relocation i.
     let mut plt: Option<(u64, u64)> = None;
     let mut plt_sec: Option<(u64, u64)> = None;
+    let mut has_plt_got = false;
     for sec in obj.sections() {
         if let Ok(name) = sec.name() {
             let (addr, size) = (sec.address(), sec.size());
@@ -35,11 +38,12 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
             match name {
                 ".plt" => plt = plt.or(Some((addr, size))),
                 ".plt.sec" => plt_sec = plt_sec.or(Some((addr, size))),
+                ".plt.got" => has_plt_got = true,
                 _ => {}
             }
         }
     }
-    if plt.is_none() && plt_sec.is_none() {
+    if plt.is_none() && plt_sec.is_none() && !has_plt_got {
         return out;
     }
 
@@ -115,13 +119,18 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
                 }
                 Some(String::from_utf8_lossy(&s[..end]).to_string())
             };
-            // Parse .rel(a).plt entries to collect names in PLT order.
+            // Parse PLT relocations for ordered tables and dynamic relocations
+            // for exact GOT-slot identity. `.plt.got` entries are backed by
+            // GLOB_DAT relocations in `.rel(a).dyn`, not JUMP_SLOT entries in
+            // `.rel(a).plt`, so the ordered list alone cannot name them.
             for sec in obj.sections() {
                 let Ok(name) = sec.name() else { continue };
                 let lname = name.to_ascii_lowercase();
-                let addend = match lname.as_str() {
-                    ".rela.plt" => true,
-                    ".rel.plt" => false,
+                let (addend, ordered_plt) = match lname.as_str() {
+                    ".rela.plt" => (true, true),
+                    ".rel.plt" => (false, true),
+                    ".rela.dyn" => (true, false),
+                    ".rel.dyn" => (false, false),
                     _ => continue,
                 };
                 // Elf32_Rel 8, Elf32_Rela 12, Elf64_Rel 16, Elf64_Rela 24.
@@ -170,7 +179,9 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
                     };
                     if let Some(s) = name_for_index(sym_idx) {
                         got_slots.insert(r_offset, s.clone());
-                        imported.push(s);
+                        if ordered_plt {
+                            imported.push(s);
+                        }
                     }
                 }
             }
@@ -209,10 +220,6 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
             }
         }
     }
-    if imported.is_empty() {
-        return out;
-    }
-
     // A header may precede the first real entry: `.plt` has one, `.plt.sec` has
     // none. Its size is *derived*, not assumed, because it is not one entry on
     // every architecture — x86-64's PLT0 is 16 bytes and AArch64's is 32, so
@@ -232,6 +239,9 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
             arm.dedup_by_key(|(va, _)| *va);
             return arm;
         }
+    }
+    if arch == object::Architecture::X86_64 {
+        out.extend(x86_64_plt_got_map(data, &obj, &got_slots));
     }
     let mut emit = |start: u64, size: u64, reserved: u64| {
         let count = imported.len() as u64;
@@ -255,6 +265,71 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
     }
     out.sort_by_key(|(va, _)| *va);
     out.dedup_by_key(|(va, _)| *va);
+    out
+}
+
+/// Decode x86-64 `.plt.got` stubs and join them to exact GLOB_DAT relocations.
+///
+/// Unlike `.plt` and `.plt.sec`, this table is not indexed by `.rela.plt`.
+/// Each stub states its GOT slot as a RIP-relative indirect jump, so decoding
+/// that displacement avoids an unsafe order-based guess. Both the CET/IBT form
+/// (`endbr64; bnd jmp *disp32(%rip)`) and the ordinary `jmp` form are accepted.
+fn x86_64_plt_got_map(
+    data: &[u8],
+    obj: &object::read::File,
+    got_slots: &std::collections::HashMap<u64, String>,
+) -> Vec<(u64, String)> {
+    use object::ObjectSection;
+
+    let mut out = Vec::new();
+    for section in obj.sections() {
+        if section.name() != Ok(".plt.got") {
+            continue;
+        }
+        let Some((file_start, file_size)) = section.file_range() else {
+            continue;
+        };
+        let start = file_start as usize;
+        let end = start.saturating_add(file_size as usize).min(data.len());
+        let Some(bytes) = data.get(start..end) else {
+            continue;
+        };
+        let base = section.address();
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let stub_offset = offset;
+            if bytes.get(offset..offset + 4) == Some(&[0xf3, 0x0f, 0x1e, 0xfa]) {
+                offset += 4;
+            }
+            if bytes.get(offset) == Some(&0xf2) {
+                offset += 1;
+            }
+            if bytes.get(offset..offset + 2) != Some(&[0xff, 0x25]) {
+                offset = stub_offset.saturating_add(1);
+                continue;
+            }
+            let Some(displacement) = bytes.get(offset + 2..offset + 6) else {
+                break;
+            };
+            let Ok(displacement) = <[u8; 4]>::try_from(displacement) else {
+                break;
+            };
+            let displacement = i64::from(i32::from_le_bytes(displacement));
+            let next_va = base.saturating_add(offset.saturating_add(6) as u64);
+            let slot = if displacement >= 0 {
+                next_va.checked_add(displacement as u64)
+            } else {
+                next_va.checked_sub(displacement.unsigned_abs())
+            };
+            if let Some(name) = slot.and_then(|slot| got_slots.get(&slot)) {
+                out.push((
+                    base.saturating_add(stub_offset as u64),
+                    format!("{name}@plt"),
+                ));
+            }
+            offset = offset.saturating_add(6);
+        }
+    }
     out
 }
 

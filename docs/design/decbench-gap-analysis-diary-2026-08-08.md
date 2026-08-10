@@ -1823,3 +1823,109 @@ new program environment, so it is recorded as an ambient gate failure rather
 than mislabeled green or attributed to this increment. Rust/Python formatting,
 targeted Ruff, and `git diff --check` pass. Targeted `ty` retains its existing
 30 diagnostics and adds none on the new test.
+
+## 04:17–08:01 — exact `.plt.got` tail calls and source/machine call effects
+
+The next named correctness target was
+`dpkg:O2:dpkg-statoverride:statdb_write` at `0x4800`. The source function is
+`static void statdb_write(void)` and ends in `free(dbname)`, but Glaurung emitted
+a scalar result and a dangling `goto L_35d0`. Disassembly identified the first
+wrong stage: the terminal machine instruction is an unconditional jump to
+`0x35d0 <free@plt>`, but that stub lives in `.plt.got`. Because the program
+takes `free`'s address, its identity is carried by a `GLOB_DAT` relocation in
+`.rela.dyn`, not an ordered `JUMP_SLOT` entry in `.rela.plt`; the existing ELF
+PLT map therefore omitted it and CFG discovery retained the nonlocal transfer
+as an ordinary branch.
+
+The RED integration fixture compiles an optimized host-GCC program with
+`-fcf-protection=full -Wl,-z,ibtplt`, takes `free`'s address to force the
+`.plt.got` form, fully strips the binary, and decompiles a noinline tail wrapper.
+It requires an exact `free@plt` mapping, a `void` one-pointer wrapper, a real
+`free` call, no goto, and successful recompilation and execution of the emitted
+C. Unit controls cover the ELF relocation/stub decoder, architecture-matched
+PLT classification, declared-void ordinary calls, stale pre-tail-call result
+register residue, fixed scalar versus variadic contracts, and ARM tail-call
+classification.
+
+The implementation advances shared owners rather than patching the function.
+The ELF mapper now reads dynamic GOT relocations and decodes each x86-64
+`.plt.got` RIP-relative jump, including CET `endbr64` and `bnd` prefixes, then
+joins the stated slot to its exact symbol. CFG discovery treats unconditional
+branches into `.plt`, `.plt.sec`, `.plt.got`, or `.iplt` as calls only when the
+ELF object architecture matches the active decoder. Lifting represents a
+CFG-proven terminal transfer as `Call + Return` with an explicit tail marker.
+All Python decompile entry points use one helper that first adds conservative
+ABI effects and then narrows resolved library calls from the symbol contract.
+
+The call-effect split is the important definedness correction. A catalog
+declaration of `void` does **not** delete the ABI return-register definition:
+the callee still clobbers that machine register, and deleting the definition
+would let stale pre-call state reach later reads. `CallEffects` now records the
+machine result DEF separately from whether it can be a source-language result;
+it also distinguishes exact fixed-scalar inputs from convention-wide may-read
+sets and records tail transfer separately. Prototype recovery can therefore
+prove a declared-void tail wrapper while SSA and reaching definitions still see
+the result-register clobber. This rejected an earlier locally green but unsound
+draft that removed the DEF.
+
+A fresh empty-kit replay emitted 250/250 requested functions from all 224/224
+binaries with zero extraction failures. Its worktree provenance label is
+`49342c0+safe-void-clobber-worktree`; the final code commit will differ only in
+tests and evidence documents, so this remains candidate evidence rather than a
+commit-labelled release artifact. The package SHA-256 is
+`f3277740fbfc0c3acea0fb6569648c1b40ece9b067abf8ded7b02a46cfa66125`,
+the result-manifest SHA-256 is
+`3d5d7e62cf9eaab0d4f6bdfbbc967119539ab6872f6a3d221f615d43ed207b1a`,
+and the diagnostic-ledger SHA-256 is
+`a345cb7d2f219f0a47e97fc47497f230566e84a8e6668fa344131521bbfe3593`.
+
+Exactly 70 generated C files differ from the accepted literal-format package.
+This breadth is expected from exposing previously anonymous `.plt.got` imports
+and using exact fixed-library input evidence in caller/callee prototype
+recovery; it is not hidden as a one-function change. Fresh full-corpus scores
+are:
+
+| Metric | Measured | Perfect | Mean | Median | Accepted direction |
+|---|---:|---:|---:|---:|---|
+| GED | 239 | 60 | 32.351464 | 10 | improves from 32.364017 |
+| ByteMatch | 250 | 9 | 0.248819 | 0.219375 | improves from about 0.247702 |
+| TypeMatch | 235 | 20 | 0.226702 | 0.083333 | regresses from 0.227412 |
+
+The exact union remains 75/250. No exact win is lost. TypeMatch changes in only
+one row, `libedit:O2-noinline:libedit.so.0.0:history_search_pos`, from `0.333333`
+to `0.166667`; the new `history@plt` identity is verified against its exact
+`GLOB_DAT` slot and exported body, so the alignment-sensitive metric loss does
+not justify restoring an anonymous symbol. GED changes in six rows, three
+better and three worse, with a net distance reduction of three. ByteMatch
+changes in thirteen rows, nine better and four worse. `statdb_write` itself
+improves from `0.392857` to `0.446429` and retains GED 4. The new ByteMatch
+perfect `cronie:O0:crontab:env_free` was already GED-perfect, so it does not
+raise the union. The largest byte regression is
+`zlib:O2-noinline:minigzip:inflate_table`, `0.117552→0.009009`; its output still
+compiles and the diff is dominated by stronger pointer types and temporary
+renumbering, but this remains an explicit metric regression rather than a
+claimed clean win.
+
+The six-worker extraction took 104.244 seconds wall time and measured
+2.526/2.772/13.339 seconds per-binary median/mean/maximum. The host still had
+multiple unrelated multi-day CPU consumers, so these are provenance values,
+not clean evidence for the Phase 1 performance guardrail.
+
+Verification passes all 1,968 Rust library tests and every Rust integration
+target, the real stripped `.plt.got` fixture, Rust and targeted Python
+formatting/lint, and `git diff --check`. The architecture ratchet matches its
+six-lane baseline exactly: 1,758 pass, 42 known fail, 228 structural, zero lane
+errors. All 56 legacy and 64 curriculum executable behavior cells pass. The
+cache-disabled 56/56-cell metric ratchet reports no per-cell GED, TypeMatch, or
+ByteMatch regression against its checked corpus baseline. The
+full Python run reached 100% and reported the four previously recorded
+cross-sample `suspicious_win` content failures plus one expected tutorial
+snapshot drift from ten to twelve real callgraph edges; the one-line evidence
+update passes its focused verifier. Targeted `ty` remains at the same 30
+pre-existing diagnostics and adds none for this test. Repository-wide Ruff
+format remains independently red on 308 pre-existing files and is not relabeled
+green; repository-wide Ruff lint and `ty` likewise retain their broad existing
+debt (`ty`: 1,939 diagnostics). The required all-features Clippy invocation is
+environment-blocked because the pinned Bitwuzla library path is unset; ordinary
+all-target Clippy reaches the crate and remains red on 192 existing warnings,
+with no warning in a newly added code hunk.

@@ -1156,6 +1156,107 @@ def test_real_stripped_format_wrapper_recovers_forwarded_string_parameter(
         assert "char * arg1" not in control.split("{", 1)[0], control
 
 
+def test_real_stripped_plt_got_tail_free_recovers_void_contract(tmp_path: Path) -> None:
+    """Resolve an address-taken import's ``.plt.got`` tail-call stub.
+
+    Taking ``free``'s address makes the linker use a GLOB_DAT relocation and a
+    compact ``.plt.got`` entry instead of an ordinary JUMP_SLOT-backed PLT
+    entry.  The stripped wrapper must still recover the exact import and its
+    authoritative void contract rather than emit a dangling external goto.
+    """
+    compiler = shutil.which("gcc")
+    strip = shutil.which("strip")
+    if compiler is None or strip is None:
+        pytest.skip("host gcc and strip are required")
+
+    source = tmp_path / "plt_got_tail.c"
+    binary = tmp_path / "plt_got_tail"
+    stripped = tmp_path / "plt_got_tail.stripped"
+    source.write_text(
+        "#include <stdlib.h>\n"
+        "__attribute__((noinline, used)) void (*get_free(void))(void *) {\n"
+        "    return free;\n"
+        "}\n"
+        "__attribute__((noinline, used)) void release_ptr(void *ptr) {\n"
+        "    free(ptr);\n"
+        "}\n"
+        "int main(void) {\n"
+        "    void *ptr = malloc(1);\n"
+        "    release_ptr(ptr);\n"
+        "    return get_free() == 0;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            compiler,
+            "-O2",
+            "-fcf-protection=full",
+            "-Wl,-z,ibtplt",
+            "-g",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=128)
+    target = next(
+        int(function.entry_point.value)
+        for function in functions
+        if function.name == "release_ptr"
+    )
+    shutil.copy2(binary, stripped)
+    stripped_result = subprocess.run(
+        [strip, "--strip-all", str(stripped)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert stripped_result.returncode == 0, stripped_result.stderr
+
+    plt = dict(
+        g.analysis.elf_plt_map_path(  # ty: ignore[unresolved-attribute]
+            str(stripped)
+        )
+    )
+    assert any(name == "free@plt" for name in plt.values()), plt
+    results = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+        str(stripped),
+        [target],
+        style="decbench",
+        timeout_ms=8000,
+    )
+    assert len(results) == 1, results
+    function_name, _, generated = results[0]
+    header = generated.split("{", 1)[0].strip().splitlines()[-1]
+    assert header.startswith(f"void {function_name}("), generated
+    assert "free(" in generated, generated
+    assert "goto" not in generated, generated
+
+    rebuilt_source = tmp_path / "rebuilt.c"
+    rebuilt = tmp_path / "rebuilt"
+    rebuilt_source.write_text(
+        generated
+        + "\nextern void *malloc(__SIZE_TYPE__);\n"
+        + f"int main(void) {{ {function_name}(malloc(1)); return 0; }}\n"
+    )
+    compiled = subprocess.run(
+        [compiler, "-O0", "-o", str(rebuilt), str(rebuilt_source)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr + "\n" + generated
+    executed = subprocess.run(
+        [str(rebuilt)], capture_output=True, text=True, check=False, timeout=10
+    )
+    assert executed.returncode == 0, executed.stderr
+
+
 def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> None:
     """Use AAPCS spill width and reload extension to recover byte arguments."""
     compiler = shutil.which("arm-none-eabi-gcc")

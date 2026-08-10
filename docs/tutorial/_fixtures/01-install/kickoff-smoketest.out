@@ -5,7 +5,7 @@
 
 ## Functions
 - discovered: **16** (with blocks: 16, named: 10)
-- callgraph edges: **10**
+- callgraph edges: **12**
 - name sources: analyzer=16
 
 ## Type system

@@ -17246,7 +17246,10 @@ function f @ 0x1000 {
                             target: CallTarget::Direct(0x2000),
                             effects: Some(crate::ir::types::CallEffects {
                                 result: Some(VReg::phys("s0#1")),
+                                result_is_source_value: true,
                                 args: vec![VReg::phys("s0"), VReg::phys("s1")],
+                                args_are_exact: false,
+                                is_tail_call: false,
                             }),
                         },
                     },

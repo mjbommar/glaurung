@@ -245,10 +245,30 @@ pub struct CallEffects {
     /// or not this program uses it. This is the DEF that makes a post-call read a new
     /// value.
     pub result: Option<VReg>,
+    /// Whether the machine-level `result` may represent a source-language value.
+    ///
+    /// A declared-void callee still clobbers its ABI return register, so `result`
+    /// must remain a DEF for sound SSA and reaching definitions. This separate
+    /// contract prevents prototype recovery from interpreting that clobber as a
+    /// value returned by the caller.
+    pub result_is_source_value: bool,
     /// Argument registers the callee may read, in ABI order. These are the call's
     /// USES: without them the argument setup looks dead, and the value model renames
     /// it out from under argument reconstruction.
     pub args: Vec<VReg>,
+    /// Whether `args` is an exact callee contract rather than the convention's
+    /// conservative may-read set.
+    ///
+    /// Exact inputs are also evidence about the caller's live-in parameters;
+    /// convention-wide may-uses are liveness-only and must not inflate them.
+    pub args_are_exact: bool,
+    /// This call replaces the current machine frame instead of returning to it.
+    ///
+    /// Function lifting records the CFG-proven tail transfer before the calling
+    /// convention or callee contract is known. Keeping the marker on the call
+    /// prevents its synthetic structural `Return` from masquerading as a real
+    /// read of stale result-register residue.
+    pub is_tail_call: bool,
 }
 
 /// A single LLIR operation. Multiple LLIR ops may correspond to one machine
