@@ -2061,7 +2061,7 @@ format/lint and `ty`. Repository-wide Ruff format (349 existing files), Ruff
 lint (3,710 existing findings), and `ty` (2,038 existing diagnostics) remain
 red and are not represented as regressions introduced by this increment.
 
-## 10:14–12:09 — make stack-address recovery follow control flow
+## 10:14–12:14 — make stack-address recovery follow control flow
 
 The next immediate target in the exact-win cohort was official
 `coreutils:O2-noinline:cp:copy_reg`. Its source has nine parameters, but the
@@ -2154,3 +2154,27 @@ same four unrelated cross-sample `suspicious_win` content failures recorded in
 the preceding increment. Repository-wide Ruff format remains red on the same
 349 files, Ruff lint on the same 3,710 findings, and `ty` on the same 2,038
 diagnostics; no Python file changed in this increment.
+
+The implementation and first evidence record are commit
+`6a3252bdc03fea3ad9a8a898bdd39735460fb852`. After rebuilding the extension
+from that clean revision, a second empty-kit replay reproduced every candidate
+C file byte-for-byte and again emitted 250/250 functions from 224/224 binaries
+without failure. The exact-revision archive is
+`/tmp/glaurung-6a3252b.xo43Us/results.zip`; its SHA-256 is
+`c6c55bc2227c486ec1237af506f26637bce1882c39ad02eb1ad01995b8a79936`,
+the result-manifest SHA-256 is
+`a5ba9d3b723b50168dd4b767e3f60a528dc3cb4ee21c32233b625a8cec3a8b76`,
+and the diagnostic-ledger SHA-256 is
+`f6232667261b76283bb9dc625873a17b66ac70a25038759dc27ed20bb859e37f`.
+Zip integrity is clean. The replay took 59.882 seconds wall time, with
+2.691/3.102/18.211 seconds per-binary median/mean/maximum.
+
+The focused output-canary baseline was still pinned before the accepted
+`console_getc`, `.plt.got`, effectful-loop, and stack-alias repairs. It is now
+materialized from the exact clean implementation commit rather than leaving
+those intended changes as permanent canary noise. The report SHA-256 is
+`1bed38125724afaf7218f6225f2a3b695a46c7427fca3fb926a8b9de408d3ba0`.
+Its four focused tests pass, the live capture matches every function and
+provenance field, and focused Ruff format/lint is clean. Focused `ty` retains
+the test file's two pre-existing missing-`pytest`-stub diagnostics; the revision
+string update introduces no typed code.

@@ -7,10 +7,6 @@
           "final_violations": [
             {
               "kind": "never_defined",
-              "name": "local_190"
-            },
-            {
-              "kind": "never_defined",
               "name": "var0"
             },
             {
@@ -31,7 +27,6 @@
             }
           ],
           "first_violation_passes": {
-            "never_defined:local_190": "promote_stack_locals",
             "never_defined:var0": "apply_role_names",
             "never_defined:var1": "apply_role_names",
             "never_defined:var2": "apply_role_names",
@@ -39,25 +34,25 @@
             "never_defined:var5": "apply_role_names"
           },
           "health": {
-            "declarations": 175,
+            "declarations": 169,
             "gotos": 91,
             "invented_cfg_edges": 0,
-            "parameters": 24,
+            "parameters": 9,
             "physical_registers": 1,
-            "statements": 593,
+            "statements": 592,
             "structure_fallbacks": 1,
-            "temporaries": 148,
+            "temporaries": 147,
             "uncovered_cfg_edges": 0,
-            "undefined_uses": 6,
+            "undefined_uses": 5,
             "unresolved_transfers": 0
           },
           "health_event_count": 22,
           "label": "copy_reg",
-          "output_bytes": 31338,
-          "output_lines": 869,
-          "output_sha256": "fe3a9a32da5f1eaacd8db34ac150631ce0fd06afe3de5cd55a835e86198cfc13",
+          "output_bytes": 30981,
+          "output_lines": 861,
+          "output_sha256": "97397ac263531fb608209bade8f6d503665d8a070f45264577e75f06f8f68ffc",
           "rendered_function": "sub_8680",
-          "signature": "unsigned int sub_8680(long * arg0, char * arg1, int arg2, char * arg3, char * arg4, long * arg5, int arg6, long arg7, long arg8, long arg9, long arg10, long arg11, long arg12, long arg13, long arg14, long arg15, long arg16, long arg17, long arg18, long arg19, long arg20, long arg21, long arg22, long arg23) {"
+          "signature": "unsigned int sub_8680(long * arg0, char * arg1, int arg2, char * arg3, char * arg4, long * arg5, int arg6, long arg7, long arg8) {"
         }
       ],
       "name": "copy_reg",
@@ -130,35 +125,35 @@
             },
             {
               "kind": "never_defined",
+              "name": "var153"
+            },
+            {
+              "kind": "never_defined",
+              "name": "var164"
+            },
+            {
+              "kind": "never_defined",
               "name": "var168"
             },
             {
               "kind": "never_defined",
-              "name": "var178"
+              "name": "var170"
             },
             {
               "kind": "never_defined",
-              "name": "var182"
+              "name": "var171"
             },
             {
               "kind": "never_defined",
-              "name": "var184"
+              "name": "var181"
             },
             {
               "kind": "never_defined",
-              "name": "var185"
+              "name": "var247"
             },
             {
               "kind": "never_defined",
-              "name": "var195"
-            },
-            {
-              "kind": "never_defined",
-              "name": "var257"
-            },
-            {
-              "kind": "never_defined",
-              "name": "var281"
+              "name": "var271"
             },
             {
               "kind": "never_defined",
@@ -196,14 +191,14 @@
             "never_defined:local_4f4": "promote_stack_locals",
             "never_defined:stack_0": "promote_stack_locals",
             "never_defined:var0": "apply_role_names",
+            "never_defined:var153": "prepare_for_decbench",
+            "never_defined:var164": "prepare_for_decbench",
             "never_defined:var168": "prepare_for_decbench",
-            "never_defined:var178": "prepare_for_decbench",
-            "never_defined:var182": "prepare_for_decbench",
-            "never_defined:var184": "prepare_for_decbench",
-            "never_defined:var185": "prepare_for_decbench",
-            "never_defined:var195": "prepare_for_decbench",
-            "never_defined:var257": "prepare_for_decbench",
-            "never_defined:var281": "apply_role_names",
+            "never_defined:var170": "prepare_for_decbench",
+            "never_defined:var171": "prepare_for_decbench",
+            "never_defined:var181": "prepare_for_decbench",
+            "never_defined:var247": "prepare_for_decbench",
+            "never_defined:var271": "apply_role_names",
             "never_defined:var3": "apply_role_names",
             "never_defined:var4": "apply_role_names",
             "never_defined:var5": "apply_role_names",
@@ -211,23 +206,23 @@
             "undefined_value:of_61": "lower"
           },
           "health": {
-            "declarations": 111,
+            "declarations": 113,
             "gotos": 54,
             "invented_cfg_edges": 0,
             "parameters": 5,
             "physical_registers": 2,
-            "statements": 378,
+            "statements": 375,
             "structure_fallbacks": 1,
-            "temporaries": 74,
+            "temporaries": 76,
             "uncovered_cfg_edges": 0,
             "undefined_uses": 27,
             "unresolved_transfers": 1
           },
           "health_event_count": 22,
           "label": "yyparse",
-          "output_bytes": 16367,
-          "output_lines": 523,
-          "output_sha256": "f7a42be5c83f62f2cd362975e7d5a6d7646db03e0cd445bbb5b03df3f5f235d6",
+          "output_bytes": 16304,
+          "output_lines": 522,
+          "output_sha256": "8042dcbde385ac4188627f66b5dda766a2e1b94f799dc7b4d444e03d9ef5b8e4",
           "rendered_function": "sub_253e0",
           "signature": "unsigned long sub_253e0(long * arg0, long arg1, long arg2, long arg3, unsigned int arg4) {"
         }
@@ -243,35 +238,28 @@
       "functions": [
         {
           "entry_va": "0x80002f8",
-          "final_violations": [
-            {
-              "kind": "never_defined",
-              "name": "var0"
-            }
-          ],
-          "first_violation_passes": {
-            "never_defined:var0": "apply_role_names"
-          },
+          "final_violations": [],
+          "first_violation_passes": {},
           "health": {
-            "declarations": 3,
+            "declarations": 2,
             "gotos": 0,
             "invented_cfg_edges": 0,
             "parameters": 1,
             "physical_registers": 0,
-            "statements": 12,
+            "statements": 13,
             "structure_fallbacks": 0,
-            "temporaries": 2,
+            "temporaries": 1,
             "uncovered_cfg_edges": 0,
-            "undefined_uses": 1,
+            "undefined_uses": 0,
             "unresolved_transfers": 0
           },
           "health_event_count": 22,
           "label": "console_getc",
-          "output_bytes": 738,
-          "output_lines": 19,
-          "output_sha256": "ba083da78267497c43227b87f047c1586ea20f36efd5a554cf7c95ecd7afe1b9",
+          "output_bytes": 589,
+          "output_lines": 17,
+          "output_sha256": "d4df6306861fe6e1a4c33187c00d0a0ca1683d8e50db95130ad2d459741ee648",
           "rendered_function": "sub_80002f8",
-          "signature": "unsigned int sub_80002f8(int * arg0) {"
+          "signature": "unsigned int sub_80002f8(int arg0) {"
         }
       ],
       "name": "console_getc",
@@ -300,25 +288,25 @@
             "never_defined:var1": "apply_role_names"
           },
           "health": {
-            "declarations": 21,
-            "gotos": 1,
+            "declarations": 20,
+            "gotos": 0,
             "invented_cfg_edges": 0,
             "parameters": 0,
             "physical_registers": 1,
-            "statements": 22,
+            "statements": 23,
             "structure_fallbacks": 0,
-            "temporaries": 17,
+            "temporaries": 16,
             "uncovered_cfg_edges": 0,
             "undefined_uses": 2,
             "unresolved_transfers": 0
           },
           "health_event_count": 22,
           "label": "statdb_write",
-          "output_bytes": 1529,
-          "output_lines": 62,
-          "output_sha256": "3cda68f49461d35cee63609ee8ddaeda73401612c0c98de24d77cbc30362ca1f",
+          "output_bytes": 1539,
+          "output_lines": 61,
+          "output_sha256": "d0fd6f2edc46bb0d65f783d38ebfdc8c74ee1bf2be4958cc7afaf352b69f3603",
           "rendered_function": "sub_4800",
-          "signature": "long sub_4800(void) {"
+          "signature": "void sub_4800(void) {"
         }
       ],
       "name": "statdb_write",
@@ -591,9 +579,9 @@
           },
           "health_event_count": 22,
           "label": "list_sum",
-          "output_bytes": 483,
+          "output_bytes": 453,
           "output_lines": 20,
-          "output_sha256": "b883719f4bd6bfb3f4ff955f2e0df787e529b39800de3832f83038b4e349992e",
+          "output_sha256": "6712aa7883493ccabcdfdb6f0c23970562060d314875017a85ee3c441af875c8",
           "rendered_function": "list_sum",
           "signature": "int list_sum(const node * arg0) {"
         }
@@ -617,7 +605,7 @@
   ],
   "git": {
     "dirty": false,
-    "revision": "f163e3473b1f881a855b226bec7c26a1ae9b4977"
+    "revision": "6a3252bdc03fea3ad9a8a898bdd39735460fb852"
   },
   "schema": "glaurung-output-canary-report-v1"
 }
