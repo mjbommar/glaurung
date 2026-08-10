@@ -508,6 +508,17 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     `0.221953→0.226475` while retaining GED 47. This closes the named
     `copy_reg` correctness acceptance item, not the still-open `yyparse`,
     `ssh_agent_sign`, exact-win, or O2-noinline cohorts.
+- [x] Remove x86 omit-frame-pointer callee saves that stack promotion names as
+  ordinary `local_*` objects.  Entry-version nonvolatile-register provenance
+  is gated by the detected calling convention, and the existing
+  unread/dead-restore proof removes five undefined C inputs
+  from the largest fresh GED outlier without deleting later register values. A
+  real stripped stack-clash fixture recompiles under uninitialized-use errors
+  and executes identically for signed/boundary inputs.  The 243-row paired GED
+  column is exactly unchanged, the 250-row ByteMatch mean changes by
+  `-0.000006`, TypeMatch changes by `-0.000304` through one lost accidental
+  positional match, and the 77/250 union is unchanged.  This is a definedness
+  and output-reliability repair, not a claimed leaderboard gain.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the
@@ -520,6 +531,10 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   run expanded three under-covered projects and required 454/3,794 units, still
   an 88.0% reduction. The executed coverage check, not the estimate, is the
   planning baseline.
+  A later fresh paired replay also found that byte-identical C could retain a
+  stale GED 3 while the current evaluator produced 18.  Until this owner is
+  closed, compare candidate and baseline only from fresh empty checkpoint roots
+  under one recorded evaluator/source-cache/toolchain tuple.
 - [ ] Make external-overlay finalization populate `FunctionData.metrics` and
   `perfect_values`, retain every manifest metric row, and fail if the derived
   scoreboard is empty while overlay values exist. The completed `9c25fcb` replay

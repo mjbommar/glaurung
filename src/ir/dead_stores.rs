@@ -228,7 +228,7 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
 /// cannot discard a computation. [`eliminate_dead_stores`] cannot make this
 /// call itself — it walks forward and stops at the first nested `If`, and these
 /// stores sit above all of a function's control flow.
-pub fn prune_callee_saved_spills(f: &mut Function) {
+pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
     // A promoted spill appears in either spelling depending on how far stack
     // promotion got: `Assign` when the slot became a plain local, `Store` when
     // it is still addressed. Both render identically as `stack_2 = rbp;`, so
@@ -238,14 +238,20 @@ pub fn prune_callee_saved_spills(f: &mut Function) {
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(source),
-            } if is_saved_frame_slot(dst) || is_arm_saved_register_local(dst, source) => {
+            } if is_saved_frame_slot(dst)
+                || is_arm_saved_register_local(dst, source)
+                || is_x86_saved_register_local(dst, source, cc) =>
+            {
                 Some(dst.clone())
             }
             Stmt::Store {
                 addr: Expr::Reg(slot),
                 src: Expr::Reg(source),
                 ..
-            } if is_saved_frame_slot(slot) || is_arm_saved_register_local(slot, source) => {
+            } if is_saved_frame_slot(slot)
+                || is_arm_saved_register_local(slot, source)
+                || is_x86_saved_register_local(slot, source, cc) =>
+            {
                 Some(slot.clone())
             }
             _ => None,
@@ -469,6 +475,39 @@ fn is_arm_saved_register_local(slot: &VReg, source: &VReg) -> bool {
     base.strip_prefix('r')
         .and_then(|index| index.parse::<u8>().ok())
         .is_some_and(|index| (4..=11).contains(&index))
+}
+
+/// Whether a promoted `local_*` is an x86 entry-stack callee save.
+///
+/// With frame-pointer omission, pushes land below the function-entry SP and
+/// therefore use the same `local_*` coordinate family as source locals.  The
+/// incoming value of an ABI-nonvolatile register is nevertheless machine state,
+/// not a source parameter.  Restrict this exception to the unversioned/SSA-zero
+/// entry value; a later definition held in the same architectural register is
+/// ordinary recovered program state and must remain visible.
+fn is_x86_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool {
+    if !matches!(
+        cc,
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32
+    ) {
+        return false;
+    }
+    let VReg::Phys(slot_name) = slot else {
+        return false;
+    };
+    let VReg::Phys(source_name) = source else {
+        return false;
+    };
+    if !slot_name.starts_with("local_") {
+        return false;
+    }
+    let (base, version) = source_name
+        .split_once('#')
+        .map_or((source_name.as_str(), None), |(base, version)| {
+            (base, Some(version))
+        });
+    matches!(version, None | Some("0"))
+        && matches!(base, "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15")
 }
 
 pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
@@ -1045,7 +1084,7 @@ mod tests {
                 },
             ],
         };
-        prune_callee_saved_spills(&mut f);
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
         assert_eq!(f.body.len(), 2, "spill/restore pair survived: {:?}", f.body);
         assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("rax")));
     }
@@ -1076,10 +1115,94 @@ mod tests {
             ],
         };
 
-        prune_callee_saved_spills(&mut f);
+        prune_callee_saved_spills(&mut f, CallConv::Arm);
 
         assert_eq!(f.body.len(), 2, "leaf r7 save survived: {:#?}", f.body);
         assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("result")));
+    }
+
+    /// Omit-frame-pointer x86 stack-clash frames save nonvolatile registers
+    /// below the entry SP, so stack promotion names each save `local_*` rather
+    /// than `stack_*`.  The source values are ABI state, not C inputs; retaining
+    /// them renders undefined `varN` reads even when the matching restore is
+    /// present and dead.
+    #[test]
+    fn x86_entry_callee_save_in_local_slot_is_removed() {
+        let mut f = Function {
+            name: "stack_clash_frame".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_8"),
+                    src: Expr::Reg(reg("r15")),
+                },
+                Stmt::Assign {
+                    dst: reg("r15#5"),
+                    src: Expr::Reg(reg("local_8")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(7)),
+                },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(
+            f.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(7))
+            }]
+        );
+    }
+
+    /// A later SSA definition stored in a local is ordinary recovered state,
+    /// even when it occupies a callee-saved machine register.  Only the entry
+    /// value has machine-frame provenance.
+    #[test]
+    fn defined_x86_callee_saved_value_in_local_slot_is_kept() {
+        let mut f = Function {
+            name: "source_local".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_8"),
+                    src: Expr::Reg(reg("r15#3")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(f.body.len(), 2, "defined source value was deleted");
+    }
+
+    /// ARM also spells its call-clobbered scratch register `r12`.  The x86
+    /// nonvolatile set contains a different architectural `r12`, so register
+    /// spelling alone is not sufficient proof that a promoted local is a
+    /// machine-frame save.
+    #[test]
+    fn arm_r12_local_is_not_treated_as_an_x86_callee_save() {
+        let mut f = Function {
+            name: "arm_source_local".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_4"),
+                    src: Expr::Reg(reg("r12")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::Arm);
+
+        assert_eq!(
+            f.body.len(),
+            2,
+            "ARM scratch value was deleted as x86 state"
+        );
     }
 
     /// A source value stored in an otherwise similarly named local is not
@@ -1099,7 +1222,7 @@ mod tests {
             ],
         };
 
-        prune_callee_saved_spills(&mut f);
+        prune_callee_saved_spills(&mut f, CallConv::Arm);
 
         assert_eq!(
             f.body.len(),
@@ -1130,7 +1253,7 @@ mod tests {
             ],
         };
         let before = f.body.len();
-        prune_callee_saved_spills(&mut f);
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
         assert_eq!(
             f.body.len(),
             before,
@@ -1164,7 +1287,7 @@ mod tests {
             ],
         };
         let before = f.body.len();
-        prune_callee_saved_spills(&mut f);
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
         assert_eq!(
             f.body.len(),
             before,

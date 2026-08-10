@@ -2367,3 +2367,79 @@ and the diagnostic ledger is
 `0d81d58919dd9dae3a170ac852ae47551da9b69289fe194607e7089fe501576e`.
 The fresh metric results above therefore apply exactly to the committed
 implementation rather than only to an uncommitted worktree state.
+
+## 16:00–17:05 — remove x86 entry-register saves from source C
+
+The largest fresh GED outlier, `shadow:O2-noinline:login:main`, exposed a
+definedness defect before another structuring defect.  GCC's omit-frame-pointer,
+stack-clash prologue saves `r15`, `r14`, `r13`, `r12`, `rbp`, and `rbx` below
+the entry SP.  Stack promotion therefore names the distinct save locations
+`local_*`, while the existing machine-frame cleanup recognized only `stack_*`
+on x86.  Five incoming callee-save values consequently survived as undefined
+`var0` through `var4` source inputs.
+
+The retained cleanup accepts a promoted `local_*` only when its source is the
+unversioned or SSA-zero canonical x86 nonvolatile register.  A later SSA
+definition in the same architectural register is a real program value and is
+preserved.  The caller supplies the detected calling convention, preventing
+ARM's unrelated caller-saved `r12` from satisfying the x86 rule.  The existing
+proof still requires the slot to be unread, or read
+only by one dead restore, before deleting the pair.  This is deliberately not a
+generic dead-local rule.
+
+TDD first pinned the spill/restore shape and the later-definition near miss in
+Rust.  A real stripped GCC shared-object fixture uses
+`-fomit-frame-pointer -fstack-clash-protection`, clobbers all five extended
+nonvolatile registers, and allocates a 9,000-byte volatile object.  Before the
+repair its recovered C failed `-Werror=uninitialized`; after the repair it
+recompiles and executes identically to the original for seven signed and
+boundary seeds.  The full Rust library gate passes all 1,984 tests and every
+integration target.  The
+six-lane architecture gate remains exactly at 1,758 pass, 42 declared failures,
+228 structural verdicts, and zero lane errors.
+
+The official `login:main` health record improves without hiding CFG loss:
+
+| Counter | Before | After |
+|---|---:|---:|
+| declarations | 254 | 242 |
+| statements | 584 | 577 |
+| temporaries | 231 | 226 |
+| undefined names | 7 | 2 |
+| raw physical registers | 2 | 1 |
+| gotos | 98 | 98 |
+| missing / invented CFG edges | 0 / 0 | 0 / 0 |
+
+The fresh empty-kit candidate at `/tmp/glaurung-x86-frame.W24rx8` returns all
+250 requested functions from all 224 binaries with zero extraction failures.
+Seventy-three C files change: 70 ELF x86-64 outputs and three PE32-i386 outputs.
+The archive passes the package validator and `unzip -t`; its SHA-256 is
+`c748b405085b7d9d2b8eaece4ac6cecf48f263650f9f1459e4b726e9a2bd9ff1`.
+The result manifest SHA-256 is
+`49c2cca99e04d229d4b3de7bb31e05fa95153645d7aaba05bd026870a6ced906`
+and the diagnostic ledger is
+`a89e62cd1e64d1c5b2f73f6a71a916b126b293fb13eab341fa1d1b545cc5f898`.
+
+Metric attribution required rejecting stale absolute columns.  The current
+PR-56 refresh evaluator reports different absolute ByteMatch and VJ-GED values
+for byte-identical stored C compared with the accepted replay; one identical
+`rtmon` artifact, for example, appeared as GED 3 in the old overlay and 18 in a
+fresh replay.  Fresh baseline and candidate columns were therefore recomputed
+through the same code, source cache, toolchain, and empty checkpoint roots.
+Those paired results are:
+
+- GED is exactly unchanged on all 243 rows: both fresh columns have 62
+  perfects, mean `27.679012`, and median `10` under this evaluator;
+- ByteMatch changes only two rows, has the same 243 recompiles, nine perfects,
+  and 52 zeros, and moves mean `0.250073232→0.250067085`;
+- TypeMatch keeps 235 rows, 20 perfects, and median `0.090909`, but
+  `diffutils:O2-noinline:diff3:output_diff3_edscript` loses one accidental
+  positional match, moving mean `0.233963670→0.233659719` and zeros `93→94`.
+
+Applying only those paired deltas to the accepted exact-revision ledger projects
+GED unchanged at `22.670782`, ByteMatch at `0.302741`, and TypeMatch at
+`0.231916`.  The 77/250 union is unchanged because no perfect row changes.  The
+repair is accepted for definedness, recompilability, and source clarity rather
+than claimed as leaderboard movement.  The evaluator drift itself reinforces
+the still-open content-addressed cache/toolchain-fingerprint task; stale absolute
+columns must not decide future patches.

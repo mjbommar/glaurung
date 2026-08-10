@@ -856,6 +856,86 @@ def test_real_guarded_call_result_survives_a_noreturn_alternative():
     assert "return ret;" in decompiled, decompiled
 
 
+def test_real_x86_stack_clash_frame_does_not_expose_callee_save_inputs():
+    """Omit-frame-pointer callee saves are machine state, not undefined C.
+
+    GCC's stack-clash prologue saves five nonvolatile registers into distinct
+    entry-SP-relative slots before probing a large local object.  Stack
+    promotion calls those slots ``local_*``; cleanup must still pair them with
+    their restores instead of emitting five uninitialized ``varN`` inputs.
+    """
+    source = (
+        "__attribute__((noinline)) int stack_clash_frame(int seed) {\n"
+        "    volatile unsigned char page[9000];\n"
+        '    __asm__ volatile("" : : : "rbx", "r12", "r13", "r14", "r15");\n'
+        "    page[0] = (unsigned char)seed;\n"
+        "    page[4096] = (unsigned char)(seed + 1);\n"
+        "    page[8192] = (unsigned char)(seed + 2);\n"
+        "    return page[0] + page[4096] + page[8192];\n"
+        "}\n"
+    )
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "stack_clash_frame.c"
+        binary_path = Path(td) / "stack_clash_frame.so"
+        source_path.write_text(source)
+        built = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-fomit-frame-pointer",
+                "-fstack-clash-protection",
+                "-fno-reorder-functions",
+                "-fno-toplevel-reorder",
+                "-o",
+                str(binary_path),
+                str(source_path),
+            ]
+        )
+        assert built.returncode == 0, built.stderr
+        stripped = TC.run(["strip", "--strip-all", str(binary_path)])
+        assert stripped.returncode == 0, stripped.stderr
+
+        function_va = D.exported_functions(str(binary_path))["stack_clash_frame"]
+        decompiled = D.decompiled_c(str(binary_path), function_va)
+        assert decompiled is not None
+
+        recovered_path = Path(td) / "stack_clash_frame_recovered.c"
+        rebuilt_path = Path(td) / "stack_clash_frame_rebuilt.so"
+        recovered_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O2",
+                "-std=gnu11",
+                "-Werror=uninitialized",
+                "-Werror=maybe-uninitialized",
+                "-o",
+                str(rebuilt_path),
+                str(recovered_path),
+            ]
+        )
+        assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+        original_library = ctypes.CDLL(
+            str(binary_path.resolve()), mode=ctypes.RTLD_LOCAL
+        )
+        rebuilt_library = ctypes.CDLL(
+            str(rebuilt_path.resolve()), mode=ctypes.RTLD_LOCAL
+        )
+        for library in (original_library, rebuilt_library):
+            function = library.stack_clash_frame
+            function.argtypes = [ctypes.c_int]
+            function.restype = ctypes.c_int
+        for seed in (-257, -1, 0, 1, 127, 255, 4096):
+            expected = original_library.stack_clash_frame(seed)
+            actual = rebuilt_library.stack_clash_frame(seed)
+            assert actual == expected, (seed, expected, actual, decompiled)
+
+
 def test_real_named_call_output_declares_its_recovered_callee_prototype():
     """A resolved project-local call must not depend on implicit C declarations.
 

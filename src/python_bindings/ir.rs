@@ -629,7 +629,7 @@ fn recognise_machine_frame(f: &mut crate::ir::ast::Function, cc: crate::ir::call
     // pattern, the callee-saved spills themselves are still machine bookkeeping.
     // This runs for every convention, including AArch64, which has no dedicated
     // recogniser in this match.
-    crate::ir::dead_stores::prune_callee_saved_spills(f);
+    crate::ir::dead_stores::prune_callee_saved_spills(f, cc);
 }
 
 fn lift_for_arch(data: &[u8], start_va: u64, bits: u32, arch: &str) -> PyResult<Vec<LlirInstr>> {
