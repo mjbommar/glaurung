@@ -2352,3 +2352,18 @@ failures. Repository-wide static checks remain baseline-red outside this lane:
 Ruff reports 3,509 existing findings and `ty` reports 1,939 diagnostics. The
 exact committed-revision package is recorded after the remaining release step
 rather than inferred from the worktree candidate.
+
+The exact-revision replay from implementation commit
+`a958b1f8c0bb73743aaa64fed7bc9a7c02e47688` is
+`/tmp/glaurung-proven-calls.Ml0cCE/results.zip`. It again emits all 250/250
+functions across 224/224 binaries, passes the package validator and `unzip -t`,
+and every generated C file is byte-identical to the scored worktree candidate.
+Only revision-bearing manifest/archive metadata changes. The exact-revision
+archive SHA-256 is
+`ef9f5e71c83439040cc25a71dfffb922d66458f13b778319c640f3e835c35d7c`;
+the manifest is
+`acddf321ac535c54c75c0e358c2306b4ab26f378af00aab0a1ea3fab09a248a0`,
+and the diagnostic ledger is
+`0d81d58919dd9dae3a170ac852ae47551da9b69289fe194607e7089fe501576e`.
+The fresh metric results above therefore apply exactly to the committed
+implementation rather than only to an uncommitted worktree state.
