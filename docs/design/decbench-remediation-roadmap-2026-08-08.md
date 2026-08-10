@@ -8,8 +8,9 @@ open
 **Historical evidence baseline:** Glaurung `c1cfdc97`, DecBench main `0a4e85b`,
 dataset `0a2d996`, with ARM `byte_match` recomputed using pending DecBench PR #61
 
-**Current planning baseline:** Glaurung `9c25fcb`, frozen 250-function replay,
-all three corrected metric overlays recomputed from revision-specific artifacts
+**Current planning baseline:** Glaurung `06b2e61`, fresh 224-binary/250-function
+stripped-kit replay, with TypeMatch and ByteMatch rebuilt from checkpoints and
+GED evaluated against the published source CFGs
 
 ## Outcome
 
@@ -42,19 +43,26 @@ is deleted rather than wrapped forever.
 
 | Measure | Baseline | First competitive target | Long target |
 |---|---:|---:|---:|
-| union perfect | 69 / 250, 27.6% | at least 75 / 250, 30% | at least 82 / 250, 32.8% |
-| GED mean | 23.79 | at most 20 | at most 15 |
-| O2-noinline GED mean | 34.61 | at most 28 | at most 22 |
-| type mean | 0.174 | at least 0.231 | at least 0.30 |
-| type perfect | 13 / 235 | at least 20 / scored | at least 30 / scored |
-| byte mean, corrected metric | 0.238 | at least 0.30 | at least 0.40 |
-| unique union perfects vs live board | not freshly recomputed | at least 1 | sustained growth |
+| union perfect | 71 / 250, 28.4% | at least 75 / 250, 30% | at least 82 / 250, 32.8% |
+| GED mean | 32.36 over 239 scored | at most 20 | at most 15 |
+| O2-noinline GED mean | 52.22 over 96 scored | at most 28 | at most 22 |
+| type mean | 0.2139 over 235 scored | at least 0.231 | at least 0.30 |
+| type perfect | 15 / 235 | at least 20 / scored | at least 30 / scored |
+| byte mean, corrected metric | 0.2355 over 250 scored | at least 0.30 | at least 0.40 |
+| unique union perfects vs pinned public board | 0 | at least 1 | sustained growth |
 
 These are engineering targets, not promises to game DecBench. A score change is
 accepted only with behavioral or semantic evidence. On the live 2026-08-09
 sample-set snapshot, the first union target passes the current 28.4% traditional
 leaders; the long target establishes a wider margin rather than chasing a stale
 denominator.
+
+The quality baseline is now strictly the stripped external-submission path. The
+debug-assisted `0.56153998` TypeMatch replay remains useful evidence for the
+DWARF product mode, but it is not comparable to the stripped public scoreboard
+and must not replace the values above. The corrected stripped baseline makes the
+real priorities sharper: TypeMatch is only `0.0171` below the first competitive
+target, while GED—especially O2-noinline—is the dominant structural gap.
 
 ### Performance baseline and targets
 
@@ -358,6 +366,26 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   and a real i386 `heap_push` improvement that advances the ratchet to 1,758
   pass / 42 known failures. Fresh isolated official metrics report no per-cell
   GED, TypeMatch, or ByteMatch regression across 56/56 cells.
+- [x] Rebuild the external submission from all 224 stripped kit binaries and
+  repair the ARM value-lifetime/call-boundary cluster. Exact live-in address
+  evidence, caller-spill provenance, mixed-width opaque pointers, narrow ARM
+  epilogue filtering, recovered local-callee return types, and parameter-aware
+  pointer boundary casts are now shared owners rather than function-name
+  patches. The fresh replay returns 250/250 functions with zero extraction
+  failures. Against `ae88988`, TypeMatch improves 13 common rows, regresses
+  none, and adds one perfect. Against the immediately preceding ARM candidate,
+  ByteMatch improves 28 rows, regresses none, and raises compilable coverage
+  210→242 while retaining seven perfects. Valid source-CFG GED is 60 perfect,
+  mean `32.3640`; the combined union is 71/250 (`28.4%`), a projected sixth on
+  the pinned public snapshot. This is external-score evidence, unlike the
+  debug-assisted DWARF replay above.
+- [ ] Convert the new compile-coverage gain into exact wins without weakening
+  the boundary contracts. The highest-leverage immediate cohort is the 28
+  newly nonzero ByteMatch rows, especially `copy_reg`, `yyparse`,
+  `statdb_write`, and `ssh_agent_sign`; preserve all 242 compilable rows as a
+  ratchet. In parallel, diagnose the 96-row O2-noinline GED mean of `52.22`
+  through edge ownership and definition-valid region recovery rather than
+  declaration or formatting normalization.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the

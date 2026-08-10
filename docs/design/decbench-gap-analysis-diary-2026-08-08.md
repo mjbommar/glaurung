@@ -6,7 +6,7 @@
 
 **Glaurung:** `c1cfdc97fdf51a5028aff5f7507033d70d16ad42`
 
-**Current replay candidate:** `9c25fcb860fb433b59bb24b3f880e8ae3a38a972`
+**Current stripped-kit candidate:** `06b2e614a6b84e96e594daf23933376078fe1092`
 
 **DecBench main:** `0a4e85bc8a0a1ff5246f6299697f59d30634fcaf`
 
@@ -1322,3 +1322,98 @@ remain explicit rather than being waived as a green repository-wide gate.
 The loop proof's 504-line RED/negative-control suite lives in a separate child
 test module, leaving the production owner at 803 lines instead of adding another
 source file above the roadmap's 1,000-line threshold.
+
+## 16:20–20:25 — stripped-submission truth and ARM value-lifetime repair
+
+The next run deliberately discarded every prior score claim and started from the
+external evaluation kit again. This exposed an important evidence boundary that
+the later diary entries had not stated strongly enough: all 224 kit binaries are
+stripped, while the local score tree's compiler outputs retain DWARF so the
+evaluator can construct ground truth. The high TypeMatch results obtained by
+decompiling those debug-bearing compiler outputs measure a useful
+debug-assisted product mode, but they are not a prediction of the external
+submission. The stripped-kit replay below is the authoritative scoreboard
+candidate. In particular, the earlier `0.56153998` TypeMatch mean must not be
+quoted as external-submission performance.
+
+Six related correctness repairs were developed RED/GREEN/REFACTOR against exact
+values and then exercised on the real stripped binaries:
+
+1. ARM r0–r3 raw-register pointer evidence no longer flows backward into a
+   different live-in lifetime. Exact SSA address evidence still recovers real
+   pointer parameters, while `console_getc(int wait)` remains scalar.
+2. A uniquely caller-supplied spill/reload is distinguished from a local index
+   reload when both feed pointer arithmetic. This recovers the buffer in
+   `console_read` without declaring every frame reload a pointer.
+3. Conflicting byte and word accesses on one exact pointer value preserve an
+   honest opaque `void *` contract rather than choosing an arbitrary element
+   width. The small TypeMatch tradeoff on `hard_fault_handler` remains explicit:
+   `0.31818→0.27273` versus the preceding candidate, but it is still above the
+   accepted parent (`0.22727`) and avoids inventing a concrete pointee type.
+4. Pre-folded ARM epilogue frame-pointer arithmetic is excluded from indexed
+   stack-object seeding. The narrow rule prevents a machine frame from becoming
+   a giant source byte array; a broader frame-pointer exclusion was rejected
+   after a real armv7 regression.
+5. High-variable propagation now consumes the return type already attached to a
+   recovered program-local call site. A pointer returned by a local callee
+   therefore stays a pointer through exact copies instead of reverting to
+   `long`.
+6. A recovered concrete pointer parameter is reasserted at the call boundary
+   when the underlying expression has only byte-object or machine-word
+   representation. Opaque `void *` parameters remain unforced. This repaired
+   the real Betaflight `mspProcessInCommand` failure, including the
+   `vtxCommonGetStatus(char *, int *)` stack-address argument.
+
+The first boundary-cast implementation cast every unknown expression, including
+calls whose declared parameter was itself `void *`; full Rust tests rejected it
+because it overrode the intended opaque-pointer behavior. The retained rule is
+parameter-aware. Likewise, a global ARM pointer filter and the broad frame skip
+were rejected rather than credited.
+
+The exact code revision is `06b2e614a6b84e96e594daf23933376078fe1092`.
+The fresh package covers 224/224 binaries and 250/250 functions with zero
+extraction failures. Its SHA-256 is
+`754db0bc3d7217c5dce7111db13fb0d20020c80905e76893415c2c7ca65d2bec`;
+the raw diagnostic ledger is
+`d00a715e4f3a9c34d57e628e56e44c39021ef7cdfb93a1f36e9b83e4b43527bf`.
+The run used eight workers while other verification was active, so its 85.58 s
+wall time is completeness evidence, not a replacement performance baseline.
+
+Fresh corrected scoring gives:
+
+| Metric | Coverage | Perfect | Mean | Median | Zero |
+|---|---:|---:|---:|---:|---:|
+| GED, published source CFGs | 239 / 250 | 60 | 32.3640 | 10.0 | 60 |
+| TypeMatch, stripped submission | 235 / 250 | 15 | 0.213917 | 0.083333 | 100 |
+| ByteMatch, PR #61 path | 250 / 250 | 7 | 0.235539 | 0.216542 | 55 |
+| union perfect | 250 / 250 | 71 | — | — | — |
+
+Against accepted parent `ae88988`, TypeMatch improves 13 common functions,
+regresses none, adds one perfect, and moves the mean from `0.185213` to
+`0.213917`. Against the immediately preceding ARM candidate it gives back
+`0.04545` on only `hard_fault_handler`, without losing a perfect. ByteMatch is
+the larger reliability result: versus that preceding candidate, compilable
+coverage rises from 210 to 242, the mean from `0.202560` to `0.235539`, and the
+median from `0.154243` to `0.216542`; 28 scores improve, none regress, and all
+seven perfects remain. The 32 newly compilable functions include
+`mspProcessInCommand`, `copy_reg`, `yyparse`, `statdb_write`, and
+`ssh_agent_sign`.
+
+The honest union is therefore 71/250 (`28.4%`). Joining those exact keys to the
+pinned nine-decompiler public snapshot
+`ed005ed3b2ec0d42bb607165d39cbabf59d8d8b54fa774fb43114c00c5320bf6`
+projects Glaurung sixth: below Kuna's 29.1% and above Binary Ninja's 28.1%.
+This remains a projection until DecBench accepts and publishes the submission.
+None of Glaurung's 71 union-perfect functions is unique versus that snapshot,
+and the GED mean remains far from competitive, so the rank is not a claim of
+structural parity.
+
+Verification is separated by gate rather than collapsed into “green.” Default
+Rust testing passes 1,951 library tests plus every integration target; the
+architecture ratchet remains 1,758 pass / 42 known fail / 228 structural / zero
+lane errors / six declared unsupported. The full Python suite reaches 100% with
+only the four known `suspicious_win` cross-sample content failures. Rust format
+and `git diff --check` pass. Repository-wide Ruff and `ty` remain baseline-red
+on pre-existing Python debt and were not rewritten as success. Earlier build
+attempts that exhausted the disk quota were discarded and not credited; the
+successful Rust run used a clean, reproducible no-debuginfo target.
