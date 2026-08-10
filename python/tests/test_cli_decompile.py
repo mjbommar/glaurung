@@ -877,6 +877,71 @@ def test_real_thumb_leaf_frame_save_does_not_become_a_source_local(
     assert "= var0;" not in generated, generated
 
 
+def test_real_stripped_x86_word_parameter_home_recovers_short(
+    tmp_path: Path,
+) -> None:
+    """Recover a short parameter from GCC's real O0 word-sized home."""
+    compiler = shutil.which("gcc")
+    strip = shutil.which("strip")
+    if compiler is None or strip is None:
+        pytest.skip("host gcc and strip are required")
+
+    source = tmp_path / "narrow_parameter.c"
+    binary = tmp_path / "narrow_parameter"
+    stripped = tmp_path / "narrow_parameter.stripped"
+    source.write_text(
+        "volatile short observed;\n"
+        "__attribute__((noinline, used)) int narrow_parameter(short value) {\n"
+        "    observed = value;\n"
+        "    return value;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            compiler,
+            "-O0",
+            "-g",
+            "-fno-pie",
+            "-no-pie",
+            "-nostdlib",
+            "-Wl,-e,narrow_parameter",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (function for function in functions if function.name == "narrow_parameter"),
+        None,
+    )
+    assert target is not None, functions
+    shutil.copy2(binary, stripped)
+    stripped_result = subprocess.run(
+        [strip, "--strip-all", str(stripped)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert stripped_result.returncode == 0, stripped_result.stderr
+
+    generated = g.ir.decompile_at(
+        str(stripped),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+
+    assert "(short arg0)" in generated, generated
+    assert "(int arg0)" not in generated, generated
+    assert "(unsigned short arg0)" not in generated, generated
+
+
 def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> None:
     """Use AAPCS spill width and reload extension to recover byte arguments."""
     compiler = shutil.which("arm-none-eabi-gcc")

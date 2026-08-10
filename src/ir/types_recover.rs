@@ -275,6 +275,7 @@ impl TypeMap {
 pub struct TypeMapV {
     inner: HashMap<SsaValue, TypeHint>,
     parameter_refinements: HashMap<SsaValue, TypeHint>,
+    strong_parameter_refinements: HashSet<SsaValue>,
 }
 
 impl TypeMapV {
@@ -315,6 +316,42 @@ impl TypeMapV {
         before != Some(merged)
     }
 
+    /// Record declaration evidence that is independently sufficient to refine
+    /// one exact ABI live-in.  This is deliberately separate from the ordinary
+    /// refinement lattice: weak narrow spills still require corroboration,
+    /// while a compiler-derived SysV parameter home has already passed its
+    /// own provenance and ambiguity checks.
+    fn upsert_strong_parameter_refinement(&mut self, value: SsaValue, hint: TypeHint) -> bool {
+        let was_strong = self.strong_parameter_refinements.contains(&value);
+        let before = self.parameter_refinements.get(&value).copied();
+        let merged = match (before, hint) {
+            // GCC may zero-extend a signed byte/word merely to transport its
+            // bits into another same-width object, then sign-extend a later
+            // reload for a semantic use.  Once both facts come from the exact
+            // proven parameter home, the sign-extension is the discriminating
+            // declaration evidence. A lone zero-extension remains unsigned.
+            (
+                Some(TypeHint::Int {
+                    signed: current_signed,
+                    width: current_width,
+                }),
+                TypeHint::Int {
+                    signed: incoming_signed,
+                    width: incoming_width,
+                },
+            ) if was_strong && current_width == incoming_width && current_width <= 2 => {
+                TypeHint::Int {
+                    signed: current_signed || incoming_signed,
+                    width: current_width,
+                }
+            }
+            _ => merge_type_hint(before, hint),
+        };
+        self.parameter_refinements.insert(value.clone(), merged);
+        let inserted = self.strong_parameter_refinements.insert(value);
+        before != Some(merged) || inserted
+    }
+
     /// Project only entry definitions back to a compatibility map. This is a
     /// lossless projection for ABI parameters: version zero is the unique
     /// caller-supplied value, while later scratch lifetimes remain excluded.
@@ -353,14 +390,15 @@ impl TypeMapV {
         let pointers_corroborated = pointer_count >= 2 || live_in_count >= 3;
         let scalars_corroborated = live_in_count >= 2;
         for (value, hint) in &self.parameter_refinements {
-            let visible = match hint {
-                TypeHint::Pointer { .. } | TypeHint::CodePointer => pointers_corroborated,
-                TypeHint::Int {
-                    signed: false,
-                    width,
-                } if *width >= 4 => true,
-                _ => scalars_corroborated,
-            };
+            let visible = self.strong_parameter_refinements.contains(value)
+                || match hint {
+                    TypeHint::Pointer { .. } | TypeHint::CodePointer => pointers_corroborated,
+                    TypeHint::Int {
+                        signed: false,
+                        width,
+                    } if *width >= 4 => true,
+                    _ => scalars_corroborated,
+                };
             if value.version == 0 && visible {
                 out.upsert(value.base.clone(), *hint);
             }
@@ -378,6 +416,9 @@ impl TypeMapV {
             return None;
         }
         let hint = self.parameter_refinements.get(value).copied()?;
+        if self.strong_parameter_refinements.contains(value) {
+            return Some(hint);
+        }
         if matches!(
             hint,
             TypeHint::Int {
@@ -2520,6 +2561,28 @@ fn is_aapcs_core_word_live_in(value: &SsaValue) -> bool {
         )
 }
 
+/// Whether `value` is one exact SysV AMD64 integer-register live-in.
+///
+/// The 32-bit and narrower aliases are normalized to these six storage bases
+/// by SSA.  Restricting derived narrow-home evidence to version zero prevents
+/// a later scratch mask/store from rewriting the source contract.
+fn is_sysv_integer_live_in(value: &SsaValue) -> bool {
+    value.version == 0
+        && matches!(
+            &value.base,
+            VReg::Phys(name)
+                if matches!(name.as_str(), "rdi" | "rsi" | "rdx" | "rcx" | "r8" | "r9")
+        )
+}
+
+fn low_mask_width(value: i64) -> Option<u8> {
+    match value as u64 {
+        0xff => Some(1),
+        0xffff => Some(2),
+        _ => None,
+    }
+}
+
 /// Recover type facts per SSA definition.
 ///
 /// The inference rules deliberately mirror the established raw-register pass,
@@ -2532,6 +2595,13 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
     let mut tm = TypeMapV::default();
     let mut constant_defs: HashMap<SsaValue, TypeHint> = HashMap::new();
     let mut copy_edges: Vec<(SsaValue, SsaValue)> = Vec::new();
+    // Narrow SysV parameter homes are sometimes fed through a compiler copy
+    // and low-bit mask (`edi -> eax; eax & 0xffff; mov [rbp-x], ax`).  These
+    // edges are provenance-only: they must never unify the wide and narrow
+    // values in the ordinary type lattice.
+    let mut narrowing_sources: HashMap<SsaValue, (SsaValue, u8, bool)> = HashMap::new();
+    let mut narrow_spill_candidates: Vec<((String, i64), SsaValue, u8)> = Vec::new();
+    let mut strong_live_in_spills: HashSet<((String, i64), SsaValue)> = HashSet::new();
     let mut reloads: HashSet<SsaValue> = HashSet::new();
     let mut reload_slots: HashMap<SsaValue, (String, i64)> = HashMap::new();
     // Exact values consumed by a logical right shift. Unlike a merged
@@ -2657,10 +2727,17 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                             // byte parameter, so the caller-supplied provenance
                             // may sit behind one or more pure copies. Those copy
                             // edges are resolved after this seed walk.
-                            let sources = live_in_spills.entry(slot).or_default();
+                            let sources = live_in_spills.entry(slot.clone()).or_default();
                             let spill = (source.clone(), addr.size.max(1));
                             if !sources.contains(&spill) {
                                 sources.push(spill);
+                            }
+                            if block_idx == 0 && addr.size.max(1) <= 2 {
+                                narrow_spill_candidates.push((
+                                    slot,
+                                    source.clone(),
+                                    addr.size.max(1),
+                                ));
                             }
                         }
                     }
@@ -2675,6 +2752,24 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                 } => {
                     if let Some((_, target)) = values.uses.first().and_then(Option::as_ref) {
                         tm.upsert(target.clone(), TypeHint::CodePointer);
+                    }
+                }
+                Op::Bin {
+                    op: BinOp::And,
+                    lhs,
+                    rhs,
+                    ..
+                } => {
+                    let mut cursor = 0;
+                    let lhs_value = operand_value(lhs, &values, &mut cursor);
+                    let rhs_value = operand_value(rhs, &values, &mut cursor);
+                    let masked_source = match (lhs, rhs) {
+                        (Value::Reg(_), Value::Const(mask)) => low_mask_width(*mask).zip(lhs_value),
+                        (Value::Const(mask), Value::Reg(_)) => low_mask_width(*mask).zip(rhs_value),
+                        _ => None,
+                    };
+                    if let (Some((_, dst)), Some((width, source))) = (&values.def, masked_source) {
+                        narrowing_sources.insert(dst.clone(), (source, width, true));
                     }
                 }
                 Op::Bin {
@@ -2764,6 +2859,22 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                     }
                     let mut cursor = 0;
                     if let Some(source) = operand_value(src, &values, &mut cursor) {
+                        if let Some((_, dst)) = &values.def {
+                            let available = if matches!(&ins.op, Op::Trunc { .. }) {
+                                to.bytes()
+                            } else {
+                                from.bytes()
+                            }
+                            .min(u8::MAX as u16) as u8;
+                            narrowing_sources.insert(
+                                dst.clone(),
+                                (
+                                    source.clone(),
+                                    available,
+                                    matches!(&ins.op, Op::Trunc { .. }),
+                                ),
+                            );
+                        }
                         tm.upsert(
                             source,
                             TypeHint::Int {
@@ -2809,6 +2920,70 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
         *spills = resolved;
     }
     live_in_spills.retain(|_, spills| !spills.is_empty());
+
+    // Admit a compiler-derived narrow parameter home only when the chain is
+    // rooted at one exact SysV live-in, contains an explicit low-width mask or
+    // truncation, and that live-in has no ordinary full-width spill.  The last
+    // condition distinguishes `f(short x)` from
+    // `f(int x) { short local = x; }`, whose prologue first saves `x` at four
+    // bytes.  Multiple distinct narrow destinations are also ambiguous and
+    // fail closed.
+    let exact_spilled_sources: HashSet<SsaValue> = live_in_spills
+        .values()
+        .flatten()
+        .map(|(source, _)| source.clone())
+        .collect();
+    let mut derived: HashMap<SsaValue, Vec<((String, i64), u8)>> = HashMap::new();
+    for (slot, source, spill_width) in narrow_spill_candidates {
+        let mut candidate = source;
+        let mut narrowed = false;
+        let mut visited = HashSet::new();
+        loop {
+            if candidate.version == 0 && matches!(candidate.base, VReg::Phys(_)) {
+                if narrowed
+                    && is_sysv_integer_live_in(&candidate)
+                    && !exact_spilled_sources.contains(&candidate)
+                {
+                    derived
+                        .entry(candidate)
+                        .or_default()
+                        .push((slot.clone(), spill_width));
+                }
+                break;
+            }
+            if !visited.insert(candidate.clone()) {
+                break;
+            }
+            if let Some(predecessor) = copy_sources.get(&candidate) {
+                candidate = predecessor.clone();
+                continue;
+            }
+            let Some((predecessor, available_width, edge_narrows)) =
+                narrowing_sources.get(&candidate)
+            else {
+                break;
+            };
+            if *available_width < spill_width {
+                break;
+            }
+            narrowed |= edge_narrows;
+            candidate = predecessor.clone();
+        }
+    }
+    for (source, mut candidates) in derived {
+        candidates.sort();
+        candidates.dedup();
+        if candidates.len() != 1 {
+            continue;
+        }
+        let (slot, width) = candidates.pop().expect("one narrow candidate");
+        strong_live_in_spills.insert((slot.clone(), source.clone()));
+        live_in_spills
+            .entry(slot)
+            .or_default()
+            .push((source, width));
+    }
+
     let live_in_reloads: HashSet<SsaValue> = reload_slots
         .iter()
         .filter(|(_, slot)| live_in_spills.contains_key(*slot))
@@ -3103,7 +3278,14 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                                         width: addr.size.max(1),
                                     };
                                     changed |= tm.upsert(source.clone(), hint);
-                                    changed |= tm.upsert_parameter_refinement(source.clone(), hint);
+                                    changed |= if narrow_exact
+                                        && strong_live_in_spills
+                                            .contains(&(slot.clone(), source.clone()))
+                                    {
+                                        tm.upsert_strong_parameter_refinement(source.clone(), hint)
+                                    } else {
+                                        tm.upsert_parameter_refinement(source.clone(), hint)
+                                    };
                                 }
                             }
                             _ => {}
@@ -4928,6 +5110,222 @@ int never_returns(void) { for (;;) {} }
                 width: 4,
             }),
             "a later r3 address lifetime must not poison r0: {prototype:#?}"
+        );
+    }
+
+    #[test]
+    fn sysv_narrow_parameter_home_refines_the_exact_live_in() {
+        // GCC x86-64 -O0 lowers `f(short key)` through the 32-bit ABI view,
+        // masks the copied value to AX, and stores only that word in the
+        // parameter home.  The narrow store is the source declaration width;
+        // the full-width RDI container is not an `int` contract.  This is the
+        // reduced stripped-binary shape of DecBench's `prec_name`.
+        let lf = mk_block(vec![
+            Op::ZExt {
+                dst: VReg::phys("rax"),
+                src: Value::Reg(VReg::phys("edi")),
+                from: crate::ir::types::Width::W32,
+                to: crate::ir::types::Width::W64,
+            },
+            Op::Bin {
+                dst: VReg::Temp(0),
+                op: BinOp::And,
+                lhs: Value::Reg(VReg::phys("rax")),
+                rhs: Value::Const(0xffff),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -20, 2),
+                src: Value::Reg(VReg::Temp(0)),
+            },
+            Op::Load {
+                dst: VReg::Temp(1),
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -20, 2),
+            },
+            // A signed short is commonly zero-extended for a bit-preserving
+            // same-width copy before a later signed semantic use.  That
+            // transport must not turn the declaration unsigned.
+            Op::ZExt {
+                dst: VReg::phys("rdx"),
+                src: Value::Reg(VReg::Temp(1)),
+                from: crate::ir::types::Width::W16,
+                to: crate::ir::types::Width::W64,
+            },
+            Op::Store {
+                addr: MemOp::plain(None, None, 1, 0x1000, 2),
+                src: Value::Reg(VReg::phys("rdx")),
+            },
+            Op::Load {
+                dst: VReg::Temp(2),
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -20, 2),
+            },
+            Op::SExt {
+                dst: VReg::phys("rcx"),
+                src: Value::Reg(VReg::Temp(2)),
+                from: crate::ir::types::Width::W16,
+                to: crate::ir::types::Width::W64,
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 2,
+            }),
+            "the exact word-sized parameter home must refine RDI: {prototype:#?}"
+        );
+    }
+
+    #[test]
+    fn sysv_unsigned_narrow_parameter_home_stays_unsigned() {
+        let lf = mk_block(vec![
+            Op::ZExt {
+                dst: VReg::phys("rax"),
+                src: Value::Reg(VReg::phys("edi")),
+                from: crate::ir::types::Width::W32,
+                to: crate::ir::types::Width::W64,
+            },
+            Op::Bin {
+                dst: VReg::Temp(0),
+                op: BinOp::And,
+                lhs: Value::Reg(VReg::phys("rax")),
+                rhs: Value::Const(0xffff),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -20, 2),
+                src: Value::Reg(VReg::Temp(0)),
+            },
+            Op::Load {
+                dst: VReg::Temp(1),
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -20, 2),
+            },
+            Op::ZExt {
+                dst: VReg::phys("rcx"),
+                src: Value::Reg(VReg::Temp(1)),
+                from: crate::ir::types::Width::W16,
+                to: crate::ir::types::Width::W64,
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: false,
+                width: 2,
+            }),
+            "a lone zero-extension is unsigned declaration evidence: {prototype:#?}"
+        );
+    }
+
+    #[test]
+    fn sysv_narrow_cast_local_does_not_shrink_a_full_width_parameter() {
+        // `f(int value) { short local = value; ... }` has an ordinary
+        // full-width parameter home before the derived narrow local.  A mask
+        // and word store alone must not rewrite that `int` contract.
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -20, 4),
+                src: Value::Reg(VReg::phys("edi")),
+            },
+            Op::ZExt {
+                dst: VReg::phys("rax"),
+                src: Value::Reg(VReg::phys("edi")),
+                from: crate::ir::types::Width::W32,
+                to: crate::ir::types::Width::W64,
+            },
+            Op::Bin {
+                dst: VReg::Temp(0),
+                op: BinOp::And,
+                lhs: Value::Reg(VReg::phys("rax")),
+                rhs: Value::Const(0xffff),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -2, 2),
+                src: Value::Reg(VReg::Temp(0)),
+            },
+            Op::Load {
+                dst: VReg::Temp(1),
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -2, 2),
+            },
+            Op::SExt {
+                dst: VReg::phys("rcx"),
+                src: Value::Reg(VReg::Temp(1)),
+                from: crate::ir::types::Width::W16,
+                to: crate::ir::types::Width::W64,
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "a derived short local must not shrink its full-width input: {prototype:#?}"
+        );
+    }
+
+    #[test]
+    fn sysv_direct_narrow_spill_does_not_bypass_corroboration() {
+        // With no explicit truncation/mask chain, a word store can equally be
+        // `short parameter` or `int parameter assigned to short local`.  One
+        // such spill is not independently strong declaration evidence.
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -2, 2),
+                src: Value::Reg(VReg::phys("edi")),
+            },
+            Op::Load {
+                dst: VReg::Temp(0),
+                addr: MemOp::plain(Some(VReg::phys("rbp")), None, 1, -2, 2),
+            },
+            Op::SExt {
+                dst: VReg::phys("rax"),
+                src: Value::Reg(VReg::Temp(0)),
+                from: crate::ir::types::Width::W16,
+                to: crate::ir::types::Width::W64,
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "an ambiguous direct word spill must remain ABI-container typed: {prototype:#?}"
         );
     }
 

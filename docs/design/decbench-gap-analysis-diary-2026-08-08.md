@@ -1483,3 +1483,79 @@ unsupported. Rust and Python formatting, `git diff --check`, the focused real
 Thumb test, and targeted Ruff are clean. Targeted `ty` remains baseline-red with
 30 existing diagnostics in `test_cli_decompile.py`; none points into the new
 fixture.
+
+## 21:20–22:50 — exact SysV narrow parameter homes and a new union win
+
+The next distance-one TypeMatch row was `findutils:O0:find:prec_name`. Its first
+wrong stage was not rendering: GCC receives a source `short` in `edi`, masks the
+low 16 bits through `eax`, and stores `ax` into the frame home. The existing
+spill owner followed exact copies only, so it could not connect that home back
+to the version-zero `rdi` live-in and left the declaration at ABI width.
+
+The retained rule records mask/truncation edges as provenance without unifying
+their wide and narrow values in the ordinary type lattice. A frame home becomes
+strong declaration evidence only when all of these conditions hold:
+
+- the chain starts in block zero and reaches an exact version-zero SysV integer
+  argument register;
+- it contains an explicit `0xff`/`0xffff` mask or truncation;
+- the same live-in has no ordinary full-width spill; and
+- there is exactly one distinct narrow destination.
+
+This is intentionally narrower than declaring every word store a `short`.
+Four RED Rust cases cover a signed word parameter, an unsigned word parameter,
+an `int` parameter copied into a local `short`, and an ambiguous direct narrow
+spill. A real stripped host-GCC integration fixture then compiles and strips a
+source `short` function before decompiling it by address; the recovered
+signature is `int sub_401000(short arg0)`. Sign extension wins when the same
+proven home also has zero-extension transport evidence, while a lone zero
+extension remains unsigned.
+
+A new external replay started from an empty result directory and extracted all
+250 functions from all 224 stripped binaries with zero extraction failures.
+The result manifest SHA-256 is
+`5d5e1fc27f3c68fd88e372d5f999a321d81dabb48ead2d02b36f760dcfbacde3`;
+the packaged `results.zip` SHA-256 is
+`cf30fa213e8e5cca54cadb23172e1f4fa77bbafc71c01c1631e9c420046808d0`,
+and the diagnostic ledger SHA-256 is
+`9322cb5352e45446fe15d16f0a0e691db5ca1a2d9c86134c3a997d05a75d7429`.
+Only seven emitted functions differ from the leaf-frame candidate. Each was
+rescored with caches disabled and all seven still compile. `prec_name` improves
+from TypeMatch `0.5` to `1.0` and ByteMatch `0.21875` to
+`0.288135593220339`; the other six retain their prior TypeMatch and ByteMatch
+scores. There are therefore zero affected-row metric regressions.
+
+Fresh aggregate scoring of the new submission column gives:
+
+| Metric | Coverage | Perfect | Mean | Median | Zero |
+|---|---:|---:|---:|---:|---:|
+| GED, prior published-source CFG ledger | 239 / 250 | 60 | 32.364017 | 10.0 | 60 |
+| TypeMatch, fresh stripped submission | 235 / 250 | 16 | 0.215000 | 0.083333 | 100 |
+| ByteMatch, fresh PR #61 path | 250 / 250 | 8 | 0.247702 | 0.220977 | 53 |
+| union perfect | 250 / 250 | 72 | — | — | — |
+
+The union increases because `prec_name` was not previously perfect in GED or
+ByteMatch. The honest external projection is now 72/250 (`28.8%`), still sixth
+and immediately below Kuna's 29.1% in the pinned public snapshot. This is a
+near-neighbor placement, not a claim that the remaining GED distance is small.
+An exact key join independently yields 60 GED, 16 TypeMatch, and eight
+ByteMatch perfects: GED/TypeMatch overlap on six keys, GED/ByteMatch on five,
+TypeMatch/ByteMatch on one, and no key is perfect in all three metrics.
+Fresh GED is still unavailable because this materialized tree has no `.i`/`.ii`
+sources, so the table labels that column as prior rather than silently reusing
+it as fresh evidence.
+
+Verification remains split by scope. Focused type recovery passes 62 tests, the
+full Rust run passes 1,957 library tests plus every integration target, the real
+CLI file passes all 30 tests, and the architecture ratchet remains exactly
+1,758 pass / 42 known fail / 228 structural / zero lane errors / six declared
+unsupported. The full Python suite reaches 100% with only the same four
+cross-sample `suspicious_win` content failures. Rust format, Python format,
+targeted Ruff, and `git diff --check` pass. Targeted `ty` reports the same 30
+pre-existing diagnostics in `test_cli_decompile.py`, with none on the new test.
+Both executable behavior matrices pass all 56 legacy and 64 curriculum cells,
+and a fresh four-worker DecBench run reports no per-cell GED, TypeMatch, or
+ByteMatch regression across 56/56 cells. The final release-build extraction
+takes 67.36 s at eight workers; its per-binary median is 2.155 s, mean 2.389 s,
+and maximum 3.739 s. Those timings establish the current artifact's performance
+and completeness, but are not attributed solely to this type-recovery change.
