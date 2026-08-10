@@ -462,6 +462,13 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   ratchet. In parallel, diagnose the 96-row O2-noinline GED mean of `52.22`
   through edge ownership and definition-valid region recovery rather than
   declaration or formatting normalization.
+  - [x] Recover the exact effectful iterator-loop header in `statdb_write`.
+    Its GED moves `4→0`, ByteMatch improves `0.446429→0.578947`, and the union
+    advances `75→76/250`. The only two collateral output changes also improve
+    GED and do not regress ByteMatch; all 250 functions extract successfully.
+    This is the first exact-win increment under the broader still-open task,
+    not completion of the `copy_reg`, `yyparse`, `ssh_agent_sign`, or
+    O2-noinline cohorts.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the

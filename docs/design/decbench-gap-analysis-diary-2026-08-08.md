@@ -1992,3 +1992,66 @@ reported `arith:gcc:O0` GED `0→0.33` and `recursion:gcc:O2` GED `149→199.5`;
 the authoritative checkout restores those values to `0` and `147.5`,
 respectively. This is recorded as evaluator-version mismatch, not hidden as a
 green retry or attributed to Glaurung.
+
+## 09:12–10:14 — recover exact call-driven loop headers
+
+The accepted candidate still rendered official
+`dpkg:O2:dpkg-statoverride:statdb_write` as an infinite loop containing an
+effectful iterator call and a conditional break. That C was executable, but
+DecBench's CPG assigned six edges to it while the source loop has four. The
+result was GED 4 even after the earlier `.plt.got` repair had removed the
+incorrect return value and dangling terminal goto.
+
+The repair recognizes only the exact lowered shape `while (1) { result =
+call(...); if (exit(result)) break; remainder; }`. It rotates that loop into an
+initial seed call followed by `while (!exit(result)) { remainder; result =
+call(...); }`. The seed and latch preserve the number and ordering of calls;
+the effect is not hidden in an expression. The transform fails closed unless
+the first statement is one result-producing call, the second is a single-arm
+break guard that reads that result, and the remainder contains no explicit
+label, goto, or indirect goto that could bypass or re-enter the synthesized
+latch. A real optimized and stripped host-GCC iterator fixture verifies that
+both calls survive and that the recovered guard is no longer `while (1)`; a
+unit negative control covers the unsafe goto case.
+
+The implementation lives in the new focused `effectful_loop` module rather
+than expanding `loop_form.rs`. The latter falls from 2,590 lines at the parent
+revision to 2,556, while the new module is 220 lines including tests. Expression
+register-use traversal is now the shared `Expr::contains_reg` helper instead of
+a private copy embedded in the oversized loop-form module.
+
+Exact scoring against the pinned canonical DecBench checkout gives these only
+three changed rows relative to the accepted `17952f0` package:
+
+| Function | GED | ByteMatch | Result |
+|---|---:|---:|---|
+| `chibios:clang:O0:chSemResetWithMessageI` | `76→74` | `0→0` | non-regressing |
+| `betaflight:clang:O2:mspProcessInCommand` | `108→104` | `0→0.001692` | improves |
+| `dpkg:gcc:O2:statdb_write` | `4→0` | `0.446429→0.578947` | new GED perfect |
+
+TypeMatch is unchanged. The projected full aggregate is therefore 61/239 GED
+perfects with mean `32.309623` and median 10, 9/250 ByteMatch perfects with mean
+`0.249356` and median `0.219375`, and the existing 20/235 TypeMatch perfects
+with mean `0.226702` and median `0.083333`. Because `statdb_write` was not
+already perfect on another official metric, the exact union advances
+75→76/250 (`30.4%`).
+
+A fresh worktree-labelled extraction completed all 224 binaries and all 250
+functions with zero extraction failures. Its result archive is
+`/tmp/glaurung-call-loop.r4YloY/results.zip` with SHA-256
+`27af7b9a9a80a12da4eaca0eb7e81e6831773ce0a817f95d4da5c206cc7ac39b`.
+Differential inspection confirms that only the three rows above changed. A
+final commit-labelled replay remains required before publication, so this
+archive is evidence for the implementation candidate rather than the release
+artifact.
+
+The full Rust gate passes 1,971 library tests, every integration target, and
+doctests after rebuilding with incremental compilation disabled and two build
+jobs. The first attempt exhausted the worktree's disk quota during linking;
+removing only the disposable Cargo target and rerunning produced the clean
+result. The full Python suite reports 2,882 passed, 44 skipped, and the same
+four unrelated `suspicious_win` cross-sample content failures recorded earlier;
+no decompiler or loop test fails. The new real-binary test passes focused Ruff
+format/lint and `ty`. Repository-wide Ruff format (349 existing files), Ruff
+lint (3,710 existing findings), and `ty` (2,038 existing diagnostics) remain
+red and are not represented as regressions introduced by this increment.

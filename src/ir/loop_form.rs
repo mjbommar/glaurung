@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use crate::ir::ast::{negate_cmp_expr, Expr, Function, Stmt};
+use crate::ir::effectful_loop::rotate_effectful_call_headers;
 use crate::ir::types::{BinOp, CmpOp, VReg};
 
 /// Recover a linearised tail-tested loop from its exact label/backedge form.
@@ -207,6 +208,7 @@ fn count_control_targets(
 /// intact.
 pub fn recover_head_tested_whiles(f: &mut Function) {
     seed_exit_value_copies(&mut f.body);
+    rotate_effectful_call_headers(&mut f.body);
     recover_body(&mut f.body);
 }
 
@@ -632,8 +634,8 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
             if seeds[0].0 != current
                 || equality_other_side(exit_guard, sentinel).and_then(reg_through_casts)
                     != Some(current)
-                || !contains_reg(match_continue, current)
-                || !contains_reg(advance, current)
+                || !match_continue.contains_reg(current)
+                || !advance.contains_reg(current)
             {
                 return None;
             }
@@ -656,10 +658,10 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
                     != Some(result)
                 || !seeds.iter().any(|(seed, _)| *seed == result)
                 || !seeds.iter().any(|(seed, _)| *seed == current)
-                || !contains_reg(match_continue, current)
-                || contains_reg(match_continue, result)
-                || !contains_reg(advance, current)
-                || contains_reg(advance, result)
+                || !match_continue.contains_reg(current)
+                || match_continue.contains_reg(result)
+                || !advance.contains_reg(current)
+                || advance.contains_reg(result)
             {
                 return None;
             }
@@ -839,7 +841,7 @@ fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
             || !stable_value_expr(carried_value)
             || all_targets
                 .iter()
-                .any(|target| contains_reg(carried_value, target))
+                .any(|target| carried_value.contains_reg(target))
         {
             return None;
         }
@@ -1102,7 +1104,7 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
     let step_target = assigned_target(step)?;
     if step_target != init_target
         || !is_unit_increment(step, step_target)
-        || !contains_reg(&loop_cond, init_target)
+        || !loop_cond.contains_reg(init_target)
         || core_body.iter().any(has_iterator_bypass)
     {
         return None;
@@ -1238,42 +1240,6 @@ fn recover_body(stmts: &mut [Stmt]) {
             | Stmt::Throw { .. }
             | Stmt::TryCatch { .. } => {}
         }
-    }
-}
-
-fn contains_reg(expr: &Expr, target: &VReg) -> bool {
-    match expr {
-        Expr::Reg(reg) => reg == target,
-        Expr::StackAddr { object, .. } => object == target,
-        Expr::Deref { addr, .. } => contains_reg(addr, target),
-        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            contains_reg(lhs, target) || contains_reg(rhs, target)
-        }
-        Expr::Select {
-            cond,
-            if_true,
-            if_false,
-            ..
-        } => {
-            contains_reg(cond, target)
-                || contains_reg(if_true, target)
-                || contains_reg(if_false, target)
-        }
-        Expr::Un { src, .. } => contains_reg(src, target),
-        Expr::Cast { expr, .. } => contains_reg(expr, target),
-        Expr::FunctionTableEntry { index, .. } => contains_reg(index, target),
-        Expr::WideArithmetic { args, .. } => {
-            args.iter().any(|argument| contains_reg(argument, target))
-        }
-        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
-            base.as_ref() == Some(target) || index.as_ref() == Some(target)
-        }
-        Expr::Const(_)
-        | Expr::FloatConst { .. }
-        | Expr::Addr(_)
-        | Expr::Named { .. }
-        | Expr::StringLit { .. }
-        | Expr::Unknown(_) => false,
     }
 }
 

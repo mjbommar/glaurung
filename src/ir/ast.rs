@@ -221,6 +221,46 @@ pub enum Expr {
     Unknown(String),
 }
 
+impl Expr {
+    /// Return whether this expression reads `target` directly or through one
+    /// of its recursively nested operands.
+    pub(crate) fn contains_reg(&self, target: &VReg) -> bool {
+        match self {
+            Self::Reg(reg) => reg == target,
+            Self::StackAddr { object, .. } => object == target,
+            Self::Deref { addr, .. } => addr.contains_reg(target),
+            Self::Bin { lhs, rhs, .. } | Self::Cmp { lhs, rhs, .. } => {
+                lhs.contains_reg(target) || rhs.contains_reg(target)
+            }
+            Self::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                cond.contains_reg(target)
+                    || if_true.contains_reg(target)
+                    || if_false.contains_reg(target)
+            }
+            Self::Un { src, .. } => src.contains_reg(target),
+            Self::Cast { expr, .. } => expr.contains_reg(target),
+            Self::FunctionTableEntry { index, .. } => index.contains_reg(target),
+            Self::WideArithmetic { args, .. } => {
+                args.iter().any(|argument| argument.contains_reg(target))
+            }
+            Self::Lea { base, index, .. } | Self::PdbFieldAddr { base, index, .. } => {
+                base.as_ref() == Some(target) || index.as_ref() == Some(target)
+            }
+            Self::Const(_)
+            | Self::FloatConst { .. }
+            | Self::Addr(_)
+            | Self::Named { .. }
+            | Self::StringLit { .. }
+            | Self::Unknown(_) => false,
+        }
+    }
+}
+
 // -- Statements ---------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
