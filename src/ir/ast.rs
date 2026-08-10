@@ -9507,8 +9507,10 @@ fn write_call_dec(
                         // A pointer argument of a DIFFERENT pointer type is
                         // still incompatible with the declaration this call
                         // emits, so reassert the declared parameter type.
-                        || call_argument_pointer_ctype(a)
-                            .is_some_and(|rendered| &rendered != parameter_type)))
+                        || call_argument_pointer_ctype(a).map_or_else(
+                            || !matches!(parameter_type.as_str(), "void *" | "const void *"),
+                            |rendered| &rendered != parameter_type,
+                        )))
                 || representation_mismatch
                 // A recovered AAPCS-VFP parameter still proves the consuming
                 // storage class.  Render its complete expression in float
@@ -12225,6 +12227,42 @@ function f @ 0x1000 {
         assert!(
             rendered.contains("sub_801d49c((int *)"),
             "a declared pointer parameter must be reasserted at the call:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn decbench_stack_address_is_cast_to_the_recovered_pointer_parameter() {
+        let prototype = CallPrototype {
+            return_type: "int".into(),
+            parameter_types: vec!["int *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let function = Function {
+            name: "stack_status".to_string(),
+            entry_va: 0,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "get_status".to_string(),
+                },
+                args: vec![Expr::StackAddr {
+                    object: VReg::phys("local_20"),
+                    size: 32,
+                }],
+                dst: Some(VReg::phys("var0")),
+                call_spec: Some(crate::ir::call_contracts::CallSiteSpec {
+                    callee_prototype: Some(prototype.clone()),
+                    call_prototype: prototype,
+                }),
+            }],
+        };
+
+        let rendered = render_decbench_typed(&function, None, None);
+
+        assert!(
+            rendered.contains("get_status((int *)(&local_20[0]))"),
+            "the stack object's byte-array representation must not violate the callee contract:\n{rendered}"
         );
     }
 

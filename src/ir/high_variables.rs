@@ -200,14 +200,20 @@ fn refine_authoritative_pointer_parameters(
 #[derive(Debug)]
 enum Definition {
     Assignment(Expr),
-    Call(Expr),
+    Call {
+        target: Expr,
+        return_type: Option<String>,
+    },
 }
 
 impl Definition {
     fn classify(&self, types: &TypeMap) -> ValueClass {
         match self {
             Self::Assignment(value) => classify_expr(value, types),
-            Self::Call(target) => classify_call(target),
+            Self::Call {
+                target,
+                return_type,
+            } => classify_call(target, return_type.as_deref()),
         }
     }
 
@@ -287,11 +293,14 @@ fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>
             Stmt::Call {
                 target,
                 dst: Some(VReg::Phys(name)),
+                call_spec,
                 ..
-            } => out
-                .entry(name.clone())
-                .or_default()
-                .push(Definition::Call(target.clone())),
+            } => out.entry(name.clone()).or_default().push(Definition::Call {
+                target: target.clone(),
+                return_type: call_spec
+                    .as_ref()
+                    .map(|spec| spec.call_prototype.return_type.clone()),
+            }),
             Stmt::If {
                 then_body,
                 else_body,
@@ -409,7 +418,12 @@ fn is_null_pointer_constant(expression: &Expr) -> bool {
     matches!(expression, Expr::Const(0))
 }
 
-fn classify_call(target: &Expr) -> ValueClass {
+fn classify_call(target: &Expr, recovered_return_type: Option<&str>) -> ValueClass {
+    if let Some(c_type) = recovered_return_type {
+        return pointer_width_from_c_type(c_type)
+            .map(ValueClass::Pointer)
+            .unwrap_or(ValueClass::Scalar);
+    }
     let Expr::Named { name, .. } = target else {
         return ValueClass::Unknown;
     };
@@ -666,6 +680,44 @@ mod tests {
         assert_eq!(pointer_width(&types, "var1"), Some(1));
         assert_eq!(pointer_width(&types, "local_8"), Some(1));
         assert_eq!(pointer_width(&types, "var2"), Some(1));
+    }
+
+    #[test]
+    fn recovered_callee_pointer_result_flows_through_an_exact_copy() {
+        let recovered = CallPrototype {
+            return_type: "void *".into(),
+            parameter_types: vec![],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let function = Function {
+            name: "copy_project_pointer".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "project_device".into(),
+                    },
+                    args: vec![],
+                    dst: Some(VReg::phys("var1")),
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(recovered.clone()),
+                        call_prototype: recovered,
+                    }),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var2"),
+                    src: Expr::Reg(VReg::phys("var1")),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+
+        refine_pointer_high_variables(&function, &mut types);
+
+        assert_eq!(pointer_width(&types, "var1"), Some(0));
+        assert_eq!(pointer_width(&types, "var2"), Some(0));
     }
 
     #[test]

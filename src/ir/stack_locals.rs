@@ -681,7 +681,24 @@ fn seed_indexed_stack_objects(
         for stmt in body {
             match stmt {
                 Stmt::Assign { dst, src } => {
-                    collect_expr(src, sp_delta, ctx, address_defs, starts);
+                    // AAPCS uses r7/r11/fp arithmetic to restore SP in the
+                    // epilogue. At this pre-value-folding stage the constant
+                    // adjustment can still be a temporary register, which has
+                    // the same syntax as a dynamic array index. It is machine
+                    // frame bookkeeping, not an indexed memory access and
+                    // must not seed a byte object spanning the entire frame.
+                    let arm_epilogue_frame_arithmetic = matches!(
+                        (dst, src),
+                        (
+                            VReg::Phys(name),
+                            Expr::Bin { lhs, rhs, .. }
+                        ) if is_arm_frame_pointer(name, ctx)
+                            && matches!(lhs.as_ref(), Expr::Reg(_))
+                            && matches!(rhs.as_ref(), Expr::Reg(_))
+                    );
+                    if !arm_epilogue_frame_arithmetic {
+                        collect_expr(src, sp_delta, ctx, address_defs, starts);
+                    }
                     if is_stack_pointer_reg(dst, ctx) {
                         sp_delta =
                             stack_delta_after_assignment(dst, src, sp_delta, ctx, address_defs);

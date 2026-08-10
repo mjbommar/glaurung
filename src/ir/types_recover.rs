@@ -288,7 +288,22 @@ impl TypeMapV {
 
     fn upsert(&mut self, value: SsaValue, hint: TypeHint) -> bool {
         let before = self.inner.get(&value).copied();
-        let merged = merge_type_hint(before, hint);
+        // Exact values may legitimately serve as byte and word buffers (for
+        // example memset's destination). A register-keyed map has to choose a
+        // widest machine view, but an SSA-keyed semantic fact can preserve the
+        // conflict honestly: width zero renders `void *` and remains stable if
+        // another concrete access arrives later.
+        let merged = match (before, hint) {
+            (
+                Some(TypeHint::Pointer {
+                    pointee_width: current,
+                }),
+                TypeHint::Pointer {
+                    pointee_width: incoming,
+                },
+            ) if current != incoming => TypeHint::Pointer { pointee_width: 0 },
+            _ => merge_type_hint(before, hint),
+        };
         self.inner.insert(value, merged);
         before != Some(merged)
     }
@@ -1390,6 +1405,7 @@ fn live_in_parameter_view_hint(
     ssa: &SsaInfo,
     value: &SsaValue,
     raw: &TypeMap,
+    cc: crate::ir::call_args::CallConv,
 ) -> Option<TypeHint> {
     // Architectural reads (a real machine operand) and speculative ABI reads
     // (the argument-register may-use list `abi::annotate_calls` hangs on every
@@ -1420,7 +1436,24 @@ fn live_in_parameter_view_hint(
                     bucket.0 = width;
                     bucket.1.clear();
                 }
-                if let Some(hint) = raw.get(register) {
+                if let Some(hint) = raw.get(register).filter(|hint| {
+                    !matches!(
+                        (cc, hint),
+                        (
+                            crate::ir::call_args::CallConv::Arm
+                                | crate::ir::call_args::CallConv::ArmHardFloat,
+                            TypeHint::Pointer { .. } | TypeHint::CodePointer
+                        )
+                    )
+                }) {
+                    // ARM raw-register pointer class is deliberately excluded
+                    // at this exact-value boundary. A later address-bearing
+                    // lifetime in the same physical r0-r3 register can
+                    // otherwise retype an earlier scalar read; ARM has no
+                    // narrow aliases to separate those lifetimes. Qualified
+                    // pointer evidence still arrives first through
+                    // `parameter_refinement`. Other ABIs retain their
+                    // alias-specific raw pointer evidence here.
                     bucket.1.push(hint);
                 }
             }
@@ -1448,6 +1481,30 @@ fn live_in_parameter_view_hint(
         },
         other => other,
     })
+}
+
+/// Return address-class evidence attached to the exact ARM live-in value.
+///
+/// ARM32 has no architectural subregister aliases for r0-r3, so the raw
+/// register map cannot distinguish a caller-supplied address from a later
+/// scratch lifetime in the same register. Value-keyed recovery can: it marks
+/// only the SSA definition actually consumed as an address. Keep this narrow
+/// to address classes; ordinary scalar width still comes from architectural
+/// views and is normalized at the ABI boundary.
+fn arm_live_in_address_hint(
+    valued: &TypeMapV,
+    value: &SsaValue,
+    cc: crate::ir::call_args::CallConv,
+) -> Option<TypeHint> {
+    if !matches!(
+        cc,
+        crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat
+    ) {
+        return None;
+    }
+    valued
+        .get(value)
+        .filter(|hint| matches!(hint, TypeHint::Pointer { .. } | TypeHint::CodePointer))
 }
 
 /// First index in [`def_uses`]'s use list that belongs to a call's synthesized
@@ -1715,7 +1772,8 @@ pub fn recover_prototype_with_arm_vfp_args(
             // into the source-level prototype.
             let hint = valued
                 .parameter_refinement(&value)
-                .or_else(|| live_in_parameter_view_hint(lf, ssa, &value, &raw))
+                .or_else(|| arm_live_in_address_hint(&valued, &value, cc))
+                .or_else(|| live_in_parameter_view_hint(lf, ssa, &value, &raw, cc))
                 .or(raw_hint)
                 .map(|hint| normalize_value_hint_for_abi(hint, cc));
             Some(RecoveredParameter { slot, value, hint })
@@ -2475,6 +2533,7 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
     let mut constant_defs: HashMap<SsaValue, TypeHint> = HashMap::new();
     let mut copy_edges: Vec<(SsaValue, SsaValue)> = Vec::new();
     let mut reloads: HashSet<SsaValue> = HashSet::new();
+    let mut reload_slots: HashMap<SsaValue, (String, i64)> = HashMap::new();
     // Exact values consumed by a logical right shift. Unlike a merged
     // unsigned type hint, this is direct machine evidence that the source
     // operation interpreted this particular value as unsigned.
@@ -2551,9 +2610,10 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                             );
                         }
                     }
-                    if frame_slot(addr, &frame_bases).is_some() {
+                    if let Some(slot) = frame_slot(addr, &frame_bases) {
                         if let Some((_, dst)) = &values.def {
                             reloads.insert(dst.clone());
+                            reload_slots.insert(dst.clone(), slot);
                         }
                     }
                 }
@@ -2749,6 +2809,11 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
         *spills = resolved;
     }
     live_in_spills.retain(|_, spills| !spills.is_empty());
+    let live_in_reloads: HashSet<SsaValue> = reload_slots
+        .iter()
+        .filter(|(_, slot)| live_in_spills.contains_key(*slot))
+        .map(|(value, _)| value.clone())
+        .collect();
 
     // Compute scaled-index/offset values using SSA operands, not register names.
     let mut offsets: HashSet<SsaValue> = HashSet::new();
@@ -2875,7 +2940,19 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                         .is_some_and(|candidate| offsets.contains(candidate)),
                     Value::Addr(_) => false,
                 };
-                let base = if is_offset(rhs, &rhs_value) && !is_offset(lhs, &lhs_value) {
+                let is_live_in_reload = |value: &Option<SsaValue>| {
+                    value
+                        .as_ref()
+                        .is_some_and(|candidate| live_in_reloads.contains(candidate))
+                };
+                let base = if is_live_in_reload(&lhs_value) && !is_live_in_reload(&rhs_value) {
+                    lhs_value
+                } else if matches!(instruction.op, Op::Bin { op: BinOp::Add, .. })
+                    && is_live_in_reload(&rhs_value)
+                    && !is_live_in_reload(&lhs_value)
+                {
+                    rhs_value
+                } else if is_offset(rhs, &rhs_value) && !is_offset(lhs, &lhs_value) {
                     lhs_value
                 } else if matches!(instruction.op, Op::Bin { op: BinOp::Add, .. })
                     && is_offset(lhs, &lhs_value)
@@ -2952,7 +3029,18 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                         let is_reload = |value: &Option<SsaValue>| {
                             value.as_ref().is_some_and(|value| reloads.contains(value))
                         };
-                        let base = if is_reload(&lhs_value) && !is_reload(&rhs_value) {
+                        let is_live_in_reload = |value: &Option<SsaValue>| {
+                            value
+                                .as_ref()
+                                .is_some_and(|value| live_in_reloads.contains(value))
+                        };
+                        let base = if is_live_in_reload(&lhs_value)
+                            && !is_live_in_reload(&rhs_value)
+                        {
+                            lhs_value
+                        } else if is_live_in_reload(&rhs_value) && !is_live_in_reload(&lhs_value) {
+                            rhs_value
+                        } else if is_reload(&lhs_value) && !is_reload(&rhs_value) {
                             lhs_value
                         } else if is_reload(&rhs_value) && !is_reload(&lhs_value) {
                             rhs_value
@@ -4689,6 +4777,30 @@ int never_returns(void) { for (;;) {} }
     }
 
     #[test]
+    fn x86_live_in_pointer_view_remains_available_to_the_prototype() {
+        // Unlike ARM r0-r3, x86's architectural aliases distinguish the
+        // incoming full-width value from later narrow scratch lifetimes. A
+        // direct dereference of version-zero rdi is therefore valid pointer
+        // evidence for the recovered function contract.
+        let lf = mk_block(vec![Op::Load {
+            dst: VReg::phys("eax"),
+            addr: MemOp::plain(Some(VReg::phys("rdi")), None, 1, 0, 4),
+        }]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &HashSet::from([0]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 4 }),
+        );
+    }
+
+    #[test]
     fn lone_spilled_pointer_fact_is_not_yet_a_rendered_parameter_refinement() {
         // A single address-taken scalar can have this same machine shape after
         // optimization: spill one incoming value, reload it, then let an
@@ -4744,6 +4856,78 @@ int never_returns(void) { for (;;) {} }
         assert!(
             tm.parameter_refinements().is_empty(),
             "one qualified live-in is not enough to rewrite a rendered prototype"
+        );
+    }
+
+    #[test]
+    fn later_arm_scratch_address_does_not_retype_an_earlier_spilled_scalar_parameter() {
+        use crate::ir::types::{CmpOp, Flag};
+
+        // ARM has no narrow aliases for r0-r3. Flow-insensitive recovery sees
+        // the later address-bearing r3 lifetime and historically propagated
+        // that pointer class backwards through the earlier `[r7+4]` reload to
+        // r0. The exact reload value is used only by an integer comparison, so
+        // the source parameter is a machine-word scalar. This is the reduced
+        // shape of DecBench's `console_getc(int wait)` defect.
+        let lf = mk_block(vec![
+            Op::Bin {
+                dst: VReg::phys("r7"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("sp")),
+                rhs: Value::Const(0),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("r7")), None, 1, 4, 4),
+                src: Value::Reg(VReg::phys("r0")),
+            },
+            Op::Load {
+                dst: VReg::phys("r3"),
+                addr: MemOp::plain(Some(VReg::phys("r7")), None, 1, 4, 4),
+            },
+            Op::Cmp {
+                dst: VReg::Flag(Flag::Z),
+                op: CmpOp::Eq,
+                lhs: Value::Reg(VReg::phys("r3")),
+                rhs: Value::Const(0),
+            },
+            Op::Bin {
+                dst: VReg::phys("r3"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("r2")),
+                rhs: Value::Const(0x100),
+            },
+            Op::Load {
+                dst: VReg::phys("r1"),
+                addr: MemOp::plain(Some(VReg::phys("r3")), None, 1, 0, 4),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let valued = recover_types_valued(&lf, &ssa);
+        assert_eq!(
+            valued.get(&SsaValue {
+                base: VReg::phys("r0"),
+                version: 0,
+            }),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            }),
+            "exact-value recovery must keep the live-in scalar before ABI normalization"
+        );
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::Arm,
+            &HashSet::from([0]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "a later r3 address lifetime must not poison r0: {prototype:#?}"
         );
     }
 
@@ -5205,6 +5389,15 @@ int never_returns(void) { for (;;) {} }
             Op::Return,
         ]);
         let ssa = compute_ssa(&lf);
+        let valued = recover_types_valued(&lf, &ssa);
+        assert_eq!(
+            valued.get(&SsaValue {
+                base: VReg::phys("r0"),
+                version: 0,
+            }),
+            Some(TypeHint::Pointer { pointee_width: 2 }),
+            "value-keyed recovery must classify the exact dereferenced live-in"
+        );
         let prototype = recover_prototype(&lf, &ssa, CallConv::Arm, &HashSet::from([0]));
 
         assert_eq!(
@@ -5216,6 +5409,11 @@ int never_returns(void) { for (;;) {} }
                 version: 0,
             }),
             "the caller-supplied address must remain the r0 live-in"
+        );
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 2 }),
+            "a direct dereference of the exact live-in is sufficient pointer evidence"
         );
         let result = prototype.result().expect("recovered ARM return value");
         assert_eq!(
@@ -5234,6 +5432,92 @@ int never_returns(void) { for (;;) {} }
             prototype.result_type_map().get(&VReg::phys("ret")),
             Some(TypeHint::Int { .. })
         ));
+    }
+
+    #[test]
+    fn arm_spilled_pointer_plus_local_index_refines_the_live_in() {
+        // GCC -O0 spills both the caller's buffer and a local loop index.
+        // When their reloads are added, both operands look like generic frame
+        // reloads; only one slot, however, has caller-supplied provenance.
+        // This is the reduced shape of DecBench's console_read(char *buffer).
+        let lf = mk_block(vec![
+            Op::Bin {
+                dst: VReg::phys("r7"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("sp")),
+                rhs: Value::Const(0),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("r7")), None, 1, 4, 4),
+                src: Value::Reg(VReg::phys("r1")),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("r7")), None, 1, 12, 4),
+                src: Value::Const(0),
+            },
+            Op::Load {
+                dst: VReg::phys("r2"),
+                addr: MemOp::plain(Some(VReg::phys("r7")), None, 1, 4, 4),
+            },
+            Op::Load {
+                dst: VReg::phys("r3"),
+                addr: MemOp::plain(Some(VReg::phys("r7")), None, 1, 12, 4),
+            },
+            Op::Bin {
+                dst: VReg::phys("r3"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("r3")),
+                rhs: Value::Reg(VReg::phys("r2")),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("r3")), None, 1, 0, 1),
+                src: Value::Const(65),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::Arm,
+            &HashSet::from([1]),
+        );
+
+        assert_eq!(
+            prototype.parameter(1).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 1 }),
+        );
+    }
+
+    #[test]
+    fn arm_live_in_with_conflicting_access_widths_is_a_void_pointer() {
+        // Optimized byte-buffer routines such as memset access one caller
+        // pointer through byte and word stores. Choosing the widest access
+        // invents `int *` and makes ordinary char-array call sites invalid C;
+        // the honest common contract is an untyped object pointer.
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("r0")), None, 1, 0, 1),
+                src: Value::Const(0),
+            },
+            Op::Store {
+                addr: MemOp::plain(Some(VReg::phys("r0")), None, 1, 4, 4),
+                src: Value::Const(0),
+            },
+            Op::Return,
+        ]);
+        let ssa = compute_ssa(&lf);
+        let prototype = recover_prototype(
+            &lf,
+            &ssa,
+            crate::ir::call_args::CallConv::Arm,
+            &HashSet::from([0]),
+        );
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 0 }),
+        );
     }
 
     #[test]
