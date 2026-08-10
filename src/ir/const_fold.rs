@@ -1069,7 +1069,7 @@ fn cast_preserves_constant(value: i64, signed: bool, width: u8) -> bool {
 /// Whether an expression's complete integer value is provably either zero or
 /// one. This is a value fact only; callers that change evaluation order must
 /// additionally use [`is_short_circuit_safe_boolean`].
-fn is_exact_boolean(expr: &Expr) -> bool {
+pub(crate) fn is_exact_boolean(expr: &Expr) -> bool {
     match expr {
         Expr::Cmp { .. } => true,
         Expr::Const(value) => matches!(value, 0 | 1),
@@ -1087,7 +1087,7 @@ fn is_exact_boolean(expr: &Expr) -> bool {
 /// that can trap. Such an expression may safely move from eager bitwise
 /// evaluation to C short-circuit evaluation without changing observable
 /// behavior.
-fn is_short_circuit_safe_boolean(expr: &Expr) -> bool {
+pub(crate) fn is_short_circuit_safe_boolean(expr: &Expr) -> bool {
     match expr {
         Expr::Cmp { lhs, rhs, .. } => {
             is_short_circuit_safe_value(lhs) && is_short_circuit_safe_value(rhs)

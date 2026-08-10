@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::ir::ast::{negate_cmp_expr, Expr, Function, Stmt};
+use crate::ir::const_fold::{is_exact_boolean, is_short_circuit_safe_boolean};
 use crate::ir::types::{BinOp, CmpOp};
 
 struct GuardLadder {
@@ -83,6 +84,9 @@ pub fn collapse_matching_terminal_return_guard(function: &mut Function) {
     if body.len() < 3 {
         return;
     }
+    if collapse_matching_terminal_guard_pair(body) {
+        return;
+    }
     let Some(final_return @ Stmt::Return { .. }) = body.last().cloned() else {
         return;
     };
@@ -117,6 +121,87 @@ pub fn collapse_matching_terminal_return_guard(function: &mut Function) {
             ],
         );
         return;
+    }
+}
+
+/// Recover two adjacent terminal guards that share the first guard's return.
+///
+/// `if (bad) return x; if (good) return y; return x;` is exactly
+/// `if (bad || !good) return x; return y;`.  This retains one CFG node for the
+/// shared terminal instead of cloning it into both machine paths.  Eager
+/// bitwise boolean trees are accepted only when their exact-boolean leaves are
+/// free of memory reads and trapping operations.
+fn collapse_matching_terminal_guard_pair(body: &mut Vec<Stmt>) -> bool {
+    let Some(final_start) = terminal_return_tail_start(body) else {
+        return false;
+    };
+    let final_tail = body[final_start..].to_vec();
+    for index in 0..final_start.saturating_sub(1) {
+        let (
+            Stmt::If {
+                cond: exit_condition,
+                then_body: exit_tail,
+                else_body: None,
+            },
+            Stmt::If {
+                cond: success_condition,
+                then_body: success_tail,
+                else_body: None,
+            },
+        ) = (&body[index], &body[index + 1])
+        else {
+            continue;
+        };
+        if index + 2 != final_start
+            || terminal_return_tail_start(exit_tail) != Some(0)
+            || exit_tail != &final_tail
+            || terminal_return_tail_start(success_tail) != Some(0)
+        {
+            continue;
+        }
+        if !is_safe_exact_eager_boolean(exit_condition) {
+            continue;
+        }
+        let exit_condition = exit_condition.clone();
+        let Some(failed_success) = negate_exact_condition(success_condition.clone()) else {
+            continue;
+        };
+        let mut replacement = vec![Stmt::If {
+            cond: Expr::Bin {
+                op: BinOp::LogicalOr,
+                lhs: Box::new(exit_condition),
+                rhs: Box::new(failed_success),
+            },
+            then_body: final_tail,
+            else_body: None,
+        }];
+        replacement.extend(success_tail.clone());
+        body.splice(index.., replacement);
+        return true;
+    }
+    false
+}
+
+/// Return the first statement of a terminal tail containing only renderer
+/// trivia followed by one return.
+fn terminal_return_tail_start(body: &[Stmt]) -> Option<usize> {
+    let return_index = body.len().checked_sub(1)?;
+    if !matches!(body[return_index], Stmt::Return { .. }) {
+        return None;
+    }
+    let mut start = return_index;
+    while start > 0 && matches!(body[start - 1], Stmt::Comment(_) | Stmt::Nop) {
+        start -= 1;
+    }
+    Some(start)
+}
+
+fn is_safe_exact_eager_boolean(condition: &Expr) -> bool {
+    match condition {
+        Expr::Bin { op, lhs, rhs } if matches!(op, BinOp::And | BinOp::Or) => {
+            is_safe_exact_eager_boolean(lhs) && is_safe_exact_eager_boolean(rhs)
+        }
+        exact => is_exact_boolean(exact) && is_short_circuit_safe_boolean(exact),
     }
 }
 
@@ -688,6 +773,23 @@ fn negate_exact_condition(condition: Expr) -> Option<Expr> {
             lhs: Box::new(negate_exact_condition(*lhs)?),
             rhs: Box::new(negate_exact_condition(*rhs)?),
         }),
+        Expr::Bin { op, lhs, rhs }
+            if matches!(op, BinOp::And | BinOp::Or)
+                && is_exact_boolean(&lhs)
+                && is_exact_boolean(&rhs)
+                && is_short_circuit_safe_boolean(&lhs)
+                && is_short_circuit_safe_boolean(&rhs) =>
+        {
+            Some(Expr::Bin {
+                op: if op == BinOp::Or {
+                    BinOp::LogicalAnd
+                } else {
+                    BinOp::LogicalOr
+                },
+                lhs: Box::new(negate_exact_condition(*lhs)?),
+                rhs: Box::new(negate_exact_condition(*rhs)?),
+            })
+        }
         _ => None,
     }
 }
@@ -1007,6 +1109,138 @@ mod tests {
         assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
         assert_eq!(rendered.matches(" && ").count(), 1, "{rendered}");
         assert!(rendered.contains("work = 1;"), "{rendered}");
+    }
+
+    /// Machine-epilogue comments are renderer metadata rather than control
+    /// flow.  They must not prevent two paths reaching the same return from
+    /// being represented by one shared source-level terminal.
+    #[test]
+    fn matching_commented_returns_keep_one_shared_terminal() {
+        let epilogue = Stmt::Comment("x86-64 epilogue: restore rbp".into());
+        let terminal = Stmt::Return {
+            value: Some(Expr::Const(0x5868)),
+        };
+        let mut function = Function {
+            name: "user_name".into(),
+            entry_va: 0x408a,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Bin {
+                        op: BinOp::Or,
+                        lhs: Box::new(Expr::Cmp {
+                            op: CmpOp::Eq,
+                            lhs: Box::new(Expr::Reg(reg("length"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        }),
+                        rhs: Box::new(Expr::Cmp {
+                            op: CmpOp::Slt,
+                            lhs: Box::new(Expr::Reg(reg("length"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        }),
+                    },
+                    then_body: vec![epilogue.clone(), terminal.clone()],
+                    else_body: None,
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ule,
+                        lhs: Box::new(Expr::Reg(reg("length"))),
+                        rhs: Box::new(Expr::Const(21)),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Const(0x82d0)),
+                    }],
+                    else_body: None,
+                },
+                epilogue,
+                terminal,
+            ],
+        };
+
+        super::collapse_matching_terminal_return_guard(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(rendered.matches("return 0x5868;").count(), 1, "{rendered}");
+        assert_eq!(
+            rendered.matches("x86-64 epilogue: restore rbp").count(),
+            1,
+            "{rendered}"
+        );
+        assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
+        assert!(rendered.contains(" || "), "{rendered}");
+        assert!(rendered.contains("return 0x82d0;"), "{rendered}");
+    }
+
+    #[test]
+    fn eager_boolean_with_memory_read_is_not_short_circuited() {
+        let condition = Expr::Bin {
+            op: BinOp::Or,
+            lhs: Box::new(Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Reg(reg("length"))),
+                rhs: Box::new(Expr::Const(0)),
+            }),
+            rhs: Box::new(Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Deref {
+                    addr: Box::new(Expr::Reg(reg("pointer"))),
+                    size: 4,
+                }),
+                rhs: Box::new(Expr::Const(0)),
+            }),
+        };
+
+        assert!(super::negate_exact_condition(condition).is_none());
+    }
+
+    #[test]
+    fn shared_terminal_pair_with_memory_predicate_stays_separate() {
+        let terminal = Stmt::Return {
+            value: Some(Expr::Const(-7)),
+        };
+        let mut function = Function {
+            name: "volatile_guard".into(),
+            entry_va: 0x4090,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Bin {
+                        op: BinOp::Or,
+                        lhs: Box::new(Expr::Cmp {
+                            op: CmpOp::Eq,
+                            lhs: Box::new(Expr::Reg(reg("length"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        }),
+                        rhs: Box::new(Expr::Cmp {
+                            op: CmpOp::Eq,
+                            lhs: Box::new(Expr::Deref {
+                                addr: Box::new(Expr::Reg(reg("pointer"))),
+                                size: 4,
+                            }),
+                            rhs: Box::new(Expr::Const(0)),
+                        }),
+                    },
+                    then_body: vec![terminal.clone()],
+                    else_body: None,
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ule,
+                        lhs: Box::new(Expr::Reg(reg("length"))),
+                        rhs: Box::new(Expr::Const(21)),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Const(42)),
+                    }],
+                    else_body: None,
+                },
+                terminal,
+            ],
+        };
+        let original = function.clone();
+
+        super::collapse_matching_terminal_return_guard(&mut function);
+
+        assert_eq!(function, original);
     }
 
     #[test]

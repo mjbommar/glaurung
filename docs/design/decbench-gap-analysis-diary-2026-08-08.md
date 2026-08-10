@@ -2456,3 +2456,56 @@ result manifest is
 `4fd768c519ef75d45e1782043d92709a1e6eb65a899d35823b937c1f44960d0c`, and the
 diagnostic ledger is
 `bfed83ae6ba619796566fad48ef434840f6636c639618f067a0237b804747e65`.
+
+## 17:10–18:05 — recover one shared terminal instead of cloning it
+
+The nearest non-perfect GED row, `libacl:O0:getfacl:user_name`, had ten CFG
+nodes on both sides but only ten decompiled edges against eleven source edges.
+The machine routes two validation failures to one epilogue return.  Region
+recovery faithfully cloned that terminal into two C returns, while the existing
+shared-terminal pass did not recognize the shape because each return carried an
+x86 epilogue comment and the first predicate was an eager bitwise tree of exact
+comparison booleans.
+
+The retained transform remains in the existing `guard_chain` owner.  It accepts
+only the exact adjacent shape
+`if (bad) return x; if (good) return y; return x;`, requires the two `x` tails
+including renderer trivia to be identical, and emits
+`if (bad || !good) return x; return y;`.  An eager `&`/`|` predicate may become
+the left operand of the short-circuit only when every leaf is an exact boolean
+and is free of memory reads and trapping operations.  The eager tree itself is
+left eager, preserving its original evaluation; only the second guard is
+skipped when the first one already exits.  A dereference-bearing negative
+control remains byte-for-byte unchanged.
+
+TDD first reproduced the commented shared tail and the unsafe memory near miss
+in Rust.  A real stripped x86-64 assembly fixture then proves that the recovered
+C contains one copy of each return, recompiles with uninitialized-use warnings
+as errors, and executes identically to the original for eight signed and
+boundary inputs.  The full Rust gate passes 1,987 library tests and every
+integration target, the complete real decompiler-fixture file passes, and the
+six-lane architecture ratchet remains exactly 1,758 pass / 42 declared failures
+/ 228 structural verdicts / zero lane errors.
+
+The empty-kit candidate emits all 250 functions across all 224 binaries with
+zero failures in 83.996 seconds.  Exactly one of 224 C files changes:
+`libacl:O0:getfacl:user_name`.  Fresh cache-disabled changed-row scoring under
+one evaluator/toolchain tuple gives:
+
+| Metric | Before | After | Result |
+|---|---:|---:|---|
+| GED | `2` | `0` | exact 10-node/11-edge graph isomorphism |
+| ByteMatch | `0.301587` | `0.355932` | improves; both compile |
+| TypeMatch | `0.6` | `0.6` | unchanged |
+
+No other submitted artifact changes, so there is no collateral metric row to
+trade against the win.  Applying the paired deltas to the accepted ledger moves
+GED mean `22.670782→22.662552`, ByteMatch mean `0.302741→0.302958`, and the
+exact any-metric union `77→78/250` (`30.8%→31.2%`); TypeMatch remains
+`0.231916`.  Under the current drifted fresh evaluator, GED perfects move
+`62→63` and mean `27.679012→27.670782`.  The worktree archive SHA-256 is
+`82c8876688c91ffe00f38584e27604dd2dca58af151f3131f669985e1aea8b5c`, its
+manifest is
+`68cab832221b7e3089d4f44dce1ee0e7c045be6139082960cb7fb1a16c34dc2d`, and the
+diagnostic ledger is
+`0c8bdf009604d9a8b71a613c5eb99fbea91cd0951e89fa98471501664750b05f`.

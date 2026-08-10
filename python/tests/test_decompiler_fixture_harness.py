@@ -936,6 +936,87 @@ def test_real_x86_stack_clash_frame_does_not_expose_callee_save_inputs():
             assert actual == expected, (seed, expected, actual, decompiled)
 
 
+def test_real_x86_shared_epilogue_keeps_one_copy_of_each_return():
+    """Adjacent guards sharing an epilogue recover one source terminal."""
+    source = (
+        ".text\n"
+        ".globl shared_terminal_guard\n"
+        ".type shared_terminal_guard, @function\n"
+        "shared_terminal_guard:\n"
+        "    cmpl $0, %edi\n"
+        "    jle .Lbad\n"
+        "    cmpl $21, %edi\n"
+        "    jle .Lgood\n"
+        ".Lbad:\n"
+        "    movl $-7, %eax\n"
+        "    ret\n"
+        ".Lgood:\n"
+        "    movl $42, %eax\n"
+        "    ret\n"
+        ".size shared_terminal_guard, .-shared_terminal_guard\n"
+        '.section .note.GNU-stack,"",@progbits\n'
+    )
+    with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
+        source_path = Path(td) / "shared_terminal_guard.S"
+        binary_path = Path(td) / "shared_terminal_guard.so"
+        source_path.write_text(source)
+        built = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-fno-reorder-functions",
+                "-fno-toplevel-reorder",
+                "-o",
+                str(binary_path),
+                str(source_path),
+            ]
+        )
+        assert built.returncode == 0, built.stderr
+        stripped = TC.run(["strip", "--strip-all", str(binary_path)])
+        assert stripped.returncode == 0, stripped.stderr
+
+        function_va = D.exported_functions(str(binary_path))["shared_terminal_guard"]
+        decompiled = D.decompiled_c(str(binary_path), function_va)
+        assert decompiled is not None
+        assert decompiled.count("return ") == 2, decompiled
+
+        recovered_path = Path(td) / "shared_terminal_guard_recovered.c"
+        rebuilt_path = Path(td) / "shared_terminal_guard_rebuilt.so"
+        recovered_path.write_text(D.PRELUDE + "\n" + decompiled + "\n")
+        rebuilt = TC.run(
+            [
+                "gcc",
+                "-shared",
+                "-fPIC",
+                "-O0",
+                "-std=gnu11",
+                "-Werror=uninitialized",
+                "-Werror=maybe-uninitialized",
+                "-o",
+                str(rebuilt_path),
+                str(recovered_path),
+            ]
+        )
+        assert rebuilt.returncode == 0, f"{rebuilt.stderr}\n{decompiled}"
+
+        original_library = ctypes.CDLL(
+            str(binary_path.resolve()), mode=ctypes.RTLD_LOCAL
+        )
+        rebuilt_library = ctypes.CDLL(
+            str(rebuilt_path.resolve()), mode=ctypes.RTLD_LOCAL
+        )
+        for library in (original_library, rebuilt_library):
+            function = library.shared_terminal_guard
+            function.argtypes = [ctypes.c_int]
+            function.restype = ctypes.c_int
+        for value in (-2**31, -100, -1, 0, 1, 21, 22, 2**31 - 1):
+            expected = original_library.shared_terminal_guard(value)
+            actual = rebuilt_library.shared_terminal_guard(value)
+            assert actual == expected, (value, expected, actual, decompiled)
+
+
 def test_real_named_call_output_declares_its_recovered_callee_prototype():
     """A resolved project-local call must not depend on implicit C declarations.
 

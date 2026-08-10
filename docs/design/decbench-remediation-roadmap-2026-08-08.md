@@ -508,6 +508,13 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     `0.221953→0.226475` while retaining GED 47. This closes the named
     `copy_reg` correctness acceptance item, not the still-open `yyparse`,
     `ssh_agent_sign`, exact-win, or O2-noinline cohorts.
+  - [x] Recover `libacl:O0:getfacl:user_name`'s shared validation return rather
+    than cloning one machine epilogue into two source terminals.  The existing
+    guard-chain owner now admits identical comment-plus-return tails and eager
+    exact-boolean predicates only with a no-memory/no-trap proof.  GED moves
+    `2→0` by exact graph isomorphism, ByteMatch `0.301587→0.355932`, TypeMatch
+    stays `0.6`, only one corpus C file changes, and the union advances
+    `77→78/250` (`31.2%`).
 - [x] Remove x86 omit-frame-pointer callee saves that stack promotion names as
   ordinary `local_*` objects.  Entry-version nonvolatile-register provenance
   is gated by the detected calling convention, and the existing
