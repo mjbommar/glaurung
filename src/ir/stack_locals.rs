@@ -287,8 +287,31 @@ pub fn promote_stack_locals_with_facts(
                 source_name,
             });
     }
-    let address_defs = collect_stack_address_defs(&f.body, ctx);
-    let label_deltas = collect_label_stack_deltas(&f.body, ctx, &address_defs);
+    // Stack-address aliases and label stack depths depend on each other: an
+    // epilogue can restore SP through an alias, while an alias defined after a
+    // textual epilogue needs the target label's actual incoming depth. Solve
+    // the two small monotone analyses together instead of letting either use
+    // textual fallthrough as a control-flow substitute.
+    let mut address_defs = HashMap::new();
+    let mut label_deltas = HashMap::new();
+    let mut coordinates_converged = false;
+    for _ in 0..64 {
+        let next_label_deltas = collect_label_stack_deltas(&f.body, ctx, &address_defs);
+        let next_address_defs = collect_stack_address_defs(&f.body, ctx, &next_label_deltas);
+        if next_label_deltas == label_deltas && next_address_defs == address_defs {
+            coordinates_converged = true;
+            break;
+        }
+        label_deltas = next_label_deltas;
+        address_defs = next_address_defs;
+    }
+    if !coordinates_converged {
+        // A cyclic disagreement is not evidence for an address alias. Retain
+        // only label depths derivable without aliases and let unresolved
+        // address expressions remain explicit in the output.
+        address_defs.clear();
+        label_deltas = collect_label_stack_deltas(&f.body, ctx, &address_defs);
+    }
     seed_indexed_stack_objects(
         &f.body,
         &mut map,
@@ -1744,7 +1767,11 @@ fn promote_address_taken_stack_object(
 /// map is the minimum equivalent of looking through an AIL virtual-variable or
 /// a Ghidra Varnode definition; it avoids asking the general expression pass to
 /// move an address computation across unrelated effects.
-fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg, (String, i64)> {
+fn collect_stack_address_defs(
+    body: &[Stmt],
+    ctx: StackContext,
+    label_deltas: &HashMap<u64, Option<i64>>,
+) -> HashMap<VReg, (String, i64)> {
     fn record_definition(
         dst: &VReg,
         address: Option<(String, i64)>,
@@ -1773,6 +1800,7 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
         ambiguous: &mut HashSet<VReg>,
         ctx: StackContext,
         sp_delta: &mut Option<i64>,
+        label_deltas: &HashMap<u64, Option<i64>>,
     ) {
         for (statement_index, stmt) in body.iter().enumerate() {
             match stmt {
@@ -1827,10 +1855,17 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                 } => {
                     let incoming = *sp_delta;
                     let mut then_delta = incoming;
-                    walk_direct(then_body, out, ambiguous, ctx, &mut then_delta);
+                    walk_direct(
+                        then_body,
+                        out,
+                        ambiguous,
+                        ctx,
+                        &mut then_delta,
+                        label_deltas,
+                    );
                     let mut else_delta = incoming;
                     if let Some(body) = else_body {
-                        walk_direct(body, out, ambiguous, ctx, &mut else_delta);
+                        walk_direct(body, out, ambiguous, ctx, &mut else_delta, label_deltas);
                     }
                     let then_falls_through = body_falls_through(then_body);
                     let else_falls_through = else_body.as_deref().is_none_or(body_falls_through);
@@ -1844,7 +1879,7 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                     let incoming = *sp_delta;
                     let mut body_delta = incoming;
-                    walk_direct(body, out, ambiguous, ctx, &mut body_delta);
+                    walk_direct(body, out, ambiguous, ctx, &mut body_delta, label_deltas);
                     *sp_delta = merge_stack_deltas(incoming, body_delta);
                 }
                 Stmt::For {
@@ -1856,16 +1891,18 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                         ambiguous,
                         ctx,
                         sp_delta,
+                        label_deltas,
                     );
                     let loop_entry = *sp_delta;
                     let mut body_delta = loop_entry;
-                    walk_direct(body, out, ambiguous, ctx, &mut body_delta);
+                    walk_direct(body, out, ambiguous, ctx, &mut body_delta, label_deltas);
                     walk_direct(
                         std::slice::from_ref(step.as_ref()),
                         out,
                         ambiguous,
                         ctx,
                         &mut body_delta,
+                        label_deltas,
                     );
                     *sp_delta = merge_stack_deltas(loop_entry, body_delta);
                 }
@@ -1874,7 +1911,7 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                     let mut merged: Option<Option<i64>> = None;
                     for (_, body) in cases {
                         let mut case_delta = incoming;
-                        walk_direct(body, out, ambiguous, ctx, &mut case_delta);
+                        walk_direct(body, out, ambiguous, ctx, &mut case_delta, label_deltas);
                         merged = Some(match merged {
                             Some(prior) => merge_stack_deltas(prior, case_delta),
                             None => case_delta,
@@ -1882,7 +1919,7 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                     }
                     if let Some(body) = default {
                         let mut default_delta = incoming;
-                        walk_direct(body, out, ambiguous, ctx, &mut default_delta);
+                        walk_direct(body, out, ambiguous, ctx, &mut default_delta, label_deltas);
                         merged = Some(match merged {
                             Some(prior) => merge_stack_deltas(prior, default_delta),
                             None => default_delta,
@@ -1901,7 +1938,12 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
                 Stmt::Pop { .. } => {
                     *sp_delta = sp_delta.map(|delta| delta + stack_word_size(ctx));
                 }
-                Stmt::Label(_) => {}
+                Stmt::Label(label) => {
+                    *sp_delta = label_deltas.get(label).copied().unwrap_or(None);
+                }
+                Stmt::Goto { .. } | Stmt::Return { .. } | Stmt::IndirectGoto { .. } => {
+                    *sp_delta = None;
+                }
                 _ => {}
             }
         }
@@ -1912,7 +1954,14 @@ fn collect_stack_address_defs(body: &[Stmt], ctx: StackContext) -> HashMap<VReg,
         let prior_ambiguities = ambiguous.len();
         let mut defs = HashMap::new();
         let mut sp_delta = Some(0);
-        walk_direct(body, &mut defs, &mut ambiguous, ctx, &mut sp_delta);
+        walk_direct(
+            body,
+            &mut defs,
+            &mut ambiguous,
+            ctx,
+            &mut sp_delta,
+            label_deltas,
+        );
         if ambiguous.len() == prior_ambiguities {
             return defs;
         }
@@ -3525,6 +3574,63 @@ mod tests {
             other => panic!("expected promoted target store, got {other:?}"),
         };
         assert_eq!(first, target);
+    }
+
+    #[test]
+    fn address_alias_after_an_epilogue_target_keeps_the_target_frame_depth() {
+        let adjust = |amount, op| Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(amount)),
+            },
+        };
+        let frame_address = reg("rcx#1");
+        let mut f = Function {
+            name: "optimized_outgoing_address".into(),
+            entry_va: 0,
+            body: vec![
+                adjust(32, crate::ir::types::BinOp::Sub),
+                Stmt::If {
+                    cond: Expr::Reg(reg("zf")),
+                    then_body: vec![Stmt::Goto { target: 0x1680 }],
+                    else_body: None,
+                },
+                adjust(32, crate::ir::types::BinOp::Add),
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+                Stmt::Label(0x1680),
+                Stmt::Assign {
+                    dst: frame_address.clone(),
+                    src: lea("rsp", 16),
+                },
+                adjust(8, crate::ir::types::BinOp::Sub),
+                Stmt::Store {
+                    addr: lea("rsp", 0),
+                    src: Expr::Reg(frame_address),
+                    size: 8,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(
+            matches!(
+                &f.body[7],
+                Stmt::Store {
+                    src: Expr::StackAddr {
+                        object: VReg::Phys(name),
+                        ..
+                    },
+                    ..
+                } if name == "local_10"
+            ),
+            "target-frame address alias was misclassified: {:#?}",
+            f.body
+        );
     }
 
     #[test]

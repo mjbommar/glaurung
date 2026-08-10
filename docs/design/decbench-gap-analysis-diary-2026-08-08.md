@@ -2060,3 +2060,97 @@ no decompiler or loop test fails. The new real-binary test passes focused Ruff
 format/lint and `ty`. Repository-wide Ruff format (349 existing files), Ruff
 lint (3,710 existing findings), and `ty` (2,038 existing diagnostics) remain
 red and are not represented as regressions introduced by this increment.
+
+## 10:14–12:09 — make stack-address recovery follow control flow
+
+The next immediate target in the exact-win cohort was official
+`coreutils:O2-noinline:cp:copy_reg`. Its source has nine parameters, but the
+accepted output declared 24. The authoritative register-input evidence already
+contained only the six SysV register slots. The other fifteen parameters came
+from outgoing-call frame addresses that stack promotion had mislabeled as
+entry-stack arguments.
+
+The root cause was duplicated stack analysis. `collect_label_stack_deltas`
+followed labels, gotos, returns, and CFG joins, while
+`collect_stack_address_defs` walked the structured text independently. After a
+textually earlier epilogue, the latter continued into a later goto target with
+an entry delta of zero. In `copy_reg`, an address that is really
+`entry_rsp-400` was consequently recorded as `entry_rsp+104` and rendered as
+`arg18`. The same false textual fallthrough affected 21 other official
+functions.
+
+The RED unit test builds the minimal shape: allocate a frame, branch to a label,
+restore and return on textual fallthrough, then take an SP-relative address at
+the target. Before the repair it produced `arg7`; after the repair it produces
+the proved `local_10`. The implementation jointly solves label depths and
+address aliases to a fixed point. The address walker restores state at labels
+and invalidates it after goto, indirect goto, or return. The solve is bounded at
+64 rounds and fails closed on non-convergence by discarding address aliases and
+retaining only label depths derivable without them. This removes the second,
+unsound notion of textual stack flow without making unresolved coordinates look
+proved.
+
+On the real stripped `copy_reg` binary, the signature is now exactly nine
+parameters:
+
+```c
+unsigned int sub_8680(long * arg0, char * arg1, int arg2, char * arg3,
+                      char * arg4, long * arg5, int arg6, long arg7,
+                      long arg8)
+```
+
+Declarations fall `175→169`, temporaries `148→147`, undefined uses `6→5`,
+and output size `31,338→30,981` bytes. The false undefined `local_190`
+disappears. The five remaining undefined role names are pre-existing and remain
+visible rather than being conflated with this repair.
+
+A fresh 224-binary/250-function worktree extraction at
+`/tmp/glaurung-stack-alias.AZq5As` completed without an extraction failure. Its
+archive SHA-256 is
+`804550427b7ebdb273c4e0c0b67deef9ae10084b59b0e48b432a4de2d58c74a7`.
+Exactly 22 generated C files differ from the exact accepted loop-recovery
+package. Focused evaluation covers every changed official row rather than a
+favorable sample:
+
+| Metric | Changed-row result | Aggregate consequence |
+|---|---:|---:|
+| GED | sum `964→955`; 2 improve, 20 equal, 0 regress | projected mean `32.309623→32.271966`; perfect count remains 61 |
+| ByteMatch | sum `3.153678→3.204642`; 7 improve, 13 equal, 2 regress | projected mean `0.249356→0.249560`; compilable coverage `242→243` |
+| TypeMatch | exact sum unchanged; all 22 equal | mean and perfect count unchanged |
+
+The two ByteMatch regressions are retained and named:
+`gnutls:O2-noinline:ocsptool:socket_open2` falls about `0.00596`, and
+`x0r-usb:O2-noinline:x0r-usb:RemoteUSBThread` falls about `0.00128`. Both GED
+rows are unchanged at zero and 29 respectively. Restoring their former stack
+names would reintroduce aliases derived from impossible textual fallthrough, so
+the safety proof takes precedence over those small compiler-similarity losses.
+Notable gains include `copy_reg` ByteMatch `0.221953→0.226475`,
+`grp_update` GED `51→46`, and `check_init_fifo` GED `40→36`. No exact metric
+win is lost, so the 76/250 union is unchanged.
+
+The 12-worker extraction took 60.707 seconds wall time, with
+2.743/3.120/18.846 seconds per-binary median/mean/maximum. The immediately
+preceding 12-worker package took 62.848 seconds with
+2.915/3.299/14.490 seconds per-binary median/mean/maximum. This rules out an
+obvious corpus-wide slowdown from the joint solve, but the shared host is too
+contended to claim a performance improvement from those timings.
+
+The full Rust gate passes 1,972 library tests, every integration target, and
+doctests. The six-lane architecture ratchet matches its baseline exactly at
+1,758 pass / 42 known fail / 228 structural / zero lane errors. The focused
+output-canary capture confirms the intended `copy_reg` arity and health changes
+with zero missing or invented CFG edges. All 56 legacy and 64 curriculum
+executable cells pass. The cache-disabled metric ratchet reports no per-cell
+GED, TypeMatch, or ByteMatch regression across all 56 cells.
+
+The first combined gate attempt exhausted the user's temporary-filesystem quota
+while two fixture-producing Python runs overlapped. Its Cargo and Python
+failures were all explicit `Disk quota exceeded` errors, not product
+assertions. Only this isolated worktree's reproducible `target/debug` build
+cache was removed; source and benchmark evidence were retained. Clean isolated
+reruns then produced the Rust, executable, architecture, and metric results
+above. The full Python suite completes with 2,882 passed, 44 skipped, and the
+same four unrelated cross-sample `suspicious_win` content failures recorded in
+the preceding increment. Repository-wide Ruff format remains red on the same
+349 files, Ruff lint on the same 3,710 findings, and `ty` on the same 2,038
+diagnostics; no Python file changed in this increment.

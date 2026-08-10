@@ -469,6 +469,17 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     This is the first exact-win increment under the broader still-open task,
     not completion of the `copy_reg`, `yyparse`, `ssh_agent_sign`, or
     O2-noinline cohorts.
+  - [x] Recover `copy_reg`'s source-level nine-parameter arity by making
+    stack-address aliases use the same label-aware stack coordinate as stack
+    promotion. A bounded joint fixed point replaces the second textual
+    fallthrough model and fails closed by discarding unproved aliases. Across
+    all 22 changed official rows, GED improves twice and never regresses,
+    TypeMatch is exactly unchanged, ByteMatch improves seven rows and regresses
+    two with a positive net sum, and compilable coverage advances `242→243`.
+    `copy_reg` itself moves from 24 to nine parameters and ByteMatch
+    `0.221953→0.226475` while retaining GED 47. This closes the named
+    `copy_reg` correctness acceptance item, not the still-open `yyparse`,
+    `ssh_agent_sign`, exact-win, or O2-noinline cohorts.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the

@@ -258,6 +258,7 @@ fn a32_fallthrough_branch_restore_invalidates_the_frame_coordinate() {
             frame_pointer_established: false,
             parameter_count: Some(3),
         },
+        &HashMap::new(),
     );
 
     assert!(
