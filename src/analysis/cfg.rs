@@ -5903,6 +5903,93 @@ mod gcc_dispatch_corpus_tests {
     use std::io::Write;
     use std::process::Command;
 
+    #[test]
+    fn nested_multi_exit_parser_loop_preserves_its_dispatch() {
+        let tmp = tempfile::tempdir().expect("temporary nested-dispatch build directory");
+        let source = tmp.path().join("nested_dispatch_loop.S");
+        let binary = tmp.path().join("nested_dispatch_loop.so");
+        std::fs::File::create(&source)
+            .and_then(|mut file| {
+                file.write_all(include_bytes!(
+                    "../../tests/decompiler_fixtures/src/09_nested_dispatch_loop.S"
+                ))
+            })
+            .expect("write the real nested-dispatch fixture source");
+        let build = match Command::new("gcc")
+            .args(["-shared", "-fPIC", "-nostdlib", "-o"])
+            .arg(&binary)
+            .arg(&source)
+            .output()
+        {
+            Ok(build) => build,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("launch GCC: {error}"),
+        };
+        assert!(
+            build.status.success(),
+            "compile nested-dispatch fixture: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let data = std::fs::read(&binary).expect("read nested-dispatch fixture");
+        let object =
+            crate::decompile::profile::parse_object(&data).expect("parse nested-dispatch ELF");
+        let entry = object
+            .dynamic_symbols()
+            .find(|symbol| symbol.name().ok() == Some("nested_dispatch_parser"))
+            .map(|symbol| symbol.address())
+            .expect("exported nested_dispatch_parser symbol");
+        let image = crate::program::image::ProgramImage::from_bytes(data.clone())
+            .expect("index nested-dispatch fixture");
+        let budgets = Budgets {
+            max_functions: 1,
+            max_blocks: 4096,
+            max_instructions: 200_000,
+            timeout_ms: 5_000,
+            total_timeout_ms: 0,
+        };
+        let (functions, _callgraph) =
+            analyze_functions_image_with_seeds(&image, &budgets, &[entry]);
+        let function = functions
+            .iter()
+            .find(|function| function.entry_point.value == entry)
+            .expect("discover nested-dispatch fixture function");
+        let lifted = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        )
+        .expect("lift nested-dispatch fixture function");
+        let lifted_dispatches = lifted
+            .blocks
+            .iter()
+            .filter(|block| block.succs.len() == 8)
+            .map(|block| block.start_va)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            lifted_dispatches.len(),
+            1,
+            "the real PIC table must contribute one eight-way CFG dispatch"
+        );
+        let ssa = crate::ir::ssa::compute_ssa(&lifted);
+        let region = crate::ir::structure::recover_verified(&lifted, &ssa);
+        assert!(
+            raw_loop_owns_dispatch(&region, &lifted),
+            "the parser loop must own its resolved dispatch: {region:#?}"
+        );
+        let ast = crate::ir::ast::lower(&lifted, &region, "nested_dispatch_parser");
+        let rendered = crate::ir::ast::render(&ast);
+        assert_eq!(
+            rendered.matches("case ").count(),
+            8,
+            "every dispatch-table slot must retain a source case label"
+        );
+        assert!(
+            !rendered.contains("unrecovered indirect jump"),
+            "a CFG-proven dispatch must not fall back to an indirect jump: {rendered}"
+        );
+    }
+
     fn switch_case_labels(region: &crate::ir::structure::Region) -> Option<&[Vec<i64>]> {
         use crate::ir::structure::Region;
         match region {

@@ -2243,6 +2243,7 @@ fn implicit_successor(block: &crate::ir::types::LlirBlock) -> Option<u64> {
 /// bodies jump to the original block labels.
 fn lower_raw_loop_block(
     block: &crate::ir::types::LlirBlock,
+    default_target: Option<u64>,
     lower_scalar_float: bool,
 ) -> Vec<Stmt> {
     let explicit_index = block
@@ -2273,14 +2274,53 @@ fn lower_raw_loop_block(
         .succs
         .iter()
         .enumerate()
+        .filter(|(_, target)| default_target != Some(**target))
         .map(|(case, target)| (Some(case as i64), vec![Stmt::Goto { target: *target }]))
         .collect();
     statements.push(Stmt::Switch {
         discriminant,
         cases,
-        default: None,
+        default: default_target.map(|target| vec![Stmt::Goto { target }]),
     });
     statements
+}
+
+/// Recover the bounds guard's out-of-range edge for one raw table dispatch.
+///
+/// The dispatch target list is positional and may contain the guard's default
+/// target in many unused slots. A conditional predecessor with exactly two
+/// successors proves which edge bypasses the table. Conflicting predecessors
+/// fail closed instead of guessing a C `default` arm.
+fn raw_dispatch_default_target(
+    lf: &LlirFunction,
+    raw_blocks: &[usize],
+    dispatch: usize,
+) -> Option<u64> {
+    let dispatch_va = lf.blocks[dispatch].start_va;
+    let mut candidates = raw_blocks.iter().copied().filter_map(|block_index| {
+        let block = &lf.blocks[block_index];
+        if block.succs.len() != 2
+            || !block.succs.contains(&dispatch_va)
+            || !matches!(
+                block.instrs.last().map(|instruction| &instruction.op),
+                Some(Op::CondJump { .. })
+            )
+        {
+            return None;
+        }
+        block
+            .succs
+            .iter()
+            .copied()
+            .find(|successor| *successor != dispatch_va)
+    });
+    let candidate = candidates.next()?;
+    if candidates.all(|other| other == candidate) && lf.blocks[dispatch].succs.contains(&candidate)
+    {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 fn lower_region(
@@ -2523,8 +2563,13 @@ fn lower_region_inner(
             let mut loop_body = Vec::new();
             for (position, block_index) in blocks.iter().copied().enumerate() {
                 let block = &lf.blocks[block_index];
+                let default_target = raw_dispatch_default_target(lf, blocks, block_index);
                 loop_body.push(Stmt::Label(block.start_va));
-                loop_body.extend(lower_raw_loop_block(block, lower_scalar_float));
+                loop_body.extend(lower_raw_loop_block(
+                    block,
+                    default_target,
+                    lower_scalar_float,
+                ));
 
                 // Raw blocks normally rely on source order for fallthrough. The
                 // loop owns a non-contiguous subset and starts at its header, so
@@ -11168,6 +11213,69 @@ function f @ 0x1000 {
                 .any(|statement| matches!(statement, Stmt::IndirectGoto { .. })),
             "the switch replaces the computed machine transfer: {body:#?}"
         );
+    }
+
+    #[test]
+    fn a_raw_dispatch_loop_coalesces_guard_default_table_slots() {
+        // PIC switch tables commonly point every unused in-range slot at the
+        // same block as the preceding bounds guard. Rendering each hole as a
+        // separate C case preserves execution but invents source CFG nodes.
+        // Once the guard proves the shared default target, those slots can be
+        // represented exactly by one `default` arm.
+        let lf = mk_cfg(vec![
+            (
+                0x1000,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(Flag::A),
+                    target: 0x1050,
+                    inverted: false,
+                }],
+                vec![0x1010, 0x1050],
+            ),
+            (
+                0x1010,
+                vec![Op::IndirectJump {
+                    target: Value::Reg(VReg::phys("target")),
+                    index: Some(Value::Reg(VReg::phys("state"))),
+                }],
+                vec![0x1020, 0x1050, 0x1030, 0x1050],
+            ),
+            (0x1020, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (0x1030, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (0x1040, vec![Op::Return], vec![]),
+            (0x1050, vec![Op::Return], vec![]),
+        ]);
+        let region = Region::Seq(vec![
+            Region::RawLoop {
+                header: 0,
+                blocks: vec![0, 1, 2, 3],
+                exits: vec![5],
+            },
+            Region::Block(5),
+        ]);
+
+        let lowered = lower(&lf, &region, "sparse_raw_dispatch_loop");
+        let Some(Stmt::While { body, .. }) = lowered
+            .body
+            .iter()
+            .find(|statement| matches!(statement, Stmt::While { .. }))
+        else {
+            panic!("expected raw while loop: {:#?}", lowered.body);
+        };
+        let Some(Stmt::Switch { cases, default, .. }) = body
+            .iter()
+            .find(|statement| matches!(statement, Stmt::Switch { .. }))
+        else {
+            panic!("expected typed switch inside raw loop: {body:#?}");
+        };
+        assert_eq!(
+            cases,
+            &vec![
+                (Some(0), vec![Stmt::Goto { target: 0x1020 }]),
+                (Some(2), vec![Stmt::Goto { target: 0x1030 }]),
+            ]
+        );
+        assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1050 }]));
     }
 
     #[test]

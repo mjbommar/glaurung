@@ -471,24 +471,26 @@ fn loops_and_switches(
     r: &Region,
     enclosing: &mut Vec<usize>,
     headers: &mut HashSet<usize>,
+    raw_loop_blocks: &mut Vec<HashSet<usize>>,
     switch_owner: &mut HashMap<usize, Vec<usize>>,
 ) {
     match r {
         Region::While { header, body, .. } => {
             headers.insert(*header);
             enclosing.push(*header);
-            loops_and_switches(body, enclosing, headers, switch_owner);
+            loops_and_switches(body, enclosing, headers, raw_loop_blocks, switch_owner);
             enclosing.pop();
         }
         Region::DoWhile { body, cond, .. } => {
             let header = structural_entry(body).unwrap_or(*cond);
             headers.insert(header);
             enclosing.push(header);
-            loops_and_switches(body, enclosing, headers, switch_owner);
+            loops_and_switches(body, enclosing, headers, raw_loop_blocks, switch_owner);
             enclosing.pop();
         }
-        Region::RawLoop { header, .. } => {
+        Region::RawLoop { header, blocks, .. } => {
             headers.insert(*header);
+            raw_loop_blocks.push(blocks.iter().copied().collect());
         }
         Region::Switch {
             dispatch,
@@ -497,21 +499,22 @@ fn loops_and_switches(
             ..
         } => {
             switch_owner.insert(*dispatch, enclosing.clone());
-            arms.iter()
-                .for_each(|a| loops_and_switches(a, enclosing, headers, switch_owner));
+            arms.iter().for_each(|a| {
+                loops_and_switches(a, enclosing, headers, raw_loop_blocks, switch_owner)
+            });
             if let Some(default) = formal_default {
-                loops_and_switches(default, enclosing, headers, switch_owner);
+                loops_and_switches(default, enclosing, headers, raw_loop_blocks, switch_owner);
             }
         }
         Region::Seq(parts) => parts
             .iter()
-            .for_each(|p| loops_and_switches(p, enclosing, headers, switch_owner)),
+            .for_each(|p| loops_and_switches(p, enclosing, headers, raw_loop_blocks, switch_owner)),
         Region::IfThen { then_r, .. } => {
-            loops_and_switches(then_r, enclosing, headers, switch_owner)
+            loops_and_switches(then_r, enclosing, headers, raw_loop_blocks, switch_owner)
         }
         Region::IfThenElse { then_r, else_r, .. } => {
-            loops_and_switches(then_r, enclosing, headers, switch_owner);
-            loops_and_switches(else_r, enclosing, headers, switch_owner);
+            loops_and_switches(then_r, enclosing, headers, raw_loop_blocks, switch_owner);
+            loops_and_switches(else_r, enclosing, headers, raw_loop_blocks, switch_owner);
         }
         Region::Block(_) | Region::Goto(_) | Region::Unstructured(_) => {}
     }
@@ -625,14 +628,24 @@ pub fn account(
     let mut goto_pairs = HashSet::new();
     goto_edges(region, edges, &mut goto_pairs);
     let mut headers = HashSet::new();
+    let mut raw_loop_blocks = Vec::new();
     let mut switch_owner = HashMap::new();
-    loops_and_switches(region, &mut Vec::new(), &mut headers, &mut switch_owner);
+    loops_and_switches(
+        region,
+        &mut Vec::new(),
+        &mut headers,
+        &mut raw_loop_blocks,
+        &mut switch_owner,
+    );
 
     let mut actual = HashSet::new();
     for &from in &reachable {
         for e in edges.get(from).into_iter().flatten() {
             actual.insert((from, e.to));
-            if e.back && !headers.contains(&e.to) {
+            let raw_loop_owns_back_edge = raw_loop_blocks
+                .iter()
+                .any(|blocks| blocks.contains(&from) && blocks.contains(&e.to));
+            if e.back && !headers.contains(&e.to) && !raw_loop_owns_back_edge {
                 errors.push(AccountError::BackEdgeUnowned { from, to: e.to });
                 continue;
             }
@@ -1221,6 +1234,52 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, AccountError::EdgeUnaccounted { from: 0, to: 3, .. })),
             "a goto-expressed edge is not fully unaccounted: {errs:?}"
+        );
+    }
+
+    /// A raw loop is the explicit labelled-CFG owner for every cycle wholly
+    /// inside its block set, including a nested parser sub-loop. Requiring a
+    /// second structured loop node defeats that fallback and makes the verifier
+    /// discard an otherwise exact multi-exit loop.
+    #[test]
+    fn a_raw_loop_owns_nested_internal_back_edges() {
+        let edges = vec![
+            vec![Edge {
+                to: 1,
+                kind: EdgeKind::Linear,
+                back: false,
+            }],
+            vec![Edge {
+                to: 2,
+                kind: EdgeKind::Linear,
+                back: false,
+            }],
+            vec![
+                Edge {
+                    to: 1,
+                    kind: EdgeKind::Taken,
+                    back: true,
+                },
+                Edge {
+                    to: 0,
+                    kind: EdgeKind::Fallthrough,
+                    back: true,
+                },
+            ],
+        ];
+        let preds = vec![vec![2], vec![0, 2], vec![1]];
+        let region = Region::RawLoop {
+            header: 0,
+            blocks: vec![0, 1, 2],
+            exits: Vec::new(),
+        };
+
+        let errors = account(&edges, &preds, 0, &region);
+        assert!(
+            !errors
+                .iter()
+                .any(|error| matches!(error, AccountError::BackEdgeUnowned { .. })),
+            "the labelled raw-loop body owns both cycles: {errors:?}"
         );
     }
 

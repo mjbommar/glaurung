@@ -231,6 +231,10 @@ struct Cfg {
     /// treating two ordinary return arms like a cold non-returning guard merely
     /// because both have zero CFG successors.
     ends_in_return: Vec<bool>,
+    /// Whether the block ends in a resolved, index-bearing indirect transfer.
+    /// Raw-loop lowering needs this stronger fact than the structural
+    /// multi-successor switch fallback used for imported/synthetic CFGs.
+    explicit_dispatch: Vec<bool>,
     /// Typed edges parallel to `succs`, OWNED here.
     ///
     /// The CFG is the thing that knows how control transfers, so it records it once
@@ -313,6 +317,18 @@ impl Cfg {
                     .is_some_and(|instr| instr.op.is_unconditional_return())
             })
             .collect();
+        let explicit_dispatch = lf
+            .blocks
+            .iter()
+            .map(|block| {
+                block.instrs.last().is_some_and(|instruction| {
+                    matches!(
+                        instruction.op,
+                        crate::ir::types::Op::IndirectJump { index: Some(_), .. }
+                    )
+                })
+            })
+            .collect();
         // Record each conditional block's taken-branch successor index.
         let mut cond_taken: Vec<Option<usize>> = vec![None; n];
         for (i, b) in lf.blocks.iter().enumerate() {
@@ -338,6 +354,7 @@ impl Cfg {
             ipostdom,
             cond_taken,
             ends_in_return,
+            explicit_dispatch,
             edges,
         }
     }
@@ -351,6 +368,10 @@ impl Cfg {
             && self.edges[block]
                 .iter()
                 .all(|edge| edge.kind == crate::ir::cfg_edges::EdgeKind::SwitchCase)
+    }
+
+    fn is_explicit_switch_dispatch(&self, block: usize) -> bool {
+        self.explicit_dispatch[block] && self.is_switch_dispatch(block)
     }
 }
 
@@ -1245,8 +1266,7 @@ struct LoopRegion {
     exit: Option<usize>,
 }
 
-/// Recognise a natural loop whose header is a resolved indirect dispatch, or
-/// whose binary range guard directly feeds one.
+/// Recognise a natural loop that contains exactly one resolved indirect dispatch.
 ///
 /// A state-machine loop has no binary header condition that can be represented
 /// as `While`: the table cases either update state and return to the dispatch,
@@ -1283,17 +1303,11 @@ fn detect_raw_dispatch_loop(
     let dispatches: Vec<usize> = body
         .iter()
         .copied()
-        .filter(|block| cfg.is_switch_dispatch(*block))
+        .filter(|block| cfg.is_explicit_switch_dispatch(*block))
         .collect();
-    let [dispatch] = dispatches.as_slice() else {
+    let [_dispatch] = dispatches.as_slice() else {
         return None;
     };
-    if *dispatch != header
-        && (cfg.succs[header].len() != 2 || !cfg.succs[header].contains(dispatch))
-    {
-        return None;
-    }
-
     let mut exits: Vec<usize> = body
         .iter()
         .copied()
