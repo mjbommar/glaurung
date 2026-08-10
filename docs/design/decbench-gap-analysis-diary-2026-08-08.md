@@ -2443,3 +2443,16 @@ repair is accepted for definedness, recompilability, and source clarity rather
 than claimed as leaderboard movement.  The evaluator drift itself reinforces
 the still-open content-addressed cache/toolchain-fingerprint task; stale absolute
 columns must not decide future patches.
+
+The implementation and evidence were committed as
+`be82d117da6239609a5f8a9ccacaa213520d7d28` and the remote branch was verified
+at that exact object.  A new empty-kit replay built from the committed extension
+returned all 250 functions across all 224 binaries with zero failures in 69.19
+seconds.  All 224 generated C files are byte-for-byte identical to the scored
+worktree candidate above, so its paired metric attribution applies to the exact
+code commit.  The validated exact-revision archive SHA-256 is
+`b7c636fc10887aeeec4827c369cf005b04d30b3d6c2418f8b218e587a66153e3`; the
+result manifest is
+`4fd768c519ef75d45e1782043d92709a1e6eb65a899d35823b937c1f44960d0c`, and the
+diagnostic ledger is
+`bfed83ae6ba619796566fad48ef434840f6636c639618f067a0237b804747e65`.

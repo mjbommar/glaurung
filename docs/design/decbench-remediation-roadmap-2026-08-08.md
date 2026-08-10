@@ -518,7 +518,10 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   column is exactly unchanged, the 250-row ByteMatch mean changes by
   `-0.000006`, TypeMatch changes by `-0.000304` through one lost accidental
   positional match, and the 77/250 union is unchanged.  This is a definedness
-  and output-reliability repair, not a claimed leaderboard gain.
+  and output-reliability repair, not a claimed leaderboard gain.  Exact commit
+  `be82d117` was replayed from an empty external kit with 224/224 binaries,
+  250/250 functions, zero failures, and byte-identical generated C relative to
+  the scored candidate.
 - [ ] Make every evaluation cache key include the decompiled artifact digest,
   binary digest, metric version, and toolchain identity. The byte re-evaluator
   currently reuses any same-named checkpoint even after the C changes; the
