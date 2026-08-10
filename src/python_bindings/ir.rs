@@ -756,7 +756,9 @@ fn prepare_llir_for_lowering(
                 prototype.apply_locked_parameters(cc, &fact.parameter_hints);
             }
             if !prototype.output_is_locked() {
-                prototype.apply_locked_output(fact.output_kind, None);
+                if let Some(output_kind) = fact.output_kind {
+                    prototype.apply_locked_output(output_kind, None);
+                }
             }
         }
         prototype

@@ -428,6 +428,19 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   mean 0.223156 over 235 scored rows. The union deliberately remains 73/250
   because `wcomment` and `print_problem` were already GED-perfect and
   `print_rta_ifidx` is not yet perfect in any metric.
+- [x] Recover stripped variadic-wrapper parameter types from agreeing literal
+  format contracts in direct callers. The program environment proves parameter
+  forwarding through `error` and message identity through `gettext`/
+  `dcgettext`; null-only, dynamic, unsupported, and contradictory evidence
+  fails closed. A real stripped-GCC fixture covers the positive and three
+  negative controls. Fresh cache-disabled scoring moves both `try_help` rows
+  from 0.5 to 1.0 (`tp=2`, `fp=0`, `fn=0`), taking TypeMatch to 20 perfects
+  and mean 0.227412 over 235 rows. Since neither row was perfect under GED or
+  ByteMatch, the exact union advances 73→75/250 (`30.0%`). A fresh 250/250
+  package changes only the two expected outputs, and the 56/56-cell metric
+  ratchet reports no regression. Performance remains explicitly inconclusive
+  under a heavily contended host rather than being declared inside the 5%
+  guardrail from noisy timing.
 - [ ] Convert the new compile-coverage gain into exact wins without weakening
   the boundary contracts. The highest-leverage immediate cohort is the 28
   newly nonzero ByteMatch rows, especially `copy_reg`, `yyparse`,

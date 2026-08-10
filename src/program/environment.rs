@@ -25,7 +25,7 @@ pub struct FunctionPrototypeFact {
     /// Source-ordered scalar parameter declarations.
     pub parameter_hints: Vec<Option<TypeHint>>,
     /// Source-level output class.
-    pub output_kind: RecoveredOutputKind,
+    pub output_kind: Option<RecoveredOutputKind>,
     /// Stable provenance label for diagnostics and future confidence policies.
     pub source: &'static str,
 }
@@ -49,16 +49,25 @@ impl ProgramEnvironment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum AbstractValue {
+pub(super) enum AbstractValue {
     Stack(i64),
     Scalar(i64),
+    Data(u64),
     Code(BTreeSet<u64>),
+    Parameter(usize),
+    FormatParameter(usize),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct CallbackState {
-    registers: HashMap<String, AbstractValue>,
+pub(super) struct CallbackState {
+    pub(super) registers: HashMap<String, AbstractValue>,
     stack: BTreeMap<i64, AbstractValue>,
+    pub(super) written_registers: HashSet<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CallSemantics {
+    MessageIdentity { argument_index: usize },
 }
 
 fn register_key(register: &VReg) -> Option<String> {
@@ -88,7 +97,7 @@ fn value_fact(value: &Value, state: &CallbackState, image: &ProgramImage) -> Opt
                 image.normalize_function_entry(*address)
             ])))
         }
-        Value::Addr(address) => i64::try_from(*address).ok().map(AbstractValue::Scalar),
+        Value::Addr(address) => Some(AbstractValue::Data(*address)),
     }
 }
 
@@ -181,13 +190,28 @@ fn merge_states(states: &[&CallbackState]) -> CallbackState {
             .map(|value| (key, value))
         })
         .collect();
-    CallbackState { registers, stack }
+    let written_registers = first
+        .written_registers
+        .iter()
+        .filter(|register| {
+            states
+                .iter()
+                .all(|state| state.written_registers.contains(*register))
+        })
+        .cloned()
+        .collect();
+    CallbackState {
+        registers,
+        stack,
+        written_registers,
+    }
 }
 
 fn set_register(state: &mut CallbackState, register: &VReg, value: Option<AbstractValue>) {
     let Some(register) = register_key(register) else {
         return;
     };
+    state.written_registers.insert(register.clone());
     if let Some(value) = value {
         state.registers.insert(register, value);
     } else {
@@ -195,11 +219,12 @@ fn set_register(state: &mut CallbackState, register: &VReg, value: Option<Abstra
     }
 }
 
-fn transfer_instruction(
+pub(super) fn transfer_instruction(
     instruction: &Op,
     state: &mut CallbackState,
     image: &ProgramImage,
     cc: CallConv,
+    call_semantics: &HashMap<u64, CallSemantics>,
 ) {
     match instruction {
         Op::Assign { dst, src } => {
@@ -209,32 +234,43 @@ fn transfer_instruction(
         Op::Bin { dst, op, lhs, rhs } => {
             let left = value_fact(lhs, state, image);
             let right = value_fact(rhs, state, image);
-            let value = match (op, left, right) {
-                (
-                    BinOp::Add,
-                    Some(AbstractValue::Stack(base)),
-                    Some(AbstractValue::Scalar(add)),
-                ) => add_signed(base, add).map(AbstractValue::Stack),
-                (
-                    BinOp::Sub,
-                    Some(AbstractValue::Stack(base)),
-                    Some(AbstractValue::Scalar(sub)),
-                ) => sub
-                    .checked_neg()
-                    .and_then(|displacement| add_signed(base, displacement))
-                    .map(AbstractValue::Stack),
-                (_, Some(AbstractValue::Scalar(left)), Some(AbstractValue::Scalar(right))) => {
-                    let value = match op {
-                        BinOp::Add => left.checked_add(right),
-                        BinOp::Sub => left.checked_sub(right),
-                        BinOp::And => Some(left & right),
-                        BinOp::Or => Some(left | right),
-                        BinOp::Xor => Some(left ^ right),
-                        _ => None,
-                    };
-                    value.map(AbstractValue::Scalar)
+            let self_xor = matches!(op, BinOp::Xor)
+                && match (lhs, rhs) {
+                    (Value::Reg(left), Value::Reg(right)) => {
+                        register_key(left) == register_key(right)
+                    }
+                    _ => false,
+                };
+            let value = if self_xor {
+                Some(AbstractValue::Scalar(0))
+            } else {
+                match (op, left, right) {
+                    (
+                        BinOp::Add,
+                        Some(AbstractValue::Stack(base)),
+                        Some(AbstractValue::Scalar(add)),
+                    ) => add_signed(base, add).map(AbstractValue::Stack),
+                    (
+                        BinOp::Sub,
+                        Some(AbstractValue::Stack(base)),
+                        Some(AbstractValue::Scalar(sub)),
+                    ) => sub
+                        .checked_neg()
+                        .and_then(|displacement| add_signed(base, displacement))
+                        .map(AbstractValue::Stack),
+                    (_, Some(AbstractValue::Scalar(left)), Some(AbstractValue::Scalar(right))) => {
+                        let value = match op {
+                            BinOp::Add => left.checked_add(right),
+                            BinOp::Sub => left.checked_sub(right),
+                            BinOp::And => Some(left & right),
+                            BinOp::Or => Some(left | right),
+                            BinOp::Xor => Some(left ^ right),
+                            _ => None,
+                        };
+                        value.map(AbstractValue::Scalar)
+                    }
+                    _ => None,
                 }
-                _ => None,
             };
             set_register(state, dst, value);
         }
@@ -264,15 +300,38 @@ fn transfer_instruction(
         Op::CondLoad { dst, .. }
         | Op::Un { dst, .. }
         | Op::Cmp { dst, .. }
-        | Op::ZExt { dst, .. }
-        | Op::SExt { dst, .. }
-        | Op::Trunc { dst, .. }
         | Op::Extract { dst, .. }
         | Op::Concat { dst, .. }
         | Op::Undef { dst, .. } => set_register(state, dst, None),
-        Op::Call { .. } => {
+        Op::ZExt { dst, src, .. } | Op::SExt { dst, src, .. } | Op::Trunc { dst, src, .. } => {
+            let value = match value_fact(src, state, image) {
+                Some(AbstractValue::Scalar(0)) => Some(AbstractValue::Scalar(0)),
+                _ => None,
+            };
+            set_register(state, dst, value);
+        }
+        Op::Call { target, .. } => {
+            let semantic_result = match target {
+                CallTarget::Direct(target) => call_semantics.get(target).and_then(|semantic| {
+                    let CallSemantics::MessageIdentity { argument_index } = semantic;
+                    let register = crate::ir::abi::argument_registers(cc).get(*argument_index)?;
+                    match state.registers.get(*register) {
+                        Some(AbstractValue::Parameter(index))
+                        | Some(AbstractValue::FormatParameter(index)) => {
+                            Some(AbstractValue::FormatParameter(*index))
+                        }
+                        _ => None,
+                    }
+                }),
+                CallTarget::Indirect(_) => None,
+            };
             for register in crate::ir::abi::caller_saved_registers(cc) {
                 state.registers.remove(*register);
+            }
+            if let Some(result) = semantic_result {
+                let register = crate::ir::abi::return_register(cc).to_string();
+                state.written_registers.insert(register.clone());
+                state.registers.insert(register, result);
             }
         }
         Op::Intrinsic { outs, .. } => {
@@ -296,10 +355,12 @@ fn stack_pointer(cc: CallConv) -> &'static str {
     }
 }
 
-fn input_states_for_image(
+pub(super) fn input_states_for_image(
     function: &LlirFunction,
     cc: CallConv,
     image: &ProgramImage,
+    call_semantics: &HashMap<u64, CallSemantics>,
+    track_parameters: bool,
 ) -> Vec<CallbackState> {
     let block_indices = function
         .blocks
@@ -322,6 +383,13 @@ fn input_states_for_image(
     entry_state
         .registers
         .insert(stack_pointer(cc).to_string(), AbstractValue::Stack(0));
+    if track_parameters {
+        for (index, register) in crate::ir::abi::argument_registers(cc).iter().enumerate() {
+            entry_state
+                .registers
+                .insert((*register).to_string(), AbstractValue::Parameter(index));
+        }
+    }
     for _ in 0..function.blocks.len().saturating_mul(4).max(1) {
         let mut changed = false;
         for (index, block) in function.blocks.iter().enumerate() {
@@ -338,7 +406,7 @@ fn input_states_for_image(
                 continue;
             };
             for instruction in &block.instrs {
-                transfer_instruction(&instruction.op, &mut output, image, cc);
+                transfer_instruction(&instruction.op, &mut output, image, cc, call_semantics);
             }
             if inputs[index].as_ref() != input.as_ref() {
                 inputs[index] = input;
@@ -356,7 +424,7 @@ fn input_states_for_image(
     inputs.into_iter().map(Option::unwrap_or_default).collect()
 }
 
-fn clean_import_name(name: &str) -> &str {
+pub(super) fn clean_import_name(name: &str) -> &str {
     name.strip_suffix("@plt")
         .or_else(|| name.strip_suffix(".plt"))
         .unwrap_or(name)
@@ -455,7 +523,7 @@ fn contiguous_executable_bytes<'a>(
     image.bytes().get(start..start.checked_add(length)?)
 }
 
-fn direct_call_sites(
+pub(super) fn direct_call_sites(
     image: &ProgramImage,
     targets: &HashMap<u64, &'static str>,
 ) -> Vec<(u64, u64)> {
@@ -616,7 +684,8 @@ fn callback_targets(
     cc: CallConv,
     api_targets: &HashMap<u64, &'static str>,
 ) -> HashMap<u64, &'static str> {
-    let inputs = input_states_for_image(function, cc, image);
+    let call_semantics = HashMap::new();
+    let inputs = input_states_for_image(function, cc, image, &call_semantics, false);
     let mut found = HashMap::new();
     for (block_index, block) in function.blocks.iter().enumerate() {
         let mut state = inputs[block_index].clone();
@@ -640,10 +709,43 @@ fn callback_targets(
                     }
                 }
             }
-            transfer_instruction(&instruction.op, &mut state, image, cc);
+            transfer_instruction(&instruction.op, &mut state, image, cc, &call_semantics);
         }
     }
     found
+}
+
+fn merge_prototype_fact(
+    prototypes: &mut HashMap<u64, FunctionPrototypeFact>,
+    target: u64,
+    incoming: FunctionPrototypeFact,
+) {
+    let Some(existing) = prototypes.get_mut(&target) else {
+        prototypes.insert(target, incoming);
+        return;
+    };
+    existing.parameter_hints.resize(
+        existing
+            .parameter_hints
+            .len()
+            .max(incoming.parameter_hints.len()),
+        None,
+    );
+    for (index, hint) in incoming.parameter_hints.into_iter().enumerate() {
+        existing.parameter_hints[index] = match (existing.parameter_hints[index], hint) {
+            (None, incoming) => incoming,
+            (current, None) => current,
+            (Some(current), Some(incoming)) if current == incoming => Some(current),
+            (Some(_), Some(_)) => None,
+        };
+    }
+    existing.output_kind = match (existing.output_kind, incoming.output_kind) {
+        (None, incoming) => incoming,
+        (current, None) => current,
+        (Some(current), Some(incoming)) if current == incoming => Some(current),
+        (Some(_), Some(_)) => None,
+    };
+    existing.source = "program.environment";
 }
 
 /// Recover registration-proven callback contracts from the immutable image.
@@ -663,7 +765,10 @@ pub fn recover_program_environment(
     if dump {
         eprintln!("\n===== program callback API targets =====\n{api_targets:#x?}");
     }
-    if api_targets.is_empty() {
+    let has_format_sink = address_names
+        .values()
+        .any(|name| clean_import_name(name) == "error");
+    if api_targets.is_empty() && !has_format_sink {
         return ProgramEnvironment::default();
     }
     let fdes = crate::analysis::exception::eh_frame_functions(image.bytes());
@@ -674,11 +779,16 @@ pub fn recover_program_environment(
         .iter()
         .map(|address| image.normalize_function_entry(*address))
         .collect::<HashSet<_>>();
-    let referencing_owners = referencing_owner_entries(image, &requested_vas, &fdes);
-    if referencing_owners.is_empty() {
-        return ProgramEnvironment::default();
-    }
-    let call_sites = direct_call_sites(image, &api_targets);
+    let referencing_owners = if api_targets.is_empty() {
+        HashSet::new()
+    } else {
+        referencing_owner_entries(image, &requested_vas, &fdes)
+    };
+    let call_sites = if referencing_owners.is_empty() {
+        Vec::new()
+    } else {
+        direct_call_sites(image, &api_targets)
+    };
     if dump {
         eprintln!("\n===== program callback call sites =====\n{call_sites:#x?}");
     }
@@ -714,7 +824,7 @@ pub fn recover_program_environment(
                     signed: true,
                     width: 4,
                 })],
-                output_kind: RecoveredOutputKind::Void,
+                output_kind: Some(RecoveredOutputKind::Void),
                 source,
             };
             if prototypes
@@ -726,6 +836,26 @@ pub fn recover_program_environment(
             } else if !conflicts.contains(&target) {
                 prototypes.insert(target, fact);
             }
+        }
+    }
+    for target in requested_vas {
+        if let Some(parameter_hints) = super::format_environment::recover_format_parameter_hints(
+            image,
+            budgets,
+            cc,
+            address_names,
+            &fdes,
+            target,
+        ) {
+            merge_prototype_fact(
+                &mut prototypes,
+                target,
+                FunctionPrototypeFact {
+                    parameter_hints,
+                    output_kind: None,
+                    source: "literal-format callers",
+                },
+            );
         }
     }
     ProgramEnvironment { prototypes }

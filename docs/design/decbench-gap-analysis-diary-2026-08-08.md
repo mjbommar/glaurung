@@ -1735,3 +1735,91 @@ silently refreshed: it still expects older outputs for `console_getc`,
 official replay shows that this increment changes only the three named
 `FILE *` rows; updating those older canaries remains separate Phase 0
 publication debt.
+
+## 01:15–04:17 — literal-format contracts for stripped wrappers
+
+The placement-oriented follow-up examined `balance` and `try_help`, the two
+named rows nearest a new exact TypeMatch win. `balance` would require recovering
+a source aggregate identity that the stripped binary does not preserve. Naming
+that struct from the expected source would be benchmark-specific guessing, so
+that path was rejected. `try_help` instead has real program-level evidence: its
+second parameter is forwarded through the variadic tail of `error`, and direct
+callers supply literal translated `printf` formats that state the operand type.
+
+The retained implementation adds parameter-only facts to the existing
+`ProgramEnvironment`; it does not invent a second signature pipeline or force a
+return type. A bounded abstract interpretation tracks entry parameters, literal
+data addresses, proven zero values, and message identity through `gettext` and
+`dcgettext`. It first proves which wrapper parameter reaches `error`'s format
+slot and which parameters reach its variadic slots, then inspects exact lifted
+direct callers. Every verified non-null format must be a supported literal and
+all observed conversion types must agree. A null literal is neutral; a dynamic,
+positional, dynamic-width, wide-string, invalid-length, unsupported, or
+contradictory format discards the fact. This is deliberately direct-call
+evidence: indirect or otherwise unobserved callers do not become positive
+evidence.
+
+The real RED fixture compiles and fully strips an optimized host-GCC binary.
+The positive wrapper has two `%s`/null callers and now recovers
+`char * arg1`. Three near misses remain unknown: a null/non-converting-only
+wrapper, a `%s` versus `%ld` conflict, and a known literal plus a runtime format.
+A parser unit test also pins positional, dynamic-width, wide-string, and invalid
+float-length rejection. Implementing the data flow exposed two general abstract
+execution gaps: self-XOR zeroing and zero-preserving extend/truncate operations
+now retain proven zero rather than turning it into an unknown argument.
+
+The first green implementation pushed the callback environment owner above
+1,200 lines. Format-specific discovery and parsing were therefore extracted
+into `program/format_environment.rs`; `program/environment.rs` is 896 lines and
+the new cohesive owner is 369 lines after formatting. A cheap import prefilter
+also avoids lifting targets in binaries that cannot contain this contract.
+Shared state transfer, call-site discovery, and prototype facts remain owned by
+the program environment rather than duplicated.
+
+Fresh cache-disabled scoring with the current DecBench checkout's TypeMatch
+cache schema v4 gives both affected official rows exactly `1.0` (`tp=2`,
+`fp=0`, `fn=0`): `try_help` in `bin_105` at O0 and `bin_148` at O2. Each pinned
+row was previously `0.5`; both had GED `33` and non-perfect ByteMatch
+(`0.37778` and `0.58065`). Subject to the final full-package differential, the
+union therefore projects 73→75/250 (`29.2%→30.0%`), TypeMatch perfects 18→20,
+and TypeMatch mean `0.22315622→0.22741154` over the same 235-row denominator.
+The older external notes call the compatible no-cache scorer v5; this record
+uses the version label reported by the current unmodified evaluator rather than
+silently merging labels.
+
+The final fresh submission replay emitted 250/250 functions across all 224/224
+binaries with zero extraction failures. Compared with the accepted `FILE *`
+candidate, exactly `bin_105.c` and `bin_148.c` change; both diffs are solely the
+second parameter changing from `long` to `char *`. The validated package
+SHA-256 is
+`072edf1a4ca7b460ec882f9c29efc067d6f1fb47d787e1bfeb9fd4e2d650643f`,
+the result-manifest SHA-256 is
+`0b215ac52162da6cb6c6a510feeb5afc23e08969cd45876f68125ff020730e2f`,
+and the diagnostic-ledger SHA-256 is
+`55e6824f956022f0c7f547fdda0050967314806641794609aab01184306e5be0`.
+The exact differential converts the projection into a 75/250 (`30.0%`) union
+result on the pinned score snapshot.
+
+The eight-worker extraction measured per-binary median/mean/maximum of
+2.547/2.855/14.058 seconds. This is not accepted as a clean Phase 1 performance
+measurement: unrelated Axeyum fuzz jobs consumed 200–600% CPU throughout, three
+older analysis processes each consumed another core, and host load remained
+roughly 9–14. A first noisy run before restoring the no-sink early exit measured
+2.631/2.960/20.195 seconds, so the retained fast path improved all three noisy
+statistics, but neither run can establish the 5% guardrail against the prior
+2.580-second mean. Output completeness and identity are valid; performance is
+explicitly inconclusive pending an idle-host replay.
+
+Final verification passes 1,964 Rust library tests plus every integration
+target, the real stripped format/callback/`FILE *` focused tests, the exact
+six-lane architecture ratchet (1,758 pass / 42 known fail / 228 structural /
+zero lane errors), both 56-cell legacy and 64-cell curriculum behavior suites,
+and the fresh 56/56-cell GED/TypeMatch/ByteMatch ratchet with no regression. The
+full Python suite adds the new test and retains the four known cross-sample
+`suspicious_win` content failures; under the heavily loaded host it also reports
+the existing load-sensitive `win10-webservices.dll` discovery as truncated,
+including on an immediate isolated rerun. This code path does not invoke the
+new program environment, so it is recorded as an ambient gate failure rather
+than mislabeled green or attributed to this increment. Rust/Python formatting,
+targeted Ruff, and `git diff --check` pass. Targeted `ty` retains its existing
+30 diagnostics and adds none on the new test.

@@ -1052,6 +1052,110 @@ def test_real_stripped_sigaction_callback_recovers_external_int_contract(
     assert "arg0" not in info_text.split("{", 1)[0], info_text
 
 
+def test_real_stripped_format_wrapper_recovers_forwarded_string_parameter(
+    tmp_path: Path,
+) -> None:
+    """Recover a wrapper parameter from complete literal-format call evidence.
+
+    The target's second parameter is only forwarded through ``error``'s
+    variadic tail, so its own body cannot classify it.  Direct callers prove
+    the missing contract with ``%s``.  Null-only, conflicting-format, and
+    unknown-format wrappers are fail-closed controls.
+    """
+    compiler = shutil.which("gcc")
+    strip = shutil.which("strip")
+    if compiler is None or strip is None:
+        pytest.skip("host gcc and strip are required")
+
+    source = tmp_path / "format_wrapper.c"
+    binary = tmp_path / "format_wrapper"
+    stripped = tmp_path / "format_wrapper.stripped"
+    source.write_text(
+        "#include <error.h>\n"
+        "#include <libintl.h>\n"
+        "#include <stdint.h>\n"
+        "__attribute__((noinline, used)) void string_wrapper(\n"
+        "    const char *reason, const char *operand) {\n"
+        "    if (reason) error(0, 0, gettext(reason), operand);\n"
+        "}\n"
+        "__attribute__((noinline, used)) void null_only_wrapper(\n"
+        "    const char *reason, long value) {\n"
+        "    if (reason) error(0, 0, gettext(reason), value);\n"
+        "}\n"
+        "__attribute__((noinline, used)) void conflicting_wrapper(\n"
+        "    const char *reason, uintptr_t value) {\n"
+        "    if (reason) error(0, 0, gettext(reason), value);\n"
+        "}\n"
+        "__attribute__((noinline, used)) void unknown_wrapper(\n"
+        "    const char *reason, const char *value) {\n"
+        "    if (reason) error(0, 0, gettext(reason), value);\n"
+        "}\n"
+        "int main(int argc, char **argv) {\n"
+        "    string_wrapper(\"missing operand after '%s'\", argv[0]);\n"
+        "    string_wrapper(0, 0);\n"
+        '    null_only_wrapper("plain message", 0);\n'
+        "    conflicting_wrapper(\"name '%s'\", (uintptr_t)argv[0]);\n"
+        '    conflicting_wrapper("count %ld", (uintptr_t)argc);\n'
+        "    unknown_wrapper(\"known '%s'\", argv[0]);\n"
+        "    if (argc > 2) unknown_wrapper(argv[1], argv[2]);\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            compiler,
+            "-O2",
+            "-fno-inline",
+            "-fno-pie",
+            "-no-pie",
+            "-g",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=128)
+    names = {
+        "string_wrapper",
+        "null_only_wrapper",
+        "conflicting_wrapper",
+        "unknown_wrapper",
+    }
+    targets = {
+        function.name: int(function.entry_point.value)
+        for function in functions
+        if function.name in names
+    }
+    assert targets.keys() == names, [function.name for function in functions]
+
+    shutil.copy2(binary, stripped)
+    stripped_result = subprocess.run(
+        [strip, "--strip-all", str(stripped)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert stripped_result.returncode == 0, stripped_result.stderr
+
+    results = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+        str(stripped),
+        list(targets.values()),
+        style="decbench",
+        timeout_ms=8000,
+    )
+    rendered = {int(va): text for _, va, text in results}
+    string_text = rendered[targets["string_wrapper"]]
+    assert "char * arg1" in string_text.split("{", 1)[0], string_text
+    for name in ("null_only_wrapper", "conflicting_wrapper", "unknown_wrapper"):
+        control = rendered[targets[name]]
+        assert "char * arg1" not in control.split("{", 1)[0], control
+
+
 def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> None:
     """Use AAPCS spill width and reload extension to recover byte arguments."""
     compiler = shutil.which("arm-none-eabi-gcc")
