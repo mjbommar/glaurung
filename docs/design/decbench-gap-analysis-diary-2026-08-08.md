@@ -2036,14 +2036,19 @@ with mean `0.226702` and median `0.083333`. Because `statdb_write` was not
 already perfect on another official metric, the exact union advances
 75→76/250 (`30.4%`).
 
-A fresh worktree-labelled extraction completed all 224 binaries and all 250
-functions with zero extraction failures. Its result archive is
-`/tmp/glaurung-call-loop.r4YloY/results.zip` with SHA-256
-`27af7b9a9a80a12da4eaca0eb7e81e6831773ce0a817f95d4da5c206cc7ac39b`.
-Differential inspection confirms that only the three rows above changed. A
-final commit-labelled replay remains required before publication, so this
-archive is evidence for the implementation candidate rather than the release
-artifact.
+The implementation is commit
+`83c6b07c0de9cf821f58517cd46d4d5ab8f44be0`. After rebuilding the extension
+from that exact revision, a fresh empty-kit replay completed all 224 binaries
+and all 250 functions with zero extraction failures. Its release archive is
+`/tmp/glaurung-effectful-final.oRUVRE/results.zip`; the package SHA-256 is
+`cb0b9c84366ea591c53d78fe68e003eb46a4178ccbf29e6ee23897395ad4b46c`,
+the result-manifest SHA-256 is
+`5031342f8ec50801c43cde3a2dd1110b2d2caca70ed5ba5e81cfa0bb946a1ec8`,
+and the diagnostic-ledger SHA-256 is
+`a0ae92ddd0f1b0df6a4266c13042b4502cbd5cff2915dca1fc7af8726b3c3155`.
+The zip integrity check is clean. Differential inspection against the accepted
+`17952f0` package confirms that only `bin_111.c`, `bin_166.c`, and `bin_174.c`
+changed, exactly matching the three scored rows above.
 
 The full Rust gate passes 1,971 library tests, every integration target, and
 doctests after rebuilding with incremental compilation disabled and two build
