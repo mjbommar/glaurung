@@ -1092,10 +1092,7 @@ pub(super) fn decompile_at_session(
             width,
             exact_value_widths,
             &readonly_data,
-            prototype.as_ref().map_or(
-                crate::ir::types_recover::RecoveredOutputKind::Unknown,
-                |p| p.output_kind(),
-            ),
+            prototype.as_ref(),
             declared_render.as_ref(),
             dwarf_types.as_deref().unwrap_or(&[]),
             &stack_facts.source_types,
@@ -1340,10 +1337,7 @@ fn decompile_range_at_py(
             width,
             exact_value_widths,
             &readonly_data,
-            prototype.as_ref().map_or(
-                crate::ir::types_recover::RecoveredOutputKind::Unknown,
-                |p| p.output_kind(),
-            ),
+            prototype.as_ref(),
             declared_render.as_ref(),
             dwarf_types.as_deref().unwrap_or(&[]),
             &stack_facts.source_types,
@@ -1595,7 +1589,7 @@ fn decbench_text(
     width: Option<&crate::ir::types_recover::TypeMap>,
     exact_value_widths: Option<&std::collections::HashMap<String, u8>>,
     readonly_data: &crate::ir::readonly_fold::ReadonlyData,
-    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    recovered_prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     dwarf_local_types: &std::collections::HashMap<String, String>,
@@ -1603,6 +1597,10 @@ fn decbench_text(
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
 ) -> String {
+    let output_kind = recovered_prototype.map_or(
+        crate::ir::types_recover::RecoveredOutputKind::Unknown,
+        crate::ir::types_recover::RecoveredPrototype::output_kind,
+    );
     let (dwarf_local_types, dwarf_local_names) =
         select_renderable_dwarf_local_facts(dwarf_local_types, dwarf_local_names, dwarf_types);
     let protected_locals = dwarf_local_names
@@ -1759,13 +1757,46 @@ fn decbench_text(
     crate::ir::dead_stores::prune_unobserved_promoted_object_stores(&mut prepared);
     crate::ir::health::trace_pass("ready_to_render", &prepared, cfg_health);
     let violations = profiler.measure("verify_defs", || crate::ir::verify_defs::check(&prepared));
+    let recovered_render_prototype = if declared_prototype.is_none() {
+        recovered_prototype.and_then(|prototype| {
+            let mut machine_prototype = recovered_call_prototype(prototype, cc);
+            machine_prototype.return_type =
+                if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
+                    "void"
+                } else {
+                    crate::ir::ast::infer_return_ctype(&prepared.body, decl)
+                }
+                .to_string();
+            if let Some(types) = decl {
+                for (slot, c_type) in machine_prototype.parameter_types.iter_mut().enumerate() {
+                    if let Some(hint) =
+                        types.get(&crate::ir::types::VReg::phys(format!("arg{slot}")))
+                    {
+                        *c_type = crate::ir::types_recover::c_type_for_hint_with_pointer_width(
+                            hint,
+                            calling_convention_pointer_width(cc),
+                        )
+                        .to_string();
+                    }
+                }
+            }
+            let refined = crate::ir::call_contracts::refine_opaque_parameter_types_from_calls(
+                &prepared,
+                &machine_prototype,
+            );
+            (refined != machine_prototype).then_some(refined)
+        })
+    } else {
+        None
+    };
+    let render_prototype = declared_prototype.or(recovered_render_prototype.as_ref());
     let body = profiler.measure("render_decbench", || {
         crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
             &prepared,
             decl,
             width,
             output_kind,
-            declared_prototype,
+            render_prototype,
             dwarf_types,
             calling_convention_pointer_width(cc),
             &dwarf_pointer_types,
@@ -2738,10 +2769,7 @@ fn decompile_all_py(
                 Some(&width),
                 Some(&exact_value_widths),
                 &readonly_data,
-                prototype
-                    .as_ref()
-                    .expect("DecBench prototype")
-                    .output_kind(),
+                prototype.as_ref(),
                 declared_render.as_ref(),
                 dwarf_types.as_deref().unwrap_or(&[]),
                 &stack_facts.source_types,
@@ -2995,10 +3023,7 @@ fn decompile_many_py(
                 Some(&width),
                 Some(&exact_value_widths),
                 &readonly_data,
-                prototype
-                    .as_ref()
-                    .expect("DecBench prototype")
-                    .output_kind(),
+                prototype.as_ref(),
                 declared_render.as_ref(),
                 dwarf_types.as_deref().unwrap_or(&[]),
                 &stack_facts.source_types,

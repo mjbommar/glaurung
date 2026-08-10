@@ -1635,3 +1635,103 @@ Ruff, and `git diff --check` pass. Targeted `ty` remains at the exact 30 existin
 diagnostics in `test_cli_decompile.py`, with none on the new fixture; global
 Ruff and `ty` remain baseline-red repository debt rather than being mislabeled
 as green.
+
+## 00:10–01:15 — conflict-aware nominal libc pointer recovery
+
+The next TypeMatch defect, `bash:O0:mksyntax:wcomment`, exposed a distinction
+that the existing call-contract catalog intentionally erased. `fputc` accepts
+`FILE *`, but its standalone boundary type is conservatively rendered as
+`void *` because the output previously had no owner for an opaque `FILE`
+declaration. Consequently, exact repeated calls proved the parameter's nominal
+contract while the recovered function signature could express only its machine
+pointer category.
+
+The retained repair keeps those layers separate. The catalog still supplies
+`void *` at an isolated call boundary, while a final prototype refinement walks
+direct call operands and records catalog-owned opaque pointer typedefs for exact
+`argN` values. A parameter is refined only when every canonical observation
+agrees. Conflicting callees, derived values, arbitrary identifier spellings,
+and non-opaque catalog types fail closed. The renderer accepts the resulting
+nominal pointer and emits one standalone forward declaration such as
+`typedef struct __glaurung_opaque_FILE FILE;`.
+
+An earlier byte-use experiment that inferred `char *` merely because a pointer
+fed byte loads was rejected. That evidence cannot distinguish a source string
+from a byte view into a wider object and would have collapsed machine access
+width into source identity. The retained implementation instead uses the
+existing call-contract owner and carries only named evidence that the catalog
+actually knows. RED/GREEN tests cover agreement, conflict, and rendering, while
+a direct predicate test covers builtin, struct, and arbitrary-token exclusions.
+A real integration fixture compiles a GCC O0 ELF with a
+`FILE *` parameter, strips its debug information, decompiles it by address,
+then recompiles and executes the result against the original output.
+
+The first full replay caught a separate integration mistake before acceptance:
+constructing a replacement render prototype also replaced the established
+return-type owner, changing unrelated signatures to `long`. The final pipeline
+starts from the normal inferred return type and refines only parameter slots.
+A new release replay from an empty results directory then emitted all 250
+functions from all 224 binaries with zero failures. Exactly three outputs
+changed:
+
+| Function | Previous TypeMatch | Candidate TypeMatch | ByteMatch before/after |
+|---|---:|---:|---:|
+| `e2fsprogs:O0:e2fsck:print_problem` | 0.5 | 0.666667 | 0.287009 / 0.287009 |
+| `iproute2:O0:ip:print_rta_ifidx` | 0.25 | 0.5 | 0.253731 / 0.253731 |
+| `bash:O0:mksyntax:wcomment` | 0.5 | 1.0 | 0.288889 / 0.288889 |
+
+All affected scores were recomputed with metric caches disabled, and all three
+generated files compile. The fresh stripped TypeMatch projection is 18 perfect,
+mean `0.22315622`, median `0.08333333`, and 99 zero rows over 235 measured
+functions. This is meaningful movement toward the 0.231 type blocker, but it
+does **not** add a union-perfect row: `wcomment` and `print_problem` were already
+GED-perfect, while `print_rta_ifidx` remains imperfect. The honest union stays
+73/250 (`29.2%`). The next placement-oriented repair must therefore target a
+row such as `balance` or `try_help` that is not already covered by another
+perfect metric.
+
+The exact candidate package validates 224/224 binaries and 250/250 functions.
+Its `results.zip` SHA-256 is
+`6f331746e8ac1bbe5b30ec71025ae68923a41ff30947afe4537de7a95c5355dd`,
+the result-manifest SHA-256 is
+`3e9af5fb1b0965ca0f5f7d8f53c1c926183cf3f18ffe5761e0144b50835c46e3`,
+and the diagnostics SHA-256 is
+`3c3ea7701ea4563b4a02824fdcba8981eaa3c68ff4da5a2410697a1f07060e4f`.
+The final post-fix release extraction took 72.83 seconds at eight workers;
+per-binary median/mean/maximum were 2.388/2.580/3.880 seconds. Mean is 4.1%
+above the callback-contract candidate and remains within the Phase 1 5% cold
+guardrail. These whole-run numbers bound the candidate but are not attributed
+to a three-output rendering change without a profile.
+
+The first full Python gate then found a boundary error that the stripped score
+sample did not exercise. Because `void *` is itself present in the catalog and
+its standalone spelling is also `void *`, the opaque-name predicate initially
+accepted `void` and emitted the invalid declaration
+`typedef struct __glaurung_opaque_void void;` for three debug-assisted
+recompilation fixtures. The repair explicitly excludes `void` and every builtin
+scalar before catalog ownership is considered. A direct `void *` negative test
+now guards that distinction, and the atomic compare-exchange, indirect-call,
+known-`memcpy`, and stripped-`FILE *` recompilation tests all pass together.
+This is why the full product suite remains a required acceptance gate even when
+all changed official-score rows compile.
+
+After that correction, a second clean release replay again emitted 250/250
+functions across 224/224 binaries with zero failures. Every generated C file is
+byte-identical to the already-scored pre-correction stripped candidate, proving
+that excluding builtin `void` removes the debug-assisted regression without
+changing any official submission row. Full verification then passes 1,963 Rust
+library tests plus every integration target, all 56 legacy and 64 curriculum
+behavior cells, the exact architecture ratchet (1,758 pass / 42 known fail /
+228 structural / zero lane errors), and the fresh 56/56-cell metric ratchet
+with no GED, TypeMatch, or ByteMatch regression. The full Python suite reports
+2,879 passed and 44 skipped, with only the same four cross-sample
+`suspicious_win` content failures. Rust/Python formatting, targeted Ruff, and
+`git diff --check` pass. Targeted `ty` has exactly the four pre-existing
+`pytest.mark` diagnostics in the round-trip file and none on the new test.
+
+The checked output-canary baseline remains intentionally red rather than being
+silently refreshed: it still expects older outputs for `console_getc`,
+`copy_reg`, `linkedlist:clang:O0`, `statdb_write`, and `yyparse`. The fresh
+official replay shows that this increment changes only the three named
+`FILE *` rows; updating those older canaries remains separate Phase 0
+publication debt.

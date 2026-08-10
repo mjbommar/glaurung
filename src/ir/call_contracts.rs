@@ -185,6 +185,56 @@ pub fn standalone_c_type(c_type: &str) -> Option<String> {
     Some(exact.to_string())
 }
 
+/// The identifier behind a catalog-owned opaque pointer typedef.
+///
+/// These source names carry useful nominal information (`FILE *` rather than
+/// merely `void *`) while requiring no object layout.  The renderer can make
+/// them self-contained with an incomplete private struct tag.  Restricting the
+/// result to names that actually occur in the canonical catalog prevents an
+/// arbitrary token recovered from machine code from becoming a C declaration.
+pub fn opaque_pointer_typedef(c_type: &str) -> Option<String> {
+    let normalized = c_type.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut base = normalized.as_str();
+    let mut pointer_depth = 0usize;
+    while let Some(inner) = base.trim_end().strip_suffix('*') {
+        pointer_depth += 1;
+        base = inner.trim_end();
+    }
+    if pointer_depth == 0 {
+        return None;
+    }
+    let base = base
+        .split_whitespace()
+        .filter(|word| !matches!(*word, "const" | "volatile" | "restrict"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if base == "void"
+        || crate::ir::dwarf_type_env::builtin_scalar_type(&base)
+        || base.starts_with("struct ")
+        || base.starts_with("union ")
+        || base.is_empty()
+        || !base.chars().enumerate().all(|(index, ch)| {
+            ch == '_' || ch.is_ascii_alphabetic() || (index > 0 && ch.is_ascii_digit())
+        })
+    {
+        return None;
+    }
+    let catalog_owns_type = libc_prototypes().values().any(|contract| {
+        std::iter::once(contract.return_type.as_str())
+            .chain(
+                contract
+                    .params
+                    .iter()
+                    .map(|parameter| parameter.c_type.as_str()),
+            )
+            .any(|candidate| {
+                candidate.split_whitespace().collect::<Vec<_>>().join(" ") == normalized
+            })
+    });
+    (catalog_owns_type && standalone_c_type(&normalized).as_deref() == Some("void *"))
+        .then_some(base)
+}
+
 static LIBC_PROTOTYPES: OnceLock<HashMap<String, CallContract>> = OnceLock::new();
 
 fn libc_prototypes() -> &'static HashMap<String, CallContract> {
@@ -260,6 +310,105 @@ fn clean_symbol_name(name: &str) -> String {
 /// Apply authoritative library contracts to named calls in `function`.
 pub fn apply_known_call_contracts(function: &mut Function) {
     apply_body(&mut function.body);
+}
+
+/// Refine nominal pointer spellings on the current function from compatible
+/// authoritative library uses.
+///
+/// This is deliberately narrower than ordinary call-site coercion.  A caller
+/// parameter is refined only when every canonical call observation for that
+/// exact `argN` agrees on one type, and only when that type is an opaque pointer
+/// typedef whose representation had otherwise collapsed to `void *`.  A
+/// conflicting use retains the recovered machine-level declaration.
+pub fn refine_opaque_parameter_types_from_calls(
+    function: &Function,
+    recovered: &CallPrototype,
+) -> CallPrototype {
+    let mut observations =
+        vec![std::collections::BTreeSet::<String>::new(); recovered.parameter_types.len()];
+    collect_parameter_contract_observations(&function.body, &mut observations);
+
+    let mut refined = recovered.clone();
+    for (slot, types) in observations.into_iter().enumerate() {
+        let mut types = types.into_iter();
+        let Some(c_type) = types.next() else {
+            continue;
+        };
+        if types.next().is_none() && opaque_pointer_typedef(&c_type).is_some() {
+            refined.parameter_types[slot] = c_type;
+        }
+    }
+    refined
+}
+
+fn collect_parameter_contract_observations(
+    body: &[Stmt],
+    observations: &mut [std::collections::BTreeSet<String>],
+) {
+    for statement in body {
+        match statement {
+            Stmt::Call { target, args, .. } => {
+                let Expr::Named { name, .. } = target else {
+                    continue;
+                };
+                let Some(contract) = lookup(name) else {
+                    continue;
+                };
+                for (argument, parameter) in args.iter().zip(&contract.params) {
+                    let Expr::Reg(crate::ir::VReg::Phys(name)) = argument else {
+                        continue;
+                    };
+                    let Some(slot) = crate::ir::ast::parse_arg_index(name) else {
+                        continue;
+                    };
+                    if let Some(slot_observations) = observations.get_mut(slot) {
+                        slot_observations.insert(
+                            parameter
+                                .c_type
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        );
+                    }
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_parameter_contract_observations(then_body, observations);
+                if let Some(else_body) = else_body {
+                    collect_parameter_contract_observations(else_body, observations);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_parameter_contract_observations(body, observations);
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                collect_parameter_contract_observations(
+                    std::slice::from_ref(init.as_ref()),
+                    observations,
+                );
+                collect_parameter_contract_observations(body, observations);
+                collect_parameter_contract_observations(
+                    std::slice::from_ref(step.as_ref()),
+                    observations,
+                );
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    collect_parameter_contract_observations(case, observations);
+                }
+                if let Some(default) = default {
+                    collect_parameter_contract_observations(default, observations);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Build the call-owned prototype pair after ABI argument reconstruction.
@@ -731,7 +880,8 @@ fn apply_body(body: &mut [Stmt]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_known_call_contracts, libc_prototypes, lookup, standalone_c_type, CallPrototype,
+        apply_known_call_contracts, libc_prototypes, lookup, opaque_pointer_typedef,
+        refine_opaque_parameter_types_from_calls, standalone_c_type, CallPrototype,
         CallPrototypeAuthority,
     };
     use crate::ir::ast::{Expr, Function, Stmt};
@@ -1113,6 +1263,82 @@ mod tests {
             standalone_c_type("const struct sockaddr *"),
             Some("const void *".into())
         );
+    }
+
+    #[test]
+    fn opaque_typedefs_are_limited_to_catalog_owned_pointer_names() {
+        assert_eq!(opaque_pointer_typedef("FILE *"), Some("FILE".into()));
+        assert_eq!(opaque_pointer_typedef("void *"), None);
+        assert_eq!(opaque_pointer_typedef("MadeUp *"), None);
+        assert_eq!(opaque_pointer_typedef("struct sockaddr *"), None);
+        assert_eq!(opaque_pointer_typedef("int *"), None);
+    }
+
+    #[test]
+    fn compatible_library_uses_recover_an_opaque_caller_parameter() {
+        let function = Function {
+            name: "wcomment".into(),
+            entry_va: 0,
+            body: vec![
+                named_call(
+                    "fputs",
+                    vec![
+                        Expr::StringLit { value: "x".into() },
+                        Expr::Reg(VReg::phys("arg0")),
+                    ],
+                    Some(VReg::phys("var0")),
+                ),
+                named_call(
+                    "fprintf",
+                    vec![
+                        Expr::Reg(VReg::phys("arg0")),
+                        Expr::StringLit { value: "%s".into() },
+                    ],
+                    Some(VReg::phys("var1")),
+                ),
+            ],
+        };
+        let recovered = CallPrototype {
+            return_type: "void".into(),
+            parameter_types: vec!["void *".into(), "int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+
+        let refined = refine_opaque_parameter_types_from_calls(&function, &recovered);
+
+        assert_eq!(refined.parameter_types, ["FILE *", "int"]);
+        assert_eq!(refined.authority, CallPrototypeAuthority::Recovered);
+    }
+
+    #[test]
+    fn conflicting_library_uses_do_not_invent_a_nominal_parameter_type() {
+        let function = Function {
+            name: "conflict".into(),
+            entry_va: 0,
+            body: vec![
+                named_call(
+                    "fclose",
+                    vec![Expr::Reg(VReg::phys("arg0"))],
+                    Some(VReg::phys("var0")),
+                ),
+                named_call(
+                    "strlen",
+                    vec![Expr::Reg(VReg::phys("arg0"))],
+                    Some(VReg::phys("var1")),
+                ),
+            ],
+        };
+        let recovered = CallPrototype {
+            return_type: "long".into(),
+            parameter_types: vec!["void *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+
+        let refined = refine_opaque_parameter_types_from_calls(&function, &recovered);
+
+        assert_eq!(refined, recovered);
     }
 
     #[test]

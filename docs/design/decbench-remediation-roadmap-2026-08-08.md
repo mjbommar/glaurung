@@ -43,11 +43,11 @@ is deleted rather than wrapped forever.
 
 | Measure | Baseline | First competitive target | Long target |
 |---|---:|---:|---:|
-| union perfect | 72 / 250, 28.8% | at least 75 / 250, 30% | at least 82 / 250, 32.8% |
+| union perfect | 73 / 250, 29.2% | at least 75 / 250, 30% | at least 82 / 250, 32.8% |
 | GED mean | 32.36 over 239 scored | at most 20 | at most 15 |
 | O2-noinline GED mean | 52.22 over 96 scored | at most 28 | at most 22 |
-| type mean | 0.2150 over 235 scored | at least 0.231 | at least 0.30 |
-| type perfect | 16 / 235 | at least 20 / scored | at least 30 / scored |
+| type mean | 0.2232 over 235 scored | at least 0.231 | at least 0.30 |
+| type perfect | 18 / 235 | at least 20 / scored | at least 30 / scored |
 | byte mean, corrected metric | 0.2477 over 250 scored | at least 0.30 | at least 0.40 |
 | unique union perfects vs pinned public board | 0 | at least 1 | sustained growth |
 
@@ -61,7 +61,7 @@ The quality baseline is now strictly the stripped external-submission path. The
 debug-assisted `0.56153998` TypeMatch replay remains useful evidence for the
 DWARF product mode, but it is not comparable to the stripped public scoreboard
 and must not replace the values above. The corrected stripped baseline makes the
-real priorities sharper: TypeMatch is only `0.0160` below the first competitive
+real priorities sharper: TypeMatch is only `0.0078` below the first competitive
 target, while GED—especially O2-noinline—is the dominant structural gap.
 
 ### Performance baseline and targets
@@ -415,6 +415,19 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   pinned public snapshot. An eager 19.2-second-owner design was rejected; the
   demand-driven implementation keeps mean full-replay time within the Phase 1
   5% guardrail.
+- [x] Recover catalog-owned opaque parameter typedefs from agreeing direct-call
+  observations without changing the catalog's conservative call-boundary
+  representation. The renderer owns one standalone opaque declaration, and the
+  final recovered prototype is refined only when every canonical observation
+  for an exact parameter agrees; `void`, builtin scalars, arbitrary typedef
+  spellings, and conflicting callees remain non-nominal. A real stripped-GCC
+  `FILE *` fixture recompiles and executes. Fresh no-cache scoring improves
+  `print_problem` TypeMatch
+  0.5→0.6667, `print_rta_ifidx` 0.25→0.5, and `wcomment` 0.5→1.0 with
+  identical affected-row ByteMatch scores. TypeMatch reaches 18 perfects and
+  mean 0.223156 over 235 scored rows. The union deliberately remains 73/250
+  because `wcomment` and `print_problem` were already GED-perfect and
+  `print_rta_ifidx` is not yet perfect in any metric.
 - [ ] Convert the new compile-coverage gain into exact wins without weakening
   the boundary contracts. The highest-leverage immediate cohort is the 28
   newly nonzero ByteMatch rows, especially `copy_reg`, `yyparse`,

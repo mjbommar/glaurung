@@ -5522,7 +5522,7 @@ fn integer_ctype_width(ctype: &str) -> Option<u8> {
 /// This is the value-keyed replacement for the bare-`ret` string lookup, which
 /// silently defaulted to `long` whenever value renaming moved the return value
 /// off the `ret` name (e.g. a return computed as a promoted local `local_8`).
-fn infer_return_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> &'static str {
+pub(crate) fn infer_return_ctype(body: &[Stmt], tm: Option<&TypeMap>) -> &'static str {
     let ret = VReg::phys("ret");
     if let Some(types) = tm.filter(|types| types.is_locked(&ret)) {
         return types.get(&ret).map(hint_to_ctype).unwrap_or("long");
@@ -6690,6 +6690,7 @@ fn source_prototype_type_is_renderable(c_type: &str, allow_void: bool) -> bool {
     }
     crate::ir::dwarf_type_env::builtin_scalar_type(&base)
         || (base == "void" && (allow_void || pointer))
+        || crate::ir::call_contracts::opaque_pointer_typedef(c_type).is_some()
 }
 
 pub(crate) fn dwarf_prototype_type_is_renderable(
@@ -6715,6 +6716,8 @@ fn source_prototype_forward_declarations(
             }
         } else if let Some(declaration) = dwarf_type_env.typedef_declaration(c_type) {
             declarations.insert(declaration);
+        } else if let Some(name) = crate::ir::call_contracts::opaque_pointer_typedef(c_type) {
+            declarations.insert(format!("typedef struct __glaurung_opaque_{name} {name};"));
         }
     }
     declarations
@@ -16941,6 +16944,46 @@ function f @ 0x1000 {
         assert!(
             rendered.contains("uint32_t fixed_width(const int32_t * arg0, int32_t arg1)"),
             "fixed-width DWARF prototype was discarded:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn recovered_opaque_typedef_parameter_is_self_contained() {
+        let function = Function {
+            name: "wcomment".into(),
+            entry_va: 0x18a5,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x1000,
+                    name: "consume".into(),
+                },
+                args: vec![Expr::Reg(VReg::phys("arg0")), Expr::Reg(VReg::phys("arg1"))],
+                dst: None,
+                call_spec: None,
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "void".into(),
+            parameter_types: vec!["FILE *".into(), "int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Void,
+            Some(&prototype),
+        );
+
+        assert!(
+            rendered.contains("typedef struct __glaurung_opaque_FILE FILE;"),
+            "opaque typedef must be declared in standalone C:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("void wcomment(FILE * arg0, int arg1)"),
+            "the semantic parameter spelling was discarded:\n{rendered}"
         );
     }
 
