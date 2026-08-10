@@ -1770,8 +1770,8 @@ now retain proven zero rather than turning it into an unknown argument.
 
 The first green implementation pushed the callback environment owner above
 1,200 lines. Format-specific discovery and parsing were therefore extracted
-into `program/format_environment.rs`; `program/environment.rs` is 896 lines and
-the new cohesive owner is 369 lines after formatting. A cheap import prefilter
+into `program/format_environment.rs`; `program/environment.rs` is 902 lines and
+the new cohesive owner is 376 lines after formatting. A cheap import prefilter
 also avoids lifting targets in binaries that cannot contain this contract.
 Shared state transfer, call-site discovery, and prototype facts remain owned by
 the program environment rather than duplicated.
