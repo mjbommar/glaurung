@@ -1417,3 +1417,69 @@ and `git diff --check` pass. Repository-wide Ruff and `ty` remain baseline-red
 on pre-existing Python debt and were not rewritten as success. Earlier build
 attempts that exhausted the disk quota were discarded and not credited; the
 successful Rust run used a clean, reproducible no-debuginfo target.
+
+## 20:30–21:20 — Thumb leaf-frame ownership and fresh stripped replay
+
+The distance-one TypeMatch census was recomputed from the metric checkpoints,
+not inferred from aggregate scores. Two repeated near misses (`try_help` at O0
+and O2) require caller-site program evidence because the callee only forwards
+its first argument through a variadic call. `balance` requires an aggregate
+environment to recover `COLUMN *` rather than merely `int *`. Those rows are
+therefore evidence for the program-level type and aggregate epics, not safe
+intraprocedural width tweaks.
+
+The nearest ARM row exposed a separate real correctness defect. GCC's Thumb O0
+leaf prologue may save only `r7`, without saving `lr`. `recognise_arm32_frame`
+therefore declined the prologue, stack promotion named the save at
+entry-SP-minus-four `local_4`, and the restore used the separate `stack_top`
+coordinate. The dead-spill owner could not pair those names and emitted an
+uninitialized source assignment such as `local_4 = var0`.
+
+The retained repair teaches callee-saved-spill pruning that an unread promoted
+`local_*` whose exact source is an ARM callee-saved core register (`r4` through
+`r11`, including `fp`) is machine-frame state. It deliberately does not remove
+an otherwise identical `local_4 = r0`. RED tests covered both cases before the
+implementation, and a real `arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -O0`
+integration fixture reproduces the leaf prologue and verifies that the real
+signed-byte source local remains while the fake frame local disappears.
+
+A new external-kit replay again started from an empty `results/` directory and
+returned 250/250 functions across 224/224 binaries with zero extraction
+failures. The package SHA-256 is
+`f1a6d649af6a7bbfd74cc00e8b8c8778f254a85811c499522928ffe202bad4c2`;
+the diagnostic ledger SHA-256 is
+`3ac506710395fe3e15059583b8c3f665121b420943dafad769867e3d0e29e89f`.
+Thirty-four stripped ARM outputs changed. Fresh ingestion used a new
+`glaurung-leaf-frame` column in an independent score-tree copy, so neither the
+old Glaurung checkpoint values nor the old generated C could satisfy the run.
+
+| Metric | Previous | Leaf-frame candidate | Delta |
+|---|---:|---:|---:|
+| TypeMatch coverage | 235 / 250 | 235 / 250 | 0 |
+| TypeMatch perfect / mean / median | 15 / 0.213917 / 0.083333 | 15 / 0.212873 / 0.083333 | 0 / -0.001044 / 0 |
+| ByteMatch coverage | 250 / 250 | 250 / 250 | 0 |
+| ByteMatch perfect / mean / median | 7 / 0.235539 / 0.216542 | 8 / 0.247425 / 0.219375 | +1 / +0.011885 / +0.002833 |
+| recompiles / zero ByteMatch rows | 242 / 55 | 242 / 53 | 0 / -2 |
+
+ByteMatch changes on 26 rows: 21 improve and five regress. The new exact byte
+match is FreeRTOS `vApplicationGetIdleTaskMemory`; it was already GED-perfect,
+so the honest union remains 71/250 (`28.4%`) and the projected placement remains
+sixth. TypeMatch gives back `0.20` on
+`libopencm3:usb_control_request_dispatch` and `0.04545` on RIOT-OS
+`hard_fault_handler`; both losses arise because a machine-frame declaration no
+longer accidentally participates in source-variable alignment, and neither
+loses a perfect. The evaluator's stack-shift calibration also continues to
+align `console_getc`'s true byte local against the already-position-matched
+argument, leaving its TypeMatch at `0.5` despite the emitted-C correction.
+
+The materialized scoring tree contains no preprocessed `.i`/`.ii` inputs, so
+the fresh inline evaluator correctly produced no GED column. The last accepted
+published-source CFG ledger remains 239 measured, 60 perfect, mean `32.3640`,
+median `10.0`; it is retained as prior evidence rather than relabeled as a fresh
+GED run. Full Rust verification passes 1,953 library tests plus every integration
+target, and the six-lane architecture ratchet still matches exactly at 1,758
+pass / 42 known fail / 228 structural / zero lane errors / six declared
+unsupported. Rust and Python formatting, `git diff --check`, the focused real
+Thumb test, and targeted Ruff are clean. Targeted `ty` remains baseline-red with
+30 existing diagnostics in `test_cli_decompile.py`; none points into the new
+fixture.

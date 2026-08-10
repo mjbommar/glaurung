@@ -808,6 +808,75 @@ def test_real_arm_stack_backed_float_round_trip(tmp_path: Path) -> None:
     assert rebuilt_run.stdout == reference_run.stdout
 
 
+def test_real_thumb_leaf_frame_save_does_not_become_a_source_local(
+    tmp_path: Path,
+) -> None:
+    """A leaf ``push {r7}`` is frame state, not an uninitialized C local.
+
+    GCC's Cortex-M O0 leaf frame saves r7 without lr, then restores r7 through
+    the entry stack boundary rather than reading the promoted save-slot name.
+    This is the exact machine-frame shape used by DecBench's ``console_getc``.
+    """
+    compiler = shutil.which("arm-none-eabi-gcc")
+    if compiler is None:
+        pytest.skip("arm-none-eabi-gcc is unavailable")
+
+    source = tmp_path / "thumb_leaf_frame.c"
+    binary = tmp_path / "thumb_leaf_frame.elf"
+    source.write_text(
+        "volatile unsigned int read_index;\n"
+        "volatile unsigned int write_index;\n"
+        "volatile unsigned char input[128];\n"
+        "__attribute__((noinline)) int thumb_leaf_frame(int wait) {\n"
+        "    signed char value = 0;\n"
+        "    while (wait && read_index == write_index) {}\n"
+        "    if (read_index != write_index) {\n"
+        "        value = (signed char)input[read_index];\n"
+        "        read_index = (read_index + 1) & 127;\n"
+        "    }\n"
+        "    return value;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [
+            compiler,
+            "-mcpu=cortex-m4",
+            "-mthumb",
+            "-mfloat-abi=soft",
+            "-nostdlib",
+            "-Wl,-Ttext=0x1000",
+            "-Wl,-e,thumb_leaf_frame",
+            "-g",
+            "-O0",
+            "-o",
+            str(binary),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=32)
+    target = next(
+        (function for function in functions if function.name == "thumb_leaf_frame"),
+        None,
+    )
+    assert target is not None, functions
+    generated = g.ir.decompile_at(
+        str(binary),
+        int(target.entry_point.value),
+        style="decbench",
+        timeout_ms=8000,
+    )
+
+    assert "thumb_leaf_frame(int arg0)" in generated, generated
+    assert "signed char value;" in generated, generated
+    assert "local_4" not in generated, generated
+    assert "= var0;" not in generated, generated
+
+
 def test_real_arm32_byte_spills_recover_narrow_parameters(tmp_path: Path) -> None:
     """Use AAPCS spill width and reload extension to recover byte arguments."""
     compiler = shutil.which("arm-none-eabi-gcc")

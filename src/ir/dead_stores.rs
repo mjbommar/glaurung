@@ -237,13 +237,17 @@ pub fn prune_callee_saved_spills(f: &mut Function) {
         match stmt {
             Stmt::Assign {
                 dst,
-                src: Expr::Reg(_),
-            } if is_saved_frame_slot(dst) => Some(dst.clone()),
+                src: Expr::Reg(source),
+            } if is_saved_frame_slot(dst) || is_arm_saved_register_local(dst, source) => {
+                Some(dst.clone())
+            }
             Stmt::Store {
                 addr: Expr::Reg(slot),
-                src: Expr::Reg(_),
+                src: Expr::Reg(source),
                 ..
-            } if is_saved_frame_slot(slot) => Some(slot.clone()),
+            } if is_saved_frame_slot(slot) || is_arm_saved_register_local(slot, source) => {
+                Some(slot.clone())
+            }
             _ => None,
         }
     };
@@ -436,6 +440,35 @@ fn is_stack_pointer(v: &VReg) -> bool {
 /// boundary rather than a storage location.
 fn is_saved_frame_slot(v: &VReg) -> bool {
     matches!(v, VReg::Phys(name) if name.starts_with("stack_") && name != "stack_top")
+}
+
+/// Whether a promoted `local_*` is the entry-stack save of an ARM callee-saved
+/// core register.
+///
+/// Stack coordinates deliberately name storage below the entry SP `local_*`.
+/// That is normally source-local territory, but Thumb leaf prologues put the
+/// `push {r7}` save at exactly `entry_sp - 4` and may omit LR entirely.  The
+/// corresponding restore is represented through `stack_top`, so the ordinary
+/// spill/restore pairing cannot see the shared slot name.  Restricting this
+/// exception to an architectural callee-saved source keeps an arbitrary
+/// `local_4 = r0` source spill outside the machine-frame cleanup.
+fn is_arm_saved_register_local(slot: &VReg, source: &VReg) -> bool {
+    let VReg::Phys(slot_name) = slot else {
+        return false;
+    };
+    let VReg::Phys(source_name) = source else {
+        return false;
+    };
+    if !slot_name.starts_with("local_") {
+        return false;
+    }
+    let base = crate::ir::abi::ssa_base(source_name);
+    if base == "fp" {
+        return true;
+    }
+    base.strip_prefix('r')
+        .and_then(|index| index.parse::<u8>().ok())
+        .is_some_and(|index| (4..=11).contains(&index))
 }
 
 pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
@@ -1015,6 +1048,64 @@ mod tests {
         prune_callee_saved_spills(&mut f);
         assert_eq!(f.body.len(), 2, "spill/restore pair survived: {:?}", f.body);
         assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("rax")));
+    }
+
+    /// A Thumb leaf function can save only r7, without lr.  Stack-coordinate
+    /// recovery names that entry-SP-minus-four slot `local_4`, not `stack_0`:
+    /// it is below the caller's entry stack pointer even though its semantic
+    /// owner is the machine frame.  The value is restored through `stack_top`,
+    /// so the save slot itself has no reader and must not survive as a fake C
+    /// local.
+    #[test]
+    fn unread_arm_frame_register_save_in_local_slot_is_removed() {
+        let mut f = Function {
+            name: "thumb_leaf".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_4"),
+                    src: Expr::Reg(reg("r7")),
+                },
+                Stmt::Assign {
+                    dst: reg("result"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("result"))),
+                },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f);
+
+        assert_eq!(f.body.len(), 2, "leaf r7 save survived: {:#?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("result")));
+    }
+
+    /// A source value stored in an otherwise similarly named local is not
+    /// machine-frame evidence.  The ARM fix must key off the saved-register
+    /// provenance rather than deleting arbitrary unread source locals.
+    #[test]
+    fn unread_non_frame_value_in_local_slot_is_kept() {
+        let mut f = Function {
+            name: "source_local".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_4"),
+                    src: Expr::Reg(reg("r0")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            2,
+            "source local was mistaken for a frame save"
+        );
     }
 
     /// If the restored register IS observed, the pair is real state and must

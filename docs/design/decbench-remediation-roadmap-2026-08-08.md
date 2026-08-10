@@ -379,6 +379,15 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   mean `32.3640`; the combined union is 71/250 (`28.4%`), a projected sixth on
   the pinned public snapshot. This is external-score evidence, unlike the
   debug-assisted DWARF replay above.
+- [x] Remove Thumb leaf-frame saves that survive as fake source locals when a
+  prologue saves `r7` without `lr`. The shared dead-spill owner now recognizes
+  only unread promoted locals with exact ARM callee-saved provenance; an `r0`
+  negative control and a real Cortex-M Thumb fixture prevent broad local
+  deletion. A fresh 250-function stripped replay changes 34 ARM outputs,
+  increases ByteMatch perfects 7 to 8 and mean 0.235539 to 0.247425, retains all
+  242 recompiles, and leaves the union at 71 because the new byte-perfect row was
+  already GED-perfect. TypeMatch's small mean tradeoff and the unavailable fresh
+  GED column are recorded explicitly in the diary.
 - [ ] Convert the new compile-coverage gain into exact wins without weakening
   the boundary contracts. The highest-leverage immediate cohort is the 28
   newly nonzero ByteMatch rows, especially `copy_reg`, `yyparse`,
