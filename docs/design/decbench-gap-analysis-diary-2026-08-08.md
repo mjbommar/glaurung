@@ -2248,3 +2248,107 @@ passing, 44 skipped, and only the same four cross-sample `suspicious_win`
 content failures recorded in the preceding increments. Focused canary tests and
 Ruff format/lint pass; focused `ty` retains exactly the two pre-existing missing
 `pytest`-stub diagnostics. `cargo fmt --check` and `git diff --check` are clean.
+
+## 14:05–15:45 — separate ABI may-uses from proven call inputs
+
+The next TypeMatch target exposed a missing program-level contract rather than
+another spelling problem. In the stripped OpenSSH `ssh_agent_sign` chain, an
+optimized wrapper leaves its first argument untouched in `rdi`, sets the later
+arguments, and forwards all three to a project-local callee. The old choices
+were both wrong: ignoring a conservative call recovered too few source inputs,
+while treating all six SysV argument registers as reads invented parameters.
+
+`CallEffects` now represents those two truths separately. `args` remains the
+complete convention-wide may-use set, preserving sound liveness and dead-code
+elimination. `proven_args` is a positive subset recovered from the callee's
+definition and is the only non-exact call evidence consumed by signature and
+parameter-view recovery. Exact catalog/declaration contracts continue to prove
+all of their listed inputs. One shared `use_is_proven_input` query replaces the
+previous whole-call exclusions in value numbering, integer parameter recovery,
+and ARM VFP recovery, so those consumers cannot drift on what a call proves.
+The recovered facts are attached before SSA in every public decompilation path,
+and exact SSA identity carries a callee's pointer/scalar type back through an
+untouched forwarding value without crossing an explicit conversion.
+
+The first corpus replay found a real safety failure before the change was
+accepted. `dpkg-statoverride`'s stripped `statdb_write(void)` became a six-
+parameter function through a local variadic diagnostic helper. Its SysV
+`va_list` prologue saved the unnamed register suffix; recursive recovery
+mistook those optional values for fixed source parameters, then propagated the
+mistake through allocation/error wrappers. The retained repair recognizes a
+variadic prologue only when both adjacent ABI `gp_offset`/`fp_offset` constants
+and the complete consecutive register-save suffix agree. It propagates only
+the named fixed prefix and leaves actual optional arguments to call-site
+reconstruction. A second fail-closed ABI rule rejects recovered SysV fixed
+layouts after their first register hole. That turns impossible layouts such as
+`[rdi, r8]` into the one proven prefix argument and `[rsi]` into no contract,
+instead of recursively laundering caller-saved residue into a signature.
+
+The exact official binary at `bin_174.elf:0x4800` now renders
+`void sub_4800(void)` again. Its local no-argument helper is declared and called
+with no parameters, while legitimate one- and two-argument callees retain their
+contracts. Real stripped GCC fixtures cover the three-function pass-through,
+the variadic register-save chain, pointer forwarding, and both integer and
+pointer conversion boundaries. Rust tests separately prove that all six ABI
+may-uses remain visible to def/use analysis while only the recovered subset is
+source-signature evidence, and that SysV fixed evidence stops at a register
+hole. Two adjacent correctness repairs also keep a reused stack-parameter home
+from swallowing a later status value and recover known scalar pointee widths
+from qualified C pointer spellings.
+
+The cohesive demand-driven callee analysis moved out of the binding
+orchestrator into `python_bindings/ir/callee_contracts.rs` (629 lines).
+`python_bindings/ir.rs` falls from 3,969 to 3,731 lines at this revision; the new
+owner contains definition discovery, bounded grandcallee facts, recovered
+prototype construction, variadic classification, and pass-through refinement
+rather than forwarding wrappers.
+
+A fresh empty-kit replay at
+`/tmp/glaurung-fixed-args.h1FbdZ` emitted 250/250 requested functions from all
+224/224 stripped binaries with zero failures. `package.py` accepted the archive
+and `unzip -t` found no error. The worktree-candidate archive SHA-256 is
+`3fd7680cef4fb062380b471bb299edc276c0fc653307b99b3452424bc54bb223`;
+the result manifest is
+`d5b7722e10911567dd108568171fb8b4ef201ffd335600991848143cf679cd1d`,
+and the diagnostic ledger is
+`670461dfde5d3977c3aaf4d96616268bb6850d17bd79e69208961b309896cff9`.
+Extraction took 65.680 seconds wall time at 12 workers, with
+2.854/3.272/21.676-second per-binary median/mean/maximum. Exactly 100 generated
+C files differ from the accepted `22a3edc` package, so the evaluation below is
+the full candidate column, not a hand-picked changed-row sample.
+
+Fresh official-metric evaluation from that package gives:
+
+| Metric | Coverage | Perfect | Mean | Median | Zero |
+|---|---:|---:|---:|---:|---:|
+| TypeMatch, higher is better | 235 | 20 | `0.232220` | `0.083333` | 94 |
+| corrected ByteMatch, higher is better | 250 | 14 | `0.302747` | `0.258810` | 36 |
+| source-CFG GED, lower is better | 243 | 63 | `22.670782` | `10.0` | 63 |
+
+ByteMatch recompiles 243/250 functions. The exact any-metric union is 77/250
+(`30.8%`). Against the accepted dispatch package under the same fresh
+TypeMatch/ByteMatch evaluation, TypeMatch rises from `0.225172` and ByteMatch
+from `0.301802`. Against the unsafe pre-prefix candidate, GED improves four
+rows, regresses none, and falls from `22.744856`; TypeMatch also rises from
+`0.231031`, and ByteMatch from `0.302227`. The current TypeMatch is slightly
+above the cited Ghidra `0.231` comparison, while GED remains about 2.24 edits
+behind the cited Ghidra `20.43`. These are projected external results, not a
+claim that PR #56 is merged or that the live board has recomputed every other
+tool under the same current metric code. The Phase-1 TypeMatch and ByteMatch
+targets are met; the GED target of at most 20 remains open.
+
+The full Rust suite passes 1,981 library tests and every integration target.
+The complete real decompiler fixture file passes. The six-lane architecture
+ratchet matches its baseline exactly at 1,758 pass / 42 known fail / 228
+structural / zero lane errors. Both executable behavior corpora pass every
+required legacy and curriculum case, and the cache-disabled score campaign
+reports no per-cell GED, TypeMatch, or ByteMatch regression across all 56/56
+cells. Focused Ruff lint is clean; the test file's repository-wide formatting
+debt and direct-file `ty` import/stub diagnostics predate this block. `cargo fmt
+--check` and `git diff --check` are clean. The repository-wide Python run
+collected 2,930 tests and retained exactly the established baseline: 2,882
+passed, 44 skipped, and the same four cross-sample `suspicious_win` content
+failures. Repository-wide static checks remain baseline-red outside this lane:
+Ruff reports 3,509 existing findings and `ty` reports 1,939 diagnostics. The
+exact committed-revision package is recorded after the remaining release step
+rather than inferred from the worktree candidate.

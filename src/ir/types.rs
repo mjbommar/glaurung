@@ -256,6 +256,14 @@ pub struct CallEffects {
     /// USES: without them the argument setup looks dead, and the value model renames
     /// it out from under argument reconstruction.
     pub args: Vec<VReg>,
+    /// Argument registers proven to be semantic inputs by a recovered callee
+    /// contract, while `args` remains the convention-wide conservative may-use
+    /// set required for sound liveness.
+    ///
+    /// This is deliberately a subset rather than an arity.  It lets signature
+    /// and type recovery consume positive evidence without claiming that an
+    /// incomplete recovered contract names every register the callee may read.
+    pub proven_args: Vec<VReg>,
     /// Whether `args` is an exact callee contract rather than the convention's
     /// conservative may-read set.
     ///

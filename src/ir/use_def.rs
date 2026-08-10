@@ -20,6 +20,47 @@ use std::collections::HashMap;
 
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, VReg, Value};
 
+fn same_machine_register(left: &VReg, right: &VReg) -> bool {
+    match (left, right) {
+        (VReg::Phys(left), VReg::Phys(right)) => {
+            let left = crate::ir::abi::ssa_base(left);
+            let right = crate::ir::abi::ssa_base(right);
+            crate::ir::ssa::parent64(left).unwrap_or(left)
+                == crate::ir::ssa::parent64(right).unwrap_or(right)
+        }
+        _ => left == right,
+    }
+}
+
+/// Whether a use reported by [`def_uses`] is positive source-level evidence.
+///
+/// Calls conservatively report every ABI argument register as a may-use so
+/// liveness and DCE cannot delete a real argument setup.  Those may-uses are
+/// not all proof that the caller has corresponding parameters.  A recovered
+/// callee contract records the proven subset separately; exact contracts prove
+/// every listed argument.  Indirect call targets and all non-call operands are
+/// genuine reads.
+pub fn use_is_proven_input(op: &Op, use_index: usize) -> bool {
+    let Op::Call { target, effects } = op else {
+        return true;
+    };
+    let target_uses = usize::from(matches!(target, CallTarget::Indirect(Value::Reg(_))));
+    if use_index < target_uses {
+        return true;
+    }
+    let Some(effects) = effects else {
+        return false;
+    };
+    let Some(argument) = effects.args.get(use_index - target_uses) else {
+        return false;
+    };
+    effects.args_are_exact
+        || effects
+            .proven_args
+            .iter()
+            .any(|proven| same_machine_register(proven, argument))
+}
+
 /// Address of an op within a function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InstrAddr {

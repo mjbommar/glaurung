@@ -467,6 +467,22 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   `0.266667→0.316667`. `vipw`'s individually worse GED is retained as a named
   metric/source-shape tradeoff because its previously omitted 34-slot machine
   switch is now explicit and recompilable.
+- [x] Separate conservative ABI call may-uses from definition-proven source
+  inputs. `CallEffects.args` continues to protect liveness while a distinct
+  `proven_args` subset feeds signature and type recovery through one shared
+  query. Bounded grandcallee facts recover the real OpenSSH untouched-leading-
+  argument shape; exact SSA identity propagates its type without crossing
+  integer conversions. SysV variadic register-save areas propagate only their
+  named prefix, and impossible fixed layouts stop at the first register hole,
+  repairing the caught `statdb_write(void)` regression instead of hiding it in
+  the aggregate. Callee analysis now has a cohesive 629-line owner and reduces
+  the binding orchestrator from 3,969 to 3,731 lines. A fresh 224/224,
+  250/250 stripped replay scores TypeMatch `0.232220` (20 perfect), corrected
+  ByteMatch `0.302747` (14 perfect, 243 compilable), and GED `22.670782` (63
+  perfect over 243); the exact union is 77/250. TypeMatch and ByteMatch clear
+  their Phase-1 targets, while GED remains above its at-most-20 target. All
+  56 metric cells, both executable corpora, the 1,758/42 architecture ratchet,
+  and 1,981 Rust library tests retain their required results.
 - [ ] Convert the new compile-coverage gain into exact wins without weakening
   the boundary contracts. The highest-leverage immediate cohort is the 28
   newly nonzero ByteMatch rows, especially `copy_reg`, `yyparse`,

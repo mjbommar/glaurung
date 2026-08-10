@@ -232,6 +232,32 @@ pub fn argument_slot_of(cc: CallConv, name: &str) -> Option<usize> {
         .position(|names| names.contains(&canon))
 }
 
+/// Length of the source-level fixed-parameter prefix proven by recovered storage.
+///
+/// SysV AMD64 allocates fixed general-purpose parameters consecutively through
+/// `rdi, rsi, rdx, rcx, r8, r9`.  Definition-site liveness can miss an unused
+/// parameter, but a later live register does not prove the missing parameter or
+/// any register after it.  Stop at the first hole instead of turning unrelated
+/// caller-saved residue into a fixed source signature.  Other conventions keep
+/// their existing layouts: AAPCS hard-float has independent allocation banks,
+/// and their recovery needs richer class-aware ordering than a single prefix.
+pub(crate) fn fixed_parameter_prefix_len(cc: CallConv, recovered: &[VReg]) -> usize {
+    if cc != CallConv::SysVAmd64 {
+        return recovered.len();
+    }
+
+    let recovered_slots = recovered
+        .iter()
+        .filter_map(|register| match register {
+            VReg::Phys(name) => argument_slot_of(cc, name),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    (0..argument_slots(cc).len())
+        .take_while(|slot| recovered_slots.contains(slot))
+        .count()
+}
+
 /// Whether a register name is the return register, tolerating the same spellings.
 pub fn is_return_register(cc: CallConv, name: &str) -> bool {
     return_registers(cc).contains(&ssa_base(name))
@@ -252,6 +278,7 @@ pub fn call_effects(cc: CallConv) -> CallEffects {
             .iter()
             .map(|n| VReg::phys(*n))
             .collect(),
+        proven_args: Vec::new(),
         args_are_exact: false,
         is_tail_call: false,
     }
@@ -443,6 +470,7 @@ mod tests {
                 result: Some(VReg::phys("rax")),
                 result_is_source_value: true,
                 args: vec![VReg::phys("rdi")],
+                proven_args: Vec::new(),
                 args_are_exact: true,
                 is_tail_call: false,
             });
@@ -517,6 +545,25 @@ mod tests {
         assert_eq!(argument_slot_of(CallConv::Win64, "rdi"), None);
         assert_eq!(argument_slot_of(CallConv::Win64, "rcx"), Some(0));
         assert_eq!(argument_slot_of(CallConv::SysVAmd64, "rcx"), Some(3));
+    }
+
+    #[test]
+    fn sysv_recovered_fixed_parameters_stop_at_the_first_register_hole() {
+        let recovered = vec![
+            VReg::phys("rdi"),
+            VReg::phys("rsi"),
+            VReg::phys("r8"),
+            VReg::phys("r9"),
+        ];
+
+        assert_eq!(
+            fixed_parameter_prefix_len(CallConv::SysVAmd64, &recovered),
+            2
+        );
+        assert_eq!(
+            fixed_parameter_prefix_len(CallConv::Win64, &recovered),
+            recovered.len()
+        );
     }
 
     /// The return register is the widest spelling, and the alias list leads with it.

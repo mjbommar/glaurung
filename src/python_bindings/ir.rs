@@ -22,11 +22,17 @@
 //! This matches the Rust `Display` impl so the Python output round-trips
 //! through tests.
 
+mod callee_contracts;
 mod dwarf_contracts;
 mod session;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+
+use callee_contracts::{
+    apply_recovered_direct_callee_effects, recover_direct_callee_layouts, recovered_call_prototype,
+    refine_passthrough_parameter_hints, DirectCalleeFacts,
+};
 
 #[cfg(test)]
 use dwarf_contracts::dwarf_return_hint;
@@ -445,6 +451,22 @@ fn run_ast_passes(
         crate::ir::types_recover::RecoveredOutputKind::Unknown,
         crate::ir::types_recover::RecoveredPrototype::output_kind,
     );
+    // A recovered variadic callee layout names only its fixed prefix. Passing
+    // that prefix to the fixed-layout folder would truncate genuine optional
+    // arguments already set up at this call site. Let the ordinary backward
+    // call scan recover the actual argument count; the prototype applied in
+    // the next pass preserves the fixed types and variadic tail.
+    let reconstruction_layouts = callee_facts
+        .layouts
+        .iter()
+        .filter(|(target, _)| {
+            !callee_facts
+                .prototypes
+                .get(target)
+                .is_some_and(|prototype| prototype.variadic)
+        })
+        .map(|(target, layout)| (*target, layout.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
     let parameter_roles = prototype
         .map(crate::ir::types_recover::RecoveredPrototype::parameter_role_map)
         .unwrap_or_default();
@@ -500,7 +522,7 @@ fn run_ast_passes(
             f,
             cc,
             param_slots,
-            &callee_facts.layouts,
+            &reconstruction_layouts,
         );
     });
     // ABI liveness supplies candidate call inputs/outputs; an authoritative
@@ -948,6 +970,21 @@ pub(super) fn decompile_at_session(
     let mut lf_raw = lf_raw;
     inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
     annotate_calls_in(&mut lf_raw, cc, &addr_map);
+    let mut callee_layout_cache = std::collections::HashMap::new();
+    let callee_facts = recover_direct_callee_layouts(
+        &image,
+        &funcs,
+        &lf_raw,
+        arch,
+        cc,
+        arm_vfp_args,
+        &budgets,
+        dwarf_outputs.as_ref(),
+        dwarf_type_env.as_ref(),
+        &mut addr_map,
+        &mut callee_layout_cache,
+    );
+    apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
     // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
     // -> `rdi`) so def/use versions line up for value correctness. But the
     // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
@@ -980,25 +1017,15 @@ pub(super) fn decompile_at_session(
         numbered: lf,
         definition_widths,
         parameter_slots: mut param_slots,
-        prototype,
+        mut prototype,
     } = prepared_llir;
+    if let Some(prototype) = prototype.as_mut() {
+        let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
+        refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
+    }
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
     }
-    let mut callee_layout_cache = std::collections::HashMap::new();
-    let callee_facts = recover_direct_callee_layouts(
-        &image,
-        &funcs,
-        &lf_raw,
-        arch,
-        cc,
-        arm_vfp_args,
-        &budgets,
-        dwarf_outputs.as_ref(),
-        dwarf_type_env.as_ref(),
-        &mut addr_map,
-        &mut callee_layout_cache,
-    );
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
@@ -1915,281 +1942,6 @@ fn locked_parameter_count(
         .map(|prototype| prototype.parameters().len())
 }
 
-#[derive(Debug, Default)]
-struct DirectCalleeFacts {
-    layouts: std::collections::HashMap<u64, Vec<crate::ir::types::VReg>>,
-    prototypes: std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
-}
-
-fn imported_symbol_base(name: &str) -> &str {
-    name.strip_suffix("@plt")
-        .or_else(|| name.strip_suffix(".plt"))
-        .unwrap_or(name)
-}
-
-fn defined_text_symbol_address(
-    image: &crate::program::image::ProgramImage,
-    name: &str,
-) -> Option<u64> {
-    image.defined_text_symbol_address(name)
-}
-
-/// Fixed Itanium C++ runtime layouts whose imported PLT stubs have no body from
-/// which parameter liveness can be recovered.
-///
-/// In particular, `__cxa_throw(object, typeinfo, destructor)` must retain all
-/// three setup registers. Without this layout x1/x2 are dead before final
-/// exception recovery, `_ZTIi` disappears, and the ABI call cannot become a
-/// source-level `throw int`.
-fn itanium_runtime_layout(
-    name: &str,
-    cc: crate::ir::call_args::CallConv,
-) -> Option<Vec<crate::ir::types::VReg>> {
-    let clean = imported_symbol_base(name);
-    let arity = match clean {
-        "__cxa_allocate_exception" | "__cxa_begin_catch" => 1,
-        "__cxa_throw" => 3,
-        "__cxa_end_catch" => 0,
-        _ => return None,
-    };
-    if cc == crate::ir::call_args::CallConv::Cdecl32 {
-        // cdecl arguments are reconstructed from stack pushes, not registers.
-        return None;
-    }
-    Some(
-        crate::ir::abi::argument_slots(cc)
-            .iter()
-            .take(arity)
-            .map(|slot| crate::ir::types::VReg::phys(slot[0]))
-            .collect(),
-    )
-}
-
-fn recovered_call_prototype(
-    prototype: &crate::ir::types_recover::RecoveredPrototype,
-    cc: crate::ir::call_args::CallConv,
-) -> crate::ir::call_contracts::CallPrototype {
-    use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
-    use crate::ir::types::VReg;
-    use crate::ir::types_recover::RecoveredOutputKind;
-
-    fn storage_fallback(register: &VReg) -> &'static str {
-        match register {
-            VReg::Phys(name) if name.starts_with('s') => "float",
-            VReg::Phys(name) if name.starts_with('d') => "double",
-            _ => "long",
-        }
-    }
-
-    let parameter_types = prototype
-        .parameters()
-        .iter()
-        .map(|parameter| {
-            parameter
-                .hint
-                .map(|hint| {
-                    crate::ir::types_recover::c_type_for_hint_with_pointer_width(
-                        hint,
-                        calling_convention_pointer_width(cc),
-                    )
-                })
-                .unwrap_or_else(|| storage_fallback(&parameter.value.base))
-                .to_string()
-        })
-        .collect();
-    let return_type = match prototype.output_kind() {
-        RecoveredOutputKind::Void => "void",
-        RecoveredOutputKind::Direct => prototype
-            .result()
-            .and_then(|result| result.hint)
-            .map(|hint| {
-                crate::ir::types_recover::c_type_for_hint_with_pointer_width(
-                    hint,
-                    calling_convention_pointer_width(cc),
-                )
-            })
-            .or_else(|| {
-                prototype
-                    .result()
-                    .and_then(|result| result.values.first())
-                    .map(|value| storage_fallback(&value.base))
-            })
-            .unwrap_or("long"),
-        RecoveredOutputKind::Unknown | RecoveredOutputKind::HiddenReturn => "long",
-    };
-    CallPrototype {
-        return_type: return_type.to_string(),
-        parameter_types,
-        variadic: false,
-        authority: CallPrototypeAuthority::Recovered,
-    }
-}
-
-/// Whether a direct callee's empty recovered argument layout is authoritative.
-///
-/// Machine-code liveness can miss parameters, so an empty inferred layout is
-/// normally not safe to impose on a caller. A DWARF `DW_AT_prototyped` function
-/// with no formal parameters is different: it proves a genuine `f(void)`
-/// declaration, and its return contract must not be discarded merely because
-/// there are no argument registers to record.
-fn retain_empty_direct_callee_layout(declared: Option<&DwarfPrototypeContract>) -> bool {
-    declared.is_some_and(|contract| contract.prototyped && contract.parameter_types.is_empty())
-}
-
-/// Recover the source-ordered physical parameter storage and prototype of direct callees.
-///
-/// This is intentionally demand-driven and cached. AAPCS-VFP callsites need
-/// cross-function prototype evidence to interleave core and VFP registers; the
-/// other conventions need the same callee-local evidence for parameter types
-/// that a forwarding caller cannot prove itself. Lifting every discovered
-/// function up front would double the dominant cost of large-binary
-/// decompilation, so only callees of the function currently being rendered are
-/// analyzed and repeated callees in batch modes reuse the result.
-fn recover_direct_callee_layouts(
-    image: &crate::program::image::ProgramImage,
-    functions: &[crate::core::function::Function],
-    caller: &crate::ir::types::LlirFunction,
-    arch: crate::core::binary::Arch,
-    cc: crate::ir::call_args::CallConv,
-    arm_vfp_args: bool,
-    budgets: &crate::analysis::cfg::Budgets,
-    dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
-    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
-    address_names: &mut std::collections::HashMap<u64, String>,
-    cache: &mut std::collections::HashMap<
-        u64,
-        Option<(
-            Vec<crate::ir::types::VReg>,
-            crate::ir::call_contracts::CallPrototype,
-            String,
-        )>,
-    >,
-) -> DirectCalleeFacts {
-    use crate::ir::lift_function::lift_function_from_image;
-    use crate::ir::ssa::compute_ssa;
-
-    let mut facts = DirectCalleeFacts::default();
-    let callees: std::collections::BTreeSet<u64> = caller
-        .blocks
-        .iter()
-        .flat_map(|block| block.instrs.iter())
-        .filter_map(|instruction| match instruction.op {
-            crate::ir::types::Op::Call {
-                target: crate::ir::types::CallTarget::Direct(address),
-                ..
-            } => Some(address),
-            _ => None,
-        })
-        .collect();
-    let dump = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
-    if dump {
-        eprintln!("\n===== direct callee candidates =====\n{callees:#x?}");
-    }
-    for callee_va in callees {
-        if let Some(layout) = address_names
-            .get(&callee_va)
-            .and_then(|name| itanium_runtime_layout(name, cc))
-        {
-            facts.layouts.insert(callee_va, layout);
-            continue;
-        }
-        // PIC code commonly calls a local exported definition through its PLT
-        // entry.  The stub has no parameter evidence, but the same binary's
-        // real `signed_step`/etc. body does. Resolve that body by the imported
-        // symbol name while keeping facts keyed by the call instruction's
-        // actual target address.
-        let body_va = address_names
-            .get(&callee_va)
-            .map(|name| imported_symbol_base(name))
-            .and_then(|name| {
-                defined_text_symbol_address(image, name).or_else(|| {
-                    functions
-                        .iter()
-                        .find(|function| {
-                            let entry = function.entry_point.value;
-                            function.name == name
-                                || [entry, entry | 1].into_iter().any(|address| {
-                                    address_names.get(&address).is_some_and(|resolved| {
-                                        imported_symbol_base(resolved) == name
-                                    })
-                                })
-                        })
-                        .map(|function| function.entry_point.value)
-                })
-            })
-            .unwrap_or(callee_va);
-        let body_va = image.normalize_function_entry(body_va);
-        if dump {
-            eprintln!(
-                "callee 0x{callee_va:x} {:?} -> body 0x{body_va:x}",
-                address_names.get(&callee_va)
-            );
-        }
-        let recovered = cache
-            .entry(callee_va)
-            .or_insert_with(|| {
-                let targeted;
-                let callee = match functions
-                    .iter()
-                    .find(|function| function.entry_point.value == body_va)
-                {
-                    Some(callee) => callee,
-                    None => {
-                        targeted = crate::analysis::cfg::discover_function_image_at(
-                            image, budgets, body_va,
-                        )?;
-                        &targeted
-                    }
-                };
-                let mut lifted = lift_function_from_image(image, callee, arch)?;
-                inline_soft_helper_calls_in(&mut lifted, &*address_names);
-                annotate_calls_in(&mut lifted, cc, &*address_names);
-                let ssa = compute_ssa(&lifted);
-                let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(&lifted, cc);
-                let prototype = recover_decbench_prototype(
-                    &lifted,
-                    &ssa,
-                    cc,
-                    &parameter_slots,
-                    arm_vfp_args,
-                    dwarf_outputs.and_then(|outputs| outputs.get(&body_va)),
-                    type_env,
-                );
-                let layout: Vec<crate::ir::types::VReg> = prototype
-                    .parameters()
-                    .iter()
-                    .map(|parameter| parameter.value.base.clone())
-                    .collect();
-                let call_prototype = recovered_call_prototype(&prototype, cc);
-                let declared = dwarf_outputs.and_then(|outputs| outputs.get(&body_va));
-                (!layout.is_empty() || retain_empty_direct_callee_layout(declared))
-                    .then(|| (layout, call_prototype, callee.name.clone()))
-            })
-            .clone();
-        if let Some((layout, prototype, name)) = recovered {
-            if dump {
-                eprintln!("callee 0x{callee_va:x}: recovered layout {layout:?}");
-            }
-            match address_names.entry(callee_va) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(name);
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry)
-                    if entry.get().starts_with("sub_") && !name.starts_with("sub_") =>
-                {
-                    entry.insert(name);
-                }
-                std::collections::hash_map::Entry::Occupied(_) => {}
-            }
-            facts.layouts.insert(callee_va, layout);
-            facts.prototypes.insert(callee_va, prototype);
-        } else if dump {
-            eprintln!("callee 0x{callee_va:x}: no recovered layout");
-        }
-    }
-    facts
-}
-
 fn float_expression_width(
     expression: &crate::ir::ast::Expr,
     types: &crate::ir::types_recover::TypeMap,
@@ -2671,6 +2423,20 @@ fn decompile_all_py(
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         annotate_calls_in(&mut lf_raw, cc, &addr_map);
+        let callee_facts = recover_direct_callee_layouts(
+            &image,
+            &funcs,
+            &lf_raw,
+            arch,
+            cc,
+            arm_vfp_args,
+            &budgets,
+            dwarf_outputs.as_ref(),
+            dwarf_type_env.as_ref(),
+            &mut addr_map,
+            &mut callee_layout_cache,
+        );
+        apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(
@@ -2693,8 +2459,12 @@ fn decompile_all_py(
             numbered: lf,
             definition_widths,
             parameter_slots: mut param_slots,
-            prototype,
+            mut prototype,
         } = prepared_llir;
+        if let Some(prototype) = prototype.as_mut() {
+            let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
+            refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
+        }
         let outer_name = resolve_outer_function_name(&func.name, func.entry_point.value, &addr_map);
         let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(
             &outer_name,
@@ -2712,19 +2482,6 @@ fn decompile_all_py(
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func.entry_point.value)),
             cc,
-        );
-        let callee_facts = recover_direct_callee_layouts(
-            &image,
-            &funcs,
-            &lf_raw,
-            arch,
-            cc,
-            arm_vfp_args,
-            &budgets,
-            dwarf_outputs.as_ref(),
-            dwarf_type_env.as_ref(),
-            &mut addr_map,
-            &mut callee_layout_cache,
         );
         let (mut stack_facts, role_names) = run_ast_passes(
             &mut f,
@@ -2916,6 +2673,20 @@ fn decompile_many_py(
         let mut lf_raw = lf_raw;
         inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
         annotate_calls_in(&mut lf_raw, cc, &addr_map);
+        let callee_facts = recover_direct_callee_layouts(
+            &image,
+            &funcs,
+            &lf_raw,
+            arch,
+            cc,
+            arm_vfp_args,
+            &budgets,
+            dwarf_outputs.as_ref(),
+            dwarf_type_env.as_ref(),
+            &mut addr_map,
+            &mut callee_layout_cache,
+        );
+        apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
         // Recover types on the pre-canonicalisation LLIR (sub-register widths
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(
@@ -2938,8 +2709,12 @@ fn decompile_many_py(
             numbered: lf,
             definition_widths,
             parameter_slots: mut param_slots,
-            prototype,
+            mut prototype,
         } = prepared_llir;
+        if let Some(prototype) = prototype.as_mut() {
+            let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
+            refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
+        }
         let outer_name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         let mut profiler =
             crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
@@ -2962,19 +2737,6 @@ fn decompile_many_py(
                 .as_ref()
                 .and_then(|outputs| outputs.get(&func_va)),
             cc,
-        );
-        let callee_facts = recover_direct_callee_layouts(
-            &image,
-            &funcs,
-            &lf_raw,
-            arch,
-            cc,
-            arm_vfp_args,
-            &budgets,
-            dwarf_outputs.as_ref(),
-            dwarf_type_env.as_ref(),
-            &mut addr_map,
-            &mut callee_layout_cache,
         );
         let (mut stack_facts, role_names) = run_ast_passes(
             &mut f,

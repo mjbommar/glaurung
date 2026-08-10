@@ -645,6 +645,9 @@ pub fn refine_call_result_types(function: &Function, types: &mut TypeMap) {
 
 /// Recover a scalar hint from the standalone C spellings stored on call specs.
 pub(crate) fn call_return_hint(c_type: &str) -> Option<TypeHint> {
+    if let Some(pointee_width) = c_pointer_pointee_width(c_type) {
+        return Some(TypeHint::Pointer { pointee_width });
+    }
     match c_type.trim() {
         "float" => Some(TypeHint::Float { width: 4 }),
         "double" | "long double" => Some(TypeHint::Float { width: 8 }),
@@ -688,10 +691,50 @@ pub(crate) fn call_return_hint(c_type: &str) -> Option<TypeHint> {
             signed: false,
             width: 8,
         }),
-        c_type if c_type.ends_with('*') => Some(TypeHint::Pointer { pointee_width: 0 }),
         "void" => None,
         _ => None,
     }
+}
+
+/// Recover a target-independent scalar pointee width from a C pointer spelling.
+///
+/// Machine-sized pointees (`long`, `size_t`, and another pointer), aggregates,
+/// handles, and incomplete types deliberately remain opaque here. Their width
+/// belongs to the active machine/type environment rather than this syntax-only
+/// helper.
+fn c_pointer_pointee_width(c_type: &str) -> Option<u8> {
+    let stars = c_type.bytes().filter(|byte| *byte == b'*').count();
+    if stars == 0 {
+        return None;
+    }
+    if stars != 1 {
+        return Some(0);
+    }
+    let base = c_type
+        .split('*')
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter(|token| !matches!(*token, "const" | "volatile" | "restrict" | "_Atomic"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(match base.as_str() {
+        "char" | "signed char" | "unsigned char" | "int8_t" | "uint8_t" => 1,
+        "short" | "signed short" | "short int" | "signed short int" | "unsigned short"
+        | "unsigned short int" | "int16_t" | "uint16_t" => 2,
+        "int" | "signed" | "signed int" | "unsigned" | "unsigned int" | "float" | "int32_t"
+        | "uint32_t" => 4,
+        "double"
+        | "long long"
+        | "signed long long"
+        | "long long int"
+        | "signed long long int"
+        | "unsigned long long"
+        | "unsigned long long int"
+        | "int64_t"
+        | "uint64_t" => 8,
+        _ => 0,
+    })
 }
 
 /// Exact byte width of a standalone C integer spelling under one data model.
@@ -960,9 +1003,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        apply_known_call_contracts, apply_known_llir_call_contracts, libc_prototypes, lookup,
-        opaque_pointer_typedef, refine_opaque_parameter_types_from_calls, standalone_c_type,
-        CallPrototype, CallPrototypeAuthority,
+        apply_known_call_contracts, apply_known_llir_call_contracts, call_return_hint,
+        libc_prototypes, lookup, opaque_pointer_typedef, refine_opaque_parameter_types_from_calls,
+        standalone_c_type, CallPrototype, CallPrototypeAuthority,
     };
     use crate::ir::ast::{Expr, Function, Stmt};
     use crate::ir::call_args::CallConv;
@@ -979,6 +1022,43 @@ mod tests {
             args,
             dst,
             call_spec: None,
+        }
+    }
+
+    #[test]
+    fn c_pointer_hints_preserve_known_scalar_pointee_widths() {
+        assert_eq!(
+            call_return_hint("const char *"),
+            Some(TypeHint::Pointer { pointee_width: 1 })
+        );
+        assert_eq!(
+            call_return_hint("volatile unsigned short *"),
+            Some(TypeHint::Pointer { pointee_width: 2 })
+        );
+        assert_eq!(
+            call_return_hint("const unsigned int * restrict"),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+        assert_eq!(
+            call_return_hint("double *"),
+            Some(TypeHint::Pointer { pointee_width: 8 })
+        );
+    }
+
+    #[test]
+    fn c_pointer_hints_keep_opaque_and_indirect_pointees_unsized() {
+        for c_type in [
+            "void *",
+            "const struct sshkey *",
+            "FILE *",
+            "char **",
+            "unsigned long *",
+        ] {
+            assert_eq!(
+                call_return_hint(c_type),
+                Some(TypeHint::Pointer { pointee_width: 0 }),
+                "{c_type}"
+            );
         }
     }
 

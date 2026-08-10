@@ -23,7 +23,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::ssa::{SsaInfo, SsaValue};
 use crate::ir::types::{BinOp, LlirFunction, MemOp, Op, VReg, Value};
-use crate::ir::use_def::{def_uses, InstrAddr};
+use crate::ir::use_def::{def_uses, use_is_proven_input, InstrAddr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeHint {
@@ -594,6 +594,31 @@ impl RecoveredPrototype {
             .find(|parameter| parameter.slot == slot)
     }
 
+    /// Refine one recovered parameter through its exact entry-value identity.
+    ///
+    /// A caller that forwards an untouched ABI value to a callee with a
+    /// recovered definition-site contract has stronger evidence than the
+    /// transport register's machine width.  Keeping this operation value-keyed
+    /// prevents a later scratch lifetime in the same physical register from
+    /// inheriting the fact.  This does not lock arity: only declared/program
+    /// contracts may do that.
+    pub(crate) fn refine_parameter_hint_for_value(
+        &mut self,
+        value: &SsaValue,
+        hint: TypeHint,
+    ) -> bool {
+        let Some(parameter) = self
+            .parameters
+            .iter_mut()
+            .find(|parameter| &parameter.value == value)
+        else {
+            return false;
+        };
+        let before = parameter.hint;
+        parameter.hint = Some(merge_type_hint(before, hint));
+        parameter.hint != before
+    }
+
     pub fn result(&self) -> Option<&RecoveredResult> {
         self.result.as_ref()
     }
@@ -971,18 +996,12 @@ fn arm_vfp_live_in_slots(lf: &LlirFunction) -> Vec<usize> {
             // parameter evidence comes from machine instructions before the
             // call; counting the conservative s0-s15 call footprint here
             // inflated every hard-float caller to sixteen parameters.
-            let conservative_call = matches!(
-                &instruction.op,
-                Op::Call { effects, .. }
-                    if !effects
-                        .as_ref()
-                        .is_some_and(|effects| effects.args_are_exact)
-            );
-            if !conservative_call {
-                for used in uses {
-                    if let Some(slot) = arm_single_vfp_slot(&used) {
-                        first_touch.entry(slot).or_insert(true);
-                    }
+            for (use_index, used) in uses.into_iter().enumerate() {
+                if !use_is_proven_input(&instruction.op, use_index) {
+                    continue;
+                }
+                if let Some(slot) = arm_single_vfp_slot(&used) {
+                    first_touch.entry(slot).or_insert(true);
                 }
             }
             if let Some(definition) = definition {
@@ -1469,7 +1488,7 @@ fn live_in_parameter_view_hint(
 ) -> Option<TypeHint> {
     // Architectural reads (a real machine operand) and speculative ABI reads
     // (the argument-register may-use list `abi::annotate_calls` hangs on every
-    // call) are accumulated separately. See `call_effect_use_floor`.
+    // call) are accumulated separately. See `use_is_proven_input`.
     let mut real = (0u8, Vec::new());
     let mut speculative = (0u8, Vec::new());
     for (block_idx, block) in lf.blocks.iter().enumerate() {
@@ -1479,14 +1498,14 @@ fn live_in_parameter_view_hint(
                 instr_idx,
             };
             let (_, uses) = def_uses(&instruction.op);
-            let floor = call_effect_use_floor(&instruction.op);
             for (use_index, register) in uses.iter().enumerate() {
                 if ssa.use_value(lf, addr, use_index).as_ref() != Some(value) {
                     continue;
                 }
-                let bucket = match floor {
-                    Some(floor) if use_index >= floor => &mut speculative,
-                    _ => &mut real,
+                let bucket = if use_is_proven_input(&instruction.op, use_index) {
+                    &mut real
+                } else {
+                    &mut speculative
                 };
                 let width = reg_width_bytes(register);
                 if width < bucket.0 {
@@ -1565,32 +1584,6 @@ fn arm_live_in_address_hint(
     valued
         .get(value)
         .filter(|hint| matches!(hint, TypeHint::Pointer { .. } | TypeHint::CodePointer))
-}
-
-/// First index in [`def_uses`]'s use list that belongs to a call's synthesized
-/// [`crate::ir::abi::CallEffects::args`], or `None` for any other operation.
-///
-/// `Op::Call` reports the convention's whole argument-register list as uses so
-/// that liveness and DCE stay sound across the call. Those entries are a
-/// may-use of a 64-bit register, not an observation that the callee read all 64
-/// bits — for a `mov %esi, ...` parameter, the only architectural evidence is
-/// the four-byte view. An indirect call's target read precedes the effect args
-/// and is a genuine read, so it stays below the floor.
-fn call_effect_use_floor(op: &Op) -> Option<usize> {
-    match op {
-        Op::Call { target, effects } => {
-            let effects = effects.as_ref()?;
-            if effects.args_are_exact {
-                return None;
-            }
-            let target_uses = usize::from(matches!(
-                target,
-                crate::ir::types::CallTarget::Indirect(crate::ir::types::Value::Reg(_))
-            ));
-            (!effects.args.is_empty()).then_some(target_uses)
-        }
-        _ => None,
-    }
 }
 
 /// Whether every apparent return is the structural terminator of a proven
@@ -3595,6 +3588,7 @@ mod tests {
                     result: Some(VReg::phys("rax")),
                     result_is_source_value: false,
                     args: vec![VReg::phys("rdi")],
+                    proven_args: Vec::new(),
                     args_are_exact: true,
                     is_tail_call: true,
                 }),
@@ -3634,6 +3628,7 @@ mod tests {
                     result: Some(VReg::phys("rax")),
                     result_is_source_value: false,
                     args: vec![],
+                    proven_args: Vec::new(),
                     args_are_exact: true,
                     is_tail_call: false,
                 }),

@@ -5986,12 +5986,9 @@ fn record_frame_store(addr: &Expr, size: u8, src: &Expr, homes: &mut Vec<FramePa
     if !expression_contains_stack_object(addr) {
         return;
     }
-    if let Some(home) = homes
-        .iter_mut()
-        .find(|home| home.size == size && home.addr == *addr)
-    {
+    if let Some(home) = homes.iter_mut().find(|home| home.addr == *addr) {
         home.stores += 1;
-        if home.arg.as_deref() != parameter_source(src).as_deref() {
+        if home.size != size || home.arg.as_deref() != parameter_source(src).as_deref() {
             home.arg = None;
         }
         return;
@@ -6283,10 +6280,17 @@ fn collect_param_homes_with_aliases(
                         v.insert(argument.unwrap_or_default());
                     }
                     std::collections::hash_map::Entry::Occupied(mut o) => {
-                        if argument
+                        // Only a direct repeated store from the same source
+                        // parameter remains a home initialization. Alias state
+                        // is intentionally insufficient here: a branch-local
+                        // status temporary can share one incoming provenance on
+                        // another path, yet its store reuses the stack bytes for
+                        // a different source object.
+                        let same_parameter = parameter_source(src)
                             .as_ref()
-                            .is_some_and(|candidate| candidate != o.get())
-                        {
+                            .is_some_and(|candidate| candidate == o.get());
+                        let in_place_update = src.contains_reg(&VReg::phys(local.clone()));
+                        if !same_parameter && !in_place_update {
                             o.insert(String::new());
                         }
                     }
@@ -12866,6 +12870,46 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn prepare_does_not_coalesce_a_parameter_spill_reused_for_a_status_value() {
+        let f = Function {
+            name: "spill_then_status".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_20")),
+                    src: Expr::Reg(VReg::phys("arg4")),
+                    size: 8,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "consume_pointer".into(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("local_20"))],
+                    dst: Some(VReg::phys("status")),
+                    call_spec: None,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_20")),
+                    src: Expr::Reg(VReg::phys("status")),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("local_20"))),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+        let text = render_decbench(&prepared);
+
+        assert!(text.contains("consume_pointer(local_20)"), "{text}");
+        assert!(text.contains("local_20 = status"), "{text}");
+        assert!(text.contains("return local_20"), "{text}");
+        assert!(!text.contains("return arg4"), "{text}");
+    }
+
+    #[test]
     fn prepare_coalesces_an_immutable_parameter_spill_inside_a_frame_object() {
         let frame_slot = Expr::Bin {
             op: BinOp::Add,
@@ -12946,6 +12990,53 @@ function f @ 0x1000 {
             text.contains("= 7;"),
             "the source-level mutation was erased:\n{text}"
         );
+    }
+
+    #[test]
+    fn prepare_keeps_a_frame_parameter_home_reused_at_a_narrower_width() {
+        let frame_slot = Expr::StackAddr {
+            object: VReg::phys("local_20"),
+            size: 32,
+        };
+        let f = Function {
+            name: "mixed_width_reuse".to_string(),
+            entry_va: 0x10,
+            body: vec![
+                Stmt::Store {
+                    addr: frame_slot.clone(),
+                    src: Expr::Reg(VReg::phys("arg4")),
+                    size: 8,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "consume_pointer".into(),
+                    },
+                    args: vec![Expr::Deref {
+                        addr: Box::new(frame_slot.clone()),
+                        size: 8,
+                    }],
+                    dst: Some(VReg::phys("status")),
+                    call_spec: None,
+                },
+                Stmt::Store {
+                    addr: frame_slot.clone(),
+                    src: Expr::Reg(VReg::phys("status")),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(frame_slot),
+                        size: 4,
+                    }),
+                },
+            ],
+        };
+
+        let text = render_decbench(&prepare_for_decbench(&f));
+
+        assert!(text.contains("local_20"), "{text}");
+        assert!(!text.contains("return arg4"), "{text}");
     }
 
     #[test]
@@ -17396,6 +17487,7 @@ function f @ 0x1000 {
                                 result: Some(VReg::phys("s0#1")),
                                 result_is_source_value: true,
                                 args: vec![VReg::phys("s0"), VReg::phys("s1")],
+                                proven_args: Vec::new(),
                                 args_are_exact: false,
                                 is_tail_call: false,
                             }),

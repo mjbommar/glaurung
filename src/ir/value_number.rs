@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ir::call_args::CallConv;
 use crate::ir::ssa::SsaValue;
 use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
-use crate::ir::use_def::{def_uses, InstrAddr};
+use crate::ir::use_def::{def_uses, use_is_proven_input, InstrAddr};
 
 /// A source variable's authoritative residence in one machine register.
 ///
@@ -91,20 +91,15 @@ fn architecturally_read_names(lf: &LlirFunction) -> HashSet<String> {
     let mut phi_copies: Vec<(&str, &str)> = Vec::new();
     for block in &lf.blocks {
         for ins in &block.instrs {
-            if let Op::Call { effects, .. } = &ins.op {
-                if !effects
-                    .as_ref()
-                    .is_some_and(|effects| effects.args_are_exact)
-                {
-                    continue;
-                }
-            }
             if let Some(pair) = phi_copy_operands(&ins.op) {
                 phi_copies.push(pair);
                 continue;
             }
             let (_, uses) = def_uses(&ins.op);
-            for used in uses {
+            for (use_index, used) in uses.into_iter().enumerate() {
+                if !use_is_proven_input(&ins.op, use_index) {
+                    continue;
+                }
                 if let VReg::Phys(name) = used {
                     read.insert(name);
                 }
@@ -189,14 +184,6 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
             // either way — the first touch of an argument register in these functions
             // is its `-O0` spill, which precedes any call). Kept because the inference
             // should not depend on `def_uses` continuing to under-report call effects.
-            if let Op::Call { effects, .. } = &ins.op {
-                if !effects
-                    .as_ref()
-                    .is_some_and(|effects| effects.args_are_exact)
-                {
-                    continue;
-                }
-            }
             // ... and a phi copy is that same may-use laundered into an ordinary
             // `Assign`. `insert_phi_copies` materialises a copy for every phi
             // whose destination is READ, and its notion of "read" is `def_uses`,
@@ -218,7 +205,10 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
             }
             // Reads first, then the def — a use and a def of the same slot in one
             // op (`rdx = rdx + 1`) counts as a read (the incoming value is used).
-            for u in &uses {
+            for (use_index, u) in uses.iter().enumerate() {
+                if !use_is_proven_input(&ins.op, use_index) {
+                    continue;
+                }
                 if alignment_padding.excludes_use(
                     InstrAddr {
                         block_idx,
@@ -2194,6 +2184,7 @@ mod tests {
                 target: crate::ir::types::CallTarget::Direct(0x2000),
                 effects: Some(crate::ir::types::CallEffects {
                     args: vec![VReg::phys("rdx")],
+                    proven_args: Vec::new(),
                     result: None,
                     result_is_source_value: false,
                     args_are_exact: true,
@@ -2220,6 +2211,36 @@ mod tests {
             def_uses(&numbered.blocks[0].instrs[2].op).0,
             Some(VReg::phys("rbp#2")),
             "the later rbp value must not overwrite an earlier call-input dependency"
+        );
+    }
+
+    #[test]
+    fn proven_nonexact_call_inputs_are_signature_evidence_but_all_args_remain_uses() {
+        let all_args = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+            .into_iter()
+            .map(VReg::phys)
+            .collect::<Vec<_>>();
+        let lf = mk(vec![Op::Call {
+            target: crate::ir::types::CallTarget::Direct(0x2000),
+            effects: Some(crate::ir::types::CallEffects {
+                result: Some(VReg::phys("rax")),
+                result_is_source_value: true,
+                args: all_args.clone(),
+                proven_args: vec![VReg::phys("rdi")],
+                args_are_exact: false,
+                is_tail_call: false,
+            }),
+        }]);
+
+        let (_, uses) = def_uses(&lf.blocks[0].instrs[0].op);
+        assert_eq!(
+            uses, all_args,
+            "conservative call liveness must be retained"
+        );
+        assert_eq!(
+            live_in_arg_slots_llir(&lf, CallConv::SysVAmd64),
+            std::collections::HashSet::from([0]),
+            "only the callee-proven input is source-signature evidence"
         );
     }
 

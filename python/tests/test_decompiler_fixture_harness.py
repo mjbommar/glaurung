@@ -932,6 +932,146 @@ def test_real_direct_callee_pointer_type_refines_forwarding_caller_parameter():
     assert "read_first(arg0)" in decompiled, decompiled
 
 
+def test_real_transitive_callee_contract_recovers_untouched_leading_argument():
+    """A proven grandcallee contract must retain an untouched ABI argument.
+
+    Optimized wrappers often leave the first argument in ``rdi`` while setting
+    only later argument registers before a call.  The middle function below
+    never dereferences ``buffer`` itself; only ``reserve_bytes`` does.  Recovering
+    ``put_bytes`` in isolation therefore requires the exact grandcallee contract
+    to distinguish the untouched live-in from arbitrary caller-saved residue.
+    This is the real three-function shape used by OpenSSH's
+    ``ssh_agent_sign -> sshbuf_put_string -> sshbuf_reserve`` chain.
+    """
+    binary = _compile_so(
+        "struct byte_buffer { unsigned char *data; unsigned long capacity; };\n"
+        "static __attribute__((noinline)) int reserve_bytes(\n"
+        "    struct byte_buffer *buffer, unsigned long count, unsigned char **out) {\n"
+        "    if (count > buffer->capacity) return -1;\n"
+        "    *out = buffer->data;\n"
+        "    return 0;\n"
+        "}\n"
+        "static __attribute__((noinline)) int put_bytes(\n"
+        "    struct byte_buffer *buffer, const unsigned char *source,\n"
+        "    unsigned long count) {\n"
+        "    unsigned char *out = 0;\n"
+        "    int result = reserve_bytes(buffer, count, &out);\n"
+        "    if (result == 0 && count != 0) out[0] = source[0];\n"
+        "    return result;\n"
+        "}\n"
+        "__attribute__((noinline)) int forward_put_bytes(\n"
+        "    struct byte_buffer *buffer, const unsigned char *source,\n"
+        "    unsigned long count) {\n"
+        "    return put_bytes(buffer, source, count) + 1;\n"
+        "}",
+        "transitive_callee_parameter",
+        debug=False,
+        optimization="O2",
+    )
+    caller_va = D.exported_functions(binary)["forward_put_bytes"]
+
+    decompiled = D.decompiled_c(binary, caller_va)
+
+    assert decompiled is not None
+    signature = decompiled.splitlines()[0]
+    assert "forward_put_bytes(" in signature, decompiled
+    assert signature.count("arg") == 3, decompiled
+    assert "* arg0" in signature, decompiled
+    assert "put_bytes(arg0, arg1, arg2)" in decompiled, decompiled
+
+
+def test_real_variadic_register_save_area_does_not_invent_wrapper_parameters():
+    """Unnamed SysV variadic inputs are not fixed parameters of their callers.
+
+    A variadic callee saves every remaining argument register in its ``va_list``
+    register-save area.  Those stores prove that the callee may consume optional
+    arguments, but they do not prove that an intermediate no-argument error path
+    or an outer wrapper receives those registers as fixed source parameters.
+    This is the stripped shape behind ``statdb_write(void)`` being widened to
+    six arguments through an internal variadic diagnostic helper.
+    """
+    binary = _compile_so(
+        "#include <stdarg.h>\n"
+        "static volatile long observed;\n"
+        "static volatile int consume_extra;\n"
+        "static volatile unsigned long requested = 1;\n"
+        "__attribute__((noinline, noipa, used)) void report(const char *message, ...) {\n"
+        "    va_list args;\n"
+        "    va_start(args, message);\n"
+        "    if (consume_extra) observed += va_arg(args, long);\n"
+        "    va_end(args);\n"
+        "}\n"
+        "__attribute__((noinline, noipa, used)) void report_failure(void) {\n"
+        '    report("allocation failed", 0L);\n'
+        "}\n"
+        "__attribute__((noinline, noipa, used)) unsigned long reserve(unsigned long count) {\n"
+        "    if (count == 0) report_failure();\n"
+        "    return count + 1;\n"
+        "}\n"
+        "__attribute__((noinline)) unsigned long begin_reservation(void) {\n"
+        "    return reserve(requested);\n"
+        "}",
+        "variadic_register_save_area",
+        debug=False,
+        optimization="O2",
+    )
+    caller_va = D.exported_functions(binary)["begin_reservation"]
+
+    decompiled = D.decompiled_c(binary, caller_va)
+
+    assert decompiled is not None
+    signature = next(
+        line for line in decompiled.splitlines() if "begin_reservation(" in line
+    )
+    assert "begin_reservation(void)" in signature, decompiled
+
+
+def test_real_callee_contract_does_not_cross_an_explicit_integer_conversion():
+    """A callee's type describes the value after, not before, a conversion."""
+    binary = _compile_so(
+        "static __attribute__((noinline)) int consume_wide(unsigned long value) {\n"
+        "    return value > 5;\n"
+        "}\n"
+        "__attribute__((noinline)) int forward_narrow(unsigned int value) {\n"
+        "    return consume_wide((unsigned long)value) + 1;\n"
+        "}",
+        "callee_contract_conversion_boundary",
+        debug=False,
+        optimization="O2",
+    )
+    caller_va = D.exported_functions(binary)["forward_narrow"]
+
+    decompiled = D.decompiled_c(binary, caller_va)
+
+    assert decompiled is not None
+    signature = decompiled.splitlines()[0]
+    assert "forward_narrow(unsigned int arg0)" in signature, decompiled
+    assert "forward_narrow(unsigned long arg0)" not in signature, decompiled
+
+
+def test_real_pointer_contract_does_not_cross_a_zero_extension():
+    """A pointer use after integer widening does not make the input a pointer."""
+    binary = _compile_so(
+        "static __attribute__((noinline)) int read_address(const char *value) {\n"
+        "    return value == 0 ? 0 : *value;\n"
+        "}\n"
+        "__attribute__((noinline)) int forward_address(unsigned int value) {\n"
+        "    return read_address((const char *)(unsigned long)value) + 1;\n"
+        "}",
+        "callee_pointer_conversion_boundary",
+        debug=False,
+        optimization="O2",
+    )
+    caller_va = D.exported_functions(binary)["forward_address"]
+
+    decompiled = D.decompiled_c(binary, caller_va)
+
+    assert decompiled is not None
+    signature = decompiled.splitlines()[0]
+    assert "forward_address(unsigned int arg0)" in signature, decompiled
+    assert "forward_address(char * arg0)" not in signature, decompiled
+
+
 def test_real_known_memcpy_output_declares_a_self_contained_library_prototype():
     """An authoritative library contract must survive into standalone C.
 
