@@ -90,7 +90,7 @@ def test_checked_baseline_covers_every_named_canary_and_real_function():
 
     assert report["git"] == {
         "dirty": False,
-        "revision": "6a3252bdc03fea3ad9a8a898bdd39735460fb852",
+        "revision": "22a3edc8876dc9f986da6f97c33ee810f1db12f9",
     }
     expected_functions = {
         "copy_reg": ["copy_reg"],

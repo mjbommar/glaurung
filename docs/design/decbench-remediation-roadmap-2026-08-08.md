@@ -455,6 +455,18 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   slightly, TypeMatch mean declines slightly in one row, no exact win is lost,
   and the exact union remains 75/250. This closes the named `statdb_write`
   correctness acceptance item, not the Phase 4 GED/type targets.
+- [x] Preserve a resolved table dispatch nested anywhere inside its one owning
+  natural loop instead of discarding the whole region when a nested back edge
+  lacks a second structured-loop node. `RawLoop` accounting now explicitly owns
+  every internal cycle, while only index-bearing machine indirect transfers can
+  select this fallback. Guard-default table holes coalesce into one sparse C
+  `default` arm. The real optimized PIC parser fixture covers the multi-exit,
+  nested-cycle shape. An exact 250/250 stripped replay changes only
+  `update-passwd:main`, `certtool:yyparse`, and `vipw:main`; changed-row GED sum
+  falls `703→345`, ByteMatch rises `0.075180→0.131599`, and TypeMatch rises
+  `0.266667→0.316667`. `vipw`'s individually worse GED is retained as a named
+  metric/source-shape tradeoff because its previously omitted 34-slot machine
+  switch is now explicit and recompilable.
 - [ ] Convert the new compile-coverage gain into exact wins without weakening
   the boundary contracts. The highest-leverage immediate cohort is the 28
   newly nonzero ByteMatch rows, especially `copy_reg`, `yyparse`,

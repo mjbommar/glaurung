@@ -117,43 +117,27 @@
             },
             {
               "kind": "never_defined",
-              "name": "stack_0"
-            },
-            {
-              "kind": "never_defined",
               "name": "var0"
             },
             {
               "kind": "never_defined",
-              "name": "var153"
+              "name": "var172"
             },
             {
               "kind": "never_defined",
-              "name": "var164"
+              "name": "var187"
             },
             {
               "kind": "never_defined",
-              "name": "var168"
+              "name": "var259"
             },
             {
               "kind": "never_defined",
-              "name": "var170"
+              "name": "var263"
             },
             {
               "kind": "never_defined",
-              "name": "var171"
-            },
-            {
-              "kind": "never_defined",
-              "name": "var181"
-            },
-            {
-              "kind": "never_defined",
-              "name": "var247"
-            },
-            {
-              "kind": "never_defined",
-              "name": "var271"
+              "name": "var269"
             },
             {
               "kind": "never_defined",
@@ -189,16 +173,12 @@
             "never_defined:local_4ec": "promote_stack_locals",
             "never_defined:local_4f0": "promote_stack_locals",
             "never_defined:local_4f4": "promote_stack_locals",
-            "never_defined:stack_0": "promote_stack_locals",
             "never_defined:var0": "apply_role_names",
-            "never_defined:var153": "prepare_for_decbench",
-            "never_defined:var164": "prepare_for_decbench",
-            "never_defined:var168": "prepare_for_decbench",
-            "never_defined:var170": "prepare_for_decbench",
-            "never_defined:var171": "prepare_for_decbench",
-            "never_defined:var181": "prepare_for_decbench",
-            "never_defined:var247": "prepare_for_decbench",
-            "never_defined:var271": "apply_role_names",
+            "never_defined:var172": "apply_role_names",
+            "never_defined:var187": "apply_role_names",
+            "never_defined:var259": "apply_role_names",
+            "never_defined:var263": "apply_role_names",
+            "never_defined:var269": "apply_role_names",
             "never_defined:var3": "apply_role_names",
             "never_defined:var4": "apply_role_names",
             "never_defined:var5": "apply_role_names",
@@ -206,25 +186,25 @@
             "undefined_value:of_61": "lower"
           },
           "health": {
-            "declarations": 113,
-            "gotos": 54,
+            "declarations": 154,
+            "gotos": 199,
             "invented_cfg_edges": 0,
             "parameters": 5,
             "physical_registers": 2,
-            "statements": 375,
-            "structure_fallbacks": 1,
-            "temporaries": 76,
+            "statements": 877,
+            "structure_fallbacks": 0,
+            "temporaries": 118,
             "uncovered_cfg_edges": 0,
-            "undefined_uses": 27,
-            "unresolved_transfers": 1
+            "undefined_uses": 23,
+            "unresolved_transfers": 0
           },
           "health_event_count": 22,
           "label": "yyparse",
-          "output_bytes": 16304,
-          "output_lines": 522,
-          "output_sha256": "8042dcbde385ac4188627f66b5dda766a2e1b94f799dc7b4d444e03d9ef5b8e4",
+          "output_bytes": 36376,
+          "output_lines": 1155,
+          "output_sha256": "e133744aef277f5bdda1bae84307c02e528a79e3c6abc97eadf25660015362a7",
           "rendered_function": "sub_253e0",
-          "signature": "unsigned long sub_253e0(long * arg0, long arg1, long arg2, long arg3, unsigned int arg4) {"
+          "signature": "long sub_253e0(long * arg0, long arg1, long arg2, long arg3, unsigned int arg4) {"
         }
       ],
       "name": "yyparse",
@@ -605,7 +585,7 @@
   ],
   "git": {
     "dirty": false,
-    "revision": "6a3252bdc03fea3ad9a8a898bdd39735460fb852"
+    "revision": "22a3edc8876dc9f986da6f97c33ee810f1db12f9"
   },
   "schema": "glaurung-output-canary-report-v1"
 }

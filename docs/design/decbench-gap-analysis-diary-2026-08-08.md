@@ -2178,3 +2178,73 @@ Its four focused tests pass, the live capture matches every function and
 provenance field, and focused Ruff format/lint is clean. Focused `ty` retains
 the test file's two pre-existing missing-`pytest`-stub diagnostics; the revision
 string update introduces no typed code.
+
+## 12:15–12:56 — retain nested parser dispatches through verified raw loops
+
+The next named target, `gnutls:O2-noinline:certtool:yyparse`, did not fail jump
+table discovery. The stripped binary's signed-relative 88-slot PIC table was
+already present as one LLIR `IndirectJump` with an explicit index and all 88 CFG
+successors. The loss happened later: a candidate region contained the recovered
+switch, but accounting rejected the outer parser loop's back edge and one nested
+internal cycle, then replaced the complete function with `Unstructured`. The
+renderer consequently printed one unrecovered indirect transfer and only 59 CFG
+nodes against the source's 178.
+
+The retained repair makes the existing lossless `RawLoop` contract explicit. A
+natural loop containing exactly one resolved, index-bearing machine dispatch may
+use the labelled-CFG fallback even when the dispatch is below an intermediate
+guard. Its full block set owns every internal back edge; requiring a second
+structured loop for a nested parser cycle would contradict the fallback's reason
+for existence. Synthetic multi-successor CFGs remain on ordinary structured
+switch recovery. During lowering, a conditional predecessor proves the table's
+guard-default target; physical table slots with that same target coalesce into
+one C `default` arm rather than inventing a case for every hole.
+
+TDD uses a real host-GCC x86-64 assembly fixture with a signed-relative PIC
+table, a separate guard block, three loop exits, and a nested internal cycle. It
+proves eight CFG successors, verified raw-loop ownership, eight rendered cases,
+and no unrecovered indirect transfer. Accounting and sparse-default unit tests
+pin the two smaller contracts. A first full Rust run exposed an existing
+synthetic switch-loop test that the broad detector had preempted; requiring an
+explicit index-bearing indirect terminator restored that structured path. The
+final Rust gate passes 1,975 library tests and every integration target.
+
+An exact-revision fresh replay from commit
+`22a3edc8876dc9f986da6f97c33ee810f1db12f9` emitted 250/250 requested functions
+across 224/224 binaries with zero failures. Only three C files differ from the
+accepted `6a3252b` package:
+
+| Function | GED | ByteMatch | TypeMatch | Sparse switch |
+|---|---:|---:|---:|---:|
+| `base-passwd:O2-noinline:update-passwd:main` | `69→53` | `0→0` | `0.166667→0.166667` | 11 cases + default |
+| `gnutls:O2-noinline:certtool:yyparse` | `601→236` | `0.075180→0.131599` | `0→0.05` | 75 cases + default |
+| `shadow:O2-noinline:vipw:main` | `33→56` | `0→0` | `0.1→0.1` | 6 cases + default |
+
+The changed-row GED sum improves `703→345`; ByteMatch and TypeMatch both rise,
+and no exact win or union member changes. Projecting those exact deltas onto the
+accepted stack-alias ledger moves GED mean about `32.271966→30.774058`,
+ByteMatch `0.249560→0.249786`, and TypeMatch `0.226702→0.226915`. `vipw` is a
+named GED regression: its source CFG has 21 nodes/33 edges, the old truncated C
+had 18/25, and the complete switch has 25/44. Keeping the old score would require
+discarding a resolved, recompilable 34-slot machine transfer, so the soundness
+gain and large net structural improvement take precedence over that metric's
+local source-shape preference.
+
+The release archive is
+`/tmp/glaurung-dispatch-22a3edc.ymC2zn/results.zip`, SHA-256
+`5b3b655d3faf5fd128b35515d18543b8f5ced283172af36521fa9b66c8f01d74`.
+The result manifest SHA-256 is
+`f8b7767d9bdb9c598fe222f1db2ac8eaec63273b351e548eb0aadb70a4455119`;
+the diagnostic ledger is
+`49ff9bd34d1e5024742665fa86db545830c36de54d3917fbe81fcc96759ed71f`.
+Zip integrity is clean. Eight-worker extraction took 75.819 seconds, with
+2.474/2.673/13.394-second per-binary median/mean/maximum. The focused canary now
+records `yyparse` structure fallbacks `1→0`, unresolved transfers `1→0`, and
+undefined uses `27→23`, while keeping uncovered and invented CFG edges at zero;
+its report SHA-256 is
+`dec2356683c5cdd02cca039642db6c3dbef8fcaf7ccbd0f407b1f037c1075d17`.
+The repository-wide Python gate collected 2,930 tests and completed with 2,882
+passing, 44 skipped, and only the same four cross-sample `suspicious_win`
+content failures recorded in the preceding increments. Focused canary tests and
+Ruff format/lint pass; focused `ty` retains exactly the two pre-existing missing
+`pytest`-stub diagnostics. `cargo fmt --check` and `git diff --check` are clean.
