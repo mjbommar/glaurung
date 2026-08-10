@@ -1929,3 +1929,66 @@ debt (`ty`: 1,939 diagnostics). The required all-features Clippy invocation is
 environment-blocked because the pinned Bitwuzla library path is unset; ordinary
 all-target Clippy reaches the crate and remains red on 192 existing warnings,
 with no warning in a newly added code hunk.
+
+## 08:01–09:12 — deterministic convergence for aliased pointer contracts
+
+The first commit-labelled replay of the `.plt.got` increment exposed a
+reliability defect that the aggregate scores hid. Of 224 generated C files,
+223 were byte-identical to the preceding worktree candidate, but
+`libedit:O2-noinline:libedit.so.0.0:history_search_pos` alternated between
+`char * arg0` and `long * arg0` across separate CLI processes. Five immediate
+repetitions produced two distinct output hashes. The input binary, requested
+VA, extension, and source revision were identical, so this was decompiler
+nondeterminism rather than benchmark noise.
+
+The cause was an unordered merge in authoritative pointer-parameter recovery.
+Two exact aliases of `arg0` reached incompatible contracts: `history` supplied
+`long *` evidence and `strstr` supplied `char *` evidence. Evidence was first
+grouped by alias name and then immediately written back to the common source
+origin while iterating a randomized `HashMap`; the last alias visited won.
+This also explains why earlier runs disagreed about the row's TypeMatch score.
+
+The RED unit test gives one source parameter two exact aliases and sends them
+to conflicting `char *` and `long *` contracts. It reliably observed a pointer
+before the repair. The retained implementation first resolves every alias to
+its source origin, aggregates all pointee widths at that origin, and applies a
+fact only if the complete set is compatible. Origin iteration uses a
+`BTreeMap` for stable traversal. Conflicting evidence now fails closed to the
+existing machine-word type instead of selecting either pointer arbitrarily.
+The focused module has 15 passing tests, and ten independent real
+`history_search_pos` CLI processes now produce the same SHA-256
+`b36de3e944c5cee2f02b1158f130fd7a1e9a0c7a37a482f8e3d899b54d47c3fc`.
+
+The reliability repair is commit
+`17952f010ebb6f9fa0478f0e22084790379d55d2`. A fresh empty-kit replay labelled
+with that exact commit emitted 250/250 functions across 224/224 binaries with
+zero extraction failures. Its package is
+`/tmp/glaurung-17952f0.pUJngv/results.zip`; the package SHA-256 is
+`d7d59105e871227bde41e6b851846d02d20b07f88956d85a2f8032cc288cf4ba`,
+the result-manifest SHA-256 is
+`fe15b8e8d4578681072b55d7565cc26722051d19583e948913e9b71639f39219`,
+and the diagnostics SHA-256 is
+`37e0aca07dc49deadc696ce68a17f3b157752e03e66461ac70ab33310f7d7825`.
+Extraction measured 2.304/2.482/12.819 seconds per-binary
+median/mean/maximum.
+
+Exactly one C file differs from the pre-repair commit-labelled package:
+`bin_054.c` now declares `long arg0` and its exact copy as `long`, with an
+explicit cast at the `history(long *, ...)` boundary. Its TypeMatch remains
+`0.166667`, the conservative side of the formerly random result. TypeMatch
+therefore retains the measured 235-row mean `0.226702`; GED and ByteMatch are
+unchanged by this type-only CFG-equivalent, non-compiling row, so the preceding
+60/239 GED perfects, nine ByteMatch perfects, and 75/250 union remain the final
+candidate scores.
+
+Final verification passes all 1,969 Rust library tests and every Rust
+integration target, the real stripped `.plt.got` fixture, all 56 legacy and 64
+curriculum executable behavior cells, and the six-lane architecture ratchet at
+1,758 pass / 42 known fail / 228 structural / zero lane errors. The
+cache-disabled metric ratchet against the pinned DecBench checkout reports no
+per-cell regression across 56/56 cells. A first comparison accidentally used
+the newer PR #56 refresh checkout against the older pinned baseline and
+reported `arith:gcc:O0` GED `0→0.33` and `recursion:gcc:O2` GED `149→199.5`;
+the authoritative checkout restores those values to `0` and `147.5`,
+respectively. This is recorded as evaluator-version mismatch, not hidden as a
+green retry or attributed to Glaurung.
