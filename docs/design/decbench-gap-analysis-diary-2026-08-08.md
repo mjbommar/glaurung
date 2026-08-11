@@ -2715,3 +2715,69 @@ result manifest is
 `958de43f7e997bfedfd45392907a83927a2c887630ca6414879f4b0c7caae1d7`, and
 the diagnostic ledger is
 `387cb21682f86f5236d04178f8a6070ea0e694045239c436acd6a9e92a3a5905`.
+
+## 22:00–23:40 — recover an optimized-away SysV stack parameter from independent callers
+
+The next named contract defect was
+`openssh-portable:O2-noinline:sshd:ssh_agent_sign`.  Its authoritative source
+prototype has eight parameters, ending in `u_int compat`, but the stripped
+callee never reads that value and definition-local recovery could therefore
+emit only seven.  Two distinct direct callers nevertheless materialize the
+same two-word outgoing stack area and clean it up exactly after the call.
+
+TDD used a real separately compiled, optimized, stripped ELF rather than a
+synthetic AST alone.  Two different caller functions recover an unused eighth
+parameter.  An indirect-only target, a six-register target, and an otherwise
+identical target with only one direct caller remain unchanged.  A dedicated
+273-line caller-arity IR owner exposes one stack-bounded query over the already
+lowered AST and reuses four existing stack-recognition primitives; the legacy
+7,000-line call-argument owner does not grow.  The program environment reuses
+ordinary function discovery, lifting, ABI annotation, SSA, verified structuring,
+and value numbering rather than decoding a second instruction model.
+
+The first candidate deliberately failed its corpus replay.  Counting every
+agreeing call site admitted two false positives: Diffutils had one real seventh
+argument plus a push-shaped alignment word, while Coreutils had repeated calls
+inside one owner.  The retained boundary now requires at least two *distinct
+caller functions*, exact `.eh_frame` owner attribution for every raw direct
+site, exact lifted/raw site agreement, one proven balanced stack observation
+per call, and unanimous arity.  Missing, singleton, indirect, conflicting, or
+non-SysV evidence produces no fact.  The program fact also cannot overwrite an
+already locked local or debug prototype.
+
+The tightened 224-binary replay at
+`/tmp/glaurung-caller-tight-replay.4OmdlF` emits all 250 requested functions
+with zero failures.  Relative to exact `e2cb1f3`, exactly one of 224 generated C
+files changes: `ssh_agent_sign` gains `long arg7`; Diffutils and Coreutils are
+byte-identical to the control.  The source says `u_int compat`, so this closes
+the missing-arity fact but does not claim that the scalar type is recovered.
+Wall time is 66.624 seconds versus 64.551 seconds for the control (`+3.21%`),
+inside the Phase-1 5% ceiling.  Package validation and `unzip -t` pass; the
+worktree archive SHA-256 is
+`9e7ee0d011b203c79148dc26e20146754e13eccd817e1ba95af9389339c392b2`.
+
+Both revisions were then ingested as separate external columns and rescored
+under one evaluator, source-CFG tree, compiler toolchain, and empty
+revision-specific checkpoints.  The paired row is intentionally score-neutral:
+
+| Metric | `e2cb1f3` | caller-arity candidate | Result |
+|---|---:|---:|---|
+| corrected GED | 17 | 17 | unchanged |
+| ByteMatch | 0.390041 | 0.390041 | unchanged; both compile |
+| TypeMatch | 0.357143 | 0.357143 | unchanged |
+
+The corrected CFGs have identical node/edge counts (24/38) against the same
+25/36 source CFG.  No aggregate or perfect count changes, so the accepted-ledger
+projection remains union 79/250 (`31.6%`), GED `22.621400`, ByteMatch
+`0.304416`, and TypeMatch `0.237396`.  This increment improves the truthfulness
+and composition of program-level contract recovery; it is not represented as
+leaderboard movement.
+
+The exact source candidate passes all 1,997 Rust library tests, every Rust
+integration target, and doc tests.  After rebuilding the editable native
+extension, the complete Python suite reports 2,890 passed and 44 skipped, with
+exactly the four established `suspicious_win` sample-content failures and no
+new failure.  The real caller/callee fixture, three focused Rust tests, focused
+Ruff and Ty, `cargo fmt --check`, and `git diff --check` are green.  Repository-
+wide Ruff and Ty retain the unrelated legacy diagnostic baseline documented
+above rather than being silently fixed or suppressed in this lane.

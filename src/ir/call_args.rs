@@ -326,7 +326,7 @@ fn slot_of(arch: CallConv, name: &str) -> Option<usize> {
     crate::ir::abi::argument_slot_of(arch, name)
 }
 
-fn ssa_base(name: &str) -> &str {
+pub(super) fn ssa_base(name: &str) -> &str {
     crate::ir::abi::ssa_base(name)
 }
 
@@ -2622,7 +2622,7 @@ fn is_pure_register_value(statement: &Stmt) -> bool {
 }
 
 /// Width of `esp/rsp = esp/rsp - N`, if this is exactly a stack allocation.
-fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
+pub(super) fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
     let Stmt::Assign {
         dst: VReg::Phys(dst),
         src: Expr::Bin {
@@ -2646,7 +2646,7 @@ fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
 }
 
 /// One exact SysV `push value` after lowering to stack arithmetic.
-fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Option<(&Expr, i64)> {
+pub(super) fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Option<(&Expr, i64)> {
     if store_index == 0 {
         return None;
     }
@@ -2758,7 +2758,7 @@ fn stack_pointer_add_width(stmt: &Stmt) -> Option<i64> {
 /// `rsp += N`. The caller supplies the exact byte count implied by the pushes,
 /// so this stops as soon as that amount is balanced and never consumes the
 /// following callee-save pop.
-fn outgoing_stack_cleanup(
+pub(super) fn outgoing_stack_cleanup(
     body: &[Stmt],
     call_index: usize,
     expected_bytes: i64,

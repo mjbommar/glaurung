@@ -768,9 +768,6 @@ pub fn recover_program_environment(
     let has_format_sink = address_names
         .values()
         .any(|name| clean_import_name(name) == "error");
-    if api_targets.is_empty() && !has_format_sink {
-        return ProgramEnvironment::default();
-    }
     let fdes = crate::analysis::exception::eh_frame_functions(image.bytes());
     if fdes.is_empty() {
         return ProgramEnvironment::default();
@@ -838,24 +835,54 @@ pub fn recover_program_environment(
             }
         }
     }
-    for target in requested_vas {
-        if let Some(parameter_hints) = super::format_environment::recover_format_parameter_hints(
-            image,
-            budgets,
-            cc,
-            address_names,
-            &fdes,
-            target,
-        ) {
+    for target in &requested_vas {
+        if let Some(parameter_hints) = has_format_sink
+            .then(|| {
+                super::format_environment::recover_format_parameter_hints(
+                    image,
+                    budgets,
+                    cc,
+                    address_names,
+                    &fdes,
+                    *target,
+                )
+            })
+            .flatten()
+        {
             merge_prototype_fact(
                 &mut prototypes,
-                target,
+                *target,
                 FunctionPrototypeFact {
                     parameter_hints,
                     output_kind: None,
                     source: "literal-format callers",
                 },
             );
+        }
+    }
+    let caller_arities = super::caller_environment::recover_direct_caller_arities(
+        image,
+        budgets,
+        cc,
+        &fdes,
+        &requested_vas,
+    );
+    for (target, arity) in caller_arities {
+        let parameter_hints = vec![None; arity];
+        match prototypes.get(&target) {
+            Some(existing) if existing.parameter_hints.len() != arity => {
+                // Registration and literal-format contracts are already exact.
+                // Conflicting caller evidence cannot widen or narrow them.
+            }
+            _ => merge_prototype_fact(
+                &mut prototypes,
+                target,
+                FunctionPrototypeFact {
+                    parameter_hints,
+                    output_kind: None,
+                    source: "agreeing direct caller stack bound",
+                },
+            ),
         }
     }
     ProgramEnvironment { prototypes }

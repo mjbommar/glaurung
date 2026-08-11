@@ -515,6 +515,16 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     `2→0` by exact graph isomorphism, ByteMatch `0.301587→0.355932`, TypeMatch
     stays `0.6`, only one corpus C file changes, and the union advances
     `77→78/250` (`31.2%`).
+  - [x] Recover `ssh_agent_sign`'s optimized-away eighth SysV parameter from
+    unanimous balanced stack observations in at least two distinct direct
+    caller functions. Exact unwind-owner and lifted-site agreement makes the
+    program fact fail closed; indirect, singleton, register-only, conflicting,
+    and alignment-only controls retain their prior contracts. The full replay
+    changes only the intended OpenSSH artifact, stays within the Phase-1
+    performance ceiling, and is exactly score-neutral under fresh paired GED,
+    ByteMatch, and TypeMatch evaluation. This closes the named missing-arity
+    defect, while the still-open type work must recover the final source
+    `u_int` rather than the current machine-word fallback.
 - [x] Remove x86 omit-frame-pointer callee saves that stack promotion names as
   ordinary `local_*` objects.  Entry-version nonvolatile-register provenance
   is gated by the detected calling convention, and the existing

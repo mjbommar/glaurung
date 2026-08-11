@@ -2210,7 +2210,15 @@ fn decbench_type_maps(
     // with function boundaries and direct-callee types.
     for parameter in prototype.parameters() {
         let role = crate::ir::types::VReg::Phys(format!("arg{}", parameter.slot));
-        if let Some(hint) = live_ins.get(&role) {
+        let hint = live_ins.get(&role).or_else(|| {
+            prototype.parameter_arity_is_locked().then_some(
+                crate::ir::types_recover::TypeHint::Int {
+                    signed: true,
+                    width: crate::ir::abi::machine_word_bytes(cc),
+                },
+            )
+        });
+        if let Some(hint) = hint {
             if prototype.parameter_is_locked(parameter.slot) {
                 decl.apply_locked_fact(role, hint);
             } else {
@@ -2236,7 +2244,15 @@ fn decbench_type_maps(
     }
     for parameter in prototype.parameters() {
         let role = crate::ir::types::VReg::Phys(format!("arg{}", parameter.slot));
-        if let Some(hint) = live_ins.get(&role) {
+        let hint = live_ins.get(&role).or_else(|| {
+            prototype.parameter_arity_is_locked().then_some(
+                crate::ir::types_recover::TypeHint::Int {
+                    signed: true,
+                    width: crate::ir::abi::machine_word_bytes(cc),
+                },
+            )
+        });
+        if let Some(hint) = hint {
             if prototype.parameter_is_locked(parameter.slot) {
                 width.apply_locked_fact(role, hint);
             } else {
