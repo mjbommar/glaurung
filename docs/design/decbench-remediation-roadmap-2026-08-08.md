@@ -8,15 +8,20 @@ open
 **Historical evidence baseline:** Glaurung `c1cfdc97`, DecBench main `0a4e85b`,
 dataset `0a2d996`, with ARM `byte_match` recomputed using pending DecBench PR #61
 
-**Current planning baseline:** exact clean revision `1e973bc`, replayed over all
+**Current planning baseline:** exact clean revision `b50ba50`, replayed over all
 224 binaries and 250 functions, with every metric joined from a fresh run and
-GED paired with the official per-optimization source CFG. It has union `79/250`
-(`31.6%`), GED `65/240` perfect with mean `24.129167` and median `9`, TypeMatch
-`22/235` perfect with mean `0.245741` and median `0.090909`, and ByteMatch
-`14/250` perfect with mean `0.304440` and median `0.259079`. Older projected
-ledgers below remain useful increment history, but their absolute GED/union
-totals are superseded because the legacy re-evaluator paired O2 and
-O2-noinline output with O0 source CFGs.
+GED paired with the official per-optimization source CFG under current DecBench
+GED cache schema 3 (`GED_MAX_NODES=200`). It has union `79/250` (`31.6%`), GED
+`65/240` perfect with mean `30.354167` and median `10`, TypeMatch `22/235`
+perfect with mean `0.245741` and median `0.090909`, and ByteMatch `14/250`
+perfect with mean `0.304440` and median `0.259079`. The exact `1e973bc`
+predecessor has union `78/250`, GED `64/240` perfect with mean `30.366667`, and
+the same TypeMatch and ByteMatch aggregates. Older projected ledgers below
+remain useful increment history, but their absolute GED/union totals are
+superseded twice: first because the legacy re-evaluator paired O2 and
+O2-noinline output with O0 source CFGs, and then because its historical
+large-graph fallback substituted node/edge-count deltas for the current VJ-GED
+calculation.
 
 ## Outcome
 
@@ -588,8 +593,11 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     per-optimization source CFGs. Revision bisect and direct graph-shape
     comparison show no Glaurung product regression: the legacy absolute ledger
     used O0 source graphs for O2 and O2-noinline rows. A fresh single-revision
-    join establishes the current `1e973bc` baseline above and replaces the
-    projected `82/250` total with the reproducible `79/250` total.
+    join removed the projected `82/250` total. A subsequent current-metric
+    replay found that this join still carried the legacy greater-than-60-node
+    size fallback: 26 GED rows changed under cache schema 3, including
+    `socket_open2` changing from a false zero to `18`. The corrected `1e973bc`
+    union is `78/250`; the current `b50ba50` baseline is recorded above.
   - [x] Materialize the missing false value of an exact guarded call-valued
     select only when reaching-definition evidence proves it is zero. The pass
     requires a one-sided call/copy body and either tests the destination itself
@@ -602,9 +610,10 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     `tar:O2-noinline:xheader_list_append`; nine other file diffs are separator
     whitespace between multiple packaged functions. Fresh official-source GED
     improves `3→0`; ByteMatch is exactly `0.475→0.475` and TypeMatch is exactly
-    `0.5→0.5`. The candidate projection is therefore union `79→80/250`
-    (`31.6%→32.0%`) and GED mean `24.129167→24.116667`, with ByteMatch mean
-    unchanged at `0.304440` and no lost perfect.
+    `0.5→0.5`. Under current GED schema 3, the candidate projection is therefore
+    union `78→79/250` (`31.2%→31.6%`) and GED mean
+    `30.366667→30.354167`, with ByteMatch mean unchanged at `0.304440` and no
+    lost perfect.
 - [x] Remove x86 omit-frame-pointer callee saves that stack promotion names as
   ordinary `local_*` objects.  Entry-version nonvolatile-register provenance
   is gated by the detected calling convention, and the existing

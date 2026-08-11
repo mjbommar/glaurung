@@ -3139,7 +3139,7 @@ changes. Direct source-graph comparison explains each delta, including
 `psktool:process_options` (O0 source 55/84 nodes/edges versus official O2
 156/271) and `shadow:login:main` (223/363 versus 238/389).
 
-The reproducible `1e973bc` baseline is:
+The initially joined `1e973bc` baseline was:
 
 | Metric | Perfect | Coverage | Mean | Median |
 |---|---:|---:|---:|---:|
@@ -3184,10 +3184,10 @@ semantically; nine multi-function files differ only because the worktree kit
 omits blank separators that the prior packager inserted. Fresh official-source
 evaluation moves `xheader_list_append` GED `3→0`. Fresh baseline and candidate
 ByteMatch are both `0.475`, and unchanged declarations keep TypeMatch at `0.5`.
-The projected single-revision totals are union `80/250` (`32.0%`) and GED mean
-`24.116667`; TypeMatch and ByteMatch aggregates are unchanged, with no lost
-perfect. This is an honest one-row exact win, not a restoration of the invalid
-mixed-source total.
+The initially projected single-revision totals were union `80/250` (`32.0%`)
+and GED mean `24.116667`; TypeMatch and ByteMatch aggregates were unchanged,
+with no lost perfect. The later current-metric audit below supersedes those
+absolute totals while preserving the one-row product delta.
 
 The final Rust gate passes 2,024 library tests plus every integration and doc
 target. The final complete Python collection reports 2,895 passed and 44
@@ -3210,3 +3210,47 @@ matching the GitHub asset at
 `https://github.com/mjbommar/glaurung/releases/tag/decbench-b50ba50`.
 DecBench PR #56 records the corrected whole-scorecard baseline and this exact
 one-row GED/union advance in comment `5252744474`.
+
+## 07:50–08:20 — remove the stale large-graph GED fallback from the ledger
+
+Triage of the apparent nearest non-union miss
+`iproute2:O0:rtmon:main` exposed a second score-accounting defect. The joined
+ledger paired the correct O0 source CFG, but its GED values still came from
+legacy `scripts/reeval_ged.py`. That script uses the historical greater-than-60
+node fallback: absolute node-count difference plus absolute edge-count
+difference. Current DecBench GED cache schema 3 instead runs VJ-GED through 200
+nodes after checking exact isomorphism.
+
+The difference is material. `rtmon:main` has a 71-node/104-edge source CFG and a
+69-node/103-edge decompiled CFG. The old fallback reported `3`; current VJ-GED
+reports `18`. More seriously, `gnutls:O2-noinline:ocsptool:socket_open2` had
+equal source/decompiled sizes, so the fallback returned a false perfect `0`
+despite non-isomorphic graphs; current VJ-GED reports `18`.
+
+I preserved the prior materialized results, then ran current DecBench
+`evaluate-tree` over all 224 `1e973bc` artifacts with the published
+per-binary/per-optimization source CFGs, GED cache schema 3, and 12 workers. It
+scored the same 240 functions. Twenty-six values changed; the exact current
+baseline is:
+
+| Metric | Perfect | Coverage | Mean | Median |
+|---|---:|---:|---:|---:|
+| GED | 64 | 240 | 30.366667 | 10 |
+| TypeMatch | 22 | 235 | 0.245741 | 0.090909 |
+| ByteMatch | 14 | 250 | 0.304440 | 0.259079 |
+| union | 78 | 250 | 31.2% | — |
+
+Direct current-metric extraction reconfirms the retained guarded-call delta:
+`xheader_list_append` moves from a 3-node/3-edge non-isomorphic CFG at GED `3`
+to a 4-node/4-edge graph isomorphic to source at GED `0`. Therefore exact
+`b50ba50` is GED `65/240` perfect with mean `30.354167`, median `10`, and union
+`79/250` (`31.6%`); TypeMatch and ByteMatch are unchanged. This supersedes PR
+#56 comment `5252744474`'s `80/250` absolute claim. The release remains a valid
+one-row improvement; only the inherited baseline was one false perfect too
+high.
+
+The corrected nearest non-artifact miss is now
+`gnutls:O0:systemkey:buffer_append` at GED `3`, not `rtmon`. Its exact source and
+binary both contain the overflow-safe, lazily evaluated capacity expression;
+the next diagnosis must determine why HIR renders that value select as an
+extra branch/join node before any transform is proposed.
