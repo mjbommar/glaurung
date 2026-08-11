@@ -5,6 +5,10 @@
 //! checked at their boolean fixed point so a later iteration can observe a
 //! write from an earlier one.
 
+mod return_type;
+
+pub(crate) use return_type::{returned_role_integer_fact, ReturnedIntegerFact};
+
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
 

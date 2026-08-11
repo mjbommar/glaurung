@@ -542,6 +542,17 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     ByteMatch improves two rows and regresses none, and all changed C CFGs are
     topology-isomorphic. The accepted-ledger projection advances union
     `79→80/250` (`32.0%`) and TypeMatch `0.237396→0.238814`.
+  - [x] Refine a coalesced source return role from definitions that actually
+    reach observed returns, rather than every historical assignment to the same
+    rendered name. A real optimized stack-canary fixture recompiles and executes;
+    pointer-return and unstructured-flow controls fail closed. The first draft
+    was rejected after DWARF exposed three corpus regressions caused by conflating
+    unsupported control flow with refutation. The retained tri-state query changes
+    only `shadow:O2-noinline:userdel:is_owner` across the 224-binary replay and
+    recovers its DWARF-confirmed `int` return. GED, TypeMatch, and ByteMatch are
+    exactly unchanged because DecBench does not score function return types and
+    the paired CFGs are topology-isomorphic. This is a correctness-only increment;
+    projected union remains 80/250 (`32.0%`).
 - [x] Remove x86 omit-frame-pointer callee saves that stack promotion names as
   ordinary `local_*` objects.  Entry-version nonvolatile-register provenance
   is gated by the detected calling convention, and the existing

@@ -4753,7 +4753,22 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
         }
     }
     if let Some(width) = widest_return_value(&f.body, tm, &defs) {
-        if all_definitions_proven_scalar(&f.body, "ret", tm) {
+        let reaching = crate::ir::structured_reaching::returned_role_integer_fact(f, "ret", tm);
+        let proven_width = match reaching {
+            crate::ir::structured_reaching::ReturnedIntegerFact::Proven(reaching_width) => {
+                Some(reaching_width)
+            }
+            crate::ir::structured_reaching::ReturnedIntegerFact::Unsupported
+                if all_definitions_proven_scalar(&f.body, "ret", tm) =>
+            {
+                // Preserve the established fallback for honest residual gotos.
+                // Unsupported predecessor recovery is not pointer evidence.
+                Some(width)
+            }
+            crate::ir::structured_reaching::ReturnedIntegerFact::Refuted
+            | crate::ir::structured_reaching::ReturnedIntegerFact::Unsupported => None,
+        };
+        if let Some(proven_width) = proven_width {
             // Raw rax reuse can attach an earlier address-computation pointer
             // hint to the final return role. Prepared value flow is stronger:
             // when every definition is explicitly scalar, the function cannot
@@ -4765,9 +4780,9 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
                 width: recovered_width,
             }) = tm.get(&ret)
             {
-                tm.force_scalar_int(ret, signed, recovered_width.max(width));
+                tm.force_scalar_int(ret, signed, recovered_width.max(proven_width));
             } else {
-                tm.force_scalar_int(ret, true, width);
+                tm.force_scalar_int(ret, true, proven_width);
             }
         } else if width >= 8 {
             tm.force_int_width(VReg::phys("ret"), 8);

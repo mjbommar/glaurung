@@ -2869,3 +2869,70 @@ validation and `unzip -t` pass. The published archive SHA-256 is
 `b0553c6308ab5a5cf7cec5f89d78d1aafb2a55d5c95e7446ecb391c2ffa24aca`, at
 `https://github.com/mjbommar/glaurung/releases/tag/decbench-e110a0a`; DecBench
 PR #56 records the exact paired attribution and projected leaderboard delta.
+
+## 01:10–02:20 — make return-type refinement ask which definitions actually reach return
+
+The next correctness target was
+`shadow:O2-noinline:userdel:is_owner`. Its source and DWARF contract return
+`int`, but Glaurung rendered `int *`. The first wrong stage was late ABI type
+refinement: an earlier stack-canary value and the final source result had both
+been coalesced into the rendered role `ret`, and the flow-insensitive
+`all_definitions_proven_scalar` scan let the killed pointer-shaped lifetime
+poison the function contract.
+
+TDD first reproduced that lifetime collision with a real optimized, stripped,
+stack-protected shared object. The retained integration test checks both an
+integer-returning function and a genuine pointer-returning negative, recompiles
+the recovered C, and executes original and recovered scalar functions across
+boundary inputs. Nine focused lattice tests cover killed definitions, branch
+joins, zero-iteration loops, non-integer/select values, unsupported gotos,
+abrupt exception flow, implicit call/pop writes of the ABI return role, and
+known noreturn calls whose branch cannot contribute a false join exit, and
+unreachable statements after a terminal return.
+
+The first structured-flow draft was rejected after the mandatory 224-binary
+replay. It changed five files and incorrectly turned three DWARF-confirmed
+integer returns into pointers (`cmp`, `dopass`, and `getfacl`'s `main`). The
+cause was an API error: one optional result represented both “the structured
+query disproved an integer” and “a residual goto makes predecessor recovery
+unsupported.” The retained three-way contract separates `Proven`, `Refuted`,
+and `Unsupported`; unsupported flow preserves the established conservative
+fallback instead of becoming pointer evidence.
+
+The query is owned as the private `structured_reaching::return_type` side-car,
+not advertised as the future shared definition service. It is 491 lines with
+its own tests, below the 1,000-line ratchet, and adds only the small call site to
+the already oversized `ast.rs`. The proper Phase-3 destination remains verified
+CFG/MIR values; this bounded HIR query exists because source-role coalescing is
+currently a late operation that MIR identities do not yet represent.
+
+The corrected replay at `/tmp/glaurung-return-reaching-v2-replay.up2zaF`
+emits all 250 requested functions across all 224 binaries with zero failures.
+Exactly one generated file changes: `is_owner` becomes `int sub_5720(...)`
+instead of `int * sub_5720(...)`, matching its independent DWARF return type.
+The final optimized replay at
+`/tmp/glaurung-return-reaching-final3-replay.ZSqH4A` is byte-identical across
+all 224 C files to that scored candidate. Wall time is 54.674 seconds, with
+2.866 mean, 2.428 median, 4.016 p95, and 5.975 maximum seconds per binary,
+inside every Phase-1 guardrail. Two intervening debug-extension timings were
+rejected as performance evidence; their 64–68 second walls measured an
+unoptimized native module, not a production build.
+
+Fresh paired evaluation is intentionally score-neutral. TypeMatch remains
+`0.666666` because the current metric scores parameters and locals, not function
+return types; corrected ByteMatch remains zero because both versions are
+noncompilable in that row. Fresh Joern extraction gives identical 6-node,
+7-edge target CFGs and confirms exact topology isomorphism, so GED is unchanged.
+The projected accepted ledger therefore remains union 80/250 (`32.0%`),
+TypeMatch `0.238814`, GED `22.621400`, and corrected ByteMatch `0.304416`.
+This corrects the earlier working assumption that fixing the return declaration
+would itself earn a TypeMatch perfect.
+
+The final Rust gate passes 2,014 library tests, every integration target, and
+doc tests. The complete 2,940-test Python collection reports 2,892 passed and
+44 skipped, with exactly the four established `suspicious_win` sample-content
+failures; rerunning `--last-failed` leaves only those same four. The real
+compile/execute fixture, focused Ruff and Ty, `cargo fmt --check`, and
+`git diff --check` pass. Repository-wide formatting, Ruff, and Ty remain the
+documented unrelated baseline (349 unformatted files, 3,710 Ruff diagnostics,
+and 2,038 Ty diagnostics); none was changed or suppressed in this lane.
