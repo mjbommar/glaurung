@@ -2857,4 +2857,15 @@ cause was avoidable rather than semantic: the new oracle was still constructed
 for non-SysV functions even though their result was unconditionally rejected.
 The final implementation therefore does not construct the demand oracle unless
 the calling convention is SysV AMD64. Focused tests and the complete Rust suite
-remain green; a fresh frozen replay is required before publication.
+remain green.
+
+The frozen `e110a0a` replay at
+`/tmp/glaurung-e110a0a-replay.T05FEn` emits 250/250 functions across 224/224
+binaries with zero failures and is byte-identical across all 224 C files to
+both the committed `5567cec` replay and the independently scored worktree.
+It measures 54.364 seconds wall, 2.846 mean, 2.404 median, 4.026 p95, and 4.274
+maximum seconds per binary, comfortably inside every Phase-1 ceiling. Package
+validation and `unzip -t` pass. The published archive SHA-256 is
+`b0553c6308ab5a5cf7cec5f89d78d1aafb2a55d5c95e7446ecb391c2ffa24aca`, at
+`https://github.com/mjbommar/glaurung/releases/tag/decbench-e110a0a`; DecBench
+PR #56 records the exact paired attribution and projected leaderboard delta.
