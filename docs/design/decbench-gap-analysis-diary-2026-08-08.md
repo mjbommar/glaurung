@@ -2618,3 +2618,18 @@ cells is byte-for-byte identical to this candidate.  The failures therefore do
 not originate in this patch; they expose accepted-branch drift from the checked
 ratchet baseline and remain an open gate-repair task rather than being hidden or
 rebaselined here.
+
+The implementation was committed as
+`7b4cc504f2d0c29626660a6fce075886ea1773ff` and pushed with an identical
+remote branch hash.  Rebuilding the extension from that exact commit and
+replaying an otherwise empty kit again emits all 250 functions from all 224
+binaries with zero failures.  Every generated C file is byte-for-byte identical
+to the independently scored worktree candidate.  The validated exact-revision
+archive SHA-256 is
+`17039cf9958df1d2c3a27a328312c47c03830bc4fd7b68cc12ab553a2cbd86f0`,
+its result manifest is
+`b111522dd28a4ff5b9ebcef2f4499fe5a984e8d90555c03edbfdb9a58278b582`,
+the diagnostic ledger is
+`6ebe6bb132a1226047e4ddaa3046169c707d49f9b14044f9fb21fc9fce1ae1db`,
+and the stable C-tree digest is
+`f1888656956c36e774abd38324f58a902e371c18adb747a7adc2e38faff1cbeb`.
