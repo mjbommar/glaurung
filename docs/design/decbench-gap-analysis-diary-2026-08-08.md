@@ -3040,3 +3040,18 @@ with exactly the four established `suspicious_win` sample-content failures;
 `--last-failed` reruns only those same four. Repository-wide checks retain their
 unrelated baseline rather than being rewritten in this lane: 308 Python files
 would be reformatted, Ruff reports 3,509 diagnostics, and Ty reports 1,939.
+
+The implementation and its pre-publication evidence are committed as
+`9d76321fcf960fa9012772eca464bae101197c33` and the remote branch resolves to
+that same hash. Rebuilding the optimized extension from the frozen commit and
+replaying a second empty kit at 12 workers again emits 250/250 functions across
+224/224 binaries with zero failures. Every generated C file is byte-identical
+to the scored candidate. The publication replay measures 55.323 seconds wall,
+2.936 mean, 2.502 median, 4.045 p95, and 4.862 maximum seconds per binary,
+inside every Phase-1 ceiling. Package validation and zip integrity pass. The
+published archive SHA-256 is
+`ed7aee876d7eb0eca8c4ac523a69c8a758ba7b579d12533b994341ad4b0ab499`,
+matching the GitHub asset digest at
+`https://github.com/mjbommar/glaurung/releases/tag/decbench-9d76321`.
+DecBench PR #56 records the exact five-row attribution and projected union
+advance in comment `5251036371`.
