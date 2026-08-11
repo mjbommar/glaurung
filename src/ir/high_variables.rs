@@ -8,13 +8,13 @@
 //! the facts to a bounded fixed point.
 //!
 //! The pass is deliberately fail-closed: every definition of a candidate must
-//! resolve to a compatible pointer, and any use in integer/address arithmetic
-//! prevents changing its C declaration.
+//! resolve to a compatible pointer, and any arithmetic use that cannot preserve
+//! byte-level semantics prevents changing its C declaration.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::{is_promoted_local_name as is_promoted_local, VReg};
+use crate::ir::types::{is_promoted_local_name as is_promoted_local, BinOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,15 +57,39 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
         types.clear_value_fact(&reg);
     }
 
+    let baseline_types = types.clone();
     let mut unsafe_uses = HashSet::new();
-    collect_unsafe_pointer_uses(&function.body, &mut unsafe_uses);
-    refine_authoritative_pointer_parameters(&function.body, &definitions, &unsafe_uses, types);
+    collect_unsafe_pointer_uses(&function.body, None, &mut unsafe_uses);
+    refine_pointer_facts(&function.body, &definitions, &unsafe_uses, types);
+    // Add/sub can be either integer arithmetic or valid C pointer arithmetic.
+    // Resolve the candidate pointer classes first, then reject any additive use
+    // that cannot be represented without changing byte-level semantics. If a
+    // rejection appears, replay from the pre-pass map so provisional pointer
+    // facts cannot survive their failed proof.
+    let mut validated_unsafe_uses = unsafe_uses.clone();
+    collect_unsafe_pointer_uses(&function.body, Some(types), &mut validated_unsafe_uses);
+    if validated_unsafe_uses != unsafe_uses {
+        *types = baseline_types;
+        refine_pointer_facts(&function.body, &definitions, &validated_unsafe_uses, types);
+    }
+}
+
+fn refine_pointer_facts(
+    body: &[Stmt],
+    definitions: &HashMap<String, Vec<Definition>>,
+    unsafe_uses: &HashSet<String>,
+    types: &mut TypeMap,
+) {
+    refine_authoritative_pointer_values(body, definitions, unsafe_uses, types);
 
     for _ in 0..=definitions.len() {
         let mut learned = Vec::new();
-        for (name, defs) in &definitions {
+        for (name, defs) in definitions {
             if !is_source_value_local(name)
                 || unsafe_uses.contains(name)
+                || defs
+                    .iter()
+                    .any(|definition| definition.transports_unsafe_source(unsafe_uses))
                 || matches!(types.get(&VReg::phys(name)), Some(TypeHint::Pointer { .. }))
             {
                 continue;
@@ -96,9 +120,9 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
 /// transported it.  The same is true for a project-local direct callee whose
 /// body recovered a pointer parameter: the caller may only forward that value,
 /// so the callee is the sole intraprocedural source of its type. Conflicting
-/// pointee types, indirect expressions, and any integer/arithmetic use remain
-/// fail-closed.
-fn refine_authoritative_pointer_parameters(
+/// pointee types, indirect expressions, and incompatible integer/arithmetic
+/// uses remain fail-closed.
+fn refine_authoritative_pointer_values(
     body: &[Stmt],
     definitions: &HashMap<String, Vec<Definition>>,
     unsafe_uses: &HashSet<String>,
@@ -174,11 +198,33 @@ fn refine_authoritative_pointer_parameters(
 
     let mut candidates = HashMap::new();
     collect(body, &mut candidates);
+    let mut direct_values = Vec::new();
     let mut widths_by_origin: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for (name, widths) in candidates {
         let Some(width) = compatible_pointer_width(&widths) else {
             continue;
         };
+        // A consumer boundary alone does not recover the declaration of an
+        // ephemeral SSA temporary or the pointee of an opaque/non-character
+        // object.  The defensible direct-use exception is a promoted source
+        // local used consistently as a byte cursor: C character-pointer
+        // arithmetic preserves the machine's byte offsets, and every local
+        // definition is checked below before the fact is admitted.
+        if is_promoted_local(&name)
+            && width == 1
+            && !unsafe_uses.contains(&name)
+            && definitions.get(&name).is_some_and(|value_definitions| {
+                definitions_accept_authoritative_pointer_use(
+                    &name,
+                    value_definitions,
+                    width,
+                    types,
+                    definitions,
+                )
+            })
+        {
+            direct_values.push((name.clone(), width));
+        }
         let Some(origin) = single_exact_parameter_origin(&name, definitions) else {
             continue;
         };
@@ -186,6 +232,15 @@ fn refine_authoritative_pointer_parameters(
             continue;
         }
         widths_by_origin.entry(origin).or_default().push(width);
+    }
+    direct_values.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (name, width) in &direct_values {
+        types.refine_from_value(
+            VReg::phys(name),
+            TypeHint::Pointer {
+                pointee_width: *width,
+            },
+        );
     }
     for (origin, widths) in widths_by_origin {
         let Some(width) = compatible_pointer_width(&widths) else {
@@ -198,6 +253,85 @@ fn refine_authoritative_pointer_parameters(
             },
         );
     }
+}
+
+fn definitions_accept_authoritative_pointer_use(
+    name: &str,
+    definitions: &[Definition],
+    width: u8,
+    types: &TypeMap,
+    all_definitions: &HashMap<String, Vec<Definition>>,
+) -> bool {
+    fn accepts(
+        definition: &Definition,
+        name: &str,
+        width: u8,
+        types: &TypeMap,
+        all_definitions: &HashMap<String, Vec<Definition>>,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        if definition.is_null_initializer() {
+            return true;
+        }
+        if width == 1
+            && matches!(
+                definition,
+                Definition::Assignment(Expr::Bin {
+                    op: BinOp::Add | BinOp::Sub,
+                    lhs,
+                    rhs,
+                }) if matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(source)) if source == name)
+                    && matches!(rhs.as_ref(), Expr::Const(_))
+            )
+        {
+            return true;
+        }
+        match (definition.classify(types), definition) {
+            (ValueClass::Pointer(candidate), _) => {
+                candidate == 0 || width == 0 || candidate == width
+            }
+            (
+                ValueClass::Scalar | ValueClass::Unknown,
+                Definition::Assignment(Expr::Reg(VReg::Phys(source))),
+            ) if is_trusted_copy_source(source) => {
+                let Some(source_definitions) = all_definitions.get(source) else {
+                    return false;
+                };
+                if !visiting.insert(source.clone()) {
+                    return false;
+                }
+                let accepted = source_definitions.iter().all(|source_definition| {
+                    accepts(
+                        source_definition,
+                        source,
+                        width,
+                        types,
+                        all_definitions,
+                        visiting,
+                    )
+                });
+                visiting.remove(source);
+                accepted
+            }
+            (ValueClass::Unknown, Definition::Call { return_type, .. }) => {
+                return_type.as_ref().is_none_or(|(_, authority)| {
+                    *authority == crate::ir::call_contracts::CallPrototypeAuthority::Recovered
+                })
+            }
+            (ValueClass::Scalar | ValueClass::Unknown, _) => false,
+        }
+    }
+
+    definitions.iter().all(|definition| {
+        accepts(
+            definition,
+            name,
+            width,
+            types,
+            all_definitions,
+            &mut HashSet::new(),
+        )
+    })
 }
 
 fn compatible_pointer_width(widths: &[u8]) -> Option<u8> {
@@ -213,7 +347,7 @@ enum Definition {
     Assignment(Expr),
     Call {
         target: Expr,
-        return_type: Option<String>,
+        return_type: Option<(String, crate::ir::call_contracts::CallPrototypeAuthority)>,
     },
 }
 
@@ -224,12 +358,24 @@ impl Definition {
             Self::Call {
                 target,
                 return_type,
-            } => classify_call(target, return_type.as_deref()),
+            } => classify_call(
+                target,
+                return_type
+                    .as_ref()
+                    .map(|(c_type, authority)| (c_type.as_str(), *authority)),
+            ),
         }
     }
 
     fn is_null_initializer(&self) -> bool {
         matches!(self, Self::Assignment(Expr::Const(0)))
+    }
+
+    fn transports_unsafe_source(&self, unsafe_uses: &HashSet<String>) -> bool {
+        matches!(
+            self,
+            Self::Assignment(Expr::Reg(VReg::Phys(source))) if unsafe_uses.contains(source)
+        )
     }
 }
 
@@ -308,9 +454,12 @@ fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>
                 ..
             } => out.entry(name.clone()).or_default().push(Definition::Call {
                 target: target.clone(),
-                return_type: call_spec
-                    .as_ref()
-                    .map(|spec| spec.call_prototype.return_type.clone()),
+                return_type: call_spec.as_ref().map(|spec| {
+                    (
+                        spec.call_prototype.return_type.clone(),
+                        spec.call_prototype.authority,
+                    )
+                }),
             }),
             Stmt::If {
                 then_body,
@@ -346,6 +495,8 @@ fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>
 fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -> Option<u8> {
     let mut width = 0;
     let mut has_pointer = false;
+    let mut has_opaque_pointer = false;
+    let mut has_concrete_pointer = false;
     for definition in definitions {
         // C pointers are routinely initialized to NULL before a conditional
         // allocation.  The zero is compatible with a later proven pointer but
@@ -357,11 +508,20 @@ fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -
             ValueClass::Pointer(next) if width == 0 || next == 0 || width == next => {
                 width = width.max(next);
                 has_pointer = true;
+                has_opaque_pointer |= next == 0;
+                has_concrete_pointer |= next != 0;
             }
             // Unknown is not evidence. This prevents one pointer-looking branch
             // from typing a multiply-defined local.
             ValueClass::Pointer(_) | ValueClass::Scalar | ValueClass::Unknown => return None,
         }
+    }
+    if definitions.len() > 1 && has_opaque_pointer && has_concrete_pointer {
+        // A multiply-defined promoted identity may cover distinct source
+        // lifetimes. Opaque and concrete pointer definitions are compatible at
+        // a single C conversion boundary, but merging them flow-insensitively
+        // invents one concrete declaration for all lifetimes.
+        return None;
     }
     has_pointer.then_some(width)
 }
@@ -441,11 +601,20 @@ fn is_null_pointer_constant(expression: &Expr) -> bool {
     matches!(expression, Expr::Const(0))
 }
 
-fn classify_call(target: &Expr, recovered_return_type: Option<&str>) -> ValueClass {
-    if let Some(c_type) = recovered_return_type {
-        return pointer_width_from_c_type(c_type)
-            .map(ValueClass::Pointer)
-            .unwrap_or(ValueClass::Scalar);
+fn classify_call(
+    target: &Expr,
+    recovered_return_type: Option<(&str, crate::ir::call_contracts::CallPrototypeAuthority)>,
+) -> ValueClass {
+    if let Some((c_type, authority)) = recovered_return_type {
+        if let Some(width) = pointer_width_from_c_type(c_type) {
+            return ValueClass::Pointer(width);
+        }
+        if authority == crate::ir::call_contracts::CallPrototypeAuthority::Authoritative {
+            return ValueClass::Scalar;
+        }
+        // A recovered machine-word spelling is not authoritative evidence that
+        // the source result was scalar. A locked pointer use may refine it.
+        return ValueClass::Unknown;
     }
     let Expr::Named { name, .. } = target else {
         return ValueClass::Unknown;
@@ -496,23 +665,24 @@ fn is_trusted_copy_source(name: &str) -> bool {
     is_source_value_local(name) || crate::ir::ast::parse_arg_index(name).is_some()
 }
 
-/// Mark names below integer/address operations. Declaring these as pointers
-/// could scale byte arithmetic or make bitwise operators ill-typed. Direct
-/// copies, returns, call arguments, comparisons, and dereferences stay eligible.
-fn collect_unsafe_pointer_uses(body: &[Stmt], out: &mut HashSet<String>) {
+/// Mark names below incompatible integer/address operations. Declaring these
+/// as pointers could scale byte arithmetic or make bitwise operators ill-typed.
+/// Direct copies, returns, call arguments, comparisons, identity addresses, and
+/// byte-scaled character-pointer arithmetic stay eligible.
+fn collect_unsafe_pointer_uses(body: &[Stmt], types: Option<&TypeMap>, out: &mut HashSet<String>) {
     for statement in body {
         match statement {
             Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
-                collect_unsafe_expr(src, false, out)
+                collect_unsafe_expr(src, false, types, out)
             }
             Stmt::Store { addr, src, .. } => {
-                collect_unsafe_expr(addr, false, out);
-                collect_unsafe_expr(src, false, out);
+                collect_unsafe_expr(addr, false, types, out);
+                collect_unsafe_expr(src, false, types, out);
             }
             Stmt::Call { target, args, .. } => {
-                collect_unsafe_expr(target, false, out);
+                collect_unsafe_expr(target, false, types, out);
                 for argument in args {
-                    collect_unsafe_expr(argument, false, out);
+                    collect_unsafe_expr(argument, false, types, out);
                 }
             }
             Stmt::If {
@@ -520,15 +690,15 @@ fn collect_unsafe_pointer_uses(body: &[Stmt], out: &mut HashSet<String>) {
                 then_body,
                 else_body,
             } => {
-                collect_unsafe_expr(cond, false, out);
-                collect_unsafe_pointer_uses(then_body, out);
+                collect_unsafe_expr(cond, false, types, out);
+                collect_unsafe_pointer_uses(then_body, types, out);
                 if let Some(else_body) = else_body {
-                    collect_unsafe_pointer_uses(else_body, out);
+                    collect_unsafe_pointer_uses(else_body, types, out);
                 }
             }
             Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
-                collect_unsafe_expr(cond, false, out);
-                collect_unsafe_pointer_uses(body, out);
+                collect_unsafe_expr(cond, false, types, out);
+                collect_unsafe_pointer_uses(body, types, out);
             }
             Stmt::For {
                 init,
@@ -536,33 +706,38 @@ fn collect_unsafe_pointer_uses(body: &[Stmt], out: &mut HashSet<String>) {
                 step,
                 body,
             } => {
-                collect_unsafe_pointer_uses(std::slice::from_ref(init.as_ref()), out);
-                collect_unsafe_expr(cond, false, out);
-                collect_unsafe_pointer_uses(body, out);
-                collect_unsafe_pointer_uses(std::slice::from_ref(step.as_ref()), out);
+                collect_unsafe_pointer_uses(std::slice::from_ref(init.as_ref()), types, out);
+                collect_unsafe_expr(cond, false, types, out);
+                collect_unsafe_pointer_uses(body, types, out);
+                collect_unsafe_pointer_uses(std::slice::from_ref(step.as_ref()), types, out);
             }
             Stmt::Switch {
                 discriminant,
                 cases,
                 default,
             } => {
-                collect_unsafe_expr(discriminant, false, out);
+                collect_unsafe_expr(discriminant, false, types, out);
                 for (_, case) in cases {
-                    collect_unsafe_pointer_uses(case, out);
+                    collect_unsafe_pointer_uses(case, types, out);
                 }
                 if let Some(default) = default {
-                    collect_unsafe_pointer_uses(default, out);
+                    collect_unsafe_pointer_uses(default, types, out);
                 }
             }
             Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
-                collect_unsafe_expr(target, true, out)
+                collect_unsafe_expr(target, true, types, out)
             }
             _ => {}
         }
     }
 }
 
-fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashSet<String>) {
+fn collect_unsafe_expr(
+    expression: &Expr,
+    integer_context: bool,
+    types: Option<&TypeMap>,
+    out: &mut HashSet<String>,
+) {
     match expression {
         Expr::Reg(VReg::Phys(name)) if integer_context => {
             out.insert(name.clone());
@@ -581,16 +756,16 @@ fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashS
                 }
             }
         }
-        Expr::Deref { addr, .. } => collect_unsafe_expr(addr, false, out),
+        Expr::Deref { addr, .. } => collect_unsafe_expr(addr, false, types, out),
         Expr::Call { target, args, .. } => {
-            collect_unsafe_expr(target, false, out);
+            collect_unsafe_expr(target, false, types, out);
             for argument in args {
-                collect_unsafe_expr(argument, false, out);
+                collect_unsafe_expr(argument, false, types, out);
             }
         }
         Expr::Cmp { lhs, rhs, .. } => {
-            collect_unsafe_expr(lhs, false, out);
-            collect_unsafe_expr(rhs, false, out);
+            collect_unsafe_expr(lhs, false, types, out);
+            collect_unsafe_expr(rhs, false, types, out);
         }
         Expr::Select {
             cond,
@@ -598,19 +773,39 @@ fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashS
             if_false,
             ..
         } => {
-            collect_unsafe_expr(cond, false, out);
-            collect_unsafe_expr(if_true, integer_context, out);
-            collect_unsafe_expr(if_false, integer_context, out);
+            collect_unsafe_expr(cond, false, types, out);
+            collect_unsafe_expr(if_true, integer_context, types, out);
+            collect_unsafe_expr(if_false, integer_context, types, out);
+        }
+        Expr::Bin { op, lhs, rhs }
+            if matches!(op, BinOp::Add | BinOp::Sub)
+                && types.is_none_or(|types| additive_pointer_use_is_safe(*op, lhs, rhs, types)) =>
+        {
+            collect_unsafe_expr(lhs, false, types, out);
+            collect_unsafe_expr(rhs, false, types, out);
         }
         Expr::Bin { lhs, rhs, .. } => {
-            collect_unsafe_expr(lhs, true, out);
-            collect_unsafe_expr(rhs, true, out);
+            collect_unsafe_expr(lhs, true, types, out);
+            collect_unsafe_expr(rhs, true, types, out);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => collect_unsafe_expr(src, true, out),
-        Expr::FunctionTableEntry { index, .. } => collect_unsafe_expr(index, true, out),
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
+            collect_unsafe_expr(src, true, types, out)
+        }
+        Expr::FunctionTableEntry { index, .. } => collect_unsafe_expr(index, true, types, out),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
-                collect_unsafe_expr(argument, true, out);
+                collect_unsafe_expr(argument, true, types, out);
+            }
+        }
+        Expr::Lea {
+            base: Some(VReg::Phys(name)),
+            index: None,
+            scale: 1,
+            disp: 0,
+            segment: None,
+        } => {
+            if integer_context {
+                out.insert(name.clone());
             }
         }
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
@@ -623,563 +818,31 @@ fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashS
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::refine_pointer_high_variables;
-    use crate::ir::ast::{Expr, Function, Stmt};
-    use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
-    use crate::ir::types::{BinOp, VReg};
-    use crate::ir::types_recover::{TypeHint, TypeMap};
+fn additive_pointer_use_is_safe(op: BinOp, lhs: &Expr, rhs: &Expr, types: &TypeMap) -> bool {
+    fn is_character_pointer(expression: &Expr, types: &TypeMap) -> bool {
+        let Expr::Reg(VReg::Phys(name)) = expression else {
+            return false;
+        };
+        is_promoted_local(name)
+            && matches!(
+                types.get(&VReg::phys(name)),
+                Some(TypeHint::Pointer { pointee_width: 1 })
+            )
+    }
 
-    fn pointer_width(types: &TypeMap, name: &str) -> Option<u8> {
-        match types.get(&VReg::phys(name)) {
-            Some(TypeHint::Pointer { pointee_width }) => Some(pointee_width),
-            _ => None,
+    match op {
+        BinOp::Add => {
+            (is_character_pointer(lhs, types) && matches!(rhs, Expr::Const(_)))
+                || (matches!(lhs, Expr::Const(_)) && is_character_pointer(rhs, types))
         }
-    }
-
-    #[test]
-    fn exact_integer_value_width_survives_pointer_refinement() {
-        let function = Function {
-            name: "negative_cases".into(),
-            entry_va: 0,
-            body: vec![Stmt::Assign {
-                dst: VReg::phys("var0"),
-                src: Expr::Bin {
-                    op: BinOp::Add,
-                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                    rhs: Box::new(Expr::Const(3)),
-                },
-            }],
-        };
-        let mut types = TypeMap::default();
-        types.upsert_public(
-            VReg::phys("var0"),
-            TypeHint::Int {
-                signed: false,
-                width: 4,
-            },
-        );
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(
-            types.get(&VReg::phys("var0")),
-            Some(TypeHint::Int {
-                signed: false,
-                width: 4,
-            })
-        );
-    }
-
-    #[test]
-    fn known_call_and_literal_flow_through_exact_copy_chain() {
-        let function = Function {
-            name: "f".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Call {
-                    target: Expr::Named {
-                        va: 0,
-                        name: "getenv@plt".into(),
-                    },
-                    args: vec![Expr::StringLit {
-                        value: "PATH".into(),
-                    }],
-                    dst: Some(VReg::phys("var1")),
-                    call_spec: None,
-                },
-                Stmt::Store {
-                    addr: Expr::Reg(VReg::phys("local_8")),
-                    src: Expr::Reg(VReg::phys("var1")),
-                    size: 8,
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var2"),
-                    src: Expr::StringLit {
-                        value: "/tmp/fallback".into(),
-                    },
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "var1"), Some(1));
-        assert_eq!(pointer_width(&types, "local_8"), Some(1));
-        assert_eq!(pointer_width(&types, "var2"), Some(1));
-    }
-
-    #[test]
-    fn recovered_callee_pointer_result_flows_through_an_exact_copy() {
-        let recovered = CallPrototype {
-            return_type: "void *".into(),
-            parameter_types: vec![],
-            variadic: false,
-            authority: CallPrototypeAuthority::Recovered,
-        };
-        let function = Function {
-            name: "copy_project_pointer".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Call {
-                    target: Expr::Named {
-                        va: 0x2000,
-                        name: "project_device".into(),
-                    },
-                    args: vec![],
-                    dst: Some(VReg::phys("var1")),
-                    call_spec: Some(CallSiteSpec {
-                        callee_prototype: Some(recovered.clone()),
-                        call_prototype: recovered,
-                    }),
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var2"),
-                    src: Expr::Reg(VReg::phys("var1")),
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "var1"), Some(0));
-        assert_eq!(pointer_width(&types, "var2"), Some(0));
-    }
-
-    #[test]
-    fn null_initialized_local_accepts_a_later_character_pointer() {
-        let function = Function {
-            name: "save_locale".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Assign {
-                    dst: VReg::phys("local_8"),
-                    src: Expr::Const(0),
-                },
-                Stmt::Call {
-                    target: Expr::Named {
-                        va: 0,
-                        name: "strdup@plt".into(),
-                    },
-                    args: vec![Expr::Reg(VReg::phys("arg0"))],
-                    dst: Some(VReg::phys("var1")),
-                    call_spec: None,
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("local_8"),
-                    src: Expr::Reg(VReg::phys("var1")),
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "var1"), Some(1));
-        assert_eq!(pointer_width(&types, "local_8"), Some(1));
-    }
-
-    #[test]
-    fn authoritative_call_parameter_refines_a_direct_function_argument() {
-        let function = Function {
-            name: "find_name".into(),
-            entry_va: 0,
-            body: vec![Stmt::Call {
-                target: Expr::Named {
-                    va: 0,
-                    name: "strcmp@plt".into(),
-                },
-                args: vec![
-                    Expr::Reg(VReg::phys("arg0")),
-                    Expr::StringLit {
-                        value: "known".into(),
-                    },
-                ],
-                dst: Some(VReg::phys("var1")),
-                call_spec: None,
-            }],
-        };
-        let mut types = TypeMap::default();
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "arg0"), Some(1));
-    }
-
-    #[test]
-    fn recovered_direct_callee_parameter_refines_a_forwarded_argument() {
-        let recovered = CallPrototype {
-            return_type: "int".into(),
-            parameter_types: vec!["int *".into()],
-            variadic: false,
-            authority: CallPrototypeAuthority::Recovered,
-        };
-        let function = Function {
-            name: "forward_pointer".into(),
-            entry_va: 0,
-            body: vec![Stmt::Call {
-                target: Expr::Named {
-                    va: 0x2000,
-                    name: "read_first".into(),
-                },
-                args: vec![Expr::Reg(VReg::phys("arg0"))],
-                dst: Some(VReg::phys("ret")),
-                call_spec: Some(CallSiteSpec {
-                    call_prototype: recovered.clone(),
-                    callee_prototype: Some(recovered),
-                }),
-            }],
-        };
-        let mut types = TypeMap::default();
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "arg0"), Some(4));
-    }
-
-    #[test]
-    fn recovered_callee_pointer_flows_back_through_one_exact_parameter_copy() {
-        // Real shape: diffutils `lf_skip(struct line_filter *lf, lin lines)`.
-        // The incoming pointer is copied to a numbered value, used in raw byte
-        // address arithmetic, and passed to a helper whose recovered contract
-        // is the only source-level pointer witness. Keep the numbered value a
-        // machine word so `+ 8` remains byte-addressed, but recover the source
-        // parameter transported into it.
-        let recovered = CallPrototype {
-            return_type: "int".into(),
-            parameter_types: vec!["long *".into()],
-            variadic: false,
-            authority: CallPrototypeAuthority::Recovered,
-        };
-        let function = Function {
-            name: "lf_skip_shape".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Assign {
-                    dst: VReg::phys("var2"),
-                    src: Expr::Reg(VReg::phys("arg0")),
-                },
-                Stmt::Call {
-                    target: Expr::Named {
-                        va: 0x2000,
-                        name: "refill".into(),
-                    },
-                    args: vec![Expr::Reg(VReg::phys("var2"))],
-                    dst: Some(VReg::phys("ret")),
-                    call_spec: Some(CallSiteSpec {
-                        call_prototype: recovered.clone(),
-                        callee_prototype: Some(recovered),
-                    }),
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var3"),
-                    src: Expr::Bin {
-                        op: BinOp::Add,
-                        lhs: Box::new(Expr::Reg(VReg::phys("var2"))),
-                        rhs: Box::new(Expr::Const(8)),
-                    },
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "arg0"), Some(8));
-        assert_eq!(pointer_width(&types, "var2"), None);
-    }
-
-    #[test]
-    fn conflicting_alias_contracts_do_not_randomly_retype_their_parameter() {
-        let recovered = CallPrototype {
-            return_type: "int".into(),
-            parameter_types: vec!["long *".into()],
-            variadic: false,
-            authority: CallPrototypeAuthority::Recovered,
-        };
-        let function = Function {
-            name: "conflicting_alias_contracts".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Assign {
-                    dst: VReg::phys("var1"),
-                    src: Expr::Reg(VReg::phys("arg0")),
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var2"),
-                    src: Expr::Reg(VReg::phys("arg0")),
-                },
-                Stmt::Call {
-                    target: Expr::Named {
-                        va: 0,
-                        name: "strcmp@plt".into(),
-                    },
-                    args: vec![
-                        Expr::Reg(VReg::phys("var1")),
-                        Expr::StringLit {
-                            value: "known".into(),
-                        },
-                    ],
-                    dst: Some(VReg::phys("cmp")),
-                    call_spec: None,
-                },
-                Stmt::Call {
-                    target: Expr::Named {
-                        va: 0x2000,
-                        name: "consume_longs".into(),
-                    },
-                    args: vec![Expr::Reg(VReg::phys("var2"))],
-                    dst: Some(VReg::phys("ret")),
-                    call_spec: Some(CallSiteSpec {
-                        call_prototype: recovered.clone(),
-                        callee_prototype: Some(recovered),
-                    }),
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "arg0"), None);
-    }
-
-    #[test]
-    fn recovered_callee_pointer_rejects_a_copy_with_conflicting_origins() {
-        let recovered = CallPrototype {
-            return_type: "int".into(),
-            parameter_types: vec!["long *".into()],
-            variadic: false,
-            authority: CallPrototypeAuthority::Recovered,
-        };
-        let function = Function {
-            name: "overwritten_forwarder".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Assign {
-                    dst: VReg::phys("var2"),
-                    src: Expr::Reg(VReg::phys("arg0")),
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var2"),
-                    src: Expr::Reg(VReg::phys("arg1")),
-                },
-                Stmt::Call {
-                    target: Expr::Named {
-                        va: 0x2000,
-                        name: "consume_pointer".into(),
-                    },
-                    args: vec![Expr::Reg(VReg::phys("var2"))],
-                    dst: None,
-                    call_spec: Some(CallSiteSpec {
-                        call_prototype: recovered.clone(),
-                        callee_prototype: Some(recovered),
-                    }),
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "arg0"), None);
-        assert_eq!(pointer_width(&types, "arg1"), None);
-    }
-
-    #[test]
-    fn integer_arithmetic_blocks_call_parameter_pointer_refinement() {
-        let function = Function {
-            name: "tagged_name".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Call {
-                    target: Expr::Named {
-                        va: 0,
-                        name: "strcmp@plt".into(),
-                    },
-                    args: vec![
-                        Expr::Reg(VReg::phys("arg0")),
-                        Expr::StringLit {
-                            value: "known".into(),
-                        },
-                    ],
-                    dst: Some(VReg::phys("var1")),
-                    call_spec: None,
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var2"),
-                    src: Expr::Bin {
-                        op: BinOp::And,
-                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                        rhs: Box::new(Expr::Const(7)),
-                    },
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "arg0"), None);
-    }
-
-    #[test]
-    fn conflicting_definition_or_integer_use_blocks_pointer_declaration() {
-        let function = Function {
-            name: "f".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Assign {
-                    dst: VReg::phys("var0"),
-                    src: Expr::StringLit { value: "a".into() },
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var0"),
-                    src: Expr::Const(7),
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var1"),
-                    src: Expr::StringLit { value: "b".into() },
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var2"),
-                    src: Expr::Bin {
-                        op: BinOp::And,
-                        lhs: Box::new(Expr::Reg(VReg::phys("var1"))),
-                        rhs: Box::new(Expr::Const(-16)),
-                    },
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-        // A legacy storage-keyed collision must not bypass the exact
-        // multi-definition proof merely because it is already a pointer.
-        types.upsert_public(VReg::phys("var0"), TypeHint::Pointer { pointee_width: 1 });
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "var0"), None);
-        assert_eq!(pointer_width(&types, "var1"), None);
-    }
-
-    #[test]
-    fn structural_stack_register_type_does_not_seed_a_source_pointer() {
-        let function = Function {
-            name: "f".into(),
-            entry_va: 0,
-            body: vec![Stmt::Assign {
-                dst: VReg::phys("var0"),
-                src: Expr::Reg(VReg::phys("sp")),
-            }],
-        };
-        let mut types = TypeMap::default();
-        types.upsert_public(VReg::phys("sp"), TypeHint::Pointer { pointee_width: 4 });
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "var0"), None);
-    }
-
-    #[test]
-    fn select_accepts_null_but_rejects_incompatible_pointer_arms() {
-        let function = Function {
-            name: "f".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Assign {
-                    dst: VReg::phys("var0"),
-                    src: Expr::Select {
-                        cond: Box::new(Expr::Const(1)),
-                        if_true: Box::new(Expr::StringLit { value: "p".into() }),
-                        if_false: Box::new(Expr::Const(0)),
-                        width: 8,
-                    },
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("local_8"),
-                    src: Expr::Select {
-                        cond: Box::new(Expr::Const(1)),
-                        if_true: Box::new(Expr::Reg(VReg::phys("var0"))),
-                        if_false: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                        width: 8,
-                    },
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-        types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 4 });
-
-        refine_pointer_high_variables(&function, &mut types);
-
-        assert_eq!(pointer_width(&types, "var0"), Some(1));
-        assert_eq!(pointer_width(&types, "local_8"), None);
-    }
-
-    #[test]
-    fn pointer_copy_into_conflicted_word_keeps_explicit_machine_cast() {
-        let function = Function {
-            name: "f".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Assign {
-                    dst: VReg::phys("var0"),
-                    src: Expr::StringLit { value: "p".into() },
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var1"),
-                    src: Expr::Reg(VReg::phys("var0")),
-                },
-                Stmt::Assign {
-                    dst: VReg::phys("var1"),
-                    src: Expr::Const(1),
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-        refine_pointer_high_variables(&function, &mut types);
-
-        let rendered = crate::ir::ast::render_decbench_typed(&function, Some(&types), None);
-
-        assert!(rendered.contains("char * var0;"), "{rendered}");
-        assert!(rendered.contains("long var1;"), "{rendered}");
-        assert!(rendered.contains("var1 = (long)var0;"), "{rendered}");
-    }
-
-    #[test]
-    fn pointer_stored_through_width_only_memory_is_explicitly_represented() {
-        let function = Function {
-            name: "f".into(),
-            entry_va: 0,
-            body: vec![
-                Stmt::Assign {
-                    dst: VReg::phys("var0"),
-                    src: Expr::StringLit { value: "p".into() },
-                },
-                Stmt::Store {
-                    addr: Expr::Addr(0x1000),
-                    src: Expr::Reg(VReg::phys("var0")),
-                    size: 4,
-                },
-            ],
-        };
-        let mut types = TypeMap::default();
-        refine_pointer_high_variables(&function, &mut types);
-
-        let rendered = crate::ir::ast::render_decbench_typed(&function, Some(&types), None);
-
-        assert!(
-            rendered.contains(
-                "static unsigned char glaurung_global_1000[16] __attribute__((aligned(16)));"
-            ),
-            "the original image address needs portable storage:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("*(int *)(&glaurung_global_1000[0]) = (int)((long)var0);"),
-            "the 4-byte pointer-to-integer store must remain explicit:\n{rendered}"
-        );
-        assert!(!rendered.contains("*(int *)(0x1000)"), "{rendered}");
+        BinOp::Sub => {
+            is_character_pointer(lhs, types)
+                && (matches!(rhs, Expr::Const(_)) || is_character_pointer(rhs, types))
+        }
+        _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "high_variables_tests.rs"]
+mod tests;

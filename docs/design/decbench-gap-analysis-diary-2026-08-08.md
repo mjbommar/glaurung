@@ -3407,3 +3407,96 @@ row-key join contains 66 GED perfects, 22 TypeMatch perfects, and eight
 ByteMatch perfects with their real overlaps, yielding 81 distinct functions.
 This is still a projected placement until DecBench PR #56 is merged and the
 maintainer recomputes the public board.
+
+## 12:30–15:20 — preserve character-pointer semantics without retyping machine temporaries
+
+The next distance-one TypeMatch target was `gzip:O0:gzip:get_method`. Its
+source keeps two byte cursors and uses valid C character-pointer addition and
+subtraction, but the prepared-AST high-variable pass classified every additive
+use as integer arithmetic. That erased otherwise consistent `char *` evidence
+from the promoted source locals and left the function one type match short of
+perfect.
+
+The first candidate was intentionally broad: it allowed an authoritative
+pointer consumer to retype the value presented at that boundary. Fresh corpus
+scoring showed why that is not a sound general rule. An ephemeral call-result
+temporary is still a machine value, an ABI parameter belongs to prototype
+recovery rather than this local-declaration pass, and a rejected pointer source
+must not leak its interpretation through a direct copy. RED tests now cover all
+three cases. The retained exception is restricted to a promoted source local,
+an exact character pointee width, definitions that all admit the same pointer
+interpretation, and additive uses whose byte scaling is unchanged in C. Opaque
+or conflicting lifetimes, partial/other arithmetic, ABI parameters, numbered
+temporaries, and copies from an unsafe source remain fail-closed.
+
+This type repair exposed a separate renderer boundary. A hidden pointer fact
+does not guarantee that the emitted C declaration is a pointer: recovered call
+results can still be declared as machine words, and promoted stack objects are
+emitted as byte arrays. The renderer now chooses representation casts from the
+actual emitted declaration, casts stack arrays at concrete-pointer boundaries,
+and converts mixed pointer/integer select arms before forming the C conditional.
+Three compile-backed unit tests reproduce those invalid-C cases. The null
+pointer exception and ordinary `void *` conversions retain normal C behavior.
+
+The retained optimized replay at `/tmp/glaurung-pointer-land.UEY8Sf` covers
+224/224 binaries and 250/250 functions with zero errors. Wall time is 57.227
+seconds at 12 workers; per-binary mean, median, p95, and maximum are 3.011,
+2.547, 4.175, and 5.883 seconds, all within the Phase-1 ceiling. The packaged
+archive `/tmp/glaurung-pointer-land-v6-results.zip` passes zip and manifest
+validation with SHA-256
+`46efd624c4fff0d7368a7b29d3fef5238ee416553bc1dea9e5208fa66ec260fc`.
+
+I ingested that exact output as `gptrland` and reran every metric with
+`DECBENCH_NO_CACHE=1`. The exact submitted `020dede` archive was rerun under the
+same evaluator, source tree, and toolchain rather than carrying forward its
+historical cache values:
+
+| Metric | fresh `020dede` | retained candidate | Delta |
+|---|---:|---:|---:|
+| GED perfect / coverage | 67 / 240 | 67 / 240 | 0 |
+| GED mean / median | 24.104167 / 9 | 24.104167 / 9 | 0 |
+| TypeMatch perfect / coverage | 22 / 235 | 23 / 235 | +1 |
+| TypeMatch mean / median | 0.243998 / 0.090909 | 0.244652 / 0.090909 | +0.000655 |
+| ByteMatch perfect / coverage | 8 / 250 | 8 / 250 | 0 |
+| ByteMatch mean / median | 0.249460 / 0.221111 | 0.256935 / 0.228233 | +0.007475 |
+| union perfect | 82 / 250 | 83 / 250 | +1 |
+
+The row join is stronger than the aggregates. TypeMatch changes exactly one
+row: `get_method` moves `0.846154→1.0`. GED is identical in all 240 scored
+rows. ByteMatch improves six rows and regresses none:
+
+- `coreutils:O2-noinline:shred:dopass`, `0→0.238586`;
+- `grep:O2-noinline:grep:finalize_input`, `0→0.268657`;
+- `gzip:O0:gzip:get_method`, `0.203535→0.203989`;
+- `mirai:O2:mirai:ensure_single_instance`, `0→0.576389`;
+- `shadow:O2-noinline:userdel:is_owner`, `0→0.4`; and
+- `sysvinit:O2:killall5:mount_proc`, `0→0.384615`.
+
+The one new union row is exactly `get_method`; no prior perfect is lost. The
+fresh baseline's `82`, rather than the release comment's `81`, is evaluator
+state drift in the absolute perfect identities, not a product delta. The paired
+candidate delta is unambiguous: `+1` union, six ByteMatch improvements, and zero
+metric regression. It projects to 83/250 and third place on the sample-set
+board, but remains a local projection until upstream scores a published
+artifact.
+
+The production/test concern split also closes one concrete file-size issue.
+`src/ir/high_variables.rs` falls from 1,664 lines to 848 production lines; its
+20 unit tests live in a 790-line sibling module. A self-review removed a now
+unreachable `void *` sharpening branch left behind by the narrowed character
+rule. This is a real production/test ownership split, not evidence that the
+larger semantic HIR decomposition target is complete.
+
+Exact-source validation passes `cargo fmt --check`, `git diff --check`, all 20
+focused high-variable tests, the three new renderer tests, and the complete
+Rust suite: 2,048 library tests plus every integration and doc-test target. The
+fresh rebuilt-extension Python collection reports 2,896 passed and 44 skipped;
+its only four failures are the established malformed cross-compiled
+`suspicious_win` samples. All four binaries lack the API name even in their raw
+bytes, and no candidate diff touches the fixtures, triage, symbols, or that
+test. Repository-wide debt remains explicit: Clippy `-D warnings` finds 216
+pre-existing diagnostics, Python format check finds 308 files, Ruff finds
+3,509 errors, and Ty finds 1,940 diagnostics. None is introduced by this
+Rust-only increment. The regenerable 5.3-GiB worktree `target/` cache was
+cleaned after shared `/tmp` quota caused linker and fixture-write failures; the
+successful gates use a target and `TMPDIR` on the home filesystem.

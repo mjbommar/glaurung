@@ -9470,12 +9470,30 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 is_one_lazy_call_times_two(if_false) && unsigned_all_ones_width(if_true).is_some();
             let canonical_false =
                 is_one_lazy_call_times_two(if_true) && unsigned_all_ones_width(if_false).is_some();
+            let true_is_pointer = expression_has_pointer_representation(if_true);
+            let false_is_pointer = expression_has_pointer_representation(if_false);
+            let null_pointer_pair = (true_is_pointer
+                && matches!(if_false.as_ref(), Expr::Const(0)))
+                || (false_is_pointer && matches!(if_true.as_ref(), Expr::Const(0)));
+            let mixed_representation = true_is_pointer != false_is_pointer && !null_pointer_pair;
             out.push('(');
             write_expr_dec(cond, out);
             out.push_str(" ? ");
-            write_select_arm_dec(if_true, canonical_true, out);
+            if mixed_representation {
+                // A surrounding cast is too late: C resolves a conditional's
+                // common type before applying it. Put both non-null arms in the
+                // machine-word representation here so nested casts and stores
+                // cannot emit an invalid pointer/integer conditional.
+                write_representation_value_dec("long", if_true, out);
+            } else {
+                write_select_arm_dec(if_true, canonical_true, out);
+            }
             out.push_str(" : ");
-            write_select_arm_dec(if_false, canonical_false, out);
+            if mixed_representation {
+                write_representation_value_dec("long", if_false, out);
+            } else {
+                write_select_arm_dec(if_false, canonical_false, out);
+            }
             out.push(')');
         }
         Expr::WideArithmetic { op, args, width } => {
@@ -10163,6 +10181,41 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
         return;
     }
 
+    if let Expr::Cast {
+        signed,
+        width,
+        expr,
+    } = src
+    {
+        if let Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } = expr.as_ref()
+        {
+            let cast_type = int_ctype(*signed, *width);
+            let destination_is_pointer = destination_type.ends_with('*');
+            if destination_is_pointer {
+                let _ = write!(out, "({destination_type})(");
+            }
+            let _ = write!(out, "({cast_type})(");
+            write_expr_dec(cond, out);
+            out.push_str(" ? ");
+            // An outer integer cast does not make a pointer/integer conditional
+            // valid: C resolves the two arms first. Convert each arm at the
+            // cast's own representation boundary before forming the select.
+            write_representation_value_dec(cast_type, if_true, out);
+            out.push_str(" : ");
+            write_representation_value_dec(cast_type, if_false, out);
+            out.push_str(")");
+            if destination_is_pointer {
+                out.push(')');
+            }
+            return;
+        }
+    }
+
     if matches!(destination_type, "float" | "double") {
         write_float_expr_dec(src, if destination_type == "float" { 4 } else { 8 }, out);
         return;
@@ -10173,11 +10226,21 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
     if destination_is_pointer && source_is_pointer {
         if let Expr::Reg(reg @ VReg::Phys(_)) = src {
             let source_type = declared_reg_ctype(reg);
-            if source_type.ends_with('*')
-                && source_type != destination_type
-                && source_type != "void *"
-                && destination_type != "void *"
-            {
+            // Pointer facts and emitted declarations intentionally have
+            // different authorities. A recovered call result can retain its
+            // machine-word declaration while later uses prove address
+            // semantics; a stack object is emitted as a byte array even when
+            // its promoted identity has a concrete pointee width. In both
+            // cases, use the C declaration that the compiler actually sees to
+            // decide whether this assignment needs an explicit conversion.
+            let source_needs_cast = dec_is_stack_object(match reg {
+                VReg::Phys(name) => name,
+                _ => unreachable!("the pattern above admits only physical registers"),
+            }) || !source_type.ends_with('*')
+                || (source_type != destination_type
+                    && source_type != "void *"
+                    && destination_type != "void *");
+            if source_needs_cast {
                 let _ = write!(out, "({destination_type})");
                 write_reg_lvalue_dec(reg, out);
                 return;
@@ -10208,8 +10271,16 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
             {
                 write_expr_dec(src, out);
             }
-            // These expressions already have a pointer type in C.
-            Expr::StringLit { .. } | Expr::StackAddr { .. } => write_expr_dec(src, out),
+            // String literals already have the compatible `char *` family in
+            // C. Recovered stack objects, however, are deliberately emitted as
+            // unsigned-byte arrays. Their decay is compatible with `void *`
+            // but needs an explicit conversion for every concrete pointee type.
+            Expr::StringLit { .. } => write_expr_dec(src, out),
+            Expr::StackAddr { .. } if destination_type == "void *" => write_expr_dec(src, out),
+            Expr::StackAddr { .. } => {
+                let _ = write!(out, "({destination_type})");
+                write_expr_dec(src, out);
+            }
             // Address arithmetic, named addresses, and LEA nodes retain a
             // pointer *representation* in the middle layer but deliberately
             // render as integer machine expressions.  Cast the completed
@@ -16216,6 +16287,154 @@ function f @ 0x1000 {
             text.contains("arg0 = (char *)((long)arg0 + arg1);")
                 || text.contains("arg0 = (char *)(((long)arg0 + arg1));"),
             "pointer arithmetic crossed an implicit integer-to-pointer boundary:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_pointer_assignment_casts_a_pointer_fact_with_integer_declaration() {
+        let recovered_long = CallPrototype {
+            return_type: "long".into(),
+            parameter_types: vec![],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let function = Function {
+            name: "copy_recovered_address".to_string(),
+            entry_va: 0x40,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1000,
+                        name: "sub_1000".to_string(),
+                    },
+                    args: vec![],
+                    dst: Some(VReg::phys("var13")),
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(recovered_long.clone()),
+                        call_prototype: recovered_long,
+                    }),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("var15"),
+                    src: Expr::Reg(VReg::phys("var13")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("var13"), TypeHint::Pointer { pointee_width: 1 });
+        types.upsert_public(VReg::phys("var15"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(text.contains("long var13;"), "{text}");
+        assert!(text.contains("char * var15;"), "{text}");
+        assert!(
+            text.contains("var15 = (char *)(var13);")
+                || text.contains("var15 = (char *)var13;"),
+            "the emitted declaration, not a hidden pointer fact, determines whether the copy needs a representation cast:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_pointer_assignment_casts_a_stack_byte_array() {
+        let function = Function {
+            name: "bind_stack_fields".to_string(),
+            entry_va: 0x50,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "touch".to_string(),
+                    },
+                    args: vec![Expr::StackAddr {
+                        object: VReg::phys("local_100"),
+                        size: 12,
+                    }],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_140")),
+                    src: Expr::StackAddr {
+                        object: VReg::phys("local_100"),
+                        size: 12,
+                    },
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("scratch"),
+                    src: Expr::Const(0),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("local_100"),
+            TypeHint::Pointer { pointee_width: 4 },
+        );
+        types.upsert_public(
+            VReg::phys("local_140"),
+            TypeHint::Pointer { pointee_width: 4 },
+        );
+
+        let text = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(text.contains("unsigned char local_100[12];"), "{text}");
+        assert!(text.contains("int * local_140;"), "{text}");
+        assert!(
+            text.contains("local_140 = (int *)local_100;")
+                || text.contains("local_140 = (int *)&local_100[0];")
+                || text.contains("local_140 = (int *)(&local_100[0]);"),
+            "the stack object's concrete byte-array declaration requires an explicit typed-pointer conversion:\n{text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn decbench_casted_select_converts_pointer_and_integer_arms_before_selection() {
+        let function = Function {
+            name: "choose_path".to_string(),
+            entry_va: 0x60,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var0"),
+                src: Expr::Cast {
+                    signed: true,
+                    width: 8,
+                    expr: Box::new(Expr::Cast {
+                        signed: true,
+                        width: 8,
+                        expr: Box::new(Expr::Select {
+                            cond: Box::new(Expr::Reg(VReg::phys("zf_0"))),
+                            if_true: Box::new(Expr::Bin {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Reg(VReg::phys("var154"))),
+                                rhs: Box::new(Expr::Const(1)),
+                            }),
+                            if_false: Box::new(Expr::Reg(VReg::phys("local_2088"))),
+                            width: 8,
+                        }),
+                    }),
+                },
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("var154"), TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(text.contains("char * var154;"), "{text}");
+        assert!(
+            text.contains("? (long)(var154 + 1) : local_2088")
+                || text.contains("? (long)((var154 + 1)) : local_2088"),
+            "C type-checks conditional arms before an outer cast, so the pointer arm must cross the representation boundary inside the select:\n{text}"
         );
         assert_looks_like_c(&text);
     }

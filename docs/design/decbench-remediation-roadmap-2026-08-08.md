@@ -649,6 +649,19 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   `CMSIS_DAP.i` was missing; this inverted a real exact-CFG repair from GED
   `3→0` into an apparent `2→5` regression. Missing own-unit source is unscored,
   not permission to substitute another same-named function.
+- [x] Preserve proven character-pointer semantics in promoted source locals
+  without retyping machine temporaries or ABI parameters. The retained rule
+  requires exact byte pointees, compatible definitions, and byte-scaled C
+  addition/subtraction; unknown call temporaries, unsafe-copy transport,
+  conflicting lifetimes, and non-character arithmetic fail closed. Actual
+  emitted declarations now control representation casts, including stack byte
+  arrays and mixed pointer/integer conditional arms. A fresh cache-disabled
+  224-binary replay changes exactly one TypeMatch row (`get_method`
+  `0.846154→1.0`), improves six ByteMatch rows with none worse, leaves all 240
+  GED rows identical, and advances the freshly rejoined union `82→83/250`.
+  Splitting the 20 tests from their production owner reduces
+  `high_variables.rs` from 1,664 to 848 lines, with a 790-line sibling test
+  module.
 - [ ] Make external-overlay finalization populate `FunctionData.metrics` and
   `perfect_values`, retain every manifest metric row, and fail if the derived
   scoreboard is empty while overlay values exist. The completed `9c25fcb` replay
@@ -1021,6 +1034,34 @@ indirect store is not an eligible consumer because its address and source are
 not sequenced by C. The optimized whole-corpus replay must compare function
 content against the independently scored candidate before any archive is
 published, because a metric win cannot excuse an extra callee invocation.
+
+## Current score increment — character-pointer high variables and C representation safety
+
+The next retained TypeMatch increment makes a narrow distinction between a
+source-local interpretation and a transported machine value:
+
+- a promoted local may become `char *` only when every definition is compatible
+  with that interpretation and all additive uses preserve byte scaling;
+- ABI parameters, numbered temporaries, unknown call temporaries, conflicting
+  lifetimes, and copies from a rejected source remain machine values;
+- the renderer decides conversions from the C declaration it actually emits,
+  not from a stronger hidden type fact; and
+- mixed pointer/integer select arms cross the representation boundary before C
+  chooses the conditional's common type.
+
+The exact optimized replay covers all 224 binaries and 250 functions with zero
+errors and remains inside the Phase-1 performance ceiling. Fresh
+cache-disabled paired scoring against exact `020dede` gives one TypeMatch
+improvement and perfect (`gzip:O0:gzip:get_method`), six ByteMatch improvements,
+zero regressions, and no changed GED row across all 240 scored functions. An
+exact any-metric join advances union `82→83/250`; the absolute fresh baseline
+differs from the prior release comment because evaluator state changed, while
+the paired product delta is stable.
+
+The concern split is measurable but deliberately bounded: production
+`high_variables.rs` is now 848 lines and its tests are 790 lines in a sibling
+module. This satisfies the immediate no-new-oversized-owner rule without
+claiming the Phase-7 HIR/visitor decomposition is complete.
 
 ## TDD and validation matrix
 
