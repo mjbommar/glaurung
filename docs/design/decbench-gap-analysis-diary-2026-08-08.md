@@ -3374,3 +3374,36 @@ integration target. A fresh release-extension Python run reaches exactly the
 four established malformed cross-compiled `suspicious_win` sample failures
 (`riscv64` twice, `armhf`, and `arm64`) and no others; `--last-failed` reproduces
 only those four.
+
+## 11:45–12:25 — publish the effect-safe exact artifact and correct the fresh union
+
+The safety follow-up is frozen as
+`020dededc20561a802394f426c68f0803549599d`, with the remote branch at the same
+commit. A clean optimized rebuild from that exact revision replayed all 224
+binaries and 250 requested functions with zero errors. All generated C files
+are byte-identical to the independently scored effect-safe candidate. The run
+took 53.77 seconds wall; per-binary mean, median, p95, and maximum were 2.826,
+2.436, 4.007, and 6.089 seconds. Zip integrity passes. The exact archive is
+published at
+`https://github.com/mjbommar/glaurung/releases/tag/decbench-020dede`; its local
+and GitHub asset SHA-256 are both
+`c5c5a8978760961c6be240e6f25af5ab1b9b859c99bbd2d88f552bfaaf4de3dd`.
+
+I then ingested that exact archive under a new decompiler id and reran all three
+metrics from stored output. The independently preserved row-level artifacts
+produce:
+
+| Metric | Perfect | Coverage | Mean | Median |
+|---|---:|---:|---:|---:|
+| GED | 66 | 240 | 30.341667 | 10 |
+| TypeMatch | 22 | 235 | 0.245741 | 0.090909 |
+| ByteMatch | 8 | 250 | 0.249460 | 0.221111 |
+| union | 81 | 250 | 32.4% | — |
+
+The `81/250` union corrects the preceding `80/250` table. That table carried an
+old union total across a current ByteMatch run whose exact-perfect identities
+had changed; it did not rejoin the three fresh per-function sets. The exact
+row-key join contains 66 GED perfects, 22 TypeMatch perfects, and eight
+ByteMatch perfects with their real overlaps, yielding 81 distinct functions.
+This is still a projected placement until DecBench PR #56 is merged and the
+maintainer recomputes the public board.

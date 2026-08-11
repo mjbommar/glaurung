@@ -8,20 +8,19 @@ open
 **Historical evidence baseline:** Glaurung `c1cfdc97`, DecBench main `0a4e85b`,
 dataset `0a2d996`, with ARM `byte_match` recomputed using pending DecBench PR #61
 
-**Current planning baseline:** exact clean revision `b50ba50`, replayed over all
-224 binaries and 250 functions, with every metric joined from a fresh run and
-GED paired with the official per-optimization source CFG under current DecBench
-GED cache schema 3 (`GED_MAX_NODES=200`). It has union `79/250` (`31.6%`), GED
-`65/240` perfect with mean `30.354167` and median `10`, TypeMatch `22/235`
-perfect with mean `0.245741` and median `0.090909`, and ByteMatch `14/250`
-perfect with mean `0.304440` and median `0.259079`. The exact `1e973bc`
-predecessor has union `78/250`, GED `64/240` perfect with mean `30.366667`, and
-the same TypeMatch and ByteMatch aggregates. Older projected ledgers below
+**Current planning baseline:** exact clean revision `020dede`, replayed over all
+224 binaries and 250 functions, with every metric joined by exact function key
+from fresh current-evaluator runs and GED paired with the official
+per-optimization source CFG under DecBench GED cache schema 3
+(`GED_MAX_NODES=200`). It has union `81/250` (`32.4%`), GED `66/240` perfect
+with mean `30.341667` and median `10`, TypeMatch `22/235` perfect with mean
+`0.245741` and median `0.090909`, and ByteMatch `8/250` perfect with mean
+`0.249460` and median `0.221111`. The lower current ByteMatch perfect count is
+evaluator drift, not a product regression; the exact-perfect identities also
+changed, so union is recomputed from row-level artifacts rather than adjusted
+arithmetically from the older 14-perfect ledger. Older projected ledgers below
 remain useful increment history, but their absolute GED/union totals are
-superseded twice: first because the legacy re-evaluator paired O2 and
-O2-noinline output with O0 source CFGs, and then because its historical
-large-graph fallback substituted node/edge-count deltas for the current VJ-GED
-calculation.
+superseded by exact current-metric joins.
 
 ## Outcome
 
