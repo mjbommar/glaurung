@@ -719,6 +719,16 @@ fn expression_reads(expression: &Expr, target: &VReg) -> bool {
             base.as_ref() == Some(target) || index.as_ref() == Some(target)
         }
         Expr::Deref { addr, .. } => expression_reads(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            expression_reads(call_target, target)
+                || args
+                    .iter()
+                    .any(|argument| expression_reads(argument, target))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expression_reads(lhs, target) || expression_reads(rhs, target)
         }
@@ -766,6 +776,16 @@ fn replace_register(expression: &mut Expr, target: &VReg, replacement: &VReg) {
             }
         }
         Expr::Deref { addr, .. } => replace_register(addr, target, replacement),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            replace_register(call_target, target, replacement);
+            for argument in args {
+                replace_register(argument, target, replacement);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             replace_register(lhs, target, replacement);
             replace_register(rhs, target, replacement);

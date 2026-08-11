@@ -113,6 +113,12 @@ fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
             }
         }
         Expr::Deref { addr, .. } => resolve_expr(addr, addr_map),
+        Expr::Call { target, args, .. } => {
+            resolve_expr(target, addr_map);
+            for argument in args {
+                resolve_expr(argument, addr_map);
+            }
+        }
         Expr::Lea {
             base: None,
             index: None,

@@ -128,6 +128,12 @@ impl Splitter {
                 }
             }
             Expr::Deref { addr, .. } => self.rewrite_expr(addr, state),
+            Expr::Call { target, args, .. } => {
+                self.rewrite_expr(target, state);
+                for argument in args {
+                    self.rewrite_expr(argument, state);
+                }
+            }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 self.rewrite_expr(lhs, state);
                 self.rewrite_expr(rhs, state);

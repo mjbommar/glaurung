@@ -440,6 +440,12 @@ fn resolve_expr(
 ) {
     match expression {
         Expr::Deref { addr, .. } => resolve_expr(addr, tables, definitions),
+        Expr::Call { target, args, .. } => {
+            resolve_expr(target, tables, definitions);
+            for argument in args {
+                resolve_expr(argument, tables, definitions);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             resolve_expr(lhs, tables, definitions);
             resolve_expr(rhs, tables, definitions);

@@ -3254,3 +3254,92 @@ The corrected nearest non-artifact miss is now
 binary both contain the overflow-safe, lazily evaluated capacity expression;
 the next diagnosis must determine why HIR renders that value select as an
 extra branch/join node before any transform is proposed.
+
+## 08:30–09:56 — recover a lazy value-producing call without losing existing perfects
+
+The `buffer_append` diagnosis reached a representation boundary rather than a
+missing CFG rewrite. Its source ternary evaluates a call only in the selected
+arm, but HIR represented calls only as `Stmt::Call`; it could not carry a call
+as the value of an `Expr::Select`. The exact binary therefore survived lowering
+as an extra call/constant diamond and join, producing GED `3` against the
+source's 13-node/15-edge CFG.
+
+TDD introduced `Expr::Call` with its target, arguments, recovered call-site
+contract, and result width. The width is computed from the active machine model:
+pointer and machine-word returns are four bytes on ARM32 and eight on AArch64 or
+x86-64. Every expression visitor was made explicit about the new variant, and
+the production Python entry point now passes the calling convention's pointer
+width into final HIR preparation. The real fixture compiles a stripped GCC O0
+shared object, checks the lazy ternary, recompiles the decompilation, and executes
+it against the original. Focused ARM32 semantic, frame, terminal-loop, and
+architecture-roundtrip tests also pass.
+
+The first transform was deliberately evaluated before acceptance. It folded six
+semantic corpus cells, improving `buffer_append` GED `3→0`,
+`mspProcessInCommand` `104→100`, and
+`_usbd_standard_request_interface` `21→18`, but regressed `user_name` and
+`xheader_list_append` from GED `0→3` and
+`_usbd_standard_request_device` `25→31`. That broad rule was rejected. The
+retained proof requires the exact saturation idiom: a signed nonnegative guard,
+one lazy call result doubled exactly once, an all-ones alternative, one
+destination, unique joins, and no extra effect. Ordinary direct, linear, and ARM
+call diamonds are negative controls and remain unchanged.
+
+The new effectful expression also exposed four stale compositional assumptions.
+Scratch-dataflow pruning and dead-copy elimination both assumed every
+`Stmt::Assign` source was pure and could have deleted an unused or overwritten
+call. Loop-header normalization could hoist the call out of a loop, changing its
+observable call count, and x86 epilogue cleanup could discard a call-valued
+machine temporary as bookkeeping. RED tests reproduce all four failures. The
+shared `Expr::contains_call()` query roots effectful definitions in the general
+data-flow passes; the movement and x86 cleanup guards likewise classify a nested
+call as effectful. This is a small concrete step toward the roadmap's centralized
+effect/definedness contract rather than another pass-local purity guess.
+
+The final uncommitted debug-build replay at
+`/tmp/glaurung-lazy-saturation.a5KIHj/results.zip` covers all 224 binaries and
+250 functions with zero errors in 73.59 seconds; its SHA-256 is
+`a0f032439ddc58cc489fc8c92e8315d31c8149f1592b0aa91c59d1cd78b8d102`.
+The timing is not compared with the optimized performance ceiling. Official
+ingest relabels 234 functions to DWARF names and proves that all 224 per-binary
+artifacts are byte-identical to `b50ba50` except O0 GnuTLS `systemkey`.
+
+Fresh current-evaluator results are:
+
+| Metric | `b50ba50` paired | retained candidate | Delta |
+|---|---:|---:|---:|
+| GED perfect | 65 / 240 | 66 / 240 | +1 |
+| GED mean | 30.354167 | 30.341667 | -0.0125 |
+| GED median | 10 | 10 | 0 |
+| TypeMatch perfect | 22 / 235 | 22 / 235 | 0 |
+| TypeMatch mean | 0.245741 | 0.245741 | 0 |
+| ByteMatch perfect | 8 / 250 | 8 / 250 | 0 |
+| ByteMatch mean | 0.249427 | 0.249460 | +0.000033 |
+| union perfect | 79 / 250 | 80 / 250 | +1 |
+
+The current ByteMatch evaluator produces eight perfects for both the exact
+release and candidate, rather than the historical 14; the same-evaluator paired
+run proves this is evaluator drift, not a product regression. On the only
+changed function, `buffer_append`, GED is `3→0`, TypeMatch remains `0.5`, and
+ByteMatch improves `0.250000→0.258278`. The projected public placement remains
+third overall and first among traditional decompilers, now at `32.0%`; it is not
+a live-board claim until DecBench PR #56 is accepted and recomputed upstream.
+
+The new production semantic owner is 547 lines; its eight unit tests live in a
+452-line sibling module. The increment therefore avoids both another
+greater-than-1,000-line IR file and a near-threshold production owner. Adding one
+expression kind still required explicit edits in roughly thirty legacy visitors;
+that cost is direct evidence for Phase 3's shared visitor/folder architecture and
+should not be repeated for every future semantic node.
+
+The fresh repository-wide Python gate ran from a build-guard-confirmed current
+native extension. It reached the same four established
+`test_suspicious_symbols_if_present` failures for malformed cross-compiled sample
+binaries (`riscv64` twice, `armhf`, and `arm64`) and no additional failure; a
+`--last-failed` replay reproduced exactly those four cases. An earlier full-suite
+attempt was discarded after the build guard correctly detected that the loaded
+extension predated a Rust safety edit. The isolated worktree's regenerable
+`target/` cache was then cleaned after it exhausted `/tmp`; the rebuilt extension
+was fresh and the real lazy-call fixture passed before this valid full run.
+The post-split Rust replay is green: 2,036 library tests plus every integration
+target pass, with the single documentation example still intentionally ignored.

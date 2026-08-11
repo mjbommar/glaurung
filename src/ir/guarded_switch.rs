@@ -493,6 +493,17 @@ fn count_reads_in_expr(expr: &Expr, target: &VReg) -> usize {
         | Expr::Un { src: addr, .. }
         | Expr::Cast { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => count_reads_in_expr(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            count_reads_in_expr(call_target, target)
+                + args
+                    .iter()
+                    .map(|argument| count_reads_in_expr(argument, target))
+                    .sum::<usize>()
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reads_in_expr(lhs, target) + count_reads_in_expr(rhs, target)
         }

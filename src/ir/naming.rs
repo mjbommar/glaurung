@@ -585,6 +585,12 @@ fn walk_expr_phys(e: &Expr, cb: &mut impl FnMut(&str)) {
             }
         }
         Expr::Deref { addr, .. } => walk_expr_phys(addr, cb),
+        Expr::Call { target, args, .. } => {
+            walk_expr_phys(target, cb);
+            for argument in args {
+                walk_expr_phys(argument, cb);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             walk_expr_phys(lhs, cb);
             walk_expr_phys(rhs, cb);
@@ -637,6 +643,12 @@ fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
             }
         }
         Expr::Deref { addr, .. } => rewrite_expr(addr, role),
+        Expr::Call { target, args, .. } => {
+            rewrite_expr(target, role);
+            for argument in args {
+                rewrite_expr(argument, role);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             rewrite_expr(lhs, role);
             rewrite_expr(rhs, role);

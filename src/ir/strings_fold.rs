@@ -274,6 +274,12 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
             }
         }
         Expr::Deref { addr, .. } => fold_expr(addr, pool),
+        Expr::Call { target, args, .. } => {
+            fold_expr(target, pool);
+            for argument in args {
+                fold_expr(argument, pool);
+            }
+        }
         Expr::Bin { op, lhs, rhs } if matches!(op, crate::ir::types::BinOp::Add) => {
             // AArch64 (and ARM32) build the address of a string in two
             // instructions: `adrp` supplies the 4 KiB page and a following

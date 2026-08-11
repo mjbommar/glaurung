@@ -51,6 +51,12 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
     fn expression(expr: &mut Expr, tm: &TypeMap) {
         match expr {
             Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Call { target, args, .. } => {
+                expression(target, tm);
+                for argument in args {
+                    expression(argument, tm);
+                }
+            }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 expression(lhs, tm);
                 expression(rhs, tm);
@@ -217,6 +223,12 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
     fn expression(expr: &mut Expr, tm: &TypeMap) {
         match expr {
             Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Call { target, args, .. } => {
+                expression(target, tm);
+                for argument in args {
+                    expression(argument, tm);
+                }
+            }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 expression(lhs, tm);
                 expression(rhs, tm);
@@ -1124,6 +1136,7 @@ fn is_short_circuit_safe_value(expr: &Expr) -> bool {
             is_short_circuit_safe_value(lhs) && is_short_circuit_safe_value(rhs)
         }
         Expr::Deref { .. }
+        | Expr::Call { .. }
         | Expr::FunctionTableEntry { .. }
         | Expr::Select { .. }
         | Expr::WideArithmetic { .. }

@@ -389,6 +389,12 @@ fn fold_expr(
             fold_expr(lhs, data, aliases, bounds, active_guard);
             fold_expr(rhs, data, aliases, bounds, active_guard);
         }
+        Expr::Call { target, args, .. } => {
+            fold_expr(target, data, aliases, bounds, active_guard);
+            for argument in args {
+                fold_expr(argument, data, aliases, bounds, active_guard);
+            }
+        }
         Expr::Select {
             cond,
             if_true,

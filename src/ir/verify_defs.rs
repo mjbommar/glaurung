@@ -197,6 +197,12 @@ fn reads_expr(e: &Expr, out: &mut Vec<String>) {
             out.extend(index.as_ref().and_then(checked_name));
         }
         Expr::Deref { addr, .. } => reads_expr(addr, out),
+        Expr::Call { target, args, .. } => {
+            reads_expr(target, out);
+            for argument in args {
+                reads_expr(argument, out);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             reads_expr(lhs, out);
             reads_expr(rhs, out);

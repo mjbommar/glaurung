@@ -14,6 +14,7 @@ pub(crate) fn explicit_expression_width(expression: &Expr) -> Option<u8> {
         | Expr::WideArithmetic { width: size, .. } => Some(*size),
         Expr::Cast { width, .. } | Expr::FloatConst { width, .. } => Some(*width),
         Expr::FunctionTableEntry { pointer_size, .. } => Some(*pointer_size),
+        Expr::Call { result_width, .. } => *result_width,
         Expr::Cmp { .. } => Some(1),
         Expr::Bin { lhs, rhs, .. } => explicit_expression_width(lhs)
             .into_iter()
@@ -55,6 +56,9 @@ pub(crate) fn can_carry_bits_above(expression: &Expr, narrow_width: u8) -> bool 
         | Expr::Select { width: size, .. }
         | Expr::WideArithmetic { width: size, .. } => *size > narrow_width,
         Expr::FunctionTableEntry { pointer_size, .. } => *pointer_size > narrow_width,
+        Expr::Call { .. } => {
+            explicit_expression_width(expression).is_some_and(|width| width > narrow_width)
+        }
         Expr::Bin { .. } | Expr::Un { .. } => {
             explicit_expression_width(expression).is_some_and(|width| width > narrow_width)
         }

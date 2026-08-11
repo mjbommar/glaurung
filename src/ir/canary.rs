@@ -647,6 +647,10 @@ fn rewrite_expr(e: &mut Expr) {
             rewrite_expr(lhs);
             rewrite_expr(rhs);
         }
+        Expr::Call { target, args, .. } => {
+            rewrite_expr(target);
+            args.iter_mut().for_each(rewrite_expr);
+        }
         Expr::Select {
             cond,
             if_true,

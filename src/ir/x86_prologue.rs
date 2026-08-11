@@ -263,7 +263,7 @@ fn is_padding_restore_load(statement: &Stmt, save: &SavedSlot) -> bool {
 
 fn contains_deref(expression: &Expr) -> bool {
     match expression {
-        Expr::Deref { .. } => true,
+        Expr::Deref { .. } | Expr::Call { .. } => true,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_deref(lhs) || contains_deref(rhs)
         }
@@ -891,6 +891,27 @@ mod tests {
                 rhs: Box::new(Expr::Const(n)),
             },
         }
+    }
+
+    #[test]
+    fn an_expression_call_is_not_dead_epilogue_bookkeeping() {
+        let statement = Stmt::Assign {
+            dst: VReg::Temp(7),
+            src: Expr::Call {
+                target: Box::new(Expr::Named {
+                    va: 0x2000,
+                    name: "notify".into(),
+                }),
+                args: Vec::new(),
+                call_spec: None,
+                result_width: Some(8),
+            },
+        };
+
+        assert!(
+            !is_dead_machine_temporary(&statement),
+            "an unused result does not make the call itself dead"
+        );
     }
 
     #[test]

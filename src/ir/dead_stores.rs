@@ -82,10 +82,14 @@ fn eliminate_body(body: &mut Vec<Stmt>, ret_regs: &[&str]) {
             continue;
         }
         let dst = match &body[i] {
-            Stmt::Assign { dst, .. } => match dst {
+            Stmt::Assign { dst, src } => match dst {
                 // Only regular register writes are considered. Flag writes
                 // are handled elsewhere.
-                VReg::Phys(_) | VReg::Temp(_) => dst.clone(),
+                VReg::Phys(_) | VReg::Temp(_) if !src.contains_call() => dst.clone(),
+                VReg::Phys(_) | VReg::Temp(_) => {
+                    i += 1;
+                    continue;
+                }
                 VReg::Flag(_) | VReg::FlagValue { .. } => {
                     i += 1;
                     continue;
@@ -675,6 +679,9 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
             base.as_ref() == Some(dst) || index.as_ref() == Some(dst)
         }
         Expr::Deref { addr, .. } => expr_reads(addr, dst),
+        Expr::Call { target, args, .. } => {
+            expr_reads(target, dst) || args.iter().any(|argument| expr_reads(argument, dst))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_reads(lhs, dst) || expr_reads(rhs, dst)
         }
@@ -721,6 +728,43 @@ mod tests {
         if let Stmt::Assign { src, .. } = &f.body[0] {
             assert_eq!(*src, Expr::Const(2));
         }
+    }
+
+    #[test]
+    fn overwritten_call_expression_keeps_its_effect() {
+        let mut function = Function {
+            name: "effectful_assignment".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "write_event".into(),
+                        }),
+                        args: Vec::new(),
+                        call_spec: None,
+                        result_width: Some(8),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Const(2),
+                },
+            ],
+        };
+
+        eliminate_dead_stores(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(function.body.len(), 2);
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Call { .. },
+                ..
+            }
+        ));
     }
 
     #[test]

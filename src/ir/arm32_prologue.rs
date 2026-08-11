@@ -339,6 +339,9 @@ fn expr_mentions_sp(expression: &Expr) -> bool {
             base.iter().chain(index.iter()).any(is_sp)
         }
         Expr::Deref { addr, .. } => expr_mentions_sp(addr),
+        Expr::Call { target, args, .. } => {
+            expr_mentions_sp(target) || args.iter().any(expr_mentions_sp)
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_mentions_sp(lhs) || expr_mentions_sp(rhs)
         }
@@ -494,6 +497,9 @@ mod tests {
                     )
                 }
                 Expr::Deref { addr, .. } => expr_mentions_sp(addr),
+                Expr::Call { target, args, .. } => {
+                    expr_mentions_sp(target) || args.iter().any(expr_mentions_sp)
+                }
                 Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                     expr_mentions_sp(lhs) || expr_mentions_sp(rhs)
                 }

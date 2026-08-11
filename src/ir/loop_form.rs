@@ -880,7 +880,10 @@ fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
 /// same value, and an opaque expression has no inspectable dependency set.
 fn stable_value_expr(expr: &Expr) -> bool {
     match expr {
-        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } | Expr::Unknown(_) => false,
+        Expr::Deref { .. }
+        | Expr::Call { .. }
+        | Expr::FunctionTableEntry { .. }
+        | Expr::Unknown(_) => false,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             stable_value_expr(lhs) && stable_value_expr(rhs)
         }
@@ -915,6 +918,12 @@ fn collect_expr_regs(expr: &Expr, out: &mut Vec<VReg>) {
     match expr {
         Expr::Reg(reg) | Expr::StackAddr { object: reg, .. } => out.push(reg.clone()),
         Expr::Deref { addr, .. } => collect_expr_regs(addr, out),
+        Expr::Call { target, args, .. } => {
+            collect_expr_regs(target, out);
+            for argument in args {
+                collect_expr_regs(argument, out);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             collect_expr_regs(lhs, out);
             collect_expr_regs(rhs, out);

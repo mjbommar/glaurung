@@ -51,6 +51,7 @@ fn pure_address_expression(expr: &Expr) -> bool {
         Expr::Bin { lhs, rhs, .. } => pure_address_expression(lhs) && pure_address_expression(rhs),
         Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => pure_address_expression(src),
         Expr::Deref { .. }
+        | Expr::Call { .. }
         | Expr::Cmp { .. }
         | Expr::Select { .. }
         | Expr::WideArithmetic { .. }
@@ -111,6 +112,12 @@ fn contains_active_stack_base(expr: &Expr, ctx: StackContext) -> bool {
             )
         }
         Expr::Deref { addr, .. } => contains_active_stack_base(addr, ctx),
+        Expr::Call { target, args, .. } => {
+            contains_active_stack_base(target, ctx)
+                || args
+                    .iter()
+                    .any(|argument| contains_active_stack_base(argument, ctx))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_active_stack_base(lhs, ctx) || contains_active_stack_base(rhs, ctx)
         }
@@ -147,6 +154,16 @@ fn contains_register(expr: &Expr, target: &VReg) -> bool {
             base.as_ref() == Some(target) || index.as_ref() == Some(target)
         }
         Expr::Deref { addr, .. } => contains_register(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            contains_register(call_target, target)
+                || args
+                    .iter()
+                    .any(|argument| contains_register(argument, target))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_register(lhs, target) || contains_register(rhs, target)
         }
@@ -194,6 +211,16 @@ fn replace_register(expr: &mut Expr, target: &VReg, replacement: &VReg) {
             }
         }
         Expr::Deref { addr, .. } => replace_register(addr, target, replacement),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            replace_register(call_target, target, replacement);
+            for argument in args {
+                replace_register(argument, target, replacement);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             replace_register(lhs, target, replacement);
             replace_register(rhs, target, replacement);
@@ -284,6 +311,12 @@ fn expand_expr(expr: &mut Expr, aliases: &HashMap<VReg, Expr>) {
     }
     match expr {
         Expr::Deref { addr, .. } => expand_expr(addr, aliases),
+        Expr::Call { target, args, .. } => {
+            expand_expr(target, aliases);
+            for argument in args {
+                expand_expr(argument, aliases);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expand_expr(lhs, aliases);
             expand_expr(rhs, aliases);
@@ -365,6 +398,12 @@ fn expand_affine_definition(expr: &mut Expr, components: &HashMap<VReg, Expr>) {
 fn expand_memory_address_components(expr: &mut Expr, components: &HashMap<VReg, Expr>) {
     match expr {
         Expr::Deref { addr, .. } => expand_affine_definition(addr, components),
+        Expr::Call { target, args, .. } => {
+            expand_memory_address_components(target, components);
+            for argument in args {
+                expand_memory_address_components(argument, components);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expand_memory_address_components(lhs, components);
             expand_memory_address_components(rhs, components);

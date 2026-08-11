@@ -190,7 +190,21 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
-    /// A pure three-input select: `cond ? if_true : if_false`.
+    /// A value-producing C call.
+    ///
+    /// Calls normally remain statement calls so their effects stay explicit.
+    /// This expression form is introduced only when a proven assignment
+    /// diamond places the original call inside one arm of a lazy select. C's
+    /// conditional operator preserves that lazy evaluation; moving the call
+    /// outside the select would not.
+    Call {
+        target: Box<Expr>,
+        args: Vec<Expr>,
+        call_spec: Option<crate::ir::call_contracts::CallSiteSpec>,
+        /// Exact ABI result width under the active machine data model.
+        result_width: Option<u8>,
+    },
+    /// A lazy three-input select: `cond ? if_true : if_false`.
     ///
     /// Unlike [`Stmt::If`], this does not introduce control flow. Both value
     /// arms remain explicit reads, matching [`Op::Ite`] use-def semantics.
@@ -222,6 +236,41 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// Return whether evaluating this expression can invoke a callee.
+    ///
+    /// Calls may be nested in a lazy select arm. Passes that delete, duplicate,
+    /// or move expressions must use this shared query instead of assuming every
+    /// [`Stmt::Assign`] source is pure.
+    pub(crate) fn contains_call(&self) -> bool {
+        match self {
+            Self::Call { .. } => true,
+            Self::Deref { addr, .. }
+            | Self::Un { src: addr, .. }
+            | Self::Cast { expr: addr, .. }
+            | Self::FunctionTableEntry { index: addr, .. } => addr.contains_call(),
+            Self::Bin { lhs, rhs, .. } | Self::Cmp { lhs, rhs, .. } => {
+                lhs.contains_call() || rhs.contains_call()
+            }
+            Self::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => cond.contains_call() || if_true.contains_call() || if_false.contains_call(),
+            Self::WideArithmetic { args, .. } => args.iter().any(Self::contains_call),
+            Self::Reg(_)
+            | Self::Const(_)
+            | Self::FloatConst { .. }
+            | Self::Addr(_)
+            | Self::Named { .. }
+            | Self::StringLit { .. }
+            | Self::StackAddr { .. }
+            | Self::Lea { .. }
+            | Self::PdbFieldAddr { .. }
+            | Self::Unknown(_) => false,
+        }
+    }
+
     /// Return whether this expression reads `target` directly or through one
     /// of its recursively nested operands.
     pub(crate) fn contains_reg(&self, target: &VReg) -> bool {
@@ -241,6 +290,14 @@ impl Expr {
                 cond.contains_reg(target)
                     || if_true.contains_reg(target)
                     || if_false.contains_reg(target)
+            }
+            Self::Call {
+                target: call_target,
+                args,
+                ..
+            } => {
+                call_target.contains_reg(target)
+                    || args.iter().any(|argument| argument.contains_reg(target))
             }
             Self::Un { src, .. } => src.contains_reg(target),
             Self::Cast { expr, .. } => expr.contains_reg(target),
@@ -456,7 +513,7 @@ pub struct Function {
 fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
     fn expr_reads_memory(e: &Expr) -> bool {
         match e {
-            Expr::Deref { .. } => true,
+            Expr::Deref { .. } | Expr::Call { .. } => true,
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 expr_reads_memory(lhs) || expr_reads_memory(rhs)
             }
@@ -543,6 +600,12 @@ fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
             Expr::Un { src, .. } => collect_read(src, out),
             Expr::Cast { expr, .. } => collect_read(expr, out),
             Expr::Deref { addr, .. } => collect_read(addr, out),
+            Expr::Call { target, args, .. } => {
+                collect_read(target, out);
+                for argument in args {
+                    collect_read(argument, out);
+                }
+            }
             // `Lea` and `PdbFieldAddr` name their base/index as registers directly,
             // not as sub-expressions: an address computed from a register the body
             // bumps is loop-carried just as much as an arithmetic one.
@@ -1920,6 +1983,17 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
             (base.as_ref() == Some(target)) as usize + (index.as_ref() == Some(target)) as usize
         }
         Expr::Deref { addr, .. } => count_reg_uses_in_expr(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            count_reg_uses_in_expr(call_target, target)
+                + args
+                    .iter()
+                    .map(|argument| count_reg_uses_in_expr(argument, target))
+                    .sum::<usize>()
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reg_uses_in_expr(lhs, target) + count_reg_uses_in_expr(rhs, target)
         }
@@ -1959,7 +2033,7 @@ fn moving_condition_to_end_is_safe(condition: &Expr, following: &[Stmt]) -> bool
 
 fn expr_reads_memory(expr: &Expr) -> bool {
     match expr {
-        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } => true,
+        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } | Expr::Call { .. } => true,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_reads_memory(lhs) || expr_reads_memory(rhs)
         }
@@ -2062,7 +2136,10 @@ fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
 /// opaque expressions are not.
 fn can_eagerly_evaluate(expr: &Expr) -> bool {
     match expr {
-        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } | Expr::Unknown(_) => false,
+        Expr::Deref { .. }
+        | Expr::FunctionTableEntry { .. }
+        | Expr::Call { .. }
+        | Expr::Unknown(_) => false,
         Expr::Bin { op: BinOp::Div, .. } => false,
         Expr::WideArithmetic {
             op:
@@ -3560,6 +3637,17 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
             let _ = write!(out, "*(u{})", size * 8);
             write_expr_ctx(addr, tm, out);
         }
+        Expr::Call { target, args, .. } => {
+            write_expr_ctx(target, tm, out);
+            out.push('(');
+            for (index, argument) in args.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_expr_ctx(argument, tm, out);
+            }
+            out.push(')');
+        }
         Expr::Bin { op, lhs, rhs } => {
             // Canonicalise sign: `x + -N` prints as `x - N`; `x - -N` as `x + N`.
             let (shown_op, shown_rhs) = match (*op, rhs.as_ref()) {
@@ -4212,6 +4300,17 @@ fn write_expr_c(e: &Expr, out: &mut String) {
             out.push('*');
             write_expr_c(addr, out);
         }
+        Expr::Call { target, args, .. } => {
+            write_expr_c(target, out);
+            out.push('(');
+            for (index, argument) in args.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_expr_c(argument, out);
+            }
+            out.push(')');
+        }
         Expr::Bin { op, lhs, rhs } => {
             let (shown_op, shown_rhs) = match (*op, rhs.as_ref()) {
                 (BinOp::Add, Expr::Const(c)) if *c < 0 && *c != i64::MIN => {
@@ -4821,6 +4920,12 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
                 expression(rhs, tm);
             }
             Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Call { target, args, .. } => {
+                expression(target, tm);
+                for argument in args {
+                    expression(argument, tm);
+                }
+            }
             Expr::Bin { lhs, rhs, .. } => {
                 expression(lhs, tm);
                 expression(rhs, tm);
@@ -5020,6 +5125,12 @@ fn expression_proven_scalar(expr: &Expr, tm: &TypeMap) -> bool {
             if_true, if_false, ..
         } => expression_proven_scalar(if_true, tm) && expression_proven_scalar(if_false, tm),
         Expr::WideArithmetic { .. } => true,
+        Expr::Call { call_spec, .. } => call_spec.as_ref().is_some_and(|spec| {
+            crate::ir::call_contracts::call_return_hint(&spec.call_prototype.return_type)
+                .is_some_and(|hint| {
+                    !matches!(hint, TypeHint::Pointer { .. } | TypeHint::CodePointer)
+                })
+        }),
         Expr::Unknown(_)
         | Expr::Reg(_)
         | Expr::Addr(_)
@@ -5395,6 +5506,7 @@ fn expression_value_width(
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => Some(8),
         Expr::FunctionTableEntry { pointer_size, .. } => Some(*pointer_size),
+        Expr::Call { result_width, .. } => *result_width,
         Expr::Deref { size, .. } => Some(*size),
         // x86's ordinary 32-bit return write is represented after
         // canonicalisation as a zero-extension into the 64-bit parent. That
@@ -6394,6 +6506,12 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                 }
             }
             Expr::Deref { addr, .. } => re(addr, map),
+            Expr::Call { target, args, .. } => {
+                re(target, map);
+                for argument in args {
+                    re(argument, map);
+                }
+            }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 re(lhs, map);
                 re(rhs, map);
@@ -6559,7 +6677,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These eighteen steps change *definitions, uses, value identities, or control-flow
+/// These nineteen steps change *definitions, uses, value identities, or control-flow
 /// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
@@ -6580,42 +6698,45 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 5. `guarded_call::materialize_false_edges` makes the zero-valued
 ///    false edge of an exact `value != 0` guarded call overwrite explicit,
 ///    preserving lazy evaluation while recovering both reaching values.
-/// 6. `select_fold::recover_guarded_select_returns` turns an initialized result,
+/// 6. `lazy_call_select::collapse_lazy_call_diamonds` moves a proven
+///    value-producing call into its original lazy assignment arm without
+///    duplicating or speculating the call.
+/// 7. `select_fold::recover_guarded_select_returns` turns an initialized result,
 ///    one guarded select overwrite, and its joined return back into terminating
 ///    nested returns when the initializer is a pure register view.
-/// 7. `select_fold::fold_boolean_masks` renders an exact comparison-derived
+/// 8. `select_fold::fold_boolean_masks` renders an exact comparison-derived
 ///    `0`/`-1` select as arithmetic negation, avoiding fake source-level control
 ///    flow without changing the mask value.
-/// 8. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
+/// 9. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
 ///    immediately adjacent, sole eager guard use without claiming that physical
 ///    role is globally SSA.
-/// 9. `copy_prop::propagate_adjacent_overwritten_values` carries one pure,
+/// 10. `copy_prop::propagate_adjacent_overwritten_values` carries one pure,
 ///    immediately consumed value into the assignment that overwrites the same
 ///    physical scratch without treating that scratch as globally SSA.
-/// 10. `terminal_loop::recover_terminal_self_loops` turns an exact terminal
+/// 11. `terminal_loop::recover_terminal_self_loops` turns an exact terminal
 ///    machine `label; goto label` into a source-level infinite loop while
 ///    retaining the label for any incoming structured edge.
-/// 11. `label_prune::recover_forward_exit_regions` turns exact forward skips to
+/// 12. `label_prune::recover_forward_exit_regions` turns exact forward skips to
 ///    an adjacent join into guarded continuations, including a tail loop exit
 ///    that is provably the source-level `break`.
-/// 12. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
+/// 13. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
 ///    `label; body; if (condition) goto label` into the exact source-level
 ///    `do { body } while (condition)` form.
-/// 13. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+/// 14. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 14. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
+/// 15. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
 ///    uniquely labelled return tails at their goto sites, recovering ordinary
 ///    early returns without inventing or reordering an effect.
-/// 15. `switch_ladder::recover_switches` runs before select formation and again
+/// 16. `switch_ladder::recover_switches` runs before select formation and again
 ///    after loop/copy recovery, converting proven comparison ladders into
 ///    `switch` nodes without losing a two-case tail to a ternary expression.
-/// 16. `guarded_switch::collapse_range_guards` removes a compiler range-check
+/// 17. `guarded_switch::collapse_range_guards` removes a compiler range-check
 ///    wrapper only when its unsigned domain and every switch label prove that
 ///    the wrapper cannot select a case the switch would not select itself.
-/// 17. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+/// 18. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
-/// 18. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
+/// 19. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
 ///    immediately joined result return into proven terminating arms. Exhaustive
 ///    `if`/`switch` regions lose the join entirely; a one-sided `if` becomes an
 ///    early return followed by the original false-path fallthrough.
@@ -6642,6 +6763,7 @@ pub fn prepare_for_decbench_with_output(
         f,
         output_kind,
         &std::collections::HashSet::new(),
+        8,
     )
 }
 
@@ -6655,6 +6777,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     f: &Function,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     protected_locals: &std::collections::HashSet<String>,
+    pointer_width: u8,
 ) -> Function {
     let mut owned = f.clone();
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
@@ -6711,6 +6834,10 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     crate::ir::switch_ladder::recover_switches(&mut owned);
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
     crate::ir::guarded_call::materialize_false_edges(&mut owned);
+    crate::ir::lazy_call_select::collapse_lazy_call_diamonds_with_pointer_width(
+        &mut owned,
+        pointer_width,
+    );
     crate::ir::select_fold::recover_guarded_select_returns(&mut owned);
     crate::ir::select_fold::fold_boolean_masks(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
@@ -7763,6 +7890,14 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
             }
             collect_idents_expr(addr, ids);
         }
+        Expr::Call { target, args, .. } => {
+            if !matches!(target.as_ref(), Expr::Named { .. }) {
+                collect_idents_expr(target, ids);
+            }
+            for argument in args {
+                collect_idents_expr(argument, ids);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             collect_idents_expr(lhs, ids);
             collect_idents_expr(rhs, ids);
@@ -7983,44 +8118,44 @@ fn collect_named_call_observations(
     for statement in body {
         match statement {
             Stmt::Call {
-                target: Expr::Named { name, .. },
+                target,
                 args,
                 dst,
                 call_spec,
             } => {
-                let displayed = sanitize_c_ident(callee_display_name(name));
-                if displayed == current_name {
-                    continue;
-                }
-                let call_spec = call_spec.clone().unwrap_or_else(|| {
-                    crate::ir::call_contracts::recover_call_site_spec(
-                        &Expr::Named {
-                            va: 0,
-                            name: name.clone(),
-                        },
-                        args,
-                        dst.as_ref(),
-                    )
-                });
-                observations
-                    .entry(displayed.clone())
-                    .or_default()
-                    .push(call_spec.call_prototype);
-                if let Some(prototype) = call_spec.callee_prototype {
-                    if let Some(existing) = authoritative.get(&displayed) {
-                        if existing != &prototype {
-                            conflicts.insert(displayed);
-                        }
-                    } else {
-                        authoritative.insert(displayed, prototype);
-                    }
+                record_named_call_observation(
+                    target,
+                    args,
+                    dst.as_ref(),
+                    call_spec.as_ref(),
+                    current_name,
+                    observations,
+                    authoritative,
+                    conflicts,
+                );
+                collect_named_call_expr(
+                    target,
+                    current_name,
+                    observations,
+                    authoritative,
+                    conflicts,
+                );
+                for argument in args {
+                    collect_named_call_expr(
+                        argument,
+                        current_name,
+                        observations,
+                        authoritative,
+                        conflicts,
+                    );
                 }
             }
             Stmt::If {
+                cond,
                 then_body,
                 else_body,
-                ..
             } => {
+                collect_named_call_expr(cond, current_name, observations, authoritative, conflicts);
                 collect_named_call_observations(
                     then_body,
                     current_name,
@@ -8038,7 +8173,8 @@ fn collect_named_call_observations(
                     );
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
+                collect_named_call_expr(cond, current_name, observations, authoritative, conflicts);
                 collect_named_call_observations(
                     body,
                     current_name,
@@ -8048,8 +8184,12 @@ fn collect_named_call_observations(
                 );
             }
             Stmt::For {
-                init, step, body, ..
+                init,
+                cond,
+                step,
+                body,
             } => {
+                collect_named_call_expr(cond, current_name, observations, authoritative, conflicts);
                 collect_named_call_observations(
                     std::slice::from_ref(init.as_ref()),
                     current_name,
@@ -8072,7 +8212,18 @@ fn collect_named_call_observations(
                     conflicts,
                 );
             }
-            Stmt::Switch { cases, default, .. } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                collect_named_call_expr(
+                    discriminant,
+                    current_name,
+                    observations,
+                    authoritative,
+                    conflicts,
+                );
                 for (_, case) in cases {
                     collect_named_call_observations(
                         case,
@@ -8110,8 +8261,139 @@ fn collect_named_call_observations(
                     );
                 }
             }
-            _ => {}
+            Stmt::Assign { src, .. } => {
+                collect_named_call_expr(src, current_name, observations, authoritative, conflicts)
+            }
+            Stmt::Store { addr, src, .. } => {
+                collect_named_call_expr(addr, current_name, observations, authoritative, conflicts);
+                collect_named_call_expr(src, current_name, observations, authoritative, conflicts);
+            }
+            Stmt::Return { value: Some(value) }
+            | Stmt::Push { value }
+            | Stmt::IndirectGoto { target: value }
+            | Stmt::Throw { value } => {
+                collect_named_call_expr(value, current_name, observations, authoritative, conflicts)
+            }
+            Stmt::Return { value: None }
+            | Stmt::Pop { .. }
+            | Stmt::Label(_)
+            | Stmt::Goto { .. }
+            | Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_) => {}
         }
+    }
+}
+
+fn record_named_call_observation(
+    target: &Expr,
+    args: &[Expr],
+    dst: Option<&VReg>,
+    call_spec: Option<&CallSiteSpec>,
+    current_name: &str,
+    observations: &mut std::collections::BTreeMap<String, Vec<CallPrototype>>,
+    authoritative: &mut std::collections::BTreeMap<String, CallPrototype>,
+    conflicts: &mut std::collections::BTreeSet<String>,
+) {
+    let Expr::Named { name, .. } = target else {
+        return;
+    };
+    let displayed = sanitize_c_ident(callee_display_name(name));
+    if displayed == current_name {
+        return;
+    }
+    let call_spec = call_spec
+        .cloned()
+        .unwrap_or_else(|| crate::ir::call_contracts::recover_call_site_spec(target, args, dst));
+    observations
+        .entry(displayed.clone())
+        .or_default()
+        .push(call_spec.call_prototype);
+    if let Some(prototype) = call_spec.callee_prototype {
+        if let Some(existing) = authoritative.get(&displayed) {
+            if existing != &prototype {
+                conflicts.insert(displayed);
+            }
+        } else {
+            authoritative.insert(displayed, prototype);
+        }
+    }
+}
+
+fn collect_named_call_expr(
+    expression: &Expr,
+    current_name: &str,
+    observations: &mut std::collections::BTreeMap<String, Vec<CallPrototype>>,
+    authoritative: &mut std::collections::BTreeMap<String, CallPrototype>,
+    conflicts: &mut std::collections::BTreeSet<String>,
+) {
+    macro_rules! visit {
+        ($nested:expr) => {
+            collect_named_call_expr(
+                $nested,
+                current_name,
+                observations,
+                authoritative,
+                conflicts,
+            )
+        };
+    }
+    match expression {
+        Expr::Call {
+            target,
+            args,
+            call_spec,
+            ..
+        } => {
+            record_named_call_observation(
+                target,
+                args,
+                None,
+                call_spec.as_ref(),
+                current_name,
+                observations,
+                authoritative,
+                conflicts,
+            );
+            visit!(target);
+            for argument in args {
+                visit!(argument);
+            }
+        }
+        Expr::Deref { addr, .. }
+        | Expr::Un { src: addr, .. }
+        | Expr::Cast { expr: addr, .. }
+        | Expr::FunctionTableEntry { index: addr, .. } => visit!(addr),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            visit!(lhs);
+            visit!(rhs);
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            visit!(cond);
+            visit!(if_true);
+            visit!(if_false);
+        }
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                visit!(argument);
+            }
+        }
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -9064,6 +9346,12 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 out.push(')');
             }
         }
+        Expr::Call {
+            target,
+            args,
+            call_spec,
+            ..
+        } => write_call_dec(target, args, None, call_spec.as_ref(), out),
         Expr::Bin { op, lhs, rhs } => {
             // Logical (unsigned) right shift has no direct signed-`long` C form;
             // cast the operand to `unsigned long` so `>>` is the zero-filling
@@ -9171,12 +9459,16 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             if_false,
             ..
         } => {
+            let canonical_true =
+                is_one_lazy_call_times_two(if_false) && unsigned_all_ones_width(if_true).is_some();
+            let canonical_false =
+                is_one_lazy_call_times_two(if_true) && unsigned_all_ones_width(if_false).is_some();
             out.push('(');
             write_expr_dec(cond, out);
             out.push_str(" ? ");
-            write_expr_dec(if_true, out);
+            write_select_arm_dec(if_true, canonical_true, out);
             out.push_str(" : ");
-            write_expr_dec(if_false, out);
+            write_select_arm_dec(if_false, canonical_false, out);
             out.push(')');
         }
         Expr::WideArithmetic { op, args, width } => {
@@ -9185,6 +9477,45 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         // An unmodelled/indirect value: a call to an undeclared `__unknown`
         // (implicit-declaration warning only) keeps it a valid `long` rvalue.
         Expr::Unknown(_) => out.push_str("__unknown(0)"),
+    }
+}
+
+fn unsigned_all_ones_width(expression: &Expr) -> Option<u8> {
+    match expression {
+        Expr::Cast {
+            signed: false,
+            width,
+            expr,
+        } if matches!(expr.as_ref(), Expr::Const(-1)) => Some(*width),
+        _ => None,
+    }
+}
+
+fn is_one_lazy_call_times_two(expression: &Expr) -> bool {
+    matches!(
+        expression,
+        Expr::Bin {
+            op: BinOp::Mul,
+            lhs,
+            rhs,
+        } if (matches!(lhs.as_ref(), Expr::Call { .. })
+            && matches!(rhs.as_ref(), Expr::Const(2)))
+            || (matches!(rhs.as_ref(), Expr::Call { .. })
+                && matches!(lhs.as_ref(), Expr::Const(2)))
+    )
+}
+
+fn write_select_arm_dec(expression: &Expr, canonical_all_ones: bool, out: &mut String) {
+    if canonical_all_ones {
+        match unsigned_all_ones_width(expression) {
+            Some(1) => out.push_str("0xffU"),
+            Some(2) => out.push_str("0xffffU"),
+            Some(4) => out.push_str("0xffffffffU"),
+            Some(8) => out.push_str("0xffffffffffffffffULL"),
+            _ => write_expr_dec(expression, out),
+        }
+    } else {
+        write_expr_dec(expression, out);
     }
 }
 
@@ -9759,6 +10090,9 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
         // agree with the printer or every integer-typed consumer receives a
         // pointer without a conversion.
         Expr::Addr(address) => dec_is_global_addr(*address),
+        Expr::Call { call_spec, .. } => call_spec
+            .as_ref()
+            .is_some_and(|spec| spec.call_prototype.return_type.trim_end().ends_with('*')),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -9797,15 +10131,27 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
         ..
     } = src
     {
+        let canonical_true =
+            is_one_lazy_call_times_two(if_false) && unsigned_all_ones_width(if_true).is_some();
+        let canonical_false =
+            is_one_lazy_call_times_two(if_true) && unsigned_all_ones_width(if_false).is_some();
         // C type-checks the two conditional operands before applying an outer
         // cast. Convert each arm at the recovered destination boundary so a
         // pointer-shaped literal and a machine word form one valid expression.
         out.push('(');
         write_expr_dec(cond, out);
         out.push_str(" ? ");
-        write_representation_value_dec(destination_type, if_true, out);
+        if canonical_true {
+            write_select_arm_dec(if_true, true, out);
+        } else {
+            write_representation_value_dec(destination_type, if_true, out);
+        }
         out.push_str(" : ");
-        write_representation_value_dec(destination_type, if_false, out);
+        if canonical_false {
+            write_select_arm_dec(if_false, true, out);
+        } else {
+            write_representation_value_dec(destination_type, if_false, out);
+        }
         out.push(')');
         return;
     }
@@ -9954,10 +10300,10 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
                     return;
                 }
             }
-            // `Expr::Select` is already the side-effect-free value semantics
-            // (`cond ? true : false`). Keep that typed middle-layer node visible
-            // in benchmark C instead of inventing statement-level CFG and an
-            // eager initializer that were not present in the AST.
+            // `Expr::Select` already carries lazy value semantics
+            // (`cond ? true : false`), including a call in the selected arm.
+            // Keep that typed middle-layer node visible in benchmark C instead
+            // of inventing statement-level CFG or an eager initializer.
             indent(out, level);
             write_assign_dec(dst, src, out);
             out.push_str(";\n");
@@ -10518,6 +10864,27 @@ mod tests {
         assert!(
             super::hoisting_the_header_is_safe(&forward, &body),
             "a forward-only preamble chain is invariant and must still hoist"
+        );
+    }
+
+    #[test]
+    fn an_expression_call_in_a_loop_header_is_not_hoistable() {
+        let pre = vec![Stmt::Assign {
+            dst: VReg::phys("next"),
+            src: Expr::Call {
+                target: Box::new(Expr::Named {
+                    va: 0x2000,
+                    name: "advance".into(),
+                }),
+                args: vec![Expr::Reg(VReg::phys("cursor"))],
+                call_spec: None,
+                result_width: Some(8),
+            },
+        }];
+
+        assert!(
+            !super::hoisting_the_header_is_safe(&pre, &[]),
+            "hoisting a value-producing call out of a loop changes its observable call count"
         );
     }
 
@@ -12891,6 +13258,7 @@ function f @ 0x1000 {
             &function,
             crate::ir::types_recover::RecoveredOutputKind::Void,
             &protected,
+            8,
         );
 
         assert!(
@@ -14394,6 +14762,7 @@ function f @ 0x1000 {
             &f,
             crate::ir::types_recover::RecoveredOutputKind::Direct,
             &protected,
+            8,
         );
         let text = render(&prepared);
 

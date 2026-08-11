@@ -94,6 +94,10 @@ fn fold_masks_in_stmt(statement: &mut Stmt) {
 fn fold_masks_in_expr(expr: &mut Expr) {
     match expr {
         Expr::FunctionTableEntry { index, .. } => fold_masks_in_expr(index),
+        Expr::Call { target, args, .. } => {
+            fold_masks_in_expr(target);
+            args.iter_mut().for_each(fold_masks_in_expr);
+        }
         Expr::Deref { addr, .. } => fold_masks_in_expr(addr),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             fold_masks_in_expr(lhs);
@@ -355,6 +359,16 @@ fn expression_reads_register(expression: &Expr, target: &VReg) -> bool {
         | Expr::Un { src: addr, .. }
         | Expr::Cast { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => expression_reads_register(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            expression_reads_register(call_target, target)
+                || args
+                    .iter()
+                    .any(|argument| expression_reads_register(argument, target))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expression_reads_register(lhs, target) || expression_reads_register(rhs, target)
         }

@@ -604,6 +604,12 @@ fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
                 || index.as_ref().is_some_and(register_matches)
         }
         Expr::Deref { addr, .. } => expr_reads_storage(addr, storage),
+        Expr::Call { target, args, .. } => {
+            expr_reads_storage(target, storage)
+                || args
+                    .iter()
+                    .any(|argument| expr_reads_storage(argument, storage))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_reads_storage(lhs, storage) || expr_reads_storage(rhs, storage)
         }
@@ -2092,6 +2098,7 @@ fn collect_fixed_frame_reads(expr: &Expr, reads: &mut Vec<(String, i64, u8)>) ->
         Expr::WideArithmetic { args, .. } => args
             .iter()
             .all(|argument| collect_fixed_frame_reads(argument, reads)),
+        Expr::Call { .. } => false,
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -2151,6 +2158,17 @@ fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> b
             changed
         }
         Expr::Deref { addr, .. } => substitute_exact_reg(addr, target, replacement),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            let mut changed = substitute_exact_reg(call_target, target, replacement);
+            for argument in args {
+                changed |= substitute_exact_reg(argument, target, replacement);
+            }
+            changed
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             let left = substitute_exact_reg(lhs, target, replacement);
             let right = substitute_exact_reg(rhs, target, replacement);
@@ -2188,7 +2206,10 @@ fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> b
 
 fn is_pure_arg_normalisation(expr: &Expr) -> bool {
     match expr {
-        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } | Expr::Unknown(_) => false,
+        Expr::Deref { .. }
+        | Expr::Call { .. }
+        | Expr::FunctionTableEntry { .. }
+        | Expr::Unknown(_) => false,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             is_pure_arg_normalisation(lhs) && is_pure_arg_normalisation(rhs)
         }
@@ -2870,6 +2891,12 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
             }
         }
         Expr::Deref { addr, .. } => mark_arg_reads_in_expr(addr, arch, read_between),
+        Expr::Call { target, args, .. } => {
+            mark_arg_reads_in_expr(target, arch, read_between);
+            for argument in args {
+                mark_arg_reads_in_expr(argument, arch, read_between);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             mark_arg_reads_in_expr(lhs, arch, read_between);
             mark_arg_reads_in_expr(rhs, arch, read_between);
@@ -3161,6 +3188,16 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
             base.as_ref() == Some(target) || index.as_ref() == Some(target)
         }
         Expr::Deref { addr, .. } => reads_reg_in_expr(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            reads_reg_in_expr(call_target, target)
+                || args
+                    .iter()
+                    .any(|argument| reads_reg_in_expr(argument, target))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             reads_reg_in_expr(lhs, target) || reads_reg_in_expr(rhs, target)
         }

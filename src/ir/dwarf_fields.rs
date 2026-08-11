@@ -635,6 +635,12 @@ fn annotate_expr(
                 definitions,
             );
         }
+        Expr::Call { target, args, .. } => {
+            annotate_expr(target, layouts, pointer_width, pointer_types, definitions);
+            for argument in args {
+                annotate_expr(argument, layouts, pointer_width, pointer_types, definitions);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             annotate_expr(lhs, layouts, pointer_width, pointer_types, definitions);
             annotate_expr(rhs, layouts, pointer_width, pointer_types, definitions);

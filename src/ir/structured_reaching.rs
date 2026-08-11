@@ -230,6 +230,12 @@ fn expression_reads(expression: &Expr, value: &VReg) -> bool {
             base.as_ref() == Some(value) || index.as_ref() == Some(value)
         }
         Expr::Deref { addr, .. } => expression_reads(addr, value),
+        Expr::Call { target, args, .. } => {
+            expression_reads(target, value)
+                || args
+                    .iter()
+                    .any(|argument| expression_reads(argument, value))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expression_reads(lhs, value) || expression_reads(rhs, value)
         }

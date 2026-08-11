@@ -987,6 +987,33 @@ Acceptance:
   on the pinned host, with unchanged coverage; and
 - no correctness metric or execution gate regresses.
 
+## Current score increment — lazy call value recovery
+
+The nearest current-schema GED miss, O0 GnuTLS `buffer_append`, now has a
+representation-level owner rather than a fixture-specific CFG rewrite:
+
+- `Expr::Call` carries lazy value-producing calls, call-site contracts, and an
+  active-machine-model result width;
+- `lazy_call_select` accepts only the proved saturation diamond and retains
+  generic direct, linear, and ARM call diamonds unchanged;
+- `Expr::contains_call()` is the shared minimum effect query used by scratch
+  pruning, dead-copy elimination, and dead-store elimination;
+- the real stripped GCC fixture recompiles and executes against the original;
+- all 224 ingested artifacts except the intended O0 GnuTLS cell are identical
+  to the paired `b50ba50` baseline; and
+- fresh current-evaluator scoring advances GED perfects `65→66/240`, GED mean
+  `30.354167→30.341667`, and union `79→80/250`, with TypeMatch unchanged and
+  ByteMatch slightly improved.
+
+The rejected broad candidate is part of the acceptance evidence: it lost two
+existing GED perfects and regressed a third cell. No future generalization may
+restore those shapes without a stronger effect, destination, and region proof.
+The new production owner is 547 lines, with eight unit tests isolated in a
+452-line sibling module. Adding `Expr::Call` nevertheless touched roughly thirty
+visitor implementations. Phase 3 should therefore prioritize a generated/shared
+expression traversal and effect interface before adding more effectful expression
+variants.
+
 ## TDD and validation matrix
 
 Every code increment follows RED -> GREEN -> REFACTOR -> VERIFY and includes a

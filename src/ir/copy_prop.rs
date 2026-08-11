@@ -64,10 +64,10 @@ pub fn propagate_copies(f: &mut Function) {
 ///
 /// This is intentionally name-conservative. If value numbering left multiple
 /// definitions with one name, their dependencies are unioned, so one live use
-/// keeps every possibly reaching source. Assignment expressions are pure in the
-/// AST (calls and stores have dedicated statement variants), making an unrooted
-/// assignment safe to remove even when its expression contains an ordinary
-/// non-volatile load.
+/// keeps every possibly reaching source. Most assignment expressions are pure,
+/// but a lazy select can contain a value-producing call. Such definitions are
+/// observable roots even when their result is unused; ordinary non-volatile
+/// loads remain removable.
 pub fn prune_unobservable_scratch_dataflow(f: &mut Function) {
     fn expr_regs(expr: &Expr) -> HashSet<VReg> {
         let mut reads = HashMap::new();
@@ -92,6 +92,9 @@ pub fn prune_unobservable_scratch_dataflow(f: &mut Function) {
                         .entry(dst.clone())
                         .or_default()
                         .extend(expr_regs(src));
+                    if src.contains_call() {
+                        roots.insert(dst.clone());
+                    }
                 }
                 Stmt::Assign { src, .. } => add_roots(src, roots),
                 Stmt::Store { addr, src, .. } => {
@@ -649,6 +652,7 @@ fn is_repeatable_versioned_flag_expr(dst: &VReg, expression: &Expr) -> bool {
             | Expr::Named { .. }
             | Expr::StringLit { .. }
             | Expr::Deref { .. }
+            | Expr::Call { .. }
             | Expr::Select { .. }
             | Expr::Unknown(_)
             | Expr::StackAddr { .. }
@@ -665,9 +669,9 @@ fn is_repeatable_versioned_flag_expr(dst: &VReg, expression: &Expr) -> bool {
 /// is the source variable itself (`Store local_x = value`). It is assignment
 /// semantics, not an indirect write through a pointer named `local_x`.
 /// Expressions whose evaluation may be moved from a promoted temporary store
-/// to its sole later use. AST expressions have no calls or writes; memory loads
-/// are still excluded because an intervening store could alias them, and an
-/// unknown expression must remain rooted where the lifter placed it.
+/// to its sole later use. Effectful calls and memory loads are excluded because
+/// moving either can change observable behavior; unknown expressions remain
+/// rooted where the lifter placed them.
 fn is_deferable_promoted_value(e: &Expr) -> bool {
     !contains_deref(e) && !contains_unknown(e)
 }
@@ -1249,11 +1253,14 @@ fn eliminate_dead_copies(body: &mut Vec<Stmt>) -> bool {
 fn remove_dead(body: &mut Vec<Stmt>, reads: &HashMap<VReg, usize>) -> bool {
     let mut changed = false;
     body.retain(|s| {
-        // Every `Assign` source is side-effect-free (registers, constants,
-        // arithmetic, loads — never a call), so a scratch destination that is
-        // never read is dead and safe to drop, whatever the source shape.
-        if let Stmt::Assign { dst, .. } = s {
-            if is_scratch_reg(dst) && reads.get(dst).copied().unwrap_or(0) == 0 {
+        // A lazy select may contain a value-producing call. Preserve that
+        // effect even when the scratch result is never read; all other current
+        // assignment sources are removable when their destination is dead.
+        if let Stmt::Assign { dst, src } = s {
+            if is_scratch_reg(dst)
+                && reads.get(dst).copied().unwrap_or(0) == 0
+                && !src.contains_call()
+            {
                 changed = true;
                 return false;
             }
@@ -1315,7 +1322,7 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
 /// post-store value.
 fn contains_deref(e: &Expr) -> bool {
     match e {
-        Expr::Deref { .. } | Expr::FunctionTableEntry { .. } => true,
+        Expr::Deref { .. } | Expr::Call { .. } | Expr::FunctionTableEntry { .. } => true,
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -1354,6 +1361,9 @@ fn contains_unknown(e: &Expr) -> bool {
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => false,
         Expr::Deref { addr, .. } => contains_unknown(addr),
+        Expr::Call { target, args, .. } => {
+            contains_unknown(target) || args.iter().any(contains_unknown)
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_unknown(lhs) || contains_unknown(rhs)
         }
@@ -1377,6 +1387,9 @@ fn contains_select(e: &Expr) -> bool {
         | Expr::Un { src: addr, .. }
         | Expr::Cast { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => contains_select(addr),
+        Expr::Call { target, args, .. } => {
+            contains_select(target) || args.iter().any(contains_select)
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_select(lhs) || contains_select(rhs)
         }
@@ -1414,6 +1427,17 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
             (base.as_ref() == Some(target)) as usize + (index.as_ref() == Some(target)) as usize
         }
         Expr::Deref { addr, .. } => count_reg_uses(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            count_reg_uses(call_target, target)
+                + args
+                    .iter()
+                    .map(|argument| count_reg_uses(argument, target))
+                    .sum::<usize>()
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reg_uses(lhs, target) + count_reg_uses(rhs, target)
         }
@@ -1456,6 +1480,12 @@ fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
             }
         }
         Expr::Deref { addr, .. } => count_reads_expr(addr, reads),
+        Expr::Call { target, args, .. } => {
+            count_reads_expr(target, reads);
+            for argument in args {
+                count_reads_expr(argument, reads);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reads_expr(lhs, reads);
             count_reads_expr(rhs, reads);
@@ -1675,6 +1705,12 @@ fn subst(e: &mut Expr, copies: &Copies) {
             }
         }
         Expr::Deref { addr, .. } => subst(addr, copies),
+        Expr::Call { target, args, .. } => {
+            subst(target, copies);
+            for argument in args {
+                subst(argument, copies);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             subst(lhs, copies);
             subst(rhs, copies);
@@ -1826,6 +1862,41 @@ mod tests {
         assert!(rendered.contains("local_30"));
         assert!(rendered.contains("arg1"));
         assert!(rendered.contains("zf_1"));
+    }
+
+    #[test]
+    fn an_unobserved_call_expression_remains_an_effect_root() {
+        let mut function = Function {
+            name: "effectful_call_result".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: reg("var0"),
+                src: Expr::Select {
+                    cond: Box::new(Expr::Reg(reg("enabled"))),
+                    if_true: Box::new(Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "write_event".into(),
+                        }),
+                        args: vec![Expr::Reg(reg("arg0"))],
+                        call_spec: None,
+                        result_width: Some(8),
+                    }),
+                    if_false: Box::new(Expr::Const(0)),
+                    width: 8,
+                },
+            }],
+        };
+
+        propagate_copies(&mut function);
+
+        assert!(matches!(
+            function.body.as_slice(),
+            [Stmt::Assign {
+                src: Expr::Select { if_true, .. },
+                ..
+            }] if matches!(if_true.as_ref(), Expr::Call { .. })
+        ));
     }
 
     #[test]

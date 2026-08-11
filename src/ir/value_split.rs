@@ -231,6 +231,12 @@ impl Splitter {
                 }
             }
             Expr::Deref { addr, .. } => self.rename_expr(addr, state),
+            Expr::Call { target, args, .. } => {
+                self.rename_expr(target, state);
+                for argument in args {
+                    self.rename_expr(argument, state);
+                }
+            }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 self.rename_expr(lhs, state);
                 self.rename_expr(rhs, state);

@@ -177,6 +177,14 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
                 || index.as_ref().map(|r| r == target).unwrap_or(false)
         }
         Expr::Deref { addr, .. } => contains_reg(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            contains_reg(call_target, target)
+                || args.iter().any(|argument| contains_reg(argument, target))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_reg(lhs, target) || contains_reg(rhs, target)
         }
@@ -219,6 +227,14 @@ fn reads_as_address_register(s: &Stmt, target: &VReg) -> bool {
             | Expr::StringLit { .. }
             | Expr::Unknown(_) => false,
             Expr::Deref { addr, .. } => in_expr(addr, target),
+            Expr::Call {
+                target: call_target,
+                args,
+                ..
+            } => {
+                in_expr(call_target, target)
+                    || args.iter().any(|argument| in_expr(argument, target))
+            }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 in_expr(lhs, target) || in_expr(rhs, target)
             }
@@ -291,6 +307,17 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
             n
         }
         Expr::Deref { addr, .. } => count_reg_uses(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            count_reg_uses(call_target, target)
+                + args
+                    .iter()
+                    .map(|argument| count_reg_uses(argument, target))
+                    .sum::<usize>()
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reg_uses(lhs, target) + count_reg_uses(rhs, target)
         }
@@ -432,6 +459,23 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
                 pointer_size,
                 index,
                 targets,
+            }
+        }
+        Expr::Call {
+            target: mut call_target,
+            mut args,
+            call_spec,
+            result_width,
+        } => {
+            substitute_in_expr(&mut call_target, target, with);
+            for argument in &mut args {
+                substitute_in_expr(argument, target, with);
+            }
+            Expr::Call {
+                target: call_target,
+                args,
+                call_spec,
+                result_width,
             }
         }
         Expr::Unknown(s) => Expr::Unknown(s),

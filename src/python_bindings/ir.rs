@@ -1660,6 +1660,7 @@ fn decbench_text(
             f,
             output_kind,
             &protected_locals,
+            calling_convention_pointer_width(cc),
         );
         // Preparation deletes proof-dead caller-saved register zeroing from
         // hardened GCC epilogues.  Only at this point can the x86 frame owner

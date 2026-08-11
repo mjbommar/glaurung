@@ -259,6 +259,7 @@ fn expression_integer_width(expression: &Expr, types: &TypeMap) -> Option<u8> {
             Some(expression_integer_width(lhs, types)?.max(expression_integer_width(rhs, types)?))
         }
         Expr::Un { src, .. } => expression_integer_width(src, types),
+        Expr::Call { result_width, .. } => *result_width,
         Expr::Unknown(_)
         | Expr::FloatConst { .. }
         | Expr::Reg(_)

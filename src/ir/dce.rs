@@ -323,18 +323,20 @@ pub fn prune_dead_flags(f: &mut Function) {
                 } => {
                     if matches!(
                         init.as_ref(),
-                        Stmt::Assign { dst, .. }
+                        Stmt::Assign { dst, src }
                             if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. })
                                 && !live.contains(dst)
+                                && !src.contains_call()
                     ) {
                         **init = Stmt::Nop;
                     }
                     retain_live(body, live);
                     if matches!(
                         step.as_ref(),
-                        Stmt::Assign { dst, .. }
+                        Stmt::Assign { dst, src }
                             if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. })
                                 && !live.contains(dst)
+                                && !src.contains_call()
                     ) {
                         **step = Stmt::Nop;
                     }
@@ -353,9 +355,10 @@ pub fn prune_dead_flags(f: &mut Function) {
         body.retain(|stmt| {
             !matches!(
                 stmt,
-                Stmt::Assign { dst, .. }
+                Stmt::Assign { dst, src }
                     if matches!(dst, VReg::Flag(_) | VReg::FlagValue { .. })
                         && !live.contains(dst)
+                        && !src.contains_call()
             )
         });
     }
@@ -395,6 +398,17 @@ fn count_reads_in_expr(e: &Expr, target: &VReg) -> usize {
             (base.as_ref() == Some(target)) as usize + (index.as_ref() == Some(target)) as usize
         }
         Expr::Deref { addr, .. } => count_reads_in_expr(addr, target),
+        Expr::Call {
+            target: call_target,
+            args,
+            ..
+        } => {
+            count_reads_in_expr(call_target, target)
+                + args
+                    .iter()
+                    .map(|argument| count_reads_in_expr(argument, target))
+                    .sum::<usize>()
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_reads_in_expr(lhs, target) + count_reads_in_expr(rhs, target)
         }

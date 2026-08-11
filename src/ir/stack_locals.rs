@@ -656,6 +656,12 @@ fn seed_indexed_stack_objects(
         }
         match expr {
             Expr::Deref { addr, .. } => collect_expr(addr, sp_delta, ctx, address_defs, starts),
+            Expr::Call { target, args, .. } => {
+                collect_expr(target, sp_delta, ctx, address_defs, starts);
+                for argument in args {
+                    collect_expr(argument, sp_delta, ctx, address_defs, starts);
+                }
+            }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 collect_expr(lhs, sp_delta, ctx, address_defs, starts);
                 collect_expr(rhs, sp_delta, ctx, address_defs, starts);
@@ -1365,6 +1371,12 @@ fn rewrite_expr(
                 return;
             }
         }
+        Expr::Call { target, args, .. } => {
+            rewrite_expr(target, map, names, ctx, sp_delta, address_defs);
+            for argument in args {
+                rewrite_expr(argument, map, names, ctx, sp_delta, address_defs);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             rewrite_expr(lhs, map, names, ctx, sp_delta, address_defs);
             rewrite_expr(rhs, map, names, ctx, sp_delta, address_defs);
@@ -1493,6 +1505,12 @@ fn reconcile_late_address_taken_objects(body: &mut [Stmt], map: &HashMap<SlotKey
                     }
                 }
                 rewrite_value(addr, objects);
+            }
+            Expr::Call { target, args, .. } => {
+                rewrite_value(target, objects);
+                for argument in args {
+                    rewrite_value(argument, objects);
+                }
             }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 rewrite_value(lhs, objects);

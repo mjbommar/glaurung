@@ -371,6 +371,18 @@ fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
         Expr::StringLit { .. } => ValueClass::Pointer(1),
         Expr::StackAddr { .. } => ValueClass::Pointer(0),
         Expr::FunctionTableEntry { .. } => ValueClass::Pointer(0),
+        Expr::Call { call_spec, .. } => call_spec
+            .as_ref()
+            .and_then(|spec| {
+                crate::ir::call_contracts::call_return_hint(&spec.call_prototype.return_type)
+            })
+            .map_or(ValueClass::Unknown, |hint| match hint {
+                TypeHint::Pointer { pointee_width } => ValueClass::Pointer(pointee_width),
+                TypeHint::CodePointer => ValueClass::Pointer(0),
+                TypeHint::Int { .. } | TypeHint::Float { .. } | TypeHint::BoolLike => {
+                    ValueClass::Scalar
+                }
+            }),
         Expr::Reg(reg @ VReg::Phys(name)) if is_trusted_copy_source(name) => match types.get(reg) {
             Some(TypeHint::Pointer { pointee_width }) => ValueClass::Pointer(pointee_width),
             Some(TypeHint::CodePointer) => ValueClass::Pointer(0),
@@ -570,6 +582,12 @@ fn collect_unsafe_expr(expression: &Expr, integer_context: bool, out: &mut HashS
             }
         }
         Expr::Deref { addr, .. } => collect_unsafe_expr(addr, false, out),
+        Expr::Call { target, args, .. } => {
+            collect_unsafe_expr(target, false, out);
+            for argument in args {
+                collect_unsafe_expr(argument, false, out);
+            }
+        }
         Expr::Cmp { lhs, rhs, .. } => {
             collect_unsafe_expr(lhs, false, out);
             collect_unsafe_expr(rhs, false, out);
