@@ -6559,7 +6559,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These fifteen steps change *definitions, uses, value identities, or control-flow
+/// These seventeen steps change *definitions, uses, value identities, or control-flow
 /// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
@@ -6589,27 +6589,30 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 8. `copy_prop::propagate_adjacent_overwritten_values` carries one pure,
 ///    immediately consumed value into the assignment that overwrites the same
 ///    physical scratch without treating that scratch as globally SSA.
-/// 9. `label_prune::recover_forward_exit_regions` turns exact forward skips to
+/// 9. `terminal_loop::recover_terminal_self_loops` turns an exact terminal
+///    machine `label; goto label` into a source-level infinite loop while
+///    retaining the label for any incoming structured edge.
+/// 10. `label_prune::recover_forward_exit_regions` turns exact forward skips to
 ///    an adjacent join into guarded continuations, including a tail loop exit
 ///    that is provably the source-level `break`.
-/// 10. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
+/// 11. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
 ///    `label; body; if (condition) goto label` into the exact source-level
 ///    `do { body } while (condition)` form.
-/// 11. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+/// 12. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 12. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
+/// 13. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
 ///    uniquely labelled return tails at their goto sites, recovering ordinary
 ///    early returns without inventing or reordering an effect.
-/// 13. `switch_ladder::recover_switches` runs before select formation and again
+/// 14. `switch_ladder::recover_switches` runs before select formation and again
 ///    after loop/copy recovery, converting proven comparison ladders into
 ///    `switch` nodes without losing a two-case tail to a ternary expression.
-/// 14. `guarded_switch::collapse_range_guards` removes a compiler range-check
+/// 15. `guarded_switch::collapse_range_guards` removes a compiler range-check
 ///    wrapper only when its unsigned domain and every switch label prove that
 ///    the wrapper cannot select a case the switch would not select itself.
-/// 15. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+/// 16. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
-/// 16. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
+/// 17. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
 ///    immediately joined result return into proven terminating arms. Exhaustive
 ///    `if`/`switch` regions lose the join entirely; a one-sided `if` becomes an
 ///    early return followed by the original false-path fallthrough.
@@ -6709,6 +6712,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned);
+    crate::ir::terminal_loop::recover_terminal_self_loops(&mut owned);
     // Recover shared return epilogues before general forward joins. Otherwise a
     // goto from a loop to `return -1` is faithfully but less clearly rendered
     // as `break; ... return -1` instead of the exact early return.

@@ -75,6 +75,7 @@ pub mod structure;
 pub mod structure_accounting;
 pub mod structured_reaching;
 pub mod switch_ladder;
+pub mod terminal_loop;
 pub mod typed_simplify;
 pub mod types;
 pub mod types_recover;
