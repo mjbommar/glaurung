@@ -239,7 +239,7 @@ pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
                 dst,
                 src: Expr::Reg(source),
             } if is_saved_frame_slot(dst)
-                || is_arm_saved_register_local(dst, source)
+                || is_arm_saved_register_local(dst, source, cc)
                 || is_x86_saved_register_local(dst, source, cc) =>
             {
                 Some(dst.clone())
@@ -249,7 +249,7 @@ pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
                 src: Expr::Reg(source),
                 ..
             } if is_saved_frame_slot(slot)
-                || is_arm_saved_register_local(slot, source)
+                || is_arm_saved_register_local(slot, source, cc)
                 || is_x86_saved_register_local(slot, source, cc) =>
             {
                 Some(slot.clone())
@@ -448,17 +448,20 @@ fn is_saved_frame_slot(v: &VReg) -> bool {
     matches!(v, VReg::Phys(name) if name.starts_with("stack_") && name != "stack_top")
 }
 
-/// Whether a promoted `local_*` is the entry-stack save of an ARM callee-saved
-/// core register.
+/// Whether a promoted `local_*` is the entry-stack save of ARM machine state.
 ///
 /// Stack coordinates deliberately name storage below the entry SP `local_*`.
 /// That is normally source-local territory, but Thumb leaf prologues put the
 /// `push {r7}` save at exactly `entry_sp - 4` and may omit LR entirely.  The
 /// corresponding restore is represented through `stack_top`, so the ordinary
 /// spill/restore pairing cannot see the shared slot name.  Restricting this
-/// exception to an architectural callee-saved source keeps an arbitrary
+/// exception to the ARM calling conventions, entry SSA versions, and the
+/// architectural callee-save/return-address registers keeps an arbitrary
 /// `local_4 = r0` source spill outside the machine-frame cleanup.
-fn is_arm_saved_register_local(slot: &VReg, source: &VReg) -> bool {
+fn is_arm_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool {
+    if !matches!(cc, CallConv::Arm | CallConv::ArmHardFloat) {
+        return false;
+    }
     let VReg::Phys(slot_name) = slot else {
         return false;
     };
@@ -468,8 +471,15 @@ fn is_arm_saved_register_local(slot: &VReg, source: &VReg) -> bool {
     if !slot_name.starts_with("local_") {
         return false;
     }
-    let base = crate::ir::abi::ssa_base(source_name);
-    if base == "fp" {
+    let (base, version) = source_name
+        .split_once('#')
+        .map_or((source_name.as_str(), None), |(base, version)| {
+            (base, Some(version))
+        });
+    if !matches!(version, None | Some("0")) {
+        return false;
+    }
+    if matches!(base, "fp" | "lr" | "r14") {
         return true;
     }
     base.strip_prefix('r')
@@ -1119,6 +1129,83 @@ mod tests {
 
         assert_eq!(f.body.len(), 2, "leaf r7 save survived: {:#?}", f.body);
         assert!(matches!(&f.body[0], Stmt::Assign { dst, .. } if dst == &reg("result")));
+    }
+
+    /// A non-leaf Thumb function saves the incoming link register below the
+    /// entry SP before its first call.  Stack-coordinate recovery names that
+    /// exact machine slot `local_4`; retaining it invents both a C local and an
+    /// undefined source input named `lr`.
+    #[test]
+    fn unread_arm_entry_lr_save_in_local_slot_is_removed() {
+        let mut f = Function {
+            name: "thumb_non_leaf".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_4"),
+                    src: Expr::Reg(reg("lr")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "callee".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::ArmHardFloat);
+
+        assert_eq!(f.body.len(), 2, "entry LR save survived: {:#?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Call { .. }));
+    }
+
+    /// A later SSA definition held in a core register is ordinary recovered
+    /// program state, not the incoming return address.  The machine-frame
+    /// exception must be entry-version specific just like its x86 counterpart.
+    #[test]
+    fn defined_arm_register_value_in_local_slot_is_kept() {
+        let mut f = Function {
+            name: "source_local".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_4"),
+                    src: Expr::Reg(reg("r7#3")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::Arm);
+
+        assert_eq!(f.body.len(), 2, "defined ARM value was deleted");
+    }
+
+    /// Register spelling alone is not enough evidence: an x86 function may
+    /// contain a recovered source variable named `r7`, and ARM frame policy
+    /// must never run under a different calling convention.
+    #[test]
+    fn arm_spelling_in_non_arm_function_is_kept() {
+        let mut f = Function {
+            name: "cross_arch_name".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_4"),
+                    src: Expr::Reg(reg("r7")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(f.body.len(), 2, "ARM policy crossed architectures");
     }
 
     /// Omit-frame-pointer x86 stack-clash frames save nonvolatile registers

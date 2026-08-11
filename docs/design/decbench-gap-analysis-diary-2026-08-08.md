@@ -2633,3 +2633,70 @@ the diagnostic ledger is
 `6ebe6bb132a1226047e4ddaa3046169c707d49f9b14044f9fb21fc9fce1ae1db`,
 and the stable C-tree digest is
 `f1888656956c36e774abd38324f58a902e371c18adb747a7adc2e38faff1cbeb`.
+
+## 20:00–21:50 — remove ARM entry-register saves without crossing SSA or architecture boundaries
+
+The next ARM32 defect was not a missing stack coordinate after all. Dual
+entry-SP/CFA recovery already promoted the `push {r7, lr}` machine frame, but
+the LR half landed below the entry SP as `local_4 = lr`. The existing
+callee-save scrub recognized only `fp`/`r4`–`r11` in that coordinate family.
+It therefore invented both a source local and an undefined source input named
+`lr`, which could cascade into fake parameters and return values.
+
+TDD first reproduced the missing LR case and two safety boundaries in the
+existing `dead_stores` owner. The retained predicate now runs only for the ARM
+and ARM-hard-float calling conventions, accepts only unversioned or SSA-zero
+incoming machine values, and covers `lr`/`r14` as well as the architectural
+callee-saved core registers. A later `r7#3` value and an ARM-looking register
+name under SysV AMD64 both remain untouched. The 26 focused Rust tests pass.
+A real integration test cross-compiles a Cortex-M4 Thumb ELF, verifies that its
+non-leaf function actually contains `push {r7, lr}`, and decompiles it end to
+end. Its recovered C has the source-shaped `int caller(int arg0)` and no
+`local_4`, `long lr`, or `= lr` artifact.
+
+The fresh external replay at `/tmp/glaurung-arm-lr-replay.X5vFHB` returns all
+250 requested functions across all 224 official binaries with zero extraction
+failures. Exactly 32 C files and 45 requested functions change relative to the
+accepted `7b4cc50` replay; every changed file is ELF32 ARM, while x86-64,
+AArch64, and PE output is byte-identical. On
+`cleanflight:O0:cleanflight_DALRCF405:sendAccel`, removing the fake entry LR
+save also removes a phantom parameter and return, recovers a void signature,
+recovers the loop counter as `unsigned int`, resolves `frSkyHubWriteFrame`, and
+structures the loop as `for`. The function is not claimed source-correct yet:
+unsupported VFP semantics still leave one undefined `var11`.
+
+Fresh paired scoring under one evaluator and materialized source tree gives:
+
+| Metric | Paired result | Perfect-count effect |
+|---|---|---|
+| GED | all 239 rows identical; mean `24.217573→24.217573` | unchanged at 64 |
+| ByteMatch | 15 improvements, zero regressions across 84 paired affected-project rows; mean `0.358089→0.360393` | unchanged |
+| TypeMatch | 3 improvements, 2 apparent regressions, 230 unchanged; mean `0.233660→0.239140` across all 235 rows | unchanged at 20 |
+
+The two TypeMatch decreases are false benchmark credit, not semantic losses.
+For `usb_control_request_dispatch`, the bogus machine save `local_4 = lr`
+accidentally matched the real DWARF local `i` solely because `i` occupies stack
+offset -4. For `hard_fault_handler`, the bogus incoming machine `lr`
+declaration name-matched a distinct source variable named `lr` that is loaded
+from the exception frame. Removing the declarations makes both functions more
+truthful even though the current matcher loses those coincidences. The three
+real TypeMatch gains are `pidUpdate` (`0.2→0.6`), `write_power_mode`
+(`0→0.8`), and `chThdSetPriority` (`0.333333→0.666667`).
+
+Applying paired deltas rather than drifted absolute columns to the accepted
+ledger projects GED unchanged at `22.621400`, ByteMatch
+`0.303642→0.304416`, and TypeMatch `0.231916→0.237396`. No perfect row changes,
+so the exact any-metric union remains 79/250 (`31.6%`). This is a broad ARM
+source-fidelity, type-quality, and recompilation-quality repair, not a claimed
+leaderboard-rank increment.
+
+The full Rust gate passes 1,994 library tests and every integration target, and
+the exact six-architecture ratchet remains 1,758 pass / 42 declared failures /
+228 structural verdicts / zero lane errors. The comprehensive Python run
+retains exactly the four established `suspicious_win` sample-content failures;
+`--last-failed` reproduces only those same four. The new real ARM integration
+test, its focused Ruff and Ty checks, `cargo fmt --check`, and
+`git diff --check` are green. Repository-wide Ruff and Ty remain unusable as
+release gates on the current branch: they report 3,710 and 2,038 pre-existing
+diagnostics respectively across unrelated legacy, documentation, optional-tool,
+and script paths. No such baseline debt was changed or suppressed in this lane.
