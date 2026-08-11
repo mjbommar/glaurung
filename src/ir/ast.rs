@@ -2963,7 +2963,7 @@ fn fold_returns(body: &mut Vec<Stmt>) {
 /// constant return. This deliberately runs after structural recovery: the
 /// assignment may still identify a shared switch destination while the CFG is
 /// being reconstructed, but it is redundant in the final source AST.
-fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>) {
+pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>) {
     for stmt in body.iter_mut() {
         match stmt {
             Stmt::If {
@@ -3038,13 +3038,16 @@ pub fn fold_exhaustive_switch_returns(function: &mut Function) {
     fold_exhaustive_switch_returns_body(&mut function.body);
 }
 
-/// Move a joined result return into every arm of an exhaustive `if` tree.
+/// Move a joined result return into terminating arms of an exhaustive `if` tree.
 ///
 /// Both arms must end by defining the exact returned value (possibly through
 /// another exhaustive `if`).  Calls and other statements earlier in an arm stay
 /// in place; only its terminal definition becomes a return.  Machine-epilogue
 /// comments and nops may separate the `if` from the joined return because they
-/// carry no source-level state.
+/// carry no source-level state.  If only the `then` arm defines the joined
+/// result, it becomes an early return and the original `else` arm becomes
+/// ordinary fallthrough before the still-shared return.  This is the same
+/// control flow with one unnecessary region join removed.
 pub fn fold_exhaustive_if_returns(function: &mut Function) {
     fold_returns(&mut function.body);
     fold_exhaustive_if_returns_body(&mut function.body);
@@ -3106,9 +3109,18 @@ fn fold_exhaustive_if_returns_body(body: &mut Vec<Stmt>) {
             index += 1;
             continue;
         };
-        if !turn_terminal_result_into_return(&mut then_body, &result, &return_template)
-            || !turn_terminal_result_into_return(&mut else_body, &result, &return_template)
-        {
+        let fallthrough_body = else_body.clone();
+        if !turn_terminal_result_into_return(&mut then_body, &result, &return_template) {
+            index += 1;
+            continue;
+        }
+        if !turn_terminal_result_into_return(&mut else_body, &result, &return_template) {
+            body[index] = Stmt::If {
+                cond,
+                then_body,
+                else_body: None,
+            };
+            body.splice(index + 1..index + 1, fallthrough_body);
             index += 1;
             continue;
         }
@@ -6583,8 +6595,9 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 15. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
 /// 16. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
-///    immediately joined result return into every arm only when both `if` arms,
-///    or an explicit switch default, make the control flow exhaustive.
+///    immediately joined result return into proven terminating arms. Exhaustive
+///    `if`/`switch` regions lose the join entirely; a one-sided `if` becomes an
+///    early return followed by the original false-path fallthrough.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
 /// impure: the AST that was checked or dumped was not the AST that was printed,
@@ -16637,6 +16650,138 @@ function f @ 0x1000 {
             inner_else.last(),
             Some(Stmt::Return { value: Some(_) })
         ));
+    }
+
+    #[test]
+    fn prepare_recovers_one_early_return_from_a_partial_result_join() {
+        let result = VReg::phys("ret");
+        let f = Function {
+            name: "peek_string".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("too_large")),
+                    then_body: vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(-6),
+                    }],
+                    else_body: Some(vec![
+                        Stmt::Call {
+                            target: Expr::Named {
+                                va: 0x1000,
+                                name: "validate_length".into(),
+                            },
+                            args: Vec::new(),
+                            dst: Some(VReg::phys("checked")),
+                            call_spec: None,
+                        },
+                        Stmt::Assign {
+                            dst: result.clone(),
+                            src: Expr::Const(0),
+                        },
+                        Stmt::If {
+                            cond: Expr::Reg(VReg::phys("lenp")),
+                            then_body: vec![Stmt::Store {
+                                addr: Expr::Reg(VReg::phys("lenp")),
+                                src: Expr::Const(4),
+                                size: 8,
+                            }],
+                            else_body: None,
+                        },
+                    ]),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result)),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+
+        let Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } = &prepared.body[0]
+        else {
+            panic!("expected the leading guard: {:#?}", prepared.body)
+        };
+        assert!(
+            else_body.is_none(),
+            "fallthrough stayed nested: {prepared:#?}"
+        );
+        assert_eq!(
+            then_body,
+            &vec![Stmt::Return {
+                value: Some(Expr::Const(-6))
+            }],
+            "the joined result should become its source-level early return"
+        );
+        assert!(
+            matches!(
+                prepared.body.get(1),
+                Some(Stmt::Call {
+                    target: Expr::Named { name, .. },
+                    ..
+                }) if name == "validate_length"
+            ),
+            "the false path should become ordinary fallthrough: {:#?}",
+            prepared.body
+        );
+        assert!(matches!(prepared.body.last(), Some(Stmt::Return { .. })));
+    }
+
+    #[test]
+    fn prepare_keeps_a_nonterminal_partial_result_join_nested() {
+        let result = VReg::phys("ret");
+        let f = Function {
+            name: "effect_after_result".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("guard")),
+                    then_body: vec![
+                        Stmt::Assign {
+                            dst: result.clone(),
+                            src: Expr::Const(-6),
+                        },
+                        Stmt::Call {
+                            target: Expr::Named {
+                                va: 0x1000,
+                                name: "observe_result".into(),
+                            },
+                            args: Vec::new(),
+                            dst: None,
+                            call_spec: None,
+                        },
+                    ],
+                    else_body: Some(vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(0),
+                    }]),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result)),
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+
+        let Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } = &prepared.body[0]
+        else {
+            panic!("expected the original conditional: {:#?}", prepared.body)
+        };
+        assert!(
+            else_body.is_some(),
+            "a nonterminal result definition must not become an early return: {prepared:#?}"
+        );
+        assert!(matches!(then_body.last(), Some(Stmt::Call { .. })));
+        assert!(matches!(prepared.body.last(), Some(Stmt::Return { .. })));
     }
 
     #[test]

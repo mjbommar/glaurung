@@ -1657,6 +1657,15 @@ fn decbench_text(
             output_kind,
             &protected_locals,
         );
+        // Preparation deletes proof-dead caller-saved register zeroing from
+        // hardened GCC epilogues.  Only at this point can the x86 frame owner
+        // see the adjacent balanced x87 scrub and stack teardown as one exact
+        // machine-only suffix.  Run the idempotent recogniser at this semantic
+        // boundary, then repeat the narrow joined-return fold it may unblock.
+        // The renderer below remains formatting-only.
+        recognise_machine_frame(&mut prepared, cc);
+        crate::ir::ast::fold_exhaustive_if_returns(&mut prepared);
+        crate::ir::ast::remove_redundant_return_constant_assignments(&mut prepared.body);
         // Preparation is also where a PC-relative address arithmetic sequence
         // finally becomes an absolute address. On AArch64 the stack guard is reached
         // through its GOT slot (`adrp`/`ldr`/`ldr`), so at the earlier

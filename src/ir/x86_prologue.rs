@@ -693,6 +693,35 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         .collect();
     for ret_idx in return_positions.into_iter().rev() {
         let mut ret_idx = ret_idx;
+        // GCC's `-fzero-call-used-regs=all` clears the caller-owned x87 stack
+        // by pushing eight zeroes and popping all eight values immediately
+        // before `ret`.  The lifter retains those unsupported x87 operations
+        // as `Unknown` nodes, so ordinary dead-store elimination cannot prove
+        // them irrelevant.  Match the complete balanced sequence only: a partial
+        // or differently ordered x87 program remains visible.  Consecutive
+        // positive RSP adjustments directly before the scrub are the same
+        // return's frame teardown (multiple pops are common).
+        if ret_idx >= 16
+            && body[ret_idx - 16..ret_idx - 8]
+                .iter()
+                .all(|statement| matches!(statement, Stmt::Unknown(mnemonic) if mnemonic == "fldz"))
+            && body[ret_idx - 8..ret_idx]
+                .iter()
+                .all(|statement| matches!(statement, Stmt::Unknown(mnemonic) if mnemonic == "fstp"))
+        {
+            let mut start = ret_idx - 16;
+            while start > 0 && is_rsp_add(&body[start - 1]) {
+                start -= 1;
+            }
+            let text = if start < ret_idx - 16 {
+                "x86-64 epilogue: clear call-used x87 and tear down frame"
+            } else {
+                "x86-64 epilogue: clear call-used x87"
+            };
+            body.drain(start..ret_idx);
+            body.insert(start, Stmt::Comment(text.to_string()));
+            continue;
+        }
         // An earlier recognition round may already have replaced `pop rbp`
         // with its provenance comment while leaving the preceding frame-size
         // adjustment in place.  The second idempotent round must still consume
@@ -1402,6 +1431,52 @@ mod tests {
             &f.body[0],
             Stmt::Comment(s) if s.contains("tear down frame")
         ));
+    }
+
+    #[test]
+    fn zero_call_used_x87_scrub_is_machine_epilogue() {
+        let mut body = vec![rsp_add(8), rsp_add(8), rsp_add(8)];
+        body.extend((0..8).map(|_| Stmt::Unknown("fldz".into())));
+        body.extend((0..8).map(|_| Stmt::Unknown("fstp".into())));
+        body.push(Stmt::Return {
+            value: Some(Expr::Const(-6)),
+        });
+        let mut f = Function {
+            name: "hardened_return".into(),
+            entry_va: 0,
+            body,
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2, "machine scrub leaked: {:#?}", f.body);
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Comment(text) if text == "x86-64 epilogue: clear call-used x87 and tear down frame"
+        ));
+        assert!(matches!(
+            &f.body[1],
+            Stmt::Return {
+                value: Some(Expr::Const(-6))
+            }
+        ));
+    }
+
+    #[test]
+    fn incomplete_x87_sequence_is_not_discarded_as_machine_epilogue() {
+        let mut body = vec![rsp_add(8)];
+        body.extend((0..7).map(|_| Stmt::Unknown("fldz".into())));
+        body.extend((0..8).map(|_| Stmt::Unknown("fstp".into())));
+        body.push(Stmt::Return { value: None });
+        let mut f = Function {
+            name: "unknown_x87_effect".into(),
+            entry_va: 0,
+            body: body.clone(),
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body, body);
     }
 
     #[test]

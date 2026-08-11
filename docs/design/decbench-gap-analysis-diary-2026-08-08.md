@@ -2524,3 +2524,97 @@ diagnostic ledger is
 `bd808e212b17c69102d16c8ad1f57f13bcb324d1604753062a26bbc4f53a117f`, and
 the stable C-tree digest is
 `5fb36ff83892a1643c5fa7983d2675999e746c60022528917645e5cad6fb9517`.
+
+## 18:10–19:55 — expose hardened GCC early returns after the x87 scrub
+
+The next valid GED-2 row,
+`openssh-portable:O2-noinline:scp:sshbuf_peek_string_direct`, did not initially
+respond to the obvious partial-result transform.  Its source has a one-sided
+length guard that returns `SSH_ERR_INVALID_FORMAT`, while Glaurung kept the
+entire false path nested and joined both paths through `ret`.  The existing
+exhaustive-if return fold could prove the terminal definition on the true path,
+but intentionally required both arms to define the result.
+
+TDD first extended that existing owner rather than introducing a second
+structuring pass.  When the true arm terminally defines the exact value consumed
+by the adjacent joined return and the false arm does not, the definition becomes
+an early return, the original false arm becomes ordinary fallthrough, and the
+shared return remains for that fallthrough.  A negative control with an effect
+after the true-arm definition remains nested.
+
+The official binary exposed a second, lower-level blocker after that transform
+passed its unit tests.  GCC 15's `-fzero-call-used-regs=all` emits a balanced
+machine-only x87 scrub immediately before every hardened return: eight `fldz`
+instructions followed by eight `fstp` instructions.  Unsupported x87 semantics
+were honestly retained as `Unknown` statements, but their presence hid the
+adjacent positive RSP teardown from the x86 epilogue recognizer and therefore
+kept machine state in source C.  The retained recognizer removes only the exact
+complete `8 x fldz; 8 x fstp` suffix immediately before a return, together with
+contiguous positive RSP adjustments immediately before that suffix.  An
+incomplete sequence remains byte-for-byte visible.  Because dead caller-register
+zeroing disappears only during final DecBench preparation, the idempotent
+machine-frame recognizer and the narrow joined-return cleanup run once more at
+that semantic boundary; the renderer remains formatting-only.
+
+On the official target this removes five leaked `rsp += 8` operations, all 16
+x87 unknowns, and the fake `rsp`, `rbp`, and `local_20` declarations.  The
+oversized-length path is now a direct `return 0xfffffffa`, the false path is
+flat, and redundant constant return assignments disappear.  The success path
+correctly retains its result assignment because an output store follows it.
+
+The fresh empty-kit candidate at `/tmp/glaurung-x87-partial.iBtm5r` emits all
+250 requested functions from all 224 binaries with zero extraction failures in
+59.266 seconds, versus 67.704 seconds for the accepted `b986d3c` replay.  Its
+per-binary median/mean/maximum are 2.597/3.120/6.219 seconds.  Exactly 42 of 224
+generated C files change, each containing exactly one requested function.  The
+package validator and `unzip -t` are clean.  The candidate archive SHA-256 is
+`003b477885c243186880cbe7005e84031d4629636539045f8f69bd294ef5e457`,
+the result manifest is
+`cbf838c3adcde4eb71ca6ac058579f19e5e0fcebb57a73463362a2cb07407469`,
+and the diagnostic ledger is
+`6ed1dc22774ee60d73e48b8656bb87cdc48d3d69e4a290c4b498d89650e2f867`.
+
+Fresh paired scoring under one evaluator, source tree, and toolchain reports no
+regression on any changed row:
+
+| Metric | Paired result | Perfect-count effect |
+|---|---|---|
+| GED | three improvements, zero regressions, total distance `-12` | `61 -> 63` on the 239 rows scoreable in this materialized tree |
+| ByteMatch | three improvements, zero regressions, mean `0.250067 -> 0.250969` | unchanged at 9/250 |
+| TypeMatch | all 40 paired changed rows identical; two rows lack ground truth | unchanged |
+
+The GED and ByteMatch sets include the already accepted
+`libacl:O0:getfacl:user_name` repair because the paired control predates
+`b986d3c`.  Removing that prior win attributes the new candidate precisely:
+
+- `sshbuf_peek_string_direct` improves GED `2 -> 0` and ByteMatch
+  `0.440994 -> 0.608696`;
+- `revoked_certs_generate` improves GED `39 -> 31` without becoming perfect;
+- `shadow:O0:chage:close_files` improves ByteMatch
+  `0.317333 -> 0.320755`; and
+- no new candidate row worsens GED, ByteMatch, or TypeMatch.
+
+The current materialized tree lacks four source-CFG rows that the accepted
+243-row ledger carries, so its drifted absolute GED column is not substituted
+for that ledger.  Applying only the paired new deltas projects GED mean
+`22.662552 -> 22.621400`, ByteMatch mean `0.302958 -> 0.303642`, and the exact
+any-metric union `78 -> 79/250` (`31.6%`); TypeMatch remains `0.231916`.
+These remain projected submission numbers until an exact committed-revision
+archive is rebuilt and published.
+
+The full Rust gate passes 1,991 library tests and every integration target.
+The six-lane architecture ratchet matches exactly at 1,758 pass / 42 declared
+failures / 228 structural verdicts / zero lane errors.  The complete candidate
+Python suite reports 2,888 passed, 44 skipped, and exactly the same four
+unrelated `suspicious_win` sample-content failures as the established baseline.
+`cargo fmt --check`, focused Ruff, and `git diff --check` are clean.  In the
+full five-lane decompiler gate, Rust, the x86-64 fixture matrix, the exact
+six-architecture ratchet, and both executable behavior corpora pass.  Its
+historical 56-cell metric ratchet remains red on four pre-existing cells:
+`arrays:gcc:O2` GED/ByteMatch, `matrix:gcc:O2` GED, and `sort:clang:O2` GED.
+An isolated `b986d3c` rebuild under the identical GCC 15.2, Clang 21.1, and
+current evaluator reproduces all four scores, and its generated C for all three
+cells is byte-for-byte identical to this candidate.  The failures therefore do
+not originate in this patch; they expose accepted-branch drift from the checked
+ratchet baseline and remain an open gate-repair task rather than being hidden or
+rebaselined here.
