@@ -403,7 +403,7 @@ fn width_mask(width: Width) -> u64 {
 mod tests {
     use super::*;
     use crate::ir::ssa::compute_ssa;
-    use crate::ir::types::{LlirBlock, LlirInstr};
+    use crate::ir::types::{Flag, LlirBlock, LlirInstr};
 
     fn instruction(va: u64, op: Op) -> LlirInstr {
         LlirInstr { va, op }
@@ -682,5 +682,65 @@ mod tests {
 
         assert_eq!(oracle.value_demand(&explicit_path_scratch), 0);
         assert_eq!(oracle.value_demand(&unresolved_path_result), FULL);
+    }
+
+    #[test]
+    fn byte_comparison_demands_only_the_architectural_byte_view() {
+        // Optimized SysV callees commonly copy an incoming EDX parameter and
+        // then observe only DL/R8B.  Register SSA correctly keeps those aliases
+        // in one storage identity, but the bit-demand sidecar must retain the
+        // exact architectural view or prototype recovery cannot distinguish a
+        // source byte from an observed machine word.
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1010,
+                instrs: vec![
+                    instruction(
+                        0x1000,
+                        Op::Assign {
+                            dst: VReg::phys("r8d"),
+                            src: Value::Reg(VReg::phys("edx")),
+                        },
+                    ),
+                    instruction(
+                        0x1004,
+                        Op::Bin {
+                            dst: VReg::Temp(0),
+                            op: BinOp::And,
+                            lhs: Value::Reg(VReg::phys("r8")),
+                            rhs: Value::Const(0xff),
+                        },
+                    ),
+                    instruction(
+                        0x1008,
+                        Op::Cmp {
+                            dst: VReg::Flag(Flag::Z),
+                            op: crate::ir::types::CmpOp::Eq,
+                            lhs: Value::Reg(VReg::Temp(0)),
+                            rhs: Value::Const(0),
+                        },
+                    ),
+                    instruction(
+                        0x100c,
+                        Op::CondJump {
+                            cond: VReg::Flag(Flag::Z),
+                            target: 0x1010,
+                            inverted: false,
+                        },
+                    ),
+                ],
+                succs: vec![0x1010],
+            }],
+        };
+        let ssa = compute_ssa(&function);
+        let oracle = BitDemandOracle::analyze(&function, &ssa, CallConv::SysVAmd64);
+        let input = SsaValue {
+            base: VReg::phys("rdx"),
+            version: 0,
+        };
+
+        assert_eq!(oracle.value_demand(&input), 0xff);
     }
 }

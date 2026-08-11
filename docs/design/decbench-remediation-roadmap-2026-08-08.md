@@ -531,6 +531,17 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     ByteMatch, and TypeMatch evaluation. This closes the named missing-arity
     defect, while the still-open type work must recover the final source
     `u_int` rather than the current machine-word fallback.
+  - [x] Recover an exact SysV byte parameter when SSA bit demand proves that
+    the complete low byte, and no higher bit, is observable. The first broad
+    candidate was rejected after fresh paired scoring exposed real
+    `bsPutBit` and `nvicEnableVector` TypeMatch regressions. The retained rule
+    rejects partial-bit masks and every non-SysV ABI. A real optimized stripped
+    fixture recompiles and executes identically; the full 250-function replay
+    changes 12 files with zero extraction failures. Fresh paired TypeMatch
+    changes only `strcmp_until` (`0.666667→1.0`), taking perfects `20→21`;
+    ByteMatch improves two rows and regresses none, and all changed C CFGs are
+    topology-isomorphic. The accepted-ledger projection advances union
+    `79→80/250` (`32.0%`) and TypeMatch `0.237396→0.238814`.
 - [x] Remove x86 omit-frame-pointer callee saves that stack promotion names as
   ordinary `local_*` objects.  Entry-version nonvolatile-register provenance
   is gated by the detected calling convention, and the existing

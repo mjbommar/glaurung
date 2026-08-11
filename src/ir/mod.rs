@@ -62,6 +62,7 @@ pub(crate) mod machine_register;
 pub mod name_resolve;
 pub mod naming;
 pub mod pdb_fields;
+pub(crate) mod prototype_width;
 pub mod readonly_fold;
 pub mod regview;
 pub mod select_fold;

@@ -2800,3 +2800,53 @@ emits 250/250 functions with zero failures, and measures 64.199 seconds wall,
 maximum.  Relative to exact `e2cb1f3`, wall and median improve, mean changes by
 `+0.22%`, and p95 by `+3.35%`; every Phase-1 ceiling passes without reducing
 coverage.
+
+## 00:10–01:05 — reject broad narrowing, retain exact SysV byte evidence
+
+The next distance-one TypeMatch target was
+`cronie:O2:crontab:strcmp_until`. Its source third parameter is `char`, while
+the stripped machine function copies `%edx` and observes only `%dl`/`%r8b`.
+The existing bit-demand oracle already preserved that exact architectural
+fact (`0xff` demand on the `%rdx#0` live-in), but prototype recovery discarded
+it after normalizing the ABI register slot.
+
+TDD first locked that definedness fact and a real optimized, stripped SysV
+fixture. The fixture verifies the byte-register instructions, recovers
+`signed char`, recompiles the recovered C, and executes original and recovered
+functions over signed and boundary inputs. A full-width negative remains
+word-sized. The first production candidate deliberately admitted byte,
+halfword, and rounded-up low-bit demands on every ABI. Its fresh 250-function
+replay completed, but paired TypeMatch rejected it: `strcmp_until` improved
+`0.666667→1.0`, while `bzip2:bsPutBit` fell `0.333333→0` and ARM32
+`chibios:nvicEnableVector` fell `1.0→0.5`. An earlier 32-bit variant had also
+mis-typed `adler32_combine64`. None of those candidates is accepted.
+
+The retained boundary requires SysV AMD64 and demand exactly `0xff`. It rejects
+partial-bit range restriction (`int bit & 1`), AAPCS word-register inputs,
+32-bit masks, pointers, and any higher-bit observation. Six focused Rust tests
+cover those boundaries. The final replay at
+`/tmp/glaurung-observable-byte-sysv.OxMqVz` emits 250/250 functions across
+224/224 binaries with zero failures. Exactly 12 C files change; the two known
+regression functions return byte-for-byte to the control.
+
+Fresh cache-disabled paired scoring of every changed slice gives one and only
+one TypeMatch delta: `strcmp_until` moves `0.666667→1.0`. On the same 235-row
+evaluator, mean TypeMatch rises `0.239140→0.240558` and perfects `20→21`.
+Fresh ByteMatch improves `read_files` `0.139535→0.142857` and
+`print_neigh_brief` `0.325758→0.328244`, with all other changed rows equal and
+no compile-rate loss. Joern extraction of both revisions finds every function
+in all 12 changed files, and every paired CFG is exactly topology-isomorphic;
+GED therefore cannot change.
+
+Applying only the paired TypeMatch delta to the accepted ledger projects
+TypeMatch `0.237396→0.238814`. `strcmp_until` was not already perfect in GED
+or ByteMatch, so the exact any-metric union advances `79→80/250`
+(`31.6%→32.0%`). This remains a submission projection until the committed
+revision archive is published and DecBench PR #56 is rerun upstream.
+
+The full Rust suite passes 2,005 library tests, every integration target, and
+doc tests. The complete Python suite reports 2,891 passed and 44 skipped, with
+exactly the same four unrelated `suspicious_win` sample-content failures as
+the established parent baseline. The real execution fixture, focused Ruff and
+Ty, `cargo fmt --check`, and `git diff --check` are green. Repository-wide Ruff
+and Ty retain the unrelated legacy diagnostic baseline documented above.

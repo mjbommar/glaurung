@@ -1635,6 +1635,8 @@ pub fn recover_prototype_with_arm_vfp_args(
 ) -> RecoveredPrototype {
     let raw = recover_types_for(lf, cc);
     let valued = recover_types_valued(lf, ssa);
+    let observable_parameter_widths =
+        crate::ir::prototype_width::ObservableParameterWidths::analyze(lf, ssa, cc);
     let slots = crate::ir::abi::argument_slots(cc);
     let canonical = crate::ir::abi::argument_registers(cc);
     let mut ordered: Vec<usize> = param_slots.iter().copied().collect();
@@ -1868,7 +1870,8 @@ pub fn recover_prototype_with_arm_vfp_args(
                 .or_else(|| arm_live_in_address_hint(&valued, &value, cc))
                 .or_else(|| live_in_parameter_view_hint(lf, ssa, &value, &raw, cc))
                 .or(raw_hint)
-                .map(|hint| normalize_value_hint_for_abi(hint, cc));
+                .map(|hint| normalize_value_hint_for_abi(hint, cc))
+                .map(|hint| observable_parameter_widths.refine(&value, hint));
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
