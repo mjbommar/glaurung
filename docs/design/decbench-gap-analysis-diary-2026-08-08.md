@@ -2773,7 +2773,7 @@ projection remains union 79/250 (`31.6%`), GED `22.621400`, ByteMatch
 and composition of program-level contract recovery; it is not represented as
 leaderboard movement.
 
-The exact source candidate passes all 1,997 Rust library tests, every Rust
+The final source candidate passes all 1,998 Rust library tests, every Rust
 integration target, and doc tests.  After rebuilding the editable native
 extension, the complete Python suite reports 2,890 passed and 44 skipped, with
 exactly the four established `suspicious_win` sample-content failures and no
@@ -2781,3 +2781,22 @@ new failure.  The real caller/callee fixture, three focused Rust tests, focused
 Ruff and Ty, `cargo fmt --check`, and `git diff --check` are green.  Repository-
 wide Ruff and Ty retain the unrelated legacy diagnostic baseline documented
 above rather than being silently fixed or suppressed in this lane.
+
+The first exact-`67ed727b` release replay was deliberately rejected on
+performance even though it reproduced every scored artifact: 70.176 seconds
+wall, 3.128 seconds median, and 5.509 seconds p95 exceeded the Phase-1 wall and
+median ceilings.  A second frozen replay was deterministic but still measured
+67.838/3.176/5.286 seconds.  Profiling found that program-environment recovery
+parsed `.eh_frame` again after CFG discovery had already parsed it for the same
+owned image.
+
+TDD added exact real-ELF parity for unwind function extents. `ProgramImage` now
+owns that immutable index alongside its sections, mappings, symbols, and target
+metadata; CFG discovery and the program environment borrow it rather than
+reopening the object.  The fresh full replay at
+`/tmp/glaurung-ehcache-replay.e6Ctz7` is byte-identical across all 224 C files,
+emits 250/250 functions with zero failures, and measures 64.199 seconds wall,
+2.843 seconds median, 3.387 seconds mean, 5.408 seconds p95, and 16.747 seconds
+maximum.  Relative to exact `e2cb1f3`, wall and median improve, mean changes by
+`+0.22%`, and p95 by `+3.35%`; every Phase-1 ceiling passes without reducing
+coverage.

@@ -768,7 +768,7 @@ pub fn recover_program_environment(
     let has_format_sink = address_names
         .values()
         .any(|name| clean_import_name(name) == "error");
-    let fdes = crate::analysis::exception::eh_frame_functions(image.bytes());
+    let fdes = image.eh_frame_functions();
     if fdes.is_empty() {
         return ProgramEnvironment::default();
     }
@@ -779,7 +779,7 @@ pub fn recover_program_environment(
     let referencing_owners = if api_targets.is_empty() {
         HashSet::new()
     } else {
-        referencing_owner_entries(image, &requested_vas, &fdes)
+        referencing_owner_entries(image, &requested_vas, fdes)
     };
     let call_sites = if referencing_owners.is_empty() {
         Vec::new()
@@ -843,7 +843,7 @@ pub fn recover_program_environment(
                     budgets,
                     cc,
                     address_names,
-                    &fdes,
+                    fdes,
                     *target,
                 )
             })
@@ -864,7 +864,7 @@ pub fn recover_program_environment(
         image,
         budgets,
         cc,
-        &fdes,
+        fdes,
         &requested_vas,
     );
     for (target, arity) in caller_arities {

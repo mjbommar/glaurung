@@ -287,6 +287,12 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   points. Real ELF, ARM32 ELF, PE, and Mach-O fixtures prove parser parity. The
   measured small-x86 query is now 45 parses with identical output; do not mark
   the one-parse acceptance criterion complete while the other 44 owners remain.
+- [x] Indexed exact `.eh_frame` function extents once in `ProgramImage` and
+  routed both CFG discovery and program-environment caller recovery through the
+  shared immutable slice. This removed a measured duplicate whole-object/unwind
+  parse exposed by the caller-arity increment: the 224-binary wall returned from
+  rejected 70.176/67.838-second exact runs to 64.199 seconds, with byte-identical
+  250/250 output and every Phase-1 latency ceiling passing.
 - [x] Added a conservative ARM alignment-save classifier at the LLIR
   input-definition seam: a proven balanced `push {r3, lr}` no longer invents a
   fourth source parameter, while a restored-and-consumed `r3` remains live-in

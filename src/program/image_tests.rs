@@ -27,6 +27,16 @@ fn one_owned_image_answers_target_entry_and_address_queries_without_reparsing() 
 }
 
 #[test]
+fn one_owned_image_reuses_exact_unwind_function_extents() {
+    let data = std::fs::read(hello_binary()).expect("read real ELF");
+    let expected = crate::analysis::exception::eh_frame_functions(&data);
+    let image = ProgramImage::from_bytes(data).expect("parse real ELF");
+
+    assert!(!expected.is_empty());
+    assert_eq!(image.eh_frame_functions(), expected);
+}
+
+#[test]
 fn malformed_input_fails_closed_instead_of_creating_an_unknown_image() {
     let error = ProgramImage::from_bytes(vec![0xde, 0xad, 0xbe, 0xef])
         .expect_err("invalid image must be rejected");

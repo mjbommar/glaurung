@@ -117,6 +117,7 @@ pub struct ProgramImage {
     code_mappings: Arc<[FileMapping]>,
     sections: Arc<[IndexedSection]>,
     executable_ranges: Arc<[Range<u64>]>,
+    eh_frame_functions: Arc<[crate::analysis::exception::EhFrameFunction]>,
     defined_text_symbols_by_name: Arc<HashMap<String, u64>>,
     defined_symbols_by_va: Arc<HashMap<u64, String>>,
 }
@@ -228,6 +229,7 @@ impl ProgramImage {
                     .or_insert(address);
             }
         }
+        let eh_frame_functions = crate::analysis::exception::eh_frame_functions(&bytes);
         drop(object);
 
         Ok(Self {
@@ -242,6 +244,7 @@ impl ProgramImage {
             code_mappings: code_mappings.into(),
             sections: sections.into(),
             executable_ranges: executable_ranges.into(),
+            eh_frame_functions: eh_frame_functions.into(),
             defined_text_symbols_by_name: Arc::new(defined_text_symbols_by_name),
             defined_symbols_by_va: Arc::new(defined_symbols_by_va),
         })
@@ -255,6 +258,11 @@ impl ProgramImage {
     /// Parsed object format.
     pub fn format(&self) -> Format {
         self.format
+    }
+
+    /// Exact function extents decoded once from ELF `.eh_frame` FDEs.
+    pub fn eh_frame_functions(&self) -> &[crate::analysis::exception::EhFrameFunction] {
+        &self.eh_frame_functions
     }
 
     /// Parsed instruction-set architecture.
