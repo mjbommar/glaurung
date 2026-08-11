@@ -2900,7 +2900,7 @@ and `Unsupported`; unsupported flow preserves the established conservative
 fallback instead of becoming pointer evidence.
 
 The query is owned as the private `structured_reaching::return_type` side-car,
-not advertised as the future shared definition service. It is 491 lines with
+not advertised as the future shared definition service. It is 509 lines with
 its own tests, below the 1,000-line ratchet, and adds only the small call site to
 the already oversized `ast.rs`. The proper Phase-3 destination remains verified
 CFG/MIR values; this bounded HIR query exists because source-role coalescing is
@@ -2936,3 +2936,16 @@ compile/execute fixture, focused Ruff and Ty, `cargo fmt --check`, and
 `git diff --check` pass. Repository-wide formatting, Ruff, and Ty remain the
 documented unrelated baseline (349 unformatted files, 3,710 Ruff diagnostics,
 and 2,038 Ty diagnostics); none was changed or suppressed in this lane.
+
+The implementation, tests, and evidence were committed as
+`399d4648acb47f1d0ef1d031d8b7f33230266b58` and pushed with an identical
+remote branch hash. Rebuilding the optimized extension from that exact commit
+and replaying an empty kit again emits 250/250 functions from 224/224 binaries
+with zero failures. Every generated C file is byte-identical to the scored
+candidate. The exact-revision replay measures 53.898 seconds wall, 2.847 mean,
+2.455 median, 4.019 p95, and 4.852 maximum seconds per binary. Its validated
+archive SHA-256 is
+`85864103bd7cbbe94010db4469337a783ca02aa43c832993d9b289b580a3d15e`,
+published at
+`https://github.com/mjbommar/glaurung/releases/tag/decbench-399d464`;
+DecBench PR #56 records the score-neutral attribution and exact asset.
