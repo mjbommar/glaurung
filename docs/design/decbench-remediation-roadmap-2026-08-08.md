@@ -923,6 +923,32 @@ Acceptance:
 - [ ] Project solved accesses as semantic `Field`/`Index` HIR and remove the
   temporary character-pointer representation seam.
 
+### Conservative LLIR MemorySSA increment — 2026-08-11
+
+- [x] Add typed deterministic memory versions, defs, uses, and phis for the
+  fully-unknown alias region, with calls and unknown instructions modelled as
+  clobbers and declared intrinsic effects respected.
+- [x] Add an independent verifier for exact effect coverage, definition
+  ownership, known versions, phi inputs, and block-local state threading;
+  corruption tests include an orphaned access record.
+- [x] Centralize object grouping, layout reduction, deduplication, and conflict
+  construction in one `MemoryObjectBuilder` shared by adapters.
+- [x] Add a fail-closed LLIR adapter whose direct affine accesses retain exact
+  instruction and memory-version provenance and reject a sidecar from another
+  function.
+- [x] Expose the verified LLIR analysis through the existing diagnostics path
+  without adding work or changing output in normal decompilation.
+- [ ] Replace the single unknown region with target-backed stack object, known
+  global, readonly image, heap/unknown, and fully-unknown regions.
+- [ ] Carry stable value/object identities through typed MIR and connect the
+  LLIR evidence to the production aggregate consumer before removing the AST
+  compatibility adapter.
+
+This is a concrete dependency of the unchecked replacement item above, not a
+claim that it is complete. The fresh 224-binary replay is byte-identical to the
+preceding candidate, and the real stripped execution fixture observes the new
+diagnostic evidence while preserving behavior.
+
 The first target, stripped `balance`, proves offsets 40/44 and stride 64 but not
 the erased nominal type `COLUMN *`. It therefore remains TypeMatch `0.8`; exact
 name recovery is not an acceptance criterion for this early evidence-only

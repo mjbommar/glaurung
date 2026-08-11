@@ -3596,3 +3596,85 @@ rerun reproduces exactly those four; direct raw-byte scans show that every
 fixture lacks all six API names the test requires. The new real integration
 fixture and every other executed test pass or skip. This is existing fixture
 debt, not a memory-object regression.
+
+## 16:00–17:15 — install a conservative MemorySSA seam without pretending LLIR is MIR
+
+The architecture audit found no MIR or MemorySSA implementation behind the
+existing design documents. `src/ir/ssa.rs` is explicitly a register-only LLIR
+sidecar, while the first common object increment still collected every access
+from the prepared AST. Flipping that adapter to a nominal "MIR" owner would
+therefore have hidden the missing definition graph instead of building it.
+
+The retained slice adds a deterministic, conservative MemorySSA sidecar over
+the LLIR that exists today. It gives the complete address space one typed
+`MemoryRegion::Unknown` token, versions loads, stores, conditional accesses,
+calls, declared intrinsics, and unknown instructions, and emits explicit phis
+at joins and loop headers. Calls and unmodelled instructions clobber memory;
+unknown never means no effect. This deliberately establishes the fully-unknown
+region from Phase 3 before later target-backed stack/global/readonly/heap
+partitioning. It is not presented as the verified typed MIR or as completion of
+the region-aware MemorySSA task.
+
+An independent verifier checks exact effect-record cardinality, one definition
+per output, known input/output versions, phi cardinality and ownership, exact
+incoming predecessor states, instruction-by-instruction state threading, and
+block exit states. RED corruption coverage proved that the first verifier
+incorrectly accepted an access record for a nonexistent instruction; the fixed
+verifier rejects orphaned records. A second RED test proved that the LLIR object
+adapter could silently accept a sidecar built for another function; the adapter
+now verifies the exact `(LLIR, MemorySSA)` pair and returns an error before
+collecting evidence.
+
+Object-layout reduction now has one owner. The prepared-AST adapter and new
+LLIR adapter both feed `MemoryObjectBuilder`, which alone performs deterministic
+grouping, alignment, stride, extent, origin compatibility, deduplication, and
+conflict construction. The active AST adapter falls from 468 to 333 lines; the
+shared model/reducer is 298 lines and the LLIR adapter is 59. Direct affine LLIR
+loads and stores retain exact `InstrAddr` provenance and the memory version read
+or defined. Because LLIR cannot yet prove cursor origin or repeated source
+stride, its objects retain `MissingOrigin` and `MissingStride` rather than
+manufacturing a solved layout.
+
+The new analysis is available through the existing opt-in
+`GLAURUNG_DUMP_PASSES` diagnostic path, which prints verified MemorySSA and LLIR
+objects for the real lifted function. Ordinary decompilation does not compute
+the unused sidecar, so this foundation adds no steady-state analysis cost and
+does not make output depend on an environment variable. The real stripped
+64-byte-record round trip now asserts that this diagnostic contains exact LLIR
+instruction provenance and no verifier failure, then recompiles and executes
+the generated C as before.
+
+Six MemorySSA tests cover straight-line read/write threading, diamond and loop
+phis, conservative calls, declared/conditional/unknown effects, and verifier
+corruption. Eleven common-object tests include LLIR provenance and mismatched
+sidecar rejection; all 23 downstream high-variable tests remain green. The
+complete Rust gate passes 2,068 library tests plus every integration and
+documentation target. The fresh release-extension real aggregate test passes.
+
+A fresh static-only optimized replay at
+`/tmp/glaurung-memory-ssa.ZKSbSh` emitted 250/250 requested functions across
+224/224 binaries with zero errors. Package validation and `unzip -t` pass; the
+candidate archive SHA-256 is
+`1cbdfd9d42c4706df96504652a8931a4dc068f8862ba465dc6b2b81578079373`.
+Every one of the 224 generated C files is byte-identical to the frozen
+`aad0022` memory-object candidate, so GED, TypeMatch, ByteMatch, and union are
+unchanged and do not need to be recomputed. The run took 56.701 seconds at 12
+workers; mean, median, p95, and maximum per-binary times were 2.984, 2.537,
+4.221, and 6.022 seconds. Since the new analysis is disabled outside pass
+diagnostics and output is byte-identical, the small timing difference is host
+variance rather than work added to the normal pipeline.
+
+The remaining ownership gap is explicit: the production high-variable consumer
+still uses the AST adapter because promoted source-local identities do not yet
+exist in LLIR. The next aligned slice must carry stable value/object identities
+through typed MIR lowering, split the unknown memory region using `TargetSpec`,
+and join LLIR accesses with source/debug constraints in `TypeStore`; it must not
+delete the AST adapter until that evidence reaches the consumer with parity.
+
+The final rebuilt-extension Python collection reports 2,897 passed and 44
+skipped. Its only four failures are the same established malformed
+`suspicious_win` fixtures: two RISC-V copies, ARMHF, and AArch64. Each assertion
+confirms that none of the required suspicious API names exists in the summary,
+symbol set, or raw binary bytes. `--last-failed` reruns exactly those four in
+0.07 seconds and no other test. This increment does not touch those fixtures or
+the suspicious-symbol analysis.

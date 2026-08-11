@@ -9,6 +9,8 @@ from pathlib import Path
 
 import glaurung as g
 import pytest
+from _pytest.capture import CaptureFixture
+from _pytest.monkeypatch import MonkeyPatch
 
 
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -28,6 +30,8 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
 )
 def test_stripped_aggregate_cursor_preserves_byte_stride_and_execution(
     tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capfd: CaptureFixture[str],
 ) -> None:
     """Recover a no-debug 64-byte record cursor without guessing its source tag."""
     source = tmp_path / "records.c"
@@ -97,12 +101,18 @@ int main(void) {
     stripped_result = _run(["strip", "--strip-all", str(stripped)])
     assert stripped_result.returncode == 0, stripped_result.stderr
 
+    monkeypatch.setenv("GLAURUNG_DUMP_PASSES", "1")
     generated = g.ir.decompile_at(
         str(stripped),
         target_va,
         timeout_ms=8000,
         style="decbench",
     )
+    diagnostic = capfd.readouterr().err
+    assert "===== verified LLIR memory SSA =====" in diagnostic
+    assert "===== LLIR memory objects =====" in diagnostic
+    assert "LlirInstruction" in diagnostic
+    assert "===== invalid LLIR memory analysis =====" not in diagnostic
     cursor_match = re.search(r"char \* (local_[0-9a-f]+);", generated)
     assert cursor_match is not None, generated
     cursor_name = cursor_match.group(1)

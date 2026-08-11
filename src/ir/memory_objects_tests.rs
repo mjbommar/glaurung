@@ -1,6 +1,9 @@
-use super::{infer_from_ast, AccessRole, LayoutConflict};
+use super::llir::infer_from_llir;
+use super::{infer_from_ast, AccessRole, AccessSource, LayoutConflict};
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::{BinOp, VReg};
+use crate::ir::memory_ssa::compute_memory_ssa;
+use crate::ir::types::{BinOp, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
+use crate::ir::use_def::InstrAddr;
 
 fn reg(name: &str) -> VReg {
     VReg::phys(name)
@@ -269,4 +272,99 @@ fn scalar_redefinition_is_an_explicit_object_conflict() {
         .conflicts
         .contains(&LayoutConflict::UnclassifiedDefinition));
     assert!(!model.has_conflict_free_extent(&reg("local_8")));
+}
+
+#[test]
+fn llir_accesses_retain_instruction_and_memory_version_provenance() {
+    let llir = LlirFunction {
+        entry_va: 0x1000,
+        blocks: vec![LlirBlock {
+            start_va: 0x1000,
+            end_va: 0x1004,
+            instrs: vec![
+                LlirInstr {
+                    va: 0x1000,
+                    op: Op::Store {
+                        addr: MemOp::plain(Some(reg("rbx")), None, 0, 4, 4),
+                        src: Value::Const(1),
+                    },
+                },
+                LlirInstr {
+                    va: 0x1001,
+                    op: Op::Load {
+                        dst: reg("rax"),
+                        addr: MemOp::plain(Some(reg("rbx")), None, 0, 8, 8),
+                    },
+                },
+            ],
+            succs: vec![],
+        }],
+    };
+    let memory = compute_memory_ssa(&llir);
+
+    let model = infer_from_llir(&llir, &memory).expect("verified LLIR object model");
+    let object = model.object_for_base(&reg("rbx")).expect("rbx object");
+
+    assert_eq!(object.accesses.len(), 2);
+    assert_eq!(object.accesses[0].offset, 4);
+    assert_eq!(object.accesses[0].role, AccessRole::Write);
+    assert_eq!(
+        object.accesses[0].source,
+        AccessSource::LlirInstruction(InstrAddr {
+            block_idx: 0,
+            instr_idx: 0,
+        })
+    );
+    assert_eq!(
+        object.accesses[0].memory_version,
+        memory
+            .access_at(InstrAddr {
+                block_idx: 0,
+                instr_idx: 0,
+            })
+            .and_then(|access| access.output)
+    );
+    assert_eq!(object.accesses[1].offset, 8);
+    assert_eq!(object.accesses[1].role, AccessRole::Read);
+    assert_eq!(
+        object.accesses[1].memory_version,
+        memory
+            .access_at(InstrAddr {
+                block_idx: 0,
+                instr_idx: 1,
+            })
+            .map(|access| access.input)
+    );
+    assert!(object.conflicts.contains(&LayoutConflict::MissingOrigin));
+    assert!(object.conflicts.contains(&LayoutConflict::MissingStride));
+}
+
+#[test]
+fn llir_adapter_rejects_a_memory_sidecar_from_another_function() {
+    let llir = LlirFunction {
+        entry_va: 0x1000,
+        blocks: vec![LlirBlock {
+            start_va: 0x1000,
+            end_va: 0x1004,
+            instrs: vec![LlirInstr {
+                va: 0x1000,
+                op: Op::Load {
+                    dst: reg("rax"),
+                    addr: MemOp::plain(Some(reg("rbx")), None, 0, 0, 8),
+                },
+            }],
+            succs: vec![],
+        }],
+    };
+    let memory = compute_memory_ssa(&LlirFunction {
+        entry_va: 0x2000,
+        blocks: vec![LlirBlock {
+            start_va: 0x2000,
+            end_va: 0x2004,
+            instrs: vec![],
+            succs: vec![],
+        }],
+    });
+
+    assert!(infer_from_llir(&llir, &memory).is_err());
 }

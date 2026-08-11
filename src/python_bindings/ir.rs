@@ -842,6 +842,16 @@ fn prepare_llir_for_lowering(
                 eprintln!("  0x{:x}: {}", instruction.va, instruction.op);
             }
         }
+        let memory = crate::ir::memory_ssa::compute_memory_ssa(&numbered);
+        match crate::ir::memory_objects::llir::infer_from_llir(&numbered, &memory) {
+            Ok(objects) => {
+                eprintln!("\n===== verified LLIR memory SSA =====\n{memory:#?}");
+                eprintln!("\n===== LLIR memory objects =====\n{objects:#?}");
+            }
+            Err(error) => {
+                eprintln!("\n===== invalid LLIR memory analysis =====\n{error}");
+            }
+        }
     }
     lock_parameter_slots_from_prototype(prototype.as_ref(), &mut parameter_slots);
     PreparedLlir {

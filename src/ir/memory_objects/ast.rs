@@ -1,28 +1,16 @@
 //! Prepared-AST compatibility adapter for the common memory-object model.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::memory_objects::{
-    AccessPath, AccessRole, AccessSource, LayoutConflict, MemoryObject, MemoryObjectModel,
-    ObjectId, ObjectOrigin,
+    AccessRole, AccessSource, LayoutConflict, MemoryObjectBuilder, MemoryObjectModel, ObjectOrigin,
 };
 use crate::ir::types::{is_promoted_local_reg, BinOp, VReg};
 
-#[derive(Debug, Clone)]
-struct RawAccess {
-    base: VReg,
-    offset: i64,
-    width: u8,
-    role: AccessRole,
-    source: AccessSource,
-}
-
 #[derive(Debug, Default)]
 struct Observations {
-    accesses: Vec<RawAccess>,
-    strides: HashMap<VReg, Vec<i64>>,
-    origins: HashMap<VReg, Vec<ObjectOrigin>>,
+    objects: MemoryObjectBuilder,
     unclassified_definitions: HashSet<VReg>,
     non_address_uses: HashSet<VReg>,
     next_statement: u32,
@@ -32,127 +20,17 @@ struct Observations {
 pub(crate) fn infer_from_ast(function: &Function) -> MemoryObjectModel {
     let mut observations = Observations::default();
     observe_body(&function.body, &mut observations);
-
-    let mut grouped: BTreeMap<VReg, Vec<RawAccess>> = BTreeMap::new();
-    for access in observations.accesses {
-        grouped.entry(access.base.clone()).or_default().push(access);
+    for base in observations.unclassified_definitions {
+        observations
+            .objects
+            .conflict(base, LayoutConflict::UnclassifiedDefinition);
     }
-
-    let mut objects = Vec::with_capacity(grouped.len());
-    let mut by_base = BTreeMap::new();
-    for (base, accesses) in grouped {
-        let id = ObjectId(objects.len() as u32);
-        let mut conflicts = BTreeSet::new();
-        let origins = observations.origins.remove(&base).unwrap_or_default();
-        if origins.is_empty() {
-            conflicts.insert(LayoutConflict::MissingOrigin);
-        } else if !origins_compatible(&origins) {
-            conflicts.insert(LayoutConflict::ConflictingOrigins);
-        }
-        if accesses.iter().any(|access| access.width == 0) {
-            conflicts.insert(LayoutConflict::ZeroWidthAccess);
-        }
-        if observations.unclassified_definitions.contains(&base) {
-            conflicts.insert(LayoutConflict::UnclassifiedDefinition);
-        }
-
-        let observed_strides = observations.strides.remove(&base).unwrap_or_default();
-        let stride_set = observed_strides
-            .into_iter()
-            .filter_map(i64::checked_abs)
-            .filter_map(|stride| u64::try_from(stride).ok())
-            .filter(|stride| *stride != 0)
-            .collect::<BTreeSet<_>>();
-        let stride = match stride_set.len() {
-            0 => {
-                conflicts.insert(LayoutConflict::MissingStride);
-                None
-            }
-            1 => stride_set.first().copied(),
-            _ => {
-                conflicts.insert(LayoutConflict::ConflictingStrides);
-                None
-            }
-        };
-        if observations.non_address_uses.contains(&base) {
-            conflicts.insert(LayoutConflict::NonAddressUse);
-        }
-
-        let mut access_paths = accesses
-            .into_iter()
-            .map(|access| AccessPath {
-                object: id,
-                offset: access.offset,
-                width: access.width,
-                alignment: inferred_alignment(access.offset, access.width),
-                role: access.role,
-                source: access.source,
-                memory_version: None,
-            })
-            .collect::<Vec<_>>();
-        access_paths
-            .sort_by_key(|access| (access.offset, access.width, access.role, access.source));
-        access_paths.dedup_by(|left, right| {
-            left.offset == right.offset
-                && left.width == right.width
-                && left.role == right.role
-                && left.source == right.source
-        });
-
-        let extent = stride.and_then(|stride| {
-            if access_paths.iter().any(|access| access.offset < 0) {
-                conflicts.insert(LayoutConflict::NegativeOffset);
-                return None;
-            }
-            let fits = access_paths.iter().all(|access| {
-                u64::try_from(access.offset)
-                    .ok()
-                    .and_then(|offset| offset.checked_add(u64::from(access.width)))
-                    .is_some_and(|end| end <= stride)
-            });
-            if !fits {
-                conflicts.insert(LayoutConflict::AccessPastStride);
-                return None;
-            }
-            Some(stride)
-        });
-
-        by_base.insert(base.clone(), id);
-        objects.push(MemoryObject {
-            id,
-            base,
-            origins,
-            accesses: access_paths,
-            stride,
-            extent,
-            conflicts,
-        });
+    for base in observations.non_address_uses {
+        observations
+            .objects
+            .conflict(base, LayoutConflict::NonAddressUse);
     }
-    MemoryObjectModel { objects, by_base }
-}
-
-fn origins_compatible(origins: &[ObjectOrigin]) -> bool {
-    let non_null = origins
-        .iter()
-        .filter(|origin| !matches!(origin, ObjectOrigin::Null))
-        .collect::<Vec<_>>();
-    let Some(first) = non_null.first() else {
-        return false;
-    };
-    non_null.iter().all(|origin| *origin == *first)
-}
-
-fn inferred_alignment(offset: i64, width: u8) -> u8 {
-    let width = width.max(1);
-    let offset = offset.unsigned_abs();
-    let mut alignment = 1;
-    while alignment < width
-        && alignment <= u8::MAX / 2
-        && offset.is_multiple_of(u64::from(alignment.saturating_mul(2)))
-    {
-        alignment = alignment.saturating_mul(2);
-    }
-    alignment.min(width)
+    observations.objects.finish()
 }
 
 fn observe_body(body: &[Stmt], observations: &mut Observations) {
@@ -189,10 +67,8 @@ fn observe_body(body: &[Stmt], observations: &mut Observations) {
                 }
                 if let Some(dst) = dst {
                     observations
-                        .origins
-                        .entry(dst.clone())
-                        .or_default()
-                        .push(ObjectOrigin::CallResult(source));
+                        .objects
+                        .observe_origin(dst.clone(), ObjectOrigin::CallResult(source));
                 }
             }
             Stmt::Return { value } => {
@@ -272,27 +148,20 @@ fn observe_definition(
         if &base == dst {
             if displacement != 0 {
                 observations
-                    .strides
-                    .entry(dst.clone())
-                    .or_default()
-                    .push(displacement);
+                    .objects
+                    .observe_stride(dst.clone(), displacement);
             }
         } else {
-            observations
-                .origins
-                .entry(dst.clone())
-                .or_default()
-                .push(ObjectOrigin::Copy {
+            observations.objects.observe_origin(
+                dst.clone(),
+                ObjectOrigin::Copy {
                     base,
                     offset: displacement,
-                });
+                },
+            );
         }
     } else if let Some(origin) = object_origin(src, source) {
-        observations
-            .origins
-            .entry(dst.clone())
-            .or_default()
-            .push(origin);
+        observations.objects.observe_origin(dst.clone(), origin);
     } else {
         observations.unclassified_definitions.insert(dst.clone());
     }
@@ -400,13 +269,9 @@ fn record_access(
     let Some((base, offset)) = affine_address(address) else {
         return;
     };
-    observations.accesses.push(RawAccess {
-        base,
-        offset,
-        width,
-        role,
-        source,
-    });
+    observations
+        .objects
+        .observe_access(base, offset, width, role, source, None);
 }
 
 fn affine_address(expression: &Expr) -> Option<(VReg, i64)> {
