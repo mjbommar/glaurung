@@ -3125,3 +3125,74 @@ at `/tmp/glaurung-1e973bc-final.5aTlpG` measures 52.674 seconds wall, 2.781 mean
 Phase-1 ceiling. Package validation and zip integrity pass; the release archive
 SHA-256 is
 `c00c0bb020c96b1d5e28d20741a7344aa07c263e81d48026681bb755910d3d0b`.
+
+## 06:10–06:45 — replace the mixed-source ledger and recover a guarded call value edge
+
+Before selecting another transform, I rebuilt the whole `1e973bc` scorecard
+from one clean external replay. GED used the official source CFG for each exact
+optimization level; TypeMatch and ByteMatch were freshly joined from their own
+complete results. This invalidates the prior absolute `82/250` projection. The
+legacy `scripts/reeval_ged.py` hard-coded `SRC_OPT = "O0"`, so its O2 and
+O2-noinline rows compared against O0 source topology. Bisecting 45 historical
+output slices confirmed that the five apparent x86 regressions were not product
+changes. Direct source-graph comparison explains each delta, including
+`psktool:process_options` (O0 source 55/84 nodes/edges versus official O2
+156/271) and `shadow:login:main` (223/363 versus 238/389).
+
+The reproducible `1e973bc` baseline is:
+
+| Metric | Perfect | Coverage | Mean | Median |
+|---|---:|---:|---:|---:|
+| GED | 65 | 240 | 24.129167 | 9 |
+| TypeMatch | 22 | 235 | 0.245741 | 0.090909 |
+| ByteMatch | 14 | 250 | 0.304440 | 0.259079 |
+| union | 79 | 250 | 31.6% | — |
+
+The nearest non-union GED miss, `coreutils:chown:usage`, was rejected as a
+target because its source CFG contains a macro-expanded `do { ... } while (0)`
+self-loop that optimized machine code correctly removes. Preserving that loop
+would optimize the metric by making the decompilation less faithful.
+
+The next real miss was `tar:O2-noinline:xheader_list_append`. Its source lazy
+select is `value ? xstrdup(value) : NULL`; the old output correctly guarded the
+call but left the false value implicit, producing a 3-node/3-edge CFG against
+the source's 4/4. RED first added a real GCC O2 shared-object fixture whose
+external consumer forces the selected value through a common join. The retained
+HIR transform accepts only an exact one-sided call followed by a copy of its
+result. The false edge is materialized only when `destination != 0`, or an exact
+straight-line reaching copy into that destination, proves the fallthrough value
+is zero. Any intervening control flow, redefinition, different constant, or
+partial view fails closed.
+
+The transform and its positive/negative proof controls are isolated in the new
+280-line `guarded_call` owner. `select_fold.rs` remains at its prior 1,145 lines
+rather than growing to 1,390, so this score increment also follows the roadmap's
+semantic-owner and file-size rules.
+
+The first real fixture draft appended an unresolved sink and a new exported
+function to the shared call-shapes corpus. The full Python gate correctly failed
+its host reference loader and execution-baseline exactness checks across x86,
+AArch64, A32, and i386. The retained fixture is instead a self-contained
+19-line translation unit outside that shared manifest, with its regression in a
+dedicated 47-line Python owner. All seven newly exposed architecture/matrix
+failures pass after the isolation; the only remaining `--last-failed` entries
+are the four established malformed `suspicious_win` samples.
+
+The full candidate replay emits 250/250 functions across 224/224 binaries with
+zero errors. Compared with the exact `1e973bc` archive, only `bin_144.c` changes
+semantically; nine multi-function files differ only because the worktree kit
+omits blank separators that the prior packager inserted. Fresh official-source
+evaluation moves `xheader_list_append` GED `3→0`. Fresh baseline and candidate
+ByteMatch are both `0.475`, and unchanged declarations keep TypeMatch at `0.5`.
+The projected single-revision totals are union `80/250` (`32.0%`) and GED mean
+`24.116667`; TypeMatch and ByteMatch aggregates are unchanged, with no lost
+perfect. This is an honest one-row exact win, not a restoration of the invalid
+mixed-source total.
+
+The final Rust gate passes 2,024 library tests plus every integration and doc
+target. The final complete Python collection reports 2,895 passed and 44
+skipped, with exactly the four established malformed `suspicious_win` sample
+failures; `--last-failed` contains only those four. The real GCC O2 regression,
+focused Ruff and Ty, `cargo fmt --check`, and `git diff --check` pass.
+Repository-wide Ruff and Ty retain the documented unrelated baseline rather
+than being rewritten in this lane.

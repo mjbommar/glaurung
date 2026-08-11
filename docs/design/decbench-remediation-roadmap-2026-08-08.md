@@ -8,9 +8,15 @@ open
 **Historical evidence baseline:** Glaurung `c1cfdc97`, DecBench main `0a4e85b`,
 dataset `0a2d996`, with ARM `byte_match` recomputed using pending DecBench PR #61
 
-**Current planning baseline:** the current branch's fresh
-224-binary/250-function stripped-kit replay, with TypeMatch and ByteMatch rebuilt
-from checkpoints and GED retained from the published-source CFG ledger
+**Current planning baseline:** exact clean revision `1e973bc`, replayed over all
+224 binaries and 250 functions, with every metric joined from a fresh run and
+GED paired with the official per-optimization source CFG. It has union `79/250`
+(`31.6%`), GED `65/240` perfect with mean `24.129167` and median `9`, TypeMatch
+`22/235` perfect with mean `0.245741` and median `0.090909`, and ByteMatch
+`14/250` perfect with mean `0.304440` and median `0.259079`. Older projected
+ledgers below remain useful increment history, but their absolute GED/union
+totals are superseded because the legacy re-evaluator paired O2 and
+O2-noinline output with O0 source CFGs.
 
 ## Outcome
 
@@ -578,6 +584,27 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     DecBench translation unit is absent locally and name-only fallback selects
     an unrelated `main`; source-correct potential is therefore recorded
     separately as `83/250` rather than presented as an official aggregate.
+  - [x] Re-audit the apparent five-row x86 GED regression against official
+    per-optimization source CFGs. Revision bisect and direct graph-shape
+    comparison show no Glaurung product regression: the legacy absolute ledger
+    used O0 source graphs for O2 and O2-noinline rows. A fresh single-revision
+    join establishes the current `1e973bc` baseline above and replaces the
+    projected `82/250` total with the reproducible `79/250` total.
+  - [x] Materialize the missing false value of an exact guarded call-valued
+    select only when reaching-definition evidence proves it is zero. The pass
+    requires a one-sided call/copy body and either tests the destination itself
+    or an exact immediately reaching source copy; control-flow barriers,
+    redefinitions, and nonzero/partial guards fail closed. A real stripped GCC
+    O2 fixture retains lazy call execution and both value edges. The transform
+    and its proof controls live in a dedicated 280-line owner instead of growing
+    the already oversized select-fold module. Across the
+    224-binary/250-function replay, the only semantic C change is
+    `tar:O2-noinline:xheader_list_append`; nine other file diffs are separator
+    whitespace between multiple packaged functions. Fresh official-source GED
+    improves `3→0`; ByteMatch is exactly `0.475→0.475` and TypeMatch is exactly
+    `0.5→0.5`. The candidate projection is therefore union `79→80/250`
+    (`31.6%→32.0%`) and GED mean `24.129167→24.116667`, with ByteMatch mean
+    unchanged at `0.304440` and no lost perfect.
 - [x] Remove x86 omit-frame-pointer callee saves that stack promotion names as
   ordinary `local_*` objects.  Entry-version nonvolatile-register provenance
   is gated by the detected calling convention, and the existing

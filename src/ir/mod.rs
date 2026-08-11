@@ -48,6 +48,7 @@ pub mod expr_reconstruct;
 pub mod expression_width;
 pub mod function_tables;
 pub mod guard_chain;
+pub(crate) mod guarded_call;
 pub mod guarded_switch;
 pub mod health;
 pub mod high_variables;

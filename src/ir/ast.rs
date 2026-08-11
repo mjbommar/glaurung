@@ -6559,7 +6559,7 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 
 /// The explicit AST transformation that precedes DecBench rendering.
 ///
-/// These seventeen steps change *definitions, uses, value identities, or control-flow
+/// These eighteen steps change *definitions, uses, value identities, or control-flow
 /// representation* — they are
 /// semantic pipeline operations, not formatting:
 ///
@@ -6577,42 +6577,45 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 4. `select_fold::collapse_assignment_diamonds` turns a proven two-arm,
 ///    same-destination diamond into one pure select expression, then the narrow
 ///    promoted-select propagator removes an adjacent one-use stack temporary.
-/// 5. `select_fold::recover_guarded_select_returns` turns an initialized result,
+/// 5. `guarded_call::materialize_false_edges` makes the zero-valued
+///    false edge of an exact `value != 0` guarded call overwrite explicit,
+///    preserving lazy evaluation while recovering both reaching values.
+/// 6. `select_fold::recover_guarded_select_returns` turns an initialized result,
 ///    one guarded select overwrite, and its joined return back into terminating
 ///    nested returns when the initializer is a pure register view.
-/// 6. `select_fold::fold_boolean_masks` renders an exact comparison-derived
+/// 7. `select_fold::fold_boolean_masks` renders an exact comparison-derived
 ///    `0`/`-1` select as arithmetic negation, avoiding fake source-level control
 ///    flow without changing the mask value.
-/// 7. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
+/// 8. `copy_prop::propagate_adjacent_guard_values` folds a physical scratch's
 ///    immediately adjacent, sole eager guard use without claiming that physical
 ///    role is globally SSA.
-/// 8. `copy_prop::propagate_adjacent_overwritten_values` carries one pure,
+/// 9. `copy_prop::propagate_adjacent_overwritten_values` carries one pure,
 ///    immediately consumed value into the assignment that overwrites the same
 ///    physical scratch without treating that scratch as globally SSA.
-/// 9. `terminal_loop::recover_terminal_self_loops` turns an exact terminal
+/// 10. `terminal_loop::recover_terminal_self_loops` turns an exact terminal
 ///    machine `label; goto label` into a source-level infinite loop while
 ///    retaining the label for any incoming structured edge.
-/// 10. `label_prune::recover_forward_exit_regions` turns exact forward skips to
+/// 11. `label_prune::recover_forward_exit_regions` turns exact forward skips to
 ///    an adjacent join into guarded continuations, including a tail loop exit
 ///    that is provably the source-level `break`.
-/// 11. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
+/// 12. `loop_form::recover_linear_latched_do_whiles` turns a uniquely owned
 ///    `label; body; if (condition) goto label` into the exact source-level
 ///    `do { body } while (condition)` form.
-/// 12. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
+/// 13. `loop_form::recover_head_tested_whiles` turns the conservative constant-bound
 ///    countdown `while (1) { if (exit) break; body }` into
 ///    `while (!exit) { body }` only when folding has made the exit guard first.
-/// 13. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
+/// 14. `label_prune::inline_terminal_goto_tails` duplicates only straight-line,
 ///    uniquely labelled return tails at their goto sites, recovering ordinary
 ///    early returns without inventing or reordering an effect.
-/// 14. `switch_ladder::recover_switches` runs before select formation and again
+/// 15. `switch_ladder::recover_switches` runs before select formation and again
 ///    after loop/copy recovery, converting proven comparison ladders into
 ///    `switch` nodes without losing a two-case tail to a ternary expression.
-/// 15. `guarded_switch::collapse_range_guards` removes a compiler range-check
+/// 16. `guarded_switch::collapse_range_guards` removes a compiler range-check
 ///    wrapper only when its unsigned domain and every switch label prove that
 ///    the wrapper cannot select a case the switch would not select itself.
-/// 16. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
+/// 17. `loop_form::promote_for_loops` combines an adjacent initializer, exact head
 ///    guard, and unconditional same-variable unit increment into a `for` node.
-/// 17. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
+/// 18. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
 ///    immediately joined result return into proven terminating arms. Exhaustive
 ///    `if`/`switch` regions lose the join entirely; a one-sided `if` becomes an
 ///    early return followed by the original false-path fallthrough.
@@ -6707,6 +6710,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     // expose ladders whose discriminant was not yet syntactically uniform.
     crate::ir::switch_ladder::recover_switches(&mut owned);
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
+    crate::ir::guarded_call::materialize_false_edges(&mut owned);
     crate::ir::select_fold::recover_guarded_select_returns(&mut owned);
     crate::ir::select_fold::fold_boolean_masks(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
