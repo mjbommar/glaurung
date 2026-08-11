@@ -3500,3 +3500,99 @@ pre-existing diagnostics, Python format check finds 308 files, Ruff finds
 Rust-only increment. The regenerable 5.3-GiB worktree `target/` cache was
 cleaned after shared `/tmp` quota caused linker and fixture-write failures; the
 successful gates use a target and `TMPDIR` on the home filesystem.
+
+## 15:20–16:00 — turn the first aggregate miss into a common object-model seam
+
+The next TypeMatch miss was `coreutils:O0:pr:balance`, still at `0.8`.
+DWARF identifies its stack local at CFA offset -24 as `COLUMN *`; `COLUMN` is
+exactly 64 bytes, with the observed `current_line` and `lines_stored` integer
+fields at offsets 40 and 44. The stripped evaluation binary contains neither
+the tag, typedef, global name, nor local name. What the machine code actually
+proves is narrower but still useful: a cursor loaded from one global pointer
+slot, two four-byte writes at offsets 40 and 44, and an exact 64-byte repeated
+stride. Inventing `COLUMN *` from that evidence would be benchmark-specific
+guessing. Emitting another machine `long` also throws away the proven object
+semantics.
+
+This increment introduces a format- and spelling-independent
+`MemoryObjectModel`. Each function-local object has a typed `ObjectId`, base
+value, explicit origins, affine byte access paths, read/write role, width,
+inferred alignment, stride, extent, and retained layout conflicts. Access paths
+reserve a memory-version field for the MIR/MemorySSA adapter. Missing or
+conflicting origins, missing or conflicting strides, unclassified
+redefinitions, zero-width accesses, negative offsets, out-of-extent accesses,
+and integer use all fail closed. Call-result origins
+carry statement provenance: a RED test showed that treating two distinct calls
+as the same undifferentiated `CallResult` could merge different lifetimes, and
+the model now rejects that case.
+
+The common 115-line model is separated from its 468-line prepared-AST
+compatibility adapter. The adapter exists because promoted source locals are
+currently materialized only after legacy AST preparation; it is not the future
+owner. MIR, MemorySSA, DWARF, and PDB should populate the same object model
+rather than adding renderer-specific aggregate hints. This concern split keeps
+both production files below 500 lines and leaves `high_variables.rs` below
+1,000 lines despite integrating the first consumer.
+
+For a conflict-free promoted cursor with one exact extent, high-variable
+recovery now projects the value as `char *`. That is intentionally not a source
+aggregate claim: character-pointer arithmetic preserves the machine's byte
+offsets until semantic `Field` and `Index` HIR can carry a solved layout. Locked
+debug declarations still win, every cursor definition must be a compatible
+origin/null/copy/call or exact self step, and the old integer-use rejection is
+removed only for an object whose model proof succeeds. `balance` therefore
+changes from `long local_8` to `char * local_8` while retaining `+64`, never the
+incorrect C-scaled `+256`.
+
+Fresh blinded replay changes only two of 224 generated C artifacts. The second
+is `cronie:O0:crontab:env_free`, where an eight-byte cursor over pointer-sized
+elements changes from `long` to `char *`. Its exact DWARF type is `char **`, so
+the retained spelling is still incomplete and TypeMatch correctly gives no new
+credit. This is useful negative evidence: access/stride recovery alone cannot
+recover nominal aggregate names or nested pointee types; those require the
+shared `TypeStore`, interprocedural constraints, and semantic layout projection
+already ordered later in Phase 6.
+
+Cache-disabled same-evaluator scoring confirms the limited claim. TypeMatch is
+bit-for-bit unchanged at 23/235 perfect, mean `0.244652`, median `0.090909`;
+`balance` stays `0.8`. ByteMatch changes exactly `balance`, improving
+`0.069565→0.070796`, with no regression; the aggregate moves
+`0.311947982→0.311952907`, retaining 14/250 perfect and median `0.269231`.
+GED is identical in all 240 scored rows at 67 perfect, mean `24.104167`,
+and median `9`. The exact row-key union is unchanged at 82/250 under this
+current evaluator snapshot; the older 83 total used a different ByteMatch
+perfect set and is not carried across metric state.
+Earlier sample-array calculations were discarded: DecBench's rendered JSON
+keeps only 100 detail samples, while the authoritative 235/250 coverage lives
+under all grouped function rows.
+
+The real integration fixture compiles a 64-byte record array with GCC O0,
+records the function address, strips all symbols, decompiles only that address,
+rebuilds the generated C against concrete storage, and executes original and
+rebuilt programs. Both print exactly `10`; the emitted cursor is `char *` with
+an exact `+64` step. Nine focused model tests cover valid x86-64- and
+ILP32-looking cursors plus conflicting strides, out-of-extent and zero-width
+accesses, integer misuse, distinct call-result origins, harmless self copies,
+and scalar redefinitions. A separate high-variable test requires a
+pointer-origin dependency to
+settle in the same bounded fixed point; all 23 high-variable tests pass. The
+post-change Rust gate passes 2,060 library tests plus every integration and
+documentation target. A build-guard-confirmed extension and the real stripped
+round trip are green.
+
+The final optimized replay covers 224/224 binaries and 250/250 functions with
+zero errors. It takes 54.198 seconds at 12 workers; per-binary mean, median,
+p95, and maximum are 2.859, 2.435, 4.119, and 4.859 seconds. Wall, median, and
+p95 all remain inside the Phase-1 ceilings. Every final generated C file is
+byte-identical to the independently scored `gobjv1` candidate, so the paired
+metric results above apply to the frozen source. Package and zip validation are
+clean; `/tmp/glaurung-memory-object-final2-results.zip` has SHA-256
+`66dc119ed4623c280c3adf3b06713d9b198dce36a4be33fea5239b56bad64ef5`.
+
+The rebuilt-extension full Python suite reaches 100% with no new failures. Its
+only four failures are the established `test_suspicious_symbols_if_present`
+cases for two RISC-V copies, ARMHF, and AArch64. A focused `--last-failed`
+rerun reproduces exactly those four; direct raw-byte scans show that every
+fixture lacks all six API names the test requires. The new real integration
+fixture and every other executed test pass or skip. This is existing fixture
+debt, not a memory-object regression.

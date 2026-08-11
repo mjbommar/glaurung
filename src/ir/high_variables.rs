@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::memory_objects::{infer_from_ast, MemoryObjectModel};
 use crate::ir::types::{is_promoted_local_name as is_promoted_local, BinOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -32,6 +33,10 @@ enum ValueClass {
 pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut TypeMap) {
     let mut definitions: HashMap<String, Vec<Definition>> = HashMap::new();
     collect_definitions(&function.body, &mut definitions);
+    let object_model = infer_from_ast(function);
+    if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
+        eprintln!("\n===== inferred memory objects =====\n{object_model:#?}");
+    }
 
     // The legacy map is keyed by raw storage. Before exact SSA definition-width
     // recovery the renderer intentionally ignored all scalar `varN` facts. The
@@ -60,7 +65,14 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
     let baseline_types = types.clone();
     let mut unsafe_uses = HashSet::new();
     collect_unsafe_pointer_uses(&function.body, None, &mut unsafe_uses);
-    refine_pointer_facts(&function.body, &definitions, &unsafe_uses, types);
+    unsafe_uses.retain(|name| !is_proven_promoted_object_cursor(name, &object_model));
+    refine_pointer_facts(
+        &function.body,
+        &definitions,
+        &unsafe_uses,
+        &object_model,
+        types,
+    );
     // Add/sub can be either integer arithmetic or valid C pointer arithmetic.
     // Resolve the candidate pointer classes first, then reject any additive use
     // that cannot be represented without changing byte-level semantics. If a
@@ -68,9 +80,16 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
     // facts cannot survive their failed proof.
     let mut validated_unsafe_uses = unsafe_uses.clone();
     collect_unsafe_pointer_uses(&function.body, Some(types), &mut validated_unsafe_uses);
+    validated_unsafe_uses.retain(|name| !is_proven_promoted_object_cursor(name, &object_model));
     if validated_unsafe_uses != unsafe_uses {
         *types = baseline_types;
-        refine_pointer_facts(&function.body, &definitions, &validated_unsafe_uses, types);
+        refine_pointer_facts(
+            &function.body,
+            &definitions,
+            &validated_unsafe_uses,
+            &object_model,
+            types,
+        );
     }
 }
 
@@ -78,11 +97,14 @@ fn refine_pointer_facts(
     body: &[Stmt],
     definitions: &HashMap<String, Vec<Definition>>,
     unsafe_uses: &HashSet<String>,
+    object_model: &MemoryObjectModel,
     types: &mut TypeMap,
 ) {
     refine_authoritative_pointer_values(body, definitions, unsafe_uses, types);
 
     for _ in 0..=definitions.len() {
+        let object_values_learned =
+            refine_object_cursor_values(definitions, unsafe_uses, object_model, types);
         let mut learned = Vec::new();
         for (name, defs) in definitions {
             if !is_source_value_local(name)
@@ -104,13 +126,99 @@ fn refine_pointer_facts(
                 },
             ));
         }
-        if learned.is_empty() {
+        if learned.is_empty() && object_values_learned == 0 {
             break;
         }
         for (reg, hint) in learned {
             types.refine_from_value(reg, hint);
         }
     }
+}
+
+/// Project a layout-proven cursor as a byte pointer without inventing a source
+/// aggregate name.
+///
+/// The object model proves that every observed access fits within one exact
+/// repeated stride. A character pointer is the only portable C declaration
+/// that preserves those byte displacements until semantic Field/Index HIR can
+/// carry the recovered layout. Authoritative declarations remain locked, and
+/// every definition of the promoted identity must be either a pointer origin,
+/// a null initializer, or its exact constant cursor step.
+fn refine_object_cursor_values(
+    definitions: &HashMap<String, Vec<Definition>>,
+    unsafe_uses: &HashSet<String>,
+    object_model: &MemoryObjectModel,
+    types: &mut TypeMap,
+) -> usize {
+    let mut learned = 0;
+    let mut candidates = definitions.keys().cloned().collect::<Vec<_>>();
+    candidates.sort();
+    for name in candidates {
+        let register = VReg::phys(&name);
+        if !is_proven_promoted_object_cursor(&name, object_model)
+            || unsafe_uses.contains(&name)
+            || types.is_locked(&register)
+        {
+            continue;
+        }
+        let Some(value_definitions) = definitions.get(&name) else {
+            continue;
+        };
+        if object_cursor_definitions_are_compatible(&name, value_definitions, types)
+            && types.get(&register) != Some(TypeHint::Pointer { pointee_width: 1 })
+        {
+            types.refine_from_value(register, TypeHint::Pointer { pointee_width: 1 });
+            learned += 1;
+        }
+    }
+    learned
+}
+
+fn is_proven_promoted_object_cursor(name: &str, object_model: &MemoryObjectModel) -> bool {
+    is_promoted_local(name) && object_model.has_conflict_free_extent(&VReg::phys(name))
+}
+
+fn object_cursor_definitions_are_compatible(
+    name: &str,
+    definitions: &[Definition],
+    types: &TypeMap,
+) -> bool {
+    let mut has_origin = false;
+    for definition in definitions {
+        if definition.is_null_initializer() {
+            continue;
+        }
+        match definition {
+            Definition::Assignment(Expr::Bin {
+                op: BinOp::Add | BinOp::Sub,
+                lhs,
+                rhs,
+            }) if matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(source)) if source == name)
+                && matches!(rhs.as_ref(), Expr::Const(_)) => {}
+            Definition::Assignment(
+                Expr::Deref { .. } | Expr::Addr(_) | Expr::Named { .. } | Expr::StackAddr { .. },
+            ) => has_origin = true,
+            Definition::Assignment(Expr::Reg(source))
+                if matches!(
+                    types.get(source),
+                    Some(TypeHint::Pointer { .. } | TypeHint::CodePointer)
+                ) =>
+            {
+                has_origin = true;
+            }
+            Definition::Call { return_type, .. }
+                if return_type.as_ref().is_none_or(|(c_type, authority)| {
+                    pointer_width_from_c_type(c_type).is_some()
+                        || *authority
+                            == crate::ir::call_contracts::CallPrototypeAuthority::Recovered
+                }) =>
+            {
+                has_origin = true;
+            }
+            _ => return false,
+        }
+    }
+    has_origin
 }
 
 /// Refine direct source parameters from authoritative callee boundaries.

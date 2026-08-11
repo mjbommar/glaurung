@@ -788,3 +788,155 @@ fn pointer_stored_through_width_only_memory_is_explicitly_represented() {
     );
     assert!(!rendered.contains("*(int *)(0x1000)"), "{rendered}");
 }
+
+#[test]
+fn proven_aggregate_cursor_becomes_a_byte_pointer_without_scaling_its_stride() {
+    let cursor = VReg::phys("local_8");
+    let offset = |value| Expr::Bin {
+        op: BinOp::Add,
+        lhs: Box::new(Expr::Reg(cursor.clone())),
+        rhs: Box::new(Expr::Const(value)),
+    };
+    let function = Function {
+        name: "walk_records".into(),
+        entry_va: 0x1000,
+        body: vec![
+            Stmt::Store {
+                addr: Expr::Reg(cursor.clone()),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Addr(0x4000)),
+                    size: 8,
+                },
+                size: 8,
+            },
+            Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::Store {
+                        addr: offset(44),
+                        src: Expr::Const(7),
+                        size: 4,
+                    },
+                    Stmt::Store {
+                        addr: offset(40),
+                        src: Expr::Const(3),
+                        size: 4,
+                    },
+                    Stmt::Store {
+                        addr: Expr::Reg(cursor.clone()),
+                        src: offset(64),
+                        size: 8,
+                    },
+                ],
+            },
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        cursor,
+        TypeHint::Int {
+            signed: true,
+            width: 8,
+        },
+    );
+
+    refine_pointer_high_variables(&function, &mut types);
+    let rendered = crate::ir::ast::render_decbench_typed(&function, Some(&types), None);
+
+    assert_eq!(pointer_width(&types, "local_8"), Some(1));
+    assert!(rendered.contains("char * local_8;"), "{rendered}");
+    assert!(rendered.contains("(local_8 + 64)"), "{rendered}");
+    assert!(!rendered.contains("local_8 + 256"), "{rendered}");
+}
+
+#[test]
+fn unbounded_dereferenced_word_does_not_become_an_aggregate_cursor() {
+    let function = Function {
+        name: "one_load".into(),
+        entry_va: 0x1000,
+        body: vec![
+            Stmt::Assign {
+                dst: VReg::phys("local_8"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Addr(0x4000)),
+                    size: 8,
+                },
+            },
+            Stmt::Store {
+                addr: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(VReg::phys("local_8"))),
+                    rhs: Box::new(Expr::Const(4)),
+                },
+                src: Expr::Const(1),
+                size: 4,
+            },
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        VReg::phys("local_8"),
+        TypeHint::Int {
+            signed: true,
+            width: 8,
+        },
+    );
+
+    refine_pointer_high_variables(&function, &mut types);
+
+    assert_eq!(pointer_width(&types, "local_8"), None);
+}
+
+#[test]
+fn aggregate_cursor_waits_for_its_pointer_origin_in_the_same_fixed_point() {
+    let origin = VReg::phys("local_10");
+    let cursor = VReg::phys("local_8");
+    let offset = |value| Expr::Bin {
+        op: BinOp::Add,
+        lhs: Box::new(Expr::Reg(cursor.clone())),
+        rhs: Box::new(Expr::Const(value)),
+    };
+    let function = Function {
+        name: "walk_copied_records".into(),
+        entry_va: 0x1000,
+        body: vec![
+            Stmt::Store {
+                addr: Expr::Reg(origin.clone()),
+                src: Expr::StringLit {
+                    value: "storage".into(),
+                },
+                size: 8,
+            },
+            Stmt::Store {
+                addr: Expr::Reg(cursor.clone()),
+                src: Expr::Reg(origin.clone()),
+                size: 8,
+            },
+            Stmt::Store {
+                addr: offset(40),
+                src: Expr::Const(3),
+                size: 4,
+            },
+            Stmt::Store {
+                addr: Expr::Reg(cursor.clone()),
+                src: offset(64),
+                size: 8,
+            },
+        ],
+    };
+    let mut types = TypeMap::default();
+    for register in [origin, cursor] {
+        types.upsert_public(
+            register,
+            TypeHint::Int {
+                signed: true,
+                width: 8,
+            },
+        );
+    }
+
+    refine_pointer_high_variables(&function, &mut types);
+
+    assert_eq!(pointer_width(&types, "local_10"), Some(1));
+    assert_eq!(pointer_width(&types, "local_8"), Some(1));
+}

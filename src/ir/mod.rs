@@ -61,6 +61,7 @@ pub mod lift_function;
 pub mod lift_x86;
 pub mod loop_form;
 pub(crate) mod machine_register;
+pub(crate) mod memory_objects;
 pub mod name_resolve;
 pub mod naming;
 pub mod pdb_fields;

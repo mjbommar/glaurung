@@ -904,6 +904,31 @@ Acceptance:
 - every rendered field has object, layout, access, and provenance evidence; and
 - aggregate gains improve type and byte behavior without relying on GED alone.
 
+### First common-object increment — 2026-08-11
+
+- [x] Add a source-spelling-independent `MemoryObjectModel` with typed identity,
+  origins, affine byte access paths, width/alignment/role/provenance, stride,
+  extent, reserved memory version, and explicit fail-closed conflicts.
+- [x] Separate the 115-line reusable model from the 468-line prepared-AST
+  compatibility adapter; no new production owner exceeds 500 lines.
+- [x] Consume a proven repeated object cursor in high-variable recovery without
+  inventing a source aggregate name or changing byte-level pointer arithmetic.
+- [x] Validate a real stripped 64-byte record walk by recompiling and executing
+  original and recovered code, with architecture-neutral positive and negative
+  model tests.
+- [ ] Replace the AST adapter with MIR/MemorySSA access collection and real
+  memory-version/lifetime identities.
+- [ ] Connect debug and inferred layouts through `TypeStore`, then recover
+  nested pointees, arrays, fields, overlaps, aggregate names, and ABI transfers.
+- [ ] Project solved accesses as semantic `Field`/`Index` HIR and remove the
+  temporary character-pointer representation seam.
+
+The first target, stripped `balance`, proves offsets 40/44 and stride 64 but not
+the erased nominal type `COLUMN *`. It therefore remains TypeMatch `0.8`; exact
+name recovery is not an acceptance criterion for this early evidence-only
+increment. Same-evaluator ByteMatch improves slightly with no regression, and
+the real round trip preserves behavior. Phase 6 as a whole remains open.
+
 ## Phase 7 — semantic HIR, pure rendering, and physical decomposition
 
 **Goal:** turn the new ownership boundaries into smaller, composable code.
