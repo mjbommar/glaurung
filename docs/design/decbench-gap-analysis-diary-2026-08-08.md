@@ -6,7 +6,7 @@
 
 **Glaurung:** `c1cfdc97fdf51a5028aff5f7507033d70d16ad42`
 
-**Current stripped-kit candidate:** `06b2e614a6b84e96e594daf23933376078fe1092`
+**Current stripped-kit candidate:** `b50ba5061adce28d53ba1bb16cbb5178ab06d4da`
 
 **DecBench main:** `0a4e85bc8a0a1ff5246f6299697f59d30634fcaf`
 
@@ -3196,3 +3196,17 @@ failures; `--last-failed` contains only those four. The real GCC O2 regression,
 focused Ruff and Ty, `cargo fmt --check`, and `git diff --check` pass.
 Repository-wide Ruff and Ty retain the documented unrelated baseline rather
 than being rewritten in this lane.
+
+The implementation and pre-publication evidence are frozen as
+`b50ba5061adce28d53ba1bb16cbb5178ab06d4da`, with an identical remote branch
+hash. Rebuilding the optimized extension from that exact commit and replaying a
+fresh empty kit emits 250/250 functions across 224/224 binaries with zero
+failures. All 224 generated C files are byte-identical to the scored candidate.
+The exact replay measures 2.847 seconds mean, 2.508 median, 3.996 p95, and 4.581
+maximum per binary at 12 workers. Package validation and zip integrity pass;
+the archive SHA-256 is
+`7ee0394df4a9c9eeddf86d4b980c66b82d50346592a0009b100aa53cec4ffc69`,
+matching the GitHub asset at
+`https://github.com/mjbommar/glaurung/releases/tag/decbench-b50ba50`.
+DecBench PR #56 records the corrected whole-scorecard baseline and this exact
+one-row GED/union advance in comment `5252744474`.
