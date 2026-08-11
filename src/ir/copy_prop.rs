@@ -335,6 +335,119 @@ pub fn propagate_adjacent_overwritten_values(function: &mut Function) {
     while fold_one_adjacent_overwritten_value(&mut function.body) {}
 }
 
+/// Move one effectful scratch value into its sole adjacent direct consumer.
+///
+/// An [`Expr::Call`] must never be copied: evaluating two structurally equal
+/// call expressions still invokes the callee twice. Late source-shape recovery
+/// can leave `scratch = lazy_call; local = scratch` after the ordinary copy
+/// fixpoint. When the scratch has exactly one whole-function read and only
+/// comments separate that direct read from its definition, moving the
+/// expression is exact: its evaluation point crosses no observable statement,
+/// and removing the definition keeps the call count at one.
+pub fn move_adjacent_effectful_scratch_values(function: &mut Function) {
+    loop {
+        let mut reads = HashMap::new();
+        count_reads_body(&function.body, &mut reads);
+        if !move_one_adjacent_effectful_scratch_value(&mut function.body, &reads) {
+            break;
+        }
+    }
+}
+
+fn move_one_adjacent_effectful_scratch_value(
+    body: &mut Vec<Stmt>,
+    reads: &HashMap<VReg, usize>,
+) -> bool {
+    for index in 0..body.len().saturating_sub(1) {
+        let Some((destination, source)) = (match &body[index] {
+            Stmt::Assign { dst, src }
+                if is_scratch_reg(dst)
+                    && !is_promoted_local_reg(dst)
+                    && src.contains_call()
+                    && !contains_reg(src, dst)
+                    && reads.get(dst).copied() == Some(1) =>
+            {
+                Some((dst.clone(), src.clone()))
+            }
+            _ => None,
+        }) else {
+            continue;
+        };
+        let Some(consumer_index) = (index + 1..body.len())
+            .find(|next| !matches!(body[*next], Stmt::Comment(_) | Stmt::Nop))
+        else {
+            continue;
+        };
+        let consumed = match &mut body[consumer_index] {
+            Stmt::Assign { src, .. } => {
+                if !matches!(&*src, Expr::Reg(register) if register == &destination) {
+                    false
+                } else {
+                    *src = source;
+                    true
+                }
+            }
+            // A bare promoted-local address denotes the recovered stack object
+            // itself, not an indirect pointer evaluation. Moving into a
+            // general Store would be unsound: C does not sequence evaluation
+            // of the store address and source expression.
+            Stmt::Store {
+                addr: Expr::Reg(address),
+                src,
+                ..
+            } if is_promoted_local_reg(address) => {
+                if !matches!(&*src, Expr::Reg(register) if register == &destination) {
+                    false
+                } else {
+                    *src = source;
+                    true
+                }
+            }
+            _ => false,
+        };
+        if consumed {
+            body.remove(index);
+            return true;
+        }
+    }
+
+    for statement in body {
+        let changed = match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                move_one_adjacent_effectful_scratch_value(then_body, reads)
+                    || else_body.as_mut().is_some_and(|else_body| {
+                        move_one_adjacent_effectful_scratch_value(else_body, reads)
+                    })
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                move_one_adjacent_effectful_scratch_value(body, reads)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases.iter_mut().any(|(_, case_body)| {
+                    move_one_adjacent_effectful_scratch_value(case_body, reads)
+                }) || default.as_mut().is_some_and(|default_body| {
+                    move_one_adjacent_effectful_scratch_value(default_body, reads)
+                })
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                move_one_adjacent_effectful_scratch_value(try_body, reads)
+                    || catches.iter_mut().any(|catch| {
+                        move_one_adjacent_effectful_scratch_value(&mut catch.body, reads)
+                    })
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
 fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
     for statement in body.iter_mut() {
         let changed = match statement {
@@ -1052,6 +1165,14 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                         || is_repeatable_versioned_flag_expr(dst, src)
                         || (is_scratch_reg(dst)
                             && reads.get(dst).copied().unwrap_or(0) == 1
+                            // A single use prevents duplicate *reads* but does
+                            // not let this in-place pass delete the original
+                            // definition. Recording a call here would therefore
+                            // invoke it once at the definition and again at the
+                            // substituted use. The dedicated adjacent mover
+                            // removes the definition atomically when that proof
+                            // is available.
+                            && !src.contains_call()
                             // A 128-bit load cannot be represented by the
                             // scalar expression that would replace this use.
                             // Keep its value identity so the C backend can
@@ -1897,6 +2018,162 @@ mod tests {
                 ..
             }] if matches!(if_true.as_ref(), Expr::Call { .. })
         ));
+    }
+
+    #[test]
+    fn a_single_use_call_expression_is_never_copied() {
+        let call = Expr::Call {
+            target: Box::new(Expr::Named {
+                va: 0x2000,
+                name: "next_value".into(),
+            }),
+            args: Vec::new(),
+            call_spec: None,
+            result_width: Some(8),
+        };
+        let mut function = Function {
+            name: "one_effectful_definition".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var0"),
+                    src: call.clone(),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("var0"))),
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        assert_eq!(
+            function.body,
+            vec![
+                Stmt::Assign {
+                    dst: reg("var0"),
+                    src: call,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("var0"))),
+                },
+            ],
+            "counted propagation must not copy a call while retaining its effect root"
+        );
+    }
+
+    #[test]
+    fn an_adjacent_single_use_moves_one_effectful_value_without_duplication() {
+        let selected = Expr::Select {
+            cond: Box::new(Expr::Reg(reg("enabled"))),
+            if_true: Box::new(Expr::Call {
+                target: Box::new(Expr::Named {
+                    va: 0x2000,
+                    name: "grow_capacity".into(),
+                }),
+                args: vec![Expr::Reg(reg("capacity"))],
+                call_spec: None,
+                result_width: Some(8),
+            }),
+            if_false: Box::new(Expr::Const(-1)),
+            width: 8,
+        };
+        let mut function = Function {
+            name: "effectful_single_use".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var14"),
+                    src: selected.clone(),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_10")),
+                    src: Expr::Reg(reg("var14")),
+                    size: 8,
+                },
+            ],
+        };
+
+        move_adjacent_effectful_scratch_values(&mut function);
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Store {
+                addr: Expr::Reg(reg("local_10")),
+                src: selected,
+                size: 8,
+            }],
+            "the call must move to its sole adjacent consumer, not be copied"
+        );
+    }
+
+    #[test]
+    fn an_effectful_value_with_multiple_reads_is_not_moved() {
+        let mut function = Function {
+            name: "shared_effectful_value".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var14"),
+                    src: Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "read_once".into(),
+                        }),
+                        args: Vec::new(),
+                        call_spec: None,
+                        result_width: Some(8),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("local_10"),
+                    src: Expr::Reg(reg("var14")),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("var14"))),
+                },
+            ],
+        };
+        let before = function.clone();
+
+        move_adjacent_effectful_scratch_values(&mut function);
+
+        assert_eq!(function, before);
+    }
+
+    #[test]
+    fn an_effectful_value_is_not_moved_into_an_indirect_store() {
+        let mut function = Function {
+            name: "effectful_indirect_store".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var14"),
+                    src: Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "read_once".into(),
+                        }),
+                        args: Vec::new(),
+                        call_spec: None,
+                        result_width: Some(8),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg("var20")),
+                    src: Expr::Reg(reg("var14")),
+                    size: 8,
+                },
+            ],
+        };
+        let before = function.clone();
+
+        move_adjacent_effectful_scratch_values(&mut function);
+
+        assert_eq!(
+            function, before,
+            "moving the call into an indirect store could reorder address evaluation"
+        );
     }
 
     #[test]

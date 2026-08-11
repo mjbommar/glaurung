@@ -1014,6 +1014,15 @@ visitor implementations. Phase 3 should therefore prioritize a generated/shared
 expression traversal and effect interface before adding more effectful expression
 variants.
 
+The exact-release audit also established a stronger acceptance invariant:
+single-use is not a license to copy an effectful expression. Counted propagation
+must reject calls; only an atomic move into a sole adjacent ordinary assignment
+or proven promoted-local store may remove the original definition. A general
+indirect store is not an eligible consumer because its address and source are
+not sequenced by C. The optimized whole-corpus replay must compare function
+content against the independently scored candidate before any archive is
+published, because a metric win cannot excuse an extra callee invocation.
+
 ## TDD and validation matrix
 
 Every code increment follows RED -> GREEN -> REFACTOR -> VERIFY and includes a

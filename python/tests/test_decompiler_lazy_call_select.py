@@ -89,6 +89,7 @@ def test_lazy_call_arm_remains_conditional_and_executes_identically(
     helper = re.search(r"extern long (sub_[0-9a-f]+)\(long, long\);", rendered)
     function = re.search(r"\bint (lazy_call_select|sub_[0-9a-f]+)\(", rendered)
     assert helper is not None and function is not None, rendered
+    assert rendered.count(f"{helper.group(1)}(") == 4, rendered
     rebuilt_source.write_text(
         rendered
         + "\nlong "

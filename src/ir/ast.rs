@@ -6856,6 +6856,13 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
         crate::ir::label_prune::recover_forward_exit_regions(&mut owned);
         crate::ir::loop_form::recover_linear_latched_do_whiles(&mut owned);
     }
+    // Forward-region recovery can be the step that finally turns a linear
+    // call/constant join into an ordinary two-arm assignment. Form the lazy
+    // select now, then MOVE its effectful scratch value into an adjacent sole
+    // consumer. Ordinary copy propagation may duplicate pure expressions, but
+    // an Expr::Call must retain exactly one evaluation.
+    crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
+    crate::ir::copy_prop::move_adjacent_effectful_scratch_values(&mut owned);
     // Inlining a shared terminal epilogue can leave its old fallthrough
     // assignment after an explicit return. Remove that newly unreachable tail
     // before exact sentinel-loop matching; it is not an effect the candidate

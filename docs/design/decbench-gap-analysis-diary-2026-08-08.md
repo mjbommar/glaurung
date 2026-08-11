@@ -3341,5 +3341,36 @@ attempt was discarded after the build guard correctly detected that the loaded
 extension predated a Rust safety edit. The isolated worktree's regenerable
 `target/` cache was then cleaned after it exhausted `/tmp`; the rebuilt extension
 was fresh and the real lazy-call fixture passed before this valid full run.
-The post-split Rust replay is green: 2,036 library tests plus every integration
+The post-split Rust replay is green: 2,039 library tests plus every integration
 target pass, with the single documentation example still intentionally ignored.
+
+The first exact-revision optimized release audit then caught a bug that the
+debug score replay had hidden. `bin_100.c` emitted both
+`var14 = lazy_call_select` and `local_10 = lazy_call_select`, so the capacity
+helper would run three times on the selected path rather than the binary's two.
+That archive was quarantined and never published. Pass dumps proved the
+interaction: late counted copy propagation substituted a single-use
+`Expr::Call`, while the new effect-root rule correctly retained the original
+definition. A read count prevents duplicated data reads; it does not make an
+effectful expression copyable.
+
+Three RED tests now enforce the compositional contract. General counted
+propagation never records a call expression, even at one use. A separate narrow
+mover may relocate an effectful scratch definition only into its sole adjacent
+direct assignment or a store to a proven promoted stack local, atomically
+removing the original; a multiple-read negative remains unchanged. A general
+indirect store is an explicit negative because moving the call into its source
+could change its order relative to address evaluation. Re-running assignment-diamond
+formation after forward-region recovery exposes the exact late shape to that
+mover. The corrected optimized corpus replay at
+`/tmp/glaurung-safe-move-candidate.pnKav8` covers 224/224 binaries and 250/250
+functions with zero errors in 55.35 seconds. Every generated function is
+semantically identical to the independently scored candidate; differences are
+limited to blank separators in multi-function package files. The real stripped
+binary fixture now also counts the recovered helper call sites, so a pure helper
+cannot hide duplicated evaluation behind equal runtime outputs. After narrowing
+the store proof, the final Rust replay passes 2,040 library tests plus every
+integration target. A fresh release-extension Python run reaches exactly the
+four established malformed cross-compiled `suspicious_win` sample failures
+(`riscv64` twice, `armhf`, and `arm64`) and no others; `--last-failed` reproduces
+only those four.
