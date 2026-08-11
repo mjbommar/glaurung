@@ -2700,3 +2700,18 @@ test, its focused Ruff and Ty checks, `cargo fmt --check`, and
 release gates on the current branch: they report 3,710 and 2,038 pre-existing
 diagnostics respectively across unrelated legacy, documentation, optional-tool,
 and script paths. No such baseline debt was changed or suppressed in this lane.
+
+The implementation and real fixture were committed as
+`e2cb1f3b4ef0d2a1577ce80fa5e914fe91ddccfe` and pushed with an identical
+remote branch hash. Rebuilding the native extension from that exact commit and
+replaying an otherwise empty kit reproduced all 250 functions across all 224
+binaries with zero failures in 64.551 seconds; the slowest binary completed in
+16.697 seconds. Every generated C file is byte-for-byte identical to the
+independently scored candidate. The package validator and `unzip -t` pass. The
+validated exact-revision archive at
+`/tmp/glaurung-e2cb1f3-replay.1dBQpY/results.zip` has SHA-256
+`c547b228470d904d3ab3fe10f5f331c1d4513acbc7e4120e52fef231a7090944`; its
+result manifest is
+`958de43f7e997bfedfd45392907a83927a2c887630ca6414879f4b0c7caae1d7`, and
+the diagnostic ledger is
+`387cb21682f86f5236d04178f8a6070ea0e694045239c436acd6a9e92a3a5905`.
