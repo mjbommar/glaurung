@@ -3055,3 +3055,73 @@ matching the GitHub asset digest at
 `https://github.com/mjbommar/glaurung/releases/tag/decbench-9d76321`.
 DecBench PR #56 records the exact five-row attribution and projected union
 advance in comment `5251036371`.
+
+## 04:35–06:05 — recover terminal ARM self-branches without trusting a wrong source pair
+
+The next structural target was `crazyflie:O0:CMSIS_DAP:main`. Glaurung emitted
+the conditional kernel-start call followed by an unresolved terminal
+`label; goto label`. The first wrong semantic stage was therefore late HIR
+control-flow recovery, not ARM lifting: the lifted branch target and the
+conditional forward skip were already exact, but no owner recognized a terminal
+machine self-branch as a source-level infinite loop.
+
+RED first used a real Cortex-M4 Thumb ELF compiled with `arm-none-eabi-gcc`,
+verified the self-branch in the disassembly, stripped the binary, and required a
+guarded call followed by `while (1)` with no residual `goto`. The retained
+223-line `terminal_loop` owner recursively counts incoming gotos, rewrites only
+an exact terminal `label; goto same-label` pair, and keeps the label when another
+edge still targets it. Nonterminal, mismatched-target, nested-arm, and
+forward-skip composition controls prevent a textual or ARM-specific shortcut.
+The pass composes immediately before the existing forward-exit owner, which then
+recovers the source guard without duplicating region logic in the new module.
+
+Only two of 224 generated corpus C files change relative to exact `9d76321`:
+
+- `crazyflie:O0:CMSIS_DAP:main` becomes the guarded kernel-start call followed
+  by an infinite loop; and
+- `freertos:O0:RTOSDemo:Default_Handler` becomes a standalone infinite loop.
+
+The other 222 files are byte-identical. TypeMatch is unscored for both changed
+functions. Fresh ByteMatch is unchanged (`0` for CMSIS-DAP `main`, `0.111111`
+for `Default_Handler`), and every other row in the two affected project slices
+is unchanged.
+
+The first fresh GED comparison appeared to make CMSIS-DAP `main` worse, from
+`2` to `5`. That result is invalid. The local preprocessed tree contains no
+`CMSIS_DAP.i` (and no `RTOSDemo.i`), so the evaluator falls back from the exact
+translation unit to an unrelated function named `main`. Its cached source CFG
+calls `platformInit`, `systemLaunch`, and `vTaskStartScheduler`; none exists in
+the target binary. DWARF names the target source as CMSIS-DAP `main.c`, and the
+[exact ARM primary source at the pinned revision](https://github.com/ARM-software/CMSIS-DAP/blob/12636590eec66fae2d1bba4518749426ad5a4595/Firmware/Examples/LPC-Link2/main.c#L68-L77)
+has precisely `if (osKernelGetState() == osKernelReady) osKernelStart();`
+followed by `for (;;) {}`. Scoring an independently extracted CFG from that
+exact source moves Glaurung from GED `3` to `0`: the old output has one node and
+no edge, while the new output and source both have two nodes and one edge.
+
+The current evaluator can validly award `Default_Handler` a new GED perfect, so
+the conservative accepted-ledger projection is union `81→82/250`
+(`32.4%→32.8%`). Correct own-translation-unit pairing would also award the
+CMSIS-DAP row, for a source-correct potential `83/250` (`33.2%`). No new
+absolute GED mean is claimed: the materialized source tree is missing the exact
+translation units and its name-only fallback makes that aggregate
+unfalsifiable. This is recorded as an evaluation-soundness defect rather than a
+reason to preserve a semantically wrong goto.
+
+The full Rust gate passes 2,022 library tests plus every integration and doc
+target. The complete Python collection reports 2,894 passed and 44 skipped,
+with exactly the four established malformed `suspicious_win` sample failures;
+`--last-failed` reruns only those four. Focused Ruff, Ty, `cargo fmt --check`,
+and `git diff --check` pass. Repository-wide Clippy remains red on the existing
+warning backlog; its all-features form additionally cannot start without the
+pinned Bitwuzla library path.
+
+The implementation is frozen as
+`1e973bc20c6e175347d0f499e4c45c510c9fa139`. Rebuilding the optimized extension
+from that exact commit and replaying a fresh empty kit at 12 workers emits
+250/250 functions across 224/224 binaries with zero failures. Every generated C
+file is byte-identical to the independently scored candidate. The exact replay
+at `/tmp/glaurung-1e973bc-final.5aTlpG` measures 52.674 seconds wall, 2.781 mean,
+2.442 median, 3.961 p95, and 4.405 maximum seconds per binary, inside every
+Phase-1 ceiling. Package validation and zip integrity pass; the release archive
+SHA-256 is
+`c00c0bb020c96b1d5e28d20741a7344aa07c263e81d48026681bb755910d3d0b`.

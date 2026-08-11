@@ -567,6 +567,17 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     The full exact-current replay emits 250/250 functions with zero failures.
     Moving environment tests beside their owner also reduces the production
     module to 916 lines without creating another oversized file.
+  - [x] Recover exact terminal machine self-branches through a dedicated
+    223-line control-flow owner. A real stripped Cortex-M Thumb fixture proves
+    the guarded-call-plus-infinite-loop source shape; nonterminal, mismatched,
+    nested, and incoming-edge controls fail closed. The 224-binary replay changes
+    only CMSIS-DAP `main` and FreeRTOS `Default_Handler`, while all other C files
+    remain byte-identical. `Default_Handler` adds one GED-perfect row under the
+    current evaluator, projecting union `81→82/250` (`32.4%→32.8%`). Exact
+    primary-source scoring also makes CMSIS-DAP `main` GED-perfect, but its
+    DecBench translation unit is absent locally and name-only fallback selects
+    an unrelated `main`; source-correct potential is therefore recorded
+    separately as `83/250` rather than presented as an official aggregate.
 - [x] Remove x86 omit-frame-pointer callee saves that stack promotion names as
   ordinary `local_*` objects.  Entry-version nonvolatile-register provenance
   is gated by the detected calling convention, and the existing
@@ -597,6 +608,12 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
   stale GED 3 while the current evaluator produced 18.  Until this owner is
   closed, compare candidate and baseline only from fresh empty checkpoint roots
   under one recorded evaluator/source-cache/toolchain tuple.
+  The source selector must also fail closed when the requested translation unit
+  is absent. The terminal-loop replay proved that CMSIS-DAP `main` was paired
+  with an unrelated Crazyflie `main` solely by function name because
+  `CMSIS_DAP.i` was missing; this inverted a real exact-CFG repair from GED
+  `3→0` into an apparent `2→5` regression. Missing own-unit source is unscored,
+  not permission to substitute another same-named function.
 - [ ] Make external-overlay finalization populate `FunctionData.metrics` and
   `perfect_values`, retain every manifest metric row, and fail if the derived
   scoreboard is empty while overlay values exist. The completed `9c25fcb` replay
