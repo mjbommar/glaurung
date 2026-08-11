@@ -2850,3 +2850,11 @@ exactly the same four unrelated `suspicious_win` sample-content failures as
 the established parent baseline. The real execution fixture, focused Ruff and
 Ty, `cargo fmt --check`, and `git diff --check` are green. Repository-wide Ruff
 and Ty retain the unrelated legacy diagnostic baseline documented above.
+
+The first frozen commit replay reproduced every scored C artifact, but its
+single timing sample was slightly above the Phase-1 mean/median guardrail. The
+cause was avoidable rather than semantic: the new oracle was still constructed
+for non-SysV functions even though their result was unconditionally rejected.
+The final implementation therefore does not construct the demand oracle unless
+the calling convention is SysV AMD64. Focused tests and the complete Rust suite
+remain green; a fresh frozen replay is required before publication.

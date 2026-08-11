@@ -15,7 +15,7 @@ use crate::ir::types_recover::TypeHint;
 
 /// Function-scoped observable-width facts shared by every recovered parameter.
 pub(crate) struct ObservableParameterWidths {
-    demand: BitDemandOracle,
+    demand: Option<BitDemandOracle>,
     cc: CallConv,
 }
 
@@ -23,7 +23,8 @@ impl ObservableParameterWidths {
     /// Analyze one lifted function once rather than rebuilding demand per slot.
     pub(crate) fn analyze(function: &LlirFunction, ssa: &SsaInfo, cc: CallConv) -> Self {
         Self {
-            demand: BitDemandOracle::analyze(function, ssa, cc),
+            demand: (cc == CallConv::SysVAmd64)
+                .then(|| BitDemandOracle::analyze(function, ssa, cc)),
             cc,
         }
     }
@@ -39,7 +40,13 @@ impl ObservableParameterWidths {
         // these scalars in word registers.  The complete-byte SysV shape is the
         // one for which register-view demand adds useful evidence without those
         // two known ambiguities.
-        if self.cc != CallConv::SysVAmd64 || self.demand.value_demand(value) != 0xff || width <= 1 {
+        if self.cc != CallConv::SysVAmd64
+            || self
+                .demand
+                .as_ref()
+                .is_none_or(|demand| demand.value_demand(value) != 0xff)
+            || width <= 1
+        {
             return hint;
         }
         TypeHint::Int { signed, width: 1 }
