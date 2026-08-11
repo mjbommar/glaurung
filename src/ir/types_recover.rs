@@ -680,6 +680,24 @@ impl RecoveredPrototype {
         self.locked_parameters.contains(&slot)
     }
 
+    /// Apply source-level type evidence without claiming a complete arity.
+    ///
+    /// Format strings and similar use sites can identify the type of an
+    /// already-recovered parameter, but absence from that evidence does not
+    /// prove that later parameters do not exist.
+    pub(crate) fn apply_parameter_hints(&mut self, hints: &[Option<TypeHint>]) {
+        for parameter in &mut self.parameters {
+            let Some(incoming) = hints.get(parameter.slot).copied().flatten() else {
+                continue;
+            };
+            // A verified format conversion is source-contract evidence.  It
+            // overrides the body heuristic for this exact parameter just as a
+            // declared type would, while leaving the parameter list unlocked.
+            parameter.hint = Some(incoming);
+            self.locked_parameters.insert(parameter.slot);
+        }
+    }
+
     /// Replace heuristic live-ins with an authoritative declared parameter list.
     ///
     /// Optimized code routinely reuses every argument register as scratch. The
@@ -3945,6 +3963,37 @@ mod tests {
                 .parameter(7)
                 .map(|parameter| &parameter.value.base),
             Some(&VReg::phys("arg7"))
+        );
+    }
+
+    #[test]
+    fn partial_parameter_hints_override_heuristics_without_locking_arity() {
+        let mut prototype = RecoveredPrototype {
+            parameters: (0..2)
+                .map(|slot| RecoveredParameter {
+                    slot,
+                    value: SsaValue {
+                        base: VReg::phys(if slot == 0 { "rdi" } else { "rsi" }),
+                        version: 0,
+                    },
+                    hint: Some(TypeHint::Pointer { pointee_width: 8 }),
+                })
+                .collect(),
+            ..RecoveredPrototype::default()
+        };
+
+        prototype.apply_parameter_hints(&[None, Some(TypeHint::Pointer { pointee_width: 1 })]);
+
+        assert!(!prototype.parameter_arity_is_locked());
+        assert!(!prototype.parameter_is_locked(0));
+        assert!(prototype.parameter_is_locked(1));
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 8 })
+        );
+        assert_eq!(
+            prototype.parameter(1).and_then(|parameter| parameter.hint),
+            Some(TypeHint::Pointer { pointee_width: 1 })
         );
     }
 

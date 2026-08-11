@@ -790,7 +790,11 @@ fn prepare_llir_for_lowering(
         // already lock one, which keeps conflicting evidence fail-closed.
         if let Some(fact) = program_fact {
             if !prototype.parameter_arity_is_locked() {
-                prototype.apply_locked_parameters(cc, &fact.parameter_hints);
+                if fact.parameter_arity_is_exact {
+                    prototype.apply_locked_parameters(cc, &fact.parameter_hints);
+                } else {
+                    prototype.apply_parameter_hints(&fact.parameter_hints);
+                }
             }
             if !prototype.output_is_locked() {
                 if let Some(output_kind) = fact.output_kind {

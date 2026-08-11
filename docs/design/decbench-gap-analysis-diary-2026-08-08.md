@@ -2949,3 +2949,94 @@ archive SHA-256 is
 published at
 `https://github.com/mjbommar/glaurung/releases/tag/decbench-399d464`;
 DecBench PR #56 records the score-neutral attribution and exact asset.
+
+## 02:25–04:30 — recover source types through stripped local format sinks
+
+The next TypeMatch target was `bash:O2:mksyntax:allocerr`, one edit from an
+exact type match. Its first parameter is a source `char *`, but the stripped
+caller body retained only an opaque machine word. The missing evidence was not
+local pointer arithmetic: `allocerr` passes a translated literal and its first
+operand to a stripped local variadic `fatal_error` wrapper, which forwards the
+format through `__vfprintf_chk`. Program analysis already understood direct
+literal calls to imported `error`; it did not model translated literals,
+stripped local format sinks, or partial parameter-type facts independently of
+complete arity.
+
+TDD added a real host-GCC `-O2 -fno-inline`, fully stripped fixture. Its local
+wrapper has the exact SysV variadic register-save prologue and forwards through
+`vfprintf`; the positive caller passes `dcgettext(..., "%s: %lu bytes", ...)`.
+Dynamic and contradictory callers are negative controls. A second literal
+`__fprintf_chk` call inside the wrapper reproduces the corpus's multi-sink
+shape: the first implementation used an early `?` and threw away valid
+forwarding evidence when it later encountered the unrelated literal sink.
+
+The retained program environment now:
+
+- preserves literal identities through `gettext` and `dcgettext` while marking
+  forwarded source parameters distinctly;
+- recognizes the imported printf/fprintf, fortified, `error`, and `v*`
+  consumer families from one table;
+- accepts a stripped local format sink only on SysV AMD64 when its complete
+  five-register variadic save sequence is present before the first call;
+- parses only supported non-positional printf conversions and fails closed on
+  dynamic formats, `*` widths/precisions, unsupported conversions, and
+  conflicting caller evidence; and
+- represents partial per-slot type evidence separately from an exact parameter
+  count, so a source type can lock one recovered slot without truncating the
+  function contract.
+
+Two broad candidates were rejected by the corpus gate. Treating literal-format
+vector length as exact arity removed `output_diff3_edscript`'s seventh source
+parameter. Applying the new hint through ordinary type merging then let a weak
+pointer-width heuristic turn `read_shadow`'s established `char *` into
+`long *`. The first failure led to the explicit
+`parameter_arity_is_exact` fact; the second led to a source-contract override
+on only the proven slot. Both rejected outputs return byte-for-byte to the
+accepted baseline.
+
+The final empty-kit optimized replay at
+`/tmp/glaurung-format-sink-exact.NW9kdw` emits 250/250 functions across all
+224 binaries with zero failures. This eight-worker completeness run measures
+80.954 seconds wall, 2.857 mean,
+2.701 median, 3.845 p95, and 4.405 maximum seconds per binary. All 224 generated
+C files are byte-identical to the independently scored candidate. Relative to
+exact `399d464`, exactly five files change: bins 006, 020, 050, 125, and 195.
+Package validation and `unzip -t` pass; the worktree archive SHA-256 is
+`487322fa7930c4ea03eb7e053167c6c0478ba6477062e63907c5f9ab0f1dbd15`.
+Its wall time is not compared with the roadmap's 12-worker ceiling; the final
+exact-commit publication replay uses the pinned 12-worker lane.
+
+Fresh cache-disabled paired scoring under one evaluator gives five TypeMatch
+improvements and no regressions:
+
+| Function | TypeMatch before | TypeMatch after | ByteMatch before/after |
+|---|---:|---:|---:|
+| `allocerr` | `0.5` | `1.0` | `0.354839` / `0.354839` |
+| `output_diff3_edscript` | `0` | `0.142857` | `0.039370` / `0.039370` |
+| `print_rta_ifidx` | `0.5` | `0.75` | `0.253731` / `0.253731` |
+| `metaProcessingInstruction` | `0.125` | `0.25` | `0.5` / `0.5` |
+| `sparse_offset_decoder` | `0.2` | `0.4` | `0.259259` / `0.259259` |
+
+The exact TypeMatch sum increases by `1.217857142857` across the same 235-row
+denominator, projecting the accepted mean `0.238814→0.243996`. Every changed
+row recompiles and its ByteMatch score is identical. Fresh Joern extraction of
+both exact revisions finds the same function sets; every paired target CFG is
+topology-isomorphic (`output_diff3_edscript` 35/54 nodes/edges,
+`print_rta_ifidx` 3/2, `sparse_offset_decoder` 9/12, and the two remaining
+targets 1/0), so GED is unchanged. `allocerr` was not already perfect in GED or
+ByteMatch; it therefore advances the accepted any-metric union `80→81/250`
+(`32.0%→32.4%`). This is still a projection until the exact committed archive
+is published and DecBench PR #56 is refreshed.
+
+Composition improves with the behavior: program-environment unit tests moved
+to a sibling test module, reducing the production owner to 916 lines; the new
+format owner is 660 lines and the real integration fixture is isolated in a
+110-line test file instead of extending the 1,723-line CLI test owner. The full
+Rust gate passes 2,017 library tests, every integration target, and doc tests.
+The rebuilt optimized extension passes the complete focused format/CLI fixture,
+focused Ruff and Ty, `cargo fmt --check`, and `git diff --check`. The exact
+extension's complete Python collection reports 2,893 passed and 44 skipped,
+with exactly the four established `suspicious_win` sample-content failures;
+`--last-failed` reruns only those same four. Repository-wide checks retain their
+unrelated baseline rather than being rewritten in this lane: 308 Python files
+would be reformatted, Ruff reports 3,509 diagnostics, and Ty reports 1,939.

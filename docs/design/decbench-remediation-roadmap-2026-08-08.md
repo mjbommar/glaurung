@@ -553,6 +553,20 @@ include RED/GREEN/REFACTOR tests. Do not add another top-level pipeline copy.
     exactly unchanged because DecBench does not score function return types and
     the paired CFGs are topology-isomorphic. This is a correctness-only increment;
     projected union remains 80/250 (`32.0%`).
+  - [x] Recover literal-format operand types through stripped local SysV
+    variadic sinks and translated message identities. Partial source type facts
+    are now independent of exact arity, so the first rejected candidate's
+    `output_diff3_edscript` truncation and the second candidate's `read_shadow`
+    pointer-width regression both fail the corpus ratchet. The retained rule
+    requires the exact five-register variadic save shape, fails closed on
+    dynamic/unsupported/conflicting formats, and improves five TypeMatch rows
+    with none worse. `allocerr` reaches 1.0; the accepted projection advances
+    union `80→81/250` (`32.0%→32.4%`) and TypeMatch
+    `0.238814→0.243996`. All changed
+    ByteMatch values are identical and all paired CFGs are topology-isomorphic.
+    The full exact-current replay emits 250/250 functions with zero failures.
+    Moving environment tests beside their owner also reduces the production
+    module to 916 lines without creating another oversized file.
 - [x] Remove x86 omit-frame-pointer callee saves that stack promotion names as
   ordinary `local_*` objects.  Entry-version nonvolatile-register provenance
   is gated by the detected calling convention, and the existing

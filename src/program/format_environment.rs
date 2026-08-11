@@ -5,12 +5,12 @@
 //! direct callers provide literal formats, those formats are authoritative
 //! type evidence. Dynamic, unsupported, and contradictory formats fail closed.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use crate::analysis::cfg::{discover_function_image_at, Budgets};
 use crate::ir::call_args::CallConv;
 use crate::ir::lift_function::lift_function_from_image;
-use crate::ir::types::{CallTarget, LlirFunction, Op};
+use crate::ir::types::{CallTarget, LlirFunction, Op, VReg, Value};
 use crate::ir::types_recover::TypeHint;
 use crate::program::image::ProgramImage;
 
@@ -23,6 +23,12 @@ use super::environment::{
 struct FormatForwarding {
     format_parameter: usize,
     conversion_parameters: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FormatConsumer {
+    format_argument: usize,
+    variadic_start: Option<usize>,
 }
 
 fn known_call_semantics(address_names: &HashMap<u64, String>) -> HashMap<u64, CallSemantics> {
@@ -42,11 +48,58 @@ fn known_call_semantics(address_names: &HashMap<u64, String>) -> HashMap<u64, Ca
         .collect()
 }
 
-fn named_targets(address_names: &HashMap<u64, String>, wanted: &str) -> HashSet<u64> {
+fn format_consumer(name: &str) -> Option<FormatConsumer> {
+    let consumer = match name {
+        "printf" => FormatConsumer {
+            format_argument: 0,
+            variadic_start: Some(1),
+        },
+        "fprintf" => FormatConsumer {
+            format_argument: 1,
+            variadic_start: Some(2),
+        },
+        "__printf_chk" => FormatConsumer {
+            format_argument: 1,
+            variadic_start: Some(2),
+        },
+        "__fprintf_chk" => FormatConsumer {
+            format_argument: 2,
+            variadic_start: Some(3),
+        },
+        "error" => FormatConsumer {
+            format_argument: 2,
+            variadic_start: Some(3),
+        },
+        "vprintf" => FormatConsumer {
+            format_argument: 0,
+            variadic_start: None,
+        },
+        "vfprintf" => FormatConsumer {
+            format_argument: 1,
+            variadic_start: None,
+        },
+        "__vfprintf_chk" => FormatConsumer {
+            format_argument: 2,
+            variadic_start: None,
+        },
+        _ => return None,
+    };
+    Some(consumer)
+}
+
+fn format_consumers(address_names: &HashMap<u64, String>) -> HashMap<u64, FormatConsumer> {
     address_names
         .iter()
-        .filter_map(|(address, name)| (clean_import_name(name) == wanted).then_some(*address))
+        .filter_map(|(address, name)| {
+            format_consumer(clean_import_name(name)).map(|consumer| (*address, consumer))
+        })
         .collect()
+}
+
+pub(super) fn has_format_consumer(address_names: &HashMap<u64, String>) -> bool {
+    address_names
+        .values()
+        .any(|name| format_consumer(clean_import_name(name)).is_some())
 }
 
 fn parameter_index(value: Option<&AbstractValue>) -> Option<usize> {
@@ -72,13 +125,12 @@ fn recover_format_forwarding(
     address_names: &HashMap<u64, String>,
 ) -> Option<FormatForwarding> {
     let semantics = known_call_semantics(address_names);
-    let error_targets = named_targets(address_names, "error");
-    if error_targets.is_empty() {
+    let consumers = format_consumers(address_names);
+    if consumers.is_empty() {
         return None;
     }
     let inputs = input_states_for_image(function, cc, image, &semantics, true);
     let argument_registers = crate::ir::abi::argument_registers(cc);
-    let format_register = *argument_registers.get(2)?;
     let mut found: Option<FormatForwarding> = None;
     for (block_index, block) in function.blocks.iter().enumerate() {
         let mut state = inputs[block_index].clone();
@@ -88,34 +140,40 @@ fn recover_format_forwarding(
                 ..
             } = instruction.op
             {
-                if error_targets.contains(&target) {
-                    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
-                        eprintln!("format sink 0x{:x}: {state:#x?}", instruction.va);
-                    }
-                    if let Some(format_parameter) =
-                        format_parameter_index(state.registers.get(format_register))
-                    {
-                        let conversion_parameters = argument_registers
-                            .iter()
-                            .skip(3)
-                            .take_while(|register| {
-                                state.written_registers.contains(**register)
-                                    && parameter_index(state.registers.get(**register)).is_some()
-                            })
-                            .filter_map(|register| parameter_index(state.registers.get(*register)))
-                            .collect::<Vec<_>>();
-                        if !conversion_parameters.is_empty() {
-                            let candidate = FormatForwarding {
-                                format_parameter,
-                                conversion_parameters,
-                            };
-                            if found
-                                .as_ref()
-                                .is_some_and(|existing| existing != &candidate)
-                            {
-                                return None;
+                if let Some(consumer) = consumers.get(&target) {
+                    if let Some(variadic_start) = consumer.variadic_start {
+                        let format_register = *argument_registers.get(consumer.format_argument)?;
+                        if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+                            eprintln!("format sink 0x{:x}: {state:#x?}", instruction.va);
+                        }
+                        if let Some(format_parameter) =
+                            format_parameter_index(state.registers.get(format_register))
+                        {
+                            let conversion_parameters = argument_registers
+                                .iter()
+                                .skip(variadic_start)
+                                .take_while(|register| {
+                                    state.written_registers.contains(**register)
+                                        && parameter_index(state.registers.get(**register))
+                                            .is_some()
+                                })
+                                .filter_map(|register| {
+                                    parameter_index(state.registers.get(*register))
+                                })
+                                .collect::<Vec<_>>();
+                            if !conversion_parameters.is_empty() {
+                                let candidate = FormatForwarding {
+                                    format_parameter,
+                                    conversion_parameters,
+                                };
+                                if found
+                                    .as_ref()
+                                    .is_some_and(|existing| existing != &candidate)
+                                {
+                                    return None;
+                                }
+                                found = Some(candidate);
                             }
-                            found = Some(candidate);
                         }
                     }
                 }
@@ -124,6 +182,93 @@ fn recover_format_forwarding(
         }
     }
     found
+}
+
+fn has_sysv_variadic_register_save(function: &LlirFunction, fixed: usize) -> bool {
+    if fixed != 1 {
+        return false;
+    }
+    let registers = ["rsi", "rdx", "rcx", "r8", "r9"];
+    let first_call = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .filter(|instruction| matches!(instruction.op, Op::Call { .. }))
+        .map(|instruction| instruction.va)
+        .min()
+        .unwrap_or(u64::MAX);
+    let mut offsets = HashMap::new();
+    for instruction in function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .filter(|instruction| instruction.va < first_call)
+    {
+        let Op::Store {
+            addr,
+            src: Value::Reg(VReg::Phys(source)),
+        } = &instruction.op
+        else {
+            continue;
+        };
+        if addr.size != 8
+            || addr.index.is_some()
+            || addr.base.as_ref() != Some(&VReg::phys("rsp"))
+            || !registers.contains(&source.as_str())
+        {
+            continue;
+        }
+        offsets.entry(source.as_str()).or_insert(addr.disp);
+    }
+    let Some(first_offset) = offsets.get(registers[0]).copied() else {
+        return false;
+    };
+    registers.iter().enumerate().all(|(index, register)| {
+        offsets.get(register).copied() == Some(first_offset + (index as i64 * 8))
+    })
+}
+
+fn recover_local_format_sink(
+    function: &LlirFunction,
+    image: &ProgramImage,
+    cc: CallConv,
+    address_names: &HashMap<u64, String>,
+) -> Option<usize> {
+    let consumers = format_consumers(address_names);
+    if consumers.is_empty() {
+        return None;
+    }
+    let semantics = known_call_semantics(address_names);
+    let inputs = input_states_for_image(function, cc, image, &semantics, true);
+    let argument_registers = crate::ir::abi::argument_registers(cc);
+    let mut found = None;
+    for (block_index, block) in function.blocks.iter().enumerate() {
+        let mut state = inputs[block_index].clone();
+        for instruction in &block.instrs {
+            if let Op::Call {
+                target: CallTarget::Direct(target),
+                ..
+            } = instruction.op
+            {
+                if let Some(consumer) = consumers.get(&target) {
+                    let format_register = *argument_registers.get(consumer.format_argument)?;
+                    if let Some(parameter) =
+                        format_parameter_index(state.registers.get(format_register))
+                    {
+                        if found.is_some_and(|existing| existing != parameter) {
+                            return None;
+                        }
+                        found = Some(parameter);
+                    }
+                }
+            }
+            transfer_instruction(&instruction.op, &mut state, image, cc, &semantics);
+        }
+    }
+    let parameter = found?;
+    (cc == CallConv::SysVAmd64
+        && has_sysv_variadic_register_save(function, parameter.saturating_add(1)))
+    .then_some(parameter)
 }
 
 fn parse_printf_hints(format: &str, pointer_width: u8) -> Option<Vec<TypeHint>> {
@@ -236,13 +381,9 @@ fn apply_literal_format(
     pointer_width: u8,
     hints: &mut [Option<TypeHint>],
 ) -> Option<bool> {
-    let address = match value {
-        Some(AbstractValue::Scalar(0)) => return Some(false),
-        Some(AbstractValue::Data(address)) => *address,
-        Some(AbstractValue::Scalar(address)) if *address > 0 => u64::try_from(*address).ok()?,
-        _ => return None,
+    let Some(conversions) = literal_format_hints(value, string_pool, pointer_width)? else {
+        return Some(false);
     };
-    let conversions = parse_printf_hints(string_pool.get(&address)?, pointer_width)?;
     if conversions.len() > forwarding.conversion_parameters.len() {
         return None;
     }
@@ -253,6 +394,123 @@ fn apply_literal_format(
     Some(typed)
 }
 
+fn literal_format_hints(
+    value: Option<&AbstractValue>,
+    string_pool: &HashMap<u64, String>,
+    pointer_width: u8,
+) -> Option<Option<Vec<TypeHint>>> {
+    let address = match value {
+        Some(AbstractValue::Scalar(0)) => return Some(None),
+        Some(AbstractValue::Data(address)) => *address,
+        Some(AbstractValue::Scalar(address)) if *address > 0 => u64::try_from(*address).ok()?,
+        _ => return None,
+    };
+    Some(Some(parse_printf_hints(
+        string_pool.get(&address)?,
+        pointer_width,
+    )?))
+}
+
+fn recover_direct_literal_parameter_hints(
+    function: &LlirFunction,
+    image: &ProgramImage,
+    budgets: &Budgets,
+    cc: CallConv,
+    address_names: &HashMap<u64, String>,
+) -> Option<Vec<Option<TypeHint>>> {
+    let targeted_budgets = Budgets {
+        max_functions: 1,
+        ..*budgets
+    };
+    let mut sinks = format_consumers(address_names)
+        .into_iter()
+        .filter_map(|(target, consumer)| {
+            consumer
+                .variadic_start
+                .map(|_| (target, consumer.format_argument))
+        })
+        .collect::<HashMap<_, _>>();
+    let direct_targets = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .filter_map(|instruction| match instruction.op {
+            Op::Call {
+                target: CallTarget::Direct(target),
+                ..
+            } => Some(target),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for target in direct_targets {
+        if sinks.contains_key(&target) {
+            continue;
+        }
+        let Some(callee) = discover_function_image_at(image, &targeted_budgets, target) else {
+            continue;
+        };
+        let Some(lifted) = lift_function_from_image(image, &callee, image.arch()) else {
+            continue;
+        };
+        if let Some(format_parameter) = recover_local_format_sink(&lifted, image, cc, address_names)
+        {
+            sinks.insert(target, format_parameter);
+        }
+    }
+    if sinks.is_empty() {
+        return None;
+    }
+
+    let parameter_slots = crate::ir::value_number::live_in_arg_slots_llir(function, cc);
+    let arity = parameter_slots.iter().copied().max()?.saturating_add(1);
+    let mut hints = vec![None; arity];
+    let semantics = known_call_semantics(address_names);
+    let inputs = input_states_for_image(function, cc, image, &semantics, true);
+    let argument_registers = crate::ir::abi::argument_registers(cc);
+    let string_pool = crate::ir::strings_fold::collect_string_pool_from_image(image);
+    let pointer_width = crate::ir::abi::machine_word_bytes(cc);
+    let mut saw_typed_parameter = false;
+    let mut saw_sink_call = false;
+    for (block_index, block) in function.blocks.iter().enumerate() {
+        let mut state = inputs[block_index].clone();
+        for instruction in &block.instrs {
+            if let Op::Call {
+                target: CallTarget::Direct(target),
+                ..
+            } = instruction.op
+            {
+                if let Some(format_argument) = sinks.get(&target).copied() {
+                    saw_sink_call = true;
+                    let format_register = *argument_registers.get(format_argument)?;
+                    let conversions = literal_format_hints(
+                        state.registers.get(format_register),
+                        &string_pool,
+                        pointer_width,
+                    )?;
+                    if let Some(conversions) = conversions {
+                        for (offset, incoming) in conversions.into_iter().enumerate() {
+                            let register = argument_registers
+                                .get(format_argument.saturating_add(1).saturating_add(offset))?;
+                            let parameter = parameter_index(state.registers.get(*register));
+                            let Some(parameter) = parameter else {
+                                continue;
+                            };
+                            if !parameter_slots.contains(&parameter) || parameter >= hints.len() {
+                                return None;
+                            }
+                            hints[parameter] =
+                                Some(merge_observed_hint(hints[parameter], incoming)?);
+                            saw_typed_parameter = true;
+                        }
+                    }
+                }
+            }
+            transfer_instruction(&instruction.op, &mut state, image, cc, &semantics);
+        }
+    }
+    (saw_sink_call && saw_typed_parameter).then_some(hints)
+}
+
 pub(super) fn recover_format_parameter_hints(
     image: &ProgramImage,
     budgets: &Budgets,
@@ -261,7 +519,7 @@ pub(super) fn recover_format_parameter_hints(
     fdes: &[crate::analysis::exception::EhFrameFunction],
     target: u64,
 ) -> Option<Vec<Option<TypeHint>>> {
-    if named_targets(address_names, "error").is_empty() {
+    if !has_format_consumer(address_names) {
         return None;
     }
     let targeted_budgets = Budgets {
@@ -270,7 +528,12 @@ pub(super) fn recover_format_parameter_hints(
     };
     let target_function = discover_function_image_at(image, &targeted_budgets, target)?;
     let target_lifted = lift_function_from_image(image, &target_function, image.arch())?;
-    let forwarding = recover_format_forwarding(&target_lifted, image, cc, address_names)?;
+    let direct =
+        recover_direct_literal_parameter_hints(&target_lifted, image, budgets, cc, address_names);
+    let Some(forwarding) = recover_format_forwarding(&target_lifted, image, cc, address_names)
+    else {
+        return direct;
+    };
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("format forwarding 0x{target:x}: {forwarding:?}");
     }
@@ -341,7 +604,28 @@ pub(super) fn recover_format_parameter_hints(
             "format result 0x{target:x}: verified={saw_verified_call} typed={saw_typed_format} hints={hints:?}"
         );
     }
-    (saw_verified_call && saw_typed_format).then_some(hints)
+    let forwarded = (saw_verified_call && saw_typed_format).then_some(hints);
+    merge_hint_vectors(direct, forwarded)
+}
+
+fn merge_hint_vectors(
+    left: Option<Vec<Option<TypeHint>>>,
+    right: Option<Vec<Option<TypeHint>>>,
+) -> Option<Vec<Option<TypeHint>>> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(hints), None) | (None, Some(hints)) => Some(hints),
+        (Some(mut left), Some(right)) => {
+            left.resize(left.len().max(right.len()), None);
+            for (index, incoming) in right.into_iter().enumerate() {
+                let Some(incoming) = incoming else {
+                    continue;
+                };
+                left[index] = Some(merge_observed_hint(left[index], incoming)?);
+            }
+            Some(left)
+        }
+    }
 }
 
 #[cfg(test)]

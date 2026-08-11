@@ -24,6 +24,11 @@ const LINUX_SA_SIGINFO: i64 = 4;
 pub struct FunctionPrototypeFact {
     /// Source-ordered scalar parameter declarations.
     pub parameter_hints: Vec<Option<TypeHint>>,
+    /// Whether `parameter_hints.len()` is a proven complete source arity.
+    ///
+    /// Literal-format observations can prove individual parameter types but
+    /// cannot prove that an unobserved trailing parameter does not exist.
+    pub parameter_arity_is_exact: bool,
     /// Source-level output class.
     pub output_kind: Option<RecoveredOutputKind>,
     /// Stable provenance label for diagnostics and future confidence policies.
@@ -144,6 +149,21 @@ fn merge_value(values: impl Iterator<Item = AbstractValue>) -> Option<AbstractVa
 fn merge_pair(left: Option<AbstractValue>, right: Option<AbstractValue>) -> Option<AbstractValue> {
     match (left, right) {
         (Some(left), Some(right)) => merge_value([left, right].into_iter()),
+        _ => None,
+    }
+}
+
+fn message_identity_result(
+    state: &CallbackState,
+    cc: CallConv,
+    argument_index: usize,
+) -> Option<AbstractValue> {
+    let register = crate::ir::abi::argument_registers(cc).get(argument_index)?;
+    match state.registers.get(*register) {
+        Some(AbstractValue::Parameter(index)) | Some(AbstractValue::FormatParameter(index)) => {
+            Some(AbstractValue::FormatParameter(*index))
+        }
+        Some(value @ (AbstractValue::Data(_) | AbstractValue::Scalar(_))) => Some(value.clone()),
         _ => None,
     }
 }
@@ -314,14 +334,7 @@ pub(super) fn transfer_instruction(
             let semantic_result = match target {
                 CallTarget::Direct(target) => call_semantics.get(target).and_then(|semantic| {
                     let CallSemantics::MessageIdentity { argument_index } = semantic;
-                    let register = crate::ir::abi::argument_registers(cc).get(*argument_index)?;
-                    match state.registers.get(*register) {
-                        Some(AbstractValue::Parameter(index))
-                        | Some(AbstractValue::FormatParameter(index)) => {
-                            Some(AbstractValue::FormatParameter(*index))
-                        }
-                        _ => None,
-                    }
+                    message_identity_result(state, cc, *argument_index)
                 }),
                 CallTarget::Indirect(_) => None,
             };
@@ -724,6 +737,22 @@ fn merge_prototype_fact(
         prototypes.insert(target, incoming);
         return;
     };
+    match (
+        existing.parameter_arity_is_exact,
+        incoming.parameter_arity_is_exact,
+    ) {
+        (true, true) if existing.parameter_hints.len() != incoming.parameter_hints.len() => {
+            return;
+        }
+        (true, false) if incoming.parameter_hints.len() > existing.parameter_hints.len() => {
+            return;
+        }
+        (false, true) if existing.parameter_hints.len() > incoming.parameter_hints.len() => {
+            return;
+        }
+        (false, true) => existing.parameter_arity_is_exact = true,
+        _ => {}
+    }
     existing.parameter_hints.resize(
         existing
             .parameter_hints
@@ -765,9 +794,7 @@ pub fn recover_program_environment(
     if dump {
         eprintln!("\n===== program callback API targets =====\n{api_targets:#x?}");
     }
-    let has_format_sink = address_names
-        .values()
-        .any(|name| clean_import_name(name) == "error");
+    let has_format_sink = super::format_environment::has_format_consumer(address_names);
     let fdes = image.eh_frame_functions();
     if fdes.is_empty() {
         return ProgramEnvironment::default();
@@ -821,6 +848,7 @@ pub fn recover_program_environment(
                     signed: true,
                     width: 4,
                 })],
+                parameter_arity_is_exact: true,
                 output_kind: Some(RecoveredOutputKind::Void),
                 source,
             };
@@ -854,6 +882,7 @@ pub fn recover_program_environment(
                 *target,
                 FunctionPrototypeFact {
                     parameter_hints,
+                    parameter_arity_is_exact: false,
                     output_kind: None,
                     source: "literal-format callers",
                 },
@@ -869,61 +898,19 @@ pub fn recover_program_environment(
     );
     for (target, arity) in caller_arities {
         let parameter_hints = vec![None; arity];
-        match prototypes.get(&target) {
-            Some(existing) if existing.parameter_hints.len() != arity => {
-                // Registration and literal-format contracts are already exact.
-                // Conflicting caller evidence cannot widen or narrow them.
-            }
-            _ => merge_prototype_fact(
-                &mut prototypes,
-                target,
-                FunctionPrototypeFact {
-                    parameter_hints,
-                    output_kind: None,
-                    source: "agreeing direct caller stack bound",
-                },
-            ),
-        }
+        merge_prototype_fact(
+            &mut prototypes,
+            target,
+            FunctionPrototypeFact {
+                parameter_hints,
+                parameter_arity_is_exact: true,
+                output_kind: None,
+                source: "agreeing direct caller stack bound",
+            },
+        );
     }
     ProgramEnvironment { prototypes }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::{callback_api_identity, merge_pair, AbstractValue};
-
-    #[test]
-    fn conditional_fact_requires_both_arms_to_agree() {
-        let known = AbstractValue::Scalar(7);
-
-        assert_eq!(merge_pair(Some(known.clone()), None), None);
-        assert_eq!(merge_pair(None, Some(known.clone())), None);
-        assert_eq!(
-            merge_pair(Some(known.clone()), Some(known.clone())),
-            Some(known)
-        );
-        assert_eq!(
-            merge_pair(
-                Some(AbstractValue::Scalar(7)),
-                Some(AbstractValue::Scalar(8))
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn callback_identity_tracks_only_recognized_registration_apis() {
-        let names = HashMap::from([
-            (0x30, "unrelated".to_string()),
-            (0x20, "signal@plt".to_string()),
-            (0x10, "sigaction@GLIBC_2.2.5".to_string()),
-        ]);
-
-        assert_eq!(
-            callback_api_identity(&names).as_ref(),
-            &[(0x10, "sigaction.sa_handler"), (0x20, "signal.handler")]
-        );
-    }
-}
+mod tests;
