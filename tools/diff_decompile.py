@@ -1060,8 +1060,14 @@ _EXTERN_FUNCTION_DECL = re.compile(
     r"(?m)^[ \t]*extern[ \t]+[^;\n{}()]*?\b"
     r"(?P<name>[A-Za-z_]\w*)[ \t]*\([^;\n{}]*\)[ \t]*;[ \t]*\n?"
 )
+#: A definition may lead with GNU attributes — the stack-protector suppression
+#: is spelled bare, because a `#define` above the signature is discarded by
+#: DecBench's per-function split. The prefix class below is identifier-only, so
+#: the parentheses of `__attribute__((...))` would end the match and the
+#: definition would be invisible to this harness. Consume them up front.
 _FUNCTION_DEFINITION = re.compile(
-    r"(?m)^(?!extern\b)(?P<prefix>[A-Za-z_][A-Za-z0-9_ \t*]*[ \t]+)"
+    r"(?m)^(?!extern\b)(?P<attrs>(?:__attribute__[ \t]*\(\(.*?\)\)[ \t\r\n]*)*)"
+    r"(?P<prefix>[A-Za-z_][A-Za-z0-9_ \t*]*[ \t]+)"
     r"(?P<name>[A-Za-z_]\w*)(?P<suffix>[ \t]*\([^;\n{}]*\)[ \t\r\n]*\{)"
 )
 _FUNCTION_CALL = re.compile(r"\b(?P<name>[A-Za-z_]\w*)[ \t]*\(")

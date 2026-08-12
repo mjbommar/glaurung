@@ -155,6 +155,29 @@ else
   note "FAILED"; fail=1
 fi
 
+# ---------------------------------------------------------------------------
+# 6. HOLDOUT metrics — the population the leaderboard actually scores.
+#
+# Lane 5 guards 56 synthetic fixture cells. The leaderboard is 250 functions
+# across 224 real binaries, and the two moved in OPPOSITE directions: holdout
+# byte_match fell 0.2392 -> 0.2005 over four commits while lane 5, the 656-case
+# execution differential and the whole Rust suite stayed green. Nothing scored
+# the thing being submitted.
+#
+# Opt-in because a full extract+ingest+score cycle is ~30 min and needs the
+# external eval kit. It is REQUIRED before a submission.
+# ---------------------------------------------------------------------------
+if [ -n "${GLAURUNG_RUN_HOLDOUT:-}" ]; then
+  note "lane 6: DecBench holdout metrics"
+  if tools/decbench_holdout.py --check 2>&1 | tail -12; then
+    note "ok"
+  else
+    note "FAILED"; fail=1
+  fi
+else
+  note "lane 6: holdout metrics SKIPPED (set GLAURUNG_RUN_HOLDOUT=1; required before submitting)"
+fi
+
 printf '\n'
 if [ "$fail" -ne 0 ]; then
   echo "HEAVY GATE: FAILED"

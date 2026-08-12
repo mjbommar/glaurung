@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use super::{
     aapcs_entry_stack_coordinate, entry_stack_base, resolved_memory_address, SlotKey, SlotVal,
-    StackContext,
+    StackAddressDefs, StackContext,
 };
 use crate::ir::ast::Expr;
 use crate::ir::types::VReg;
@@ -30,7 +30,7 @@ pub(super) fn aapcs_top_padding_scalar_value(
     map: &HashMap<SlotKey, SlotVal>,
     sp_delta: Option<i64>,
     ctx: StackContext,
-    address_defs: &HashMap<VReg, (String, i64)>,
+    address_defs: &StackAddressDefs,
 ) -> Option<Expr> {
     let (base, disp, index, _scale) = resolved_memory_address(expr, sp_delta, ctx, address_defs)?;
     if index.is_some() {

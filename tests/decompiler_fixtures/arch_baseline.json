@@ -2078,7 +2078,7 @@
     "countdown": "pass",
     "dec_loop": "pass",
     "dec_preserves_carry": "pass",
-    "shift_until_zero": "fail",
+    "shift_until_zero": "pass",
     "sub_then_sign": "pass"
   },
   "14_flag_effects:x86_64:O0": {
@@ -2535,7 +2535,7 @@
     "kmp_search": "pass"
   },
   "25_kmp_search:armv7:O2": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:armv7_a32:O0": {
     "kmp_search": "pass"

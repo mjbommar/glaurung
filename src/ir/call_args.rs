@@ -1284,6 +1284,30 @@ fn aapcs_integer_stack_suffix(layout: &[VReg]) -> Option<usize> {
     Some(layout.len() - 4)
 }
 
+/// Whether a recovered callee layout follows this ABI's allocation order.
+///
+/// Integer/pointer parameters occupy a contiguous prefix of the convention's
+/// argument slots. Registers from an independent bank, such as AAPCS-VFP
+/// `s0..s15`, are skipped. Rejecting impossible imported layouts keeps a
+/// malformed callee discovery from overriding direct call-site evidence.
+fn layout_matches_abi_allocation_order(arch: CallConv, layout: &[VReg]) -> bool {
+    let slots = arg_slots(arch);
+    let mut expected_slot = 0usize;
+    for register in layout {
+        let VReg::Phys(name) = register else {
+            continue;
+        };
+        let Some(slot) = slot_of(arch, name) else {
+            continue;
+        };
+        if slot >= slots.len() || slot != expected_slot {
+            return false;
+        }
+        expected_slot += 1;
+    }
+    true
+}
+
 /// Recover an exact preallocated AAPCS outgoing stack suffix.
 ///
 /// ARM compilers routinely interleave `[sp,#N]` argument stores with pure
@@ -1380,8 +1404,9 @@ fn fold_one_call(
     if known_arm_core_arity == Some(0) {
         return;
     }
-    let recovered_layout =
-        direct_call_target_va(&body[call_idx]).and_then(|target| callee_layouts.get(&target));
+    let recovered_layout = direct_call_target_va(&body[call_idx])
+        .and_then(|target| callee_layouts.get(&target))
+        .filter(|layout| layout_matches_abi_allocation_order(arch, layout));
     let aapcs_stack = matches!(arch, CallConv::Arm | CallConv::ArmHardFloat)
         .then(|| {
             recovered_layout

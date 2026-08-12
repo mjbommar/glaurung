@@ -6740,6 +6740,9 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 ///    immediately joined result return into proven terminating arms. Exhaustive
 ///    `if`/`switch` regions lose the join entirely; a one-sided `if` becomes an
 ///    early return followed by the original false-path fallthrough.
+/// 20. `bool_guard::recover_inclusive_comparisons` folds x86's `(a == b) | (a < b)`
+///    flag pair back into the single `a <= b` relation it encodes, once every
+///    switch recogniser has seen the un-merged comparison ladder.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
 /// impure: the AST that was checked or dumped was not the AST that was printed,
@@ -6822,6 +6825,13 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     crate::ir::dce::prune_dead_flags(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
+    // The run-local propagators above clear their environment at every
+    // control-flow boundary, so an ABI copy made in the entry block and read
+    // inside a loop survives as a declared local no matter how few reads it
+    // has. That is the ordinary shape of -O2 output. This pass folds only the
+    // provably free case: a name assigned exactly once, from a cast chain over
+    // a never-written parameter.
+    crate::ir::copy_prop::propagate_trivial_parameter_aliases(&mut owned);
     crate::ir::guard_chain::collapse_shared_exit_guard_ladders(&mut owned);
     crate::ir::guard_chain::collapse_shared_assignment_guards(&mut owned);
     crate::ir::guard_chain::collapse_redundant_copy_nested_guards(&mut owned);
@@ -6840,6 +6850,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     );
     crate::ir::select_fold::recover_guarded_select_returns(&mut owned);
     crate::ir::select_fold::fold_boolean_masks(&mut owned);
+    // Runs after every producer of `Select`, including the lifters. ARM32
+    // predicated execution emits the guard twice — `(C ? (C ? x : prior) : y)` —
+    // and the inner alternative is unreachable because the enclosing arm already
+    // decided `C`. Dominance, not definedness: the arm being dropped may well be
+    // a defined value, it simply cannot be selected.
+    crate::ir::copy_prop::collapse_dominated_select_arms(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned);
@@ -6897,6 +6913,13 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     // phi-coalesced cursors retain their source-level pre-test.
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
     crate::ir::latch_predicate::fold_latched_predicates(&mut owned);
+    // Last, because it is the one rewrite every switch recogniser must be
+    // allowed to see the un-merged form of: x86 spells `a <= b` as the flag
+    // pair `(a == b) | (a < b)`, and folding that into one relation before
+    // `switch_ladder` runs destroys the comparison ladder (see
+    // `bool_guard`'s module docs and `320e960`). By this point every switch
+    // pass has had its look.
+    crate::ir::bool_guard::recover_inclusive_comparisons(&mut owned);
     remove_redundant_return_constant_assignments(&mut owned.body);
     owned
 }
@@ -7392,10 +7415,26 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // zero-initialized identity. Repeated tentative declarations of the same
     // internal-linkage object in a combined helper/root translation unit denote
     // one object, preserving sharing between decompiled sibling functions.
+    // The attribute leads the declaration deliberately. DecBench's recompile
+    // harness runs `fixup::sanitize_tokens` over every unit before compiling it,
+    // and its `_ARRAY_RET` rule — which exists to repair array-return-type
+    // declarations — is anchored at the start of a line and matches
+    // `<type> <name>[N] <ident>(`. The trailing-attribute spelling hits it:
+    //
+    //     static unsigned char g[16] __attribute__((aligned(16)));
+    //  -> static unsigned char g *__attribute__((aligned(16)));   // syntax error
+    //
+    // Valid C in, uncompilable C out, and the diagnostic points at our line, so
+    // it reads as our defect. Leading the attribute is byte-identical through
+    // the sanitizer and identical to the compiler. Verified directly against
+    // `decbench.metrics.fixup.sanitize_tokens`.
+    //
+    // The indented, function-local spelling below is safe: `_ARRAY_RET` is
+    // `^`-anchored, so leading whitespace already prevents the match.
     for address in ids.global_addresses.keys() {
         let _ = writeln!(
             out,
-            "static unsigned char {}[16] __attribute__((aligned(16)));",
+            "__attribute__((aligned(16))) static unsigned char {}[16];",
             dec_global_name(*address)
         );
     }
@@ -7468,6 +7507,43 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // perturb ordinary output.
     if ids.statement_count >= 2_000 {
         out.push_str("__attribute__((optimize(\"O1\"))) ");
+    }
+    // A recovered frame slot renders as `unsigned char name[N]`, and GCC's
+    // `-fstack-protector-strong` — on by default in every mainstream distro
+    // toolchain — protects any function containing an array. So a function that
+    // had NO canary in the original acquires a guard load, a guard compare and
+    // a failure branch purely because we spelled a spill as an array.
+    //
+    // Measured on the ARM fixture corpus, that injection alone costs 0.0346 of
+    // recompilation fidelity (0.6260 -> 0.6606, 51 functions better, none
+    // worse): on `sum_arg1` the rebuild goes from 11 instructions to 39.
+    //
+    // Suppress it ONLY where the original demonstrably had no protector, which
+    // is exactly the absence of a `__stack_chk_fail` call in the recovered
+    // body. Where the original DID have one, we say nothing and let the rebuild
+    // add its own — that matches the code being compared against.
+    //
+    // Spelled as a BARE attribute, not a `__has_attribute` macro dance.
+    //
+    // The guarded form cost 43 holdout functions their compile. DecBench does
+    // not compile the unit we emit: `split_c_functions`
+    // (`decbench/decompilers/dockerized.py:156`) cuts each snippet starting at
+    // the `_FUNC_DEF_RE` match — the SIGNATURE line — and discards everything
+    // above it. The `#define`s were emitted correctly and thrown away, leaving
+    // a bare `GLAURUNG_NO_SSP` token in front of the return type:
+    //
+    //     /tmp/x.c:4:16: error: expected ';' before 'void'
+    //         GLAURUNG_NO_SSP void rcc_periph_clock_enable(int arg0) {
+    //
+    // The general rule this violated: ANY per-function preamble above the
+    // signature is invisible to scoring. Everything a function needs must sit
+    // at or below its signature line.
+    //
+    // The macro was unnecessary anyway — all four holdout toolchains accept the
+    // attribute directly (probed: gcc 15.2, arm-none-eabi-gcc 14.2,
+    // i686/x86_64-w64-mingw32-gcc 13).
+    if !ids.stack_objects.is_empty() && !ids.calls_stack_check {
+        out.push_str("__attribute__((no_stack_protector)) ");
     }
     out.push_str(&return_type);
     out.push(' ');
@@ -7719,6 +7795,10 @@ struct DecIdents {
     /// splitting gives every call a distinct `varN`, so a value here is a
     /// stronger declaration fact than the flow-insensitive TypeMap.
     call_result_types: std::collections::BTreeMap<String, Option<String>>,
+    /// The recovered body calls the stack-check failure handler, i.e. the
+    /// ORIGINAL function was built with a stack protector. Used to decide
+    /// whether the rebuild may be allowed to add one of its own.
+    calls_stack_check: bool,
 }
 
 /// If `name` is exactly `arg` followed by decimal digits, return that index.
@@ -7968,7 +8048,14 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         } => {
             // A `Named` target is a callee name, not a local; other targets are
             // rendered as value expressions and their registers must be declared.
-            if !matches!(target, Expr::Named { .. }) {
+            if let Expr::Named { name, .. } = target {
+                // Evidence the ORIGINAL was built with a stack protector. The
+                // rebuild is then free to add one too, because the code it is
+                // being compared against already has it.
+                if name.contains("__stack_chk_fail") {
+                    ids.calls_stack_check = true;
+                }
+            } else {
                 collect_idents_expr(target, ids);
             }
             for a in args {
@@ -9306,6 +9393,14 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             if dec_is_global_addr(*va) {
                 let _ = write!(out, "&{}[0]", dec_global_name(*va));
             } else {
+                // A raw VA, deliberately. Rendering the recovered identifier
+                // here instead was measured on 2026-08-05 and REVERTED: the
+                // required `extern void <name>(void);` conflicts with the
+                // function's real signature once the whole unit is compiled,
+                // which is what `fixture_harness` and `arch_roundtrip` do.
+                // Cost: fixture_harness 656 -> 633 and a CONTROL-lane
+                // regression, against a holdout byte_match gain of +0.0002.
+                // Fixing it needs one agreed signature per callee — EPIC 1.
                 let _ = write!(out, "0x{:x}", va);
             }
         }
@@ -9732,35 +9827,54 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
     write_expr_dec(arg, out);
 }
 
-/// Whether the ordinary call-argument writer already emits a C pointer value.
-/// Pointer-shaped arithmetic is deliberately absent: its internal C spelling is
-/// a machine word and therefore still needs a cast at the call boundary.
-fn call_argument_renders_as_pointer(arg: &Expr) -> bool {
-    match arg {
-        Expr::Reg(VReg::Phys(name)) => {
-            dec_ptr_arg_type(name).is_some()
-                || dec_struct_ptr_type(name).is_some()
-                || dec_ptr_width(name).is_some()
-                || dec_is_stack_object(name)
-        }
-        Expr::StringLit { .. } | Expr::StackAddr { .. } => true,
-        _ => false,
-    }
-}
-
 /// The exact C pointer type a call argument renders as, when it is known.
 ///
 /// Two different pointer types are still a type error, so "renders as a
 /// pointer" is not enough to skip the boundary cast: the rendered type has to
-/// be the declared parameter type. Only register arguments have an exact
-/// declared spelling; everything else answers `None` and keeps the cast.
+/// be the declared parameter type. This oracle is consumed as a *proof of
+/// equality* — every arm must answer the spelling `write_call_arg_dec` will
+/// actually print, and anything it cannot name answers `None` so the caller
+/// keeps the cast. Answering a spelling this renderer does not actually print
+/// would suppress a needed cast and emit `-Wincompatible-pointer-types`, which
+/// GCC 14 and later treat as an error.
 fn call_argument_pointer_ctype(arg: &Expr) -> Option<String> {
     match arg {
         Expr::Reg(register @ VReg::Phys(_)) => {
             let declared = declared_reg_ctype(register);
             declared.ends_with('*').then_some(declared)
         }
+        // A string literal has C type `char *` after array-to-pointer decay,
+        // whatever pointee the callee's recovered prototype names.
+        Expr::StringLit { .. } => Some("char *".to_string()),
+        // `write_expr_dec` prints an incoming-argument frame object as
+        // `(void *)(argN)` and every other frame object as `&local_N[0]` over
+        // an `unsigned char local_N[..]` declaration.
+        Expr::StackAddr { object, .. } => Some(
+            if matches!(object, VReg::Phys(name) if parse_arg_index(name).is_some()) {
+                "void *".to_string()
+            } else {
+                "unsigned char *".to_string()
+            },
+        ),
         _ => None,
+    }
+}
+
+/// Whether a pointer parameter needs its argument reasserted with a cast.
+///
+/// C converts between object pointers only through `void *`; every other pair
+/// of pointee types is a constraint violation that GCC 14 reports as an error.
+/// So the cast is skipped exactly when the argument is PROVEN to render as a
+/// pointer that C already accepts here: the same spelling, or a `void *` on
+/// either side. An argument whose rendered spelling is unknown keeps the cast,
+/// because that includes machine-word address arithmetic, which would
+/// otherwise be an implicit integer-to-pointer conversion.
+fn pointer_parameter_needs_cast(parameter_type: &str, arg: &Expr) -> bool {
+    match call_argument_pointer_ctype(arg) {
+        Some(rendered) => {
+            rendered != parameter_type && rendered != "void *" && parameter_type != "void *"
+        }
+        None => true,
     }
 }
 
@@ -9986,15 +10100,15 @@ fn write_call_dec(
                 // when its base has pointer representation. Reassert every
                 // recovered pointer parameter at the consuming boundary so C
                 // sees the ABI pointer rather than an implicit integer cast.
+                //
+                // The cast is skipped only on PROOF that the argument already
+                // renders as this exact pointer spelling. "Renders as some
+                // pointer" is not that proof: a string literal is `char *` and
+                // a frame object is `unsigned char *`, both incompatible with
+                // a recovered `long *`/`int *` parameter, and C rejects the
+                // call outright rather than converting.
                 || (parameter_type.ends_with('*')
-                    && (!call_argument_renders_as_pointer(a)
-                        // A pointer argument of a DIFFERENT pointer type is
-                        // still incompatible with the declaration this call
-                        // emits, so reassert the declared parameter type.
-                        || call_argument_pointer_ctype(a).map_or_else(
-                            || !matches!(parameter_type.as_str(), "void *" | "const void *"),
-                            |rendered| &rendered != parameter_type,
-                        )))
+                    && pointer_parameter_needs_cast(parameter_type, a))
                 || representation_mismatch
                 // A recovered AAPCS-VFP parameter still proves the consuming
                 // storage class.  Render its complete expression in float
@@ -12568,11 +12682,15 @@ function f @ 0x1000 {
 
         let rendered = render_decbench(&function);
 
+        // Attribute FIRST: the trailing spelling is destroyed by DecBench's
+        // `sanitize_tokens` (`_ARRAY_RET` rewrites `g[16] __attribute__((` into
+        // `g *__attribute__((`), which turns valid C into a syntax error whose
+        // diagnostic points at our line. See the emitter for the full note.
         assert!(
             rendered.contains(
-                "static unsigned char glaurung_global_4024[16] __attribute__((aligned(16)));"
+                "__attribute__((aligned(16))) static unsigned char glaurung_global_4024[16];"
             ),
-            "direct data storage needs a portable object:\n{rendered}"
+            "direct data storage needs a portable object, attribute-first:\n{rendered}"
         );
         assert!(
             rendered.contains("*(int *)(&glaurung_global_4024[0])"),
@@ -18216,6 +18334,57 @@ function f @ 0x1000 {
             "exact pointee scaling was not preserved at the call boundary:\n{rendered}"
         );
         assert!(!rendered.contains("arg0 + 64"), "{rendered}");
+    }
+
+    /// A recovered pointer parameter is only compatible with an argument that
+    /// renders as that same pointer type. A string literal is `char *` and a
+    /// frame object is `unsigned char *`; passing either to a recovered
+    /// `long *`/`int *` is `-Wincompatible-pointer-types`, which is a hard
+    /// error from GCC 14 on. This is exactly the shape that cost 23 of the 250
+    /// DecBench holdout functions their compile.
+    #[test]
+    fn recovered_pointer_parameters_cast_literal_and_frame_arguments() {
+        let recovered = CallPrototype {
+            return_type: "long".into(),
+            parameter_types: vec!["long *".into(), "int *".into(), "void *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let rendered = render_decbench(&Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "record".into(),
+                },
+                args: vec![
+                    Expr::StringLit {
+                        value: "boom".into(),
+                    },
+                    Expr::StackAddr {
+                        object: VReg::phys("local_18"),
+                        size: 24,
+                    },
+                    Expr::StackAddr {
+                        object: VReg::phys("local_28"),
+                        size: 8,
+                    },
+                ],
+                dst: None,
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: Some(recovered.clone()),
+                    call_prototype: recovered,
+                }),
+            }],
+        });
+
+        assert!(
+            rendered.contains(r#"record((long *)("boom"), (int *)(&local_18[0]), &local_28[0])"#),
+            "a literal or frame argument reached an incompatible pointer parameter \
+             without the reasserting cast, or a `void *` parameter grew a \
+             redundant one:\n{rendered}"
+        );
     }
 
     #[test]

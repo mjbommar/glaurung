@@ -1234,6 +1234,61 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 },
             ];
         }
+        // `clz` left unmodelled is an opaque comment whose destination is never
+        // defined, so every `-O2` bit-scan idiom built on it (`31 - clz(x)`,
+        // `32 - clz(x)`) reads an undefined local. `lift_arm32` already models
+        // it; AArch64 was simply never given the same treatment, and the gap
+        // shows up as `return (32 - var3)` with `var3` declared and never
+        // assigned. `clz(0)` is architecturally the operand width in bits on
+        // both ARM32 and AArch64 (ARM DDI 0487 C6.2.66), which is what the
+        // `CountLeadingZeros` renderer spells — NOT `__builtin_clz`, which is
+        // undefined there.
+        "clz" => {
+            if ins.operands.len() == 2 {
+                let (Some(dst), Some(src)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                let width = dst.width().unwrap_or(Width::W64);
+                return vec![Op::Intrinsic {
+                    name: format!("aarch64.clz.{}", width.bits()),
+                    ins: vec![src],
+                    outs: vec![(dst, width)],
+                    reads_mem: false,
+                    writes_mem: false,
+                }];
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
+        // `negs Rd, Rn` is `subs Rd, ZR, Rn`: it negates AND sets the flags of a
+        // comparison against zero. Modelling only the negation (or nothing at
+        // all) leaves both the result and the flags undefined, which is how the
+        // signed-remainder bias idiom came out as `slt_0 ? (v & 15) : -(var3 & 15)`
+        // with `slt_0` and `var3` never assigned. The flags come from the
+        // PRE-operation operands, so they are emitted before the write.
+        "negs" => {
+            if ins.operands.len() == 2 {
+                let (Some(dst), Some(src)) = (
+                    operand_reg(&ins.operands[0]),
+                    operand_to_value(&ins.operands[1]),
+                ) else {
+                    return vec![Op::Unknown { mnemonic: mnem }];
+                };
+                let width = dst.width().unwrap_or(Width::W64);
+                let mut out = Vec::new();
+                let src = modified_last_operand(ins, src, width, &mut out);
+                out.extend(compare_flags(ins, Value::Const(0), src.clone()));
+                out.push(Op::Un {
+                    dst,
+                    op: UnOp::Neg,
+                    src,
+                });
+                return out;
+            }
+            vec![Op::Unknown { mnemonic: mnem }]
+        }
         "neg" => {
             if let Some(ops) = packed::dword_negate(ins) {
                 return ops;
@@ -2367,6 +2422,60 @@ mod tests {
             Op::Unknown { mnemonic } => mnemonic.clone(),
             other => format!("{:?}", other),
         }
+    }
+
+    /// `clz` unmodelled is an opaque comment whose destination is never defined,
+    /// so `32 - clz(x)` reads a local nothing assigns. The renderer only accepts
+    /// the `x86.` / `aarch64.` / `arm.` namespaces, so the name matters as much
+    /// as the op: `arm64.clz.32` lifts but renders as raw asm.
+    #[test]
+    fn clz_lifts_to_the_shared_count_leading_zeros_intrinsic() {
+        // clz w1, w0 = 0x5ac01001
+        let out = lift_bytes(&0x5ac01001u32.to_le_bytes(), 0x1000);
+        let intrinsic = out
+            .iter()
+            .find_map(|instruction| match &instruction.op {
+                Op::Intrinsic {
+                    name, ins, outs, ..
+                } => Some((name.clone(), ins.clone(), outs.clone())),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("clz must not be left unlifted: {out:#?}"));
+        let (name, ins, outs) = intrinsic;
+        assert_eq!(
+            name, "aarch64.clz.32",
+            "the renderer strips `x86.`/`aarch64.`/`arm.` only"
+        );
+        assert_eq!(ins, vec![Value::Reg(VReg::phys("w0"))]);
+        assert_eq!(outs, vec![(VReg::phys("w1"), Width::W32)]);
+    }
+
+    /// `negs Rd, Rn` is `subs Rd, ZR, Rn`: it negates AND sets comparison flags
+    /// against zero. Modelling only the negation leaves the flags undefined, and
+    /// the signed-remainder bias idiom then reads them.
+    #[test]
+    fn negs_defines_both_the_negation_and_the_comparison_flags() {
+        // negs x0, x1 = 0xeb0103e0
+        let out = lift_bytes(&0xeb0103e0u32.to_le_bytes(), 0x1000);
+        assert!(
+            out.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Un { dst, op: UnOp::Neg, src }
+                    if dst == &VReg::phys("x0") && src == &Value::Reg(VReg::phys("x1"))
+            )),
+            "negs must produce the negation: {out:#?}"
+        );
+        assert!(
+            out.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Cmp {
+                    dst: VReg::Flag(_),
+                    ..
+                }
+            )),
+            "negs must DEFINE the flags it sets, or the following csel/cset \
+             binds to a stale definition: {out:#?}"
+        );
     }
 
     /// `bics Rd, Rn, Rm` is AND-**NOT** (ARM DDI 0487 C6.2.34), not AND.

@@ -1917,7 +1917,7 @@ fn expand_lea_with_copies(e: &Expr, copies: &Copies) -> Option<Expr> {
 mod tests {
     use super::*;
     use crate::ir::ast::{Function, Stmt};
-    use crate::ir::types::{BinOp, CmpOp};
+    use crate::ir::types::{BinOp, CmpOp, VReg};
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
@@ -2560,7 +2560,7 @@ mod tests {
                 }] if matches!(
                     addr.as_ref(),
                     Expr::Bin {
-                        op: BinOp::Add,
+                        op: crate::ir::BinOp::Add,
                         lhs,
                         rhs,
                     } if matches!(lhs.as_ref(), Expr::Reg(r) if r == &reg("arg0"))
@@ -2871,7 +2871,7 @@ mod tests {
                 },
                 Stmt::Return {
                     value: Some(Expr::Bin {
-                        op: BinOp::Add,
+                        op: crate::ir::BinOp::Add,
                         lhs: Box::new(Expr::Reg(selected)),
                         rhs: Box::new(Expr::Const(1)),
                     }),
@@ -2993,7 +2993,7 @@ mod tests {
                 Stmt::Store {
                     addr: Expr::Reg(reg("local_c")),
                     src: Expr::Bin {
-                        op: BinOp::Add,
+                        op: crate::ir::BinOp::Add,
                         lhs: Box::new(Expr::Reg(reg("local_c"))),
                         rhs: Box::new(Expr::Const(1)),
                     },
@@ -3529,7 +3529,7 @@ mod tests {
                 size: 4,
             },
             Expr::Bin {
-                op: BinOp::Add,
+                op: crate::ir::BinOp::Add,
                 lhs: Box::new(Expr::Reg(result.clone())),
                 rhs: Box::new(Expr::Const(1)),
             },
@@ -3541,7 +3541,7 @@ mod tests {
                 rhs: Box::new(Expr::Reg(reg("rhs"))),
             },
             Expr::Bin {
-                op: BinOp::Add,
+                op: crate::ir::BinOp::Add,
                 lhs: Box::new(Expr::Reg(result.clone())),
                 rhs: Box::new(Expr::Reg(result.clone())),
             },
@@ -3801,5 +3801,596 @@ mod tests {
             "the return must still read the rooted promoted local: {:?}",
             f.body
         );
+    }
+
+    fn sel(cond: Expr, t: Expr, f: Expr) -> Expr {
+        Expr::Select {
+            cond: Box::new(cond),
+            if_true: Box::new(t),
+            if_false: Box::new(f),
+            width: 4,
+        }
+    }
+
+    fn le16(arg: &str) -> Expr {
+        Expr::Cmp {
+            op: crate::ir::CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(VReg::phys(arg))),
+            rhs: Box::new(Expr::Const(16)),
+        }
+    }
+
+    /// The exact ARMv7 -O2 shape: `(C ? (C ? 0 : var1) : 1)`. The inner
+    /// alternative is unreachable because the outer arm already decided `C`,
+    /// and `var1` is a local nothing ever assigns.
+    #[test]
+    fn a_select_repeated_inside_its_own_true_arm_keeps_only_the_true_arm() {
+        let mut f = Function {
+            name: "armv7".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var2"),
+                src: sel(
+                    le16("arg2"),
+                    sel(le16("arg2"), Expr::Const(0), Expr::Reg(VReg::phys("var1"))),
+                    Expr::Const(1),
+                ),
+            }],
+        };
+        collapse_dominated_select_arms(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            unreachable!()
+        };
+        assert_eq!(
+            *src,
+            sel(le16("arg2"), Expr::Const(0), Expr::Const(1)),
+            "the dominated inner select should reduce to its true arm"
+        );
+    }
+
+    /// The mirror: inside the FALSE arm the condition is known false, so only
+    /// the false arm is reachable.
+    #[test]
+    fn a_select_repeated_inside_its_own_false_arm_keeps_only_the_false_arm() {
+        let mut f = Function {
+            name: "mirror".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var2"),
+                src: sel(
+                    le16("arg2"),
+                    Expr::Const(1),
+                    sel(le16("arg2"), Expr::Reg(VReg::phys("var1")), Expr::Const(0)),
+                ),
+            }],
+        };
+        collapse_dominated_select_arms(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            unreachable!()
+        };
+        assert_eq!(*src, sel(le16("arg2"), Expr::Const(1), Expr::Const(0)));
+    }
+
+    /// A DIFFERENT condition decides nothing. Collapsing here would discard a
+    /// live arm, so structural inequality must leave the select intact.
+    #[test]
+    fn a_nested_select_on_a_different_condition_is_left_alone() {
+        let body = vec![Stmt::Assign {
+            dst: VReg::phys("var2"),
+            src: sel(
+                le16("arg2"),
+                sel(le16("arg1"), Expr::Const(0), Expr::Reg(VReg::phys("var1"))),
+                Expr::Const(1),
+            ),
+        }];
+        let mut f = Function {
+            name: "distinct".into(),
+            entry_va: 0,
+            body: body.clone(),
+        };
+        collapse_dominated_select_arms(&mut f);
+        assert_eq!(f.body, body);
+    }
+
+    /// Dominance reaches through an intervening operator, not only through an
+    /// immediately nested select.
+    #[test]
+    fn dominance_reaches_a_select_nested_under_an_operator() {
+        let mut f = Function {
+            name: "under_op".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("var2"),
+                src: sel(
+                    le16("arg2"),
+                    Expr::Bin {
+                        op: crate::ir::BinOp::Add,
+                        lhs: Box::new(Expr::Const(5)),
+                        rhs: Box::new(sel(
+                            le16("arg2"),
+                            Expr::Const(7),
+                            Expr::Reg(VReg::phys("var1")),
+                        )),
+                    },
+                    Expr::Const(1),
+                ),
+            }],
+        };
+        collapse_dominated_select_arms(&mut f);
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            unreachable!()
+        };
+        let Expr::Select { if_true, .. } = src else {
+            panic!("outer select should survive: {src:#?}");
+        };
+        assert_eq!(
+            **if_true,
+            Expr::Bin {
+                op: crate::ir::BinOp::Add,
+                lhs: Box::new(Expr::Const(5)),
+                rhs: Box::new(Expr::Const(7)),
+            }
+        );
+    }
+}
+
+/// Substitute a local whose single definition is a trivial view of a parameter.
+///
+/// `propagate_run` and `propagate_run_counted` are deliberately run-local: they
+/// clear their environment at every control-flow boundary, so a value defined in
+/// the entry block and read inside an `if` or a loop is never folded even when
+/// it is read exactly once. In real `-O2` output that is the *common* shape —
+/// the ABI copies land at function top and the uses are all inside the body:
+///
+/// ```text
+/// var0 = (long)arg0;            long var0;  long var1;  long var2;
+/// var1 = (long)arg1;      =>    ...
+/// var2 = (unsigned long)((unsigned int)(arg3));
+/// if (...) { while (...) { ... *(int *)((var0 + var11 * 4)) ... } }
+/// ```
+///
+/// Four of `hash_lookup`'s nine declarations are exactly this. Substituting them
+/// costs nothing — the replacement is a cast chain over a parameter, so it is
+/// neither a computation nor a memory access, and repeating it inside a loop
+/// cannot be more expensive than naming it.
+///
+/// The rule is deliberately narrow, because the general version is unsound:
+///
+///  * the definition must be the ONLY assignment to that name anywhere in the
+///    function (otherwise the name is a real mutable variable);
+///  * the source must be a cast chain bottoming out in a parameter register —
+///    no loads, no calls, no arithmetic, so substituting cannot fault, cannot
+///    be observed, and cannot change what is read;
+///  * every parameter it names must itself be never assigned, or a later write
+///    would make the substituted text mean something different at the use than
+///    it did at the definition.
+pub fn propagate_trivial_parameter_aliases(f: &mut Function) {
+    let mut written: HashSet<VReg> = HashSet::new();
+    collect_written_regs(&f.body, &mut written);
+
+    let mut assignment_counts: HashMap<VReg, usize> = HashMap::new();
+    count_assignments(&f.body, &mut assignment_counts);
+
+    let mut aliases: HashMap<VReg, Expr> = HashMap::new();
+    collect_parameter_aliases(&f.body, &assignment_counts, &written, &mut aliases);
+    if aliases.is_empty() {
+        return;
+    }
+    substitute_aliases_body(&mut f.body, &aliases);
+
+    // Only drop a definition once the body demonstrably no longer reads it.
+    //
+    // Substitution alone is NOT sufficient evidence: this pass runs inside a
+    // long pipeline, and a later stage can reintroduce a read of a name — or
+    // hold one in a shape this walker does not rewrite. Dropping on the
+    // assumption that substitution was total produced exactly that bug in
+    // `hash_lookup`: `var0` and `var1` kept their reads inside the loop while
+    // their definitions were deleted, so the emitted C read two uninitialised
+    // locals. Counting first makes the pass safe under any ordering, and a
+    // definition that cannot be dropped is simply left alone.
+    let mut remaining: HashMap<VReg, usize> = HashMap::new();
+    count_reads_body(&f.body, &mut remaining);
+    let droppable: HashMap<VReg, Expr> = aliases
+        .into_iter()
+        .filter(|(dst, _)| remaining.get(dst).copied().unwrap_or(0) == 0)
+        .collect();
+    if !droppable.is_empty() {
+        drop_alias_definitions(&mut f.body, &droppable);
+    }
+}
+
+fn count_assignments(body: &[Stmt], counts: &mut HashMap<VReg, usize>) {
+    for statement in body {
+        match statement {
+            Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
+                *counts.entry(dst.clone()).or_insert(0) += 1;
+            }
+            Stmt::Call { dst: Some(dst), .. } => {
+                *counts.entry(dst.clone()).or_insert(0) += 1;
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                count_assignments(then_body, counts);
+                if let Some(else_body) = else_body {
+                    count_assignments(else_body, counts);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                count_assignments(body, counts)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                count_assignments(std::slice::from_ref(init.as_ref()), counts);
+                count_assignments(body, counts);
+                count_assignments(std::slice::from_ref(step.as_ref()), counts);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    count_assignments(case_body, counts);
+                }
+                if let Some(default_body) = default {
+                    count_assignments(default_body, counts);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A cast chain bottoming out in a parameter register that is never written.
+fn parameter_view(expr: &Expr, written: &HashSet<VReg>) -> bool {
+    match expr {
+        Expr::Reg(reg) => {
+            matches!(reg, VReg::Phys(name) if crate::ir::ast::parse_arg_index(name).is_some())
+                && !written.contains(reg)
+        }
+        Expr::Cast { expr, .. } => parameter_view(expr, written),
+        _ => false,
+    }
+}
+
+fn collect_parameter_aliases(
+    body: &[Stmt],
+    counts: &HashMap<VReg, usize>,
+    written: &HashSet<VReg>,
+    aliases: &mut HashMap<VReg, Expr>,
+) {
+    for statement in body {
+        match statement {
+            Stmt::Assign { dst, src } => {
+                if counts.get(dst).copied() == Some(1)
+                    && !matches!(dst, VReg::Phys(name) if crate::ir::ast::parse_arg_index(name).is_some())
+                    && parameter_view(src, written)
+                {
+                    aliases.insert(dst.clone(), src.clone());
+                }
+            }
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_parameter_aliases(then_body, counts, written, aliases);
+                if let Some(else_body) = else_body {
+                    collect_parameter_aliases(else_body, counts, written, aliases);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_parameter_aliases(body, counts, written, aliases)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                collect_parameter_aliases(
+                    std::slice::from_ref(init.as_ref()),
+                    counts,
+                    written,
+                    aliases,
+                );
+                collect_parameter_aliases(body, counts, written, aliases);
+                collect_parameter_aliases(
+                    std::slice::from_ref(step.as_ref()),
+                    counts,
+                    written,
+                    aliases,
+                );
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    collect_parameter_aliases(case_body, counts, written, aliases);
+                }
+                if let Some(default_body) = default {
+                    collect_parameter_aliases(default_body, counts, written, aliases);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn substitute_alias_expr(expr: &mut Expr, aliases: &HashMap<VReg, Expr>) {
+    match expr {
+        Expr::Reg(reg) => {
+            if let Some(replacement) = aliases.get(reg) {
+                *expr = replacement.clone();
+            }
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            substitute_alias_expr(lhs, aliases);
+            substitute_alias_expr(rhs, aliases);
+        }
+        Expr::Un { src, .. } => substitute_alias_expr(src, aliases),
+        Expr::Cast { expr, .. } => substitute_alias_expr(expr, aliases),
+        Expr::Deref { addr, .. } => substitute_alias_expr(addr, aliases),
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            substitute_alias_expr(cond, aliases);
+            substitute_alias_expr(if_true, aliases);
+            substitute_alias_expr(if_false, aliases);
+        }
+        Expr::WideArithmetic { args, .. } => {
+            for arg in args {
+                substitute_alias_expr(arg, aliases);
+            }
+        }
+        Expr::FunctionTableEntry { index, .. } => substitute_alias_expr(index, aliases),
+        _ => {}
+    }
+}
+
+fn substitute_stmt_exprs(statement: &mut Stmt, aliases: &HashMap<VReg, Expr>) {
+    match statement {
+        Stmt::Assign { src, .. } => substitute_alias_expr(src, aliases),
+        Stmt::Store { addr, src, .. } => {
+            substitute_alias_expr(addr, aliases);
+            substitute_alias_expr(src, aliases);
+        }
+        Stmt::Call { target, args, .. } => {
+            substitute_alias_expr(target, aliases);
+            for arg in args {
+                substitute_alias_expr(arg, aliases);
+            }
+        }
+        Stmt::Return { value: Some(value) } => substitute_alias_expr(value, aliases),
+        Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
+            substitute_alias_expr(cond, aliases)
+        }
+        Stmt::For { cond, .. } => substitute_alias_expr(cond, aliases),
+        Stmt::Switch { discriminant, .. } => substitute_alias_expr(discriminant, aliases),
+        Stmt::Push { value } => substitute_alias_expr(value, aliases),
+        Stmt::IndirectGoto { target } => substitute_alias_expr(target, aliases),
+        _ => {}
+    }
+}
+
+fn substitute_aliases_body(body: &mut [Stmt], aliases: &HashMap<VReg, Expr>) {
+    for statement in body.iter_mut() {
+        // The defining assignment keeps its own destination; only its RHS and
+        // every other statement's expressions are rewritten.
+        substitute_stmt_exprs(statement, aliases);
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                substitute_aliases_body(then_body, aliases);
+                if let Some(else_body) = else_body {
+                    substitute_aliases_body(else_body, aliases);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                substitute_aliases_body(body, aliases)
+            }
+            Stmt::For {
+                init, step, body, ..
+            } => {
+                substitute_aliases_body(std::slice::from_mut(init.as_mut()), aliases);
+                substitute_aliases_body(body, aliases);
+                substitute_aliases_body(std::slice::from_mut(step.as_mut()), aliases);
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    substitute_aliases_body(case_body, aliases);
+                }
+                if let Some(default_body) = default {
+                    substitute_aliases_body(default_body, aliases);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn drop_alias_definitions(body: &mut Vec<Stmt>, aliases: &HashMap<VReg, Expr>) {
+    body.retain(
+        |statement| !matches!(statement, Stmt::Assign { dst, .. } if aliases.contains_key(dst)),
+    );
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                drop_alias_definitions(then_body, aliases);
+                if let Some(else_body) = else_body {
+                    drop_alias_definitions(else_body, aliases);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                drop_alias_definitions(body, aliases)
+            }
+            Stmt::For { body, .. } => drop_alias_definitions(body, aliases),
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case_body) in cases {
+                    drop_alias_definitions(case_body, aliases);
+                }
+                if let Some(default_body) = default {
+                    drop_alias_definitions(default_body, aliases);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collapse a select nested inside its own arm on an identical condition.
+///
+/// `select(C, select(C, X, Y), Z)` is `select(C, X, Z)`: inside the true arm of
+/// a select, `C` holds, so a nested select on the same condition can only take
+/// its true arm. Symmetrically in the false arm, `C` does not hold and only the
+/// false arm is reachable.
+///
+/// This is where the ARMv7 `-O2` reads of never-assigned locals come from. A
+/// predicated instruction (`it ls` / `movls`) preserves its destination when the
+/// condition fails, which — unlike x86 `bsr`, where the architecture leaves the
+/// destination undefined — is exactly right. The redundancy is not about
+/// definedness at all. Emitting the guard twice leaves the inner alternative
+/// syntactically present but unreachable:
+///
+/// ```text
+/// var2 = ((arg2 <= 16) ? ((arg2 <= 16) ? 0 : var1) : 1);
+/// ```
+///
+/// and `var1` is a local nothing assigns. Collapsing on dominance removes it
+/// without needing to know whether it was defined: the enclosing arm already
+/// proves the branch cannot be taken. That distinction matters — the rule that
+/// tried to prove an arm *undefined* instead of *unreachable* rested on an
+/// incomplete definition oracle and silently rewrote the signed divide-by-four
+/// rounding idiom.
+///
+/// Conditions are compared by structural equality. That is deliberately
+/// conservative: two conditions that are semantically equal but spelled
+/// differently are simply not collapsed, which costs a missed simplification
+/// and never costs correctness.
+pub fn collapse_dominated_select_arms(f: &mut Function) {
+    collapse_dominated_body(&mut f.body, &mut Vec::new());
+}
+
+/// One enclosing select arm: the condition, and whether we are in its true arm.
+type Dominator = (Expr, bool);
+
+fn dominated_value(cond: &Expr, known: &[Dominator]) -> Option<bool> {
+    known
+        .iter()
+        .rev()
+        .find(|(known_cond, _)| known_cond == cond)
+        .map(|(_, taken)| *taken)
+}
+
+fn collapse_dominated_expr(expr: &mut Expr, known: &mut Vec<Dominator>) {
+    if let Expr::Select {
+        cond,
+        if_true,
+        if_false,
+        ..
+    } = expr
+    {
+        // An enclosing arm may already decide this condition, in which case the
+        // whole select is just that arm.
+        if let Some(taken) = dominated_value(cond, known) {
+            let kept = if taken { if_true } else { if_false };
+            let kept = std::mem::replace(kept.as_mut(), Expr::Const(0));
+            *expr = kept;
+            collapse_dominated_expr(expr, known);
+            return;
+        }
+        collapse_dominated_expr(cond, known);
+        let decided = (*cond.clone(), true);
+
+        known.push(decided);
+        collapse_dominated_expr(if_true, known);
+        let (condition, _) = known.pop().expect("just pushed");
+
+        known.push((condition, false));
+        collapse_dominated_expr(if_false, known);
+        known.pop();
+        return;
+    }
+    match expr {
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            collapse_dominated_expr(lhs, known);
+            collapse_dominated_expr(rhs, known);
+        }
+        Expr::Un { src, .. } => collapse_dominated_expr(src, known),
+        Expr::Cast { expr, .. } => collapse_dominated_expr(expr, known),
+        Expr::Deref { addr, .. } => collapse_dominated_expr(addr, known),
+        Expr::WideArithmetic { args, .. } => {
+            for arg in args {
+                collapse_dominated_expr(arg, known);
+            }
+        }
+        Expr::FunctionTableEntry { index, .. } => collapse_dominated_expr(index, known),
+        _ => {}
+    }
+}
+
+fn collapse_dominated_body(body: &mut [Stmt], known: &mut Vec<Dominator>) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::Assign { src, .. } => collapse_dominated_expr(src, known),
+            Stmt::Store { addr, src, .. } => {
+                collapse_dominated_expr(addr, known);
+                collapse_dominated_expr(src, known);
+            }
+            Stmt::Call { target, args, .. } => {
+                collapse_dominated_expr(target, known);
+                for arg in args {
+                    collapse_dominated_expr(arg, known);
+                }
+            }
+            Stmt::Return { value: Some(value) } => collapse_dominated_expr(value, known),
+            Stmt::Push { value } => collapse_dominated_expr(value, known),
+            Stmt::IndirectGoto { target } => collapse_dominated_expr(target, known),
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                collapse_dominated_expr(cond, known);
+                collapse_dominated_body(then_body, known);
+                if let Some(else_body) = else_body {
+                    collapse_dominated_body(else_body, known);
+                }
+            }
+            Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
+                collapse_dominated_expr(cond, known);
+                collapse_dominated_body(body, known);
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                collapse_dominated_body(std::slice::from_mut(init.as_mut()), known);
+                collapse_dominated_expr(cond, known);
+                collapse_dominated_body(body, known);
+                collapse_dominated_body(std::slice::from_mut(step.as_mut()), known);
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                collapse_dominated_expr(discriminant, known);
+                for (_, case_body) in cases {
+                    collapse_dominated_body(case_body, known);
+                }
+                if let Some(default_body) = default {
+                    collapse_dominated_body(default_body, known);
+                }
+            }
+            _ => {}
+        }
     }
 }
