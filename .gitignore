@@ -4,6 +4,8 @@
 # Rust
 /target/
 **/target/
+!src/target/
+!src/target/**
 # Isolated per-worktree cargo target dirs (CARGO_TARGET_DIR=target-<name>)
 /target-*/
 **/*.rs.bk

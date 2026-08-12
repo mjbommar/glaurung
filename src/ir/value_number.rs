@@ -4188,12 +4188,8 @@ mod tests {
             .iter()
             .find(|function| function.entry_point.value == 0x5d4)
             .expect("discover real _fini");
-        let lifted = crate::ir::lift_function::lift_function_from_image(
-            &image,
-            function,
-            crate::core::binary::Arch::ARM,
-        )
-        .expect("lift real _fini");
+        let lifted = crate::ir::lift_function::lift_function_from_image(&image, function)
+            .expect("lift real _fini");
 
         assert_eq!(
             live_in_arg_slots_llir(&lifted, CallConv::ArmHardFloat),

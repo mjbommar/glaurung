@@ -726,6 +726,35 @@ Acceptance:
 
 Stop if an ARM32 feature requires a parallel definition, SSA, or ABI model.
 
+### First canonical-target increment — 2026-08-11
+
+- [x] Add one immutable `TargetSpec` to `ProgramImage`/`ProgramSession` with
+  explicit supported/unsupported `TargetId`, endian, format, OS ABI,
+  address/pointer width, default and per-function A32/Thumb mode, instruction
+  alignment, PC rule, calling convention, and architecture-qualified special
+  register roles.
+- [x] Move `CallConv` identity to the target owner while retaining a temporary
+  compatibility export for existing IR consumers.
+- [x] Make image-backed lifting derive its architecture/mode from the image and
+  reject contradictory Thumb markers; remove the caller-supplied architecture
+  parameter from every image-backed lifting call site.
+- [x] Remove the Python decompiler's silent unsupported-ISA to x86-64 fallback.
+  A real RISC-V ELF now fails closed before lifting.
+- [x] Index allocated/loadable image-section mutability once, including BSS, so
+  analysis can distinguish mapped readonly and writable addresses without
+  reparsing the object.
+- [x] Preserve legacy generic-COFF behavior: only PE establishes the Windows
+  ABI. A RED compatibility test prevents generic COFF from silently selecting
+  Win64.
+- [ ] Replace the remaining internal `Arch`/format compatibility consumers,
+  add complete register banks/view contracts, model ILP32 independently of ISA,
+  make constants exact-width, and introduce `LiftContext`/`LiftBuilder`.
+
+This is a real Phase-2 boundary, not Phase-2 completion. The target owns the
+facts consumed by the migrated image/lifting/MemorySSA path, but legacy CFG,
+environment, register-view, and renderer code still consumes compatibility
+`Arch` values and spelling-based registers.
+
 ## Phase 3 — verified MIR and the shared definition oracle
 
 **Goal:** remove the main type and transform-safety root cause.
@@ -938,8 +967,11 @@ Acceptance:
   function.
 - [x] Expose the verified LLIR analysis through the existing diagnostics path
   without adding work or changing output in normal decompilation.
-- [ ] Replace the single unknown region with target-backed stack object, known
-  global, readonly image, heap/unknown, and fully-unknown regions.
+- [x] Replace the single LLIR-sidecar unknown region with target-backed stack,
+  known-global, readonly-image, heap/unknown, and fully-unknown regions. Exact
+  stack/global accesses stay separated; arbitrary pointers observe every
+  may-alias region; arbitrary writes and opaque effects clobber every mutable
+  may-alias region. This remains diagnostic-only until typed MIR owns it.
 - [ ] Carry stable value/object identities through typed MIR and connect the
   LLIR evidence to the production aggregate consumer before removing the AST
   compatibility adapter.

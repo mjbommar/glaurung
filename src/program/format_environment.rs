@@ -449,7 +449,7 @@ fn recover_direct_literal_parameter_hints(
         let Some(callee) = discover_function_image_at(image, &targeted_budgets, target) else {
             continue;
         };
-        let Some(lifted) = lift_function_from_image(image, &callee, image.arch()) else {
+        let Some(lifted) = lift_function_from_image(image, &callee) else {
             continue;
         };
         if let Some(format_parameter) = recover_local_format_sink(&lifted, image, cc, address_names)
@@ -527,7 +527,7 @@ pub(super) fn recover_format_parameter_hints(
         ..*budgets
     };
     let target_function = discover_function_image_at(image, &targeted_budgets, target)?;
-    let target_lifted = lift_function_from_image(image, &target_function, image.arch())?;
+    let target_lifted = lift_function_from_image(image, &target_function)?;
     let direct =
         recover_direct_literal_parameter_hints(&target_lifted, image, budgets, cc, address_names);
     let Some(forwarding) = recover_format_forwarding(&target_lifted, image, cc, address_names)
@@ -567,7 +567,7 @@ pub(super) fn recover_format_parameter_hints(
         let Some(function) = discover_function_image_at(image, &targeted_budgets, owner) else {
             continue;
         };
-        let Some(lifted) = lift_function_from_image(image, &function, image.arch()) else {
+        let Some(lifted) = lift_function_from_image(image, &function) else {
             continue;
         };
         let inputs = input_states_for_image(&lifted, cc, image, &semantics, false);

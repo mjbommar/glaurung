@@ -697,26 +697,22 @@ fn lift_window_at_py(
     lift_bytes_py(py, &data[foff..end], start_va, bits, arch)
 }
 
-fn detect_arch_and_call_conv(
+fn target_calling_convention(
     image: &crate::program::image::ProgramImage,
-) -> (crate::core::binary::Arch, crate::ir::call_args::CallConv) {
-    use crate::core::binary::Arch as BArch;
-
-    let arch = match image.arch() {
-        BArch::X86 | BArch::X86_64 | BArch::AArch64 | BArch::ARM => image.arch(),
-        _ => BArch::X86_64,
-    };
-    let is_pe = image.format() == crate::core::binary::Format::PE;
-
-    let cc = match (arch, is_pe) {
-        (BArch::AArch64, _) => crate::ir::call_args::CallConv::Aarch64,
-        (BArch::ARM, _) if image.arm_hard_float() => crate::ir::call_args::CallConv::ArmHardFloat,
-        (BArch::ARM, _) => crate::ir::call_args::CallConv::Arm,
-        (BArch::X86, _) => crate::ir::call_args::CallConv::Cdecl32,
-        (BArch::X86_64, true) => crate::ir::call_args::CallConv::Win64,
-        _ => crate::ir::call_args::CallConv::SysVAmd64,
-    };
-    (arch, cc)
+) -> PyResult<crate::ir::call_args::CallConv> {
+    let target = image.target();
+    let arch = target.architecture();
+    if !crate::ir::lift_function::supports_arch(arch) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "LLIR decompiler does not support target {arch:?}"
+        )));
+    }
+    let cc = target.calling_convention().ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "target {arch:?} has no supported calling convention"
+        ))
+    })?;
+    Ok(cc)
 }
 
 /// Normalize proof-dead partial-register lanes before any consumer leaves SSA.
@@ -761,6 +757,7 @@ struct PreparedLlir {
 
 fn prepare_llir_for_lowering(
     function: &mut crate::ir::types::LlirFunction,
+    image: &crate::program::image::ProgramImage,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
     cc: crate::ir::call_args::CallConv,
     recover_semantic_prototype: bool,
@@ -842,8 +839,8 @@ fn prepare_llir_for_lowering(
                 eprintln!("  0x{:x}: {}", instruction.va, instruction.op);
             }
         }
-        let memory = crate::ir::memory_ssa::compute_memory_ssa(&numbered);
-        match crate::ir::memory_objects::llir::infer_from_llir(&numbered, &memory) {
+        let memory = crate::ir::memory_ssa::compute_memory_ssa(&numbered, image);
+        match crate::ir::memory_objects::llir::infer_from_llir(&numbered, &memory, image) {
             Ok(objects) => {
                 eprintln!("\n===== verified LLIR memory SSA =====\n{memory:#?}");
                 eprintln!("\n===== LLIR memory objects =====\n{objects:#?}");
@@ -960,7 +957,8 @@ pub(super) fn decompile_at_session(
                 func_va
             ))
         })?;
-    let (arch, cc) = detect_arch_and_call_conv(&image);
+    let cc = target_calling_convention(&image)?;
+    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     // Build the address map first so we can apply a PDB public-symbol name
     // to the *outer* function header before lowering. The map already
@@ -975,7 +973,7 @@ pub(super) fn decompile_at_session(
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
-    let lf_raw = lift_function_from_image(&image, &func, arch).ok_or_else(|| {
+    let lf_raw = lift_function_from_image(&image, &func).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
     // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
@@ -989,7 +987,6 @@ pub(super) fn decompile_at_session(
         &image,
         &funcs,
         &lf_raw,
-        arch,
         cc,
         arm_vfp_args,
         &budgets,
@@ -1013,6 +1010,7 @@ pub(super) fn decompile_at_session(
     // now only a final projection (`value -> argN`), never a type-analysis key.
     let prepared_llir = prepare_llir_for_lowering(
         &mut lf_raw,
+        &image,
         &exception_sites,
         cc,
         style == "decbench" && types,
@@ -1227,13 +1225,12 @@ fn decompile_range_at_py(
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
-    let (arch, cc) = detect_arch_and_call_conv(&image);
+    let cc = target_calling_convention(&image)?;
+    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
-    let bits = match arch {
-        crate::core::binary::Arch::X86 | crate::core::binary::Arch::ARM => 32,
-        crate::core::binary::Arch::X86_64 | crate::core::binary::Arch::AArch64 => 64,
-        _ => 64,
-    };
+    let bits = image.target().address_bits().ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("target address width is unknown")
+    })?;
     let max_bytes = (max_instructions as u64).saturating_mul(16).max(1);
     let capped_end = range_end.min(range_start.saturating_add(max_bytes));
     let entry = Address::new(AddressKind::VA, func_va, bits, None, None)
@@ -1270,7 +1267,7 @@ fn decompile_range_at_py(
     };
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
-    let lf_raw = lift_function_from_image(&image, &func, arch).ok_or_else(|| {
+    let lf_raw = lift_function_from_image(&image, &func).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
     })?;
     // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
@@ -1288,6 +1285,7 @@ fn decompile_range_at_py(
     // narrower width.
     let prepared_llir = prepare_llir_for_lowering(
         &mut lf_raw,
+        &image,
         &exception_sites,
         cc,
         style == "decbench" && types,
@@ -2429,7 +2427,8 @@ fn decompile_all_py(
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
     // the closure boundary. See `python_bindings::analysis`.
     let funcs = py.detach(|| session.discover_functions(&budgets, &[]));
-    let (arch, cc) = detect_arch_and_call_conv(&image);
+    let cc = target_calling_convention(&image)?;
+    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
@@ -2456,7 +2455,7 @@ fn decompile_all_py(
         // never notices a signal. This is the supported way to stay
         // interruptible without releasing: it raises `KeyboardInterrupt` here.
         py.check_signals()?;
-        let Some(lf_raw) = lift_function_from_image(&image, func, arch) else {
+        let Some(lf_raw) = lift_function_from_image(&image, func) else {
             continue;
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
@@ -2467,7 +2466,6 @@ fn decompile_all_py(
             &image,
             &funcs,
             &lf_raw,
-            arch,
             cc,
             arm_vfp_args,
             &budgets,
@@ -2481,6 +2479,7 @@ fn decompile_all_py(
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(
             &mut lf_raw,
+            &image,
             &exception_sites,
             cc,
             style == "decbench",
@@ -2674,7 +2673,8 @@ fn decompile_many_py(
     // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
     // the closure boundary. See `python_bindings::analysis`.
     let funcs = py.detach(|| session.discover_functions(&budgets, &func_vas));
-    let (arch, cc) = detect_arch_and_call_conv(&image);
+    let cc = target_calling_convention(&image)?;
+    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
     let mut addr_map =
@@ -2706,7 +2706,7 @@ fn decompile_many_py(
         if !wanted.contains(&func_va) {
             continue;
         }
-        let Some(lf_raw) = lift_function_from_image(&image, func, arch) else {
+        let Some(lf_raw) = lift_function_from_image(&image, func) else {
             continue;
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
@@ -2717,7 +2717,6 @@ fn decompile_many_py(
             &image,
             &funcs,
             &lf_raw,
-            arch,
             cc,
             arm_vfp_args,
             &budgets,
@@ -2731,6 +2730,7 @@ fn decompile_many_py(
         // intact); see the note in `decompile_at`.
         let prepared_llir = prepare_llir_for_lowering(
             &mut lf_raw,
+            &image,
             &exception_sites,
             cc,
             style == "decbench",

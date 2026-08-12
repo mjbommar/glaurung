@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
-use super::image::{ProgramImage, ProgramImageError};
+use super::image::{ImageMemoryKind, ProgramImage, ProgramImageError};
 use crate::core::binary::{Arch, Format};
+use crate::ir::call_args::CallConv;
+use crate::target::{CodeMode, OsAbi, PcRule, TargetId};
 use object::{Object, ObjectSection};
 
 fn hello_binary() -> PathBuf {
@@ -24,6 +26,21 @@ fn one_owned_image_answers_target_entry_and_address_queries_without_reparsing() 
         .executable_ranges()
         .any(|range| range.contains(&0x2549)));
     assert_eq!(image.bytes(), std::fs::read(hello_binary()).unwrap());
+
+    let target = image.target();
+    assert_eq!(target.id(), TargetId::X86_64);
+    assert_eq!(target.architecture(), Arch::X86_64);
+    assert_eq!(target.address_bits(), Some(64));
+    assert_eq!(target.pointer_bits(), Some(64));
+    assert_eq!(target.default_code_mode(), Some(CodeMode::X86_64));
+    assert_eq!(target.calling_convention(), Some(CallConv::SysVAmd64));
+    assert_eq!(target.os_abi(), OsAbi::SystemV);
+    assert_eq!(target.instruction_alignment(CodeMode::X86_64), Some(1));
+    assert_eq!(
+        target.pc_rule(CodeMode::X86_64),
+        Some(PcRule::NextInstruction)
+    );
+    assert_eq!(target.registers().stack_pointer(), &["rsp", "esp"]);
 }
 
 #[test]
@@ -118,6 +135,83 @@ fn arm32_function_entries_are_normalized_from_indexed_target_metadata() {
     assert_eq!(image.normalize_function_entry(0x46d), 0x46c);
     assert_eq!(image.normalize_function_entry(0x4c8), 0x4c8);
     assert!(image.arm_hard_float());
+
+    let target = image.target();
+    assert_eq!(target.id(), TargetId::Arm32);
+    assert_eq!(target.address_bits(), Some(32));
+    assert_eq!(target.pointer_bits(), Some(32));
+    assert_eq!(target.default_code_mode(), Some(CodeMode::ArmA32));
+    assert_eq!(target.code_mode_for_function(false), Some(CodeMode::ArmA32));
+    assert_eq!(
+        target.code_mode_for_function(true),
+        Some(CodeMode::ArmThumb)
+    );
+    assert_eq!(target.calling_convention(), Some(CallConv::ArmHardFloat));
+    assert_eq!(target.instruction_alignment(CodeMode::ArmA32), Some(4));
+    assert_eq!(target.instruction_alignment(CodeMode::ArmThumb), Some(2));
+    assert_eq!(
+        target.pc_rule(CodeMode::ArmA32),
+        Some(PcRule::CurrentPlus(8))
+    );
+    assert_eq!(
+        target.pc_rule(CodeMode::ArmThumb),
+        Some(PcRule::CurrentPlus(4))
+    );
+    assert_eq!(target.registers().stack_pointer(), &["sp", "r13"]);
+    assert_eq!(target.registers().frame_pointer(), &["r11", "r7", "fp"]);
+    assert_eq!(target.registers().link_register(), &["lr", "r14"]);
+}
+
+#[test]
+fn target_spec_is_exact_across_real_aarch64_and_windows_images() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let aarch64 = ProgramImage::from_path(
+        &root.join("samples/binaries/platforms/linux/arm64/export/native/gcc/O0/hello-c-gcc-O0"),
+    )
+    .expect("index real AArch64 ELF");
+    assert_eq!(aarch64.target().id(), TargetId::AArch64);
+    assert_eq!(
+        aarch64.target().default_code_mode(),
+        Some(CodeMode::AArch64)
+    );
+    assert_eq!(
+        aarch64.target().calling_convention(),
+        Some(CallConv::Aarch64)
+    );
+    assert_eq!(aarch64.target().os_abi(), OsAbi::SystemV);
+    assert_eq!(
+        aarch64.target().instruction_alignment(CodeMode::AArch64),
+        Some(4)
+    );
+    assert_eq!(aarch64.target().registers().stack_pointer(), &["sp"]);
+    assert_eq!(aarch64.target().registers().frame_pointer(), &["x29", "fp"]);
+
+    let pe32 = ProgramImage::from_path(&root.join(
+        "samples/binaries/platforms/windows/i386/export/windows/i686/O0/hello-c-mingw32-O0.exe",
+    ))
+    .expect("index real PE32");
+    assert_eq!(pe32.target().id(), TargetId::X86_32);
+    assert_eq!(pe32.target().default_code_mode(), Some(CodeMode::X86_32));
+    assert_eq!(pe32.target().calling_convention(), Some(CallConv::Cdecl32));
+    assert_eq!(pe32.target().os_abi(), OsAbi::Windows);
+    assert_eq!(pe32.target().pointer_bits(), Some(32));
+
+    let pe64 = ProgramImage::from_path(&root.join(
+        "samples/binaries/platforms/windows/i386/export/windows/x86_64/O0/hello-c-mingw64-O0.exe",
+    ))
+    .expect("index real PE64");
+    assert_eq!(pe64.target().id(), TargetId::X86_64);
+    assert_eq!(pe64.target().calling_convention(), Some(CallConv::Win64));
+    assert_eq!(pe64.target().os_abi(), OsAbi::Windows);
+
+    let riscv64 = ProgramImage::from_path(
+        &root.join("samples/binaries/platforms/linux/amd64/cross/riscv64/hello-riscv64-gcc"),
+    )
+    .expect("index real RISC-V ELF");
+    assert_eq!(riscv64.target().id(), TargetId::Unsupported(Arch::RISCV64));
+    assert_eq!(riscv64.target().address_bits(), Some(64));
+    assert_eq!(riscv64.target().default_code_mode(), None);
+    assert_eq!(riscv64.target().calling_convention(), None);
 }
 
 #[test]
@@ -159,10 +253,16 @@ fn llir_lifting_reuses_the_owned_image_without_changing_instructions() {
         .expect("discover main");
 
     let legacy = crate::ir::lift_function::lift_function_from_bytes(&data, function, Arch::X86_64);
-    let indexed =
-        crate::ir::lift_function::lift_function_from_image(&image, function, Arch::X86_64);
+    let indexed = crate::ir::lift_function::lift_function_from_image(&image, function);
 
     assert_eq!(indexed, legacy);
+
+    let mut contradictory = function.clone();
+    contradictory.add_flag(crate::core::function::FunctionFlags::IS_THUMB);
+    assert!(
+        crate::ir::lift_function::lift_function_from_image(&image, &contradictory).is_none(),
+        "a per-function mode marker must belong to the image target"
+    );
 }
 
 #[test]
@@ -232,4 +332,38 @@ fn indexed_section_bytes_match_the_parser_across_object_formats() {
 
         assert_eq!(actual, expected, "{}", binary.display());
     }
+}
+
+#[test]
+fn image_memory_classification_keeps_readonly_writable_and_bss_distinct() {
+    let data = std::fs::read(hello_binary()).expect("read real ELF");
+    let object = crate::decompile::profile::parse_object(&data).expect("parse real ELF");
+    let section_address = |name: &str| {
+        object
+            .sections()
+            .find(|section| section.name() == Ok(name))
+            .filter(|section| section.size() != 0)
+            .map(|section| section.address())
+            .unwrap_or_else(|| panic!("real ELF has nonempty {name}"))
+    };
+    let rodata = section_address(".rodata");
+    let data_va = section_address(".data");
+    let bss = section_address(".bss");
+    drop(object);
+
+    let image = ProgramImage::from_bytes(data).expect("index real ELF");
+    assert_eq!(
+        image.memory_kind_at(rodata),
+        Some(ImageMemoryKind::ReadOnly)
+    );
+    assert_eq!(
+        image.memory_kind_at(data_va),
+        Some(ImageMemoryKind::Writable)
+    );
+    assert_eq!(
+        image.memory_kind_at(bss),
+        Some(ImageMemoryKind::Writable),
+        "uninitialized image storage must be indexed even without file bytes"
+    );
+    assert_eq!(image.memory_kind_at(u64::MAX), None);
 }

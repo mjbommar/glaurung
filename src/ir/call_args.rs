@@ -33,21 +33,8 @@
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
-/// Which calling convention a function obeys. The register facts that follow from
-/// it live in [`crate::ir::abi`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallConv {
-    SysVAmd64,
-    Win64,
-    /// 32-bit x86 cdecl: stack arguments, EAX return value.
-    Cdecl32,
-    Aarch64,
-    /// ARM32 base/soft-float AAPCS (r0-r3 args, r0 return).
-    Arm,
-    /// ARM32 AAPCS-VFP. Integer/pointer values use r0-r3 while scalar
-    /// floating-point values use s0-s15 and return through s0/d0.
-    ArmHardFloat,
-}
+/// Compatibility export while ABI consumers migrate to `crate::target`.
+pub use crate::target::abi::CallConv;
 
 /// Argument slots come from [`crate::ir::abi`], which owns them. They were
 /// previously written out here AND in `value_number`, and the copies drifted in a

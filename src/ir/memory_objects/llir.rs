@@ -1,7 +1,7 @@
 //! LLIR and MemorySSA adapter for common memory-object access evidence.
 
 use crate::ir::memory_objects::{AccessRole, AccessSource, MemoryObjectBuilder, MemoryObjectModel};
-use crate::ir::memory_ssa::{MemorySsaError, MemorySsaInfo};
+use crate::ir::memory_ssa::{primary_region_for_memop, MemorySsaError, MemorySsaInfo};
 use crate::ir::types::{LlirFunction, MemOp, Op};
 use crate::ir::use_def::InstrAddr;
 
@@ -11,8 +11,9 @@ use crate::ir::use_def::InstrAddr;
 pub(crate) fn infer_from_llir(
     function: &LlirFunction,
     memory: &MemorySsaInfo,
+    image: &crate::program::image::ProgramImage,
 ) -> Result<MemoryObjectModel, MemorySsaError> {
-    memory.verify(function)?;
+    memory.verify(function, image)?;
     let mut builder = MemoryObjectBuilder::default();
     for (block_idx, block) in function.blocks.iter().enumerate() {
         for (instr_idx, instruction) in block.instrs.iter().enumerate() {
@@ -22,10 +23,17 @@ pub(crate) fn infer_from_llir(
             };
             match &instruction.op {
                 Op::Load { addr, .. } | Op::CondLoad { addr, .. } => {
-                    observe_memop(&mut builder, addr, AccessRole::Read, address, memory);
+                    observe_memop(&mut builder, addr, AccessRole::Read, address, memory, image);
                 }
                 Op::Store { addr, .. } | Op::CondStore { addr, .. } => {
-                    observe_memop(&mut builder, addr, AccessRole::Write, address, memory);
+                    observe_memop(
+                        &mut builder,
+                        addr,
+                        AccessRole::Write,
+                        address,
+                        memory,
+                        image,
+                    );
                 }
                 _ => {}
             }
@@ -40,20 +48,25 @@ fn observe_memop(
     role: AccessRole,
     address: InstrAddr,
     memory: &MemorySsaInfo,
+    image: &crate::program::image::ProgramImage,
 ) {
     let (Some(base), None, None) = (&memop.base, &memop.index, &memop.segment) else {
         return;
     };
-    let memory_version = memory.access_at(address).and_then(|access| match role {
-        AccessRole::Read => Some(access.input),
-        AccessRole::Write => access.output,
-    });
+    let region = primary_region_for_memop(memop, image);
+    let memory_version = memory
+        .access_at(address, region)
+        .and_then(|access| match role {
+            AccessRole::Read => Some(access.input),
+            AccessRole::Write => access.output,
+        });
     builder.observe_access(
         base.clone(),
         memop.disp,
         memop.size,
         role,
         AccessSource::LlirInstruction(address),
+        Some(region),
         memory_version,
     );
 }

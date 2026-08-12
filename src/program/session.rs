@@ -192,6 +192,11 @@ impl ProgramSession {
         &self.image
     }
 
+    /// The image's canonical machine target.
+    pub fn target(&self) -> &crate::target::TargetSpec {
+        self.image.target()
+    }
+
     /// Discover functions or reuse the exact immutable artifact from this session.
     pub fn discover_functions(&self, budgets: &Budgets, requested_vas: &[u64]) -> Arc<[Function]> {
         let key = DiscoveryKey::new(&self.image, budgets, requested_vas);

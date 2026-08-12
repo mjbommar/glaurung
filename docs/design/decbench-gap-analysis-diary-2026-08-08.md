@@ -3678,3 +3678,87 @@ confirms that none of the required suspicious API names exists in the summary,
 symbol set, or raw binary bytes. `--last-failed` reruns exactly those four in
 0.07 seconds and no other test. This increment does not touch those fixtures or
 the suspicious-symbol analysis.
+
+## 17:15–18:20 — make target identity canonical and split MemorySSA by proven region
+
+The one-region MemorySSA seam exposed the next concrete dependency: region
+classification could not be sound while architecture, ABI, width, mode, and
+register roles were recomputed independently. `ProgramImage` stored four loose
+target fields, image-backed lifting accepted a second caller-supplied `Arch`,
+and the Python decompiler silently interpreted every unsupported image as
+x86-64. That was both a composition problem and an unsafe failure mode.
+
+This increment adds the first canonical `src/target/` owner. One immutable
+`TargetSpec`, constructed during the image's existing object parse and exposed
+through `ProgramImage` and `ProgramSession`, carries explicit supported or
+unsupported target identity, endian, object format, OS ABI, address/pointer
+bits, default and per-function A32/Thumb mode, instruction alignment, PC rule,
+calling convention, and architecture-qualified stack/frame/link/PC roles.
+`CallConv` identity moves out of `ir::call_args` into that owner with a temporary
+compatibility export. Image-backed lifting no longer accepts an architecture
+argument and rejects a Thumb marker on a non-ARM image. The Python entry points
+now fail closed on a real unsupported RISC-V ELF instead of decoding it as
+x86-64.
+
+The image also indexes mapped section permissions once, including
+uninitialized BSS that has no file bytes. The MemorySSA sidecar uses those facts
+and target register roles to split state into `Stack`, `KnownGlobal`,
+`ReadOnlyImage`, `HeapUnknown`, and `FullyUnknown`. Exact stack and mapped-image
+accesses advance only their proven region. Arbitrary pointer reads observe every
+region they may alias; arbitrary writes and calls/unknown effects advance or
+clobber every mutable may-alias region. Readonly image state is observed but not
+invented as mutable. Every block has a region-specific entry/exit state and each
+CFG join has one phi per region. The verifier recomputes classification from the
+exact `(LLIR, ProgramImage)` pair and checks exact keys/cardinality, region-local
+definition ownership, output presence, phi inputs, and instruction threading.
+An ARM `r11` frame access classifies as stack under a real ARM image, and the
+same sidecar is rejected under x86.
+
+Memory-object access paths now retain both region and version provenance from
+the verified LLIR adapter. The production aggregate consumer remains on the
+prepared-AST adapter because stable source/object identities still do not exist
+in LLIR; normal decompilation therefore does not compute the sidecar. The
+existing `GLAURUNG_DUMP_PASSES` diagnostic computes and prints the region-aware
+analysis, and the real stripped 64-byte-record fixture asserts the provenance,
+recompiles the recovered C, and executes it. This is an aligned prerequisite
+for typed MIR and `TypeStore`, not a claim that either exists.
+
+TDD caught three boundaries. The real RISC-V Python test first reproduced the
+old silent fallback. Region tests first failed against the one-token API. A
+late compatibility audit added a RED test showing generic COFF was being
+misclassified as Windows and would switch x86-64 calling convention; the fix
+restricts Windows ABI inference to PE. Real-image target tests cover x86-64 ELF,
+ARM hard-float, AArch64 ELF, PE32, PE64, and unsupported RISC-V. Real ELF
+permission tests distinguish `.rodata`, `.data`, `.bss`, and unmapped space.
+
+Validation from the exact source passes `cargo fmt --check`, `git diff --check`,
+the rebuilt release extension, both new real-binary Python tests, and the full
+Rust suite: 2,074 library tests plus every integration target. The complete
+Python collection reaches 100%; its only four failures are the same malformed
+`suspicious_win` fixtures (two RISC-V copies, ARMHF, AArch64), with no required
+API name in their raw bytes. Repository-wide Python gates remain existing debt:
+Ruff format reports unrelated pre-existing files, Ruff lint passes on both
+changed Python files, and Ty reports its existing native-module/pytest stub
+gaps (1,943 repository diagnostics). No unrelated file was reformatted.
+
+A fresh optimized sample-set replay at
+`/tmp/glaurung-target-regions.P5fWMn` emits 250/250 requested functions from
+224/224 binaries with zero errors. All 224 generated C files are byte-identical
+to `/tmp/glaurung-memory-ssa.ZKSbSh`, the immediate frozen predecessor. Wall
+time is 57.511 seconds at 12 workers; per-binary mean, median, p95, and maximum
+are 3.020, 2.989, 3.957, and 5.278 seconds. This remains within the Phase-1
+performance ceiling and confirms the diagnostic-only analysis adds no normal
+output work. The checked-in eleven-function output-canary baseline is stale
+relative to earlier committed improvements (not this increment): it still
+expects undefined variables and larger declaration sets in `copy_reg`,
+`ackermann`, `statdb_write`, and others. It was not refreshed merely to force a
+green ratchet; immediate-predecessor corpus parity is the authoritative output
+comparison for this slice.
+
+Production file ownership remains bounded in the new seam: target facts are
+split across 23-line ABI, 76-line register-role, and 239-line spec modules;
+`memory_ssa.rs` is 639 lines, the common object reducer 303, and its LLIR adapter
+72. The existing 3,771-line Python binding orchestrator remains a Phase-7 split
+target. The next aligned implementation step is stable typed MIR value/object
+identity joined to `TypeStore`, so region/version evidence can replace the AST
+adapter in the production aggregate consumer without a second heuristic path.

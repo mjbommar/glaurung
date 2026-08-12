@@ -271,7 +271,7 @@ fn record_access(
     };
     observations
         .objects
-        .observe_access(base, offset, width, role, source, None);
+        .observe_access(base, offset, width, role, source, None, None);
 }
 
 fn affine_address(expression: &Expr) -> Option<(VReg, i64)> {

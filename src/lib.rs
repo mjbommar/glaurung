@@ -10,6 +10,9 @@ pub mod logging;
 /// Timeout utilities for analysis operations
 pub mod timeout;
 
+/// Canonical machine-target, register-role, and ABI facts.
+pub mod target;
+
 /// Triage runtime implementation
 pub mod triage;
 

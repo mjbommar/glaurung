@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::ir::memory_ssa::MemoryVersionId;
+use crate::ir::memory_ssa::{MemoryRegion, MemoryVersionId};
 use crate::ir::types::VReg;
 use crate::ir::use_def::InstrAddr;
 
@@ -48,6 +48,8 @@ pub(crate) struct AccessPath {
     pub(crate) alignment: u8,
     pub(crate) role: AccessRole,
     pub(crate) source: AccessSource,
+    /// Alias region selected by target/image-backed LLIR classification.
+    pub(crate) memory_region: Option<MemoryRegion>,
     /// Filled by the MIR/MemorySSA adapter when that owner is installed.
     pub(crate) memory_version: Option<MemoryVersionId>,
 }
@@ -102,6 +104,7 @@ pub(super) struct RawAccess {
     width: u8,
     role: AccessRole,
     source: AccessSource,
+    memory_region: Option<MemoryRegion>,
     memory_version: Option<MemoryVersionId>,
 }
 
@@ -127,6 +130,7 @@ impl MemoryObjectBuilder {
         width: u8,
         role: AccessRole,
         source: AccessSource,
+        memory_region: Option<MemoryRegion>,
         memory_version: Option<MemoryVersionId>,
     ) {
         self.observations
@@ -138,6 +142,7 @@ impl MemoryObjectBuilder {
                 width,
                 role,
                 source,
+                memory_region,
                 memory_version,
             });
     }
@@ -214,6 +219,7 @@ impl MemoryObjectBuilder {
                     alignment: inferred_alignment(access.offset, access.width),
                     role: access.role,
                     source: access.source,
+                    memory_region: access.memory_region,
                     memory_version: access.memory_version,
                 })
                 .collect::<Vec<_>>();

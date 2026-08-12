@@ -390,7 +390,6 @@ fn recover_direct_callee_definition(
     image: &crate::program::image::ProgramImage,
     functions: &[crate::core::function::Function],
     callee_va: u64,
-    arch: crate::core::binary::Arch,
     cc: crate::ir::call_args::CallConv,
     arm_vfp_args: bool,
     budgets: &crate::analysis::cfg::Budgets,
@@ -418,7 +417,7 @@ fn recover_direct_callee_definition(
             &targeted
         }
     };
-    let mut lifted = lift_function_from_image(image, callee, arch)?;
+    let mut lifted = lift_function_from_image(image, callee)?;
     inline_soft_helper_calls_in(&mut lifted, address_names);
     annotate_calls_in(&mut lifted, cc, address_names);
 
@@ -468,7 +467,6 @@ fn recover_direct_callee_definition(
                 image,
                 functions,
                 target,
-                arch,
                 cc,
                 arm_vfp_args,
                 budgets,
@@ -535,7 +533,6 @@ pub(super) fn recover_direct_callee_layouts(
     image: &crate::program::image::ProgramImage,
     functions: &[crate::core::function::Function],
     caller: &crate::ir::types::LlirFunction,
-    arch: crate::core::binary::Arch,
     cc: crate::ir::call_args::CallConv,
     arm_vfp_args: bool,
     budgets: &crate::analysis::cfg::Budgets,
@@ -592,7 +589,6 @@ pub(super) fn recover_direct_callee_layouts(
                 image,
                 functions,
                 callee_va,
-                arch,
                 cc,
                 arm_vfp_args,
                 budgets,

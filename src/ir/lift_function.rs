@@ -82,9 +82,16 @@ pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Opt
 pub fn lift_function_from_image(
     image: &crate::program::image::ProgramImage,
     func: &Function,
-    arch: Arch,
 ) -> Option<LlirFunction> {
-    lift_function(image.bytes(), func, arch, Some(image))
+    image
+        .target()
+        .code_mode_for_function(func.has_flag(crate::core::function::FunctionFlags::IS_THUMB))?;
+    lift_function(
+        image.bytes(),
+        func,
+        image.target().architecture(),
+        Some(image),
+    )
 }
 
 fn lift_function(

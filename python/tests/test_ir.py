@@ -334,6 +334,9 @@ ARM64_SAMPLE = Path(
 WIN64_SAMPLE = Path(
     "samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe"
 )
+RISCV64_SAMPLE = Path(
+    "samples/binaries/platforms/linux/amd64/cross/riscv64/hello-riscv64-gcc"
+)
 NTDLL_SAMPLE = Path("tests/fixtures/msvc-pdb/ntdll.dll")
 NTOSKRNL_SAMPLE = Path("tests/fixtures/msvc-pdb/ntoskrnl.exe")
 MSVC_PDB_CACHE = Path("tests/fixtures/msvc-pdb")
@@ -371,6 +374,12 @@ def test_decompile_all_returns_readable_functions():
 def test_decompile_at_rejects_unknown_va():
     with pytest.raises(ValueError):
         g.ir.decompile_at(str(SAMPLE), 0xDEADBEEF)
+
+
+@pytest.mark.skipif(not RISCV64_SAMPLE.exists(), reason="RISC-V sample missing")
+def test_decompiler_rejects_an_unsupported_image_instead_of_assuming_x86_64():
+    with pytest.raises(ValueError, match="does not support target RISCV64"):
+        g.ir.decompile_all(str(RISCV64_SAMPLE), limit=1)
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="x86-64 sample missing")

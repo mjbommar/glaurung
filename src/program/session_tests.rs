@@ -95,3 +95,15 @@ fn discovery_cache_key_includes_budgets_and_normalized_seeds() {
     assert_eq!(stats.misses, 2, "a budget change requires new discovery");
     assert_eq!(stats.entries, 2);
 }
+
+#[test]
+fn session_exposes_the_images_single_canonical_target() {
+    let (session, _) = real_test_session();
+
+    assert!(std::ptr::eq(session.target(), session.image().target()));
+    assert_eq!(session.target().id(), crate::target::TargetId::X86_64);
+    assert_eq!(
+        session.target().calling_convention(),
+        Some(crate::target::CallConv::SysVAmd64)
+    );
+}

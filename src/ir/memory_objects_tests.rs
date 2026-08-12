@@ -1,12 +1,20 @@
 use super::llir::infer_from_llir;
 use super::{infer_from_ast, AccessRole, AccessSource, LayoutConflict};
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::memory_ssa::compute_memory_ssa;
+use crate::ir::memory_ssa::{compute_memory_ssa, MemoryRegion};
 use crate::ir::types::{BinOp, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
 use crate::ir::use_def::InstrAddr;
 
 fn reg(name: &str) -> VReg {
     VReg::phys(name)
+}
+
+fn x86_image() -> crate::program::image::ProgramImage {
+    crate::program::image::ProgramImage::from_path(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0"),
+    )
+    .expect("index real x86-64 ELF")
 }
 
 fn cursor_address(name: &str, offset: i64) -> Expr {
@@ -300,14 +308,19 @@ fn llir_accesses_retain_instruction_and_memory_version_provenance() {
             succs: vec![],
         }],
     };
-    let memory = compute_memory_ssa(&llir);
+    let image = x86_image();
+    let memory = compute_memory_ssa(&llir, &image);
 
-    let model = infer_from_llir(&llir, &memory).expect("verified LLIR object model");
+    let model = infer_from_llir(&llir, &memory, &image).expect("verified LLIR object model");
     let object = model.object_for_base(&reg("rbx")).expect("rbx object");
 
     assert_eq!(object.accesses.len(), 2);
     assert_eq!(object.accesses[0].offset, 4);
     assert_eq!(object.accesses[0].role, AccessRole::Write);
+    assert_eq!(
+        object.accesses[0].memory_region,
+        Some(MemoryRegion::HeapUnknown)
+    );
     assert_eq!(
         object.accesses[0].source,
         AccessSource::LlirInstruction(InstrAddr {
@@ -318,10 +331,13 @@ fn llir_accesses_retain_instruction_and_memory_version_provenance() {
     assert_eq!(
         object.accesses[0].memory_version,
         memory
-            .access_at(InstrAddr {
-                block_idx: 0,
-                instr_idx: 0,
-            })
+            .access_at(
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 0,
+                },
+                MemoryRegion::HeapUnknown
+            )
             .and_then(|access| access.output)
     );
     assert_eq!(object.accesses[1].offset, 8);
@@ -329,10 +345,13 @@ fn llir_accesses_retain_instruction_and_memory_version_provenance() {
     assert_eq!(
         object.accesses[1].memory_version,
         memory
-            .access_at(InstrAddr {
-                block_idx: 0,
-                instr_idx: 1,
-            })
+            .access_at(
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 1,
+                },
+                MemoryRegion::HeapUnknown
+            )
             .map(|access| access.input)
     );
     assert!(object.conflicts.contains(&LayoutConflict::MissingOrigin));
@@ -356,15 +375,19 @@ fn llir_adapter_rejects_a_memory_sidecar_from_another_function() {
             succs: vec![],
         }],
     };
-    let memory = compute_memory_ssa(&LlirFunction {
-        entry_va: 0x2000,
-        blocks: vec![LlirBlock {
-            start_va: 0x2000,
-            end_va: 0x2004,
-            instrs: vec![],
-            succs: vec![],
-        }],
-    });
+    let image = x86_image();
+    let memory = compute_memory_ssa(
+        &LlirFunction {
+            entry_va: 0x2000,
+            blocks: vec![LlirBlock {
+                start_va: 0x2000,
+                end_va: 0x2004,
+                instrs: vec![],
+                succs: vec![],
+            }],
+        },
+        &image,
+    );
 
-    assert!(infer_from_llir(&llir, &memory).is_err());
+    assert!(infer_from_llir(&llir, &memory, &image).is_err());
 }
