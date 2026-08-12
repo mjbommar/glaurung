@@ -778,7 +778,7 @@ fn pointer_stored_through_width_only_memory_is_explicitly_represented() {
 
     assert!(
         rendered.contains(
-            "static unsigned char glaurung_global_1000[16] __attribute__((aligned(16)));"
+            "__attribute__((aligned(16))) static unsigned char glaurung_global_1000[16];"
         ),
         "the original image address needs portable storage:\n{rendered}"
     );
