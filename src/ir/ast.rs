@@ -6264,6 +6264,9 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 16. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
 ///    immediately joined result return into every arm only when both `if` arms,
 ///    or an explicit switch default, make the control flow exhaustive.
+/// 17. `bool_guard::recover_inclusive_comparisons` folds x86's `(a == b) | (a < b)`
+///    flag pair back into the single `a <= b` relation it encodes, once every
+///    switch recogniser has seen the un-merged comparison ladder.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
 /// impure: the AST that was checked or dumped was not the AST that was printed,
@@ -6283,6 +6286,14 @@ pub fn prepare_for_decbench_with_output(
     f: &Function,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
 ) -> Function {
+    let __dp2 = std::env::var("GLAURUNG_DUMP_PASSES").map(|v| v == "2").unwrap_or(false);
+    macro_rules! dp2 {
+        ($n:expr, $g:expr) => {
+            if __dp2 {
+                eprintln!("\n##### pfd/{} #####\n{}", $n, crate::ir::ast::render($g));
+            }
+        };
+    }
     let mut owned = f.clone();
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
         clear_return_values(&mut owned.body);
@@ -6290,7 +6301,9 @@ pub fn prepare_for_decbench_with_output(
         default_return_to_reg(&mut owned.body);
     }
     coalesce_param_spills(&mut owned.body);
+    dp2!("coalesce_param_spills", &owned);
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);
+    dp2!("crate::ir::label_prune::prune_unreachable_tails", &owned);
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
     // monotone pair to a small bounded fixpoint: x86 partial-register returns
@@ -6301,7 +6314,9 @@ pub fn prepare_for_decbench_with_output(
     for _ in 0..4 {
         let before = owned.clone();
         crate::ir::copy_prop::propagate_copies(&mut owned);
+        dp2!("loop/propagate_copies", &owned);
         crate::ir::const_fold::fold_constants(&mut owned);
+        dp2!("loop/fold_constants", &owned);
         if owned == before {
             break;
         }
@@ -6310,34 +6325,66 @@ pub fn prepare_for_decbench_with_output(
     // Collapse it before exhaustive-switch joining so the lossless cast chain
     // can be carried into each arm instead of blocking source-level returns.
     fold_returns(&mut owned.body);
+    dp2!("fold_returns", &owned);
     // Copy propagation and the second constant fold can replace a flag read in
     // a condition with its recovered comparison. Prune the now-dead definition
     // before shape recovery: otherwise a redundant `sf_N = ...` remains before
     // an exit guard and blocks exact while/for/select recognition.
     crate::ir::dce::prune_overwritten_flags(&mut owned);
+    dp2!("crate::ir::dce::prune_overwritten_flags", &owned);
     crate::ir::dce::prune_dead_flags(&mut owned);
+    dp2!("crate::ir::dce::prune_dead_flags", &owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
+    dp2!("crate::ir::copy_prop::propagate_adjacent_promoted_values", &owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
+    dp2!("crate::ir::copy_prop::propagate_adjacent_guard_values", &owned);
+    // The run-local propagators above clear their environment at every
+    // control-flow boundary, so an ABI copy made in the entry block and read
+    // inside a loop survives as a declared local no matter how few reads it
+    // has. That is the ordinary shape of -O2 output. This pass folds only the
+    // provably free case: a name assigned exactly once, from a cast chain over
+    // a never-written parameter.
+    crate::ir::copy_prop::propagate_trivial_parameter_aliases(&mut owned);
+    dp2!("crate::ir::copy_prop::propagate_trivial_parameter_aliases", &owned);
     crate::ir::guard_chain::collapse_shared_exit_guard_ladders(&mut owned);
+    dp2!("crate::ir::guard_chain::collapse_shared_exit_guard_ladders", &owned);
     crate::ir::guard_chain::collapse_shared_assignment_guards(&mut owned);
+    dp2!("crate::ir::guard_chain::collapse_shared_assignment_guards", &owned);
     crate::ir::guard_chain::collapse_redundant_copy_nested_guards(&mut owned);
+    dp2!("crate::ir::guard_chain::collapse_redundant_copy_nested_guards", &owned);
     crate::ir::guard_chain::collapse_nested_terminal_return_guards(&mut owned);
+    dp2!("crate::ir::guard_chain::collapse_nested_terminal_return_guards", &owned);
     // Region recovery may clone a comparison tree's shared default into
     // sequential terminal guards. Recover that switch before two-case tails
     // become `Select` expressions and erase the final equality arms. The
     // second invocation below remains necessary because select/copy folding can
     // expose ladders whose discriminant was not yet syntactically uniform.
     crate::ir::switch_ladder::recover_switches(&mut owned);
+    dp2!("crate::ir::switch_ladder::recover_switches", &owned);
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
+    dp2!("crate::ir::select_fold::collapse_assignment_diamonds", &owned);
     crate::ir::select_fold::recover_guarded_select_returns(&mut owned);
+    dp2!("crate::ir::select_fold::recover_guarded_select_returns", &owned);
     crate::ir::select_fold::fold_boolean_masks(&mut owned);
+    dp2!("crate::ir::select_fold::fold_boolean_masks", &owned);
+    // Runs after every producer of `Select`, including the lifters. ARM32
+    // predicated execution emits the guard twice — `(C ? (C ? x : prior) : y)` —
+    // and the inner alternative is unreachable because the enclosing arm already
+    // decided `C`. Dominance, not definedness: the arm being dropped may well be
+    // a defined value, it simply cannot be selected.
+    crate::ir::copy_prop::collapse_dominated_select_arms(&mut owned);
+    dp2!("crate::ir::copy_prop::collapse_dominated_select_arms", &owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
+    dp2!("crate::ir::copy_prop::propagate_adjacent_promoted_values", &owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
+    dp2!("crate::ir::copy_prop::propagate_adjacent_guard_values", &owned);
     crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned);
+    dp2!("crate::ir::copy_prop::propagate_adjacent_overwritten_values", &owned);
     // Recover shared return epilogues before general forward joins. Otherwise a
     // goto from a loop to `return -1` is faithfully but less clearly rendered
     // as `break; ... return -1` instead of the exact early return.
     crate::ir::label_prune::inline_terminal_goto_tails(&mut owned);
+    dp2!("crate::ir::label_prune::inline_terminal_goto_tails", &owned);
     // A forward join may contain a still-linearised inner loop, while removing
     // that join can in turn expose the enclosing linear latch. Two bounded
     // rounds recover inner loop -> forward join -> outer loop without relaxing
@@ -6351,35 +6398,60 @@ pub fn prepare_for_decbench_with_output(
     // before exact sentinel-loop matching; it is not an effect the candidate
     // should have to tolerate, but it also must not block a faithful rewrite.
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);
+    dp2!("crate::ir::label_prune::prune_unreachable_tails", &owned);
     crate::ir::loop_form::recover_head_tested_whiles(&mut owned);
+    dp2!("crate::ir::loop_form::recover_head_tested_whiles", &owned);
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
+    dp2!("crate::ir::loop_form::recover_guarded_do_whiles", &owned);
     crate::ir::loop_form::recover_sentinel_search_loops(&mut owned);
+    dp2!("crate::ir::loop_form::recover_sentinel_search_loops", &owned);
     crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
+    dp2!("crate::ir::guard_chain::collapse_adjacent_break_guards", &owned);
     crate::ir::guard_chain::collapse_nested_terminal_return_guards(&mut owned);
+    dp2!("crate::ir::guard_chain::collapse_nested_terminal_return_guards", &owned);
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
     crate::ir::switch_ladder::recover_switches(&mut owned);
+    dp2!("crate::ir::switch_ladder::recover_switches", &owned);
     crate::ir::guarded_switch::collapse_range_guards(&mut owned);
+    dp2!("crate::ir::guarded_switch::collapse_range_guards", &owned);
     // Removing a proven range guard can make a prefix copy dominate the switch
     // directly. Carry only those aliases into the switch arms. A general late
     // copy-propagation rerun is unsound here: loops have already been recovered,
     // and a pre-loop snapshot may depend on a value changed by the loop body.
     crate::ir::copy_prop::propagate_switch_entry_copies(&mut owned);
+    dp2!("crate::ir::copy_prop::propagate_switch_entry_copies", &owned);
     fold_exhaustive_if_returns(&mut owned);
+    dp2!("fold_exhaustive_if_returns", &owned);
     fold_exhaustive_switch_returns(&mut owned);
+    dp2!("fold_exhaustive_switch_returns", &owned);
     crate::ir::loop_form::promote_for_loops(&mut owned);
+    dp2!("crate::ir::loop_form::promote_for_loops", &owned);
     // Loop promotion can expose sequential terminal guards that were nested in
     // the recovered CFG during the earlier pass. Fuse that final exact shape
     // as well; the transformation is adjacency-checked and idempotent.
     crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
+    dp2!("crate::ir::guard_chain::collapse_adjacent_break_guards", &owned);
     crate::ir::guard_chain::collapse_redundant_copy_nested_guards(&mut owned);
+    dp2!("crate::ir::guard_chain::collapse_redundant_copy_nested_guards", &owned);
     crate::ir::guard_chain::collapse_matching_terminal_return_guard(&mut owned);
+    dp2!("crate::ir::guard_chain::collapse_matching_terminal_return_guard", &owned);
     // Late copy/guard folding can make an entry-owned do-while's initial and
     // latch predicates structurally identical only after the first loop-form
     // pass. The recovery is exact and idempotent; rerun it on the final AST so
     // phi-coalesced cursors retain their source-level pre-test.
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
+    dp2!("crate::ir::loop_form::recover_guarded_do_whiles", &owned);
+    // Last, because it is the one rewrite every switch recogniser must be
+    // allowed to see the un-merged form of: x86 spells `a <= b` as the flag
+    // pair `(a == b) | (a < b)`, and folding that into one relation before
+    // `switch_ladder` runs destroys the comparison ladder (see
+    // `bool_guard`'s module docs and `320e960`). By this point every switch
+    // pass has had its look.
+    crate::ir::bool_guard::recover_inclusive_comparisons(&mut owned);
+    dp2!("crate::ir::bool_guard::recover_inclusive_comparisons", &owned);
     remove_redundant_return_constant_assignments(&mut owned.body);
+    dp2!("remove_redundant_return_constant_assignments", &owned);
     owned
 }
 
@@ -6875,6 +6947,34 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types(
     if ids.statement_count >= 2_000 {
         out.push_str("__attribute__((optimize(\"O1\"))) ");
     }
+    // A recovered frame slot renders as `unsigned char name[N]`, and GCC's
+    // `-fstack-protector-strong` — on by default in every mainstream distro
+    // toolchain — protects any function containing an array. So a function that
+    // had NO canary in the original acquires a guard load, a guard compare and
+    // a failure branch purely because we spelled a spill as an array.
+    //
+    // Measured on the ARM fixture corpus, that injection alone costs 0.0346 of
+    // recompilation fidelity (0.6260 -> 0.6606, 51 functions better, none
+    // worse): on `sum_arg1` the rebuild goes from 11 instructions to 39.
+    //
+    // Suppress it ONLY where the original demonstrably had no protector, which
+    // is exactly the absence of a `__stack_chk_fail` call in the recovered
+    // body. Where the original DID have one, we say nothing and let the rebuild
+    // add its own — that matches the code being compared against.
+    //
+    // `__has_attribute` is honoured by GCC 5+ and Clang, and the fallback is
+    // empty, so a toolchain without the attribute still compiles.
+    if !ids.stack_objects.is_empty() && !ids.calls_stack_check {
+        out.push_str("#if defined(__has_attribute)\n");
+        out.push_str("#if __has_attribute(no_stack_protector)\n");
+        out.push_str("#define GLAURUNG_NO_SSP __attribute__((no_stack_protector))\n");
+        out.push_str("#endif\n");
+        out.push_str("#endif\n");
+        out.push_str("#ifndef GLAURUNG_NO_SSP\n");
+        out.push_str("#define GLAURUNG_NO_SSP\n");
+        out.push_str("#endif\n");
+        out.push_str("GLAURUNG_NO_SSP ");
+    }
     out.push_str(&return_type);
     out.push(' ');
     out.push_str(&name);
@@ -7092,6 +7192,10 @@ struct DecIdents {
     /// Scalar names whose value is actually a complete 128-bit machine load.
     /// These render as byte arrays so no high half is discarded.
     wide_locals: std::collections::BTreeSet<String>,
+    /// The recovered body calls the stack-check failure handler, i.e. the
+    /// ORIGINAL function was built with a stack protector. Used to decide
+    /// whether the rebuild may be allowed to add one of its own.
+    calls_stack_check: bool,
 }
 
 /// If `name` is exactly `arg` followed by decimal digits, return that index.
@@ -7284,7 +7388,14 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         } => {
             // A `Named` target is a callee name, not a local; other targets are
             // rendered as value expressions and their registers must be declared.
-            if !matches!(target, Expr::Named { .. }) {
+            if let Expr::Named { name, .. } = target {
+                // Evidence the ORIGINAL was built with a stack protector. The
+                // rebuild is then free to add one too, because the code it is
+                // being compared against already has it.
+                if name.contains("__stack_chk_fail") {
+                    ids.calls_stack_check = true;
+                }
+            } else {
                 collect_idents_expr(target, ids);
             }
             for a in args {

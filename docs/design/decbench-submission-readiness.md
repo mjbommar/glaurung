@@ -960,3 +960,71 @@ decoding three times as many genuine AArch64 functions.
   failures, now measurable per lane.
 * `test_cli_explain`'s four failures: pre-existing, unrelated to decompilation,
   but they make "the suite is green" untrue as a sentence.
+
+## Submission checklist — added 2026-08-04
+
+Written after a 16 % `byte_match` regression reached `master` and survived four
+commits because nothing scored the population the leaderboard scores. Every item
+below is a gate that has caught something real.
+
+### Before any submission
+
+1. `cargo test --lib` — the Rust logic gate.
+2. `tools/fixture_harness.py` — 656 execution-differential cases, x86-64.
+3. `tools/arch_roundtrip.py --check` — the same differential for i386, AArch64
+   and ARMv7. **The control lane must be 328/328.** If x86-64 is not clean, no
+   verdict on any other lane means anything.
+4. `pytest -m slow python/tests/test_decompiler_emission_invariants.py` — 52
+   cases: self-consistency properties of the emitted unit (disjoint frame
+   slots, no unassigned value reaching an observable use, prototypes agreeing
+   with their call sites, recovered arity matching source, determinism,
+   declared-vs-used, join-defined pointers). These exist because every other
+   gate asks what the code *does*, and a regression can live entirely in what
+   the code *claims about itself*.
+5. `tools/decbench_matrix.py --check` — 56 synthetic fixture cells.
+6. **`tools/decbench_holdout.py --check`** — the 250-function holdout, which is
+   what the leaderboard actually scores. Lanes 5 and 6 measure different
+   populations and have moved in opposite directions; passing 5 is not evidence
+   about 6.
+
+Lanes 1-5 are `scripts/decbench-local-gate.sh`; lane 6 joins it under
+`GLAURUNG_RUN_HOLDOUT=1` (opt-in only because the cycle is ~30 min).
+
+### Rules learned the hard way
+
+* **A metric reading 0.00 deserves the same suspicion as one reading 1.00.**
+  Two of this project's largest quality defects were reported as perfect scores
+  by regexes that could not match their own targets.
+* **An empty result must announce itself.** `callcheck` scored zero functions on
+  an entire tier while printing a well-formed table of dashes.
+* **Check the denominator before believing a rate.** A per-binary mean of
+  per-function means manufactured a prototype "regression" that was an
+  improvement, and made RetDec look worst on strings when it is best.
+* **Check the sign before believing an ordering.** `local_<hex>` is a distance
+  BELOW the frame pointer, so a larger label is a lower address; sorting by the
+  label made correctly-tiled frames look like overlapping ones and produced a
+  confident, wrong root cause.
+* **Attribute before fixing.** The `byte_match` drop was blamed on the string
+  work; scoring three trees showed the string work was 11 improved / 0 worse and
+  the loss belonged to earlier commits.
+* **`reeval_typematch.py` prints an empty table for a newly ingested column** —
+  it only aggregates ids already in `function_results.json`. Use `--emit` and
+  read `type_match_new.json`, or you will read "no change" as "no effect".
+* **A lifter that is exact about the machine can still be wrong about the
+  program.** `bsr`/`bsf` preserved the destination on a zero source, which is
+  AMD's behaviour and which Intel explicitly leaves undefined. The self-read
+  that modelling required made the destination live-in, and parameter recovery
+  promotes a live-in argument-slot register to a parameter — so a
+  one-parameter function was emitted with four. Exactness is only worth what it
+  costs everything downstream.
+* **A pass is only as sound as its weakest oracle.** `collapse_undefined_select_arms`
+  was a correct rule (an undefined arm permits any value) resting on
+  `count_assignments`, which was written for a narrower job and does not see a
+  frame slot's definition. It silently rewrote the signed divide-by-4 rounding
+  idiom and broke the control lane. Reusing a helper across purposes needs the
+  helper's *completeness*, not just its correctness, re-checked.
+* **Widen an invariant to the corpus, not just to the fixture it was written
+  for.** Emission invariant #2 forbids exactly the unassigned read the `bsr`
+  defect produced, and did not fire: it compiles one fixture, and the defect was
+  in another. A property gate that runs on one input is a unit test wearing a
+  property's name.

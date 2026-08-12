@@ -1354,7 +1354,7 @@
     "countdown": "pass",
     "dec_loop": "pass",
     "dec_preserves_carry": "pass",
-    "shift_until_zero": "fail",
+    "shift_until_zero": "pass",
     "sub_then_sign": "pass"
   },
   "14_flag_effects:armv7:O0": {
@@ -1390,7 +1390,7 @@
     "countdown": "pass",
     "dec_loop": "pass",
     "dec_preserves_carry": "pass",
-    "shift_until_zero": "fail",
+    "shift_until_zero": "pass",
     "sub_then_sign": "pass"
   },
   "14_flag_effects:x86_64:O0": {
@@ -1450,7 +1450,7 @@
     "rb_validate": "fail"
   },
   "16_red_black_tree:armv7:O0": {
-    "rb_validate": "fail"
+    "rb_validate": "pass"
   },
   "16_red_black_tree:armv7:O2": {
     "rb_validate": "fail"
@@ -1570,7 +1570,7 @@
     "graph_bfs": "fail"
   },
   "20_graph_bfs:armv7:O0": {
-    "graph_bfs": "fail"
+    "graph_bfs": "pass"
   },
   "20_graph_bfs:armv7:O2": {
     "graph_bfs": "fail"
@@ -1594,7 +1594,7 @@
     "graph_dfs": "fail"
   },
   "21_graph_dfs:armv7:O0": {
-    "graph_dfs": "fail"
+    "graph_dfs": "pass"
   },
   "21_graph_dfs:armv7:O2": {
     "graph_dfs": "fail"
@@ -1693,7 +1693,7 @@
     "kmp_search": "pass"
   },
   "25_kmp_search:armv7:O2": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:i386:O0": {
     "kmp_search": "pass"
