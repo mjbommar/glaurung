@@ -292,7 +292,7 @@ pub fn promote_stack_locals_with_facts(
     // textual epilogue needs the target label's actual incoming depth. Solve
     // the two small monotone analyses together instead of letting either use
     // textual fallthrough as a control-flow substitute.
-    let mut address_defs = StackAddressDefs::default();
+    let mut address_defs = HashMap::new();
     let mut label_deltas = HashMap::new();
     let mut coordinates_converged = false;
     for _ in 0..64 {
@@ -309,7 +309,7 @@ pub fn promote_stack_locals_with_facts(
         // A cyclic disagreement is not evidence for an address alias. Retain
         // only label depths derivable without aliases and let unresolved
         // address expressions remain explicit in the output.
-        address_defs = StackAddressDefs::default();
+        address_defs.clear();
         label_deltas = collect_label_stack_deltas(&f.body, ctx, &address_defs);
     }
     seed_indexed_stack_objects(
@@ -425,14 +425,14 @@ fn merge_stack_flow_entry(states: &mut HashMap<u64, StackFlow>, label: u64, inco
 fn collect_label_stack_deltas(
     body: &[Stmt],
     ctx: StackContext,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) -> HashMap<u64, Option<i64>> {
     fn update_stack_assignment(
         flow: StackFlow,
         dst: &VReg,
         src: &Expr,
         ctx: StackContext,
-        address_defs: &StackAddressDefs,
+        address_defs: &HashMap<VReg, (String, i64)>,
     ) -> StackFlow {
         match flow {
             StackFlow::Known(delta) => {
@@ -450,7 +450,7 @@ fn collect_label_stack_deltas(
         target_states: &mut HashMap<u64, StackFlow>,
         label_states: &mut HashMap<u64, StackFlow>,
         ctx: StackContext,
-        address_defs: &StackAddressDefs,
+        address_defs: &HashMap<VReg, (String, i64)>,
     ) -> StackFlow {
         for statement in body {
             match statement {
@@ -637,14 +637,14 @@ fn seed_indexed_stack_objects(
     map: &mut HashMap<SlotKey, SlotVal>,
     names: &mut SlotNames,
     ctx: StackContext,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
     label_deltas: &HashMap<u64, Option<i64>>,
 ) {
     fn collect_expr(
         expr: &Expr,
         sp_delta: Option<i64>,
         ctx: StackContext,
-        address_defs: &StackAddressDefs,
+        address_defs: &HashMap<VReg, (String, i64)>,
         starts: &mut Vec<(String, i64, u8)>,
     ) {
         if let Some((base, disp, Some(_), scale)) =
@@ -703,7 +703,7 @@ fn seed_indexed_stack_objects(
         body: &[Stmt],
         ctx: StackContext,
         mut sp_delta: Option<i64>,
-        address_defs: &StackAddressDefs,
+        address_defs: &HashMap<VReg, (String, i64)>,
         label_deltas: &HashMap<u64, Option<i64>>,
         starts: &mut Vec<(String, i64, u8)>,
     ) -> Option<i64> {
@@ -725,17 +725,7 @@ fn seed_indexed_stack_objects(
                             && matches!(lhs.as_ref(), Expr::Reg(_))
                             && matches!(rhs.as_ref(), Expr::Reg(_))
                     );
-                    // A definition of a subscript-carrying address register is
-                    // likewise a pointer computation, not an access. Its uses
-                    // seed the true object start after applying their residual
-                    // displacement.
-                    // A definition of a subscript-carrying address register is
-                    // a pointer computation, not an access: the compiler is
-                    // free to compute `fp + 120 + i*4` and only then apply the
-                    // real `-84`, so this displacement is not an object start.
-                    // Every USE of that register resolves through
-                    // `StackAddressDefs::indexed` and seeds the true start.
-                    if !arm_epilogue_frame_arithmetic && !address_defs.indexed.contains_key(dst) {
+                    if !arm_epilogue_frame_arithmetic {
                         collect_expr(src, sp_delta, ctx, address_defs, starts);
                     }
                     if is_stack_pointer_reg(dst, ctx) {
@@ -968,7 +958,7 @@ fn rewrite_body(
     names: &mut SlotNames,
     ctx: StackContext,
     sp_delta: &mut Option<i64>,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
     label_deltas: &HashMap<u64, Option<i64>>,
 ) {
     for s in body.iter_mut() {
@@ -1245,12 +1235,12 @@ fn stack_delta_after_assignment(
     src: &Expr,
     before: Option<i64>,
     ctx: StackContext,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<i64> {
     if !is_stack_pointer_reg(dst, ctx) {
         return before;
     }
-    let (base, disp) = resolve_stack_address(src, before, ctx, &address_defs.direct)?;
+    let (base, disp) = resolve_stack_address(src, before, ctx, address_defs)?;
     if base == entry_stack_base(ctx) {
         Some(disp)
     } else {
@@ -1285,7 +1275,7 @@ fn rewrite_expr(
     names: &mut SlotNames,
     ctx: StackContext,
     sp_delta: Option<i64>,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) {
     match e {
         Expr::Deref { addr, size } => {
@@ -1654,14 +1644,14 @@ fn promote_address_taken_stack_object(
     names: &mut SlotNames,
     ctx: StackContext,
     sp_delta: Option<i64>,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) {
     // A debug scalar is seeded in CFA/entry-SP coordinates before the body is
     // walked. If its address escapes through the post-prologue SP spelling,
     // promote that exact seeded slot into an addressable object instead of
     // creating a second, uninitialised current-SP object beside it.
     let scalar_address = resolved_memory_address(expr, sp_delta, ctx, address_defs).or_else(|| {
-        resolve_stack_address(expr, sp_delta, ctx, &address_defs.direct)
+        resolve_stack_address(expr, sp_delta, ctx, address_defs)
             .map(|(base, disp)| (base, disp, None, 1))
     });
     if let Some((base, disp, index, _scale)) = scalar_address {
@@ -1788,301 +1778,6 @@ fn promote_address_taken_stack_object(
     *expr = Expr::StackAddr { object, size };
 }
 
-/// A register whose value is an affine function of another register:
-/// `bias + reg * scale`.
-///
-/// Compilers routinely fold an element bias into the *subscript* rather than
-/// into the addressing displacement — `arm-linux-gnueabihf-gcc -O0` computes
-/// `queue[i]` as `(i << 2) + 120` and only then adds the frame pointer, so the
-/// `+120` never reaches the memory operand at all. Without this, the constant
-/// part of such an address is invisible and the object it selects appears to
-/// start at the frame base.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct IndexDef {
-    bias: i64,
-    reg: VReg,
-    scale: u8,
-}
-
-/// A register holding a computed stack address that still carries a dynamic
-/// subscript, e.g. `r3 = r7 + 120 + (i << 2)`. Unlike a
-/// [`StackAddressDefs::direct`] entry this cannot be reduced to one
-/// displacement, so it is kept separately and re-based at each use.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct IndexedAddress {
-    base: String,
-    disp: i64,
-    index: VReg,
-    scale: u8,
-}
-
-/// The register-level facts that let a memory operand be resolved to a stack
-/// object: constant addresses, indexed addresses, and affine subscripts.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct StackAddressDefs {
-    /// Registers holding a constant frame/stack address.
-    direct: HashMap<VReg, (String, i64)>,
-    /// Registers holding a stack address with a dynamic subscript.
-    indexed: HashMap<VReg, IndexedAddress>,
-    /// Registers holding an affine function of another register.
-    affine: HashMap<VReg, IndexDef>,
-    /// Registers holding a literal constant. Needed because the constant part
-    /// of an address is often materialised into a register of its own.
-    constants: HashMap<VReg, i64>,
-}
-
-/// Whether a register's identity is stable across the whole function body.
-///
-/// The value model versions the registers it has proved single-assignment
-/// (`rax#4`, `rax#8`, ...) and synthesises fresh `Temp`s; those can be reasoned
-/// about with one whole-function map. A BARE physical name is not versioned,
-/// so its value at a use is whatever the nearest preceding definition left
-/// there — which a whole-function map cannot see. Folding through one silently
-/// rewrites a use in terms of a definition that has not executed yet: on
-/// `clang -O2` `20_graph_bfs` a bare `rax` is defined as `rax#5 + 1` AFTER the
-/// store that reads it, and folding moved `seen[]` one byte up the frame.
-fn is_version_stable(reg: &VReg) -> bool {
-    match reg {
-        VReg::Phys(name) => name.contains('#'),
-        VReg::Temp(_) => true,
-        VReg::Flag(_) | VReg::FlagValue { .. } => false,
-    }
-}
-
-/// Record a per-register fact, failing closed on disagreement.
-///
-/// A register that is defined twice with different facts — which is what a
-/// non-SSA read-modify-write looks like — is dropped and remembered as
-/// ambiguous, so the enclosing fixpoint re-runs and no earlier read can have
-/// used the fact that later turned out to be wrong.
-fn record_fact<T: PartialEq>(
-    dst: &VReg,
-    fact: Option<T>,
-    out: &mut HashMap<VReg, T>,
-    ambiguous: &mut HashSet<VReg>,
-) {
-    if ambiguous.contains(dst) {
-        return;
-    }
-    match (out.get(dst), fact) {
-        (None, Some(fact)) => {
-            out.insert(dst.clone(), fact);
-        }
-        (Some(existing), Some(fact)) if existing == &fact => {}
-        (Some(_), Some(_)) | (Some(_), None) => {
-            out.remove(dst);
-            ambiguous.insert(dst.clone());
-        }
-        (None, None) => {}
-    }
-}
-
-/// A register's own affine value, or the identity fold when nothing is known.
-fn root(reg: &VReg, defs: &HashMap<VReg, IndexDef>) -> IndexDef {
-    defs.get(reg).cloned().unwrap_or(IndexDef {
-        bias: 0,
-        reg: reg.clone(),
-        scale: 1,
-    })
-}
-
-fn scaled(base: IndexDef, factor: i64) -> Option<IndexDef> {
-    let scale = u8::try_from(i64::from(base.scale).checked_mul(factor)?)
-        .ok()
-        .filter(|scale| *scale > 0)?;
-    Some(IndexDef {
-        bias: base.bias.checked_mul(factor)?,
-        reg: base.reg,
-        scale,
-    })
-}
-
-/// The affine value of an arbitrary register-plus-constant expression.
-///
-/// Recursive because copy propagation collapses the chain before this pass
-/// runs: the ARM32 sequence arrives as one `((i << 2) + 120)` node, not as
-/// two statements, so matching only `Reg op Const` sees nothing.
-fn affine_of_expr(
-    expr: &Expr,
-    defs: &HashMap<VReg, IndexDef>,
-    constants: &HashMap<VReg, i64>,
-) -> Option<IndexDef> {
-    use crate::ir::types::BinOp;
-    // The constant operand is routinely materialised into its own register
-    // first — ARM32 has no add-immediate wide enough for every frame — so a
-    // literal match on `Expr::Const` alone sees `reg + reg` and gives up.
-    let constant = |expr: &Expr| match expr {
-        Expr::Const(amount) => Some(*amount),
-        Expr::Reg(reg) => constants.get(reg).copied(),
-        _ => None,
-    };
-    match expr {
-        Expr::Reg(reg) if !constants.contains_key(reg) => Some(root(reg, defs)),
-        Expr::Bin { op, lhs, rhs } => {
-            // `Shl`/`Sub` are not commutative, so only the value-left
-            // spelling can be folded for those.
-            let (value, amount) = match (constant(lhs.as_ref()), constant(rhs.as_ref())) {
-                (_, Some(amount)) => (lhs.as_ref(), amount),
-                (Some(amount), None) if matches!(op, BinOp::Add | BinOp::Mul) => {
-                    (rhs.as_ref(), amount)
-                }
-                _ => return None,
-            };
-            let base = affine_of_expr(value, defs, constants)?;
-            match op {
-                BinOp::Shl => {
-                    let shift = u32::try_from(amount).ok().filter(|shift| *shift <= 7)?;
-                    scaled(base, 1i64 << shift)
-                }
-                BinOp::Mul => scaled(base, amount),
-                BinOp::Add => Some(IndexDef {
-                    bias: base.bias.checked_add(amount)?,
-                    ..base
-                }),
-                BinOp::Sub => Some(IndexDef {
-                    bias: base.bias.checked_sub(amount)?,
-                    ..base
-                }),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Recover the affine subscript chains (`bias + reg * scale`) reachable from
-/// plain register arithmetic.
-///
-/// Deliberately fails closed. A definition that disagrees with an earlier one
-/// for the same register — which is what a non-SSA `r3 = r3 + 4` looks like —
-/// is dropped and the fixpoint re-runs so no earlier read can have used it.
-/// A definition naming its own destination as the root is dropped outright for
-/// the same reason.
-fn collect_affine_index_defs(body: &[Stmt]) -> (HashMap<VReg, IndexDef>, HashMap<VReg, i64>) {
-    fn affine_of(
-        src: &Expr,
-        dst: &VReg,
-        defs: &HashMap<VReg, IndexDef>,
-        constants: &HashMap<VReg, i64>,
-    ) -> Option<IndexDef> {
-        // Both ends must be version-stable: the register being described, so a
-        // later redefinition cannot invalidate the fact, and the root it is
-        // described in terms of, so the fold names the same value at every use.
-        if !is_version_stable(dst) {
-            return None;
-        }
-        let result = affine_of_expr(src, defs, constants)?;
-        // A self-rooted definition is a read-modify-write of a non-SSA
-        // register; folding it would silently shift every later use. A trivial
-        // one carries no information and only costs a lookup.
-        (&result.reg != dst
-            && is_version_stable(&result.reg)
-            && (result.bias != 0 || result.scale != 1))
-            .then_some(result)
-    }
-
-    fn walk(
-        body: &[Stmt],
-        out: &mut HashMap<VReg, IndexDef>,
-        constants: &mut HashMap<VReg, i64>,
-        ambiguous: &mut HashSet<VReg>,
-        constant_ambiguous: &mut HashSet<VReg>,
-    ) {
-        for stmt in body {
-            match stmt {
-                Stmt::Assign { dst, src } => {
-                    let literal = is_version_stable(dst)
-                        .then(|| match src {
-                            Expr::Const(amount) => Some(*amount),
-                            Expr::Reg(reg) => constants.get(reg).copied(),
-                            _ => None,
-                        })
-                        .flatten();
-                    record_fact(dst, literal, constants, constant_ambiguous);
-                    let definition = affine_of(src, dst, out, constants);
-                    record_fact(dst, definition, out, ambiguous);
-                }
-                // Any other definition of a register invalidates a fold rooted
-                // at it; the destination is recorded as ambiguous so the
-                // fixpoint drops it.
-                Stmt::Call { dst: Some(dst), .. } | Stmt::Pop { target: dst } => {
-                    if out.remove(dst).is_some() {
-                        ambiguous.insert(dst.clone());
-                    }
-                    if constants.remove(dst).is_some() {
-                        constant_ambiguous.insert(dst.clone());
-                    }
-                }
-                Stmt::If {
-                    then_body,
-                    else_body,
-                    ..
-                } => {
-                    walk(then_body, out, constants, ambiguous, constant_ambiguous);
-                    if let Some(body) = else_body {
-                        walk(body, out, constants, ambiguous, constant_ambiguous);
-                    }
-                }
-                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                    walk(body, out, constants, ambiguous, constant_ambiguous)
-                }
-                Stmt::For {
-                    init, step, body, ..
-                } => {
-                    walk(
-                        std::slice::from_ref(init.as_ref()),
-                        out,
-                        constants,
-                        ambiguous,
-                        constant_ambiguous,
-                    );
-                    walk(body, out, constants, ambiguous, constant_ambiguous);
-                    walk(
-                        std::slice::from_ref(step.as_ref()),
-                        out,
-                        constants,
-                        ambiguous,
-                        constant_ambiguous,
-                    );
-                }
-                Stmt::Switch { cases, default, .. } => {
-                    for (_, body) in cases {
-                        walk(body, out, constants, ambiguous, constant_ambiguous);
-                    }
-                    if let Some(body) = default {
-                        walk(body, out, constants, ambiguous, constant_ambiguous);
-                    }
-                }
-                Stmt::TryCatch { try_body, catches } => {
-                    walk(try_body, out, constants, ambiguous, constant_ambiguous);
-                    for catch in catches {
-                        walk(&catch.body, out, constants, ambiguous, constant_ambiguous);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let mut ambiguous = HashSet::new();
-    let mut constant_ambiguous = HashSet::new();
-    loop {
-        let prior_ambiguities = ambiguous.len() + constant_ambiguous.len();
-        let mut defs = HashMap::new();
-        let mut constants = HashMap::new();
-        walk(
-            body,
-            &mut defs,
-            &mut constants,
-            &mut ambiguous,
-            &mut constant_ambiguous,
-        );
-        if ambiguous.len() + constant_ambiguous.len() == prior_ambiguities {
-            return (defs, constants);
-        }
-    }
-}
-
 /// Recover definitions that carry a constant frame/stack address into a call.
 ///
 /// These registers are already SSA-versioned by the value model (`rax#4`,
@@ -2094,7 +1789,7 @@ fn collect_stack_address_defs(
     body: &[Stmt],
     ctx: StackContext,
     label_deltas: &HashMap<u64, Option<i64>>,
-) -> StackAddressDefs {
+) -> HashMap<VReg, (String, i64)> {
     fn record_definition(
         dst: &VReg,
         address: Option<(String, i64)>,
@@ -2119,9 +1814,8 @@ fn collect_stack_address_defs(
 
     fn walk_direct(
         body: &[Stmt],
-        out: &mut StackAddressDefs,
+        out: &mut HashMap<VReg, (String, i64)>,
         ambiguous: &mut HashSet<VReg>,
-        indexed_ambiguous: &mut HashSet<VReg>,
         ctx: StackContext,
         sp_delta: &mut Option<i64>,
         label_deltas: &HashMap<u64, Option<i64>>,
@@ -2129,7 +1823,7 @@ fn collect_stack_address_defs(
         for (statement_index, stmt) in body.iter().enumerate() {
             match stmt {
                 Stmt::Assign { dst, src } => {
-                    let address = resolve_stack_address(src, *sp_delta, ctx, &out.direct);
+                    let address = resolve_stack_address(src, *sp_delta, ctx, out);
                     if is_stack_pointer_reg(dst, ctx) {
                         *sp_delta = address.and_then(|(base, disp)| {
                             (base == entry_stack_base(ctx)).then_some(disp)
@@ -2146,7 +1840,7 @@ fn collect_stack_address_defs(
                             // unread afterwards; a fall-through nested body or
                             // any live redefinition remains ambiguous.
                             let terminal_dead_overwrite = address.is_none()
-                                && out.direct.contains_key(dst)
+                                && out.contains_key(dst)
                                 && !body_falls_through(&body[statement_index + 1..])
                                 && body[statement_index + 1..]
                                     .iter()
@@ -2159,43 +1853,17 @@ fn collect_stack_address_defs(
                             // arithmetic must resolve to the same DWARF CFA
                             // object. x86's `rbp = rsp` remains a coordinate-
                             // system establishment below.
-                            record_definition(dst, address, &mut out.direct, ambiguous);
+                            record_definition(dst, address, out, ambiguous);
                             continue;
                         }
                         // Architectural frame bases define the coordinate
                         // system used by DWARF and local naming. In particular,
                         // `rbp = rsp` is a frame establishment, not an immutable
                         // SSA address alias to rebase as `entry_rsp`.
-                        out.direct.remove(dst);
+                        out.remove(dst);
                         ambiguous.insert(dst.clone());
-                        out.indexed.remove(dst);
-                        indexed_ambiguous.insert(dst.clone());
                     } else {
-                        record_fact(dst, address.clone(), &mut out.direct, ambiguous);
-                        // A register that resolves to a *constant* address is
-                        // already fully described by `direct`; only the residual
-                        // subscript-carrying form needs re-basing at each use.
-                        // Both ends version-stable, for the same reason the
-                        // affine folds require it: this map is consulted at
-                        // every use, including uses that precede the
-                        // definition in program order.
-                        let indexed = (address.is_none() && is_version_stable(dst)).then(|| {
-                            resolved_memory_address(src, *sp_delta, ctx, out).and_then(
-                                |(base, disp, index, scale)| {
-                                    index
-                                        .filter(|index| {
-                                            scale > 0 && index != dst && is_version_stable(index)
-                                        })
-                                        .map(|index| IndexedAddress {
-                                            base,
-                                            disp,
-                                            index,
-                                            scale,
-                                        })
-                                },
-                            )
-                        });
-                        record_fact(dst, indexed.flatten(), &mut out.indexed, indexed_ambiguous);
+                        record_definition(dst, address, out, ambiguous);
                     }
                 }
                 Stmt::If {
@@ -2209,22 +1877,13 @@ fn collect_stack_address_defs(
                         then_body,
                         out,
                         ambiguous,
-                        indexed_ambiguous,
                         ctx,
                         &mut then_delta,
                         label_deltas,
                     );
                     let mut else_delta = incoming;
                     if let Some(body) = else_body {
-                        walk_direct(
-                            body,
-                            out,
-                            ambiguous,
-                            indexed_ambiguous,
-                            ctx,
-                            &mut else_delta,
-                            label_deltas,
-                        );
+                        walk_direct(body, out, ambiguous, ctx, &mut else_delta, label_deltas);
                     }
                     let then_falls_through = body_falls_through(then_body);
                     let else_falls_through = else_body.as_deref().is_none_or(body_falls_through);
@@ -2238,15 +1897,7 @@ fn collect_stack_address_defs(
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                     let incoming = *sp_delta;
                     let mut body_delta = incoming;
-                    walk_direct(
-                        body,
-                        out,
-                        ambiguous,
-                        indexed_ambiguous,
-                        ctx,
-                        &mut body_delta,
-                        label_deltas,
-                    );
+                    walk_direct(body, out, ambiguous, ctx, &mut body_delta, label_deltas);
                     *sp_delta = merge_stack_deltas(incoming, body_delta);
                 }
                 Stmt::For {
@@ -2256,27 +1907,17 @@ fn collect_stack_address_defs(
                         std::slice::from_ref(init.as_ref()),
                         out,
                         ambiguous,
-                        indexed_ambiguous,
                         ctx,
                         sp_delta,
                         label_deltas,
                     );
                     let loop_entry = *sp_delta;
                     let mut body_delta = loop_entry;
-                    walk_direct(
-                        body,
-                        out,
-                        ambiguous,
-                        indexed_ambiguous,
-                        ctx,
-                        &mut body_delta,
-                        label_deltas,
-                    );
+                    walk_direct(body, out, ambiguous, ctx, &mut body_delta, label_deltas);
                     walk_direct(
                         std::slice::from_ref(step.as_ref()),
                         out,
                         ambiguous,
-                        indexed_ambiguous,
                         ctx,
                         &mut body_delta,
                         label_deltas,
@@ -2288,15 +1929,7 @@ fn collect_stack_address_defs(
                     let mut merged: Option<Option<i64>> = None;
                     for (_, body) in cases {
                         let mut case_delta = incoming;
-                        walk_direct(
-                            body,
-                            out,
-                            ambiguous,
-                            indexed_ambiguous,
-                            ctx,
-                            &mut case_delta,
-                            label_deltas,
-                        );
+                        walk_direct(body, out, ambiguous, ctx, &mut case_delta, label_deltas);
                         merged = Some(match merged {
                             Some(prior) => merge_stack_deltas(prior, case_delta),
                             None => case_delta,
@@ -2304,15 +1937,7 @@ fn collect_stack_address_defs(
                     }
                     if let Some(body) = default {
                         let mut default_delta = incoming;
-                        walk_direct(
-                            body,
-                            out,
-                            ambiguous,
-                            indexed_ambiguous,
-                            ctx,
-                            &mut default_delta,
-                            label_deltas,
-                        );
+                        walk_direct(body, out, ambiguous, ctx, &mut default_delta, label_deltas);
                         merged = Some(match merged {
                             Some(prior) => merge_stack_deltas(prior, default_delta),
                             None => default_delta,
@@ -2342,27 +1967,20 @@ fn collect_stack_address_defs(
         }
     }
 
-    let (affine, constants) = collect_affine_index_defs(body);
     let mut ambiguous = HashSet::new();
-    let mut indexed_ambiguous = HashSet::new();
     loop {
-        let prior_ambiguities = ambiguous.len() + indexed_ambiguous.len();
-        let mut defs = StackAddressDefs {
-            affine: affine.clone(),
-            constants: constants.clone(),
-            ..StackAddressDefs::default()
-        };
+        let prior_ambiguities = ambiguous.len();
+        let mut defs = HashMap::new();
         let mut sp_delta = Some(0);
         walk_direct(
             body,
             &mut defs,
             &mut ambiguous,
-            &mut indexed_ambiguous,
             ctx,
             &mut sp_delta,
             label_deltas,
         );
-        if ambiguous.len() + indexed_ambiguous.len() == prior_ambiguities {
+        if ambiguous.len() == prior_ambiguities {
             return defs;
         }
     }
@@ -2432,7 +2050,7 @@ fn resolved_memory_slot(
     expr: &Expr,
     sp_delta: Option<i64>,
     ctx: StackContext,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<(String, i64)> {
     let (base, disp, index, _) = resolved_memory_address(expr, sp_delta, ctx, address_defs)?;
     index.is_none().then_some((base, disp))
@@ -2445,107 +2063,80 @@ fn resolved_memory_address(
     expr: &Expr,
     sp_delta: Option<i64>,
     ctx: StackContext,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<(String, i64, Option<VReg>, u8)> {
-    /// The subscript exactly as the machine spells it: a register, optionally
-    /// scaled by a literal. No definition is looked through, so the recovered
-    /// expression reads the same register the instruction reads.
-    fn plain_index(expr: &Expr) -> Option<(VReg, u8)> {
+    fn scaled_index(expr: &Expr) -> Option<(VReg, u8, i64)> {
         match expr {
-            Expr::Reg(index) => Some((index.clone(), 1)),
+            Expr::Reg(index) => Some((index.clone(), 1, 0)),
             Expr::Bin {
                 op: crate::ir::types::BinOp::Mul,
                 lhs,
                 rhs,
             } => {
-                let (index, scale) = match (lhs.as_ref(), rhs.as_ref()) {
-                    (Expr::Reg(index), Expr::Const(scale))
-                    | (Expr::Const(scale), Expr::Reg(index)) => (index, *scale),
-                    _ => return None,
+                let (Expr::Reg(index), Expr::Const(scale)) = (lhs.as_ref(), rhs.as_ref()) else {
+                    let (Expr::Const(scale), Expr::Reg(index)) = (lhs.as_ref(), rhs.as_ref())
+                    else {
+                        return None;
+                    };
+                    return u8::try_from(*scale)
+                        .ok()
+                        .filter(|scale| *scale > 0)
+                        .map(|scale| (index.clone(), scale, 0));
                 };
-                u8::try_from(scale)
+                u8::try_from(*scale)
                     .ok()
                     .filter(|scale| *scale > 0)
-                    .map(|scale| (index.clone(), scale))
+                    .map(|scale| (index.clone(), scale, 0))
+            }
+            Expr::Bin {
+                op: crate::ir::types::BinOp::Shl,
+                lhs,
+                rhs,
+            } => {
+                let (Expr::Reg(index), Expr::Const(shift)) = (lhs.as_ref(), rhs.as_ref()) else {
+                    return None;
+                };
+                u32::try_from(*shift)
+                    .ok()
+                    .and_then(|shift| 1u8.checked_shl(shift))
+                    .filter(|scale| *scale > 0)
+                    .map(|scale| (index.clone(), scale, 0))
+            }
+            Expr::Bin { op, lhs, rhs }
+                if matches!(
+                    op,
+                    crate::ir::types::BinOp::Add | crate::ir::types::BinOp::Sub
+                ) =>
+            {
+                if let Expr::Const(amount) = rhs.as_ref() {
+                    let (index, scale, offset) = scaled_index(lhs)?;
+                    let adjustment = match op {
+                        crate::ir::types::BinOp::Add => *amount,
+                        crate::ir::types::BinOp::Sub => amount.checked_neg()?,
+                        _ => unreachable!(),
+                    };
+                    return Some((index, scale, offset.checked_add(adjustment)?));
+                }
+                if matches!(op, crate::ir::types::BinOp::Add) {
+                    if let Expr::Const(amount) = lhs.as_ref() {
+                        let (index, scale, offset) = scaled_index(rhs)?;
+                        return Some((index, scale, offset.checked_add(*amount)?));
+                    }
+                }
+                None
             }
             _ => None,
         }
     }
 
-    /// Split a subscript into the part that is genuinely dynamic and the
-    /// constant bias the compiler folded into it.
-    ///
-    /// `(i << 2) + 120` selects element `i` of an object 120 bytes above the
-    /// resolved base, NOT element `(i << 2) + 120` of the base object. Without
-    /// this the bias never reaches the displacement and the access appears to
-    /// start at the frame base, which then swallows every scalar between the
-    /// frame base and the real array.
-    fn biased_index(
-        expr: &Expr,
-        sp_delta: Option<i64>,
-        ctx: StackContext,
-        address_defs: &StackAddressDefs,
-    ) -> Option<(VReg, u8, i64)> {
-        // The machine spelling is always the answer of last resort, so this is
-        // a strict superset of reading the operand literally: it only ever
-        // REPLACES that answer when a large constant bias is provably folded
-        // into the subscript.
-        let unfolded = || plain_index(expr).map(|(index, scale)| (index, scale, 0));
-        // Anything that is itself a stack address is a base, not a subscript.
-        // An `sp + C` definition looks affine, and folding it would silently
-        // reinterpret the stack pointer as an array index.
-        if resolve_stack_address(expr, sp_delta, ctx, &address_defs.direct).is_some() {
-            return unfolded();
-        }
-        let Some(affine) = affine_of_expr(expr, &address_defs.affine, &address_defs.constants)
-        else {
-            return unfolded();
-        };
-        if resolve_stack_address(
-            &Expr::Reg(affine.reg.clone()),
-            sp_delta,
-            ctx,
-            &address_defs.direct,
-        )
-        .is_some()
-        {
-            return unfolded();
-        }
-        // A bias of at most one element is the aliasing bias that the
-        // partitioner below already treats as the SAME object (`base - 36 +
-        // 4*(i+1)` vs `base - 32 + 4*i`), so folding it moves nothing and
-        // cannot identify a distinct allocation. It is also the shape of an
-        // ordinary induction-variable step (`k` indexed as `(k-1) + 1`), where
-        // re-rooting the subscript on the earlier value extends that value's
-        // live range across code where it is dead -- which broke
-        // `25_kmp_search:i386:O2`. Keep the machine spelling.
-        if affine.bias.unsigned_abs() <= u64::from(affine.scale) {
-            return unfolded().or(Some((affine.reg, affine.scale, affine.bias)));
-        }
-        Some((affine.reg, affine.scale, affine.bias))
-    }
-
     // Alias expansion represents a constant stack address as ordinary
-    // arithmetic (`sp + 68`). Resolve that exact non-indexed ARM form before
-    // looking for dynamic address components.
+    // arithmetic (`sp + 68`) instead of a low-level Lea. Resolve that exact
+    // non-indexed form before looking for dynamic address components; otherwise
+    // the address-valued definition promotes while a store through the same
+    // alias remains rooted at an uninitialised synthetic `sp` C local.
     if matches!(ctx.cc, Some(CallConv::Arm | CallConv::ArmHardFloat)) {
-        if let Some((base, disp)) = resolve_stack_address(expr, sp_delta, ctx, &address_defs.direct)
-        {
+        if let Some((base, disp)) = resolve_stack_address(expr, sp_delta, ctx, address_defs) {
             return Some((base, disp, None, 1));
-        }
-    }
-
-    // A register that already holds a subscript-carrying stack address is
-    // re-based here rather than at its definition: the definition site is not
-    // where the access happens, and the residual displacement rides on the use.
-    if let Expr::Reg(reg) = expr {
-        if let Some(address) = address_defs.indexed.get(reg) {
-            return Some((
-                address.base.clone(),
-                address.disp,
-                Some(address.index.clone()),
-                address.scale,
-            ));
         }
     }
 
@@ -2571,11 +2162,11 @@ fn resolved_memory_address(
             for (base_expr, index_expr) in
                 [(lhs.as_ref(), rhs.as_ref()), (rhs.as_ref(), lhs.as_ref())]
             {
-                if let (Some((base, disp)), Some((index, scale, bias))) = (
-                    resolve_stack_address(base_expr, sp_delta, ctx, &address_defs.direct),
-                    biased_index(index_expr, sp_delta, ctx, address_defs),
+                if let (Some((base, disp)), Some((index, scale, index_offset))) = (
+                    resolve_stack_address(base_expr, sp_delta, ctx, address_defs),
+                    scaled_index(index_expr),
                 ) {
-                    return Some((base, disp.checked_add(bias)?, Some(index), scale));
+                    return Some((base, disp.checked_add(index_offset)?, Some(index), scale));
                 }
             }
         }
@@ -2591,49 +2182,18 @@ fn resolved_memory_address(
     else {
         return None;
     };
-    // The SIB index may itself carry a folded constant bias, exactly as the AST
-    // form above does; resolve it once here so both spellings agree.
-    let (index, scale, index_bias) = match index {
-        // The SIB scale multiplies whatever the index register holds, so a fold
-        // of that register composes with it rather than replacing it: an `rax`
-        // worth `rcx * 2` under `[rbp + rax*4]` is `rcx * 8`, not `rcx * 2`.
-        Some(index) => biased_index(&Expr::Reg(index.clone()), sp_delta, ctx, address_defs)
-            .and_then(|(folded, folded_scale, bias)| {
-                let outer = i64::from(*scale);
-                let combined = u8::try_from(i64::from(folded_scale).checked_mul(outer)?)
-                    .ok()
-                    .filter(|scale| *scale > 0)?;
-                Some((Some(folded), combined, bias.checked_mul(outer)?))
-            })
-            .unwrap_or_else(|| (Some(index.clone()), *scale, 0)),
-        None => (None, *scale, 0),
-    };
+    if let Some((resolved_base, base_disp)) = address_defs.get(base) {
+        return Some((
+            resolved_base.clone(),
+            base_disp.checked_add(*disp)?,
+            index.clone(),
+            *scale,
+        ));
+    }
     if let VReg::Phys(name) = base {
         if is_active_stack_base(name, ctx) {
             let (base, disp) = normalized_stack_slot(name, *disp, sp_delta, ctx);
-            return Some((base, disp.checked_add(index_bias)?, index, scale));
-        }
-    }
-    if let Some((resolved_base, base_disp)) = address_defs.direct.get(base) {
-        return Some((
-            resolved_base.clone(),
-            base_disp.checked_add(*disp)?.checked_add(index_bias)?,
-            index,
-            scale,
-        ));
-    }
-    // A base register already known to hold a subscript-carrying stack address
-    // resolves through that fact; the operand's own displacement is added on
-    // top. `arm-linux-gnueabihf-gcc -O0` builds `queue[i]` this way, computing
-    // `r3 = fp + 120 + (i << 2)` and then storing to `[r3 - 84]`.
-    if index.is_none() {
-        if let Some(address) = address_defs.indexed.get(base) {
-            return Some((
-                address.base.clone(),
-                address.disp.checked_add(*disp)?,
-                Some(address.index.clone()),
-                address.scale,
-            ));
+            return Some((base, disp, index.clone(), *scale));
         }
     }
 
@@ -2642,29 +2202,22 @@ fn resolved_memory_address(
     // subscript in the base field. Recover the same object while retaining the
     // non-stack base as the dynamic byte offset.
     let stack_index = index.as_ref()?;
-    if scale != 1 {
+    if *scale != 1 {
         return None;
     }
-    let (resolved_base, resolved_disp) = match stack_index {
-        VReg::Phys(name) if is_active_stack_base(name, ctx) => {
-            normalized_stack_slot(name, *disp, sp_delta, ctx)
-        }
-        _ => {
-            let (resolved_base, base_disp) = address_defs.direct.get(stack_index)?.clone();
-            (resolved_base, base_disp.checked_add(*disp)?)
-        }
-    };
-    // The dynamic side sits in the base field here; it carries a folded bias
-    // exactly as a SIB index would.
-    let (subscript, subscript_scale, subscript_bias) =
-        biased_index(&Expr::Reg(base.clone()), sp_delta, ctx, address_defs)
-            .unwrap_or_else(|| (base.clone(), 1, 0));
-    Some((
-        resolved_base,
-        resolved_disp.checked_add(subscript_bias)?,
-        Some(subscript),
-        subscript_scale,
-    ))
+    let (resolved_base, resolved_disp) =
+        if let Some((resolved_base, base_disp)) = address_defs.get(stack_index) {
+            (resolved_base.clone(), base_disp.checked_add(*disp)?)
+        } else if let VReg::Phys(name) = stack_index {
+            if is_active_stack_base(name, ctx) {
+                normalized_stack_slot(name, *disp, sp_delta, ctx)
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+    Some((resolved_base, resolved_disp, Some(base.clone()), 1))
 }
 
 /// Re-express an AAPCS current-SP coordinate in DWARF's CFA coordinate.
@@ -2764,7 +2317,7 @@ fn stack_object_address(
     map: &HashMap<SlotKey, SlotVal>,
     sp_delta: Option<i64>,
     ctx: StackContext,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<Expr> {
     let (base, disp, index, scale) = resolved_memory_address(expr, sp_delta, ctx, address_defs)?;
     if index.is_some() && scale == 0 {
@@ -2836,7 +2389,7 @@ fn stack_object_constant_address(
     map: &HashMap<SlotKey, SlotVal>,
     sp_delta: Option<i64>,
     ctx: StackContext,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<Expr> {
     let recovered = escaped_stack_address(expr, sp_delta, ctx, address_defs, true)?;
     let (base, disp) = normalized_stack_slot(&recovered.0, recovered.1, sp_delta, ctx);
@@ -2876,7 +2429,7 @@ fn stack_assignment_object_address(
     map: &mut HashMap<SlotKey, SlotVal>,
     sp_delta: Option<i64>,
     ctx: StackContext,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<Expr> {
     if let Some(existing) = stack_object_constant_address(expr, map, sp_delta, ctx, address_defs) {
         return Some(existing);
@@ -2954,23 +2507,23 @@ fn escaped_stack_address(
     expr: &Expr,
     sp_delta: Option<i64>,
     ctx: StackContext,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
     prefer_active_base: bool,
 ) -> Option<(String, i64)> {
     if matches!(ctx.cc, Some(CallConv::Arm | CallConv::ArmHardFloat)) {
-        return resolve_stack_address(expr, sp_delta, ctx, &address_defs.direct);
+        return resolve_stack_address(expr, sp_delta, ctx, address_defs);
     }
     if prefer_active_base {
         return match expr {
             Expr::Reg(VReg::Phys(name)) if is_active_stack_base(name, ctx) => {
                 Some((name.clone(), 0))
             }
-            Expr::Reg(reg) => address_defs.direct.get(reg).cloned(),
+            Expr::Reg(reg) => address_defs.get(reg).cloned(),
             _ => constant_stack_address(expr, ctx),
         };
     }
     constant_stack_address(expr, ctx).or_else(|| match expr {
-        Expr::Reg(reg) => address_defs.direct.get(reg).cloned(),
+        Expr::Reg(reg) => address_defs.get(reg).cloned(),
         _ => None,
     })
 }
@@ -3057,7 +2610,7 @@ fn try_promote_lea_to_local(
     names: &mut SlotNames,
     ctx: StackContext,
     sp_delta: Option<i64>,
-    address_defs: &StackAddressDefs,
+    address_defs: &HashMap<VReg, (String, i64)>,
 ) {
     if let Some(object_addr) = stack_object_address(addr, size, map, sp_delta, ctx, address_defs) {
         *addr = object_addr;
@@ -6358,94 +5911,5 @@ mod tests {
         let orig = f.clone();
         promote_stack_locals(&mut f);
         assert_eq!(f, orig);
-    }
-
-    /// The ARM32 -O0 shape from issue #42: `arm-linux-gnueabihf-gcc` folds an
-    /// array's frame bias into the SUBSCRIPT (`(i << 2) + 120`) and materialises
-    /// the constant into a register of its own, so only the residual `-84`
-    /// reaches the memory operand. The object must be seeded where the access
-    /// actually lands, not at the frame base.
-    #[test]
-    fn a_constant_bias_folded_into_the_index_still_reaches_the_displacement() {
-        use crate::ir::types::BinOp;
-        // r7 = sp (frame base at entry_sp-128 after a 128-byte frame),
-        // t_idx#1 = i#1 << 2; t_bias#1 = 120; r3#1 = t_idx#1 + t_bias#1;
-        // r4#1 = r3#1 + r7#1;
-        // store [r4 - 84]  ==>  entry_sp - 92 + i*4.
-        let body = vec![
-            Stmt::Assign {
-                dst: reg("sp"),
-                src: Expr::Bin {
-                    op: BinOp::Sub,
-                    lhs: Box::new(Expr::Reg(reg("sp"))),
-                    rhs: Box::new(Expr::Const(128)),
-                },
-            },
-            Stmt::Assign {
-                dst: reg("r7#1"),
-                src: Expr::Reg(reg("sp")),
-            },
-            Stmt::Assign {
-                dst: reg("t_idx#1"),
-                src: Expr::Bin {
-                    op: BinOp::Shl,
-                    lhs: Box::new(Expr::Reg(reg("i#1"))),
-                    rhs: Box::new(Expr::Const(2)),
-                },
-            },
-            Stmt::Assign {
-                dst: reg("t_bias#1"),
-                src: Expr::Const(120),
-            },
-            Stmt::Assign {
-                dst: reg("r3#1"),
-                src: Expr::Bin {
-                    op: BinOp::Add,
-                    lhs: Box::new(Expr::Reg(reg("t_idx#1"))),
-                    rhs: Box::new(Expr::Reg(reg("t_bias#1"))),
-                },
-            },
-            Stmt::Assign {
-                dst: reg("r4#1"),
-                src: Expr::Bin {
-                    op: BinOp::Add,
-                    lhs: Box::new(Expr::Reg(reg("r3#1"))),
-                    rhs: Box::new(Expr::Reg(reg("r7#1"))),
-                },
-            },
-            Stmt::Store {
-                addr: lea("r4#1", -84),
-                src: Expr::Const(7),
-                size: 4,
-            },
-        ];
-        let ctx = StackContext {
-            cc: Some(CallConv::ArmHardFloat),
-            rbp_repurposed: false,
-            frame_pointer_established: false,
-            parameter_count: None,
-        };
-        let defs = collect_stack_address_defs(&body, ctx);
-        let resolved = resolved_memory_address(&lea("r4#1", -84), Some(0), ctx, &defs)
-            .expect("the store address must resolve to a stack object");
-        assert_eq!(
-            resolved,
-            ("entry_sp".to_string(), -92, Some(reg("i#1")), 4),
-            "the +120 folded into the subscript must reach the displacement, \
-             and `i` must survive as the subscript with its stride"
-        );
-
-        // And the seeded object starts where the access lands, not at -128.
-        let mut f = Function {
-            name: "f".into(),
-            entry_va: 0,
-            body,
-        };
-        promote_stack_locals_typed(&mut f, Some(CallConv::ArmHardFloat));
-        let rendered = format!("{:?}", f.body.last().unwrap());
-        assert!(
-            rendered.contains("local_5c"),
-            "expected the object seeded at entry_sp-92 (0x5c), got: {rendered}"
-        );
     }
 }
