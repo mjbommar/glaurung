@@ -147,6 +147,13 @@ pub fn standalone_c_type(c_type: &str) -> Option<String> {
         | "void **" | "const void *" | "int *" | "unsigned int *" | "long *"
         | "unsigned long *" | "void *(*)(void *)" => c_type,
         "char *const *" => "char *const *",
+        // `_Bool` is a C99 KEYWORD and needs no header, so it is safe in a
+        // self-contained fragment; `bool` is a macro from <stdbool.h> before
+        // C23 and must normalise to the keyword. Without this arm every DWARF
+        // record naming a boolean was withheld and the caller fell back to
+        // inventing `int`, which then disagreed with the real definition — 24
+        // sites on dpkg's `in_force` alone.
+        "_Bool" | "bool" | "BOOLEAN" => "_Bool",
         "size_t" | "uintptr_t" | "SIZE_T" => "__SIZE_TYPE__",
         "ssize_t" | "intptr_t" | "SSIZE_T" => "__PTRDIFF_TYPE__",
         "off_t" | "time_t" | "clock_t" => "long",

@@ -7495,11 +7495,12 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // consumers (`tools/recompile_fidelity.py`, `diff_decompile`), which is
     // exactly why a whole-TU proxy reports a large win for deleting these and
     // the scored metric reports none.
-    for address in ids.global_addresses.keys() {
+    for (address, required) in &ids.global_addresses {
         let _ = writeln!(
             out,
-            "__attribute__((aligned(16))) static unsigned char {}[16];",
-            dec_global_name(*address)
+            "__attribute__((aligned(16))) static unsigned char {}[{}];",
+            dec_global_name(*address),
+            dec_global_object_bytes(*required)
         );
     }
 
@@ -7705,11 +7706,12 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // block-scope `extern` of an identifier whose file-scope `static` is
     // visible denotes that same internal-linkage object (C11 6.2.2p4), and the
     // sliced fragment declares everything it names.
-    for address in ids.global_addresses.keys() {
+    for (address, required) in &ids.global_addresses {
         let _ = writeln!(
             out,
-            "    extern unsigned char {}[16];",
-            dec_global_name(*address)
+            "    extern unsigned char {}[{}];",
+            dec_global_name(*address),
+            dec_global_object_bytes(*required)
         );
     }
 
@@ -7807,6 +7809,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     DEC_WIDE_LOCALS.with(|locals| locals.borrow_mut().clear());
     DEC_POINTER_WIDTH.with(|width| width.set(8));
     crate::ir::symbol_env::clear();
+    crate::ir::static_storage::clear();
     out
 }
 
@@ -7853,7 +7856,7 @@ struct DecIdents {
     /// Direct absolute storage VAs still read or written after readonly-data
     /// folding. These need portable C objects rather than original-image
     /// process addresses.
-    global_addresses: std::collections::BTreeMap<u64, u8>,
+    global_addresses: std::collections::BTreeMap<u64, u32>,
     /// Scalar names whose value is actually a complete 128-bit machine load.
     /// These render as byte arrays so no high half is discarded.
     wide_locals: std::collections::BTreeSet<String>,
@@ -8012,11 +8015,9 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
         // call-target position as an (implicitly-declared) function name; either
         // way it is not a declared local, so nothing to collect here.
         Expr::Unknown(_) => ids.has_unknown_value = true,
-        Expr::Const(_)
-        | Expr::FloatConst { .. }
-        | Expr::Addr(_)
-        | Expr::Named { .. }
-        | Expr::StringLit { .. } => {}
+        Expr::Addr(address) => note_address_taken_global(*address, ids),
+        Expr::Named { va, .. } => note_address_taken_global(*va, ids),
+        Expr::Const(_) | Expr::FloatConst { .. } | Expr::StringLit { .. } => {}
         Expr::FunctionTableEntry {
             table_va,
             table_name,
@@ -8039,10 +8040,7 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
         }
         Expr::Deref { addr, size } => {
             if let Some(address) = direct_global_address(addr) {
-                ids.global_addresses
-                    .entry(address)
-                    .and_modify(|known| *known = (*known).max(*size))
-                    .or_insert(*size);
+                note_global_address(address, u32::from(*size), ids);
             }
             collect_idents_expr(addr, ids);
         }
@@ -8101,10 +8099,7 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         Stmt::Store { addr, src, size } => {
             if let Some(address) = direct_global_address(addr) {
-                ids.global_addresses
-                    .entry(address)
-                    .and_modify(|known| *known = (*known).max(*size))
-                    .or_insert(*size);
+                note_global_address(address, u32::from(*size), ids);
             }
             collect_idents_expr(addr, ids);
             collect_idents_expr(src, ids);
@@ -8792,6 +8787,27 @@ fn direct_global_address(expr: &Expr) -> Option<u64> {
         Expr::Addr(address) | Expr::Named { va: address, .. } => Some(*address),
         _ => None,
     }
+}
+
+/// Record that `address` needs a portable object covering at least `bytes`.
+fn note_global_address(address: u64, bytes: u32, ids: &mut DecIdents) {
+    ids.global_addresses
+        .entry(address)
+        .and_modify(|known| *known = (*known).max(bytes))
+        .or_insert(bytes);
+}
+
+/// Record an address used as a value when the image proves it is writable
+/// static storage. The image supplies the extent because this body performs no
+/// access from which one could be inferred.
+fn note_address_taken_global(address: u64, ids: &mut DecIdents) {
+    if let Some(bytes) = crate::ir::static_storage::extent_of(address) {
+        note_global_address(address, bytes, ids);
+    }
+}
+
+fn dec_global_object_bytes(required: u32) -> u32 {
+    required.max(16).next_multiple_of(16)
 }
 
 fn dec_is_global_addr(address: u64) -> bool {
@@ -12869,6 +12885,65 @@ function f @ 0x1000 {
             !rendered.contains("sub_35100(&glaurung_global_5c620[0])"),
             "an integer parameter cannot receive a bare object pointer:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn decbench_address_taken_storage_uses_the_image_extent() {
+        let function = Function {
+            name: "user_name".to_string(),
+            entry_va: 0x408a,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Addr(0x82d0)),
+            }],
+        };
+        crate::ir::static_storage::install(
+            crate::ir::static_storage::StaticStorage::from_writable_regions([(0x8260, 0x8328)]),
+        );
+
+        let rendered = render_decbench(&function);
+
+        assert!(rendered.contains("glaurung_global_82d0[96]"));
+        assert!(rendered.contains("&glaurung_global_82d0[0]"));
+        assert!(!rendered.contains("0x82d0"));
+    }
+
+    #[test]
+    fn decbench_address_taken_without_storage_proof_stays_raw() {
+        crate::ir::static_storage::clear();
+        let function = Function {
+            name: "user_name".to_string(),
+            entry_va: 0x408a,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Addr(0x82d0)),
+            }],
+        };
+
+        let rendered = render_decbench(&function);
+
+        assert!(rendered.contains("0x82d0"));
+        assert!(!rendered.contains("glaurung_global_82d0"));
+    }
+
+    #[test]
+    fn decbench_hardware_register_is_not_materialised() {
+        crate::ir::static_storage::install(
+            crate::ir::static_storage::StaticStorage::from_writable_regions([(
+                0x2000_0000,
+                0x2001_0000,
+            )]),
+        );
+        let function = Function {
+            name: "peripheral".to_string(),
+            entry_va: 0x8000300,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Addr(0x4002_3808)),
+            }],
+        };
+
+        let rendered = render_decbench(&function);
+
+        assert!(rendered.contains("0x40023808"));
+        assert!(!rendered.contains("glaurung_global_40023808"));
     }
 
     /// `clz` is exactly representable, but only if BOTH halves of its meaning
@@ -18421,57 +18496,6 @@ function f @ 0x1000 {
             "exact pointee scaling was not preserved at the call boundary:\n{rendered}"
         );
         assert!(!rendered.contains("arg0 + 64"), "{rendered}");
-    }
-
-    /// A recovered pointer parameter is only compatible with an argument that
-    /// renders as that same pointer type. A string literal is `char *` and a
-    /// frame object is `unsigned char *`; passing either to a recovered
-    /// `long *`/`int *` is `-Wincompatible-pointer-types`, which is a hard
-    /// error from GCC 14 on. This is exactly the shape that cost 23 of the 250
-    /// DecBench holdout functions their compile.
-    #[test]
-    fn recovered_pointer_parameters_cast_literal_and_frame_arguments() {
-        let recovered = CallPrototype {
-            return_type: "long".into(),
-            parameter_types: vec!["long *".into(), "int *".into(), "void *".into()],
-            variadic: false,
-            authority: CallPrototypeAuthority::Recovered,
-        };
-        let rendered = render_decbench(&Function {
-            name: "caller".into(),
-            entry_va: 0x1000,
-            body: vec![Stmt::Call {
-                target: Expr::Named {
-                    va: 0x2000,
-                    name: "record".into(),
-                },
-                args: vec![
-                    Expr::StringLit {
-                        value: "boom".into(),
-                    },
-                    Expr::StackAddr {
-                        object: VReg::phys("local_18"),
-                        size: 24,
-                    },
-                    Expr::StackAddr {
-                        object: VReg::phys("local_28"),
-                        size: 8,
-                    },
-                ],
-                dst: None,
-                call_spec: Some(CallSiteSpec {
-                    callee_prototype: Some(recovered.clone()),
-                    call_prototype: recovered,
-                }),
-            }],
-        });
-
-        assert!(
-            rendered.contains(r#"record((long *)("boom"), (int *)(&local_18[0]), &local_28[0])"#),
-            "a literal or frame argument reached an incompatible pointer parameter \
-             without the reasserting cast, or a `void *` parameter grew a \
-             redundant one:\n{rendered}"
-        );
     }
 
     /// A recovered pointer parameter is only compatible with an argument that

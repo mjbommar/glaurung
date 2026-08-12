@@ -1059,6 +1059,7 @@ pub(super) fn decompile_at_session(
     dp!("lower");
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
+    let static_storage = crate::ir::static_storage::collect_static_storage(image.bytes());
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
@@ -1156,6 +1157,7 @@ pub(super) fn decompile_at_session(
             cc,
             &addr_map,
             &callee_facts.env,
+            &static_storage,
         )
     } else if style == "c" {
         let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
@@ -1321,6 +1323,7 @@ fn decompile_range_at_py(
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
+    let static_storage = crate::ir::static_storage::collect_static_storage(image.bytes());
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
@@ -1402,6 +1405,7 @@ fn decompile_range_at_py(
             cc,
             &addr_map,
             &callee_facts.env,
+            &static_storage,
         )
     } else if style == "c" {
         profiler.measure("render_c", || crate::ir::ast::render_c(&f))
@@ -1655,10 +1659,12 @@ fn decbench_text(
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
     symbol_env: &crate::ir::symbol_env::SymbolEnv,
+    static_storage: &crate::ir::static_storage::StaticStorage,
 ) -> String {
     // Install the program-level callee records for this render. The renderer
     // clears them alongside its other per-render selections.
     crate::ir::symbol_env::install(symbol_env.clone());
+    crate::ir::static_storage::install(static_storage.clone());
     let output_kind = recovered_prototype.map_or(
         crate::ir::types_recover::RecoveredOutputKind::Unknown,
         crate::ir::types_recover::RecoveredPrototype::output_kind,
@@ -2452,6 +2458,7 @@ fn decompile_all_py(
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
+    let static_storage = crate::ir::static_storage::collect_static_storage(image.bytes());
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
@@ -2596,6 +2603,7 @@ fn decompile_all_py(
                 cc,
                 &addr_map,
                 &callee_facts.env,
+                &static_storage,
             )
         } else {
             profiler.measure("render", || render(&f))
@@ -2694,6 +2702,7 @@ fn decompile_many_py(
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
+    let static_storage = crate::ir::static_storage::collect_static_storage(image.bytes());
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let mut callee_layout_cache = std::collections::HashMap::new();
     // PDB-only public-symbol map for the `// PDB:` provenance comment; built
@@ -2857,6 +2866,7 @@ fn decompile_many_py(
                 cc,
                 &addr_map,
                 &callee_facts.env,
+                &static_storage,
             )
         } else if style == "c" {
             let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
