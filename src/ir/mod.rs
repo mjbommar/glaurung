@@ -63,6 +63,7 @@ pub mod strings_fold;
 pub mod structure;
 pub mod structure_accounting;
 pub mod switch_ladder;
+pub mod symbol_env;
 pub mod types;
 pub mod types_recover;
 pub mod use_def;

@@ -836,6 +836,7 @@ fn decompile_at_py(
             dwarf_types.as_deref().unwrap_or(&[]),
             cc,
             &addr_map,
+            &callee_facts.env,
         )
     } else if style == "c" {
         let body = crate::ir::ast::render_c(&f);
@@ -1065,6 +1066,7 @@ fn decompile_range_at_py(
             dwarf_types.as_deref().unwrap_or(&[]),
             cc,
             &addr_map,
+            &callee_facts.env,
         )
     } else if style == "c" {
         crate::ir::ast::render_c(&f)
@@ -1289,7 +1291,11 @@ fn decbench_text(
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
+    symbol_env: &crate::ir::symbol_env::SymbolEnv,
 ) -> String {
+    // The program-level callee records for this render. `render_decbench_typed`
+    // clears them alongside its other per-render selections.
+    crate::ir::symbol_env::install(symbol_env.clone());
     let mut prepared = crate::ir::ast::prepare_for_decbench_with_output(f, output_kind);
     // Preparation is also where a PC-relative address arithmetic sequence
     // finally becomes an absolute address. On AArch64 the stack guard is reached
@@ -1681,6 +1687,12 @@ fn locked_parameter_count(
 struct DirectCalleeFacts {
     layouts: std::collections::HashMap<u64, Vec<crate::ir::types::VReg>>,
     prototypes: std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    /// The program-level record for every callee reached from this function.
+    ///
+    /// Keyed by the identifier the renderer prints rather than by call-target
+    /// VA, because that is the key both the caller's `extern` and the callee's
+    /// own definition are spelled under. See [`crate::ir::symbol_env`].
+    env: crate::ir::symbol_env::SymbolEnv,
 }
 
 fn imported_symbol_base(name: &str) -> &str {
@@ -1733,6 +1745,25 @@ fn itanium_runtime_layout(
             .map(|slot| crate::ir::types::VReg::phys(slot[0]))
             .collect(),
     )
+}
+
+/// Choose the strongest callee-owned record available for `name`.
+///
+/// A curated library contract outranks machine-code recovery: it is a
+/// declaration, not an inference. Recovery from the callee's own body is the
+/// fallback, and it is still a property of the callee alone — which is what
+/// keeps [`crate::ir::symbol_env`] order-independent.
+fn callee_record(
+    name: &str,
+    recovered: &crate::ir::call_contracts::CallPrototype,
+    noreturn: bool,
+) -> crate::ir::symbol_env::SymbolRecord {
+    use crate::ir::symbol_env::{RecordSource, SymbolRecord};
+
+    crate::ir::call_contracts::lookup(name)
+        .and_then(|contract| contract.standalone_prototype())
+        .map(|prototype| SymbolRecord::new(prototype, RecordSource::Catalog, noreturn))
+        .unwrap_or_else(|| SymbolRecord::new(recovered.clone(), RecordSource::CalleeBody, noreturn))
 }
 
 fn recovered_call_prototype(
@@ -1907,7 +1938,18 @@ fn recover_direct_callee_layouts(
                     .map(|parameter| parameter.value.base.clone())
                     .collect();
                 let call_prototype = recovered_call_prototype(&prototype);
-                (!layout.is_empty()).then(|| (layout, call_prototype, callee.name.clone()))
+                // An EMPTY parameter layout is a fact, not a failure: it says
+                // this callee reads no argument register. Folding that into the
+                // same `None` that means "the callee could not be lifted at
+                // all" discarded the strongest evidence we had about every
+                // zero-argument function in the image, and each caller then
+                // re-invented a prototype from its own live registers —
+                // `extern long flash_dcache_enable(char *);` against a real
+                // `void flash_dcache_enable(void)`, and `extern long
+                // main(void);` against `int main(void)`. Keep the record; only
+                // the *layout*, which is an instruction to install specific
+                // registers as arguments, stays gated on being non-empty.
+                Some((layout, call_prototype, callee.name.clone()))
             })
             .clone();
         if let Some((layout, prototype, name)) = recovered {
@@ -1925,8 +1967,53 @@ fn recover_direct_callee_layouts(
                 }
                 std::collections::hash_map::Entry::Occupied(_) => {}
             }
-            facts.layouts.insert(callee_va, layout);
-            facts.prototypes.insert(callee_va, prototype);
+            // Installing an empty layout would take `fold_one_call`'s
+            // locked-layout branch and short-circuit the caller's own backward
+            // scan over its argument setup. That branch exists to impose
+            // registers, so it stays keyed on there being registers to impose.
+            if !layout.is_empty() {
+                facts.layouts.insert(callee_va, layout);
+            }
+            let mut call_prototype = prototype.clone();
+            if let Some(display) = address_names.get(&callee_va) {
+                let key =
+                    crate::ir::ast::sanitize_c_ident(crate::ir::ast::callee_display_name(display));
+                let noreturn = crate::analysis::call_semantics::is_known_noreturn_symbol(&key);
+                facts
+                    .env
+                    .insert(key.clone(), callee_record(&key, &prototype, noreturn));
+                if let Some(declared) = dwarf_outputs
+                    .and_then(|outputs| outputs.get(&body_va))
+                    .and_then(dwarf_render_prototype)
+                {
+                    // `dwarf_record` withholds itself unless every type it
+                    // spells is either self-contained or a tag the declaring
+                    // function can forward-declare, so an admitted record is
+                    // always printable without any layout table.
+                    if let Some(record) = crate::ir::symbol_env::dwarf_record(&declared, noreturn) {
+                        facts.env.insert(key.clone(), record);
+                    }
+                }
+                // The record is the callee's contract for the *call site* too,
+                // not only for the declaration the caller prints. Routing it
+                // here is what lets a callee's proven return type reach
+                // `refine_call_result_types` and become the declared type of the
+                // local that receives it.
+                //
+                // Restricted to records whose every type has a self-contained
+                // spelling. A record that needs a tag declaration is printable
+                // as a DECLARATION — the renderer forward-declares the tag —
+                // but its types also become verbatim call-boundary casts, and
+                // widening the blast radius to those has not been measured.
+                if let Some(record) = facts
+                    .env
+                    .get(&key)
+                    .filter(|record| record.required_structs.is_empty())
+                {
+                    call_prototype = record.prototype.clone();
+                }
+            }
+            facts.prototypes.insert(callee_va, call_prototype);
         } else if dump {
             eprintln!("callee 0x{callee_va:x}: no recovered layout");
         }
@@ -2513,6 +2600,7 @@ fn decompile_all_py(
                 dwarf_types.as_deref().unwrap_or(&[]),
                 cc,
                 &addr_map,
+                &callee_facts.env,
             )
         } else {
             render(&f)
@@ -2756,6 +2844,7 @@ fn decompile_many_py(
                 dwarf_types.as_deref().unwrap_or(&[]),
                 cc,
                 &addr_map,
+                &callee_facts.env,
             )
         } else if style == "c" {
             let body = crate::ir::ast::render_c(&f);
