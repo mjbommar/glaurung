@@ -3,12 +3,12 @@
     0x11e0  f3 0f 1e fa 31 ed 49 89 d1 5e 48 89 e2 48 83 e4   |....1.I..^H..H..| ←
 
 ── disasm @ 0x11e0 ──
-    0x11e0  f30f1efa                  Endbr64  ←
+    0x11e0  f30f1efa                  endbr64  ←
     0x11e4  31ed                      xor ebp, ebp
     0x11e6  4989d1                    mov r9, rdx
     0x11e9  5e                        pop rsi
     0x11ea  4889e2                    mov rdx, rsp
-    0x11ed  4883e4f0                  and rsp
+    0x11ed  4883e4f0                  and rsp, 0xfffffffffffffff0
     0x11f1  50                        push rax
     0x11f2  54                        push rsp
     0x11f3  4531c0                    xor r8d, r8d
@@ -19,7 +19,7 @@
 ── pseudocode (enclosing function) ──
 fn _start {
     nop;
-    arg5 = arg2;
-    pop(arg1);
-    arg2 = rsp;
-    rsp = (rsp & 240);
+    ebp = 0;
+    ebp = (unsigned long)((unsigned int)(ebp));
+    rsp = (rsp + 8);
+    rsp = (rsp & -16);

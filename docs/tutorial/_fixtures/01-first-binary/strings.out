@@ -1,4 +1,4 @@
-path: /nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug
+path: <repo>/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug
 size: 92600 bytes (90.4 KiB)
 encodings: ascii=1029 utf8=2 u16le=0 u16be=0
 languages: (none)
@@ -53,8 +53,8 @@ entropy: count=1029 min=1.00 max=5.00 mean=3.38 p90=4.50 p99=4.62
 [0x128b] ascii    len=   4 2.00 lang=- script=- | u+UH
 [0x3004] ascii    len=  22 3.63 lang=- script=Latin | Hello, World from C++!
 [0x301b] ascii    len=  11 3.28 lang=- script=Latin | Sum printer
-[0x3027] ascii    len=  23 3.68 lang=- script=- | Total argument length: 
-[0x303f] ascii    len=  15 3.51 lang=- script=- | Counter value: 
+[0x3027] ascii    len=  23 3.68 lang=- script=- | Total argument length:
+[0x303f] ascii    len=  15 3.51 lang=- script=- | Counter value:
 [0x304f] ascii    len=  48 4.13 lang=- script=- | cannot create std::vector larger than max_size()
 [0x33a7] ascii    len=   5 2.32 lang=- script=- | ;*3$"
 [0x3ce5] ascii    len=   4 2.00 lang=- script=- | zPLR

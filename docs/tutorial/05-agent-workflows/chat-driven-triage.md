@@ -1,182 +1,141 @@
 # §Y — Chat-driven triage
 
-How to use the LLM agent to drive analysis. **This chapter
-requires LLM credentials**; if you skipped Tier 1's optional
-section, set them now:
+The `ask` command lets a model choose deterministic analysis tools and
+synthesize their results. It is optional: Tiers 1–4 and `kickoff` work without
+model credentials.
+
+An agent response is a lead, not a verdict. Check the tool results, addresses,
+and database rows behind material claims before using them in a report.
+
+## Before making a provider call
+
+The project default is `openai:gpt-5.4-mini`; OpenAI requests use the `flex`
+service tier by default. You can override the model with `--model` or
+`GLAURUNG_LLM_MODEL`. Do not silently switch providers merely to avoid a rate
+or spend limit.
+
+Supply credentials through your shell's secret mechanism or an untracked
+`.env` file. Do not put a real key in documentation, command history, or a
+tracked file. This shell pattern avoids echoing the value:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-# or
-export OPENAI_API_KEY=sk-...
+read -rsp "OpenAI API key: " OPENAI_API_KEY
+export OPENAI_API_KEY
+printf '\n'
 ```
 
-Tiers 1-4 work without these. Tier 5 is where Glaurung's LLM
-integration starts paying off.
-
-> **Output here is illustrative, not captured.** Unlike Tiers
-> 1-4, the agent's natural-language responses are non-deterministic
-> by design — different LLM model versions and prompt variations
-> will phrase things differently. The deterministic substrate
-> (every memory tool the agent calls + every `evidence_log` row it
-> writes) IS reproducible; that's covered in §Z. The example
-> response below is what one run looked like — yours will differ
-> in wording but should land on the same evidence rows.
-
-## The agent has 50+ memory tools
-
-Every deterministic surface you've used in Tiers 1-4 is also
-registered as a `pydantic-ai` memory tool. The agent doesn't
-hallucinate function names or string content — it calls the same
-underlying APIs you'd call from the CLI:
-
-- `kickoff_analysis(binary)` — same as `glaurung kickoff` (#206)
-- `view_function(va)` — same as `glaurung view <db> <va>`
-- `list_xrefs_to(va)` / `list_xrefs_from(va)` — same as
-  `glaurung xrefs`
-- `set_function_name(va, name)` — same as REPL `n`
-- `set_comment(va, body)` — same as REPL `c`
-- `discover_stack_vars(fn_va)` — same as `glaurung frame ... discover`
-- `recover_struct_candidates(fn_va)` — same as REPL `recover-structs`
-- ... 40+ more.
-
-**Every tool call records to evidence_log** (#200) with a
-`cite_id`. The agent's response can cite those rows to ground its
-claims.
-
-## The cheap chat: `glaurung ask`
+Glaurung also recognizes `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, and
+`GEMINI_API_KEY` when an explicitly selected model uses those providers. Check
+provider availability without printing credentials:
 
 ```bash
-glaurung ask samples/.../c2_demo-clang-O0 "what does this binary do?"
+uv run python - <<'PY'
+from glaurung.llm.config import get_config
+
+config = get_config()
+print("model:", config.default_model)
+print("service tier:", config.openai_service_tier)
+print("providers configured:", config.available_models())
+PY
 ```
 
-The agent runs kickoff, then issues whatever follow-up tool calls
-it needs. A typical response:
+Model calls can incur charges and transmit prompts plus binary-derived tool
+output to the selected provider. Use only samples and case data you are
+authorized to disclose under that provider's terms.
 
-> This is a synthetic C2-callback malware analog. Based on
-> evidence collected:
->
-> 1. **C2 endpoints** (cite 12, 13): Embeds two domain literals
->    `malware-c2.evil.com` and `beacon.command-control.badguys.org`
->    referenced from the global pointer table at 0x4040.
->
-> 2. **Update channel** (cite 17): `https://10.10.10.10:443/malware/update`
->    is hardcoded into a stack buffer via memcpy in `main`.
->
-> 3. **Persistence** (cite 22): Writes paths
->    `/etc/cron.d/evil-persistence` and
->    `/etc/systemd/system/backdoor.service` — both intended for
->    root-level persistence.
->
-> 4. **Exfil** (cite 28): Mentions `stolen-data@evil-corp.com` —
->    exfil endpoint, likely a placeholder rather than a live SMTP
->    target.
->
-> The behavioural surface is consistent with a stage-1 dropper or
-> a research / training sample.
+## Ask one bounded question
 
-Each `cite N` is an `evidence_log` row id. Inspect:
+The positional argument is the binary. Questions use `-a/--ask`:
 
 ```bash
-sqlite3 demo.glaurung "SELECT cite_id, tool, summary FROM evidence_log WHERE cite_id IN (12,13,17);"
+BIN="samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0"
+
+uv run glaurung ask "$BIN" --route -a \
+  "Summarize the suspicious strings and cite the tool observations you used." \
+  --show-routing \
+  --show-tools \
+  --max-cost-usd 0.25 \
+  --usage-log ./glaurung-usage.jsonl
 ```
 
-```
-12 | list_strings  | found 38 strings; sampled 20
-13 | view_function | main @ 0x1160 — 432-byte frame, calls printf, snprintf, memcpy
-17 | view_function | main @ 0x1160 — sample with the c2 url buffer build
-```
+`--route` uses deterministic keyword matching to select a focused set of 5–30
+tools rather than registering all 163. `--show-routing` prints the selected
+intent, and `--show-tools` exposes calls and results for review. Use
+`--all-tools` only when the focused router omitted a capability you actually
+need.
 
-You can verify each citation against what the agent actually saw.
+`--max-cost-usd` is a circuit breaker for this invocation, not a price quote or
+preauthorization. The tracker stops a subsequent agent call after recorded
+spend exceeds the limit; provider accounting can lag. `--usage-log` writes one
+JSONL record per model call. Its default location is under
+`~/.cache/glaurung/usage/`; passing `-` disables file logging while retaining
+in-memory accounting.
 
-## The interactive chat: `glaurung repl > ask`
+The documentation gate verifies the command shape and CLI options but does not
+spend provider credits or bless a particular natural-language response. Model
+versions, routing, tool selection, and response wording can all change.
 
-For multi-turn analysis, drop into the REPL:
+## Know which state is persistent
+
+The standalone `ask` uses an in-memory knowledge base. It can analyze
+the binary and show tool calls, but its KB changes and generic tool evidence do
+not persist to a `.glaurung` project after the process exits.
+
+For an operator-guided session with durable project state, create a project and
+use the REPL:
 
 ```bash
-glaurung repl samples/.../c2_demo-clang-O0 --db demo.glaurung
+DB="demo.glaurung"
+
+uv run glaurung kickoff "$BIN" --db "$DB"
+uv run glaurung repl "$BIN" --db "$DB"
 ```
 
-```
->>> ask "what's at 0x4040 — looks like a global pointer table?"
-   ... (agent calls list_data_labels, view_function, etc) ...
+Then, at the REPL prompt:
 
->>> g 0x1160
->>> n c2_main           # YOU rename main → c2_main
->>> ask "now that main is renamed c2_main, walk through what it does"
-   ... (agent picks up the new name on its next view_function call) ...
-```
-
-The agent reads the **current** KB state on each tool call. Your
-manual renames between turns are visible immediately.
-
-## When the agent helps most
-
-**Naming functions in stripped binaries.** `glaurung name-func
-<binary> <va>` asks the agent to suggest a name from the
-decompiled body. Useful for "I see what this function does, name
-it for me":
-
-```bash
-glaurung name-func samples/.../some-stripped.elf 0x1140
+```text
+ask summarize the suspicious strings and the functions that reference them
+g 0x1160
+d
+n reviewed_main
+ask reassess the current function using the persisted name and call sites
+q
 ```
 
-```
-suggestion: parse_command_packet
-rationale: function reads first byte to dispatch; calls handle_*
-  for each command type; layout matches a TLV parser.
-```
+The REPL reuses the persistent project, so deterministic tools wrapped by the
+evidence layer can append `evidence_log` rows and manual edits are saved. Its
+`ask` shorthand does not expose standalone CLI flags such as `--route` or
+`--max-cost-usd`; use standalone `ask` when those controls are mandatory.
 
-Use `glaurung repl > n parse_command_packet` to commit if you
-agree.
+## Ask questions that can be checked
 
-**Hypothesis verification.** Phrase the question as a hypothesis:
+Prefer questions with a scope and an evidence requirement:
 
-```
->>> ask "is 0x1140 a TLS handshake handler?"
-```
+- “List strings referenced by functions that call `connect`; include addresses
+  and distinguish direct observations from inference.”
+- “Does function `0x1140` behave like a TLS handler? Give evidence for and
+  against the hypothesis.”
+- “Suggest a name for `0x1140` from its body and callers; do not modify the
+  project.”
 
-The agent looks at the body, the call sites, the strings, and
-either confirms or explains why the hypothesis doesn't fit.
+Avoid requests for unsupported attribution, exploitability, or intent. A
+suspicious domain-shaped string is not proof of network use; a dangerous API
+import is not proof that a vulnerable path is reachable.
 
-**Cross-cutting questions.** "What strings are referenced from
-network-handling functions?" — the agent enumerates network calls
-(send/recv), traces back to their callers, and lists the
-referenced strings.
+## Failure and review checklist
 
-## When the agent hurts
+If a run fails or looks weak:
 
-**Don't ask it to invent things.** "Make up a name for this
-function" — bad question. "Suggest a name based on the
-decompilation and call sites" — good question. The bounded
-phrasing keeps the agent grounded in citable evidence.
+1. confirm the selected provider is configured without printing its key;
+2. rerun `uv run glaurung ask --help` to check the current interface;
+3. narrow the question and lower analysis budgets where appropriate;
+4. inspect `--show-routing`, `--show-tools`, and the usage log;
+5. reproduce key facts with deterministic CLI or SQLite queries; and
+6. treat timeout, budget exhaustion, or a partial response as incomplete—not a
+   negative finding.
 
-**Don't trust without spot-checking.** Random sample: pull two of
-the agent's `cite N` ids and verify the evidence_log row says
-what the response claims. Glaurung makes this easy because every
-tool call is logged.
+Never paste a model answer into a case report without preserving the binary
+hash, Glaurung revision, model name, question, relevant tool output, and your
+independent validation.
 
-**Don't let it drive when you'd be faster.** The deterministic
-CLI is faster than asking — `glaurung find <db> <query>` is
-sub-second; the same question routed through the agent takes 5-10
-seconds and a token budget. Use the agent for synthesis questions,
-not for lookups.
-
-## Caveats / GAPs
-
-- **No streaming output yet** ([#204](../../architecture/IDA_GHIDRA_PARITY.md)).
-  The agent buffers its full response and renders at the end.
-  For long sessions this means a noticeable wait.
-- **No web chat UI yet** ([#203](../../architecture/IDA_GHIDRA_PARITY.md)).
-  The agent runs through the CLI / REPL today; the web front-end
-  is the Phase 5 launch surface.
-- **Tool-call budgets.** The agent has a per-question budget on
-  tool calls. If the question is too vague, the agent may
-  exhaust its budget without converging — re-phrase with more
-  context.
-
-## What's next
-
-- [§Z `evidence-and-citations.md`](evidence-and-citations.md) —
-  read the evidence_log directly.
-
-→ [§Z `evidence-and-citations.md`](evidence-and-citations.md)
+Next: [§Z — Evidence and citations](evidence-and-citations.md).

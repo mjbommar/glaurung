@@ -1,5 +1,8 @@
 # Disassembly & Decompiler Foundations — Data Model and Capabilities
 
+> **Status: historical foundations plan.** The status matrix and proposed types
+> below predate the current LLIR/SSA/AST pipeline and backend registry.
+
 Purpose: Define the minimal, foundational data models and capabilities we need before wiring up disassembly and decompilation. This works backwards from the goals in docs/disassembly/ and docs/decompiler/, and aligns with existing core types in src/core/.
 
 This document focuses on durable models, deterministic outputs, and integration seams that enable multiple engines and future IR/decompiler work.

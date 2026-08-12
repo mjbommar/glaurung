@@ -1,5 +1,9 @@
 # Source Recovery LLM Tool Ladder
 
+> **Design ladder, not a current command reference.** Individual tools may be
+> implemented while the end-to-end pipeline remains incomplete. Consult
+> [`README.md`](README.md), current source, and tests for availability.
+
 ## Goal
 
 Take a stripped binary and produce a **well-documented, idiomatic source tree**

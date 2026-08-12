@@ -1,5 +1,9 @@
 # Glaurung LLM Tool System Overview
 
+> **Superseded first-generation overview.** Names such as `tools.py`,
+> `re_tools_simple.py`, and the model examples below are historical sketches,
+> not current APIs. Use the maintained [`TOOLS.md`](TOOLS.md) guide.
+
 ## What We Built
 
 We've created a comprehensive tool system for pydantic-ai agents that enables LLMs to perform reverse engineering and binary analysis tasks through function calling. The system is inspired by professional RE tools like IDA Pro, Ghidra, and gdb.

@@ -1,5 +1,9 @@
 # Handoff: decompiler work recovered and integrated, 2026-07-27
 
+> **Status: historical closed handoff.** This document preserves the evidence
+> and repository state from July 2026; it is not a current work queue or test
+> report.
+
 **Worktree:** `/home/mjbommar/projects/personal/glaurung`
 **Original state:** `master` @ `b66a4cb`, seven commits behind upstream, all work uncommitted
 **Closed:** 2026-07-28 on `master`; final upstream revision recorded after push

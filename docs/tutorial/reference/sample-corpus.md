@@ -1,191 +1,149 @@
 # Sample corpus
 
-Glaurung ships ~150 sample binaries under `samples/binaries/` so a
-fresh clone has everything the tutorial track needs without external
-downloads. This page lists the **canonical samples** — the ones
-referenced from a tutorial chapter or used by the bench harness.
+The repository ships real binary fixtures so tutorials and regression tests do
+not depend on external downloads. This page is a curated map of representative
+inputs, not a frozen inventory or a claim that every platform contains every
+variant.
 
-The full inventory is browsable at `samples/binaries/`. This page is
-a curated index keyed by **what each binary teaches**.
+For the tree layout, rebuild policy, and inventory-generation caveats, read the
+top-level [`samples/README.md`](../../../samples/README.md). Resolve a path
+against the current checkout before using it in a test or document.
 
-## The "Hello World ladder" — optimization spectrum
+<!-- Fixture paths in the mapping tables are intentionally unwrapped. -->
+<!-- markdownlint-disable MD013 -->
 
-| Binary | Compiler | Flags | Demonstrates |
-|---|---|---|---|
-| `samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug` | clang | -g -O0 | Tier 1 §B first binary; full DWARF; trivial main + libc puts |
-| `samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-stripped` | clang | -g -O0 -s | DWARF still present; symbol table stripped |
-| `samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-c-gcc-O2` | gcc | -O2 | Inlining, dead-code elimination |
-| `samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-c-clang-O2` | clang | -O2 | clang's idioms vs gcc |
-| `samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2` | g++ | -O2 | C++ at -O2; mangled names |
+## Native ELF learning ladder
 
-## Polymorphic C++ — vtable + RTTI
+| Path | Good for |
+| --- | --- |
+| `samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-clang-debug` | First-binary walkthrough with debug-rich native code. |
+| `samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug` | Small C project used by the CLI and REPL tours. |
+| `samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-c-gcc-O2` | Optimized C idioms and benchmark coverage. |
+| `samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-c-clang-O2` | Comparing compiler-specific optimized output. |
+| `samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-cpp-g++-O2` | C++ symbol and optimization behavior. |
+| `samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual` | Vtables and RTTI with symbols. |
+| `samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual-stripped` | The corresponding stripped C++ recovery case. |
 
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual` | Polymorphic class hierarchy with vtables; full symbols |
-| `samples/binaries/platforms/linux/amd64/synthetic/poly-cpp-virtual-stripped` | Stripped sibling — vtable walker (#160) lights up the virtual methods |
+Start with [§B — First binary](../01-getting-started/first-binary.md), then use
+[the native C walkthrough](../03-walkthroughs/01-hello-c-clang.md).
 
-## Fortran (gfortran)
+## Language and managed-runtime fixtures
 
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O2` | libgfortran I/O; #157 DWARF lift signal; the "language detection" edge case (#140 bug fix) |
-| `samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-debug` | Same, with debug info |
+| Path | Good for |
+| --- | --- |
+| `samples/binaries/platforms/linux/amd64/export/fortran/hello-gfortran-O2` | Fortran runtime and language-detection behavior. |
+| `samples/binaries/platforms/linux/amd64/export/rust/hello-rust-release` | Optimized Rust code. |
+| `samples/binaries/platforms/linux/amd64/export/rust/hello-rust-debug` | Debug Rust comparison. |
+| `samples/binaries/platforms/linux/amd64/export/go/hello-go` | Stripped Go metadata and function-name recovery. |
+| `samples/binaries/platforms/linux/amd64/export/go/hello-go-debug` | Unoptimized/debug Go comparison. |
+| `samples/binaries/platforms/linux/amd64/export/dotnet/mono/Hello-mono.exe` | Managed .NET metadata inside a PE. |
+| `samples/binaries/platforms/linux/amd64/export/java/HelloWorld.class` | JVM classfile parsing. |
+| `samples/binaries/platforms/linux/amd64/export/java/HelloWorld.jar` | JVM archive traversal. |
+| `samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.3.luac` | Lua 5.3 bytecode recognition. |
+| `samples/binaries/platforms/linux/amd64/export/lua/hello-luajit.luac` | LuaJIT header/layout differences. |
 
-## Rust
+Use the [stripped-Go](../03-walkthroughs/02-stripped-go-binary.md),
+[managed-.NET](../03-walkthroughs/03-managed-dotnet-pe.md), and
+[JVM](../03-walkthroughs/04-jvm-classfile.md) walkthroughs. Recovered function
+counts are analyzer results and can change; the tutorial verifier captures the
+current output instead of freezing a count here.
 
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/rust/hello-rust-release` | Rust release build |
-| `samples/binaries/platforms/linux/amd64/export/rust/hello-rust-debug` | Rust debug build |
-| `samples/binaries/platforms/linux/amd64/export/rust/hello-rust-musl` | musl-linked static Rust |
+## Cross-architecture and Windows fixtures
 
-## Stripped Go (the #212 demo)
+| Path | Good for |
+| --- | --- |
+| `samples/binaries/platforms/linux/amd64/export/cross/arm64/hello-arm64-gcc` | AArch64 ELF triage and analysis. |
+| `samples/binaries/platforms/linux/amd64/export/cross/riscv64/hello-riscv64-gcc` | RISC-V coverage and current capability boundaries. |
+| `samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe` | Native x86-64 PE and Windows ABI behavior. |
+| `samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/suspicious_win-c-x86_64-mingw.exe` | Windows API and risk-summary workflows. |
 
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/go/hello-go` | Stripped Go binary; gopclntab walker (#212) recovers 1801 names |
-| `samples/binaries/platforms/linux/amd64/export/go/hello-go-static` | Statically linked Go; same recovery |
-| `samples/binaries/platforms/linux/amd64/export/go/hello-go-debug` | Go with -gcflags="all=-N -l"; for comparison |
+Do not infer equal feature depth across formats or architectures. Begin with
+`triage`, inspect the command-specific help, and keep unsupported or partial
+analysis explicit.
 
-**Tutorial:** Tier 3 §N `02-stripped-go-binary.md`.
+## Security-oriented walkthrough fixtures
 
-## .NET / Mono managed PE (the #210 demo)
+| Path | Good for |
+| --- | --- |
+| `samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0` | Malware-style strings, imports, and analyst workflow. |
+| `samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/c2_demo-c-x86_64-mingw.exe` | The same source shape compiled as a Windows PE. |
+| `samples/binaries/platforms/linux/amd64/synthetic/vulnparse-c-gcc-O0` | Vulnerability-hunting walkthrough on a deliberately unsafe parser. |
+| `samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2` | Baseline for function-level binary diffing. |
+| `samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-v2` | Modified sibling for the diff recipe. |
 
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/dotnet/mono/Hello-mono.exe` | Mono .NET PE assembly; CIL metadata walker (#210) recovers `Hello::Main`, `Hello::.ctor` |
+The `vulnparse` and `switchy` fixtures live under `synthetic/`; older exported
+paths are not present in the current checkout. See the
+[vulnerable-parser](../03-walkthroughs/05-vulnerable-parser.md),
+[C2](../03-walkthroughs/07-malware-c2-demo.md), and
+[binary-diff](../04-recipes/diffing-two-binaries.md) chapters.
 
-**Tutorial:** Tier 3 §O `03-managed-dotnet-pe.md`.
+## Packed corpus
 
-## JVM bytecode (the #209 demo)
+`samples/packed/` contains checked-in UPX variants across Fortran, Go, and
+Rust. Use a specific path such as:
 
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/java/HelloWorld.class` | Single classfile; `glaurung classfile` decodes class + method descriptors |
-| `samples/binaries/platforms/linux/amd64/export/java/HelloWorld.jar` | JAR archive; classfile walker iterates every `.class` entry |
-
-**Tutorial:** Tier 3 §P `04-jvm-classfile.md`.
-
-## Lua bytecode (the #211 demo)
-
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.3.luac` | Lua 5.3 .luac with embedded source filename in debug info |
-| `samples/binaries/platforms/linux/amd64/export/lua/hello-lua5.4.luac` | Lua 5.4 |
-| `samples/binaries/platforms/linux/amd64/export/lua/hello-luajit.luac` | LuaJIT — different magic + layout |
-
-**Tutorial:** sibling to Tier 3 §P.
-
-## Cross-platform / cross-arch
-
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/cross/arm64/hello-arm64-gcc` | AArch64 ELF; AAPCS64 arg recovery (#162) |
-| `samples/binaries/platforms/linux/amd64/export/cross/riscv64/hello-riscv64-gcc` | RISC-V (currently triage-only; full lift is #166) |
-| `samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/hello-c-x86_64-mingw.exe` | Win64 PE; Win64 calling convention; ABI-aware arg recovery (#162) |
-
-## Malware analogs (the flagship demo)
-
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0` | C2-callback malware analog; hardcoded URLs/IPs, libc-driven syscalls. The flagship Demo 1 (#205). |
-| `samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/c2_demo-c-x86_64-mingw.exe` | Same logic, MinGW-built Windows PE |
-| `samples/binaries/platforms/linux/amd64/export/cross/windows-x86_64/suspicious_win-c-x86_64-mingw.exe` | Win-API-heavy: process injection / persistence / network calls |
-
-**Tutorial:** Tier 3 §S `07-malware-c2-demo.md`.
-
-## Vulnerable parser (Demo 2)
-
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/native/gcc/O0/vulnparse-c-gcc-O0` | A buffer-overflow-prone C parser; vulnerability hunting walkthrough (Demo 2, #207) |
-
-**Tutorial:** Tier 3 §Q `05-vulnerable-parser.md`.
-
-## Patch analysis (Demo 3)
-
-| Binary | Demonstrates |
-|---|---|
-| `samples/binaries/platforms/linux/amd64/export/native/gcc/O2/switchy-c-gcc-O2` | Switch-table-heavy program (vulnerable build) |
-| `samples/binaries/platforms/linux/amd64/export/native/gcc/O2/switchy-c-gcc-O2-v2` | Patched build — `glaurung diff` shows what changed |
-
-**Tutorial:** Tier 4 §T `diffing-two-binaries.md`.
-
-## Packed binaries (the #213 corpus)
-
-UPX-packed corpus, 10 samples covering Fortran (5 opt levels), Go
-(static + dynamic), Rust (debug + musl + release):
-
-```
-samples/packed/hello-gfortran-O0.upx9
-samples/packed/hello-gfortran-O1.upx9
-samples/packed/hello-gfortran-O2.upx9
-samples/packed/hello-gfortran-O3.upx9
-samples/packed/hello-gfortran-debug.upx9
-samples/packed/hello-go.upx9
-samples/packed/hello-go-static.upx9
-samples/packed/hello-rust-debug.upx9
-samples/packed/hello-rust-musl.upx9
-samples/packed/hello-rust-release.upx9
+```bash
+uv run glaurung detect-packer samples/packed/hello-go.upx9
 ```
 
-All ten detect as UPX with confidence ≥ 0.9 and entropy in [7.17, 7.89].
+Packer confidence and entropy are measured outputs, not permanent constants.
+The [UPX walkthrough](../03-walkthroughs/06-upx-packed-binary.md) and packed
+benchmark recipe verify the current behavior.
 
-**Tutorial:** Tier 3 §R `06-upx-packed-binary.md`.
-**Bench harness:** `python -m glaurung.bench --packed-matrix`.
+## Adversarial inputs
 
-## Adversarial / pathological samples
+`samples/adversarial/` contains bounded malformed files and nested-container
+fixtures used to verify error handling. Representative inputs include:
 
-Hand-crafted byte sequences for triage robustness tests (#214):
-
+```text
+samples/adversarial/elf_truncated_phdr.bin
+samples/adversarial/magic_dope_mz_elf.bin
+samples/adversarial/pe_bad_optional_header.bin
+samples/adversarial/zip_masquerade_exe.exe
+samples/adversarial/gzip_truncated.gz
+samples/adversarial/embedded/xor_url_in_elf.elf
 ```
-samples/adversarial/elf_truncated_phdr.bin     # ELF magic + truncated phdr
-samples/adversarial/magic_dope_mz_elf.bin      # MZ-then-ELF magic confusion
-samples/adversarial/pe_bad_optional_header.bin # MZ + insufficient optional hdr
-samples/adversarial/zip_masquerade_exe.exe     # ZIP local hdr with .exe ext
-samples/adversarial/gzip_truncated.gz          # GZIP magic, truncated body
-samples/adversarial/embedded/{...}             # b64/xor payloads in valid ELFs
-```
 
-These don't have a tutorial chapter — they exist to keep our
-parsers honest. Run the matrix:
+They are parser test fixtures, not arbitrary untrusted corpora. Run their
+focused coverage with:
 
 ```bash
 uv run pytest python/tests/test_adversarial_coverage.py
 ```
 
-## Bench-harness CI matrix
+See [`samples/adversarial/README.md`](../../../samples/adversarial/README.md)
+for the intended invariants.
 
-The 10-binary set the bench harness ships against by default:
+## Benchmark matrices
 
-```python
-DEFAULT_CI_MATRIX = [
-    ".../hello-c-gcc-O2",
-    ".../hello-cpp-g++-O2",
-    ".../hello-gcc-O2",
-    ".../hello-gfortran-O2",
-    ".../hello-c-clang-O2",
-    ".../hello-cpp-clang++-O2",
-    ".../hello-clang-debug",
-    ".../hello-clang-stripped",
-    ".../poly-cpp-virtual",
-    ".../poly-cpp-virtual-stripped",
-]
+The canonical matrix definitions live in
+[`python/glaurung/bench/__main__.py`](../../../python/glaurung/bench/__main__.py).
+Query the current runner rather than copying its list into automation:
+
+```bash
+uv run python -m glaurung.bench --help
 ```
 
-(See `python/glaurung/bench/__main__.py`.)
+The default matrix is deliberately small and spans native C/C++, Fortran,
+debug/stripped comparisons, and polymorphic C++. A separate packed matrix uses
+the UPX fixtures.
 
-## Metadata sidecars
+## Exact inventory and metadata
 
-Many samples have a sibling `<name>.json` under
-`samples/binaries/platforms/.../export/metadata/` describing how
-they were built (compiler, flags, source path). The bench harness
-reads these to score `language_match_rate`.
+The checked-in `samples/binaries/index.json` is a generated snapshot with paths,
+sizes, hashes, file-type output, and generation provenance. Its absolute `root`
+and `host` describe the machine that generated it; they are not paths that must
+exist on your system. Because a snapshot can lag the filesystem, verify both:
 
-## See also
+```bash
+test -f samples/binaries/platforms/linux/amd64/export/go/hello-go
+uv run python -c \
+  'import json; d=json.load(open("samples/binaries/index.json")); print(len(d["files"]))'
+```
 
-- [`cli-cheatsheet.md`](cli-cheatsheet.md) — every command
-- Tier 3 walkthroughs — each names the binary it uses
-- `docs/architecture/IDA_GHIDRA_PARITY.md` — what every shipped
-  feature does
+Do not regenerate the index just to inspect it: the indexer rewrites the file.
+Follow the intentional regeneration workflow in
+[`samples/README.md`](../../../samples/README.md).
+
+See also the [CLI cheatsheet](cli-cheatsheet.md) and
+[`set_by` precedence](set-by-precedence.md).

@@ -4,22 +4,22 @@
 - entry: **0x11e0**
 
 ## Functions
-- discovered: **16** (with blocks: 16, named: 16)
-- callgraph edges: **10**
-- name sources: analyzer=16
+- discovered: **133** (with blocks: 133, named: 93)
+- callgraph edges: **165**
+- name sources: analyzer=133
 
 ## Type system
-- stdlib prototypes loaded: **192**
-- DWARF types imported: **104**
-- stack slots discovered: **492**
+- stdlib prototypes loaded: **114**
+- DWARF types imported: **107**
+- stack slots discovered: **1027**
 - types propagated: **0**
-- auto-struct candidates: **16**
+- auto-struct candidates: **31**
 
 ## IOCs (from string scan)
 - **hostname**: 5
-- **path_posix**: 1
-- **java_path**: 1
 - **ipv4**: 0
+- **java_path**: 1
+- **path_posix**: 1
 
 Examples:
   - `path_posix` `/lib64/ld-linux-x86-64.so.2`  (off `0x318`)

@@ -1,5 +1,9 @@
 # 06 - Validation and CI
 
+> **Status: maintained validation principles with historical examples.** The
+> soundness rules remain applicable, but exact commands, corpus revisions, and
+> gate counts must be checked against current source and harness help.
+
 The integration is only worth shipping if axeyum's answers are provably
 consistent with z3's. This mirrors a pattern glaurung already trusts: the
 **Unicorn differential oracle** (`exec/oracle.rs`, `dev-oracle`) validates

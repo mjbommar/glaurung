@@ -1,5 +1,9 @@
 # Reviewer checklist: pre-submission todos for the axeyum/glaurung paper
 
+> **Status: historical/evolving paper checklist.** Checked items and evidence
+> apply only to their recorded revisions; rerun mandatory gates on the frozen
+> submission revision.
+
 > A self-review written from the perspective of a skeptical PC reviewer for a
 > solver/security venue (CAV / TACAS / USENIX Security / OOPSLA tool track).
 > Each item is a concern a reviewer will raise; each is broken into

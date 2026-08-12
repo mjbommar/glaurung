@@ -1,5 +1,9 @@
 # Tool surface and contracts
 
+> **Status: unimplemented design contract.** Tool names and schemas below are
+> proposed for the autonomous agent unless current source and `STATUS.md`
+> explicitly identify them as existing reusable components.
+
 ## Design rule
 
 Register the smallest deterministic tool set that lets the agent answer the

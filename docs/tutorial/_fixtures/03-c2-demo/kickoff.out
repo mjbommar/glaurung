@@ -4,25 +4,25 @@
 - entry: **0x1070**
 
 ## Functions
-- discovered: **6** (with blocks: 6, named: 6)
-- callgraph edges: **1**
-- name sources: analyzer=6
+- discovered: **16** (with blocks: 16, named: 8)
+- callgraph edges: **15**
+- name sources: analyzer=16
 
 ## Type system
-- stdlib prototypes loaded: **192**
+- stdlib prototypes loaded: **114**
 - DWARF types imported: **0**
-- stack slots discovered: **90**
-- types propagated: **18**
+- stack slots discovered: **225**
+- types propagated: **45**
 - auto-struct candidates: **0**
 
 ## IOCs (from string scan)
-- **path_posix**: 11
-- **hostname**: 10
-- **java_path**: 10
-- **ipv4**: 4
 - **domain**: 3
-- **url**: 2
 - **email**: 1
+- **hostname**: 10
+- **ipv4**: 4
+- **java_path**: 10
+- **path_posix**: 11
+- **url**: 2
 
 Examples:
   - `path_posix` `/lib64/ld-linux-x86-64.so.2`  (off `0x318`)

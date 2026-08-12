@@ -7,20 +7,20 @@ fn main {
     // ─────────────────────────────────────────────────
 
     // x86-64 prologue: save rbp, frame 432 bytes
-    local_0 = 0;
-    local_1 = arg0;
-    local_2 = arg1;
-    printf@plt("Connecting to C2 server...\n");  // proto: int printf(const char * fmt, ...)
-    snprintf@plt(&var_110, 256, "http://%s:8080%s", *&[var0+0x4050], *&[var0+0x4070]);
-    memcpy@plt(&var_140, "https://10.10.10.10:443/malware/update", 39);
-    ret = *&[var0+0x2150];
-    local_3 = ret;
-    ret = *&[var0+0x2158];
-    local_4 = ret;
-    ret = *&[var0+0x2160];
-    local_5 = ret;
-    ret = *&[var0+0x2168];
-    local_6 = ret;
-    printf@plt("Primary: %s\n", *&[var0+0x4040]);  // proto: int printf(const char * fmt, ...)
-    printf@plt("Backup: %s\n", *&[var0+0x4048]);  // proto: int printf(const char * fmt, ...)
-    printf@plt("Domain: %s\n", *&[var0+0x4050]);  // proto: int printf(const char * fmt, ...)
+    var_4 = 0;
+    var_8 = arg0;
+    var_10 = arg1;
+    ret = printf@plt("Connecting to C2 server...\n");  // proto: int printf(const char * fmt, ...)
+    ret = snprintf@plt(&var_110, 256, "http://%s:8080%s", *C2_DOMAIN, *C2_PATHS);
+    ret = memcpy@plt(&var_140, "https://10.10.10.10:443/malware/update", 39);
+    ret = *"ftp://198.51.100.0/dropzone";
+    var_160 = ret;
+    ret = *"8.51.100.0/dropzone";
+    var_158 = ret;
+    ret = *".0/dropzone";
+    var_150 = ret;
+    ret = (unsigned long)((unsigned int)(*"one"));
+    var_148 = ret;
+    ret = printf@plt("Primary: %s\n", *PRIMARY_C2_SERVER);  // proto: int printf(const char * fmt, ...)
+    ret = printf@plt("Backup: %s\n", *BACKUP_C2_SERVER);  // proto: int printf(const char * fmt, ...)
+    ret = printf@plt("Domain: %s\n", *C2_DOMAIN);  // proto: int printf(const char * fmt, ...)

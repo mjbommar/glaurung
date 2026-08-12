@@ -1,0 +1,5 @@
+function_va  offset  name     c_type  set_by
+-----------  ------  -------  ------  ----------
+0x1160       -0x1b0  var_1b0  void *  propagated
+0x1160       -0x140  var_140  void *  propagated
+0x1160       -0x110  var_110  char *  propagated

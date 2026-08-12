@@ -1,5 +1,9 @@
 # Roadmap: Glaurung Windows-port items
 
+> **Status: historical campaign roadmap.** The May 2026 checklist is retained
+> for issue and acceptance provenance; use the Windows capability index and
+> current source/tests for completion state.
+
 > Four Glaurung GitHub issues the `agentic-security-bot` (asb)
 > windows-port campaign drives upstream. Each section: scope,
 > motivation, design sketch, dependencies, effort, exit signal.

@@ -1,5 +1,8 @@
 # Baselines, ablations, and scorecards
 
+> **Status: planned evaluation schema.** The scorecard defines future evidence
+> requirements; empty or historical lanes are not current agent results.
+
 ## Why ablations matter
 
 An autonomous agent can improve because of its model, raw pseudocode, CFG tools,

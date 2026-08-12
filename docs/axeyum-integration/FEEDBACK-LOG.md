@@ -1,5 +1,9 @@
 # axeyum feedback log (from the glaurung integration)
 
+> **Status: living append-oriented integration evidence log.** Individual
+> findings and timings are revision-bound. Later decisions may supersede an
+> earlier diagnosis without erasing it.
+
 > Running diary of the axeyum -> glaurung integration. Everything tagged
 > **[AXEYUM]** is feedback to carry back to the axeyum project (API
 > friction, bugs, perf, missing features, docs). **[GLAURUNG]** items are

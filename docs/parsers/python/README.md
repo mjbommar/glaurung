@@ -1,5 +1,9 @@
 # Python Bytecode Parser Documentation
 
+> **Status: historical design record.** The marshal, code-object, disassembly,
+> and decompilation parser described below is a proposal, not a current Glaurung
+> API. See the [parser index](../README.md) for the current detection boundary.
+
 ## Overview
 
 Python bytecode (.pyc, .pyo) files contain compiled Python code that runs on the Python Virtual Machine (PVM). These files are crucial for malware analysis as Python is increasingly used in malicious scripts, ransomware, and info-stealers. GLAURUNG's Python bytecode parser handles all major Python versions from 2.7 through 3.13+.

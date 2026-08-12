@@ -1,5 +1,9 @@
 # Paper notes: axeyum as an in-process SMT backend for binary symbolic execution
 
+> **Status: evolving research notes, not a submission-readiness claim.** Use the
+> benchmark provenance, reviewer checklist, and latest decision-log gates before
+> promoting any result into a paper claim.
+
 > Working notes for a future academic paper announcing **axeyum**, using
 > **glaurung** (a reverse-engineering / driver-vulnerability-detection
 > framework) as the real-world application. This file accumulates the

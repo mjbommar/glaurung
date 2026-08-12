@@ -1,6 +1,6 @@
 # Patch applied
 
-- input:  `/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug`
+- input:  `<repo>/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug`
 - output: `/tmp/tutorial-fixtures/patched-bytes.bin`
 - VA: `0x11e5` (file offset `0x11e5`)
 
@@ -8,4 +8,4 @@
   after:  `9090`
 
 _patched 2 bytes at VA 0x11e5 (file offset 0x11e5)_
-_verify: Nop_
+_verify: nop_

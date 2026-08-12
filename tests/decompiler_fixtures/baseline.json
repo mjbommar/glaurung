@@ -962,6 +962,830 @@
   "30_finite_difference:gcc:O2": {
     "heat_step_1d": "pass"
   },
+  "31_edit_distance:clang:O0": {
+    "edit_distance": "pass",
+    "hamming_distance": "pass"
+  },
+  "31_edit_distance:clang:O2": {
+    "edit_distance": "pass",
+    "hamming_distance": "pass"
+  },
+  "31_edit_distance:gcc:O0": {
+    "edit_distance": "pass",
+    "hamming_distance": "pass"
+  },
+  "31_edit_distance:gcc:O2": {
+    "edit_distance": "pass",
+    "hamming_distance": "pass"
+  },
+  "32_longest_common_subsequence:clang:O0": {
+    "lcs_length": "pass",
+    "lcs_recover": "pass"
+  },
+  "32_longest_common_subsequence:clang:O2": {
+    "lcs_length": "pass",
+    "lcs_recover": "pass"
+  },
+  "32_longest_common_subsequence:gcc:O0": {
+    "lcs_length": "pass",
+    "lcs_recover": "pass"
+  },
+  "32_longest_common_subsequence:gcc:O2": {
+    "lcs_length": "pass",
+    "lcs_recover": "pass"
+  },
+  "33_knapsack:clang:O0": {
+    "knapsack_best_value": "pass",
+    "unbounded_knapsack": "pass"
+  },
+  "33_knapsack:clang:O2": {
+    "knapsack_best_value": "fail",
+    "unbounded_knapsack": "fail"
+  },
+  "33_knapsack:gcc:O0": {
+    "knapsack_best_value": "pass",
+    "unbounded_knapsack": "pass"
+  },
+  "33_knapsack:gcc:O2": {
+    "knapsack_best_value": "fail",
+    "unbounded_knapsack": "fail"
+  },
+  "34_coin_change:clang:O0": {
+    "count_change": "pass",
+    "min_coins": "pass"
+  },
+  "34_coin_change:clang:O2": {
+    "count_change": "pass",
+    "min_coins": "pass"
+  },
+  "34_coin_change:gcc:O0": {
+    "count_change": "pass",
+    "min_coins": "pass"
+  },
+  "34_coin_change:gcc:O2": {
+    "count_change": "pass",
+    "min_coins": "pass"
+  },
+  "35_matrix_chain:clang:O0": {
+    "matrix_chain_cost": "pass"
+  },
+  "35_matrix_chain:clang:O2": {
+    "matrix_chain_cost": "pass"
+  },
+  "35_matrix_chain:gcc:O0": {
+    "matrix_chain_cost": "pass"
+  },
+  "35_matrix_chain:gcc:O2": {
+    "matrix_chain_cost": "fail"
+  },
+  "36_quicksort:clang:O0": {
+    "quicksort_i32": "pass"
+  },
+  "36_quicksort:clang:O2": {
+    "quicksort_i32": "fail"
+  },
+  "36_quicksort:gcc:O0": {
+    "quicksort_i32": "fail"
+  },
+  "36_quicksort:gcc:O2": {
+    "quicksort_i32": "fail"
+  },
+  "37_heapsort:clang:O0": {
+    "heapsort_i32": "pass"
+  },
+  "37_heapsort:clang:O2": {
+    "heapsort_i32": "pass"
+  },
+  "37_heapsort:gcc:O0": {
+    "heapsort_i32": "pass"
+  },
+  "37_heapsort:gcc:O2": {
+    "heapsort_i32": "pass"
+  },
+  "38_insertion_shell_sort:clang:O0": {
+    "insertion_sort_i32": "pass",
+    "shell_sort_i32": "pass"
+  },
+  "38_insertion_shell_sort:clang:O2": {
+    "insertion_sort_i32": "pass",
+    "shell_sort_i32": "pass"
+  },
+  "38_insertion_shell_sort:gcc:O0": {
+    "insertion_sort_i32": "pass",
+    "shell_sort_i32": "pass"
+  },
+  "38_insertion_shell_sort:gcc:O2": {
+    "insertion_sort_i32": "pass",
+    "shell_sort_i32": "pass"
+  },
+  "39_counting_radix_sort:clang:O0": {
+    "counting_sort_u8": "pass",
+    "radix_sort_u32": "pass"
+  },
+  "39_counting_radix_sort:clang:O2": {
+    "counting_sort_u8": "fail",
+    "radix_sort_u32": "pass"
+  },
+  "39_counting_radix_sort:gcc:O0": {
+    "counting_sort_u8": "pass",
+    "radix_sort_u32": "pass"
+  },
+  "39_counting_radix_sort:gcc:O2": {
+    "counting_sort_u8": "fail",
+    "radix_sort_u32": "fail"
+  },
+  "40_quickselect:clang:O0": {
+    "median_of_three": "pass",
+    "quickselect_kth": "pass"
+  },
+  "40_quickselect:clang:O2": {
+    "median_of_three": "pass",
+    "quickselect_kth": "pass"
+  },
+  "40_quickselect:gcc:O0": {
+    "median_of_three": "pass",
+    "quickselect_kth": "pass"
+  },
+  "40_quickselect:gcc:O2": {
+    "median_of_three": "pass",
+    "quickselect_kth": "pass"
+  },
+  "41_tokenizer:clang:O0": {
+    "tokenize": "pass"
+  },
+  "41_tokenizer:clang:O2": {
+    "tokenize": "pass"
+  },
+  "41_tokenizer:gcc:O0": {
+    "tokenize": "pass"
+  },
+  "41_tokenizer:gcc:O2": {
+    "tokenize": "pass"
+  },
+  "42_rpn_evaluator:clang:O0": {
+    "rpn_evaluate": "fail"
+  },
+  "42_rpn_evaluator:clang:O2": {
+    "rpn_evaluate": "fail"
+  },
+  "42_rpn_evaluator:gcc:O0": {
+    "rpn_evaluate": "pass"
+  },
+  "42_rpn_evaluator:gcc:O2": {
+    "rpn_evaluate": "pass"
+  },
+  "43_base64:clang:O0": {
+    "base64_decode": "pass",
+    "base64_encode": "pass"
+  },
+  "43_base64:clang:O2": {
+    "base64_decode": "pass",
+    "base64_encode": "pass"
+  },
+  "43_base64:gcc:O0": {
+    "base64_decode": "pass",
+    "base64_encode": "pass"
+  },
+  "43_base64:gcc:O2": {
+    "base64_decode": "pass",
+    "base64_encode": "pass"
+  },
+  "44_run_length:clang:O0": {
+    "rle_decode": "pass",
+    "rle_encode": "pass"
+  },
+  "44_run_length:clang:O2": {
+    "rle_decode": "pass",
+    "rle_encode": "pass"
+  },
+  "44_run_length:gcc:O0": {
+    "rle_decode": "pass",
+    "rle_encode": "pass"
+  },
+  "44_run_length:gcc:O2": {
+    "rle_decode": "pass",
+    "rle_encode": "pass"
+  },
+  "45_string_algorithms:clang:O0": {
+    "format_decimal": "fail",
+    "is_palindrome": "pass",
+    "parse_decimal": "pass"
+  },
+  "45_string_algorithms:clang:O2": {
+    "format_decimal": "pass",
+    "is_palindrome": "pass",
+    "parse_decimal": "pass"
+  },
+  "45_string_algorithms:gcc:O0": {
+    "format_decimal": "pass",
+    "is_palindrome": "pass",
+    "parse_decimal": "pass"
+  },
+  "45_string_algorithms:gcc:O2": {
+    "format_decimal": "pass",
+    "is_palindrome": "pass",
+    "parse_decimal": "pass"
+  },
+  "46_bitset:clang:O0": {
+    "bitset_population": "pass",
+    "bitset_rank": "pass",
+    "bitset_select": "pass"
+  },
+  "46_bitset:clang:O2": {
+    "bitset_population": "pass",
+    "bitset_rank": "pass",
+    "bitset_select": "pass"
+  },
+  "46_bitset:gcc:O0": {
+    "bitset_population": "pass",
+    "bitset_rank": "pass",
+    "bitset_select": "pass"
+  },
+  "46_bitset:gcc:O2": {
+    "bitset_population": "pass",
+    "bitset_rank": "pass",
+    "bitset_select": "pass"
+  },
+  "47_huffman:clang:O0": {
+    "huffman_code_lengths": "pass",
+    "kraft_sum_q16": "pass"
+  },
+  "47_huffman:clang:O2": {
+    "huffman_code_lengths": "pass",
+    "kraft_sum_q16": "pass"
+  },
+  "47_huffman:gcc:O0": {
+    "huffman_code_lengths": "pass",
+    "kraft_sum_q16": "pass"
+  },
+  "47_huffman:gcc:O2": {
+    "huffman_code_lengths": "pass",
+    "kraft_sum_q16": "pass"
+  },
+  "48_gray_code:clang:O0": {
+    "binary_to_gray": "pass",
+    "gray_sequence": "pass",
+    "gray_to_binary": "pass",
+    "reverse_bits32": "pass"
+  },
+  "48_gray_code:clang:O2": {
+    "binary_to_gray": "pass",
+    "gray_sequence": "pass",
+    "gray_to_binary": "pass",
+    "reverse_bits32": "pass"
+  },
+  "48_gray_code:gcc:O0": {
+    "binary_to_gray": "pass",
+    "gray_sequence": "pass",
+    "gray_to_binary": "pass",
+    "reverse_bits32": "pass"
+  },
+  "48_gray_code:gcc:O2": {
+    "binary_to_gray": "pass",
+    "gray_sequence": "pass",
+    "gray_to_binary": "pass",
+    "reverse_bits32": "pass"
+  },
+  "49_crc32:clang:O0": {
+    "crc32_bitwise": "pass",
+    "crc32_table_driven": "pass",
+    "internet_checksum": "pass"
+  },
+  "49_crc32:clang:O2": {
+    "crc32_bitwise": "pass",
+    "crc32_table_driven": "pass",
+    "internet_checksum": "fail"
+  },
+  "49_crc32:gcc:O0": {
+    "crc32_bitwise": "pass",
+    "crc32_table_driven": "pass",
+    "internet_checksum": "pass"
+  },
+  "49_crc32:gcc:O2": {
+    "crc32_bitwise": "pass",
+    "crc32_table_driven": "pass",
+    "internet_checksum": "pass"
+  },
+  "50_varint:clang:O0": {
+    "varint_decode": "pass",
+    "varint_encode": "pass",
+    "zigzag_decode": "pass",
+    "zigzag_encode": "pass"
+  },
+  "50_varint:clang:O2": {
+    "varint_decode": "pass",
+    "varint_encode": "pass",
+    "zigzag_decode": "pass",
+    "zigzag_encode": "pass"
+  },
+  "50_varint:gcc:O0": {
+    "varint_decode": "pass",
+    "varint_encode": "pass",
+    "zigzag_decode": "pass",
+    "zigzag_encode": "pass"
+  },
+  "50_varint:gcc:O2": {
+    "varint_decode": "pass",
+    "varint_encode": "pass",
+    "zigzag_decode": "pass",
+    "zigzag_encode": "pass"
+  },
+  "51_rc4:clang:O0": {
+    "rc4_keystream_checksum": "pass"
+  },
+  "51_rc4:clang:O2": {
+    "rc4_keystream_checksum": "pass"
+  },
+  "51_rc4:gcc:O0": {
+    "rc4_keystream_checksum": "pass"
+  },
+  "51_rc4:gcc:O2": {
+    "rc4_keystream_checksum": "pass"
+  },
+  "52_hash_functions:clang:O0": {
+    "djb2_xor": "pass",
+    "fnv1a_32": "pass",
+    "murmur3_finalize": "pass"
+  },
+  "52_hash_functions:clang:O2": {
+    "djb2_xor": "pass",
+    "fnv1a_32": "pass",
+    "murmur3_finalize": "pass"
+  },
+  "52_hash_functions:gcc:O0": {
+    "djb2_xor": "pass",
+    "fnv1a_32": "pass",
+    "murmur3_finalize": "pass"
+  },
+  "52_hash_functions:gcc:O2": {
+    "djb2_xor": "pass",
+    "fnv1a_32": "pass",
+    "murmur3_finalize": "pass"
+  },
+  "53_pseudorandom:clang:O0": {
+    "bounded_sample": "pass",
+    "lcg64_next_high": "pass",
+    "xorshift32": "pass"
+  },
+  "53_pseudorandom:clang:O2": {
+    "bounded_sample": "fail",
+    "lcg64_next_high": "pass",
+    "xorshift32": "pass"
+  },
+  "53_pseudorandom:gcc:O0": {
+    "bounded_sample": "pass",
+    "lcg64_next_high": "pass",
+    "xorshift32": "pass"
+  },
+  "53_pseudorandom:gcc:O2": {
+    "bounded_sample": "fail",
+    "lcg64_next_high": "pass",
+    "xorshift32": "pass"
+  },
+  "54_sha256_block:clang:O0": {
+    "sha256_compress_block": "fail"
+  },
+  "54_sha256_block:clang:O2": {
+    "sha256_compress_block": "fail"
+  },
+  "54_sha256_block:gcc:O0": {
+    "sha256_compress_block": "fail"
+  },
+  "54_sha256_block:gcc:O2": {
+    "sha256_compress_block": "fail"
+  },
+  "55_modular_arithmetic:clang:O0": {
+    "extended_gcd": "pass",
+    "gcd_i32": "pass",
+    "mod_pow": "pass"
+  },
+  "55_modular_arithmetic:clang:O2": {
+    "extended_gcd": "pass",
+    "gcd_i32": "pass",
+    "mod_pow": "pass"
+  },
+  "55_modular_arithmetic:gcc:O0": {
+    "extended_gcd": "pass",
+    "gcd_i32": "pass",
+    "mod_pow": "pass"
+  },
+  "55_modular_arithmetic:gcc:O2": {
+    "extended_gcd": "pass",
+    "gcd_i32": "pass",
+    "mod_pow": "pass"
+  },
+  "56_sieve:clang:O0": {
+    "factorize": "pass",
+    "sieve_primes": "pass"
+  },
+  "56_sieve:clang:O2": {
+    "factorize": "pass",
+    "sieve_primes": "fail"
+  },
+  "56_sieve:gcc:O0": {
+    "factorize": "pass",
+    "sieve_primes": "pass"
+  },
+  "56_sieve:gcc:O2": {
+    "factorize": "pass",
+    "sieve_primes": "fail"
+  },
+  "57_bignum:clang:O0": {
+    "bignum_add": "pass",
+    "bignum_mul_small": "pass"
+  },
+  "57_bignum:clang:O2": {
+    "bignum_add": "pass",
+    "bignum_mul_small": "pass"
+  },
+  "57_bignum:gcc:O0": {
+    "bignum_add": "pass",
+    "bignum_mul_small": "pass"
+  },
+  "57_bignum:gcc:O2": {
+    "bignum_add": "pass",
+    "bignum_mul_small": "pass"
+  },
+  "58_rational:clang:O0": {
+    "rational_add": "pass",
+    "rational_compare": "pass"
+  },
+  "58_rational:clang:O2": {
+    "rational_add": "pass",
+    "rational_compare": "fail"
+  },
+  "58_rational:gcc:O0": {
+    "rational_add": "fail",
+    "rational_compare": "fail"
+  },
+  "58_rational:gcc:O2": {
+    "rational_add": "pass",
+    "rational_compare": "pass"
+  },
+  "59_combinatorics:clang:O0": {
+    "binomial": "pass",
+    "catalan": "pass",
+    "pascal_row": "pass"
+  },
+  "59_combinatorics:clang:O2": {
+    "binomial": "pass",
+    "catalan": "pass",
+    "pascal_row": "pass"
+  },
+  "59_combinatorics:gcc:O0": {
+    "binomial": "pass",
+    "catalan": "pass",
+    "pascal_row": "pass"
+  },
+  "59_combinatorics:gcc:O2": {
+    "binomial": "pass",
+    "catalan": "pass",
+    "pascal_row": "pass"
+  },
+  "60_integer_matrix:clang:O0": {
+    "determinant3": "pass",
+    "matrix_multiply": "pass",
+    "matrix_transpose": "pass"
+  },
+  "60_integer_matrix:clang:O2": {
+    "determinant3": "pass",
+    "matrix_multiply": "pass",
+    "matrix_transpose": "pass"
+  },
+  "60_integer_matrix:gcc:O0": {
+    "determinant3": "pass",
+    "matrix_multiply": "pass",
+    "matrix_transpose": "pass"
+  },
+  "60_integer_matrix:gcc:O2": {
+    "determinant3": "pass",
+    "matrix_multiply": "pass",
+    "matrix_transpose": "pass"
+  },
+  "61_fixed_point:clang:O0": {
+    "fixed_divide": "pass",
+    "fixed_lerp": "pass",
+    "fixed_multiply": "pass",
+    "fixed_sqrt": "pass"
+  },
+  "61_fixed_point:clang:O2": {
+    "fixed_divide": "pass",
+    "fixed_lerp": "pass",
+    "fixed_multiply": "pass",
+    "fixed_sqrt": "pass"
+  },
+  "61_fixed_point:gcc:O0": {
+    "fixed_divide": "pass",
+    "fixed_lerp": "pass",
+    "fixed_multiply": "pass",
+    "fixed_sqrt": "pass"
+  },
+  "61_fixed_point:gcc:O2": {
+    "fixed_divide": "pass",
+    "fixed_lerp": "pass",
+    "fixed_multiply": "pass",
+    "fixed_sqrt": "pass"
+  },
+  "62_gaussian_elimination:clang:O0": {
+    "gaussian_solve": "pass"
+  },
+  "62_gaussian_elimination:clang:O2": {
+    "gaussian_solve": "fail"
+  },
+  "62_gaussian_elimination:gcc:O0": {
+    "gaussian_solve": "pass"
+  },
+  "62_gaussian_elimination:gcc:O2": {
+    "gaussian_solve": "pass"
+  },
+  "63_numerical_integration:clang:O0": {
+    "simpson_integrate": "pass",
+    "trapezoid_integrate": "pass"
+  },
+  "63_numerical_integration:clang:O2": {
+    "simpson_integrate": "pass",
+    "trapezoid_integrate": "pass"
+  },
+  "63_numerical_integration:gcc:O0": {
+    "simpson_integrate": "pass",
+    "trapezoid_integrate": "pass"
+  },
+  "63_numerical_integration:gcc:O2": {
+    "simpson_integrate": "pass",
+    "trapezoid_integrate": "pass"
+  },
+  "64_root_finding:clang:O0": {
+    "bisection_sqrt": "pass",
+    "newton_sqrt": "pass"
+  },
+  "64_root_finding:clang:O2": {
+    "bisection_sqrt": "pass",
+    "newton_sqrt": "pass"
+  },
+  "64_root_finding:gcc:O0": {
+    "bisection_sqrt": "pass",
+    "newton_sqrt": "pass"
+  },
+  "64_root_finding:gcc:O2": {
+    "bisection_sqrt": "pass",
+    "newton_sqrt": "pass"
+  },
+  "65_projectile_motion:clang:O0": {
+    "kinetic_energy": "pass",
+    "projectile_step": "pass"
+  },
+  "65_projectile_motion:clang:O2": {
+    "kinetic_energy": "pass",
+    "projectile_step": "pass"
+  },
+  "65_projectile_motion:gcc:O0": {
+    "kinetic_energy": "pass",
+    "projectile_step": "pass"
+  },
+  "65_projectile_motion:gcc:O2": {
+    "kinetic_energy": "pass",
+    "projectile_step": "pass"
+  },
+  "66_orbital_step:clang:O0": {
+    "orbital_step": "pass"
+  },
+  "66_orbital_step:clang:O2": {
+    "orbital_step": "pass"
+  },
+  "66_orbital_step:gcc:O0": {
+    "orbital_step": "pass"
+  },
+  "66_orbital_step:gcc:O2": {
+    "orbital_step": "pass"
+  },
+  "67_elastic_collision:clang:O0": {
+    "elastic_velocity_a": "pass",
+    "inelastic_velocity": "pass",
+    "momentum_residual": "pass"
+  },
+  "67_elastic_collision:clang:O2": {
+    "elastic_velocity_a": "pass",
+    "inelastic_velocity": "pass",
+    "momentum_residual": "pass"
+  },
+  "67_elastic_collision:gcc:O0": {
+    "elastic_velocity_a": "pass",
+    "inelastic_velocity": "pass",
+    "momentum_residual": "pass"
+  },
+  "67_elastic_collision:gcc:O2": {
+    "elastic_velocity_a": "pass",
+    "inelastic_velocity": "pass",
+    "momentum_residual": "pass"
+  },
+  "68_thermodynamics:clang:O0": {
+    "ideal_gas_pressure": "pass",
+    "mixing_temperature": "pass",
+    "newton_cooling": "pass"
+  },
+  "68_thermodynamics:clang:O2": {
+    "ideal_gas_pressure": "pass",
+    "mixing_temperature": "pass",
+    "newton_cooling": "pass"
+  },
+  "68_thermodynamics:gcc:O0": {
+    "ideal_gas_pressure": "pass",
+    "mixing_temperature": "pass",
+    "newton_cooling": "pass"
+  },
+  "68_thermodynamics:gcc:O2": {
+    "ideal_gas_pressure": "pass",
+    "mixing_temperature": "pass",
+    "newton_cooling": "pass"
+  },
+  "69_molar_mass:clang:O0": {
+    "molar_mass_centi": "pass"
+  },
+  "69_molar_mass:clang:O2": {
+    "molar_mass_centi": "pass"
+  },
+  "69_molar_mass:gcc:O0": {
+    "molar_mass_centi": "pass"
+  },
+  "69_molar_mass:gcc:O2": {
+    "molar_mass_centi": "pass"
+  },
+  "70_reaction_balance:clang:O0": {
+    "balance_reaction": "pass"
+  },
+  "70_reaction_balance:clang:O2": {
+    "balance_reaction": "pass"
+  },
+  "70_reaction_balance:gcc:O0": {
+    "balance_reaction": "pass"
+  },
+  "70_reaction_balance:gcc:O2": {
+    "balance_reaction": "pass"
+  },
+  "71_compound_interest:clang:O0": {
+    "annuity_future_value": "pass",
+    "compound_balance": "pass"
+  },
+  "71_compound_interest:clang:O2": {
+    "annuity_future_value": "pass",
+    "compound_balance": "pass"
+  },
+  "71_compound_interest:gcc:O0": {
+    "annuity_future_value": "pass",
+    "compound_balance": "pass"
+  },
+  "71_compound_interest:gcc:O2": {
+    "annuity_future_value": "pass",
+    "compound_balance": "pass"
+  },
+  "72_loan_amortization:clang:O0": {
+    "amortization_schedule": "pass",
+    "remaining_balance": "pass"
+  },
+  "72_loan_amortization:clang:O2": {
+    "amortization_schedule": "pass",
+    "remaining_balance": "pass"
+  },
+  "72_loan_amortization:gcc:O0": {
+    "amortization_schedule": "pass",
+    "remaining_balance": "pass"
+  },
+  "72_loan_amortization:gcc:O2": {
+    "amortization_schedule": "pass",
+    "remaining_balance": "pass"
+  },
+  "73_present_value:clang:O0": {
+    "internal_rate_of_return": "pass",
+    "net_present_value": "pass"
+  },
+  "73_present_value:clang:O2": {
+    "internal_rate_of_return": "pass",
+    "net_present_value": "pass"
+  },
+  "73_present_value:gcc:O0": {
+    "internal_rate_of_return": "pass",
+    "net_present_value": "pass"
+  },
+  "73_present_value:gcc:O2": {
+    "internal_rate_of_return": "pass",
+    "net_present_value": "pass"
+  },
+  "74_moving_statistics:clang:O0": {
+    "exponential_moving_average": "pass",
+    "population_variance": "pass",
+    "simple_moving_average": "pass"
+  },
+  "74_moving_statistics:clang:O2": {
+    "exponential_moving_average": "pass",
+    "population_variance": "pass",
+    "simple_moving_average": "fail"
+  },
+  "74_moving_statistics:gcc:O0": {
+    "exponential_moving_average": "pass",
+    "population_variance": "pass",
+    "simple_moving_average": "pass"
+  },
+  "74_moving_statistics:gcc:O2": {
+    "exponential_moving_average": "pass",
+    "population_variance": "pass",
+    "simple_moving_average": "pass"
+  },
+  "75_order_book:clang:O0": {
+    "match_order": "pass"
+  },
+  "75_order_book:clang:O2": {
+    "match_order": "pass"
+  },
+  "75_order_book:gcc:O0": {
+    "match_order": "pass"
+  },
+  "75_order_book:gcc:O2": {
+    "match_order": "pass"
+  },
+  "76_portfolio_rebalance:clang:O0": {
+    "maximum_drift": "pass",
+    "rebalance_trades": "pass"
+  },
+  "76_portfolio_rebalance:clang:O2": {
+    "maximum_drift": "pass",
+    "rebalance_trades": "pass"
+  },
+  "76_portfolio_rebalance:gcc:O0": {
+    "maximum_drift": "pass",
+    "rebalance_trades": "pass"
+  },
+  "76_portfolio_rebalance:gcc:O2": {
+    "maximum_drift": "pass",
+    "rebalance_trades": "pass"
+  },
+  "77_lru_cache:clang:O0": {
+    "lru_access": "pass"
+  },
+  "77_lru_cache:clang:O2": {
+    "lru_access": "fail"
+  },
+  "77_lru_cache:gcc:O0": {
+    "lru_access": "pass"
+  },
+  "77_lru_cache:gcc:O2": {
+    "lru_access": "pass"
+  },
+  "78_ring_buffer:clang:O0": {
+    "ring_occupancy": "pass",
+    "ring_pop": "pass",
+    "ring_push": "pass"
+  },
+  "78_ring_buffer:clang:O2": {
+    "ring_occupancy": "pass",
+    "ring_pop": "pass",
+    "ring_push": "pass"
+  },
+  "78_ring_buffer:gcc:O0": {
+    "ring_occupancy": "pass",
+    "ring_pop": "pass",
+    "ring_push": "pass"
+  },
+  "78_ring_buffer:gcc:O2": {
+    "ring_occupancy": "pass",
+    "ring_pop": "pass",
+    "ring_push": "pass"
+  },
+  "79_segment_tree:clang:O0": {
+    "segment_build": "pass",
+    "segment_range_sum": "pass",
+    "segment_update": "pass"
+  },
+  "79_segment_tree:clang:O2": {
+    "segment_build": "pass",
+    "segment_range_sum": "pass",
+    "segment_update": "pass"
+  },
+  "79_segment_tree:gcc:O0": {
+    "segment_build": "pass",
+    "segment_range_sum": "pass",
+    "segment_update": "pass"
+  },
+  "79_segment_tree:gcc:O2": {
+    "segment_build": "pass",
+    "segment_range_sum": "pass",
+    "segment_update": "pass"
+  },
+  "80_trie:clang:O0": {
+    "trie_insert": "pass",
+    "trie_lookup": "pass"
+  },
+  "80_trie:clang:O2": {
+    "trie_insert": "pass",
+    "trie_lookup": "pass"
+  },
+  "80_trie:gcc:O0": {
+    "trie_insert": "pass",
+    "trie_lookup": "pass"
+  },
+  "80_trie:gcc:O2": {
+    "trie_insert": "pass",
+    "trie_lookup": "pass"
+  },
   "__toolchain__": {
     "clang": "Ubuntu clang version 14.0.0-1ubuntu1.1",
     "clangpp": "Ubuntu clang version 14.0.0-1ubuntu1.1",

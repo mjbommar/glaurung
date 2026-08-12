@@ -4,22 +4,22 @@
 - entry: **0x1100**
 
 ## Functions
-- discovered: **7** (with blocks: 7, named: 7)
-- callgraph edges: **2**
-- name sources: analyzer=7
+- discovered: **23** (with blocks: 23, named: 9)
+- callgraph edges: **15**
+- name sources: analyzer=23
 
 ## Type system
-- stdlib prototypes loaded: **192**
+- stdlib prototypes loaded: **114**
 - DWARF types imported: **6**
-- stack slots discovered: **52**
-- types propagated: **0**
+- stack slots discovered: **172**
+- types propagated: **21**
 - auto-struct candidates: **0**
 
 ## IOCs (from string scan)
 - **hostname**: 3
-- **path_posix**: 1
-- **java_path**: 1
 - **ipv4**: 0
+- **java_path**: 1
+- **path_posix**: 1
 
 Examples:
   - `path_posix` `/lib64/ld-linux-x86-64.so.2`  (off `0x374`)

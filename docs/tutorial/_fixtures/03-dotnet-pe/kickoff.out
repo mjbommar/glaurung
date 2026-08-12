@@ -9,7 +9,7 @@
 - name sources: cil=2, analyzer=1
 
 ## Type system
-- stdlib prototypes loaded: **192**
+- stdlib prototypes loaded: **20868**
 - DWARF types imported: **0**
 - stack slots discovered: **1**
 - types propagated: **0**

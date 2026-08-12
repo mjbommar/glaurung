@@ -1,5 +1,9 @@
 # Test strategy
 
+> **Status: planned evaluation contract.** These gates have not been executed
+> for an autonomous source-recovery agent because that implementation does not
+> yet exist.
+
 ## Principle
 
 Testing must separate deterministic software correctness, live agent behavior,

@@ -1,5 +1,9 @@
 # Agentic AI Functionality Roadmap for Windows Analysis
 
+> **Status: historical/evolving roadmap dated 2026-05-20.** Many tools described
+> as future work have since landed. Use the Windows capability index, current
+> tool registry, source, and tests for shipped behavior.
+
 Date: 2026-05-20
 
 This roadmap converts the 30-file Glaurung-vs-Ghidra regression review

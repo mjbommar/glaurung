@@ -1,274 +1,132 @@
-# Compiler and Binary Format Technical Details
+# Compiler and language-detection evidence
 
-## Critical Technical Discoveries
+> **Status: maintained implementation guide.** This page documents the current
+> evidence model in `src/triage/compiler_detection.rs`. It does not treat one
+> observed binary layout or instruction sequence as a universal compiler
+> signature.
 
-### 1. Go Binary Format
+Compiler and source-language detection is probabilistic. Linkers, stripping,
+LTO, obfuscation, runtime choice, and mixed-language builds can remove or combine
+signals. Preserve the evidence and confidence with a result; do not turn a
+heuristic into provenance proof.
 
-#### Build ID Location and Format
-```
-Offset 0x400f9c: .note.go.buildid section
-Format: Standard ELF note structure
-  - 4 bytes: name size (0x04)
-  - 4 bytes: desc size (0x53 = 83 bytes)
-  - 4 bytes: type (0x04)
-  - 4 bytes: "Go\0\0"
-  - 83 bytes: Build ID string
-```
+## Current inputs and APIs
 
-#### Go Build Info Marker
-```
-Offset ~0x151000: "Go buildinf:" marker
-Followed by:
-  - Version: "go1.23.5" format
-  - Build flags: "-buildmode=exe"
-  - Compiler: "-compiler=gc"
-  - LDFLAGS: "-ldflags=-s -w"
-  - CGO_ENABLED=0
-  - GOARCH=amd64
-  - GOOS=linux
-```
+The detector combines six evidence families:
 
-**Key Finding**: Go binaries have TWO identification points:
-1. ELF note section (structured)
-2. Build info string (unstructured but rich)
+- symbol mangling and well-known symbol names;
+- imported runtime libraries;
+- runtime-specific diagnostic strings;
+- PE Rich-header entries;
+- ELF `.comment` contents;
+- byte signatures, including bytecode magic, Go build metadata, and packer
+  markers.
 
-### 2. Rust Binary Mangling
+`detect_language_and_compiler_with_path` combines those inputs and may use the
+path as weak context. The path-free `detect_language_and_compiler` variant uses
+only binary-derived evidence. `LanguageDetectionResult` returns the selected
+language, optional compiler information, confidence, alternatives, and an
+evidence summary.
 
-#### Legacy Rust Mangling Pattern
-```
-_ZN<length><name>17h<16-hex-hash>E
+Focused helpers expose individual stages:
 
-Example: _ZN11miniz_oxide7inflate4core10decompress17h0c6ece3638d29594E
-         └─ Rust-specific hash suffix (17h + 16 hex chars)
-```
+- `detect_language_from_symbols`;
+- `detect_runtime_libraries`;
+- `detect_language_from_strings`;
+- `detect_from_rich_header` and `detect_from_elf_comment`;
+- `detect_bytecode_format`;
+- `detect_packer`;
+- `has_go_buildid` and `extract_go_version`; and
+- `is_likely_stripped` and `is_shared_library`.
 
-#### Rust-Specific Symbol Encodings
-- `$LT$` = `<` (less than)
-- `$GT$` = `>` (greater than)
-- `$u20$` = space character
-- `$u27$` = single quote
-- `$RF$` = `&` (reference)
-- `$BP$` = `*` (pointer)
+The enums list more languages and compiler families than every input can
+currently distinguish. An enum variant is a data-model capability, not proof
+that all binaries from that toolchain are detected.
 
-#### Anonymous Symbols
-```
-anon.<32-hex-hash>.<number>.llvm.<number>
-Example: anon.1fc6f8ff832de9ee09644801f6e75787.8.llvm.370997419347659522
-```
+## Evidence interpretation
 
-**Key Finding**: Rust symbols are distinguishable from C++ by:
-- Hash suffix (17h pattern)
-- Dollar-sign encodings
-- Anonymous symbol pattern
+### Symbols
 
-### 3. ELF .comment Section Quirks
+The live symbol classifier recognizes, among other signals:
 
-#### Clang Binaries Have BOTH Signatures
-```
-.comment section in Clang binary:
-  [0x00] "GCC: (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0"
-  [0x2d] "Ubuntu clang version 14.0.0-1ubuntu1.1"
-```
-**Critical**: Must check for Clang FIRST, then GCC
+- Rust v0 names beginning `_R`, legacy Rust names with a `17h` hash, Rust
+  escape forms, and names accepted by `rustc_demangle`;
+- Itanium C++ `_Z...` and common MSVC `?`/`@@` forms;
+- common Go package/runtime names;
+- Swift `$s` and older `_T` forms;
+- Objective-C method/runtime forms; and
+- a small set of plain-C library names.
 
-#### GCC Version String Variations
-```
-"GCC: (GNU) 11.2.0"                    // Standard GNU
-"GCC: (Ubuntu 11.4.0-1ubuntu1) 11.4.0" // Ubuntu packaged
-"GCC: (Debian 12.2.0-14) 12.2.0"       // Debian packaged
-```
-**Pattern**: Last version number is the actual GCC version
+These signals can coexist in one executable. Missing symbols after stripping do
+not imply C, and an isolated demangleable name does not prove the whole program
+was written in that language.
 
-### 4. Stripped Binary Characteristics
+### Runtime libraries and strings
 
-#### What Survives Stripping
-```
-Sections that remain:
-- .note.gnu.property
-- .note.gnu.build-id  
-- .note.ABI-tag
-- .comment (compiler info!)
-- .dynamic
-- .plt entries
-```
+Imports such as `libstdc++`, `libc++`, MSVC/UCRT components, or Rust-named
+libraries can support a language hypothesis. Panic, runtime, and exception text
+adds weaker evidence. Statically linked runtimes, dead-code elimination, and
+user-controlled strings limit both methods.
 
-#### Symbol Count Thresholds
-- **Stripped**: < 10 non-dynamic symbols
-- **Normal**: 100+ symbols typically
-- **Dynamic symbols**: `_DYNAMIC`, `_GLOBAL_OFFSET_TABLE_`, `@plt`, `@GLIBC`
+### ELF comments
 
-### 5. UPX Packing Signatures
+`detect_from_elf_comment` currently recognizes Clang, rustc, and GCC version
+text. It checks Clang before GCC because one `.comment` section can contain both
+toolchain strings. The parser returns the last version-like GCC token it finds.
 
-#### Primary UPX Signature
-```
-Offset 0xE0-0xF0 (varies): "UPX!"
-Additional markers: "UPX0", "UPX1", "UPX2" (section names)
-```
+`.comment` is optional and can be removed. Its presence identifies a contributing
+tool, not necessarily the compiler for every object in the final binary.
 
-#### UPX File Characteristics
-- No section headers in packed file
-- File reported as "statically linked"
-- Original entry point obscured
-- All original symbols removed
+### PE Rich headers
 
-### 6. Java Class File Format
+`detect_from_rich_header` maps selected product-ID ranges to Visual C++ release
+families. Rich-header interpretation is heuristic: entries can reflect several
+build tools, mappings are incomplete, and the structure may be absent or
+modified. Retain the product/build evidence rather than reporting a release name
+without qualification.
 
-#### Magic Number
-```
-Offset 0x00: 0xCAFEBABE (big-endian)
-Offset 0x04: Minor version (2 bytes)
-Offset 0x06: Major version (2 bytes)
+### Go and bytecode markers
 
-Version mapping:
-- 0x0041 (65) = Java 21
-- 0x003D (61) = Java 17
-- 0x0037 (55) = Java 11
-- 0x0034 (52) = Java 8
+Go build IDs and `Go buildinf:` data can survive when ordinary symbols do not.
+The current bytecode helper recognizes Java class magic, a limited family of
+Python `.pyc` prefixes, Lua bytecode as an unsupported/unknown language, and a
+bounded CLR metadata check. Container classification such as JAR versus APK is
+handled elsewhere; a ZIP magic value is not a Java class.
+
+### Packer markers
+
+`detect_packer` recognizes a bounded list of byte and section-name signatures,
+including UPX. A marker is a useful triage signal, not sufficient proof by
+itself: validate layout and downstream parsing before making a packer claim.
+
+## What not to infer
+
+- Instruction preferences such as `mov` versus `lea` are not stable compiler
+  identities across versions, targets, optimization levels, or surrounding
+  code.
+- A symbol-count threshold is not a format-independent definition of stripped.
+- A filename extension is weak context, not source-language proof.
+- A compiler version found in metadata does not establish the build host or the
+  toolchain used for every linked object.
+- Confidence is detector confidence, not a calibrated probability of authorship.
+
+For high-impact attribution, corroborate at least two independent evidence
+families and preserve contradictory signals in the report.
+
+## Validation
+
+The focused real-sample gates are:
+
+```bash
+cargo test --test compiler_detection_test
+cargo test --test compiler_detection_comprehensive
+uv run pytest python/tests/test_compiler_detection_improvements.py -q
 ```
 
-### 7. Python Bytecode (.pyc) Magic
+The Rust tests exercise checked-in GCC, Clang, Go, Rust, Java, Python, PE, and
+other sample families when their fixtures are present. Some older tests skip a
+missing fixture by returning early, so read the test output and fixture inventory
+before interpreting a green exit as complete corpus coverage.
 
-#### Magic Number Structure
-```
-Offset 0x00: 2-byte magic (varies by version)
-Offset 0x02: 0x0D0A (CR+LF)
-Offset 0x04: Timestamp or hash (4 bytes)
-
-Python version magic (first 2 bytes):
-- Python 3.11: 0xA70D
-- Python 3.10: 0x6F0D  
-- Python 3.9:  0x610D
-- Python 3.8:  0x550D
-- Python 3.7:  0x420D
-- Python 3.6:  0x330D
-```
-
-### 8. Lua Bytecode Format
-
-#### Header Structure
-```
-Offset 0x00: 0x1B4C7561 ("ESC Lua")
-Offset 0x04: Version (0x53 = 5.3, 0x54 = 5.4)
-Offset 0x05: Format version
-Offset 0x06: Data sizes (6 bytes)
-```
-
-### 9. Shared Library (.so) Patterns
-
-#### Typical Symbol Pattern
-```
-Exported functions: 5-50 symbols
-Standard symbols always present:
-- _init, _fini
-- __cxa_finalize (C++)
-- frame_dummy
-- register_tm_clones
-```
-
-#### C vs C++ Library Detection
-- C++ libraries have: `__cxa_*`, `__gxx_personality_*`
-- C libraries have: Only basic symbols, no mangling
-
-### 10. PE Rich Header Structure
-
-#### Product ID to Compiler Mapping
-```
-0x5D-0x5F: Visual C++ 2002 (7.0)
-0x6D-0x6F: Visual C++ 2003 (7.1)
-0x83-0x86: Visual C++ 2005 (8.0)
-0x91-0x94: Visual C++ 2008 (9.0)
-0x9B-0x9E: Visual C++ 2010 (10.0)
-0xA5-0xA8: Visual C++ 2012 (11.0)
-0xAF-0xB2: Visual C++ 2013 (12.0)
-0xB9-0xBC: Visual C++ 2015 (14.0)
-0xC3-0xC6: Visual C++ 2017 (14.1)
-0xCD-0xD0: Visual C++ 2019 (14.2)
-0xD7-0xDA: Visual C++ 2022 (14.3)
-```
-
-### 11. Compiler-Specific Code Patterns
-
-#### GCC vs Clang Code Generation
-- **GCC**: Prefers `mov` instructions for stack setup
-- **Clang**: Prefers `lea` instructions for address calculations
-- **GCC**: Groups similar operations
-- **Clang**: Interleaves operations for pipeline optimization
-
-#### Function Prologue Patterns
-```asm
-; GCC typical prologue
-push   %rbp
-mov    %rsp,%rbp
-sub    $0x10,%rsp
-
-; Clang typical prologue  
-push   %rbp
-mov    %rsp,%rbp
-lea    -0x10(%rsp),%rsp
-```
-
-### 12. Cross-Compilation Indicators
-
-#### MinGW Signatures
-- Import from `msvcrt.dll` on Windows
-- Has both Windows and POSIX symbols
-- Section names: `.text`, `.data`, `.rdata`, `.bss` (like Linux)
-- PE format but Unix-like structure
-
-#### Cross-Architecture Patterns
-- ARM binaries compiled on x86: Build ID contains host info
-- RISC-V cross-compile: Often has "gnu" in compiler string
-
-## Important Edge Cases Discovered
-
-### 1. JAR Files Are Not Class Files
-- JAR = ZIP archive containing .class files
-- Must unzip first or check for PK magic (0x504B)
-- Can contain multiple Java versions in one JAR
-
-### 2. Fortran Detection Is Hard
-- Symbol pattern: `_gfortran_*`, `__fortran_*`
-- Often looks like C in stripped form
-- Best indicator: "gfortran" in .comment
-
-### 3. Swift on Linux
-- Uses Itanium C++ ABI mangling
-- But has Swift-specific symbols: `$s` prefix
-- Runtime: `libswiftCore.so`
-
-### 4. Mono/.NET on Linux
-- PE format embedded in ELF
-- Look for "BSJB" signature (CLR metadata)
-- Mono runtime symbols: `mono_*`
-
-## Recommended Detection Order
-
-Based on our findings, check in this order for best accuracy:
-
-1. **Magic numbers** (Java, Python, Lua bytecode)
-2. **Packer signatures** (UPX, etc.)
-3. **Rich Headers** (PE/Windows)
-4. **ELF .comment** (Linux/Unix compilers)
-5. **Go build ID** (in .note.go.buildid)
-6. **Symbol analysis** (mangling patterns)
-7. **String analysis** (error messages)
-8. **Import/library analysis**
-9. **Heuristic fallback** (stripped, etc.)
-
-## Key Takeaways for Implementation
-
-1. **Always check .comment section** - survives stripping
-2. **Order matters** - Clang before GCC in .comment
-3. **Go has redundant markers** - Check both note and buildinf
-4. **Rust symbols are unique** - 17h hash pattern is distinctive
-5. **Stripped ≠ Unknown** - Can still identify compiler
-6. **Context helps** - .so extension → likely C/C++
-7. **Packed binaries are detectable** - UPX! signature is reliable
-
-## Future Research Needed
-
-- How to distinguish C from C++ in stripped libraries
-- Better detection of optimization levels
-- Detecting LTO (Link-Time Optimization) binaries
-- Identifying specific stdlib versions (glibc, musl, etc.)
-- Cross-compilation target vs host detection
+When adding a signal, start with a real fixture and a negative or mixed-evidence
+control. Then update the detector, focused tests, and this page together.

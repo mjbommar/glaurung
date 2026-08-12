@@ -1,5 +1,8 @@
 # ELF Parser Technical Design
 
+> **Status: historical design record.** This is a design snapshot, not the
+> current Rust API or a verified performance/safety specification.
+
 ## Memory Layout and Zero-Copy Architecture
 
 ### Design Philosophy

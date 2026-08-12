@@ -1,10 +1,10 @@
 kind        location        snippet
 --------------------------------------------------------------------------------
-type        ATOM            typedef  (set_by=stdlib)
-type        BOOL            typedef  (set_by=stdlib)
-type        BOOLEAN         typedef  (set_by=stdlib)
-type        BYTE            typedef  (set_by=stdlib)
-type        CHAR            typedef  (set_by=stdlib)
 type        DIR             typedef  (set_by=stdlib)
-type        DWORD           typedef  (set_by=stdlib)
-type        DWORD_PTR       typedef  (set_by=stdlib)
+type        FILE            typedef  (set_by=stdlib)
+type        addrinfo        struct  (set_by=stdlib)
+type        af_family_e     enum  (set_by=stdlib)
+type        blkcnt_t        typedef  (set_by=stdlib)
+type        blksize_t       typedef  (set_by=stdlib)
+type        clock_t         typedef  (set_by=stdlib)
+type        dev_t           typedef  (set_by=stdlib)

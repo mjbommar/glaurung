@@ -1,5 +1,8 @@
 # PE Parser Technical Design
 
+> **Status: historical design record.** This is a design snapshot, not the
+> current Rust API or a verified performance/safety specification.
+
 ## Memory Layout & Zero-Copy Design
 
 ### Core Principle: Borrow, Don't Copy

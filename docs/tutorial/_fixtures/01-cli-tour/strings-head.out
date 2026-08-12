@@ -1,4 +1,4 @@
-path: /nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+path: <repo>/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
 size: 17680 bytes (17.3 KiB)
 encodings: ascii=105 utf8=1 u16le=0 u16be=0
 languages: (none)

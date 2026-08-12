@@ -1,5 +1,8 @@
 # Project structure
 
+> **Status: maintained repository map.** The map describes the current source
+> tree; `src/lib.rs`, `pyproject.toml`, and the filesystem remain authoritative.
+
 Glaurung is a mixed Rust/Python project. Rust implements the native analysis
 engine; Python exposes the scripting, CLI, knowledge-base, and LLM surfaces.
 
@@ -37,7 +40,6 @@ Generated analysis databases normally use the `.glaurung` extension.
 - `triage/` for bounded first-touch analysis;
 - `formats/`, `disasm/`, `analysis/`, and `symbols/` for binary recovery;
 - `ir/` for LLIR, lifting, optimization, structuring, and pseudocode rendering;
-- `kb/` for native knowledge-base support;
 - `exec/` and `symbolic/` for concrete and opt-in symbolic execution; and
 - `python_bindings/` for the PyO3 surface exposed as `glaurung._native`.
 
@@ -49,7 +51,7 @@ The exact module list evolves; `src/lib.rs` and `Cargo.toml` are authoritative.
 
 - `cli/` and `cli/commands/` for the `glaurung` console script;
 - `llm/` for model configuration, agents, tools, and usage controls;
-- `kb/` for persistent project workflows;
+- `python/glaurung/llm/kb/` for SQLite-backed persistent project workflows;
 - format- and analysis-specific Python helpers; and
 - `_native.pyi`, `triage.pyi`, and `py.typed` for the native typing surface.
 

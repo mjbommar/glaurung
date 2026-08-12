@@ -1,6 +1,19 @@
 # Agentic Glaurung status and resume record
 
-Snapshot date: 2026-08-03
+> **Status: maintained canonical resume record.** Update this file and
+> `PLAN.md` together when implementation state changes.
+
+Baseline snapshot date: 2026-08-03
+
+Refresh audit: 2026-08-07. The worktree was inspected at
+`fcca960bd7490c452a541f1034d13f2dd4e98eda`; local `origin/master` and the live
+remote both resolved to `02d32c9db62a4c8dc77a801795adc33b6ca5794d`.
+`python/glaurung/llm/agents/source_recovery.py` remains absent,
+`tools/decbench_external_agent.py` remains absent, and the existing
+`tools/decbench_external_agentic.py` still invokes the fixed
+`glaurung explain` sequence. The product verdict, phase, task, and authorization
+state below therefore remain unchanged. This refresh did not run an agentic
+behavioral or model-backed gate.
 
 Overall state: **READY TO START PHASE 0; AUTONOMOUS AGENT NOT IMPLEMENTED**
 

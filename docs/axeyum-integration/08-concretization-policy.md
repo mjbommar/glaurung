@@ -1,5 +1,9 @@
 # 08 - Concretization policy
 
+> **Status: maintained policy design and evidence record.** Shipped defaults
+> and environment compatibility must be verified in current symbolic-execution
+> source; measurements remain revision-bound.
+
 Status: A0 accepted on `axeyum-concretization-policy-a0` at `07ea0c1`;
 taint-provenance correction accepted at `845239f`
 and policy-robust stack-region classification accepted at `0581f57`

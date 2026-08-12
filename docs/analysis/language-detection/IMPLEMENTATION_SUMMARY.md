@@ -1,5 +1,9 @@
 # Implementation Summary: Compiler Detection Improvements
 
+> **Status: historical implementation summary.** The measurements, code
+> pointers, and remaining-work claims below are retained as a dated snapshot,
+> not current accuracy evidence.
+
 ## Achieved Results
 
 ### Detection Rate Improvement

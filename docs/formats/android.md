@@ -1,9 +1,27 @@
 # Android ecosystem support
 
+> **Status: maintained capability reference.** Implemented behavior below is
+> tied to current source and real-fixture tests. The SELinux policy capability
+> is header parsing only; no access-vector reachability query is shipped.
+
 Glaurung understands the core Android container, bytecode, manifest, and native
 hardening formats. Everything here is exercised by real-fixture tests under
 `tests/fixtures/android/` (see that directory's `README.md` for provenance and
 rebuild recipes).
+
+## Current boundary
+
+| Area | Current support |
+| --- | --- |
+| Native ELF | Android packed relocations, RELR, PAC/BTI control flow, and stripped PAC-prologue discovery |
+| DEX | Header and core identifier tables, MUTF-8 strings, classes, and method signatures |
+| AXML | String pools, chunk events, and a bounded manifest summary |
+| APK/AAB/JAR | ZIP classification and stored/deflated member access |
+| Linux drivers | AArch64 `file_operations` IOCTL surface recovery |
+| SELinux policydb | Magic and header parsing only |
+
+OAT/VDEX/CDEX, resource-value resolution, SELinux symbol/AV-table queries,
+Binder/AIDL dispatch, and vendor trustlet formats are not implemented.
 
 ## Native ELF: bionic packed relocations (`src/formats/elf/packed_relocations.rs`)
 
@@ -98,3 +116,20 @@ above: the `.ko` gives the device + command set, sepolicy says who can reach it.
 - sepolicy `avtab` reachability query (header/detection done; see above),
   Binder/AIDL `onTransact` modelling, HAL/HIDL vtables, Trusty/QSEE `MCLF`
   trustlets, GKI/KMI symbol borrowing.
+
+## Focused validation
+
+Run the source-bound checks from the repository root:
+
+```bash
+cargo test --test android_dex_triage
+cargo test --test android_packed_relocations
+cargo test --test android_pac_bti_cfg
+cargo test --test android_pac_stripped_discovery
+cargo test formats::axml::tests
+cargo test formats::apk::tests
+cargo test formats::sepolicy::tests
+```
+
+These focused checks do not replace the complete Rust and Python gates in
+`CLAUDE.md`.

@@ -1,5 +1,8 @@
 # RetDec Lifting Experiment: Simple C Program
 
+> **Status: historical experiment.** Results are tied to the named 2025 test
+> environment and do not establish current RetDec integration or parity.
+
 **Date**: 2025-10-20
 **Tool**: RetDec v4.0 (Ubuntu 64-bit pre-built binaries)
 **Test Binary**: Simple two-function C program (factorial + sum)

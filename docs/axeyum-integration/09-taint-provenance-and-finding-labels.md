@@ -1,5 +1,9 @@
 # 09 - Taint provenance and finding labels
 
+> **Status: maintained provenance design and evidence record.** Raw diagnostics,
+> confidence-gated rows, and independently validated findings remain separate
+> populations; dated counts are not current readiness claims.
+
 Status: accepted provenance, confidence-partition, and WDM SystemBuffer-model
 corrections on `axeyum-concretization-policy-a0` (2026-07-18).
 

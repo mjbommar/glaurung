@@ -1,31 +1,31 @@
 ── pseudocode (enclosing function) ──
 fn main {
     nop;
-    // x86-64 prologue: save rbp, frame 32 bytes
-    local_0 = arg0;
-    local_1 = arg1;
-    t10 = local_2;
-    if ((t10 <= 1)) {
-        ret = local_1;
+    // x86-64 prologue: save rbp
+    var_14 = arg0;
+    var_20 = arg1;
+    t10 = var_14;
+    t30 = (long)((int)(t10));
+    t35 = (unsigned long)((unsigned int)(t10));
+    t32 = (t30 < 1);
+    t33 = (t10 - 1);
+    %zf = (t35 == 1);
+    t134 = (unsigned long)((unsigned int)(t33));
+    %sf = ((long)((int)(t33)) < 0);
+    %of = (t32 ^ %sf);
+    if (((%zf | (%sf ^ %of)) == 0)) {
+        ret = var_20;
         ret = *&[ret+0x8];
-        local_3 = ret;
-        ret = local_1;
+        var_10 = ret;
+        ret = var_20;
+        t30 = ret;
+        t33 = (t30 < 0);
+        t34 = (8 < 0);
         ret = (ret + 8);
+        t36 = (t33 == t34);
         ret = *&[ret];
-        0x10a0(ret);
-        local_4 = ret;
-        arg2 = local_4;
-        ret = local_3;
-        parse_record(ret, arg2);
-        ret = 0;
-        rsp = rbp;
-        pop(rbp);
-        return;
-    }
-    ret = local_1;
-    arg2 = *&[ret];
-    arg3 = "usage: %s <input-bytes>\n";
-    ret = 0;
-    0x10d0(ret, arg3);
-    ret = 1;
-    goto L_132e;
+        ret = strlen@plt(ret);  // proto: size_t strlen(const char * s)
+        var_8 = ret;
+        var0 = var_8;
+        ret = var_10;
+        parse_record(ret, var0);

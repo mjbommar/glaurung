@@ -1,5 +1,8 @@
 # Runtime and control-loop architecture
 
+> **Status: unimplemented design contract.** It defines the intended autonomous
+> runtime; it does not describe the existing fixed `glaurung explain` pipeline.
+
 ## Design objective
 
 One invocation recovers one requested function. The model decides what static

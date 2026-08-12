@@ -1,5 +1,8 @@
 # Language and Compiler Detection Improvements
 
+> **Status: historical measurement.** The rates and sample totals below belong
+> to an older corpus run and must not be presented as current performance.
+
 ## Summary
 
 Improved the binary language and compiler detection system, achieving a **74.5% detection rate** on 243 sample binaries (up from 73.3%).

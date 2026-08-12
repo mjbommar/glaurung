@@ -1,5 +1,8 @@
 # Data Model Implementation Plan
 
+> **Status: historical implementation plan.** Paths, code sketches, phases, and
+> unchecked items below predate the current `src/core/` model.
+
 ## Phase 0: Core Foundation Types
 
 ### 1. Address Type - FIRST IMPLEMENTATION

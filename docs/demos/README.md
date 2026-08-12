@@ -1,22 +1,30 @@
-# Glaurung canonical demos
+# Glaurung deterministic demos
 
-Three end-to-end conversations showing what the agentic chat UI
-delivers today. Each demo is grounded in a sample binary that ships
-with the repo, so anyone can re-run the commands and see the same
-output without external dependencies.
+These demos are short, reproducible investigations over binaries checked into
+the repository. They show current CLI workflows and link to captured output
+from `scripts/verify_tutorial.py`. They are not synthesized chat transcripts
+and do not require an LLM provider.
 
-These demos drive priority calls on the roadmap: any task that
-doesn't make at least one of these demos materially better can be
-deferred. They are also the marketing deliverable for the Phase 5
-chat UI launch (#203/#204).
+| Demo | Core question | Verifier chapter |
+| --- | --- | --- |
+| [Malware-style triage](demo-1-malware-triage.md) | Which observations support suspicious-string triage without overstating behavior? | `03-c2-demo` |
+| [Vulnerability review](demo-2-vulnerability-hunting.md) | How do source, xrefs, disassembly, and pseudocode jointly support a known fixture bug? | `03-vulnparse` |
+| [Patch analysis](demo-3-patch-analysis.md) | Which recovered function changed across two related binaries? | `04-diff` |
 
-| Demo | Sample binary | Status |
-|---|---|---|
-| 1. Malware triage | `samples/binaries/platforms/linux/amd64/export/native/clang/O0/c2_demo-clang-O0` | ✅ runnable today |
-| 2. Vulnerability hunting | `samples/binaries/platforms/linux/amd64/synthetic/vulnparse-c-gcc-O0` | ✅ runnable today |
-| 3. Patch analysis | `samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2{,-v2}` | ✅ runnable today |
+Run all three evidence recipes from the repository root:
 
-See:
-- [`demo-1-malware-triage.md`](./demo-1-malware-triage.md)
-- [`demo-2-vulnerability-hunting.md`](./demo-2-vulnerability-hunting.md)
-- [`demo-3-patch-analysis.md`](./demo-3-patch-analysis.md)
+```bash
+uv run python scripts/verify_tutorial.py --check \
+  --chapter 03-c2-demo \
+  --chapter 03-vulnparse \
+  --chapter 04-diff
+```
+
+The verifier uses real checked-in binaries, requires each documented command's
+expected exit status, and compares normalized output with fixtures. Timing,
+repository paths, and similarly volatile fields may be normalized; substantive
+analysis output is not replaced with invented prose.
+
+For optional agent synthesis after the deterministic work, continue to the
+[agent-workflow tutorial](../tutorial/05-agent-workflows/chat-driven-triage.md).
+Provider responses, cost, and privacy are outside the deterministic demo gate.

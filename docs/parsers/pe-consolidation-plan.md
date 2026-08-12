@@ -1,5 +1,8 @@
 # PE Parser Consolidation Plan
 
+> **Status: historical design record.** Retained as consolidation history;
+> phases, paths, and capability gaps below are not current implementation status.
+
 ## Executive Summary
 
 This document outlines the plan to consolidate all PE parsing functionality from multiple modules into a unified, self-contained PE parser implementation. We will eliminate dependencies on external crates like `object` and create a comprehensive, performance-optimized PE parsing library.

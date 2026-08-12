@@ -1,5 +1,9 @@
 # Acceptance gates and commands
 
+> **Status: planned acceptance contract.** Commands requiring the autonomous
+> agent are not runnable until their implementation tasks land. Record `NOT RUN`
+> rather than treating absence as success.
+
 ## Evidence reporting rule
 
 Report focused tests, full suites, static policy, live model runs, behavioral

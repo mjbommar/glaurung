@@ -1,5 +1,10 @@
 # PE-COFF Parser Documentation
 
+> **Status: historical design record.** Its unchecked phase matrix and
+> illustrative Rust model are not current implementation status. See the
+> [parser index](../README.md) and Windows documentation for tested operator
+> entry points.
+
 ## Overview
 
 The Portable Executable (PE) format, based on the Common Object File Format (COFF), is the standard executable format for Windows operating systems. GLAURUNG's PE-COFF parser handles executables (.exe), dynamic libraries (.dll), drivers (.sys), and .NET assemblies.

@@ -1,5 +1,9 @@
 # #186 -- BSim-equivalent function similarity design
 
+> **Status: historical design record with partial implementation.** Use current
+> similarity source, CLI help, and tests for shipped algorithms and output; the
+> target architecture and campaign rationale remain useful context.
+
 > Ghidra ships BSim; Glaurung ships `glaurung diff` today but
 > at function-name granularity only. The `agentic-security-bot`
 > (asb) windows-port campaign needs body-level similarity for

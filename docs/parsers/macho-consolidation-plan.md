@@ -1,5 +1,9 @@
 # Mach-O Parser Consolidation Plan
 
+> **Status: historical design record.** The proposed consolidated
+> `src/formats/macho` module was not implemented. Use the parser index for the
+> current split across triage, symbols, and analysis helpers.
+
 ## Executive Summary
 
 This document outlines the plan to consolidate scattered Mach-O parsing functionality across the Glaurung codebase into a unified, comprehensive Mach-O parser module. The new parser will support Universal/Fat binaries, multi-architecture files, and modern security features while maintaining zero-copy design principles and lazy loading for performance.

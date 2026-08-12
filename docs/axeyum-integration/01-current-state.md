@@ -1,5 +1,9 @@
 # 01 - Current state (ground truth)
 
+> **Status: historical state snapshot from 2026-07-13.** It predates the native
+> backend, retained-session work, and later decision-log entries. It is retained
+> for interface provenance, not as current checkout truth.
+
 Exact interfaces both sides, captured 2026-07-13. glaurung working tree on
 branch `sec/ioctlance-parity` (the solver/symbolic code is identical on
 `master`; line numbers below are from that working tree). axeyum at

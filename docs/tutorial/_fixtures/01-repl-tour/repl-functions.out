@@ -2,14 +2,14 @@
 functions 6
 q
 ─── glaurung repl stdout ───
-glaurung repl  binary=/nas4/data/workspace-infosec/glaurung/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
+glaurung repl  binary=<repo>/samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug
                db=/tmp/tutorial-fixtures/01-repl-tour.glaurung  session='main'
->   9 functions, showing first 6:
-    0x1060  _start  (set_by=analyzer)
-    0x1090  deregister_tm_clones  (set_by=analyzer)
-    0x10c0  register_tm_clones  (set_by=analyzer)
-    0x1100  __do_global_dtors_aux  (set_by=analyzer)
-    0x1140  frame_dummy  (set_by=analyzer)
-    0x1150  main  (set_by=analyzer)
-> 
+>   16 functions, showing first 6:
+    0x1000  _init  (set_by=analyzer)
+    0x1020  sub_1020  (set_by=analyzer)
+    0x1030  sub_1030  (set_by=analyzer)
+    0x1036  sub_1036  (set_by=analyzer)
+    0x1040  sub_1040  (set_by=analyzer)
+    0x1046  sub_1046  (set_by=analyzer)
+>
 saving and exiting…

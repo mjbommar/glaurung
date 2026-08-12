@@ -1,5 +1,9 @@
 # 03 - Target architecture
 
+> **Status: historical target architecture, partially implemented.** Current
+> feature selection and backend priority are defined by `Cargo.toml` and
+> `src/symbolic/solver/mod.rs`; later ADRs supersede conflicting targets here.
+
 ## The seam (unchanged)
 
 Integration happens at exactly one place: a new backend implementing the

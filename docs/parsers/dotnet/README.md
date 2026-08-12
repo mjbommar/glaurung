@@ -1,5 +1,9 @@
 # .NET CLR Parser Documentation
 
+> **Status: historical design record.** The proposed data model, phase
+> checklist, and coverage claims below are not current implementation status.
+> See the [parser index](../README.md) for the present CLR/CIL analysis boundary.
+
 ## Overview
 
 .NET assemblies are PE files with embedded Common Language Runtime (CLR) metadata and Intermediate Language (IL) code. GLAURUNG's .NET parser handles managed assemblies (.exe, .dll), providing deep analysis of .NET applications including C#, VB.NET, F#, and other CLR languages.

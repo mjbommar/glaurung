@@ -1,5 +1,9 @@
 # Current state and scope boundary
 
+> **Status: maintained audited scope.** This page separates existing native and
+> fixed-pipeline capabilities from the unimplemented autonomous source-recovery
+> product. Use `STATUS.md` for the latest repository audit.
+
 ## Executive verdict
 
 Glaurung has the pieces needed to build a genuine source-recovery agent, but

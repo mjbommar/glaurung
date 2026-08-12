@@ -1,5 +1,8 @@
 # Project
 
+> **Status: historical model proposal.** Illustrative types below are not the
+> current Rust, Python, triage, or persistence API.
+
 ## Purpose
 The `Project` object is the top-level container for a complete analysis session. It holds the binary being analyzed, the analysis results, and any user-defined metadata. It is the primary object that will be serialized to and deserialized from a file to save and load analysis progress.
 

@@ -1,5 +1,9 @@
 # DecBench experiment design
 
+> **Status: planned experiment, not authorized or executed.** Historical native
+> and fixed-pipeline measurements are separate baselines and may not be relabeled
+> as autonomous-agent results.
+
 ## Objective
 
 Produce a defensible three-way comparison on the exact same 250-function

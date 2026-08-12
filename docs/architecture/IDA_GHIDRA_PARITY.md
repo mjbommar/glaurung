@@ -1,5 +1,10 @@
 # Glaurung ↔ IDA / Ghidra parity status
 
+> **Status: historical capability snapshot.** This checklist accumulated issue
+> closures over time and contains stale completeness and demo claims. It is not
+> a current support matrix or competitive benchmark; verify each capability in
+> command help, source, and focused tests.
+
 Living document tracking what Glaurung has, what's still missing, and
 why each gap matters. Updated whenever a roadmap task completes.
 

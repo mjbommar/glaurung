@@ -1,5 +1,9 @@
 # Mach-O Technical Design Document
 
+> **Status: historical design record.** The types and architecture below are a
+> proposal for a consolidated parser that is not present in the current source
+> tree.
+
 ## Format Overview
 
 Mach-O (Mach Object) is the native executable format for macOS, iOS, and other Apple platforms. It supports multiple architectures in a single file (Universal/Fat binaries) and provides rich metadata for dynamic linking, code signing, and runtime security.

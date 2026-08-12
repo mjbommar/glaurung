@@ -1,5 +1,8 @@
 # Mach-O Parser Migration Guide
 
+> **Status: historical design record.** This guide targets an unimplemented
+> consolidated parser and is not a runnable migration path.
+
 This guide provides step-by-step instructions for migrating from the scattered Mach-O parsing implementations to the new unified parser in `src/formats/macho/`.
 
 ## Migration Overview

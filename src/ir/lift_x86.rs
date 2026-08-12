@@ -1527,6 +1527,162 @@ fn double_shift_ops(instr: &iced_x86::Instruction, right: bool) -> Vec<Op> {
     ops
 }
 
+/// `bsr`/`bsf` — the x86 bit scans, lowered through the same exact `clz`
+/// intrinsic the ARM lifter already emits (`ast::WideArithmetic::CountLeadingZeros`,
+/// rendered as `((unsigned)(x) == 0 ? BITS : __builtin_clz((unsigned)(x)))`).
+///
+/// Left unmodelled these were an `Op::Unknown`, so the destination was never
+/// defined and every consumer read an uninitialised local. `14_flag_effects`'s
+/// `shift_until_zero` is exactly that: gcc -O2 compiles the shift-count loop to
+/// `bsr %eax,%ecx ; add $1,%ecx ; test %eax,%eax ; cmovne %ecx,%eax`, and we
+/// recovered `return ((arg0 != 0) ? (var1 + 1) : arg0);` with `var1` undefined.
+///
+/// **The x86 zero case is NOT ARM's.** `clz` answers the operand width; `bsr`
+/// and `bsf` instead set ZF and leave the DESTINATION ALONE (AMD APM v3 states
+/// "the destination is left unchanged"; Intel SDM calls it undefined, which
+/// permits that). Modelling the scan as producing `32`, `0`, or `-1` would
+/// invent a value the machine never wrote — so the scan result is gated behind
+/// `Op::Ite` on `src != 0` with the destination's PRIOR value as the else arm.
+/// `Op::Ite` rather than `Op::CondAssign` for the reason `cmovcc` uses it: a
+/// `CondAssign` destination is a pure def, so dataflow cannot see that the old
+/// value is still read and DCE drops whatever produced it.
+///
+/// The two identities, both exact for a nonzero operand at `BITS` bits:
+///
+/// * `bsr(x) = (BITS - 1) - clz(x)` — the index of the highest set bit.
+/// * `bsf(x) = (BITS - 1) - clz(x ^ (x - 1))`. `x ^ (x - 1)` is the mask of the
+///   trailing zeros together with the lowest set bit, so its highest set bit IS
+///   the lowest set bit of `x`. It is used in preference to the more familiar
+///   `x & -x` because it never negates: the operands stay non-negative in the C
+///   this renders to.
+///
+/// Deliberately narrow:
+/// * only 32- and 64-bit operands. The 16-bit form exists, but the `clz`
+///   renderer spells a sub-64-bit count as `__builtin_clz((unsigned int)(x))` —
+///   a count over 32 bits — so `x86.clz.16` would answer 16 too high. That is
+///   the renderer's contract to widen, not this lifter's to guess around, and
+///   `ast.rs` is not this change's file.
+/// * only a register destination, which is the only form the ISA encodes.
+/// * every flag other than ZF is architecturally undefined and is poisoned
+///   rather than left stale.
+fn bit_scan_ops(instr: &iced_x86::Instruction, forward: bool) -> Vec<Op> {
+    let mnemonic = if forward { "bsf" } else { "bsr" };
+    let unsupported = || {
+        vec![Op::Unknown {
+            mnemonic: mnemonic.into(),
+        }]
+    };
+    if instr.op_count() != 2 || instr.op_kind(0) != OpKind::Register {
+        return unsupported();
+    }
+    let dst_name = reg_name(instr.op_register(0));
+    let Some(width) = phys_reg_width(&dst_name) else {
+        return unsupported();
+    };
+    if !matches!(width, Width::W32 | Width::W64) {
+        return unsupported();
+    }
+
+    let mut ops = Vec::new();
+    let source = match instr.op_kind(1) {
+        OpKind::Register => {
+            if phys_reg_width(&reg_name(instr.op_register(1))) != Some(width) {
+                return unsupported();
+            }
+            Value::Reg(VReg::phys(reg_name(instr.op_register(1))))
+        }
+        OpKind::Memory => {
+            if Width::from_bytes(instr.memory_size().size() as u16) != width {
+                return unsupported();
+            }
+            let loaded = VReg::Temp(0);
+            ops.push(Op::Load {
+                dst: loaded.clone(),
+                addr: mem_op_of(instr),
+            });
+            Value::Reg(loaded)
+        }
+        _ => return unsupported(),
+    };
+
+    // The word the scan actually observes. A canonicalised 32-bit register
+    // lives in a 64-bit parent whose high half this IR never clears, so both
+    // the zero test and the leading-zero count have to name the encoded width.
+    let operand = unsigned_cmp_value(source, width, VReg::Temp(1), &mut ops);
+    let bits = i64::from(width.bits());
+    let dst = VReg::phys(dst_name);
+
+    // ZF is the one flag x86 defines here, and it is defined for BOTH cases.
+    ops.push(Op::Cmp {
+        dst: VReg::Flag(Flag::Z),
+        op: CmpOp::Eq,
+        lhs: operand.clone(),
+        rhs: Value::Const(0),
+    });
+
+    // Move the bit being searched for into the most-significant position that
+    // `clz` reports on. For a backward scan it is already there.
+    let scanned = if forward {
+        let lowered = VReg::Temp(2);
+        ops.push(Op::Bin {
+            dst: lowered.clone(),
+            op: BinOp::Sub,
+            lhs: operand.clone(),
+            rhs: Value::Const(1),
+        });
+        ops.push(Op::Bin {
+            dst: lowered.clone(),
+            op: BinOp::Xor,
+            lhs: operand.clone(),
+            rhs: Value::Reg(lowered.clone()),
+        });
+        Value::Reg(lowered)
+    } else {
+        operand.clone()
+    };
+
+    let index = VReg::Temp(3);
+    ops.push(Op::Intrinsic {
+        name: format!("x86.clz.{bits}"),
+        ins: vec![scanned],
+        outs: vec![(index.clone(), width)],
+        reads_mem: false,
+        writes_mem: false,
+    });
+    ops.push(Op::Bin {
+        dst: index.clone(),
+        op: BinOp::Sub,
+        lhs: Value::Const(bits - 1),
+        rhs: Value::Reg(index.clone()),
+    });
+
+    // Intel leaves the destination UNDEFINED when the source is zero; only AMD
+    // documents it as preserved. Writing the count unconditionally is therefore
+    // architecturally faithful, and it is the only lowering that does not read
+    // the destination before defining it.
+    //
+    // That read is not a cosmetic difference. A self-referential `dst = src ? f(src) : dst`
+    // makes `dst` live-in on the zero path, and a live-in physical register in an
+    // argument slot is exactly what parameter recovery promotes to a parameter —
+    // so preserving a value no correct program can observe cost `shift_until_zero`
+    // three phantom parameters and left the emitted C reading an unassigned local
+    // in an arm the guard never selects.
+    //
+    // ZF above still distinguishes the two cases exactly, which is what callers
+    // actually branch on. The zero case yields `bits - 1 - clz(0)`, a defined and
+    // deterministic value where the architecture permits any.
+    ops.push(Op::Assign {
+        dst,
+        src: Value::Reg(index),
+    });
+    append_undef_flags(
+        &mut ops,
+        &[Flag::C, Flag::O, Flag::S, Flag::P, Flag::A],
+        "x86 BSR/BSF define ZF only; CF/OF/SF/PF/AF are architecturally undefined",
+    );
+    ops
+}
+
 /// Exact CF/ZF/SF/OF effects for one ADC/SBB destination.
 ///
 /// The arithmetic is deliberately split into two machine-width steps. Besides
@@ -3886,6 +4042,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Sbb => sbb_ops(instr),
         Mnemonic::Shrd => double_shift_ops(instr, true),
         Mnemonic::Shld => double_shift_ops(instr, false),
+        Mnemonic::Bsr => bit_scan_ops(instr, false),
+        Mnemonic::Bsf => bit_scan_ops(instr, true),
         Mnemonic::Pxor => packed_dword_binary_ops(instr, BinOp::Xor),
         Mnemonic::Pand => packed_dword_binary_ops(instr, BinOp::And),
         Mnemonic::Pandn => packed_dword_and_not_ops(instr),
@@ -6196,6 +6354,219 @@ mod tests {
         assert!(
             ops.iter()
                 .all(|op| matches!(op, Op::Unknown { mnemonic } if mnemonic == "shrd")),
+            "got: {ops:#?}"
+        );
+    }
+
+    /// `bsr` is exactly `(BITS - 1) - clz(x)` for a nonzero operand, and gcc
+    /// -O2 emits it for `14_flag_effects:shift_until_zero`. The count must be
+    /// taken at the ENCODED width: `eax` canonicalises into a 64-bit `rax`
+    /// whose high half nothing clears, so `x86.clz.64` on the raw value would
+    /// answer 32 too high.
+    #[test]
+    fn bsr_is_the_encoded_width_minus_one_less_its_leading_zero_count() {
+        // 0f bd c8 -> bsr ecx, eax
+        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xbd, 0xc8], 0x1000, 32)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::ZExt { src: Value::Reg(VReg::Phys(n)), from: Width::W32, to: Width::W64, .. }
+                    if n == "eax"
+            )),
+            "the source must be read at its encoded 32 bits: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, outs, .. }
+                    if name == "x86.clz.32" && outs[0].1 == Width::W32
+            )),
+            "a 32-bit scan counts a 32-bit quantity's leading zeros: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    op: BinOp::Sub,
+                    lhs: Value::Const(31),
+                    ..
+                }
+            )),
+            "the highest set bit's index is 31 - clz: {ops:#?}"
+        );
+    }
+
+    /// True when the op names `ecx` (or its 64-bit parent) in any input
+    /// position. Used to prove the bit-scan lowering never reads its own
+    /// destination before writing it.
+    fn reads_ecx(op: &Op) -> bool {
+        fn is_ecx(v: &Value) -> bool {
+            matches!(v, Value::Reg(VReg::Phys(name)) if name == "ecx" || name == "rcx")
+        }
+        match op {
+            Op::Assign { src, .. } => is_ecx(src),
+            Op::Bin { lhs, rhs, .. } | Op::Cmp { lhs, rhs, .. } => is_ecx(lhs) || is_ecx(rhs),
+            Op::Un { src, .. } => is_ecx(src),
+            Op::Ite { cond, t, e, .. } => {
+                matches!(cond, VReg::Phys(name) if name == "ecx" || name == "rcx")
+                    || is_ecx(t)
+                    || is_ecx(e)
+            }
+            Op::Intrinsic { ins, .. } => ins.iter().any(is_ecx),
+            Op::Load { addr, .. } => addr
+                .base
+                .as_ref()
+                .is_some_and(|b| matches!(b, VReg::Phys(name) if name == "ecx" || name == "rcx")),
+            _ => false,
+        }
+    }
+
+    /// x86's zero case is NOT ARM's, but it is also not AMD's. Intel documents
+    /// the DESTINATION as UNDEFINED when the source is zero; only AMD promises
+    /// it is preserved. So the count is written unconditionally and ZF — the one
+    /// flag x86 defines here, and the one callers actually branch on — carries
+    /// the distinction.
+    ///
+    /// The property this test exists to hold is the absence of a self-read. A
+    /// `dst = src ? f(src) : dst` gate makes `dst` live-in on the zero path, and
+    /// a live-in physical register sitting in an argument slot is promoted to a
+    /// parameter — which gave `shift_until_zero(unsigned int)` four parameters
+    /// and an unassigned local read in an arm the guard never selects. Modelling
+    /// a value the architecture refuses to define is not worth that.
+    #[test]
+    fn a_zero_bit_scan_source_sets_zf_without_reading_the_destination() {
+        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xbd, 0xc8], 0x1000, 32)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Z),
+                    op: CmpOp::Eq,
+                    rhs: Value::Const(0),
+                    ..
+                }
+            )),
+            "ZF is the one flag x86 defines here: {ops:#?}"
+        );
+        // The destination is written, and nothing anywhere in the lowering reads
+        // it first — that read is what parameter recovery mistakes for an
+        // incoming argument.
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::Assign { dst: VReg::Phys(d), .. } if d == "ecx")),
+            "the count is written unconditionally: {ops:#?}"
+        );
+        let defined_at = ops
+            .iter()
+            .position(|op| matches!(op, Op::Assign { dst: VReg::Phys(d), .. } if d == "ecx"))
+            .expect("checked above");
+        assert!(
+            !ops[..defined_at].iter().any(reads_ecx),
+            "no read of the destination may precede its definition: {ops:#?}"
+        );
+        for flag in [Flag::C, Flag::O, Flag::S, Flag::P, Flag::A] {
+            assert!(
+                ops.iter()
+                    .any(|op| matches!(op, Op::Undef { dst, .. } if *dst == VReg::Flag(flag))),
+                "{flag:?} is architecturally undefined and must not go stale: {ops:#?}"
+            );
+        }
+    }
+
+    /// The memory source form loads once and scans the loaded word. Reading the
+    /// operand twice would be two loads of an address the ISA dereferences once.
+    #[test]
+    fn a_memory_source_bit_scan_loads_once() {
+        // 0f bd 08 -> bsr ecx, dword ptr [eax]
+        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xbd, 0x08], 0x1000, 32)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::Load { .. }))
+                .count(),
+            1,
+            "exactly one dereference: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, .. } if name == "x86.clz.32"
+            )),
+            "the loaded word is what gets scanned: {ops:#?}"
+        );
+    }
+
+    /// `bsf` is the same shape over `x ^ (x - 1)`, whose highest set bit is the
+    /// LOWEST set bit of `x`. The identity avoids `x & -x` so that nothing in
+    /// the rendered C negates a value.
+    #[test]
+    fn bsf_scans_the_trailing_zero_mask_rather_than_negating() {
+        // 48 0f bc c8 -> bsf rcx, rax
+        let ops: Vec<Op> = lift64(&[0x48, 0x0f, 0xbc, 0xc8])
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    op: BinOp::Sub,
+                    rhs: Value::Const(1),
+                    ..
+                }
+            )),
+            "the mask starts from x - 1: {ops:#?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::Bin { op: BinOp::Xor, .. })),
+            "x ^ (x - 1) isolates the trailing-zero run: {ops:#?}"
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, Op::Un { op: UnOp::Neg, .. })),
+            "nothing may negate: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, .. } if name == "x86.clz.64"
+            )) && ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    op: BinOp::Sub,
+                    lhs: Value::Const(63),
+                    ..
+                }
+            )),
+            "a 64-bit scan counts 64 bits and indexes from 63: {ops:#?}"
+        );
+    }
+
+    /// The 16-bit form is real, but `ast::write_wide_arithmetic_dec` spells any
+    /// sub-64-bit count as `__builtin_clz((unsigned int)(x))` — a count over 32
+    /// bits — so `x86.clz.16` would answer 16 too high. Refuse it rather than
+    /// emit a wrong index.
+    #[test]
+    fn a_sixteen_bit_bit_scan_is_not_guessed() {
+        // 66 0f bd c8 -> bsr cx, ax
+        let ops: Vec<Op> = lift64(&[0x66, 0x0f, 0xbd, 0xc8])
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(
+            ops,
+            vec![Op::Unknown {
+                mnemonic: "bsr".into()
+            }],
             "got: {ops:#?}"
         );
     }

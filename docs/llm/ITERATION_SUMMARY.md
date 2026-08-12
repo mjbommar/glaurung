@@ -1,5 +1,10 @@
 # Agent Iteration Summary
 
+> **Historical pre-refactor assessment.** The limitations below describe an
+> earlier implementation. Current agents include confidence metadata,
+> single-pass and iterative strategies, budgets, and routing. See
+> [`README.md`](README.md) and the current source/tests.
+
 ## Current Implementation Analysis
 
 After thorough analysis, I've identified that our agents currently operate in a **single-pass execution model**:

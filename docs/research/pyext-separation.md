@@ -1,5 +1,10 @@
 # PyO3 Separation Plan (Core vs Python Wrappers)
 
+> **Status: historical separation plan (December 2024).** This checklist is not
+> current architecture truth. PyO3 remains optional behind `python-ext`, but
+> current `src/core/` modules still contain PyO3 bindings and attributes. Inspect
+> `Cargo.toml`, `src/lib.rs`, and the named module before acting on an item below.
+
 ## Purpose
 - Eliminate PyO3/GIL dependencies from core Rust logic and tests.
 - Keep a single Python package built with Maturin, with `_native` module providing Python bindings over a pure-Rust core.

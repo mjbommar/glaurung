@@ -1,5 +1,8 @@
 # Data Model Critique and Unification Plan
 
+> **Status: historical model critique.** Recommendations below are design input,
+> not current fields or implementation work.
+
 This document outlines a critique of the initial `GEMINI.md` data model proposal in light of the more comprehensive `CLAUDE.md` proposal. It provides a set of actionable recommendations to merge the strengths of both, creating a robust and extensible foundation for Glaurung.
 
 The core strategy is to adopt the detailed, feature-rich objects from `CLAUDE.md` for our foundational models while deferring the highly advanced, graph-oriented features to later project phases. This approach ensures we build a strong base without getting bogged down in excessive complexity upfront.

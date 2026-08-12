@@ -1,5 +1,9 @@
 # Windows API Type Sync
 
+> **Status: maintained generation guide.** Normal analysis is offline. Online
+> regeneration is an explicit maintainer workflow that can update generated
+> data and must preserve the pinned-source manifest.
+
 Glaurung ships an offline Windows API prototype bundle at
 `data/types/stdlib-winapi-protos.json`. It is generated, not
 hand-maintained.
@@ -7,7 +11,7 @@ hand-maintained.
 Regenerate it with:
 
 ```bash
-glaurung types sync
+uv run glaurung types sync
 ```
 
 The command downloads only the pinned NuGet packages listed in
@@ -21,17 +25,28 @@ The Rust native extension parses the extracted `.winmd` files with the
 overlay merging, and manifest writing.
 
 Normal analysis never reaches out to the network. It only reads the checked-in
-bundle. To prove the cache path is sufficient:
+bundle. To prove the cache path is sufficient without replacing tracked output,
+write the regenerated files to a disposable directory:
 
 ```bash
-glaurung types sync --offline
+WINDOWS_TYPES_TMP=$(mktemp -d /tmp/glaurung-windows-types.XXXXXX)
+uv run glaurung types sync --offline \
+  --output "$WINDOWS_TYPES_TMP/stdlib-winapi-protos.json" \
+  --generated-dir "$WINDOWS_TYPES_TMP/generated" \
+  --format json
+test -s "$WINDOWS_TYPES_TMP/stdlib-winapi-protos.json"
+test -s "$WINDOWS_TYPES_TMP/generated/MANIFEST.json"
+rm -r -- "$WINDOWS_TYPES_TMP"
 ```
+
+Offline mode fails if either pinned NuGet package is absent from the default
+cache. It never downloads a missing package.
 
 Local SDK/WDK headers can be used as an explicit fallback or augmentation
 source:
 
 ```bash
-glaurung types sync --offline \
+uv run glaurung types sync --offline \
   --header /path/to/ntddk.h \
   --clang-arg -I/path/to/sdk/include \
   --clang-arg -D_AMD64_=1

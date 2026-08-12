@@ -1,5 +1,8 @@
 # Data Model Proposals (GPT5)
 
+> **Status: historical model proposal.** Illustrative types below are not the
+> current Rust, Python, triage, or persistence API.
+
 ## Notes
 - Scope focuses on foundational domain objects (binaries, layout, code repr) and pipeline objects (artifacts, tasks, tools) that enable incremental analysis.
 - Types use simple names for clarity; exact Rust/Python representations can refine later.
@@ -326,4 +329,3 @@ Capture known decisions to be refined during implementation without blocking ini
 
 # Summary
 This proposal defines a lean, typed nucleus for binary description (Binary, Segment, Section, Symbol), code representation (Instruction, BasicBlock, Function, Graphs), and the pipeline envelope (Artifact, Task, ToolMetadata, Manifest, Workspace). It is intentionally minimal but sufficient to ship early phases (Identify, Layout, Symbols, Disassembly, Xrefs, Strings) while leaving room to evolve toward IR and dynamic analysis.
-

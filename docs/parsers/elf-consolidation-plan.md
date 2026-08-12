@@ -1,5 +1,9 @@
 # ELF Parser Consolidation Plan
 
+> **Status: historical design record.** Retained to explain the consolidation
+> intent; paths, gaps, phases, and acceptance claims must not be treated as the
+> current implementation contract.
+
 ## Executive Summary
 
 This document outlines the consolidation of all ELF (Executable and Linkable Format) parsing functionality scattered across the Glaurung codebase into a unified, self-contained ELF parser module at `src/formats/elf/`.

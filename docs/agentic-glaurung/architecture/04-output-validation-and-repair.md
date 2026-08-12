@@ -1,5 +1,9 @@
 # Output validation and repair
 
+> **Status: unimplemented design contract.** The validator and bounded repair
+> loop described here are required acceptance behavior, not current runtime
+> guarantees.
+
 ## Objective
 
 Validation is the trust boundary between model output and a DecBench result.

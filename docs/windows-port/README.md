@@ -1,8 +1,29 @@
 # Glaurung Windows-port working tree
 
-> Living docs for the Windows / PE / PDB readiness sprint driven
-> by the sibling `agentic-security-bot` (asb) repo's `windows-port`
-> campaign.
+> **Status: maintained capability index.** Current source, CLI help, and focused
+> tests take precedence over dated campaign prose and measurements. The sibling
+> `agentic-security-bot` campaign remains planning/provenance context, not a
+> dependency for normal Glaurung use.
+
+## Document map and maturity
+
+- [`windows-analysis-config.md`](windows-analysis-config.md) and
+  [`windows-api-type-sync.md`](windows-api-type-sync.md) are maintained operator
+  and generation guides.
+- [`atomic-tools.md`](atomic-tools.md),
+  [`pdb-ingestion-design.md`](pdb-ingestion-design.md),
+  [`pe-hardening-design.md`](pe-hardening-design.md), and
+  [`bsim-similarity-design.md`](bsim-similarity-design.md) are historical design
+  records. Significant portions have shipped; use the capability table below
+  and current source for the implemented boundary.
+- [`roadmap.md`](roadmap.md) and
+  [`agentic-ai-functionality-roadmap.md`](agentic-ai-functionality-roadmap.md)
+  are dated campaign/backlog records, not current completion checklists.
+- The Glaurung-versus-Ghidra reviews and dashboards are generated, revision-bound snapshots.
+  Regenerate or bind a claim to their exact input
+  artifacts; do not present their timings or recall as current by default.
+- [`co-investment-policy.md`](co-investment-policy.md) mirrors external campaign
+  governance. It does not define the public Glaurung API.
 
 ## Status
 

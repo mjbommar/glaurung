@@ -17,4 +17,4 @@ def _apply():
     }
 
     # Function renames (preferring demangled when present).
-    if ida_name.set_name(0x1060, "_start", ida_name.SN_FORCE):
+    if ida_name.set_name(0x1000, "_init", ida_name.SN_FORCE):

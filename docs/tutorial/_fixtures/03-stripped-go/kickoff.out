@@ -4,29 +4,21 @@
 - entry: **0x46d1e0**
 
 ## Functions
-- discovered: **16** (with blocks: 16, named: 0)
-- callgraph edges: **0**
-- name sources: gopclntab=1801
+- discovered: **1522** (with blocks: 1522, named: 0)
+- callgraph edges: **8774**
+- name sources: gopclntab=1801, analyzer=193
 
 ## Type system
-- stdlib prototypes loaded: **192**
+- stdlib prototypes loaded: **114**
 - DWARF types imported: **0**
-- stack slots discovered: **160**
+- stack slots discovered: **1079**
 - types propagated: **0**
-- auto-struct candidates: **32**
+- auto-struct candidates: **131**
 
 ## IOCs (from string scan)
 - **hostname**: 1
+- **ipv4**: 0
 - **java_path**: 1
 - **path_posix**: 1
-- **ipv4**: 0
-
-Examples:
-  - `path_posix` `/qX9lCEmUD5wxPlbFoWbu/uFKWi9tvwcKX-1JoH49O/7bp7aRo25jsgzkQau8bl`  (off `0xfc0`)
-  - `java_path` `_MNoXSivWLKBjjCAORgb/qX9lCEmUD5wxPlbFoWbu/uFKWi9tvwcKX-1JoH49O/7bp7aRo25jsgzkQau8bl`  (off `0xfac`)
-  - `c_identifier` `_MNoXSivWLKBjjCAORgb`  (off `0xfac`)
-  - `c_identifier` `qX9lCEmUD5wxPlbFoWbu`  (off `0xfc1`)
-  - `c_identifier` `uFKWi9tvwcKX`  (off `0xfd6`)
-  - `c_identifier` `v`  (off `0x1124`)
 
 _completed in N ms_

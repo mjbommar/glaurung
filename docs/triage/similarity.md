@@ -1,44 +1,84 @@
-Similarity Hashing
+# Similarity hashing
 
-Overview
-- Provides lightweight, license-friendly fuzzy hashing via Context-Triggered Piecewise Hashing (CTPH) for clustering and near-duplicate detection.
-- Also reports PE import hash (imphash) when applicable.
+Glaurung provides a native context-triggered piecewise hash (CTPH) for bounded
+near-duplicate comparison and a PE import hash when applicable. CTPH is useful
+for candidate clustering; it is not a cryptographic identity, semantic
+equivalence proof, or malware-family attribution.
 
-CTPH Format
-- Digest format: "<window_size>:<digest_size>:<block1>:<block2>:..."
-- Blocks: short BLAKE3-XOF substrings emitted when a rolling hash trigger fires (or a safety length is reached).
-- Similarity: Jaccard over block sets, only if window_size and digest_size match.
+## Triage integration
 
-Default Parameters
-- Small (< 16 KiB): window=8, digest=4, precision=8 (8-bit rolling)
-- Medium (< 1 MiB): window=16, digest=5, precision=16
-- Large (>= 1 MiB): window=32, digest=6, precision=16
+`glaurung triage FILE --json` includes:
 
-Python Usage
+- `similarity.ctph` for analyzed inputs; and
+- `similarity.imphash` for supported PE inputs with import data.
+
+The CTPH digest is intentionally verbose. Store it as structured data rather
+than displaying it in an analyst summary.
+
+## Tested Python example
+
 ```python
-import glaurung as g
+from glaurung import similarity
 
-# Hash bytes
-h1 = g.similarity.ctph_hash_bytes(data)
+paths = [
+    "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/"
+    "hello-gcc-O2",
+    "samples/binaries/platforms/linux/amd64/export/native/clang/O2/"
+    "hello-clang-O2",
+]
 
-# Hash a file (bounded I/O)
-h2 = g.similarity.ctph_hash_path("/path/to/file")
+digests = [similarity.ctph_hash_path(path) for path in paths]
+score = similarity.ctph_similarity(digests[0], digests[1])
+assert 0.0 <= score <= 1.0
 
-# Compare digests
-score = g.similarity.ctph_similarity(h1, h2)  # 0.0..1.0
-
-# Pairwise matrix (budgeted)
-M = g.similarity.ctph_pairwise_matrix([h1, h2, ...], max_pairs=250_000)
-
-# Top-K nearest digests
-neighbors = g.similarity.ctph_top_k(h1, digest_list, k=5, min_score=0.6)
+pairs = similarity.ctph_pairwise_matrix(digests, max_pairs=10)
+clusters = similarity.cluster_single_linkage(
+    digests,
+    threshold=0.85,
+    max_pairs=10,
+)
+print(score, pairs, clusters)
 ```
 
-Triage Integration
-- TriagedArtifact.similarity:
-  - imphash: Optional (PE only)
-  - ctph: Always computed over a bounded heuristics buffer
+For bytes already in memory:
 
-Notes
-- CTPH here is MIT/Apache friendly and avoids GPL-encumbered ssdeep/sdhash.
-- For best clustering, use consistent parameters across your corpus.
+```python
+digest = similarity.ctph_hash_bytes(b"example payload" * 256)
+assert isinstance(digest, str)
+```
+
+Other available helpers are:
+
+- `ctph_recommended_params(size)` for the native size-based parameter choice;
+- `ctph_top_k(query, candidates, k, min_score)` for nearest digests; and
+- `cluster_single_linkage(digests, threshold, max_pairs)` for connected
+  components over pairwise scores.
+
+## Digest compatibility
+
+The digest encodes its window and digest sizes. `ctph_similarity` compares block
+sets only when those parameters are compatible. Generate corpus digests with the
+same Glaurung revision and defaults when stable clustering matters.
+
+The current size-based recommendations are:
+
+| Input size | Window | Digest bytes | Rolling precision |
+| --- | ---: | ---: | ---: |
+| under 16 KiB | 8 | 4 | 8 |
+| 16 KiB to under 1 MiB | 16 | 5 | 16 |
+| 1 MiB and above | 32 | 6 | 16 |
+
+These are implementation defaults, not universal similarity thresholds.
+Calibrate `min_score` or clustering thresholds on labeled data from the target
+corpus.
+
+## Complexity and limits
+
+Pairwise comparison is quadratic in the number of digests. Always set
+`max_pairs` from an explicit resource budget. `ctph_pairwise_matrix` raises or
+stops according to the native contract rather than silently claiming complete
+coverage beyond that budget.
+
+Treat a high score as a lead for deeper function-, import-, or behavior-level
+comparison. Treat a low score as inconclusive when packing, relinking,
+architecture, compiler, or large resource changes can dominate byte structure.
