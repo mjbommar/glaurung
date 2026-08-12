@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
         style="decbench",
     )
     assert "cdecl_chain(int arg0, int arg1, int arg2)" in generated, generated
-    assert "helper3(arg0, arg1, arg2)" in generated, generated
+    assert "helper3((int)(arg0), (int)(arg1), (int)(arg2))" in generated, generated
 
     rebuilt_source = tmp_path / "rebuilt.c"
     rebuilt_source.write_text(
