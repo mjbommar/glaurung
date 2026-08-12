@@ -26,6 +26,7 @@ pub mod abi;
 pub mod arm32_prologue;
 pub mod arm64_prologue;
 pub mod ast;
+pub mod bool_guard;
 pub mod call_args;
 pub mod call_contracts;
 pub mod canary;

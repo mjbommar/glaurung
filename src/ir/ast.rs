@@ -6264,6 +6264,9 @@ fn drop_self_stores(body: &mut Vec<Stmt>) {
 /// 16. `fold_exhaustive_if_returns` and `fold_exhaustive_switch_returns` move an
 ///    immediately joined result return into every arm only when both `if` arms,
 ///    or an explicit switch default, make the control flow exhaustive.
+/// 17. `bool_guard::recover_inclusive_comparisons` folds x86's `(a == b) | (a < b)`
+///    flag pair back into the single `a <= b` relation it encodes, once every
+///    switch recogniser has seen the un-merged comparison ladder.
 ///
 /// They used to run *inside* `render_decbench_typed`, which made that renderer
 /// impure: the AST that was checked or dumped was not the AST that was printed,
@@ -6379,6 +6382,13 @@ pub fn prepare_for_decbench_with_output(
     // pass. The recovery is exact and idempotent; rerun it on the final AST so
     // phi-coalesced cursors retain their source-level pre-test.
     crate::ir::loop_form::recover_guarded_do_whiles(&mut owned);
+    // Last, because it is the one rewrite every switch recogniser must be
+    // allowed to see the un-merged form of: x86 spells `a <= b` as the flag
+    // pair `(a == b) | (a < b)`, and folding that into one relation before
+    // `switch_ladder` runs destroys the comparison ladder (see
+    // `bool_guard`'s module docs and `320e960`). By this point every switch
+    // pass has had its look.
+    crate::ir::bool_guard::recover_inclusive_comparisons(&mut owned);
     remove_redundant_return_constant_assignments(&mut owned.body);
     owned
 }
