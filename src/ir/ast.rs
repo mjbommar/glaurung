@@ -7431,6 +7431,34 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     //
     // The indented, function-local spelling below is safe: `_ARRAY_RET` is
     // `^`-anchored, so leading whitespace already prevents the match.
+    //
+    // THIS DEFINITION IS NOT OPTIONAL, AND IT IS NOT A `byte_match` LEVER.
+    // Both claims have been made, on the strength of a real GCC behaviour seen
+    // through a harness that is not DecBench's. Measured 2026-08-04 on the
+    // frozen 250-function holdout; do not re-litigate without redoing this:
+    //
+    //   * DecBench never compiles this line. `evalkit ingest` slices the
+    //     submitted unit with `decompilers.dockerized.split_c_functions`, which
+    //     starts each snippet at the `_FUNC_DEF_RE` SIGNATURE line. Census over
+    //     the whole holdout: 88 of 250 submitted functions reference a
+    //     `glaurung_global_*`; 88 of those 88 snippets carry the in-body
+    //     `extern` below; 0 of 250 carry this file-scope definition.
+    //   * A/B over the holdout, definitions emitted vs. suppressed, same build:
+    //     227/250 compile and byte_match 0.2005 over 250 BOTH ways — 0 of 250
+    //     functions changed by a single ULP. The lever does not exist here.
+    //   * Suppressing them costs the execution differential 4 of 656
+    //     `tools/fixture_harness.py` cases (656 -> 652): `tools/diff_decompile.py`
+    //     builds the WHOLE emitted unit into a shared object and `dlopen`s it,
+    //     and supplies no definition of its own. This line is that definition.
+    //
+    // The real GCC behaviour behind the false lever: in a whole translation
+    // unit an uninitialised `static` array is provably zero, so -O2 folds every
+    // guard that reads it. Measured on 25 holdout functions, 20 compile SMALLER
+    // as a whole TU than as the DecBench snippet (`sub_53d0` 3 vs 130
+    // instructions). That collapse is real — and it is confined to whole-TU
+    // consumers (`tools/recompile_fidelity.py`, `diff_decompile`), which is
+    // exactly why a whole-TU proxy reports a large win for deleting these and
+    // the scored metric reports none.
     for address in ids.global_addresses.keys() {
         let _ = writeln!(
             out,
@@ -18431,9 +18459,7 @@ function f @ 0x1000 {
         });
 
         assert!(
-            rendered.contains(
-                r#"record((long *)("boom"), (int *)(&local_18[0]), &local_28[0])"#
-            ),
+            rendered.contains(r#"record((long *)("boom"), (int *)(&local_18[0]), &local_28[0])"#),
             "a literal or frame argument reached an incompatible pointer parameter \
              without the reasserting cast, or a `void *` parameter grew a \
              redundant one:\n{rendered}"
