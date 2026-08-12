@@ -84,62 +84,11 @@ description = "Every Clang -O0 fixture, where unoptimised structuring bugs are m
 selectors = ["*:clang:O0"]
 
 [curriculum]
-description = "All 66 curriculum projects: data structures, graphs, strings, numerics, and applied-science kernels, in all four lanes."
+description = "Sixteen undergraduate data-structure, graph, string, and numerical projects in all four lanes."
 selectors = [
     "15_*", "16_*", "17_*", "18_*", "19_*", "20_*", "21_*", "22_*",
     "23_*", "24_*", "25_*", "26_*", "27_*", "28_*", "29_*", "30_*",
-    "31_*", "32_*", "33_*", "34_*", "35_*", "36_*", "37_*", "38_*",
-    "39_*", "40_*", "41_*", "42_*", "43_*", "44_*", "45_*", "46_*",
-    "47_*", "48_*", "49_*", "50_*", "51_*", "52_*", "53_*", "54_*",
-    "55_*", "56_*", "57_*", "58_*", "59_*", "60_*", "61_*", "62_*",
-    "63_*", "64_*", "65_*", "66_*", "67_*", "68_*", "69_*", "70_*",
-    "71_*", "72_*", "73_*", "74_*", "75_*", "76_*", "77_*", "78_*",
-    "79_*", "80_*",
 ]
-
-[curriculum-dynamic-programming]
-description = "Edit distance, LCS, knapsack, coin change, and matrix-chain order: flat DP tables and reverse iteration."
-selectors = ["31_*", "32_*", "33_*", "34_*", "35_*"]
-
-[curriculum-sorting]
-description = "Recursive quicksort, heapsort, insertion/shell, counting/radix, and quickselect."
-selectors = ["36_*", "37_*", "38_*", "39_*", "40_*"]
-
-[curriculum-strings]
-description = "Lexer state machine, RPN stack evaluation, base64, run-length coding, and decimal conversion."
-selectors = ["41_*", "42_*", "43_*", "44_*", "45_*"]
-
-[curriculum-bits]
-description = "Bit sets with rank/select, Huffman code lengths, Gray coding, CRC-32, and LEB128 varints."
-selectors = ["46_*", "47_*", "48_*", "49_*", "50_*"]
-
-[curriculum-crypto]
-description = "RC4, FNV/djb2/Murmur finalizer, xorshift and LCG generators, and one SHA-256 compression."
-selectors = ["51_*", "52_*", "53_*", "54_*"]
-
-[curriculum-number-theory]
-description = "Euclid and modular exponentiation, sieving, multi-limb arithmetic, exact rationals, combinatorics, and integer matrices."
-selectors = ["55_*", "56_*", "57_*", "58_*", "59_*", "60_*"]
-
-[curriculum-numerics]
-description = "Q16.16 primitives, Gaussian elimination with pivoting, quadrature, and root finding."
-selectors = ["61_*", "62_*", "63_*", "64_*"]
-
-[curriculum-physics]
-description = "Projectile motion, an orbital step, elastic collisions, and thermodynamics in fixed point."
-selectors = ["65_*", "66_*", "67_*", "68_*"]
-
-[curriculum-chemistry]
-description = "Molar-mass formula parsing and integer reaction balancing."
-selectors = ["69_*", "70_*"]
-
-[curriculum-finance]
-description = "Compounding, loan amortisation, NPV/IRR, moving statistics, order matching, and portfolio rebalancing."
-selectors = ["71_*", "72_*", "73_*", "74_*", "75_*", "76_*"]
-
-[curriculum-structures]
-description = "LRU cache, ring buffer, segment tree, and a flat-array trie."
-selectors = ["77_*", "78_*", "79_*", "80_*"]
 
 [curriculum-data-structures]
 description = "BST, red-black invariants, open-address hashing, binary heap, and disjoint-set."

@@ -12,9 +12,8 @@ analyst-facing surface, and an LLM agent (`pydantic-ai`) integrated throughout
 the pipeline rather than bolted on.
 
 - **Rust crate** (`src/`): the analysis engine, exposed to Python via PyO3.
-  Key modules: `triage` (including ELF/PE/Mach-O metadata), dedicated `formats`
-  parsers (ELF, PE, APK/AXML, DEX, and SELinux policy), `disasm` (x86/x64,
-  ARM/ARM64, RISC-V), `analysis` (CFG, function discovery), `ir`, `symbols`,
+  Key modules: `triage`, `formats` (ELF/PE/Mach-O), `disasm` (x86/x64, ARM/ARM64,
+  RISC-V), `analysis` (CFG, function discovery), `ir` (LLIR), `symbols`,
   `demangle` (Itanium/Rust/MSVC), `flirt`, `strings`, `similarity`, `entropy`.
 - **Python package** (`python/glaurung/`): PyO3 bindings (`_native…so`), the
   `glaurung` CLI (`cli/commands/`), the `llm/` agent subsystem, and the `kb/`
@@ -43,16 +42,16 @@ uv run glaurung triage <binary>
 uv run glaurung kickoff <binary>        # full analysis → .glaurung KB
 
 # Tests
-uv run pytest python/tests/                # Python suite
+uv run pytest python/tests/                # Python suite (~345 test files)
 uv run pytest python/tests/test_x.py -xvs  # one file, stop on first failure
-cargo test                                # Rust suite
+cargo test                              # Rust suite (~125 test modules)
 
 # Decompiler: iterate small, gate big — docs/development/decompiler-testing.md
 tools/build_guard.py                              # is the .so current?
-tools/dectest.py 13_loop_early_exit:gcc:O0:bisect --show   # one function
+tools/dectest.py 13_loop_early_exit:gcc:O0:bisect --show   # ONE function, ~3s
 tools/dectest.py @loops                           # a named set (sets.toml)
 tools/dectest.py --list-sets                      # what sets exist
-scripts/decbench-local-gate.sh                    # the full three-lane gate
+scripts/decbench-local-gate.sh                    # the full 3-lane gate (~40m)
 
 # Bench / regression scorecard
 uv run python -m glaurung.bench
@@ -75,8 +74,7 @@ uvx ty check python/
 
 ## Working style
 
-This is a **real, production** tool used for actual binary analysis. Hold the
-line on:
+This is a **real, production** tool used for actual binary analysis. Hold the line on:
 
 - **TDD.** Write/extend the test first, then make it pass. Run the suite before
   calling something done. New analysis behavior needs a real fixture-backed test.
@@ -111,8 +109,7 @@ Env overrides: `GLAURUNG_LLM_MODEL`, `GLAURUNG_OPENAI_SERVICE_TIER`
 - Hitting Anthropic's 4M-tokens/min ceiling → lower `max_parallel` in
   `sweep_binary` (default 1), don't change model family.
 - One-off heavier interactive runs may pass `--model anthropic:claude-opus-4-7`
-  (or any `provider:model`); the default stays `gpt-5.4-mini` for
-  batched/automated work.
+  (or any `provider:model`); the default stays `gpt-5.4-mini` for batched/automated work.
 
 ## Custom agents
 
