@@ -14,6 +14,8 @@ use super::{
 pub(super) struct DirectCalleeFacts {
     pub(super) layouts: std::collections::HashMap<u64, Vec<crate::ir::types::VReg>>,
     pub(super) prototypes: std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    /// Program-level records keyed by the identifier emitted for each callee.
+    pub(super) env: crate::ir::symbol_env::SymbolEnv,
 }
 
 fn imported_symbol_base(name: &str) -> &str {
@@ -58,6 +60,20 @@ fn itanium_runtime_layout(
             .map(|slot| crate::ir::types::VReg::phys(slot[0]))
             .collect(),
     )
+}
+
+/// Choose the strongest callee-owned record available for `name`.
+fn callee_record(
+    name: &str,
+    recovered: &crate::ir::call_contracts::CallPrototype,
+    noreturn: bool,
+) -> crate::ir::symbol_env::SymbolRecord {
+    use crate::ir::symbol_env::{RecordSource, SymbolRecord};
+
+    crate::ir::call_contracts::lookup(name)
+        .and_then(|contract| contract.standalone_prototype())
+        .map(|prototype| SymbolRecord::new(prototype, RecordSource::Catalog, noreturn))
+        .unwrap_or_else(|| SymbolRecord::new(recovered.clone(), RecordSource::CalleeBody, noreturn))
 }
 
 pub(super) fn recovered_call_prototype(
@@ -616,7 +632,33 @@ pub(super) fn recover_direct_callee_layouts(
                 std::collections::hash_map::Entry::Occupied(_) => {}
             }
             facts.layouts.insert(callee_va, layout);
-            facts.prototypes.insert(callee_va, prototype);
+            let mut call_prototype = prototype.clone();
+            if let Some(display) = address_names.get(&callee_va) {
+                let key =
+                    crate::ir::ast::sanitize_c_ident(crate::ir::ast::callee_display_name(display));
+                let noreturn = crate::analysis::call_semantics::is_known_noreturn_symbol(&key);
+                facts
+                    .env
+                    .insert(key.clone(), callee_record(&key, &prototype, noreturn));
+                if let Some(declared) = dwarf_outputs
+                    .and_then(|outputs| outputs.get(&body_va))
+                    .and_then(super::dwarf_render_prototype)
+                {
+                    if let Some(record) = crate::ir::symbol_env::dwarf_record(&declared, noreturn) {
+                        facts.env.insert(key.clone(), record);
+                    }
+                }
+                // Records that require no separate tag declaration are also
+                // safe to use as call-boundary type evidence.
+                if let Some(record) = facts
+                    .env
+                    .get(&key)
+                    .filter(|record| record.required_structs.is_empty())
+                {
+                    call_prototype = record.prototype.clone();
+                }
+            }
+            facts.prototypes.insert(callee_va, call_prototype);
         } else if dump {
             eprintln!("callee 0x{callee_va:x}: no recovered layout");
         }

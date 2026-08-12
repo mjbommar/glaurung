@@ -1155,6 +1155,7 @@ pub(super) fn decompile_at_session(
             &stack_facts.source_names,
             cc,
             &addr_map,
+            &callee_facts.env,
         )
     } else if style == "c" {
         let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
@@ -1400,6 +1401,7 @@ fn decompile_range_at_py(
             &stack_facts.source_names,
             cc,
             &addr_map,
+            &callee_facts.env,
         )
     } else if style == "c" {
         profiler.measure("render_c", || crate::ir::ast::render_c(&f))
@@ -1652,7 +1654,11 @@ fn decbench_text(
     dwarf_local_names: &std::collections::HashMap<String, String>,
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
+    symbol_env: &crate::ir::symbol_env::SymbolEnv,
 ) -> String {
+    // Install the program-level callee records for this render. The renderer
+    // clears them alongside its other per-render selections.
+    crate::ir::symbol_env::install(symbol_env.clone());
     let output_kind = recovered_prototype.map_or(
         crate::ir::types_recover::RecoveredOutputKind::Unknown,
         crate::ir::types_recover::RecoveredPrototype::output_kind,
@@ -2589,6 +2595,7 @@ fn decompile_all_py(
                 &stack_facts.source_names,
                 cc,
                 &addr_map,
+                &callee_facts.env,
             )
         } else {
             profiler.measure("render", || render(&f))
@@ -2849,6 +2856,7 @@ fn decompile_many_py(
                 &stack_facts.source_names,
                 cc,
                 &addr_map,
+                &callee_facts.env,
             )
         } else if style == "c" {
             let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));

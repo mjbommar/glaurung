@@ -7331,6 +7331,24 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
             .filter_map(|c_type| dwarf_type_env.aggregate_pointer(c_type))
             .map(|pointer| pointer.source_name.to_string()),
     );
+    // Callee declarations come from the program-level environment, and a record
+    // may spell an aggregate this function never otherwise mentions. Those tags
+    // are forward-declared (see the emission below) rather than defined: an
+    // incomplete type is all a pointer parameter needs, so the declaration
+    // never depends on recovering the aggregate's layout.
+    //
+    // The alias rewrite that turns `struct X *` into the typedef spelling is
+    // deliberately NOT applied to these declarations. `typedef struct X X;`
+    // makes the two spellings one type wherever both are visible, so the
+    // defining function's `X *` and a caller's `struct X *` already agree —
+    // and the tag spelling needs only a forward declaration, while the typedef
+    // spelling would need the definition.
+    let named_call_declarations = recover_named_call_prototypes(&f.body, &name);
+    let callee_tag_declarations = named_call_declarations
+        .keys()
+        .filter_map(|callee| crate::ir::symbol_env::lookup(callee))
+        .flat_map(|record| record.required_structs)
+        .collect::<std::collections::BTreeSet<_>>();
     DEC_RENDERABLE_STRUCTS.with(|selected| *selected.borrow_mut() = complete_structs.clone());
     DEC_STRUCT_PTR_TYPES.with(|selected| {
         let mut exact = std::collections::HashMap::new();
@@ -7395,6 +7413,24 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         }
     }
     for declaration in source_declarations {
+        let _ = writeln!(out, "{declaration}");
+    }
+    // Tags named by the callee declarations below, at FILE scope.
+    //
+    // Not inside the body, which is where they were first emitted: a tag
+    // declared at block scope is a *new, distinct* type scoped to that block
+    // (C11 6.2.1p4). Two functions each declaring `struct varbuf;` in their own
+    // bodies therefore got two incompatible `struct varbuf`s, and every
+    // `extern void varbuf_end_str(struct varbuf *);` conflicted with every
+    // other — with gcc printing `have 'void(struct varbuf *)'` against a
+    // `previous declaration ... with type 'void(struct varbuf *)'`, identical
+    // text, 46 times for that one symbol. At file scope there is one tag and
+    // the declarations agree.
+    //
+    // DecBench's per-function split discards this line along with the struct
+    // definitions already emitted here; the sliced fragment then declares the
+    // tag in parameter-list scope, which warns but compiles.
+    for declaration in &callee_tag_declarations {
         let _ = writeln!(out, "{declaration}");
     }
     for (name, layout) in &aggregate_layouts {
@@ -7508,8 +7544,6 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
             }
         }
     }
-    let named_call_declarations = recover_named_call_prototypes(&f.body, &name);
-
     // Signature: recovered return + argument types. Record which arguments are
     // pointers so the body can cast their int↔pointer reuse (see DEC_PTR_ARGS).
     DEC_PTR_ARGS.with(|m| m.borrow_mut().clear());
@@ -7638,7 +7672,13 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // though both sources share one deterministic declaration table here.
     for (callee, prototype) in &named_call_declarations {
         out.push_str("    extern ");
-        if crate::analysis::call_semantics::is_known_noreturn_symbol(callee) {
+        // Non-returning-ness is a property of the callee, so it belongs to the
+        // callee's record. The symbol catalog remains the fallback for callees
+        // the environment never reached.
+        if crate::ir::symbol_env::lookup(callee).map_or_else(
+            || crate::analysis::call_semantics::is_known_noreturn_symbol(callee),
+            |record| record.noreturn,
+        ) {
             out.push_str("__attribute__((noreturn)) ");
         }
         let _ = write!(out, "{} {}(", prototype.return_type, callee);
@@ -7766,6 +7806,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow_mut().clear());
     DEC_WIDE_LOCALS.with(|locals| locals.borrow_mut().clear());
     DEC_POINTER_WIDTH.with(|width| width.set(8));
+    crate::ir::symbol_env::clear();
     out
 }
 
@@ -7870,7 +7911,7 @@ fn flag_ident(fl: &Flag) -> &'static str {
 
 /// Map an arbitrary name (function or register) to a valid C identifier: keep
 /// `[A-Za-z0-9_]`, replace the rest with `_`, and prefix a leading digit.
-fn sanitize_c_ident(name: &str) -> String {
+pub fn sanitize_c_ident(name: &str) -> String {
     let mut s = String::with_capacity(name.len());
     for ch in name.chars() {
         if ch.is_ascii_alphanumeric() || ch == '_' {
@@ -8582,6 +8623,19 @@ fn infer_named_call_prototype(observations: &[CallPrototype]) -> Option<CallProt
     })
 }
 
+/// Select one declaration per callee named by `body`.
+///
+/// The program-level environment answers first. A record there is a property of
+/// the *callee* — its DWARF declaration, its catalog contract, or the recovery
+/// run over its own body — so every caller in the image selects the same
+/// declaration for the same symbol, and a callee defined in this unit is
+/// declared as what it actually is.
+///
+/// Call-site inference remains for the symbols the environment cannot reach:
+/// imports with no body in this image and no catalog entry. Those are still
+/// per-function and can still disagree between functions; measured on dpkg
+/// (816 rendered functions) they are 1,210 of 3,609 declaration sites, of which
+/// 96 disagree.
 fn recover_named_call_prototypes(
     body: &[Stmt],
     current_name: &str,
@@ -8598,6 +8652,11 @@ fn recover_named_call_prototypes(
     );
     for conflict in &conflicts {
         prototypes.remove(conflict);
+    }
+    for name in observations.keys() {
+        if let Some(record) = crate::ir::symbol_env::lookup(name) {
+            prototypes.insert(name.clone(), record.prototype);
+        }
     }
     for (name, observations) in observations {
         if let std::collections::btree_map::Entry::Vacant(entry) = prototypes.entry(name) {
@@ -9819,7 +9878,7 @@ fn write_string_lit(value: &str, out: &mut String) {
 /// that spelling is right for an import listing or an xref view. In a call
 /// EXPRESSION it is wrong: the source called `foo`, `foo@plt` sanitises to the
 /// undeclared identifier `foo_plt`, and nothing in the program defines it.
-fn callee_display_name(name: &str) -> &str {
+pub fn callee_display_name(name: &str) -> &str {
     name.split_once('@').map_or(name, |(base, _)| base)
 }
 
