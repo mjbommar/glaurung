@@ -76,7 +76,6 @@ pub mod soft_helpers;
 pub mod ssa;
 pub mod stack_idiom;
 pub mod stack_locals;
-pub mod static_storage;
 pub mod strings_fold;
 pub mod structure;
 pub mod structure_accounting;

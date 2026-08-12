@@ -6022,10 +6022,7 @@ mod tests {
             },
         )]);
         let cursor = reg("x9#1");
-        let address_defs = StackAddressDefs {
-            direct: HashMap::from([(cursor.clone(), ("entry_sp".into(), -168))]),
-            ..StackAddressDefs::default()
-        };
+        let address_defs = HashMap::from([(cursor.clone(), ("entry_sp".into(), -168))]);
         let body = vec![Stmt::Assign {
             dst: reg("w0#1"),
             src: Expr::Deref {
@@ -6428,7 +6425,7 @@ mod tests {
             frame_pointer_established: false,
             parameter_count: None,
         };
-        let defs = collect_stack_address_defs(&body, ctx, &HashMap::new());
+        let defs = collect_stack_address_defs(&body, ctx);
         let resolved = resolved_memory_address(&lea("r4#1", -84), Some(0), ctx, &defs)
             .expect("the store address must resolve to a stack object");
         assert_eq!(

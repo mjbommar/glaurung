@@ -262,10 +262,7 @@ fn a32_fallthrough_branch_restore_invalidates_the_frame_coordinate() {
     );
 
     assert!(
-        !definitions.direct.contains_key(&reg("fp"))
-            && !definitions.indexed.contains_key(&reg("fp"))
-            && !definitions.affine.contains_key(&reg("fp"))
-            && !definitions.constants.contains_key(&reg("fp")),
+        !definitions.contains_key(&reg("fp")),
         "fall-through restore retained a stale frame coordinate: {definitions:#?}"
     );
 }
