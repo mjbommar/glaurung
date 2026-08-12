@@ -542,7 +542,7 @@ def test_real_arm_mixed_hard_float_call_round_trip(tmp_path: Path) -> None:
     )
 
     assert "float arm_hf_mixed_caller(float arg0, int arg1)" in generated, generated
-    assert "arm_hf_mixed_callee(7, arg0, arg1)" in generated, generated
+    assert "arm_hf_mixed_callee((int)(7), arg0, (int)(arg1))" in generated, generated
     assert "asm:" not in generated, generated
 
     driver = tmp_path / "mixed_call_driver.c"
