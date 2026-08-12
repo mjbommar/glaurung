@@ -2298,11 +2298,25 @@ fn it_conditions(mnem: &str, cond_name: &str) -> Vec<(VReg, bool)> {
     out
 }
 
-/// Wrap an unconditionally-lifted instruction's ops so its register write only
-/// takes effect when `cond` holds (an IT-block predicated instruction). The
-/// common single-write shapes become an [`Op::Ite`] select (`dst = cond ? new :
-/// dst`); multi-op or store-only lifts fall back to executing unconditionally
-/// (a documented approximation).
+/// Wrap an unconditionally-lifted instruction's ops so its architectural writes
+/// only take effect when `cond` holds (an IT-block predicated instruction).
+///
+/// Single-write shapes become one [`Op::Ite`] select (`dst = cond ? new : dst`).
+/// Anything longer goes through [`predicate_sequence`], which is the case that
+/// matters: a predicated **flag-writing** instruction expands to many ops, and
+/// this function used to give up on those and emit them **unconditionally**.
+///
+/// That fallback was not a harmless approximation. `cmp` writes five flags plus
+/// scratch, so `cmpgt r1,#0` — gcc's conditional-compare idiom for `&&` — took
+/// the bail-out, clobbered the flags carrying the *first* operand's result, and
+/// the recovered C tested only the second. `sc_and(-5, 5)` returned 1234 where
+/// the original returns 4321. Two `@smoke` canaries failed on armv7 and passed
+/// on x86-64 for exactly this reason; see
+/// `docs/design/armv7-real-defects-2026-08-05.md`.
+///
+/// Store-only and control-transfer lifts still execute unconditionally — the IR
+/// has no predicated store — but that residue is now narrow and named rather
+/// than being every multi-op lift.
 fn make_conditional(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
     // Ite is `dst = cond ? t : e`; for `if !cond` we swap the two arms.
     let pick = |new: Value, keep: Value| -> (Value, Value) {
@@ -2313,7 +2327,7 @@ fn make_conditional(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
         }
     };
     if ops.len() != 1 {
-        return ops;
+        return predicate_sequence(ops, cond, inverted);
     }
     match ops.into_iter().next().unwrap() {
         Op::Assign { dst, src } => {
@@ -2376,6 +2390,161 @@ fn make_conditional(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
         // Stores / returns / anything else: keep as-is (unconditional approx).
         other => vec![other],
     }
+}
+
+/// First temp number [`predicate_sequence`] may allocate.
+///
+/// Hand-numbered temps in this lifter currently reach 41 (`cmp_flag_ops`), and
+/// the shift helpers sit at `SHIFT_TEMP`(6)..8 and 10..17. 64 leaves a clear gap
+/// so a future hand-numbered temp does not silently alias a predication temp —
+/// the aliasing failure would be a wrong *value*, not a compile error.
+const PRED_TEMP_BASE: u32 = 64;
+
+/// Predicate a multi-op instruction lift: run it, then commit each architectural
+/// write only when `cond` holds.
+///
+/// The shape is "compute unconditionally into scratch, then select":
+///
+/// 1. Every write to a **`Phys` or `Flag`** register is redirected to a fresh
+///    temp, and later reads of that register within the same instruction are
+///    rewritten to the temp — a sequence really does read its own earlier
+///    writes (`O = S xor Slt` in [`cmp_flag_ops`] is exactly that), so skipping
+///    the substitution would compute the new flag from the *stale* one.
+/// 2. Writes to `Temp` are left alone. They are instruction-internal scratch,
+///    dead outside the lift, so preserving them across a not-taken predicate
+///    would be pointless work with no observable difference.
+/// 3. Each redirected register is then committed with an [`Op::Ite`] —
+///    `dst = cond ? computed : dst` — in first-write order, so the emitted
+///    sequence is deterministic.
+///
+/// Bails out (executing unconditionally, as before) only for a sequence
+/// containing a write this scheme cannot express: a store, a control transfer,
+/// or a call. The IR has no predicated store, and inventing one here would be a
+/// larger change than the defect warrants.
+fn predicate_sequence(ops: Vec<Op>, cond: VReg, inverted: bool) -> Vec<Op> {
+    use crate::ir::use_def::def_mut;
+    use crate::ir::value_number::for_each_vreg_mut;
+
+    // A predicated store or branch cannot be expressed as a select over a
+    // register write, so keep the old approximation rather than emit something
+    // that is confidently wrong. `Nop` is not a write and must not trip this.
+    let unpredicatable = ops.iter().any(|op| {
+        matches!(
+            op,
+            Op::Store { .. }
+                | Op::Jump { .. }
+                | Op::CondJump { .. }
+                | Op::IndirectJump { .. }
+                | Op::Call { .. }
+                | Op::Return
+                | Op::Unknown { .. }
+        )
+    });
+    if unpredicatable {
+        return ops;
+    }
+
+    // Architectural state that must survive a not-taken predicate. Temps are
+    // scratch; see the doc comment.
+    fn is_architectural(r: &VReg) -> bool {
+        matches!(r, VReg::Phys(_) | VReg::Flag(_))
+    }
+
+    let mut renamed: Vec<(VReg, VReg)> = Vec::new(); // (architectural dst, temp), first-write order
+    let mut current: Vec<(VReg, VReg)> = Vec::new(); // (architectural reg, temp holding its newest value)
+    let mut next_temp = PRED_TEMP_BASE;
+    let mut out: Vec<Op> = Vec::with_capacity(ops.len() + 5);
+
+    // A predicated instruction is allowed to write the very flag it is
+    // predicated on, and the conditional-compare idiom routinely does:
+    //
+    //     cmp   r0, #0
+    //     it    ne          <- predicate is Z
+    //     cmpne r1, #0      <- ...and this writes Z, among the other flags
+    //     ble   ...
+    //
+    // The commits below all read `cond`, so if `cond` is itself one of the
+    // committed registers, whichever commit lands first silently changes the
+    // condition every later commit sees. That is not hypothetical: it made
+    // `fsm`'s guard select its signed-LE flag on an *already re-selected* Z,
+    // recovering `((arg0==0) ? (arg0==0) : (arg1==0)) ? ...` — a live
+    // regression this fix caught before it shipped. Snapshot the predicate
+    // first and commit against the snapshot.
+    let cond_written = ops
+        .iter()
+        .any(|op| crate::ir::use_def::def_uses(op).0.as_ref() == Some(&cond));
+    let commit_cond = if cond_written {
+        let snapshot = VReg::Temp(next_temp);
+        next_temp += 1;
+        out.push(Op::Assign {
+            dst: snapshot.clone(),
+            src: Value::Reg(cond.clone()),
+        });
+        snapshot
+    } else {
+        cond.clone()
+    };
+
+    for mut op in ops {
+        // The def BEFORE any substitution — this is the architectural register
+        // the instruction means to write.
+        let def = crate::ir::use_def::def_uses(&op).0;
+
+        // Rewrite every mention (reads and the def alike) to the temp currently
+        // holding that register's value. The def is corrected immediately below;
+        // doing it in this order is what makes a read-modify-write op such as
+        // `subs r3, r3, #1` read the OLD value and write a NEW temp.
+        for_each_vreg_mut(&mut op, &mut |r| {
+            if let Some((_, temp)) = current.iter().find(|(reg, _)| reg == r) {
+                *r = temp.clone();
+            }
+        });
+
+        if let Some(def) = def.filter(is_architectural) {
+            let temp = VReg::Temp(next_temp);
+            next_temp += 1;
+            if let Some(slot) = def_mut(&mut op) {
+                *slot = temp.clone();
+            }
+            match current.iter_mut().find(|(reg, _)| *reg == def) {
+                Some((_, held)) => *held = temp.clone(),
+                None => current.push((def.clone(), temp.clone())),
+            }
+            if !renamed.iter().any(|(reg, _)| *reg == def) {
+                renamed.push((def, temp));
+            }
+        }
+        out.push(op);
+    }
+
+    // Commit: `dst = cond ? computed : dst`. Take the LAST temp written for each
+    // register, not the first-write one, so a register written twice in one lift
+    // commits its final value.
+    for (reg, _) in renamed {
+        let Some((_, temp)) = current.iter().find(|(r, _)| *r == reg) else {
+            continue;
+        };
+        let new = Value::Reg(temp.clone());
+        let keep = Value::Reg(reg.clone());
+        let (t, e) = if inverted {
+            (keep, new)
+        } else {
+            (new, keep)
+        };
+        let width = if matches!(reg, VReg::Flag(_)) {
+            Width::W1
+        } else {
+            Width::W32
+        };
+        out.push(Op::Ite {
+            dst: reg,
+            cond: commit_cond.clone(),
+            t,
+            e,
+            width,
+        });
+    }
+    out
 }
 
 /// Lift a byte window of ARM32 machine code into LLIR.
@@ -3088,6 +3257,121 @@ mod tests {
         );
         // The IT prefixes themselves carry no data effect.
         assert!(out.iter().any(|o| matches!(o, Op::Nop)));
+    }
+
+    /// A predicated *flag-writing* instruction must not execute unconditionally.
+    ///
+    /// This is gcc's conditional-compare idiom for `&&`, which is how
+    /// `sc_and(int x, int y) { if (x > 0 && y > 0) ... }` compiles at O2:
+    ///
+    /// ```text
+    /// cmp   r0, #0    2800
+    /// it    gt        bfc8
+    /// cmpgt r1, #0    2900
+    /// ```
+    ///
+    /// The flags reaching the branch encode BOTH operands: if `r0 <= 0` the
+    /// `cmpgt` does not execute, so `r0`'s comparison survives. `make_conditional`
+    /// used to bail on any lift longer than one op — and `cmp` expands to five
+    /// flag writes plus scratch — so the second compare ran unconditionally and
+    /// erased the first operand entirely. The recovered C tested only `arg1`, and
+    /// `sc_and(-5, 5)` returned 1234 where the original returns 4321.
+    #[test]
+    fn a_predicated_compare_does_not_clobber_the_flags_it_is_predicated_on() {
+        let body: &[u8] = &[
+            0x00, 0x28, // cmp r0, #0
+            0xc8, 0xbf, // it gt
+            0x00, 0x29, // cmpgt r1, #0
+            0x70, 0x47, // bx lr
+        ];
+        let out = ops(body);
+
+        // Every flag the predicated `cmp` writes must be committed through a
+        // select, never assigned outright.
+        let committed: Vec<&VReg> = out
+            .iter()
+            .filter_map(|o| match o {
+                Op::Ite { dst, .. } if matches!(dst, VReg::Flag(_)) => Some(dst),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !committed.is_empty(),
+            "the predicated cmp wrote its flags unconditionally: {out:#?}"
+        );
+
+        // The leading `cmp r0, #0` is NOT predicated and rightly writes flags
+        // outright; the property that matters is that the value a flag is left
+        // holding comes from a select. So for every flag written at all, the
+        // LAST write to it must be the conditional commit.
+        let mut last_write: Vec<(VReg, &Op)> = Vec::new();
+        for op in &out {
+            if let Some(dst @ VReg::Flag(_)) = crate::ir::use_def::def_uses(op).0 {
+                match last_write.iter_mut().find(|(r, _)| *r == dst) {
+                    Some((_, slot)) => *slot = op,
+                    None => last_write.push((dst, op)),
+                }
+            }
+        }
+        assert!(
+            !last_write.is_empty(),
+            "the compares wrote no flags at all: {out:#?}"
+        );
+        for (flag, op) in &last_write {
+            assert!(
+                matches!(op, Op::Ite { .. }),
+                "flag {flag:?} is left holding an unconditional write ({op:?}) — the \
+                 predicated compare clobbered it: {out:#?}"
+            );
+        }
+    }
+
+    /// A predicated instruction may write the very flag it is predicated on, and
+    /// the commit must read the predicate's value from BEFORE the instruction.
+    ///
+    /// `fsm`'s guard (`if (input == 0 || len <= 0)`) compiles to:
+    ///
+    /// ```text
+    /// cmp   r0, #0    2800
+    /// it    ne        bf18
+    /// cmpne r1, #0    2900
+    /// ```
+    ///
+    /// The predicate is Z and `cmpne` writes Z. Committing the selects in order
+    /// against the live flag let the Z commit land first, so every later select
+    /// was gated on an already-re-selected Z: the recovered guard read
+    /// `((arg0==0) ? (arg0==0) : (arg1==0)) ? ...`. Caught as a live regression
+    /// by `tools/arch_roundtrip.py` while fixing the case above.
+    #[test]
+    fn a_predicate_written_by_its_own_instruction_is_snapshotted_first() {
+        let body: &[u8] = &[
+            0x00, 0x28, // cmp r0, #0
+            0x18, 0xbf, // it ne
+            0x00, 0x29, // cmpne r1, #0
+            0x70, 0x47, // bx lr
+        ];
+        let out = ops(body);
+
+        // Z is both the predicate and one of the written flags, so the selects
+        // must be gated on a temp snapshot -- never on Flag::Z itself, which by
+        // commit time may already have been rewritten.
+        let gated_on_live_z = out.iter().any(|o| {
+            matches!(o, Op::Ite { cond, dst, .. }
+                if matches!(cond, VReg::Flag(Flag::Z)) && matches!(dst, VReg::Flag(_)))
+        });
+        assert!(
+            !gated_on_live_z,
+            "a flag select is gated on the live Z it also rewrites: {out:#?}"
+        );
+
+        // And the snapshot must actually be taken from Z.
+        assert!(
+            out.iter().any(|o| matches!(o,
+                Op::Assign { dst, src }
+                    if matches!(dst, VReg::Temp(_))
+                        && matches!(src, Value::Reg(VReg::Flag(Flag::Z))))),
+            "no snapshot of the Z predicate was taken: {out:#?}"
+        );
     }
 
     /// Thumb's narrow add/sub encodings set flags only when they execute outside

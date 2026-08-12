@@ -167,6 +167,47 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
     (def, uses)
 }
 
+/// Mutable handle on the VReg an op defines — the write sibling of [`def_uses`].
+///
+/// It lives here, immediately beside `def_uses`, on purpose: "what does this op
+/// define" is one fact, and a second copy of it in a lifter would be free to
+/// drift from this one. A caller that needs to *redirect* a write (predication
+/// rewriting a definition to a temp, say) needs the slot, not a clone, and
+/// nothing else in the IR offers one.
+///
+/// Returns `None` for exactly the ops `def_uses` reports no def for. Callers
+/// that must not silently skip a write should treat `None` on an op they
+/// expected to define something as a hard case, not a no-op.
+pub fn def_mut(op: &mut Op) -> Option<&mut VReg> {
+    match op {
+        Op::Assign { dst, .. }
+        | Op::Undef { dst, .. }
+        | Op::CondAssign { dst, .. }
+        | Op::Bin { dst, .. }
+        | Op::Un { dst, .. }
+        | Op::Cmp { dst, .. }
+        | Op::Load { dst, .. }
+        | Op::ZExt { dst, .. }
+        | Op::SExt { dst, .. }
+        | Op::Trunc { dst, .. }
+        | Op::Extract { dst, .. }
+        | Op::Concat { dst, .. }
+        | Op::Ite { dst, .. } => Some(dst),
+        // Mirrors `def_uses`: an unannotated call reports no def, and an
+        // annotated one defines its ABI result register.
+        Op::Call { effects, .. } => effects.as_mut().and_then(|e| e.result.as_mut()),
+        // Mirrors `def_uses`' three-address model: the first output only.
+        Op::Intrinsic { outs, .. } => outs.first_mut().map(|(r, _)| r),
+        Op::Store { .. }
+        | Op::IndirectJump { .. }
+        | Op::CondJump { .. }
+        | Op::Jump { .. }
+        | Op::Return
+        | Op::Nop
+        | Op::Unknown { .. } => None,
+    }
+}
+
 /// Build a use-def index for `lf` performing intra-block reaching-definitions.
 pub fn compute_use_def(lf: &LlirFunction) -> UseDefIndex {
     let mut idx = UseDefIndex::default();

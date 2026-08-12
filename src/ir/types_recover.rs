@@ -1834,11 +1834,37 @@ fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
 
 /// True for a frame-relative base register (`rbp`/`rsp` on x86-64,
 /// `x29`/`sp`/`w29` on AArch64) — the anchors `-O0` code spills locals against.
+/// Is this register a frame/stack base that spill slots are addressed from?
+///
+/// Two things were wrong here, and together they cost every ARM32 pointer
+/// parameter its type.
+///
+/// **ARM32 was simply absent.** The list named x86-64 (`rbp`/`rsp`), 32-bit x86
+/// (`ebp`/`esp`) and AArch64 (`x29`/`w29`/`sp`) and stopped. ARM32's frame
+/// pointer is `r7` under Thumb and `r11` under A32, so `store [r7+4] = r0`
+/// — the -O0 spill of the first argument — was not a spill to anything, and
+/// [`propagate_spill_slot_pointers`] could not walk the later dereference back
+/// to `r0`. `static int consume(Movable m)` recovered as `int consume(int arg0)`
+/// on armv7 while recovering correctly as `int consume(int *arg0)` on x86-64,
+/// from a body that plainly does `*(int *)(arg0)` in both.
+///
+/// That mistyping is invisible on a 32-bit target, where a pointer and an `int`
+/// are both four bytes — and lethal once the recovered C is rebuilt at 64 bits,
+/// because the caller then truncates a real pointer to 32 bits before the call.
+///
+/// **The SSA suffix was not stripped.** x86-64 writes `rbp` once, so it stays
+/// unversioned and a bare `"rbp"` match worked by luck. ARM saves the incoming
+/// `r7` and then defines a new one, so the frame base is spelled `r7#1` and an
+/// exact-name match fails. Compare on the base name, as `abi`, `x86_prologue`
+/// and `arm32_prologue` all already do.
 fn is_frame_base(v: &VReg) -> bool {
+    let VReg::Phys(n) = v else {
+        return false;
+    };
+    let base = n.split_once('#').map_or(n.as_str(), |(base, _)| base);
     matches!(
-        v,
-        VReg::Phys(n)
-            if matches!(n.as_str(), "rbp" | "rsp" | "ebp" | "esp" | "x29" | "sp" | "w29")
+        base,
+        "rbp" | "rsp" | "ebp" | "esp" | "x29" | "sp" | "w29" | "r7" | "r11" | "fp"
     )
 }
 
@@ -2997,6 +3023,43 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
 
 #[cfg(test)]
 mod tests {
+
+    /// Frame bases must cover ARM32 and tolerate the SSA suffix.
+    ///
+    /// `is_frame_base` gates spill-slot pointer propagation, which is what gives
+    /// a pointer PARAMETER its type at -O0. It listed x86-64, 32-bit x86 and
+    /// AArch64 but not ARM32, whose frame pointer is `r7` (Thumb) or `r11` (A32);
+    /// and it compared whole names, which only worked because x86-64 writes
+    /// `rbp` once and so never gets a version suffix. ARM saves the incoming
+    /// `r7` and defines a new one, so its frame base is spelled `r7#1`.
+    ///
+    /// With either half missing, `static int consume(Movable m)` recovered as
+    /// `int consume(int arg0)` on armv7 and `int consume(int *arg0)` on x86-64 —
+    /// from the same body, which dereferences the parameter in both.
+    #[test]
+    fn frame_bases_cover_arm32_and_ignore_the_ssa_suffix() {
+        for name in [
+            "rbp", "rsp", "ebp", "esp", // x86
+            "x29", "w29", "sp", // AArch64
+            "r7", "r11", "fp", // ARM32 -- absent until this was fixed
+        ] {
+            assert!(
+                is_frame_base(&VReg::phys(name)),
+                "{name} should be a frame base"
+            );
+            assert!(
+                is_frame_base(&VReg::phys(format!("{name}#1"))),
+                "{name}#1 (SSA-versioned) should be a frame base"
+            );
+        }
+        // Ordinary registers are not frame bases, versioned or not. `r0` matters:
+        // it is ARM's first argument register, and treating it as a frame base
+        // would make every argument spill look like a slot.
+        for name in ["r0", "r1", "r3", "rax", "rdi", "x0"] {
+            assert!(!is_frame_base(&VReg::phys(name)), "{name} is not a frame base");
+            assert!(!is_frame_base(&VReg::phys(format!("{name}#2"))));
+        }
+    }
     use super::*;
     use crate::ir::ssa::{compute_ssa, SsaValue};
     use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};

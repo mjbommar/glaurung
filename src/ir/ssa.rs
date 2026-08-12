@@ -122,10 +122,37 @@ fn is_ssa_reg(v: &VReg) -> bool {
 /// half of `xN`, so without it `ldr w0,[sp,#12]` followed by `lsl x1,x0,#32`
 /// were two unrelated SSA values and the shift read an undefined live-in.
 /// `reconstruct_64` decompiled to `return 0;`.
+///
+/// The fallback is *name*-based and this function has no architecture to consult
+/// ([`crate::ir::types::LlirFunction`] does not carry one), so it must decline
+/// any name the two ARM architectures spell alike and mean differently — see
+/// [`ARM32_AMBIGUOUS`].
 pub fn parent64(n: &str) -> Option<&'static str> {
+    if ARM32_AMBIGUOUS.contains(&n) {
+        return None;
+    }
     regview::ssa_parent(regview::Arch::X86_64, n)
         .or_else(|| regview::ssa_parent(regview::Arch::AArch64, n))
 }
+
+/// Register names that AArch64 and ARM32 spell alike but size differently.
+///
+/// On AArch64 `lr`/`fp` are 64-bit aliases of `x30`/`x29`; on ARM32 they are
+/// 32-bit registers (`r14`/`r11`) that are their own parents. Because
+/// [`parent64`] cannot see which architecture it is being asked about, the
+/// AArch64 fallback silently rewrote **ARM32**'s `lr` into `x30` at width 64, and
+/// the recovered C then declared `long x30;` in an ARM32 function and read it
+/// undefined. ARM32 has no sub-register views at all — `r0`..`r15` are all 32
+/// bits and alias nothing — so declining here costs ARM32 nothing it needs.
+///
+/// It costs AArch64 nothing either, and that is measured rather than assumed:
+/// capstone never prints these aliases for AArch64. Disassembling the fixture
+/// corpus yields 42 `x29` and 31 `x30` and **zero** `lr`/`fp`, so an AArch64
+/// VReg carrying one of these names does not occur. `regview`'s own AArch64
+/// table still declares the aliases truthfully — a descriptor should answer the
+/// architectural question correctly; it is this arch-blind lookup that must be
+/// conservative.
+const ARM32_AMBIGUOUS: [&str; 2] = ["lr", "fp"];
 
 /// Canonicalize a GP sub-register VReg to its 64-bit parent (identity otherwise).
 pub fn canon_gpr(v: &VReg) -> VReg {

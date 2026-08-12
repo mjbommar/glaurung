@@ -1470,9 +1470,38 @@ fn dwarf_stack_object_hints(
                 (CallConv::Cdecl32, DwarfStackBase::Register(5)) => ("ebp", 0),
                 (CallConv::Cdecl32, DwarfStackBase::CallFrameCfa) => ("ebp", 8),
                 (CallConv::Aarch64, DwarfStackBase::Register(29)) => ("x29", 0),
-                (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::Register(11 | 7)) => {
-                    ("fp", 0)
-                }
+                // DWARF register 7 is `r7` and 11 is `r11`; they are DIFFERENT
+                // registers and AAPCS uses each as the frame pointer in a
+                // different instruction set — `r7` under Thumb, `r11` (spelled
+                // `fp` by the disassembler) under A32. Collapsing both to "fp"
+                // gave a Thumb function's aggregate a base register it does not
+                // address its frame through, so the hint matched no slot: at
+                // best inert, at worst naming storage that is not the object's.
+                (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::Register(7)) => ("r7", 0),
+                (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::Register(11)) => ("fp", 0),
+                // NO `DwarfStackBase::CallFrameCfa` arm for ARM, unlike x86-64,
+                // i386 and AArch64 — so every ARM aggregate hint is dropped, and
+                // this is the common path rather than a corner: gcc emits
+                // `DW_AT_frame_base: DW_OP_call_frame_cfa` for ARM exactly as for
+                // x86-64, so every `DW_OP_fbreg` local resolves through it.
+                // `graph_bfs`'s `int32_t queue[16]` gets no recovered extent on
+                // armv7 for this reason.
+                //
+                // Adding one is NOT just a missing match arm, which is why there
+                // is a comment here instead of code. AAPCS pushes no return
+                // address (it is in `lr`), so the CFA is the entry stack pointer
+                // itself rather than sitting a fixed distance from a frame
+                // register the way x86-64's `rbp + 16` does. The natural base is
+                // therefore `entry_sp` — but `stack_locals::promote_*` filters
+                // every hint through `is_active_stack_base`, and neither
+                // `entry_sp` nor ARM's `r7` is in `STACK_BASES`, so such a hint
+                // is rejected at intake. Verified: emitting `("entry_sp", 0)`
+                // here changes `graph_bfs`'s recovery not at all.
+                //
+                // Making ARM aggregates work needs the hint vocabulary to admit
+                // the entry anchor, which is the same one-coordinate-system
+                // change ARM frame promotion needs. See
+                // `docs/design/armv7-real-defects-2026-08-05.md`.
                 _ => return None,
             };
             Some(crate::ir::stack_locals::StackObjectHint {

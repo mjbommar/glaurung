@@ -650,6 +650,18 @@ fn constant_address(
     }
     match strip_cast(expression) {
         Expr::Named { va, .. } | Expr::Addr(va) => Some(*va),
+        // ARM32 reaches its own data through the literal pool: `ldr r3,[pc,#N]`
+        // loads a displacement and `add r3,pc` adds the program counter. The
+        // lifter resolves the pool entry to a plain integer, so the table base
+        // arrives as `Expr::Const`, never as the `Addr`/`Named` an x86-64
+        // RIP-relative `lea` produces. Rejecting it here is why the
+        // relocation-proven `ops` table WAS collected for armv7 and then never
+        // matched to the load, leaving `dispatch` dereferencing the literal
+        // input-image VA `0x20028` — an address the rebuilt C does not map.
+        // The recovered value is only ever compared for exact equality against a
+        // relocation-proven table VA, so admitting a bare constant cannot invent
+        // a table that the relocations did not already prove.
+        Expr::Const(value) => u64::try_from(*value).ok(),
         Expr::Reg(register) => constant_address(definitions.get(register)?, definitions, depth + 1),
         // `_GLOBAL_OFFSET_TABLE_` is materialised in two instructions
         // (`call __x86.get_pc_thunk.bx; add $GOT,%ebx`), and the pair survives
@@ -661,12 +673,33 @@ fn constant_address(
             lhs,
             rhs,
         } => {
-            let (base, offset) = match (strip_cast(lhs), strip_cast(rhs)) {
-                (other, Expr::Const(offset)) | (Expr::Const(offset), other) => (other, *offset),
+            let (base, offset) = match (
+                literal_displacement(strip_cast(lhs)),
+                literal_displacement(strip_cast(rhs)),
+            ) {
+                (_, Some(offset)) => (strip_cast(lhs), offset),
+                (Some(offset), _) => (strip_cast(rhs), offset),
                 _ => return None,
             };
             constant_address(base, definitions, depth + 1)?.checked_add_signed(offset)
         }
+        _ => None,
+    }
+}
+
+/// A numeric literal usable as a displacement, whichever way the lifter typed it.
+///
+/// Half of ARM32's literal-pool sum arrives as `Expr::Addr`, not `Expr::Const`:
+/// `r3 = 0x1fb88` then `r3 = r3 + <pool value>` renders as
+/// `Bin { Add, lhs: Reg(r3), rhs: Addr(0x4a0) }` because the pool entry looked
+/// address-shaped to the lifter. Accepting only `Const` on the offset side meant
+/// the sum could not be folded and the `ops` table stayed unmatched — the whole
+/// point of summing here. Both spellings denote the same integer; which one a
+/// displacement gets is a lifter detail this pass must not depend on.
+fn literal_displacement(expression: &Expr) -> Option<i64> {
+    match expression {
+        Expr::Const(value) => Some(*value),
+        Expr::Addr(va) => i64::try_from(*va).ok(),
         _ => None,
     }
 }
@@ -680,13 +713,13 @@ fn is_table_base(
     if depth >= 16 {
         return false;
     }
-    match strip_cast(expression) {
-        Expr::Named { va, .. } | Expr::Addr(va) => *va == table_va,
-        Expr::Reg(register) => definitions
-            .get(register)
-            .is_some_and(|definition| is_table_base(definition, table_va, definitions, depth + 1)),
-        _ => false,
-    }
+    // Delegate rather than re-deciding: this used to carry its own shorter list
+    // of "shapes that name an address" (`Addr`/`Named`/`Reg` only), so a base
+    // `constant_address` could resolve — a summed PIC base, or the ARM32 literal
+    // pool constant above — was a table base to one function and not to the
+    // other. Two answers to one question is how the armv7 gap survived; there is
+    // now one.
+    constant_address(expression, definitions, depth) == Some(table_va)
 }
 
 fn scaled_index(
@@ -1009,6 +1042,97 @@ mod tests {
         assert!(
             targets.values().any(|&target| target != 0),
             "no relative relocation resolved on a RELA image"
+        );
+    }
+
+    /// ARM32's literal-pool table base must resolve to the table.
+    ///
+    /// `ldr r3,[pc,#N]` + `add r3,pc` reaches `ops` in two steps, and the pair
+    /// survives constant folding whenever the intermediate has a second reader.
+    /// The exact AST observed for armv7 `dispatch` is reproduced here:
+    ///
+    /// ```text
+    /// %r3#3 = 0x1fb88;                       Const  -- not Addr/Named
+    /// %r3#4 = (%r3#3 + Addr(0x4a0));         the offset side is Addr, not Const
+    /// %r3#5 = *(u32)&[%r3#4 + %r2#1*4];      the table load
+    /// ```
+    ///
+    /// Two separate gaps made this unmatchable: `constant_address` accepted no
+    /// bare `Expr::Const`, and its `Add` arm accepted no `Expr::Addr` on the
+    /// offset side. The relocation-proven `ops` table was collected correctly and
+    /// then silently never matched, so the recovered C dereferenced the literal
+    /// input-image VA `0x20028` — an address the rebuilt object does not map.
+    #[test]
+    fn arm32_literal_pool_table_base_resolves_to_the_table() {
+        const TABLE_VA: u64 = 0x20028;
+        let (pool, base, index) = (
+            VReg::phys("r3#3"),
+            VReg::phys("r3#4"),
+            VReg::phys("r2#1"),
+        );
+
+        let mut definitions: HashMap<VReg, Expr> = HashMap::new();
+        definitions.insert(pool.clone(), Expr::Const(0x1fb88));
+        definitions.insert(
+            base.clone(),
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(pool)),
+                rhs: Box::new(Expr::Addr(0x4a0)),
+            },
+        );
+
+        assert_eq!(
+            constant_address(&Expr::Reg(base.clone()), &definitions, 0),
+            Some(TABLE_VA),
+            "0x1fb88 + 0x4a0 must fold to the table VA"
+        );
+        assert!(
+            is_table_base(&Expr::Reg(base.clone()), TABLE_VA, &definitions, 0),
+            "the summed literal-pool base names the table"
+        );
+
+        let address = Expr::Lea {
+            base: Some(base),
+            index: Some(index.clone()),
+            scale: 4,
+            disp: 0,
+            segment: None,
+        };
+        assert_eq!(
+            indexed_table_address(&address, TABLE_VA, 4, &definitions, 0),
+            Some(Expr::Reg(index)),
+            "the scaled index must be recovered from the ARM32 table load"
+        );
+    }
+
+    /// A base that resolves to some OTHER address is still not this table.
+    ///
+    /// Admitting bare constants widens what `constant_address` accepts, so pin
+    /// that the widening did not turn the match into "any constant will do".
+    #[test]
+    fn a_constant_base_that_is_not_the_table_does_not_match() {
+        const TABLE_VA: u64 = 0x20028;
+        let base = VReg::phys("r3#4");
+        let mut definitions: HashMap<VReg, Expr> = HashMap::new();
+        definitions.insert(base.clone(), Expr::Const(0x20030)); // adjacent, not equal
+
+        assert!(!is_table_base(
+            &Expr::Reg(base.clone()),
+            TABLE_VA,
+            &definitions,
+            0
+        ));
+        let address = Expr::Lea {
+            base: Some(base),
+            index: Some(VReg::phys("r2#1")),
+            scale: 4,
+            disp: 0,
+            segment: None,
+        };
+        assert_eq!(
+            indexed_table_address(&address, TABLE_VA, 4, &definitions, 0),
+            None
         );
     }
 }
