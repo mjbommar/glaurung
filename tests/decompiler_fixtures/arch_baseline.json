@@ -1390,7 +1390,7 @@
     "countdown": "pass",
     "dec_loop": "pass",
     "dec_preserves_carry": "pass",
-    "shift_until_zero": "fail",
+    "shift_until_zero": "pass",
     "sub_then_sign": "pass"
   },
   "14_flag_effects:x86_64:O0": {
