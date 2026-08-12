@@ -1192,6 +1192,54 @@ fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize) -> bool {
     true
 }
 
+/// Could `layout` be a real parameter allocation under `arch`?
+///
+/// Every convention modelled here allocates integer/pointer parameters from
+/// [`arg_slots`] in ascending order beginning at slot zero, so the argument-slot
+/// registers of a genuine callee layout are that table's contiguous prefix, in
+/// order. Registers drawn from a separate bank (AAPCS-VFP `s0`…`s15`, which is
+/// the whole reason recovered layouts exist) are not part of that order and are
+/// skipped rather than judged.
+///
+/// This exists because a layout is evidence imported from ANOTHER function, and
+/// [`fold_one_call`] trusts it ahead of the call site's own instructions.
+/// `recover_direct_callee_layouts` derives one by lifting the callee — and an
+/// ARM32 PLT stub is not a function: discovery does not stop at
+/// `ldr pc,[ip,#n]!`, so the body it lifts runs through the following stubs and
+/// into misdecoded bytes whose reads of r2/r3 become the "parameters". Every
+/// imported callee of `strip_iconv_arm-v7` was recovered as `[r2, r3]`, and
+/// `fold_one_call` installed those two undefined live-in registers verbatim on
+/// ten distinct calls — leaving no call-site value for string folding to see, so
+/// that binary recovered no string literals at all.
+///
+/// Rejecting the layout is not a guess about the callee. It only withdraws
+/// unusable outside evidence, returning the call to the local backward scan over
+/// the argument setup the caller actually executed.
+///
+/// Applied to every convention rather than only to AAPCS. ARM is where the
+/// damage was observed — there a layout also short-circuits the local scan and
+/// installs its own registers verbatim, while on SysV a layout only reaches
+/// [`fold_one_recovered_layout_call`], which folds an adjacent setup window and
+/// otherwise declines — but the allocation order it checks is a property of all
+/// of them, and measuring the unscoped form moved no cell of the DecBench
+/// matrix, no fixture-harness case, and no `arch_roundtrip` lane.
+fn layout_matches_abi_allocation_order(arch: CallConv, layout: &[VReg]) -> bool {
+    let mut expected_slot = 0usize;
+    for register in layout {
+        let VReg::Phys(name) = register else {
+            continue;
+        };
+        let Some(slot) = slot_of(arch, name) else {
+            continue;
+        };
+        if slot != expected_slot {
+            return false;
+        }
+        expected_slot += 1;
+    }
+    true
+}
+
 fn fold_one_call(
     body: &mut Vec<Stmt>,
     call_idx: usize,
@@ -1204,8 +1252,9 @@ fn fold_one_call(
         fold_one_cdecl32_call(body, call_idx);
         return;
     }
-    if let Some(layout) =
-        direct_call_target_va(&body[call_idx]).and_then(|target| callee_layouts.get(&target))
+    if let Some(layout) = direct_call_target_va(&body[call_idx])
+        .and_then(|target| callee_layouts.get(&target))
+        .filter(|layout| layout_matches_abi_allocation_order(arch, layout))
     {
         if fold_one_recovered_layout_call(body, call_idx, layout) {
             return;
@@ -5287,6 +5336,77 @@ mod tests {
             panic!("call disappeared: {:#?}", f.body);
         };
         assert_eq!(args, &[Expr::Reg(reg("r0"))]);
+    }
+
+    #[test]
+    fn a_layout_that_skips_leading_slots_is_not_a_parameter_layout() {
+        // AAPCS allocates core parameters r0, r1, r2, r3 in order, so `[r2, r3]`
+        // cannot be any callee's first two parameters. It is what
+        // `recover_direct_callee_layouts` produced for EVERY imported function of
+        // `strip_iconv_arm-v7`: discovery does not stop at an ARM32 PLT stub's
+        // `ldr pc,[ip,#n]!`, so the "callee" it lifts runs through the following
+        // stubs into misdecoded bytes that read r2/r3.
+        assert!(!layout_matches_abi_allocation_order(
+            CallConv::Arm,
+            &[reg("r2"), reg("r3")]
+        ));
+        // An AAPCS-VFP layout allocates from two independent banks; the core
+        // registers inside it are still ordered from r0.
+        assert!(layout_matches_abi_allocation_order(
+            CallConv::ArmHardFloat,
+            &[reg("r0"), reg("s0"), reg("r1")]
+        ));
+        assert!(!layout_matches_abi_allocation_order(
+            CallConv::ArmHardFloat,
+            &[reg("r1"), reg("s0"), reg("r0")]
+        ));
+        // The same order property holds for SysV's slot table.
+        assert!(layout_matches_abi_allocation_order(
+            CallConv::SysVAmd64,
+            &[reg("rdi"), reg("rsi")]
+        ));
+        assert!(!layout_matches_abi_allocation_order(
+            CallConv::SysVAmd64,
+            &[reg("rdx"), reg("rcx")]
+        ));
+    }
+
+    #[test]
+    fn an_impossible_callee_layout_does_not_displace_the_call_site_setup() {
+        // The whole defect end to end: with `[r2, r3]` trusted, `fold_one_call`
+        // installed those two bare live-in registers as the argument list and
+        // returned before ever looking at the real r0/r1/r2 setup — so ten
+        // distinct callees in `sub_6fc` all received the same two undefined
+        // locals, and no call-site value survived for string folding to see.
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                assign("r0", 11),
+                assign("r1", 22),
+                assign("r2", 33),
+                call_to("getopt@plt"),
+            ],
+        };
+        let layouts = std::collections::HashMap::from([(0x2000, vec![reg("r2"), reg("r3")])]);
+        let mut parameter_slots = Default::default();
+
+        reconstruct_args_with_params_and_callee_layouts(
+            &mut f,
+            CallConv::ArmHardFloat,
+            &mut parameter_slots,
+            &layouts,
+        );
+
+        let Stmt::Call { args, .. } = &f.body[0] else {
+            panic!("setup did not fold into the call: {:#?}", f.body);
+        };
+        assert_eq!(
+            args,
+            &[Expr::Const(11), Expr::Const(22), Expr::Const(33)],
+            "the call site's own argument setup is the evidence, not a layout \
+             that no calling convention could have allocated"
+        );
     }
 
     fn dst_of(s: &Stmt) -> &Option<VReg> {

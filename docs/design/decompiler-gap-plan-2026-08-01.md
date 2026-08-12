@@ -1327,3 +1327,631 @@ regressions and 25 verified improvements: x86-64 328/328, i386 232 behavioral
 passes, AArch64 274, and ARMv7 202. The Rust library gate passes 1,802 tests;
 the focused Python decompiler/instrument tests and all 24 register-view semantic
 tests pass.
+
+## 16. The byte_match regression — attributed, NOT root-caused — 2026-08-04
+
+`byte_match` on the 250-function holdout fell **0.2392 -> 0.2005** between the
+`fix1` package and `89b220e`, and no gate saw it for four commits. Attribution,
+by extracting and scoring three trees:
+
+| package | byte_match | vs previous |
+|---|---:|---|
+| `fix1` | 0.2392 | — |
+| `89b220e` | 0.2005 | 43 improved / **77 worse** |
+| `+ strings` | 0.2015 | 11 improved / **0 worse** |
+
+The string work is strictly positive. The loss belongs to the campaign commits.
+**The cause within those commits is still unknown.**
+
+### A wrong root cause, and how it was caught
+
+This section first claimed the cause was *overlapping frame slots* — emitted
+units declaring `local_50[80]` spanning into `local_70` and `local_78`. That was
+an artifact of reading the slot names backwards.
+
+`alloc_name` formats `local_{:x}` from `disp.unsigned_abs()` under `disp < 0`.
+`local_50` is therefore `[rbp-0x50]` — eighty bytes **below** the frame pointer.
+The stack grows down, so a LARGER label is a LOWER address and ascending memory
+order is DESCENDING label order. Sorting by label inverts every comparison and
+makes a correctly-tiled frame look like a pile of overlaps:
+
+```text
+local_80   [fp-128, fp-120)
+local_78   [fp-120, fp-112)
+local_70   [fp-112, fp-80)
+local_50   [fp-80,  fp+0)     <- tiles exactly; no overlap anywhere
+```
+
+The independent check that settles it: the emitted canary write is
+`*(long *)(&local_50[0] + 72)`, and `fp-80+72 = fp-8`, which is exactly where
+x86-64 puts the stack canary. The frame model was right; the analysis was wrong.
+
+Re-measured with the correct ordering, overlaps are a real but MINOR
+phenomenon — and far too small to account for 77 regressed functions:
+
+| | units with an overlap | overlapping pairs |
+|---|---:|---:|
+| `fix1` | 11 / 224 | 45 |
+| `89b220e` | 17 / 224 | 50 |
+
+(The inverted model reported 26 -> 77 units and 72 -> 158 pairs, which is what
+made it look causal.)
+
+### What is actually established
+
+* the regression is real, is 16 %, and belongs to the four campaign commits;
+* it is NOT the string work;
+* it is NOT primarily frame-slot overlap;
+* every existing gate is blind to it, because all of them ask what the recovered
+  code *does* and this changes what it *claims about itself*.
+
+Next step is a bisect across `e91c7d0`, `f5b4e0f`, `20f9acd`, `89b220e`, scoring
+`byte_match` at each. `f5b4e0f` (phi/width coalescing) remains the prime suspect
+because it is also the commit that broke the three `linkedlist`/`matrix` GED
+cells, but that is a hypothesis and the last one did not survive contact.
+
+### New gate: `python/tests/test_decompiler_emission_invariants.py`
+
+Seven properties, each checked on all four architectures at `-O0` and `-O2`
+(48 cases). They are self-consistency properties of the emitted translation
+unit, not copies of any benchmark metric:
+
+1. frame locals occupy disjoint byte ranges;
+2. an unassigned value never reaches an observable use (entry spills of
+   callee-saved registers are excluded by construction: `slot = varN` where
+   `varN` is the caller's value is meaningful and universal);
+3. an emitted prototype agrees with its own call sites;
+4. recovered arity matches the source for a function with more arguments than
+   any of the four ABIs passes in registers;
+5. decompiling the same bytes twice is deterministic;
+6. every local used is declared;
+7. a pointer selected in two predecessors is defined on both paths.
+
+Fixture: `tests/decompiler_fixtures/invariants/frame_and_arity_shapes.c`,
+written for the properties rather than derived from any corpus, and deliberately
+NOT under `decompiler_fixtures/src` — that directory is auto-discovered by the
+shared execution gate, and dropping a file into it silently took that gate from
+656 pass / 0 fail to 664 pass / 12 fail.
+
+All 48 currently pass. Property 1 keeps a `FRAME_OVERLAP_KNOWN_BAD` ratchet that
+is now empty and fails if any listed lane starts passing, so it can only shrink.
+
+## 17. A recovered frame array invites a stack protector — 2026-08-04
+
+One mechanism behind the `byte_match` loss, found and fixed.
+
+### The defect
+
+A recovered frame slot renders as `unsigned char name[N]`.
+`-fstack-protector-strong` is the default in every mainstream distro toolchain
+and protects **any function containing an array**. So a function that had no
+canary in the original acquires a guard load, a guard compare and a failure
+branch purely because we spelled a register spill as an array.
+
+`sum_arg1` — source is `return a + 1` — is the clean case. ARMv7 `-O0`:
+
+```text
+original                        11 instructions, 12-byte frame, no canary
+rebuilt (protector on)          39 instructions, 40-byte frame, + __stack_chk_guard
+rebuilt (-fno-stack-protector)  19 instructions
+```
+
+Isolating the one variable: similarity to the original is **0.400** with the
+protector and **0.733** without it. More than half that function's loss is the
+canary, and none of it is anything the decompiler got semantically wrong.
+
+### The fix
+
+Emit `__attribute__((no_stack_protector))` on a recovered function when — and
+only when — it declares a frame array **and** the recovered body contains no
+`__stack_chk_fail` call. That absence is the evidence the original had no
+protector. Where the original DID have one we stay silent and let the rebuild
+add its own, which matches the code being compared against.
+
+The attribute is guarded by `__has_attribute` (GCC 5+, Clang) with an empty
+fallback, so a toolchain that lacks it still compiles. There was precedent for a
+function attribute in this renderer: the `optimize("O1")` guard for
+2,000-statement bodies.
+
+### Measured
+
+`tools/recompile_fidelity.py`, ARM fixture corpus, 278 functions:
+
+| | mean |
+|---|---:|
+| before | 0.6260 |
+| after | **0.6606** |
+
+**+0.0346, 51 functions better, 0 worse** — and identical to what
+`-fno-stack-protector` on the rebuild achieves, confirming the attribute
+captures the whole effect. x86-64 is unchanged (0.6932), because those fixtures'
+originals already carry canaries so no attribute is emitted.
+
+Gates: `cargo test --lib` 1,735; `fixture_harness` 656 pass / 0 fail — the
+attribute changes what a compiler does with the code, not what the code does;
+`decbench_matrix --check` shows no new regressions (the three pre-existing GED
+cells are unchanged).
+
+### New tooling
+
+`tools/recompile_fidelity.py` — asks the question `byte_match` asks, but locally
+on our own fixtures in seconds rather than ~30 min per holdout column. It
+compares the ORIGINAL and REBUILT instruction streams as mnemonic sequences. It
+is a proxy, deliberately uncalibrated against DecBench; its value is
+differential, which is what makes it usable for finding a regression rather than
+only reporting one. `--rebuild-flag` isolates a single compiler variable, which
+is how the protector was separated from frame growth.
+
+### Caveat
+
+This was measured with the host's default flags. If DecBench rebuilds with
+`-fno-stack-protector`, the canary half of this does not apply to their metric
+and only the frame-size half does. The holdout score settles it.
+
+## 18. The three GED cells, fixed — 2026-08-04
+
+`linkedlist:gcc:O2`, `linkedlist:clang:O2` (both 0.0 -> 2.5) and
+`matrix:clang:O2` (21 -> 24) had been red since the campaign. All three are
+back at baseline; `decbench_matrix --check` reports **no per-cell regressions
+across 56 of 56 cells** for the first time since `f5b4e0f`.
+
+### The defect
+
+`linkedlist.c` is one line:
+
+```c
+int list_sum(const struct node *h){ int s=0; while(h){ s+=h->val; h=h->next; } return s; }
+```
+
+At `-O2` GCC rotates the loop and emits a zero-trip guard. We recovered it
+faithfully — and then kept the guard:
+
+```c
+ret = 0;
+if (((long)arg0 != 0)) {          /* not in the source */
+    var1 = 0; var2 = arg0;
+    while (((long)var2 != 0)) { ... }
+}
+```
+
+One extra branch node and two extra edges against the source CFG. `list_find`
+in the same file has no rotation and was always clean, which is why the cost
+looked like a whole-file mystery rather than one construct.
+
+### Why the fix is sound
+
+`recover_owned_pretested_do_while` **already proved** the guard redundant: it
+refuses to rewrite unless `resolve_entry_aliases(latch_guard) == entry_guard`,
+i.e. unless the loop's head test, with the prelude's copies substituted, IS the
+entry guard. It simply chose to keep the `if` ("so no seed moves across the
+entry guard").
+
+Given that proof the guard cannot change behaviour: when it is false the head
+test is false too, so the loop runs zero times either way. And the prelude is
+`stable_value_expr` throughout — no load, call, or unknown — so hoisting it out
+of the guard can neither fault nor be observed. The `if` was sound but
+redundant, and redundancy is not free when the metric is graph edit distance.
+
+The earlier decision was deliberate, so the test that asserted the guard was
+retained (`an_entry_owned_coalesced_cursor_recovers_a_head_tested_loop`) was
+rewritten to assert the new contract *and carry the reason*, rather than
+deleted.
+
+### Gates
+
+```
+cargo test --lib                  1,735 passed / 0 failed
+tools/fixture_harness.py          656 pass / 0 fail
+tools/arch_roundtrip.py --check   328/328 control — matches baseline exactly
+tools/decbench_matrix.py --check  FULL MATRIX: 56 of 56 cells clean
+emission invariants               52 cases, 8 properties
+```
+
+The behavioural lanes are untouched, which is the point: removing a provably
+redundant branch changes structure, not semantics.
+
+## 19. Two proxies that lied, and one that held — 2026-08-04
+
+### goto density is NOT a proxy for GED
+
+`goto_sink` moved a labelled block whose only predecessor is a single nested
+`goto` down to that jump, removing both. Sound in principle — the block executes
+exactly when the goto fires — and it measured well on every local number:
+
+| | before | after |
+|---|---:|---:|
+| gotos | 409 | 364 (-11%) |
+| gotos / 100 lines | 8.63 | 7.82 |
+| declarations / fn | 17.720 | 17.054 |
+
+Behaviour was untouched: 656/0 on the fixture harness and `arch_roundtrip`
+matching the baseline exactly on all four architectures, which is the check that
+matters when code moves across nesting levels.
+
+The DecBench matrix then failed it:
+
+```text
+statemachine:gcc:O0.ged:        10.0 -> 35.0
+statemachine:gcc:O0.byte_match:  0.37 -> 0.21
+linkedlist:gcc:O0.byte_match:    0.44 -> 0.34
+sort:{gcc,clang}:O0.byte_match:  0.30 -> 0.27, 0.12 -> 0.10
+```
+
+A 3.5x structural regression bought with an 11 % readability gain. **Reverted.**
+The pass is retained at `src/ir/goto_sink.rs` with its four tests but is NOT
+wired into the pipeline; anyone re-enabling it must explain `statemachine`.
+
+The lesson is specific: fewer `goto` tokens is not a flatter graph. Sinking a
+block *into* an `if` deepens nesting and can defeat the region recovery that
+would otherwise have found a loop or switch — which costs far more GED than the
+jump saved.
+
+### the local fidelity proxy DID hold
+
+`tools/recompile_fidelity.py` predicted the stack-protector fix (+0.0346 on ARM,
+51 better / 0 worse) and that fix survived the matrix unchanged. Same tool, same
+corpus, opposite outcome from goto density — because it asks the question
+`byte_match` asks (recompile and compare) rather than a readability question
+that merely correlates with it.
+
+### two filings of mine were wrong
+
+* **`SBB`/`ADC` SF/OF** was already fixed at `b83a066`, an ancestor of the base
+  I filed against. Worse, the symptom I quoted — `__unknown(0)` in a `sf ^ of`
+  compare — is how `Expr::Unknown` renders an unrecognised *intrinsic*, not how
+  an undefined flag renders, so it could never have been evidence for that
+  claim. `28_euler_ode` passes on i386 at both optimisation levels.
+* **`push %rcx`** is necessary but not sufficient for the phantom parameter.
+  Suppressing it alone changes nothing; the other half is that
+  `live_in_arg_slots_llir` `continue`s past `Op::Call`, so a call that clobbers
+  `rcx` under SysV never registers as a definition and `setne %cl`'s
+  preservation read counts as a parameter. Both together give `[0, 1]`, matching
+  DWARF. The naive call-kill was prototyped, measured working, and deliberately
+  reverted: it is order-sensitive rather than dataflow-sound.
+
+### what landed
+
+`bsr`/`bsf`, modelled as `(BITS-1) - clz(...)` with the zero case gated on
+`src != 0` and the destination's prior value preserved (x86 leaves the
+destination unmodified for a zero source — it does not produce 32). i386
+**232 -> 233 of 256 (90.6 % -> 91.0 %)**, total behavioural correctness
+1036 -> 1037, control lane unchanged at 328/328.
+
+## 20. Preserving a value the architecture refuses to define — 2026-08-04
+
+The `bsr`/`bsf` lowering in §19 was exact and still wrong, in a way that took a
+second look to see. Its zero case gated the count on `src != 0` with the
+destination's **prior value** as the else arm:
+
+```
+ops.push(Op::Ite { dst: dst.clone(), cond: found,
+                   t: Value::Reg(index), e: Value::Reg(dst), width });
+```
+
+That reads `dst` before defining it. The consequence is not cosmetic. A live-in
+physical register sitting in an argument slot is what parameter recovery
+promotes to a parameter, so `shift_until_zero` — whose source is
+
+```c
+int shift_until_zero(unsigned x) { int n = 0; while (x) { x >>= 1; n++; } return n; }
+```
+
+came out as
+
+```c
+unsigned int shift_until_zero(int arg0, long arg1, long arg2, unsigned int arg3)
+```
+
+with three parameters that do not exist, and `arg3` read in an arm the outer
+guard never selects. Before parameter recovery reached it, the same read
+surfaced as `long var1;` — declared, never assigned, and read. Two symptoms, one
+cause.
+
+The premise was also false. **Intel documents the destination as UNDEFINED when
+the source is zero**; only AMD promises it is preserved. So the lowering was
+paying three phantom parameters to model a value no correct program can observe
+and no architecture guarantees. It now writes the count unconditionally; ZF —
+the one flag x86 defines here, and the one callers actually branch on — still
+separates the two cases exactly. `shift_until_zero` recovers one parameter.
+
+The test that guarded the old behaviour asserted the else arm *was* the
+destination's own prior value. It now asserts the property that actually
+matters: **no read of the destination precedes its definition**, checked over
+every op in the lowering.
+
+### The general rule, and why it is not in the tree
+
+An arm that is undefined permits any value, so collapsing a select onto its
+other arm is a refinement rather than a change. That rule is sound. The oracle I
+built for it was not: `copy_prop::count_assignments` was written for parameter
+aliases and does not see every form of definition. It missed a frame slot's, and
+the pass rewrote the signed divide-by-4 rounding idiom
+
+```c
+*(int *)(arg0 + local_c * 4) = (long)((local_8 < 0) ? (local_8 + 3) : local_8) >> 2;
+```
+
+into `(local_8 + 3) >> 2`, changing the result for every non-negative value.
+Cost: four `arch_roundtrip` regressions including **the control lane**
+(`30_finite_difference:{x86_64,aarch64}:O0:heat_step_1d`,
+`14_flag_effects:i386:O0:{dec_preserves_carry,sub_then_sign}`).
+
+Reverted. A correct version needs a real reaching-definitions oracle over the
+AST covering stack slots and every defining statement — the same machinery task
+#56 is blocked on. Filed as #66. The case that motivated it needs nothing: it
+was fixed at the lifter.
+
+The lesson generalises past this pass. Both defects in this section are the same
+mistake at different levels — modelling a value that is not there. A lowering
+that preserves an architecturally-undefined destination manufactures a live-in;
+an oracle that counts *some* definitions manufactures an undefined value. Being
+exact about the machine is only worth what it costs everything downstream.
+
+## 21. What the ARM32 argument work found — 2026-08-04
+
+Two of the three defects sent to the ARM32 agent came back changed.
+
+**Filed as "adds/subs claim only Z and N".** Already fixed at `b83a066`, an
+ancestor of the base. `arm_carry_arithmetic` writes Z/S/C/O/Slt/Sle/Ule with
+32-bit width stated at the point of use, and handles the borrow-polarity trap.
+What still routes to `flags_for_arith` is `ands`/`orrs`/`eors`/the shifts/`muls`
+— where Z and N genuinely are the only flags the result determines. A stale
+filing, not a defect.
+
+**Filed as "one undefined local is the argument to ten distinct callees".**
+Real, and the cause sat one level below where it was filed. An ARM32 PLT stub is
+`add ip,pc,#0,#12 / add ip,ip,#4096 / ldr pc,[ip,#n]!`, and function discovery
+does not stop at that indirect branch — so lifting a "callee" at a stub runs
+through the seven stubs after it and into misdecoded bytes. Every one of the 16
+imported callees of `strip_iconv_arm-v7` was therefore recovered with the same
+argument layout, `[r2, r3]`, read out of that garbage. `fold_one_call` trusts a
+recovered layout ahead of the call site and returns before the local backward
+scan runs, so ten different calls all received the same two undefined live-in
+registers, and no call-site value survived for string folding to see.
+
+The fix does not guess at the callee. `layout_matches_abi_allocation_order`
+admits a recovered layout only when its argument-slot registers form the
+contiguous prefix slot 0, 1, 2, … in order — every convention modelled here
+allocates that way, and the separate AAPCS-VFP bank is skipped rather than
+judged. `[r2, r3]` cannot be any callee's first two parameters, so the layout is
+withdrawn and the call falls back to the evidence the caller actually executed.
+Withdrawing unusable outside evidence is safe by construction.
+
+`sub_6fc`: pathological locals 2 → 0, string literals 0 → 2, all ten call sites
+carrying real values — `getopt(argc, argv, "f:t:csl")`, `nl_langinfo(CODESET)`,
+`iconv` at four arguments instead of two — each checked against the unstripped
+disassembly and raw `.rodata`.
+
+The discovery bug itself is still there (#64), as is a third defect the agent
+found, implemented, measured as a 202 → 199 loss on armv7, and reverted (#65):
+`value_number` reads a call's ABI may-use list as an alias read, and
+`return_registers(ArmHardFloat)` overlaps `argument_registers(ArmHardFloat)` at
+`s0`, so every pre-call `r0` definition is kept spelled as the function's
+live-in. The clean fix is a no-op on SysV/Win64/Cdecl32, whose return and
+argument tables are disjoint — but three armv7 consumers depend on the bare
+spelling and have to move in the same change.
+
+## 22. Widening one property gate, and the two lifter gaps it found — 2026-08-04
+
+Emission invariant #2 — *a value read is a value assigned* — forbids exactly the
+unassigned read that §20's `bsr` defect produced. It did not fire. The reason is
+structural rather than subtle: the module compiles **one** fixture, and the
+defect was in another. A property gate that runs on a single input is a unit
+test wearing a property's name.
+
+Two measurements shaped the fix.
+
+**How much would the property flag corpus-wide?** Scanning every fixture (30
+sources × 4 architectures × {O0, O2}, ~264 units) for a declared-but-never-
+assigned local reaching an observable use:
+
+```text
+40  total
+35  i386 CRT/PLT glue (sub_1020/sub_1030/sub_1040)
+ 5  real, ALL armv7:O2, ZERO on x86_64 / i386 / aarch64
+```
+
+The 35 are not defects. A PIC PLT stub legitimately reads the GOT-base register
+its *caller* set up; it is live-in by construction. That is precisely the class
+`FIXTURE_FUNCTIONS` scoping exists to exclude, and it is why widening the gate
+to "every function in the corpus" would have been the wrong move — it would have
+bought 35 permanent false positives for 5 true ones.
+
+**So widen the fixture, not the corpus.** Six shapes were added to
+`frame_and_arity_shapes.c`, chosen for what the *compiler* emits rather than
+what the source says: shift-until-zero and trailing-zero (bit scans, which
+define their destination only for a non-zero source), signed division and
+remainder by powers of two (the bias-and-shift idiom that §20's bad pass
+rewrote), a fused `||`/`&&` guard, and a conditional move. Cost: one extra
+translation unit per lane. The existing eight properties apply to them for free.
+
+The arity property was also generalised from a single function to a ceiling over
+all of them. The asymmetry is the point: recovering **fewer** parameters can be
+legitimate — at `-O2` an argument that is never read leaves no trace — but
+recovering **more** cannot be, under any optimisation. That is the phantom-
+parameter class exactly.
+
+### What it caught on the first run
+
+Both on **AArch64**, both at `-O0` and `-O2`, both pre-existing:
+
+* **`clz` was not lifted at all.** It emitted `/* asm: clz */`, so its
+  destination was never defined and `32 - clz(x)` read a local nothing assigns.
+  `lift_arm32` has had this fix for some time, with a comment describing this
+  same defect class; AArch64 was simply never given it. A second layer sat
+  underneath: the first attempt named the intrinsic `arm64.clz.32`, and
+  `wide_integer_intrinsic` strips only `x86.` / `aarch64.` / `arm.` — so it
+  lifted correctly and *still* rendered as raw asm. The namespace is part of the
+  contract, not decoration.
+* **`negs` was not lifted.** `negs Rd, Rn` is `subs Rd, ZR, Rn`: it negates AND
+  sets comparison flags against zero. Unmodelled, `signed_remainder` came out as
+  `slt_0 ? (v & 15) : -(var3 & 15)` with both names never assigned. The flags are
+  a function of the pre-operation operands, so they are emitted before the write.
+
+Measured: aarch64 **274 → 275**, total behavioural correctness **1037 → 1038**,
+control lane unchanged at 328/328. `14_flag_effects:aarch64:O2:shift_until_zero`
+went fail → pass and the baseline cell was refreshed; a semantic diff of
+`arch_baseline.json` against HEAD confirms exactly two changed cells, both
+`shift_until_zero` improvements (i386:O2 from §20, aarch64:O2 from here).
+
+### The five armv7 findings, re-diagnosed
+
+The original filing called them "-O2 fused guards read undefined locals". They
+are not that. Every one is:
+
+```c
+var2 = ((arg2 <= 16) ? ((arg2 <= 16) ? 0 : var1) : 1);
+```
+
+a select nested inside its **own true arm on the identical condition**. ARM32
+predicated execution (`it ls` / `movls`) preserves its destination when the
+condition fails, which — unlike x86 `bsr`, where the architecture leaves it
+undefined — is exactly right. Nothing about definedness is wrong here. The inner
+alternative is simply *unreachable*: inside the true arm, `C` holds.
+
+So the collapse needs no oracle at all, only structural equality of the
+condition — which is why it is sound where §20's attempt was not. That one had
+to prove an arm undefined; this one only has to observe that the enclosing arm
+already decided the branch. Implemented as
+`copy_prop::collapse_dominated_select_arms` with four tests, deliberately
+outside `select_fold.rs` / `guard_chain.rs` / `ast.rs` while agents hold those
+files; not yet wired, so not yet measured.
+
+`newton_isqrt` shows a second instance the expression-local rule does not reach:
+
+```c
+var3 = ((arg0 <= 1) ? arg0 : var0);
+if ((arg0 <= 1)) { return var3; }
+```
+
+Here the dominating condition is a *statement*, not an enclosing arm. Extending
+dominance across the following `if` would cover it and is a strictly larger
+change — do the expression-local form first and re-measure.
+
+### A measurement hazard worth writing down
+
+Two gate runs in this session produced numbers that meant nothing:
+
+* A `decbench_matrix --check` against the main worktree while that worktree was
+  rebuilt three times underneath it. A gate measures whatever is installed when
+  each case runs, not the tree as it stood at launch.
+* A worktree agent's `export PATH="$PWD/.venv/bin:$PATH"`. `git worktree add`
+  does **not** copy `.venv` — it is untracked — so the export is a no-op and
+  `glaurung` resolves to the first one on the inherited PATH, which is the main
+  checkout's build. An agent measuring in a worktree must create a venv *in that
+  worktree* and confirm `which glaurung` points inside it, or it is measuring
+  someone else's tree while believing it measures its own.
+
+## 23. Two agents, three of my filings wrong — 2026-08-04
+
+Both parallel agents came back with a working change AND a correction to the
+task that produced it. Recording the corrections first, because they are the
+more durable result.
+
+### #44 — the fused guards were never fused
+
+I filed: "at -O2 compilers fuse short-circuit conditions into branchless bitwise
+expressions; we emit them literally; every such guard is a permanent GED penalty
+because it collapses two source basic blocks into one." Both halves are false.
+
+They are **our own x86 flag model**. `jle` is `ZF | (SF^OF)`, and the lifter
+computes `zf` over the UNSIGNED view of the operands while `sf`/`of` use the
+SIGNED view:
+
+```text
+%t35 = (unsigned long)((unsigned int)(%t10));   %zf = (%t35 == 99)
+%t30 = (long)((int)(%t10));                     %sf^%of  ==  (%t30 < 99)
+```
+
+`const_fold::merge_equality_and_less` already merges this pair — but only when
+the two comparisons are syntactically identical, which the signed/unsigned view
+split guarantees they never are. A signedness-tolerant version existed and was
+deliberately reverted in `320e960`, because merging that early destroys GCC
+switch ladders before `switch_ladder` sees them.
+
+A scan of every function in both corpora: **in all 56 DecBench cells, every `|`
+between two comparisons is this flag pair.** The only other `|` uses are genuine
+bit rotates and 64-bit merges. Not one compiler-fused short-circuit. The fixture
+corpus has exactly one. So the fix I proposed — rewrite to `||` — would have
+been actively wrong: it invents a basic block the source never had. The correct
+recovery is `<=`.
+
+And the motivation was measurably false: **all 56 `ged` cells are byte-identical
+before and after, corpus total 403.17 → 403.17.** Neither spelling adds or
+removes a branch, so Joern builds the same CFG either way. The `&&`/`||`
+recovery I asked for had also already shipped on 2026-08-03 (§15) and emits 25
+short-circuit operators today.
+
+What shipped instead is `bool_guard::recover_inclusive_comparisons`: fold
+`(a == b) | (a < b)` → `a <= b` when the equality's operands match under the
+same cast-*width* chain and differ only in cast *signedness*. Exact, because
+`zext(a)==zext(b) ⟺ trunc(a)==trunc(b) ⟺ sext(a)==sext(b)`; the strict half is
+kept verbatim so its signedness — the one that decides the relation — is never
+reinterpreted. Sequenced LAST in `prepare_for_decbench`, after every switch
+recogniser has seen the un-merged ladder, which honours `320e960`'s reason
+rather than overriding it. Fused-guard lines 377 → 237; one `byte_match` cell up.
+
+A more aggressive variant was measured and rejected: merging under an `== 0`
+polarity gave `if (arg1 < arg0)` instead of four-comparison soup, GED still
+identical, but cost `branches:gcc:O2.byte_match` 1.00 → 0.80. `CmpOp` has no
+`>`, so negating `a <= b` swaps operands to `b < a`, and gcc then emits
+`cmpl %edi,%esi; jl` where the original had `cmpl %esi,%edi; jg`. Preserving the
+source's operand order is fidelity; chasing the extra sites was not.
+
+### #42 — right defect, wrong consequence
+
+The indexed-seeding bug was real and is fixed: `resolved_memory_address` now
+resolves the index expression's own definition chain, so an affine
+`(reg << k) + C` contributes `C` to the displacement instead of vanishing into
+the index. armv7 **202 → 206**, control lane 328/328, all 56 matrix cells
+byte-identical. In `graph_bfs` the frame goes `local_80[100] + local_1c[28]` →
+`local_80[36] + local_5c[64] + local_1c[28]`, the queue store becomes
+`*(int *)(&local_5c[0] + (i * 4))`, and **the out-of-bounds write is gone** —
+every `seen[]` access had been `&local_80[0] + 100 + i`, past the end of a
+100-byte object.
+
+But I also claimed the five scalars render as `*(int *)(&local_80[0] + N)`
+*because of* that bug. They do not, and they still do not recover names after
+the fix. Instrumentation found the real cause: `stack_assignment_object_address`'s
+contiguous-run join, triggered by a **dead** `Temp(49) = r7#1` left over from
+flag-width modelling (`JOIN-RUN disp=-128 size=36`). `graph_dfs` has no such dead
+copy. Filed as #68.
+
+Two self-caused regressions are worth remembering because both came from
+dropping an assumption the surrounding code already documented:
+
+* A **bare** `rax` with an affine def `rax = rax#5 + 1` textually AFTER the
+  store that read it moved `seen[]` one byte up the frame — on the CONTROL lane.
+  Fixed by recording facts only when the register and its root carry an SSA
+  version, which `collect_stack_address_defs` already required.
+* Folding a one-element bias (`k` indexed as `(k-1)+1`) re-rooted the subscript
+  on an earlier value. Fixed by refusing when `|bias| <= scale` — the same rule
+  the partitioner immediately below already used.
+
+### The pattern
+
+Three filings wrong in one session: #44 (wrong mechanism *and* wrong
+motivation), #53 (already fixed at base), and half of #42 (wrong consequence).
+Each was written by reasoning from a symptom to the nearest plausible mechanism.
+Each was corrected by someone instrumenting the actual pass — a `GLAURUNG_DUMP_PASSES`
+dump, a `JOIN-RUN` trace, a corpus-wide scan of what `|` operands actually are.
+
+The cost is not just wasted work: a confidently-worded filing sends an agent
+toward a fix that would have been wrong, and #44's would have shipped invented
+basic blocks. Instrument before filing, and state the evidence in the task so
+the next reader can check it rather than inherit the guess.
+
+### Gates, fully merged
+
+```text
+cargo test --lib          1765 pass / 0 fail
+fixture_harness            656 pass / 0 fail
+arch_roundtrip --check    1042 pass  ·  x86_64 328/328 (CONTROL)
+                          i386 233 · aarch64 275 · armv7 206 (80.5%)
+```
+
+Six `arch_baseline.json` cells refreshed, all `fail -> pass`, verified by a
+semantic diff against HEAD rather than by reading the textual one:
+`14_flag_effects:{aarch64,i386}:O2:shift_until_zero`,
+`16_red_black_tree:armv7:O0:rb_validate`, `20_graph_bfs:armv7:O0:graph_bfs`,
+`21_graph_dfs:armv7:O0:graph_dfs`, `25_kmp_search:armv7:O2:kmp_search`.

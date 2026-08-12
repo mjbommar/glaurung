@@ -193,3 +193,119 @@ Stop if a change improves literal count while changing call arguments,
 introducing arbitrary integer-to-string conversions, breaking any architecture
 round-trip cell, or reducing imported-callee correctness. Do not credit a
 rerender made with a stale Python extension.
+
+---
+
+# Implementation pass — 2026-08-04
+
+The three root causes above were re-verified against the running pipeline before
+any code changed. Two held, one did not, and a fourth cause was found that the
+diagnosis had missed.
+
+## Root cause C as written is wrong
+
+The doc says `fold_constants` runs before `fold_string_literals` and therefore
+"erases address provenance", leaving plain constants. Instrumenting the pass
+pipeline on `strip_getconf_arm64:main` shows it does not:
+
+```
+after apply_known_call_contracts (i.e. immediately before the string pass)
+  call setlocale@plt(..., (0x1000 + 3234));
+  call getopt@plt(..., %x22#2);
+```
+
+and the actual AST node is
+
+```
+args=[..., Bin { op: Add, lhs: Addr(4096), rhs: Const(3234) }]
+```
+
+The `Addr` survives intact. Nothing was erased. **The renderer prints `Addr(v)`
+and `Const(v)` identically**, as a bare hex number, which is why reading a pass
+dump made it look like provenance had been lost.
+
+The real blocker was in `fold_constant_string`, the only path permitted to fold a
+value that is not already an `Addr`/`Named`: it matched `Expr::Const` and nothing
+else, so it bailed on both AArch64 shapes — the unfolded `adrp`+`add` sum, and a
+name defined by one. It never reached the length floor.
+
+## Root cause A holds, and is not x86-only
+
+`setlocale(LC_ALL, "")` on **AArch64** passes address `0x1ca2`, which is the NUL
+terminator of the run at `0x1c9c` — the empty string, below the 3-character
+floor. `getopt(argc, argv, "a")` passes a 1-character literal. Both are genuine
+literals discarded by a policy meant to stop arbitrary integers from becoming
+strings.
+
+The floor is a statement about **confidence in an address**, not about the bytes,
+so it moved from pool construction to the point of use:
+
+* a bare `Addr`/`Named` still requires `MIN_STRING_LEN` — otherwise any integer
+  pointing at a NUL byte would render as `""`;
+* a call argument whose **callee prototype proves the parameter is `char *`** may
+  go below it, because the type is authoritative.
+
+## The fourth cause: the prototype catalogue was too small
+
+The contract-gated path can only fire where a prototype proves `char *`. The
+catalogue held 96 entries and was missing `getopt` and the **entire BSD `err.h`
+family** — which is how `getconf`, `getent` and `iconv` all report errors. So for
+those calls there was nothing to gate on. 18 prototypes added (`getopt`,
+`getopt_long`, `err`, `errx`, `warn`, `warnx`, `dlopen`, `dlsym`, `openlog`,
+`syslog`, `asprintf`, `fnmatch`, `regcomp`, `execlp`, `execvp`, `unsetenv`,
+`textdomain`, `bindtextdomain`). A guard test — every contract must have a
+self-contained C spelling — rejected `char * const *`, `const struct option *`
+and `regex_t *`; those were retyped to renderable equivalents.
+
+## Root cause B confirmed, with a concrete instance
+
+`getopt`'s optstring on AArch64 still does not fold, and **should not**. The name
+carrying it is assigned three times:
+
+```
+%x22#1 = 0x1000;
+%x22#2 = (%x22#1 + 3313);      <- the "a" optstring
+%x22#2 = *(u64)&[%x20#1+%x1#4];
+%x22#2 = 0;
+```
+
+Phi coalescing merged three unrelated values into one name, so the constant no
+longer reaches the call as a distinguishable value. The single-assignment guard
+refuses it. On **x86-64** the same source line folds correctly, because there the
+name is genuinely single-assignment. This is root cause B — the value model — and
+it is not fixable in the string layer.
+
+## Measured effect
+
+Tier A, function-weighted, restricted to ground-truth targets:
+
+| | before campaign | before this pass | after | Ghidra | angr | RetDec |
+|---|---:|---:|---:|---:|---:|---:|
+| all architectures | 0.269 | 0.570 | **0.774** | 1.147 | 1.471 | 1.241 |
+| x86-64 | 0.806 | 0.839 | **1.000** | 1.500 | 1.667 | 1.679 |
+| AArch64 | 0.000 | 0.677 | **0.903** | 1.536 | 1.429 | 1.107 |
+| ARMv7 | 0.000 | 0.194 | **0.419** | 0.053 | 1.310 | 0.968 |
+
+The gap to Ghidra narrows from 2.01x to **1.48x**. Tier B (real distro binaries,
+263 sampled targets) moves `1.441 -> 1.532`, against angr's 1.595 and Ghidra's
+1.829.
+
+Every newly recovered literal was checked to be real: `""` from
+`setlocale(LC_ALL, "")`, `"a"` from `getopt`, `"undefined"` via the new `errx`
+contract. Three stripped binaries across three architectures were checked for
+spurious empty-string literals in untyped positions: **zero**.
+
+## Formats
+
+PE is covered at the pool level and now has a regression test: a PE `.rdata`
+section is described by an RVA, and a pool keyed on RVAs would miss every Windows
+string. The pool keys on image-based VAs (verified against a real PE based at
+`0x140000000`). Folding after that point is format-independent. Mach-O
+`__cstring` / `__TEXT,__cstring` match the same section filter.
+
+## Gates
+
+`cargo test --lib` 1,735 passed; `fixture_harness` 656 pass / 0 fail;
+`arch_roundtrip --check` matches the baseline exactly with the control lane at
+328/328 — string folding changes rendering, not behaviour, and the differential
+confirms it.
