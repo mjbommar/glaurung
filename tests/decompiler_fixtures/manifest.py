@@ -618,6 +618,276 @@ OVERRIDES: dict[tuple[str, str], dict] = {
         "len_args": [2],
         "extra_vectors": [[[0], [0, 0, 100, 0, 0], 5]],
     },
+    # --- domain expansion contracts (fixtures 31-80) ---
+    ("31_edit_distance", "edit_distance"): {
+        "arg_values": {1: [0, 1, 2, 5, 8], 3: [0, 1, 3, 8]},
+    },
+    ("31_edit_distance", "hamming_distance"): {
+        "arg_values": {2: [0, 1, 4, 8]},
+    },
+    ("32_longest_common_subsequence", "lcs_length"): {
+        "arg_values": {1: [0, 1, 4, 8], 3: [0, 2, 8]},
+    },
+    ("32_longest_common_subsequence", "lcs_recover"): {
+        "arg_values": {1: [0, 1, 4, 8], 3: [0, 2, 8]},
+    },
+    ("33_knapsack", "knapsack_best_value"): {
+        "arg_values": {2: [0, 1, 4, 8], 3: [0, 1, 8, 16]},
+    },
+    ("33_knapsack", "unbounded_knapsack"): {
+        "arg_values": {2: [0, 1, 4, 8], 3: [0, 1, 8, 16]},
+    },
+    ("34_coin_change", "min_coins"): {
+        "arg_values": {1: [0, 1, 3, 8], 2: [0, 1, 6, 11, 32]},
+        "extra_vectors": [[[1, 3, 4], 3, 6], [[2, 5], 2, 3]],
+    },
+    ("34_coin_change", "count_change"): {
+        "arg_values": {1: [0, 1, 3, 8], 2: [0, 1, 5, 32]},
+        "extra_vectors": [[[1, 2, 5], 3, 5]],
+    },
+    ("35_matrix_chain", "matrix_chain_cost"): {
+        "arg_values": {1: [1, 2, 3, 7]},
+        "extra_vectors": [[[10, 30, 5, 60], 3], [[5, 4, 6, 2, 7], 4]],
+    },
+    ("36_quicksort", "quicksort_i32"): {
+        "len_args": [1],
+    },
+    ("37_heapsort", "heapsort_i32"): {
+        "len_args": [1],
+    },
+    ("38_insertion_shell_sort", "insertion_sort_i32"): {
+        "len_args": [1],
+    },
+    ("38_insertion_shell_sort", "shell_sort_i32"): {
+        "len_args": [1],
+    },
+    ("39_counting_radix_sort", "counting_sort_u8"): {
+        "len_args": [1],
+    },
+    ("39_counting_radix_sort", "radix_sort_u32"): {
+        "len_args": [1],
+    },
+    ("40_quickselect", "quickselect_kth"): {
+        "len_args": [1, 2],
+    },
+    ("41_tokenizer", "tokenize"): {
+        "len_args": [1],
+        "extra_vectors": [[[97, 98, 32, 49, 50, 0, 0, 0], 5, [0], [0]]],
+    },
+    ("42_rpn_evaluator", "rpn_evaluate"): {
+        "len_args": [2],
+        "extra_vectors": [[[35, 35, 43], [2, 3, 0], 3, [0]]],
+    },
+    ("43_base64", "base64_encode"): {
+        "arg_values": {1: [0, 1, 2, 3, 6, 9, 12]},
+        "extra_vectors": [[[77, 97, 110], 3, [0]]],
+    },
+    ("43_base64", "base64_decode"): {
+        "arg_values": {1: [0, 4, 8, 12, 16]},
+        "extra_vectors": [[[84, 87, 70, 117], 4, [0]]],
+    },
+    ("44_run_length", "rle_encode"): {
+        "len_args": [1, 3],
+    },
+    ("44_run_length", "rle_decode"): {
+        "len_args": [1, 3],
+    },
+    ("45_string_algorithms", "parse_decimal"): {
+        "len_args": [1],
+        "extra_vectors": [[[45, 49, 50, 51], 4, [0]], [[57, 57, 57], 3, [0]]],
+    },
+    ("45_string_algorithms", "format_decimal"): {
+        "len_args": [2],
+        "extra_vectors": [[-4096, [0], 8], [0, [0], 4]],
+    },
+    ("45_string_algorithms", "is_palindrome"): {
+        "len_args": [1],
+    },
+    ("46_bitset", "bitset_population"): {
+        "arg_values": {1: [0, 1, 4, 8]},
+    },
+    ("46_bitset", "bitset_rank"): {
+        "arg_values": {1: [0, 1, 4, 8], 2: [0, 1, 31, 32, 64, 128, 256]},
+    },
+    ("46_bitset", "bitset_select"): {
+        "arg_values": {1: [0, 1, 4, 8], 2: [0, 1, 5, 31, 255]},
+    },
+    ("47_huffman", "huffman_code_lengths"): {
+        "arg_values": {1: [1, 2, 4, 8]},
+        "extra_vectors": [[[5, 9, 12, 13, 16, 45], 6, [0]]],
+    },
+    ("47_huffman", "kraft_sum_q16"): {
+        "arg_values": {1: [0, 1, 4, 8]},
+    },
+    ("48_gray_code", "gray_sequence"): {
+        "len_args": [1],
+    },
+    ("49_crc32", "crc32_bitwise"): {
+        "len_args": [1],
+        "extra_vectors": [[[49, 50, 51, 52, 53, 54, 55, 56, 57], 9]],
+    },
+    ("49_crc32", "crc32_table_driven"): {
+        "len_args": [1],
+        "extra_vectors": [[[49, 50, 51, 52, 53, 54, 55, 56, 57], 9]],
+    },
+    ("49_crc32", "internet_checksum"): {
+        "len_args": [1],
+    },
+    ("50_varint", "varint_encode"): {
+        "len_args": [2],
+    },
+    ("50_varint", "varint_decode"): {
+        "len_args": [1],
+        "extra_vectors": [[[172, 2], 2, [0]], [[1], 1, [0]]],
+    },
+    ("51_rc4", "rc4_keystream_checksum"): {
+        "arg_values": {1: [1, 2, 8, 16], 2: [0, 1, 16, 64]},
+        "extra_vectors": [[[75, 101, 121], 3, 16]],
+    },
+    ("52_hash_functions", "fnv1a_32"): {
+        "len_args": [1],
+    },
+    ("52_hash_functions", "djb2_xor"): {
+        "len_args": [1],
+    },
+    ("53_pseudorandom", "bounded_sample"): {
+        "len_args": [3],
+        "arg_values": {1: [1, 2, 10, 1024]},
+    },
+    ("54_sha256_block", "sha256_compress_block"): {
+        "ptr_len": 16,
+    },
+    ("55_modular_arithmetic", "extended_gcd"): {
+        "arg_values": {0: [0, 1, 12, 240, 100000], 1: [0, 1, 8, 46, 100000]},
+    },
+    ("56_sieve", "sieve_primes"): {
+        "len_args": [1],
+    },
+    ("56_sieve", "factorize"): {
+        "arg_values": {0: [2, 3, 12, 97, 360, 999983], 2: [1, 4, 8]},
+    },
+    ("57_bignum", "bignum_add"): {
+        "arg_values": {1: [0, 1, 4, 8], 3: [0, 1, 4, 8], 5: [1, 4, 8]},
+    },
+    ("57_bignum", "bignum_mul_small"): {
+        "arg_values": {1: [0, 1, 4, 8], 2: [0, 1, 7, 65535], 4: [1, 4, 8]},
+    },
+    ("58_rational", "rational_add"): {
+        "arg_values": {0: [-7, 0, 1, 3, 10000], 1: [-4, 1, 2, 6, 10000], 2: [-3, 0, 1, 5, 10000], 3: [-2, 1, 3, 8, 10000]},
+    },
+    ("58_rational", "rational_compare"): {
+        "arg_values": {0: [-7, 0, 1, 3, 10000], 1: [-4, 1, 2, 6, 10000], 2: [-3, 0, 1, 5, 10000], 3: [-2, 1, 3, 8, 10000]},
+    },
+    ("59_combinatorics", "pascal_row"): {
+        "arg_values": {0: [0, 1, 2, 5, 12], 2: [13]},
+    },
+    ("60_integer_matrix", "matrix_multiply"): {
+        "arg_values": {3: [0, 1, 2, 3, 4]},
+    },
+    ("60_integer_matrix", "matrix_transpose"): {
+        "arg_values": {2: [0, 1, 2, 3, 4]},
+    },
+    ("60_integer_matrix", "determinant3"): {
+        "ptr_len": 16,
+    },
+    ("62_gaussian_elimination", "gaussian_solve"): {
+        "ptr_len": 20,
+        "arg_values": {1: [1, 2, 3, 4]},
+        "extra_vectors": [[[131072, 65536, 196608, 65536, 262144, 327680], 2, [0, 0]]],
+    },
+    ("63_numerical_integration", "trapezoid_integrate"): {
+        "arg_values": {2: [1, 2, 4, 8, 32]},
+    },
+    ("63_numerical_integration", "simpson_integrate"): {
+        "arg_values": {2: [2, 4, 8, 32]},
+    },
+    ("64_root_finding", "bisection_sqrt"): {
+        "arg_values": {1: [1, 16, 256, 65536]},
+    },
+    ("64_root_finding", "newton_sqrt"): {
+        "arg_values": {1: [1, 16, 256, 65536]},
+    },
+    ("65_projectile_motion", "projectile_step"): {
+        "arg_values": {2: [1, 256, 6553, 65536], 3: [0, 1, 8, 32]},
+    },
+    ("66_orbital_step", "orbital_step"): {
+        "arg_values": {4: [1, 65536, 655360], 5: [1, 256, 6553, 65536], 6: [0, 1, 4, 16]},
+    },
+    ("68_thermodynamics", "newton_cooling"): {
+        "arg_values": {2: [0, 1024, 32768, 65536], 3: [0, 1, 8, 24]},
+    },
+    ("69_molar_mass", "molar_mass_centi"): {
+        "len_args": [1],
+        "extra_vectors": [[[72, 50, 79], 3], [[67, 54, 72, 49, 50, 79, 54], 7], [[78, 97, 67, 108], 4]],
+    },
+    ("70_reaction_balance", "balance_reaction"): {
+        "arg_values": {4: [1, 2, 3, 4]},
+        "extra_vectors": [[[0, 2], [2, 0], [2, 1], [0, 0], 2, [0, 0, 0, 0]]],
+    },
+    ("71_compound_interest", "compound_balance"): {
+        "arg_values": {1: [0, 655, 6553, 65536], 2: [0, 1, 8, 32]},
+    },
+    ("71_compound_interest", "annuity_future_value"): {
+        "arg_values": {1: [0, 655, 6553, 65536], 2: [0, 1, 8, 32]},
+    },
+    ("72_loan_amortization", "amortization_schedule"): {
+        "arg_values": {1: [0, 655, 6553], 2: [1, 65536, 655360], 3: [0, 1, 6, 12]},
+    },
+    ("72_loan_amortization", "remaining_balance"): {
+        "arg_values": {1: [0, 655, 6553], 2: [1, 65536, 655360], 3: [0, 1, 6, 12]},
+    },
+    ("73_present_value", "net_present_value"): {
+        "arg_values": {1: [0, 1, 4, 12], 2: [0, 655, 6553, 65536]},
+    },
+    ("73_present_value", "internal_rate_of_return"): {
+        "arg_values": {1: [1, 4, 12]},
+    },
+    ("74_moving_statistics", "simple_moving_average"): {
+        "len_args": [1, 2],
+    },
+    ("74_moving_statistics", "exponential_moving_average"): {
+        "arg_values": {1: [1, 4, 16], 2: [0, 6553, 32768, 65536]},
+    },
+    ("74_moving_statistics", "population_variance"): {
+        "arg_values": {1: [1, 4, 16]},
+    },
+    ("75_order_book", "match_order"): {
+        "arg_values": {2: [0, 1, 4, 8], 4: [0, 1, 100, 1000000], 5: [0, 1]},
+        "extra_vectors": [[[100, 101, 102], [5, 5, 5], 3, 101, 7, 1, [0]]],
+    },
+    ("76_portfolio_rebalance", "maximum_drift"): {
+        "arg_values": {2: [1, 2, 4, 8]},
+    },
+    ("76_portfolio_rebalance", "rebalance_trades"): {
+        "arg_values": {2: [1, 2, 4, 8]},
+    },
+    ("77_lru_cache", "lru_access"): {
+        "arg_values": {2: [1, 2, 4, 8], 4: [0, 1, 100]},
+    },
+    ("78_ring_buffer", "ring_push"): {
+        "ptr_len": 16,
+    },
+    ("78_ring_buffer", "ring_pop"): {
+        "ptr_len": 16,
+    },
+    ("79_segment_tree", "segment_build"): {
+        "arg_values": {1: [0, 1, 4, 8]},
+    },
+    ("79_segment_tree", "segment_update"): {
+        "arg_values": {1: [0, 1, 4, 7]},
+    },
+    ("79_segment_tree", "segment_range_sum"): {
+        "arg_values": {1: [0, 1, 4], 2: [0, 2, 5, 8]},
+    },
+    ("80_trie", "trie_insert"): {
+        "ptr_len": 96,
+        "arg_values": {4: [0, 1, 3, 8]},
+        "extra_vectors": [[[0], [0], [1], [97, 98], 2]],
+    },
+    ("80_trie", "trie_lookup"): {
+        "ptr_len": 96,
+        "arg_values": {3: [0, 1, 3, 8]},
+    },
 }
 
 # Structural expectations for the structural lane (checked on decompiled text, not
@@ -681,6 +951,57 @@ CURRICULUM_PROJECTS: dict[str, list[str]] = {
     "28_euler_ode": ["euler_decay_q16"],
     "29_polynomial": ["polynomial_eval_mod32", "polynomial_derivative_mod32"],
     "30_finite_difference": ["heat_step_1d"],
+    # --- domain expansion: algorithms, numerics, and applied-science kernels ---
+    "31_edit_distance": ["edit_distance", "hamming_distance"],
+    "32_longest_common_subsequence": ["lcs_length", "lcs_recover"],
+    "33_knapsack": ["knapsack_best_value", "unbounded_knapsack"],
+    "34_coin_change": ["min_coins", "count_change"],
+    "35_matrix_chain": ["matrix_chain_cost"],
+    "36_quicksort": ["quicksort_i32"],
+    "37_heapsort": ["heapsort_i32"],
+    "38_insertion_shell_sort": ["insertion_sort_i32", "shell_sort_i32"],
+    "39_counting_radix_sort": ["counting_sort_u8", "radix_sort_u32"],
+    "40_quickselect": ["quickselect_kth", "median_of_three"],
+    "41_tokenizer": ["tokenize"],
+    "42_rpn_evaluator": ["rpn_evaluate"],
+    "43_base64": ["base64_encode", "base64_decode"],
+    "44_run_length": ["rle_encode", "rle_decode"],
+    "45_string_algorithms": ["parse_decimal", "format_decimal", "is_palindrome"],
+    "46_bitset": ["bitset_population", "bitset_rank", "bitset_select"],
+    "47_huffman": ["huffman_code_lengths", "kraft_sum_q16"],
+    "48_gray_code": ["binary_to_gray", "gray_to_binary", "reverse_bits32", "gray_sequence"],
+    "49_crc32": ["crc32_bitwise", "crc32_table_driven", "internet_checksum"],
+    "50_varint": ["zigzag_encode", "zigzag_decode", "varint_encode", "varint_decode"],
+    "51_rc4": ["rc4_keystream_checksum"],
+    "52_hash_functions": ["fnv1a_32", "djb2_xor", "murmur3_finalize"],
+    "53_pseudorandom": ["xorshift32", "lcg64_next_high", "bounded_sample"],
+    "54_sha256_block": ["sha256_compress_block"],
+    "55_modular_arithmetic": ["gcd_i32", "extended_gcd", "mod_pow"],
+    "56_sieve": ["sieve_primes", "factorize"],
+    "57_bignum": ["bignum_add", "bignum_mul_small"],
+    "58_rational": ["rational_add", "rational_compare"],
+    "59_combinatorics": ["pascal_row", "binomial", "catalan"],
+    "60_integer_matrix": ["matrix_multiply", "matrix_transpose", "determinant3"],
+    "61_fixed_point": ["fixed_multiply", "fixed_divide", "fixed_sqrt", "fixed_lerp"],
+    "62_gaussian_elimination": ["gaussian_solve"],
+    "63_numerical_integration": ["trapezoid_integrate", "simpson_integrate"],
+    "64_root_finding": ["bisection_sqrt", "newton_sqrt"],
+    "65_projectile_motion": ["projectile_step", "kinetic_energy"],
+    "66_orbital_step": ["orbital_step"],
+    "67_elastic_collision": ["elastic_velocity_a", "inelastic_velocity", "momentum_residual"],
+    "68_thermodynamics": ["ideal_gas_pressure", "newton_cooling", "mixing_temperature"],
+    "69_molar_mass": ["molar_mass_centi"],
+    "70_reaction_balance": ["balance_reaction"],
+    "71_compound_interest": ["compound_balance", "annuity_future_value"],
+    "72_loan_amortization": ["amortization_schedule", "remaining_balance"],
+    "73_present_value": ["net_present_value", "internal_rate_of_return"],
+    "74_moving_statistics": ["simple_moving_average", "exponential_moving_average", "population_variance"],
+    "75_order_book": ["match_order"],
+    "76_portfolio_rebalance": ["maximum_drift", "rebalance_trades"],
+    "77_lru_cache": ["lru_access"],
+    "78_ring_buffer": ["ring_push", "ring_pop", "ring_occupancy"],
+    "79_segment_tree": ["segment_build", "segment_update", "segment_range_sum"],
+    "80_trie": ["trie_insert", "trie_lookup"],
 }
 
 # Functions that MUST be present in each fixture (real names; a missing one fails

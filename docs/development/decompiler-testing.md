@@ -1,5 +1,9 @@
 # Testing the decompiler locally
 
+> **Status: maintained developer guide.** The commands and gate boundaries are
+> current. Lane counts and timings are measured snapshots, not performance
+> guarantees; remeasure them before making a current performance claim.
+
 Which command answers which question, and how much it costs. The gate is not the
 only tool, and using it as one is why iteration was slow: it compiles and
 executes 56 lanes to tell you about the one function you just changed.
@@ -81,7 +85,7 @@ success looks like.
 result map carries no `__toolchain__` fingerprint (so `fixture_harness` refuses
 it), and every summary line names its scope:
 
-```
+```text
 SCOPED: 1 lane of 56 (2%) — no regressions in scope
 ```
 
@@ -116,7 +120,7 @@ already cost a full gate cycle here once.
 
 So `dectest` and `scripts/decbench-local-gate.sh` refuse to run against one:
 
-```
+```text
 STALE BUILD: src/ir/structure.rs is newer than the built extension.
   Every verdict below would describe the PREVIOUS build, not your change.
   Rebuild:  VIRTUAL_ENV=.venv uvx maturin develop --release
@@ -145,7 +149,7 @@ corpus, keyed `fixture:arch:opt` and baselined in
 
 The recovered artifact is portable C, so it does not have to run on the target:
 
-```
+```text
 fixture.c --(cross cc)--> target .so --(glaurung)--> recovered.c --(cc)--> B
 fixture.c ---------------------(cc)-------------------------------------> A
 ```
