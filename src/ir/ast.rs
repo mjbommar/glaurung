@@ -18387,6 +18387,59 @@ function f @ 0x1000 {
         );
     }
 
+    /// A recovered pointer parameter is only compatible with an argument that
+    /// renders as that same pointer type. A string literal is `char *` and a
+    /// frame object is `unsigned char *`; passing either to a recovered
+    /// `long *`/`int *` is `-Wincompatible-pointer-types`, which is a hard
+    /// error from GCC 14 on. This is exactly the shape that cost 23 of the 250
+    /// DecBench holdout functions their compile.
+    #[test]
+    fn recovered_pointer_parameters_cast_literal_and_frame_arguments() {
+        let recovered = CallPrototype {
+            return_type: "long".into(),
+            parameter_types: vec!["long *".into(), "int *".into(), "void *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let rendered = render_decbench(&Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "record".into(),
+                },
+                args: vec![
+                    Expr::StringLit {
+                        value: "boom".into(),
+                    },
+                    Expr::StackAddr {
+                        object: VReg::phys("local_18"),
+                        size: 24,
+                    },
+                    Expr::StackAddr {
+                        object: VReg::phys("local_28"),
+                        size: 8,
+                    },
+                ],
+                dst: None,
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: Some(recovered.clone()),
+                    call_prototype: recovered,
+                }),
+            }],
+        });
+
+        assert!(
+            rendered.contains(
+                r#"record((long *)("boom"), (int *)(&local_18[0]), &local_28[0])"#
+            ),
+            "a literal or frame argument reached an incompatible pointer parameter \
+             without the reasserting cast, or a `void *` parameter grew a \
+             redundant one:\n{rendered}"
+        );
+    }
+
     #[test]
     fn exceptionally_large_decbench_function_uses_the_gcc_ice_guard() {
         let rendered = render_decbench(&Function {
