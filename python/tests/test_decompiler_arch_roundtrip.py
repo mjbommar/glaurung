@@ -194,9 +194,24 @@ def test_known_failures_are_writable_as_a_baseline():
 
 
 def test_schema_requires_every_declared_fixture_in_every_lane():
+    """One `missing lane` per fixture this tool is RESPONSIBLE for.
+
+    That is the C/C++ corpus, not the whole manifest. `TARGETS` configures no
+    cross-`rustc`, so `schema_problems` deliberately scopes itself to fixtures
+    with a C or C++ source — otherwise every `--write-baseline` refused with six
+    "only declared" entries that no amount of building could satisfy. This
+    assertion counted the raw manifest and so drifted the moment the Rust
+    fixtures joined it: 181 declared against 175 answerable.
+    """
     matrix = [("x86_64", "O0")]
     problems = A.schema_problems(_result(), matrix)
-    assert len(problems) == len(M.REQUIRED_FUNCTIONS)
+    cross_buildable = [
+        name
+        for name in M.REQUIRED_FUNCTIONS
+        if (A.SRC / f"{name}.c").exists() or (A.SRC / f"{name}.cpp").exists()
+    ]
+    assert cross_buildable, "no C/C++ fixture sources found"
+    assert len(problems) == len(cross_buildable)
     assert all("missing lane" in p for p in problems)
 
 
