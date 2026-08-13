@@ -41,6 +41,40 @@ import fixture_toolchain as TC
 import manifest as M  # ty: ignore[unresolved-import]
 
 REQUIRED_MATRIX = [("gcc", "O0"), ("gcc", "O2"), ("clang", "O0"), ("clang", "O2")]
+#: Rust has exactly one compiler, so its lanes are named `rustc` rather than
+#: cross-producted with a C compiler that never builds it.
+RUST_MATRIX = [("rustc", "O0"), ("rustc", "O2")]
+
+
+def matrix_for(src) -> list[tuple[str, str]]:
+    """The compiler/optimization lanes that apply to one fixture source."""
+    return RUST_MATRIX if str(src).endswith(".rs") else REQUIRED_MATRIX
+
+
+def rust_lanes_enabled() -> bool:
+    """Whether Rust fixtures participate in the matrix.
+
+    ON: the pinned toolchain image now provisions rustc (see
+    `toolchain/Dockerfile`) and `_VERSION_PROBES` records its version, so a Rust
+    verdict is attributable to a fingerprinted toolchain exactly as a gcc or
+    clang verdict is. That is the guarantee this gate exists to make, and it is
+    why the lanes were held back until rustc was in the image rather than run
+    against whatever happened to be on the host.
+
+    Set GLAURUNG_FIXTURE_RUST=0 to drop the Rust lanes — useful on a host whose
+    image predates them, where every Rust lane would otherwise report
+    `compile-failed: rustc: executable file not found`.
+    """
+    return os.environ.get("GLAURUNG_FIXTURE_RUST", "1") != "0"
+
+
+def _fixture_sources() -> list:
+    """Every fixture source the matrix should cover."""
+    srcs = list(SRC.glob("*.c")) + list(SRC.glob("*.cpp"))
+    if rust_lanes_enabled():
+        srcs += list(SRC.glob("*.rs"))
+    return sorted(srcs)
+
 
 #: Reserved key in a result map / baseline holding the compile toolchain identity
 #: (see fixture_toolchain.fingerprint). Not a lane — every consumer filters it.
@@ -100,9 +134,49 @@ def detect_allowed_missing() -> set[tuple[str, str, str]]:
     return missing
 
 
+def _compile_rust_fixture(
+    src: Path, cc: str, opt: str, strict: bool = False
+) -> tuple[Path | None, str]:
+    """Build a Rust fixture as a cdylib.
+
+    rustc is its own front end and back end, so the `{gcc, clang}` axis has no
+    meaning here — a Rust fixture has exactly one compiler and the lane is named
+    `rustc`. `-shared`/`-fPIC` are rejected by rustc (a cdylib is already
+    both), `-O` is `-C opt-level=2`, and `-D warnings` is the analogue of
+    `-Wall -Wextra -Werror`.
+
+    DWARF v4 is emitted with `-g`, which is what the execution differential
+    recovers signatures from; a cdylib exports exactly its `#[no_mangle]`
+    symbols and does not re-export std.
+    """
+    BUILD.mkdir(parents=True, exist_ok=True)
+    out = BUILD / f"{src.stem}-rustc-{opt}.so"
+    level = "0" if opt == "O0" else "2"
+    cmd = [
+        "rustc",
+        "--edition",
+        "2021",
+        "-g",
+        "-C",
+        f"opt-level={level}",
+        "--crate-type",
+        "cdylib",
+        *(["-D", "warnings"] if strict else []),
+        "-o",
+        str(out),
+        str(src),
+    ]
+    completed = TC.run(cmd)
+    if completed.returncode != 0:
+        return None, completed.stderr
+    return out, ""
+
+
 def compile_fixture(
     src: Path, cc: str, opt: str, strict: bool = False
 ) -> tuple[Path | None, str]:
+    if src.suffix == ".rs":
+        return _compile_rust_fixture(src, cc, opt, strict)
     is_cpp = src.suffix == ".cpp"
     compiler = _cpp_compiler(cc) if is_cpp else cc
     BUILD.mkdir(parents=True, exist_ok=True)
@@ -137,12 +211,14 @@ def strict_compile_problems(matrix=None, allowed_missing=None) -> list[str]:
     if allowed_missing is None:
         allowed_missing = detect_allowed_missing()
     problems = []
-    srcs = sorted(list(SRC.glob("*.c")) + list(SRC.glob("*.cpp")))
+    srcs = _fixture_sources()
     # Shared with gen_structural_baseline.py — see M.assert_fixtures_declared for why
     # this must not live in only one of the two writers.
     M.assert_fixtures_declared()
     for src in srcs:
-        for cc, opt in matrix:
+        # A Rust fixture has rustc lanes only; cross-producting it with the C
+        # matrix would demand `166_rust_generics:gcc:O0`, which never exists.
+        for cc, opt in matrix if src.suffix != ".rs" else matrix_for(src):
             so, err = compile_fixture(src, cc, opt, strict=True)
             if (cc, opt, src.stem) in allowed_missing:
                 # declared gap: must genuinely fail (env runtime absent)
@@ -239,11 +315,11 @@ def run_matrix(
     if jobs is None:
         jobs = default_jobs()
     result: dict = {TOOLCHAIN_KEY: TC.fingerprint()}
-    srcs = sorted(list(SRC.glob("*.c")) + list(SRC.glob("*.cpp")))
+    srcs = _fixture_sources()
     lanes_to_run = [
         (f"{src.stem}:{cc}:{opt}", src, cc, opt, (cc, opt, src.stem) in allowed_missing)
         for src in srcs
-        for cc, opt in matrix
+        for cc, opt in (matrix if src.suffix != ".rs" else matrix_for(src))
     ]
     if jobs == 1:
         for key, src, cc, opt, env_missing in lanes_to_run:
@@ -286,7 +362,13 @@ def run_lanes(
     work = []
     for fixture, cc, opt, funcs in lane_specs:
         matches = [
-            p for p in (SRC / f"{fixture}.c", SRC / f"{fixture}.cpp") if p.is_file()
+            p
+            for p in (
+                SRC / f"{fixture}.c",
+                SRC / f"{fixture}.cpp",
+                SRC / f"{fixture}.rs",
+            )
+            if p.is_file()
         ]
         if not matches:
             raise FileNotFoundError(f"no fixture source for {fixture!r} in {SRC}")
@@ -411,7 +493,7 @@ def schema_problems(result: dict, matrix) -> list[str]:
     the sources on disk against `REQUIRED_FUNCTIONS` catches both a vanished
     fixture and one added without being declared."""
     problems = []
-    stems = sorted(p.stem for p in list(SRC.glob("*.c")) + list(SRC.glob("*.cpp")))
+    stems = sorted(p.stem for p in _fixture_sources())
     declared = set(M.REQUIRED_FUNCTIONS)
     if set(stems) != declared:
         problems.append(
@@ -424,8 +506,14 @@ def schema_problems(result: dict, matrix) -> list[str]:
             f"no {TOOLCHAIN_KEY} fingerprint — the verdicts are not attributable to "
             f"a toolchain; regenerate with `--write-baseline`"
         )
+    sources = {src.stem: src for src in _fixture_sources()}
     for stem in stems:
-        for cc, opt in matrix:
+        # Per-language lanes: a Rust fixture has rustc:O0/rustc:O2 and no gcc or
+        # clang lane at all, so cross-producting every stem with the global
+        # matrix would demand `171_rust_overflow:gcc:O2` and report it missing.
+        src = sources.get(stem)
+        lanes = matrix if src is None or src.suffix != ".rs" else matrix_for(src)
+        for cc, opt in lanes:
             key = f"{stem}:{cc}:{opt}"
             if key not in result:
                 problems.append(f"missing lane {key}")

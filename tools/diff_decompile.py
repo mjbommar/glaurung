@@ -36,10 +36,12 @@ import argparse
 import ctypes
 import hashlib
 import json
+import math
 import random
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -137,219 +139,12 @@ assert NATIVE_PRELUDE != PRELUDE, "PRELUDE no longer spells int64_t as `long`"
 # Signature recovery
 # ---------------------------------------------------------------------------
 
-# Encodings we accept as integer scalars (float/complex are unsupported).
-_SIGNED_ENC = {0x05, 0x06, 0x0D}  # signed, signed_char, signed_fixed
-_UNSIGNED_ENC = {
-    0x02,
-    0x07,
-    0x08,
-    0x0E,
-}  # boolean, unsigned, unsigned_char, unsigned_fixed
-
-
-def _resolve(ref, cu, drop_cv: bool):
-    """Peel typedef (and optionally const/volatile) wrappers; report const seen."""
-    const = False
-    for _ in range(16):
-        tag = ref.tag
-        if tag == "DW_TAG_const_type":
-            const = True
-        elif (
-            tag not in ("DW_TAG_typedef", "DW_TAG_volatile_type")
-            or not drop_cv
-            and tag in ("DW_TAG_const_type", "DW_TAG_volatile_type")
-        ):
-            break
-        tt = ref.attributes.get("DW_AT_type")
-        if tt is None:
-            return None, const  # e.g. `const void`
-        ref = cu.get_DIE_from_refaddr(tt.value)
-    return ref, const
-
-
-def _scalar_desc(ref):
-    """{'k':'int','w':width,'s':signed} for a base integer type, else None."""
-    if ref is None or ref.tag != "DW_TAG_base_type":
-        return None
-    enc = ref.attributes.get("DW_AT_encoding")
-    if enc is None or enc.value not in (_SIGNED_ENC | _UNSIGNED_ENC):
-        return None
-    sz = ref.attributes.get("DW_AT_byte_size")
-    w = sz.value if sz is not None else 4
-    if w not in (1, 2, 4, 8):
-        return None
-    return {"k": "int", "w": w, "s": enc.value in _SIGNED_ENC}
-
-
-def _dwarf_typedef_name(ref, cu) -> str | None:
-    """Return the first C typedef name on a DWARF wrapper chain, if any."""
-    for _ in range(16):
-        if ref.tag == "DW_TAG_typedef":
-            name_attr = ref.attributes.get("DW_AT_name")
-            if name_attr is not None:
-                name = name_attr.value.decode(errors="replace")
-                if re.fullmatch(r"[A-Za-z_]\w*", name):
-                    return name
-        if ref.tag not in (
-            "DW_TAG_typedef",
-            "DW_TAG_const_type",
-            "DW_TAG_volatile_type",
-        ):
-            return None
-        type_attr = ref.attributes.get("DW_AT_type")
-        if type_attr is None:
-            return None
-        try:
-            ref = cu.get_DIE_from_refaddr(type_attr.value)
-        except Exception:  # noqa: BLE001 - malformed debug data is unsupported
-            return None
-    return None
-
-
-def _die_desc(ref, cu, seen: set[int] | None = None):
-    """Describe one resolved DIE.
-
-    Aggregate execution is deliberately bounded to plain data structs. That is
-    enough for the SysV `struct { int x, y; }` eightbyte used by DecBench while
-    refusing bit-fields, unions, pointer members, and location expressions whose
-    ABI/data layout this harness cannot state exactly.
-    """
-    ref, _ = _resolve(ref, cu, drop_cv=True)
-    if ref is None:
-        return None
-    scalar = _scalar_desc(ref)
-    if scalar is not None:
-        return scalar
-    if ref.tag == "DW_TAG_pointer_type":
-        pointee_attr = ref.attributes.get("DW_AT_type")
-        if pointee_attr is None:
-            return None
-        try:
-            pointee = cu.get_DIE_from_refaddr(pointee_attr.value)
-        except Exception:  # noqa: BLE001
-            return None
-        pointee, _ = _resolve(pointee, cu, drop_cv=True)
-        # The only aggregate pointer we can materialize without inventing object
-        # ownership is a link back to the struct currently being described.
-        # Encode it nominally instead of recursively embedding the same descriptor.
-        if (
-            pointee is not None
-            and pointee.tag == "DW_TAG_structure_type"
-            and seen is not None
-            and pointee.offset in seen
-        ):
-            size = ref.attributes.get("DW_AT_byte_size")
-            width = size.value if size is not None else cu["address_size"]
-            return {"k": "self_ptr", "w": width}
-        return None
-    if ref.tag != "DW_TAG_structure_type":
-        return None
-    offset = ref.offset
-    seen = set() if seen is None else set(seen)
-    if offset in seen:
-        return None
-    seen.add(offset)
-    size_attr = ref.attributes.get("DW_AT_byte_size")
-    if size_attr is None or not 1 <= size_attr.value <= 256:
-        return None
-    fields = []
-    for index, child in enumerate(ref.iter_children()):
-        if child.tag != "DW_TAG_member":
-            continue
-        if "DW_AT_bit_size" in child.attributes:
-            return None
-        loc = child.attributes.get("DW_AT_data_member_location")
-        typ = child.attributes.get("DW_AT_type")
-        if loc is None or typ is None or not isinstance(loc.value, int):
-            return None
-        try:
-            field_ref = cu.get_DIE_from_refaddr(typ.value)
-        except Exception:  # noqa: BLE001
-            return None
-        field_type = _die_desc(field_ref, cu, seen)
-        if field_type is None or field_type["k"] not in (
-            "int",
-            "struct",
-            "self_ptr",
-        ):
-            return None
-        name_attr = child.attributes.get("DW_AT_name")
-        name = (
-            name_attr.value.decode(errors="replace")
-            if name_attr is not None
-            else f"field{index}"
-        )
-        fields.append({"name": name, "off": loc.value, "t": field_type})
-    if not fields:
-        return None
-    fields.sort(key=lambda field: field["off"])
-    return {"k": "struct", "w": size_attr.value, "fields": fields}
-
-
-def _type_desc(type_attr, cu):
-    """Full descriptor for a DWARF type reference, or None if unsupported.
-
-    scalar : {'k':'int','w':1|2|4|8,'s':bool}
-    struct : {'k':'struct','w':bytes,'fields':[{'off':N,'t':desc}, ...]}
-    pointer: {'k':'ptr','p':pointee_descriptor,'const':bool}; scalar pointees
-             retain the legacy `pw`/`ps` keys for manifest compatibility.
-    """
-    if type_attr is None:
-        return {"k": "void"}
-    try:
-        ref = cu.get_DIE_from_refaddr(type_attr.value)
-    except Exception:  # noqa: BLE001
-        return None
-    ref, _ = _resolve(ref, cu, drop_cv=True)
-    if ref is None:
-        return None
-    if ref.tag == "DW_TAG_pointer_type":
-        pt = ref.attributes.get("DW_AT_type")
-        if pt is None:
-            return {"k": "ptr", "pw": 1, "ps": False, "const": False}  # void*
-        try:
-            pref = cu.get_DIE_from_refaddr(pt.value)
-        except Exception:  # noqa: BLE001
-            return None
-        pointee_name = _dwarf_typedef_name(pref, cu)
-        pref2, const = _resolve(pref, cu, drop_cv=True)
-        if pointee_name is None and pref2 is not None:
-            name_attr = pref2.attributes.get("DW_AT_name")
-            if name_attr is not None:
-                candidate = name_attr.value.decode(errors="replace")
-                if re.fullmatch(r"[A-Za-z_]\w*", candidate):
-                    pointee_name = candidate
-        pointee = _die_desc(pref2, cu)
-        if pointee is None:
-            return None
-        if pointee["k"] == "struct" and pointee_name is not None:
-            pointee = {**pointee, "name": pointee_name}
-        desc = {"k": "ptr", "p": pointee, "const": const}
-        if pointee["k"] == "int":
-            desc.update({"pw": pointee["w"], "ps": pointee["s"]})
-        return desc
-    return _die_desc(ref, cu)
-
-
-def _inherited_attr(die, name: str, cu):
-    """Resolve one attribute through a bounded abstract-origin/specification chain."""
-    seen: set[int] = set()
-    for _ in range(16):
-        if die.offset in seen:
-            return None
-        seen.add(die.offset)
-        if value := die.attributes.get(name):
-            return value
-        origin = die.attributes.get("DW_AT_abstract_origin") or die.attributes.get(
-            "DW_AT_specification"
-        )
-        if origin is None:
-            return None
-        try:
-            die = cu.get_DIE_from_refaddr(origin.value)
-        except Exception:  # noqa: BLE001
-            return None
-    return None
+# The pyelftools DWARF type walker that used to live here — roughly 300 lines
+# of DIE resolution, wrapper peeling and descriptor building — has been
+# deleted. `signatures()` below reads the same information through Glaurung's
+# own `gimli` reader (`debug::dwarf_signatures`), so this harness no longer
+# carries a second, independently-buggy DWARF parser. See that module's header
+# for what it refuses and why refusing is the point.
 
 
 def exported_functions(binary: str) -> dict[str, int]:
@@ -403,45 +198,42 @@ def defined_functions(binary: str) -> dict[str, int]:
 
 
 def signatures(binary: str) -> list[dict]:
+    """Executable signatures for every function this harness can call.
+
+    Read through Glaurung's own `gimli` DWARF reader
+    (`debug::dwarf_signatures`), not a second parser. This used to be ~200 lines
+    of pyelftools DIE walking used by nothing but this harness, and it was the
+    source of every DWARF crash chased on 2026-08-12 — cross-CU references
+    resolved against the wrong compilation unit, `DW_FORM_strp` offsets
+    reporting `value=None`, abbrev tables decoded lazily with the wrong CU. A
+    Rust `cdylib` under test carries 13 compilation units and turned up all of
+    them; not one was a defect in the product.
+
+    Reading the same bytes through the same code the product uses means a DWARF
+    failure here is now evidence about Glaurung rather than about the harness.
+
+    The address still comes from the dynamic symbol table when the DIE has no
+    `DW_AT_low_pc`: at -O2 a function can be described entirely by
+    `DW_AT_ranges`, and the export table is the authoritative name->address map
+    this harness loads through anyway.
+    """
     exported = exported_functions(binary)
     out = []
-    with open(binary, "rb") as fh:
-        elf = ELFFile(fh)
-        if not elf.has_dwarf_info():
-            return out
-        dw = elf.get_dwarf_info()
-        for cu in dw.iter_CUs():
-            for die in cu.iter_DIEs():
-                if die.tag != "DW_TAG_subprogram":
-                    continue
-                name_attr = _inherited_attr(die, "DW_AT_name", cu)
-                if name_attr is None:
-                    continue
-                name = name_attr.value.decode()
-                # Optimized functions can be represented by DW_AT_ranges with
-                # no low_pc at all.  They are still callable, and the dynamic
-                # symbol table is already our authoritative name->address map.
-                # Use it for ranged exported DIEs rather than degrading a fully
-                # recoverable prototype to structural-only evidence.
-                low_pc = die.attributes.get("DW_AT_low_pc")
-                va = low_pc.value if low_pc is not None else exported.get(name)
-                if va is None:
-                    continue
-                params, ok = [], True
-                for c in die.iter_children():
-                    if c.tag != "DW_TAG_formal_parameter":
-                        continue
-                    d = _type_desc(_inherited_attr(c, "DW_AT_type", cu), cu)
-                    if d is None or d.get("k") == "void":
-                        ok = False
-                        break
-                    params.append(d)
-                if not ok:
-                    continue
-                ret = _type_desc(_inherited_attr(die, "DW_AT_type", cu), cu)
-                if ret is None:
-                    continue  # unsupported return type
-                out.append({"name": name, "va": va, "params": params, "ret": ret})
+    for signature in g.debug.extract_dwarf_signatures_path(  # ty: ignore[unresolved-attribute]
+        binary
+    ):
+        name = signature["name"]
+        va = signature["va"] or exported.get(name)
+        if not va:
+            continue
+        out.append(
+            {
+                "name": name,
+                "va": va,
+                "params": signature["params"],
+                "ret": signature["ret"],
+            }
+        )
     return out
 
 
@@ -451,7 +243,11 @@ _STR_DESC = {
     "uint": {"k": "int", "w": 4, "s": False},
     "long": {"k": "int", "w": 8, "s": True},
     "ulong": {"k": "int", "w": 8, "s": False},
+    "float": {"k": "float", "w": 4},
+    "double": {"k": "float", "w": 8},
     "ptr": {"k": "ptr", "pw": 4, "ps": True, "const": False},
+    "fptr": {"k": "ptr", "p": {"k": "float", "w": 4}, "const": False},
+    "dptr": {"k": "ptr", "p": {"k": "float", "w": 8}, "const": False},
     "void": {"k": "void"},
 }
 
@@ -1060,8 +856,14 @@ _EXTERN_FUNCTION_DECL = re.compile(
     r"(?m)^[ \t]*extern[ \t]+[^;\n{}()]*?\b"
     r"(?P<name>[A-Za-z_]\w*)[ \t]*\([^;\n{}]*\)[ \t]*;[ \t]*\n?"
 )
+#: A definition may lead with GNU attributes — the stack-protector suppression
+#: is spelled bare, because a `#define` above the signature is discarded by
+#: DecBench's per-function split. The prefix class below is identifier-only, so
+#: the parentheses of `__attribute__((...))` would end the match and the
+#: definition would be invisible to this harness. Consume them up front.
 _FUNCTION_DEFINITION = re.compile(
-    r"(?m)^(?!extern\b)(?P<prefix>[A-Za-z_][A-Za-z0-9_ \t*]*[ \t]+)"
+    r"(?m)^(?!extern\b)(?P<attrs>(?:__attribute__[ \t]*\(\(.*?\)\)[ \t\r\n]*)*)"
+    r"(?P<prefix>[A-Za-z_][A-Za-z0-9_ \t*]*[ \t]+)"
     r"(?P<name>[A-Za-z_]\w*)(?P<suffix>[ \t]*\([^;\n{}]*\)[ \t\r\n]*\{)"
 )
 _FUNCTION_CALL = re.compile(r"\b(?P<name>[A-Za-z_]\w*)[ \t]*\(")
@@ -1412,6 +1214,91 @@ def build_so(
 # ---------------------------------------------------------------------------
 
 
+#: `struct` codes for the two IEEE formats we marshal. Little-endian is spelled
+#: explicitly rather than left native: the byte ORDER is irrelevant to an equality
+#: test, but `<` also pins standard size, and the native codes would silently
+#: follow the host's alignment padding rules.
+_FLOAT_PACK = {4: "<f", 8: "<d"}
+
+
+def float_bits(width: int, value) -> int:
+    """The exact IEEE-754 bit pattern of `value` at `width` bytes.
+
+    This is the ONLY way a floating-point result is compared. `==` on Python
+    floats is the wrong predicate twice over: it calls `-0.0` equal to `0.0`,
+    hiding a lost sign that a `signbit`/divide-by-zero path will later act on,
+    and it calls a NaN unequal to ITSELF, so a function that correctly returns
+    NaN on both sides would be reported as a behavioural divergence. A tolerance
+    would be worse still — it is precisely the near-miss (a `float` temporary
+    recovered as a `double`, a fused multiply-add that should not have been
+    contracted) this gate exists to catch, and any epsilon large enough to be
+    called "close" swallows it.
+    """
+    return int.from_bytes(struct.pack(_FLOAT_PACK[width], float(value)), "little")
+
+
+def _round_to_float_width(value: float, width: int) -> float:
+    """`value` as the nearest number the target format can hold.
+
+    Vectors are generated as Python floats (binary64) and JSON-serialised; a
+    binary32 parameter would have them rounded by ctypes at the call. Rounding
+    HERE instead makes the recorded vector the value actually passed, so a
+    reported counter-example is the literal input to reproduce with.
+    """
+    return struct.unpack(_FLOAT_PACK[width], struct.pack(_FLOAT_PACK[width], value))[0]
+
+
+#: Deterministic floating-point boundaries, the FP counterpart of
+#: `manifest.scalar_boundaries`. Every entry is exactly representable in binary32,
+#: so the same list means the same values at either width and a float-vs-double
+#: disagreement is the function's, not the vector's.
+#:
+#: NaN and the infinities are DELIBERATELY ABSENT. Comparison handles them
+#: correctly (`float_bits` is exact, and a NaN produced by either side is
+#: compared by pattern), but generating them as INPUTS is a different question:
+#: nearly every arithmetic fixture would then be asked to compare NaN payload
+#: propagation through the x87/SSE mix a compiler may choose, and a payload the
+#: hardware is permitted to alter is not a decompiler property. They stay out of
+#: the input set until a fixture exists whose contract is specifically about them.
+_FLOAT_BOUNDARIES = [
+    0.0,
+    -0.0,  # a distinct bit pattern, and the only input that can expose a lost sign
+    1.0,
+    -1.0,
+    0.5,
+    -0.5,
+    2.0,
+    -2.0,
+    3.5,
+    100.0,
+    -100.0,
+    65536.0,
+    0.0000152587890625,  # 2^-16
+    1048576.0,  # 2^20
+    -1048576.0,
+    1.1754943508222875e-38,  # smallest normal binary32
+    3.4028234663852886e38,  # largest finite binary32
+]
+
+
+def float_boundaries(width: int) -> list[float]:
+    """`_FLOAT_BOUNDARIES` canonicalised to one format's representable values."""
+    return [_round_to_float_width(v, width) for v in _FLOAT_BOUNDARIES]
+
+
+def _float_fuzz(rng: random.Random, width: int) -> float:
+    """One seeded random float, spread across MAGNITUDES rather than uniform.
+
+    A uniform draw over a fixed interval only ever exercises one exponent range;
+    scaling a mantissa by a random power of two reaches the small and large ends
+    where a wrong exponent width or a spilled/reloaded value shows up. The range
+    is bounded well inside binary32 so no draw silently becomes an infinity.
+    """
+    return _round_to_float_width(
+        math.ldexp(rng.uniform(-2.0, 2.0), rng.randrange(-20, 21)), width
+    )
+
+
 def _stable_seed(name: str, seed: int) -> int:
     """A per-function seed that is IDENTICAL across processes. Python's built-in
     hash() of a str is randomized by PYTHONHASHSEED, so `hash(name)` produced
@@ -1423,12 +1310,14 @@ def _stable_seed(name: str, seed: int) -> int:
 
 
 def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
-    """A list of argument tuples. Scalars are ints; pointer params are lists of
-    element values of length ptr_len. Length args are clamped to [0, ptr_len].
-    Pointer element type/range follow the DWARF pointee width (1B -> 0..255,
-    else signed 4B fuzz); ov["ptr_elem"] may force "u8" or "cstr". Scalar boundaries are
-    width- and signedness-aware so a 64-bit return's high half and a signed
-    extension are actually exercised."""
+    """A list of argument tuples. Scalars are ints (floats for a `float`
+    descriptor); pointer params are lists of element values of length ptr_len.
+    Length args are clamped to [0, ptr_len]. Pointer element type/range follow the
+    DWARF pointee width (1B -> 0..255, else signed 4B fuzz); ov["ptr_elem"] may
+    force "u8" or "cstr". Scalar boundaries are width- and signedness-aware so a
+    64-bit return's high half and a signed extension are actually exercised;
+    floating-point parameters and buffers draw from `float_boundaries` and
+    `_float_fuzz` instead."""
     params = [_as_desc(p) for p in sig["params"]]
     ptr_len = ov.get("ptr_len", M.DEFAULT_PTR_LEN)
     len_args = set(ov.get("len_args", []))
@@ -1453,9 +1342,14 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
                 f"{len(params)} parameter(s)"
             )
         if params[i]["k"] != "int":
+            # Integer-only, and floating point stays out deliberately: the pinned
+            # values are `_wrap`ped to a width and signedness a float does not
+            # have, and a manifest cannot spell a bit pattern as a JSON number.
+            # `extra_vectors` states exact floating inputs and is the way to do it.
             raise ValueError(
-                f"{sig['name']}: arg_values[{i}] pins a non-scalar parameter "
-                f"({params[i]['k']}); use extra_vectors for pointer contents"
+                f"{sig['name']}: arg_values[{i}] pins a parameter that is not an "
+                f"integer ({params[i]['k']}); use extra_vectors for pointer "
+                f"contents and for exact floating-point inputs"
             )
         arg_values[i] = vals
     # "cstr" is "u8" plus the one invariant a string function needs: a NUL inside the
@@ -1466,6 +1360,17 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
     elem = ov.get("ptr_elem")
     forced_u8 = elem in ("u8", "cstr")
     is_cstr = elem == "cstr"
+    # A byte-element override reinterprets the buffer as `uint8_t`. Over a float
+    # buffer that is not a narrowing but a type pun: the harness would fill and
+    # compare raw bytes while the function reads them as IEEE values, and every
+    # verdict would be about the pun. A manifest that says this is wrong, so say so.
+    if forced_u8:
+        for d in params:
+            if d["k"] == "ptr" and _pointee_desc(d)["k"] == "float":
+                raise ValueError(
+                    f"{sig['name']}: ptr_elem={elem!r} forces byte elements over a "
+                    f"floating-point buffer — the two descriptions disagree"
+                )
     rng = random.Random(_stable_seed(sig["name"], seed))
 
     def is_u8(d):
@@ -1512,6 +1417,16 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
             return _wrap(allowed[abs(v) % len(allowed)], d["w"], d["s"])
         if d["k"] == "struct":
             return aggregate(v, d)
+        if d["k"] == "float":
+            # A float cannot be a length: clamping it would hand the callee a
+            # fractional bound, and silently rounding one would invent an index
+            # the manifest never declared. Refuse rather than guess.
+            if i in len_args:
+                raise ValueError(
+                    f"{sig['name']}: len_args names parameter {i}, which is "
+                    f"floating point — a length must be an integer parameter"
+                )
+            return _round_to_float_width(v, d["w"])
         v = _wrap(v, d["w"], d["s"])
         return max(0, min(ptr_len, v)) if i in len_args else v
 
@@ -1525,6 +1440,15 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
             return _terminate([(k * 7 + j * 3) for j in range(ptr_len)], k % ptr_len)
         if is_u8(d):
             return [(k * 7 + j * 3) % 256 for j in range(ptr_len)]
+        if pointee["k"] == "float":
+            # The same small signed spread the integer case uses, in eighths, so a
+            # buffer element is a value with a fraction (a decompilation that
+            # truncates through an integer temporary cannot survive it) and every
+            # element is exact in binary32.
+            return [
+                _round_to_float_width((((k * 7 + j * 3) % 17) - 8) / 8.0, pointee["w"])
+                for j in range(ptr_len)
+            ]
         return [((k * 7 + j * 3) % 17) - 8 for j in range(ptr_len)]
 
     def buf_rng(d):
@@ -1537,6 +1461,8 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         if is_cstr:
             n = rng.randrange(0, ptr_len)
             return _terminate([rng.randrange(0, 255) for _ in range(n)], n)
+        if pointee["k"] == "float":
+            return [_float_fuzz(rng, pointee["w"]) for _ in range(ptr_len)]
         lo, hi = (0, 256) if is_u8(d) else (-64, 64)
         return [rng.randrange(lo, hi) for _ in range(ptr_len)]
 
@@ -1552,23 +1478,39 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
                 si += 1
         vectors.append(args)
 
-    # Deterministic scalar boundaries, per scalar arg's own width/signedness.
-    scalar_ws = [(d["w"], d.get("s", False)) for d in params if d["k"] != "ptr"]
-    n_bounds = max((len(M.scalar_boundaries(w, s)) for w, s in scalar_ws), default=0)
+    # Deterministic scalar boundaries, per scalar arg's own width/signedness — or,
+    # for a floating-point parameter, its own format's boundaries. Resolved once
+    # per slot rather than per sweep step so the two families stay side by side and
+    # an integer parameter's sequence is bit-for-bit what it always was.
+    scalar_descs = [d for d in params if d["k"] != "ptr"]
+    boundaries = [
+        float_boundaries(d["w"])
+        if d["k"] == "float"
+        else M.scalar_boundaries(d["w"], d.get("s", False))
+        for d in scalar_descs
+    ]
+    n_bounds = max((len(b) for b in boundaries), default=0)
     for bi in range(n_bounds):
 
         def src(si, bi=bi):
-            w, s = scalar_ws[si]
-            b = M.scalar_boundaries(w, s)
+            b = boundaries[si]
             return b[bi % len(b)]
 
         add(src)
     # Explicit manifest vectors (already full tuples: scalar ints, ptr lists).
     for ev in ov.get("extra_vectors", []):
         vectors.append(_pad_ptr(ev, params, ptr_len))
-    # Seeded fuzz.
+
+    # Seeded fuzz. The draw is per-slot because a float slot needs a float: handing
+    # `randrange(-64, 64)` to a binary32 parameter would only ever test integers.
+    def fuzz_src(si):
+        d = scalar_descs[si]
+        if d["k"] == "float":
+            return _float_fuzz(rng, d["w"])
+        return rng.randrange(-64, 64)
+
     for _ in range(fuzz):
-        add(lambda _si: rng.randrange(-64, 64))
+        add(fuzz_src)
 
     # Materialise buffers: assign deterministic then rng buffers to ptr slots.
     out = []
@@ -1608,7 +1550,10 @@ def _zero_value(d):
         return [_zero_value(field["t"]) for field in d["fields"]]
     if d["k"] == "self_ptr":
         return -1
-    return 0
+    # `+0.0`, not the int 0: the padding a manifest vector receives must be a value
+    # of the buffer's own type, so a snapshot of an untouched tail is comparable
+    # without a coercion that could hide which side wrote what.
+    return 0.0 if d["k"] == "float" else 0
 
 
 # ---------------------------------------------------------------------------
@@ -1648,7 +1593,15 @@ _CTYPE = {
 }
 
 
+#: The FP calling convention is ctypes' to implement: `c_float`/`c_double` as an
+#: argtype or a restype is what puts the value in xmm0..7 and reads it back out of
+#: xmm0, which is exactly the ABI edge these fixtures exist to exercise.
+_FLOAT_CTYPE = {4: ctypes.c_float, 8: ctypes.c_double}
+
+
 def _scalar_ctype(d):
+    if d["k"] == "float":
+        return _FLOAT_CTYPE[d["w"]]
     return _CTYPE[(d["w"], d["s"])]
 
 
@@ -1707,7 +1660,7 @@ def _struct_ctype(d):
 
 
 def _value_ctype(d):
-    if d["k"] == "int":
+    if d["k"] in ("int", "float"):
         return _scalar_ctype(d)
     if d["k"] == "struct":
         return _struct_ctype(d)
@@ -1726,6 +1679,12 @@ def _materialize_value(d, value):
 
 
 def _snapshot_value(d, value):
+    # Bits, not the float: `int(value)` would truncate a buffer element to its
+    # integer part (0.5 and 0.4 would compare equal), and keeping the float would
+    # compare `-0.0` equal to `0.0` and a NaN unequal to itself. The snapshot is
+    # only ever compared and never arithmetic, so the pattern is the right value.
+    if d["k"] == "float":
+        return float_bits(d["w"], value)
     if d["k"] != "struct":
         return int(value)
     return [
@@ -1905,9 +1864,31 @@ def worker(spec_path: str) -> int:
                     )
                 )
                 return 0
+        # A floating-point return is compared as an EXACT BIT PATTERN, never with
+        # `==` and never with a tolerance — see `float_bits`. The restype is the
+        # DWARF width, so a `float` result is read out of xmm0 as a binary32 and
+        # re-packed as one; the caveat is that it passes through a Python double on
+        # the way, which preserves every finite value and a quiet NaN's payload but
+        # is not a promise about a SIGNALLING NaN (which nothing here generates).
+        elif ret["k"] == "float" and float_bits(ret["w"], ro) != float_bits(
+            ret["w"], rd
+        ):
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "detail": (
+                            f"return {ro!r} != {rd!r} "
+                            f"(bits 0x{float_bits(ret['w'], ro):x} != "
+                            f"0x{float_bits(ret['w'], rd):x}) on {vec}"
+                        ),
+                    }
+                )
+            )
+            return 0
         # Scalar restype is the exact DWARF width/signedness, so this is a full-
         # width comparison (including high halves and sign extension).
-        elif ret["k"] != "void" and ro != rd:
+        elif ret["k"] not in ("void", "float") and ro != rd:
             print(json.dumps({"ok": False, "detail": f"return {ro} != {rd} on {vec}"}))
             return 0
         ptr_params = [d for d in params if d["k"] == "ptr"]

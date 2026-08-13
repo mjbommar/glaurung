@@ -699,16 +699,43 @@ def control_gate_disagreements(result: dict, x86_baseline: dict) -> list[str]:
     return disagreements
 
 
-def control_problems(result: dict, matrix=None) -> list[str]:
-    """The control lane must be present, complete and clean.
+def control_problems(
+    result: dict, matrix=None, x86_baseline: dict | None = None
+) -> list[str]:
+    """The control lane must be present, complete, and AGREE WITH THE GATE.
 
     `x86_64` decompiles a host-architecture object and diffs it against a
     host-architecture reference, so nothing about a foreign lifter is involved:
     every failure it reports is either this harness or a genuine x86-64
-    decompiler bug that the main gate would also see. Until it is clean, a number
-    from any other architecture is uninterpretable — which is exactly how the
-    prototype's "AArch64 is 37% correct" figure came to include 11 failures that
-    were the harness passing `static` functions it should never have executed.
+    decompiler bug that the main gate would also see. Until it is trustworthy, a
+    number from any other architecture is uninterpretable — which is exactly how
+    the prototype's "AArch64 is 37% correct" figure came to include 11 failures
+    that were the harness passing `static` functions it should never have
+    executed.
+
+    "Trustworthy" is agreement with `baseline.json`, not absence of failure, and
+    the difference is what unblocked this lane. Requiring every control verdict
+    to be `pass` conflates two things:
+
+      * the HARNESS is sound — the control lane reproduces the x86-64 gate
+        function for function. This is what makes a foreign-architecture verdict
+        interpretable, and it is checked exactly (see
+        `control_gate_disagreements`).
+      * the DECOMPILER is perfect on x86-64. This is not required for an ARM
+        number to mean something: a function whose x86-64 result is a known,
+        recorded failure still has a meaningful ARM comparison — against that
+        recorded result.
+
+    Demanding the second tied cross-architecture coverage to x86-64 perfection,
+    and that is why the committed baseline covered 30 of 175 fixtures. Every
+    fixture beyond it contains at least one function the x86-64 decompiler gets
+    wrong (`36_quicksort`, `54_sha256_block`, `87_variable_length_array`, …), so
+    no amount of running this tool could ever record one. The ARM and i386 gaps
+    for the other 145 were unmeasurable by construction.
+
+    A control failure that the gate's baseline also records as a failure is
+    therefore accepted here; one the gate does not record is still a problem,
+    and is reported by `control_gate_disagreements` with the exact mismatch.
     """
     if matrix is None:
         matrix = REQUIRED_MATRIX
@@ -729,7 +756,17 @@ def control_problems(result: dict, matrix=None) -> list[str]:
             if not is_unsupported(fns):
                 problems.append(f"control lane {key}: {fns['__lane__']}")
             continue
-        bad = sorted(f for f, st in fns.items() if st not in ("pass", "structural"))
+        fixture, _arch, opt = key.split(":")
+        gate = (
+            H.lanes(x86_baseline).get(f"{fixture}:gcc:{opt}", {})
+            if x86_baseline is not None
+            else {}
+        )
+        bad = sorted(
+            f
+            for f, st in fns.items()
+            if st not in ("pass", "structural") and gate.get(f) != st
+        )
         if bad:
             problems.append(
                 f"control lane {key}: {', '.join(f'{f}={fns[f]}' for f in bad)}"
@@ -757,10 +794,23 @@ def baseline_problems(result: dict) -> list[str]:
 
 def schema_problems(result: dict, matrix) -> list[str]:
     """Every declared fixture present in every matrix lane, every status a known
-    kind, and a toolchain fingerprint attached."""
+    kind, and a toolchain fingerprint attached.
+
+    The comparison is against the fixtures this tool CAN cross-build, which is
+    `sources()` — C and C++. The manifest also declares Rust fixtures
+    (`166_rust_generics` and friends); `TARGETS` configures no cross-`rustc`, so
+    they are out of scope here and their absence is not a disagreement. Checking
+    the raw manifest instead made every `--write-baseline` refuse with six
+    "only declared" entries that no amount of building could satisfy.
+    """
     problems = []
     stems = sorted(p.stem for p in sources())
-    declared = set(M.REQUIRED_FUNCTIONS)
+    # Declared fixtures this tool is responsible for: those with a C/C++ source.
+    declared = {name for name in M.REQUIRED_FUNCTIONS if name in set(stems)} | {
+        name
+        for name in M.REQUIRED_FUNCTIONS
+        if (SRC / f"{name}.c").exists() or (SRC / f"{name}.cpp").exists()
+    }
     if set(stems) != declared:
         problems.append(
             f"fixture sources and the manifest disagree: "
@@ -1058,7 +1108,7 @@ def main() -> int:
         problems = (
             baseline_problems(result)
             + schema_problems(result, matrix)
-            + control_problems(result, matrix)
+            + control_problems(result, matrix, _x86_baseline())
             + control_gate_disagreements(result, _x86_baseline())
         )
         if problems:
@@ -1088,7 +1138,7 @@ def main() -> int:
         baseline = json.loads(BASELINE.read_text())
         problems = (
             toolchain_problems(baseline.get(H.TOOLCHAIN_KEY), result[H.TOOLCHAIN_KEY])
-            + control_problems(result, matrix)
+            + control_problems(result, matrix, _x86_baseline())
             + control_gate_disagreements(result, _x86_baseline())
             + schema_problems(result, matrix)
             + comparison_problems(result, baseline)

@@ -237,6 +237,7 @@ fn loop_fixed_point(
 fn expression_integer_width(expression: &Expr, types: &TypeMap) -> Option<u8> {
     match expression {
         Expr::Const(value) => Some(if i32::try_from(*value).is_ok() { 4 } else { 8 }),
+        Expr::NumericConvert { to, .. } => Some(to.width()),
         Expr::Cast { width, .. }
         | Expr::Select { width, .. }
         | Expr::WideArithmetic { width, .. } => match expression {

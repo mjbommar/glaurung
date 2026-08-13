@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import glaurung as g
@@ -1721,3 +1722,67 @@ def test_decbench_output_parses_with_gcc():
     assert total > 0, "no functions decompiled"
     rate = ok / total
     assert rate >= 0.95, f"only {ok}/{total} ({rate:.1%}) functions parse as C"
+
+
+def test_mixed_width_float_accumulator_decompiles_within_its_budget(
+    tmp_path: Path,
+) -> None:
+    """A `double` accumulator fed by `float` terms must not spin the type pass.
+
+    `refine_float_copy_types` used to report "I did not get the hint I asked
+    for" as progress. `TypeMap::refine_from_value` is allowed to decline a
+    `Float{8}` -> `Float{4}` join, so that condition never cleared and the
+    fixed point ran forever — inside a single pass, where no `timeout_ms`
+    between passes could reach it. This is the shape that hung
+    `172_float_double_widths:gcc:O2:accumulate_wide` past ninety seconds
+    against a five-second budget.
+    """
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("gcc is unavailable")
+
+    source = tmp_path / "accumulate_wide.c"
+    binary = tmp_path / "accumulate_wide.so"
+    source.write_text(
+        "__attribute__((noinline)) double accumulate_wide(float seed, int count) {\n"
+        "    double total = 0.0;\n"
+        "    float step = seed;\n"
+        "    int index;\n"
+        "    if (count < 0 || count > 16) {\n"
+        "        return 0.0;\n"
+        "    }\n"
+        "    for (index = 0; index < count; ++index) {\n"
+        "        total += (double)step;\n"
+        "        step = step * 0.5f;\n"
+        "    }\n"
+        "    return total;\n"
+        "}\n"
+    )
+    built = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-O2", "-g", "-o", str(binary), str(source)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+
+    functions, _ = g.analysis.analyze_functions_path(str(binary), max_functions=64)
+    target = next(
+        (function for function in functions if function.name == "accumulate_wide"),
+        None,
+    )
+    assert target is not None, [function.name for function in functions]
+
+    started = time.monotonic()
+    results = g.ir.decompile_many(
+        str(binary),
+        [int(target.entry_point.value)],
+        style="decbench",
+        timeout_ms=5000,
+    )
+    elapsed = time.monotonic() - started
+
+    assert len(results) == 1, results
+    # Generous next to the ~10 ms this takes, and still two orders of magnitude
+    # under the ninety seconds the spin cost.
+    assert elapsed < 30.0, f"decompile took {elapsed:.1f}s"

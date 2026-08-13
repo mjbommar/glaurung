@@ -15,5 +15,6 @@
 //! parsing (Tier-B), line-table → source-line mapping (#161).
 
 pub mod dwarf;
+pub mod dwarf_signatures;
 
 pub use dwarf::{extract_dwarf_functions, DwarfFunction};

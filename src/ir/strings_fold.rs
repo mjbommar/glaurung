@@ -322,7 +322,7 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
             fold_expr(if_false, pool);
         }
         Expr::Un { src, .. } => fold_expr(src, pool),
-        Expr::Cast { expr, .. } => fold_expr(expr, pool),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => fold_expr(expr, pool),
         Expr::FunctionTableEntry { index, .. } => fold_expr(index, pool),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {

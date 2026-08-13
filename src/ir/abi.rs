@@ -166,10 +166,19 @@ pub fn argument_slots(cc: CallConv) -> &'static [&'static [&'static str]] {
 /// Every spelling of the return register, widest first.
 pub fn return_registers(cc: CallConv) -> &'static [&'static str] {
     match cc {
-        CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
+        // The SSE class returns in `xmm0`, and it is the ONLY place a `float`
+        // or `double` result can arrive under either x86-64 convention. Listing
+        // it here is what lets the naming pass call that value `ret` instead of
+        // an anonymous `varN`; without it every float-returning function
+        // rendered its recovered result into a dead variable and returned zero.
+        // Ordered after the integer names deliberately: when a function writes
+        // both, `rax` is the result and `xmm0` was scratch, and the naming pass
+        // takes the first alias that is still unclaimed.
+        CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al", "xmm0"],
         // SSA canonicalises EAX and its subregisters to the RAX parent name
         // even when decoding a 32-bit binary, so keep that logical spelling at
         // the head of the alias set as the decompiler's logical return value.
+        // i386 returns floating point on the x87 stack, not in an SSE register.
         CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
         CallConv::Aarch64 => &["x0", "w0"],
         // AAPCS hard-float returns scalar FP values in s0/d0. Keep those
@@ -265,6 +274,16 @@ pub fn is_return_register(cc: CallConv, name: &str) -> bool {
 
 /// The effects of any call under `cc`.
 ///
+/// `args` is the INTEGER argument bank only, deliberately. Adding SysV's
+/// `xmm0`-`xmm7` to this may-use set was tried on 2026-08-12 to keep float
+/// argument setup alive through dead-code elimination, and measured: it gained
+/// nothing (all 25 float-corpus improvements hold without it) and cost twelve
+/// regressions in functions containing no SSE instruction at all —
+/// `164_nested_tlv_walker`, `150_obfuscation_composite`, `10_cpp_runtime_shapes`
+/// and `84_compound_literals`, every one of them at `gcc:O0` and every one of
+/// them a caller. Eight undefined live-in registers per call is not a free
+/// over-approximation.
+///
 /// The full argument-register set is listed as uses rather than a recovered arity: the
 /// callee is usually unknown, and claiming a narrower set would let dead-code
 /// elimination delete an argument setup that a real callee reads. Over-approximating
@@ -306,8 +325,27 @@ pub fn arm_hard_float_argument_slots() -> &'static [&'static [&'static str]] {
     ]
 }
 
-fn hard_float_result_consumed_after(block: &crate::ir::types::LlirBlock, call_idx: usize) -> VReg {
-    let mut candidates = vec!["s0", "d0", "r0"];
+/// Which of `candidates` a call's result actually lands in, decided by what the
+/// code AFTER the call reads first.
+///
+/// A convention with separate integer and floating-point result registers does
+/// not say which one a given callee used — that is a property of the callee's
+/// return type, which an instruction stream does not carry. What the caller
+/// does say is which register it goes on to consume, and consuming a
+/// caller-saved register that the call did not write would be reading garbage.
+/// So first-read wins, a definition removes that candidate, and the integer
+/// register is the fallback when nothing decides.
+///
+/// `candidates` is ordered float-first: on both x86-64 and AAPCS-VFP the
+/// integer register is the one that is also used for other purposes, so it must
+/// not win a tie.
+fn result_register_consumed_after(
+    block: &crate::ir::types::LlirBlock,
+    call_idx: usize,
+    candidates: &[&'static str],
+    fallback: &'static str,
+) -> VReg {
+    let mut candidates: Vec<&str> = candidates.to_vec();
     for instruction in &block.instrs[call_idx + 1..] {
         let (definition, uses) = def_uses(&instruction.op);
         for used in uses {
@@ -330,7 +368,24 @@ fn hard_float_result_consumed_after(block: &crate::ir::types::LlirBlock, call_id
             break;
         }
     }
-    VReg::phys("r0")
+    VReg::phys(fallback)
+}
+
+/// The `(candidates, fallback)` this convention's call results are chosen from,
+/// or `None` when a single register carries every result.
+fn result_register_candidates(cc: CallConv) -> Option<(&'static [&'static str], &'static str)> {
+    match cc {
+        // The SSE class returns in `xmm0`, the INTEGER and POINTER classes in
+        // `rax`, and nothing in the instruction stream says which class this
+        // callee's return type belongs to. Before this, every call was
+        // annotated as returning `rax`, so a float-returning call defined a
+        // register the caller never read and the value it DID read had no
+        // definition at all — `dot_product_f32` assigned the call to one
+        // variable and returned a different, undefined one.
+        CallConv::SysVAmd64 | CallConv::Win64 => Some((&["xmm0", "rax"], "rax")),
+        CallConv::ArmHardFloat => Some((&["s0", "d0", "r0"], "r0")),
+        CallConv::Aarch64 | CallConv::Arm | CallConv::Cdecl32 => None,
+    }
 }
 
 /// Write the ABI's call effects onto every call in `lf`.
@@ -341,8 +396,10 @@ pub fn annotate_calls(lf: &mut LlirFunction, cc: CallConv) {
     for block in &mut lf.blocks {
         for index in 0..block.instrs.len() {
             let mut effects = call_effects(cc);
-            if cc == CallConv::ArmHardFloat {
-                effects.result = Some(hard_float_result_consumed_after(block, index));
+            if let Some((candidates, fallback)) = result_register_candidates(cc) {
+                effects.result = Some(result_register_consumed_after(
+                    block, index, candidates, fallback,
+                ));
             }
             let instr = &mut block.instrs[index];
             if let Op::Call { effects: slot, .. } = &mut instr.op {

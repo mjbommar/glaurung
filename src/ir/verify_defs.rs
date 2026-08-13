@@ -218,7 +218,7 @@ fn reads_expr(e: &Expr, out: &mut Vec<String>) {
             reads_expr(if_false, out);
         }
         Expr::Un { src, .. } => reads_expr(src, out),
-        Expr::Cast { expr, .. } => reads_expr(expr, out),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => reads_expr(expr, out),
         Expr::FunctionTableEntry { index, .. } => reads_expr(index, out),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {

@@ -673,6 +673,7 @@ fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
         | Expr::Un { .. }
         | Expr::Cmp { .. }
         | Expr::Cast { .. }
+        | Expr::NumericConvert { .. }
         | Expr::WideArithmetic { .. } => ValueClass::Scalar,
         Expr::Addr(_)
         | Expr::Named { .. }
@@ -896,7 +897,7 @@ fn collect_unsafe_expr(
             collect_unsafe_expr(lhs, true, types, out);
             collect_unsafe_expr(rhs, true, types, out);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => {
             collect_unsafe_expr(src, true, types, out)
         }
         Expr::FunctionTableEntry { index, .. } => collect_unsafe_expr(index, true, types, out),

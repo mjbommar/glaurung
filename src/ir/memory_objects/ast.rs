@@ -224,7 +224,7 @@ fn observe_expr(
                 observe_expr(argument, ExprContext::Escape, source, observations);
             }
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => {
             observe_expr(src, ExprContext::Integer, source, observations)
         }
         Expr::FunctionTableEntry { index, .. } => {

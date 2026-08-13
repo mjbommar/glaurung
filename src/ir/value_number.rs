@@ -632,15 +632,24 @@ fn def_read_by_alias_before_redef(
     def_name: &str,
 ) -> bool {
     for ins in &lf.blocks[def_bi].instrs[def_ii + 1..] {
-        // An explicit return's register view is resolved by SSA itself. It is
-        // the one cross-alias use which must *not* force the definition bare:
-        // e.g. an `eax` write followed by `ReturnValue(rax)` is exactly the
-        // x86-64 zero-extending result edge whose version we need to preserve.
+        // Two independent exemptions, both needed. An explicit return's
+        // register view is resolved by SSA itself (`eax` write then
+        // `ReturnValue(rax)` is the zero-extending result edge). And a
+        // cross-alias use `parent64` ALREADY unifies is not one: `%eax`
+        // canonicalises onto `%rax`, so keeping that definition bare collapsed
+        // it with the NEXT `%eax` definition and both reads saw one name —
+        // `argument_sink(0, low, split - 1, depth - 1)` became
+        // `..., split - 1, split - 1)`, the reduced form of the lost recursion
+        // bound in `36_quicksort`. The rule exists for `%al`/`%ax`, which
+        // `parent64` deliberately does not canonicalise.
         if ins.op.returned_value().is_none() {
             let (_, uses) = def_uses(&ins.op);
             for u in &uses {
                 if let VReg::Phys(n) = u {
-                    if ret_names.contains(&n.as_str()) && n != def_name {
+                    if ret_names.contains(&n.as_str())
+                        && n != def_name
+                        && !ssa_unifies_aliases(n, def_name)
+                    {
                         return true;
                     }
                 }
@@ -651,6 +660,26 @@ fn def_read_by_alias_before_redef(
         }
     }
     false
+}
+
+/// Whether SSA already gives these two register spellings ONE version.
+///
+/// [`crate::ir::ssa::parent64`] canonicalises a 32-bit view onto its 64-bit
+/// parent, so a value written `%eax` and read back as `%rax` is already one
+/// value at one version and needs no help from the keep-bare rule above. It
+/// deliberately does NOT canonicalise `%al`/`%ax`, whose writes preserve the
+/// parent's other bits — those are the aliases the rule exists for.
+///
+/// Checking this is what stops the rule from firing on ordinary scratch use of
+/// the return register. `mov -0x24(%rbp),%eax ; lea -0x1(%rax),%ecx` is an
+/// `%eax` def read as `%rax`; keeping it bare collapsed it with the NEXT
+/// `%eax` def, and both `lea`s then read the same name. In
+/// `81_call_argument_identity` that turned `argument_sink(0, low, split - 1,
+/// depth - 1)` into `..., split - 1, split - 1)` — the reduced form of a lost
+/// recursion-depth bound in `36_quicksort`.
+fn ssa_unifies_aliases(read_name: &str, def_name: &str) -> bool {
+    let read_parent = crate::ir::ssa::parent64(read_name);
+    read_parent.is_some() && read_parent == crate::ir::ssa::parent64(def_name)
 }
 
 /// Return a copy of `lf` with every physical register occurrence rewritten to

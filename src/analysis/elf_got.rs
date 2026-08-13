@@ -5,7 +5,7 @@
 //! resolve indirect calls or jumps through the GOT on ELF platforms.
 
 use object::read::Object;
-use object::ObjectSection;
+use object::{ObjectSection, ObjectSymbol, RelocationTarget};
 
 /// Build a best-effort map of GOT entry addresses (r_offset) to symbol names.
 /// Supports ELF64 RELA and ELF32 REL formats. Returns empty on failure.
@@ -147,5 +147,79 @@ pub fn elf_got_map(data: &[u8]) -> Vec<(u64, String)> {
     // Deduplicate by address
     out.sort_by_key(|(a, _)| *a);
     out.dedup_by_key(|(a, _)| *a);
+    out
+}
+
+/// Map each GOT slot to the IN-IMAGE address the loader will store in it.
+///
+/// A GOT slot holding a pointer to a symbol this same object DEFINES has a
+/// value that is fixed the moment the image is mapped: `R_*_GLOB_DAT` against a
+/// defined symbol resolves to that symbol's `st_value`, and `R_*_RELATIVE`
+/// resolves to its addend. Both are link-time facts, so the load through the
+/// slot can be folded away.
+///
+/// This is what a `-fPIC` build does to every reference to a global that
+/// interposition could rebind: `vis_public_bias` becomes
+/// `mov 0x3fe8(%rip),%rax ; mov (%rax),%eax`. Without the fold, the renderer
+/// sees a dereference of a `.got` address, and `.got` is deliberately excluded
+/// from portable static storage (it is linkage, not a program object — see
+/// [`crate::ir::static_storage`]), so the slot renders as a zero-filled
+/// stand-in. The recompiled function then dereferences a null pointer, which is
+/// how fixtures 157, 158 and 160 segfaulted rather than returning a value.
+///
+/// Deliberately EXCLUDED: slots whose symbol is undefined here (`st_value == 0`
+/// with `SHN_UNDEF`) — those really are resolved by the dynamic linker at load
+/// time from another object, and no value in this file predicts them. They keep
+/// their existing treatment.
+pub fn elf_got_target_map(data: &[u8]) -> Vec<(u64, u64)> {
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    let Ok(obj) = object::read::File::parse(data) else {
+        return out;
+    };
+    if obj.format() != object::BinaryFormat::Elf {
+        return out;
+    }
+
+    for section in obj.sections() {
+        let Ok(name) = section.name() else {
+            continue;
+        };
+        if !name.to_ascii_lowercase().starts_with(".rel") {
+            continue;
+        }
+        for (offset, relocation) in section.relocations() {
+            let target = match relocation.target() {
+                RelocationTarget::Symbol(index) => {
+                    let Ok(symbol) = obj.symbol_by_index(index) else {
+                        continue;
+                    };
+                    // `is_definition` is what separates "this file owns the
+                    // object" from "the dynamic linker will supply it".
+                    if !symbol.is_definition() {
+                        continue;
+                    }
+                    let address = symbol.address();
+                    if address == 0 {
+                        continue;
+                    }
+                    address.wrapping_add(relocation.addend() as u64)
+                }
+                // `R_*_RELATIVE`: no symbol, the addend IS the target, already
+                // biased by the link-time load address.
+                RelocationTarget::Absolute => {
+                    let addend = relocation.addend();
+                    if addend <= 0 {
+                        continue;
+                    }
+                    addend as u64
+                }
+                _ => continue,
+            };
+            out.push((offset, target));
+        }
+    }
+
+    out.sort_by_key(|(slot, _)| *slot);
+    out.dedup_by_key(|(slot, _)| *slot);
     out
 }

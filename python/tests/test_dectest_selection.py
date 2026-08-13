@@ -56,7 +56,13 @@ def test_globs_are_allowed_in_every_position():
     assert ("01_conditional_polarity", "gcc", "O0") in names
     assert all(cc == "gcc" and opt == "O0" for _, cc, opt in names)
     got = {f for lane in lanes for f in lane.funcs}
-    assert got == {"ternary", "ternary_nested"}
+    # Every selected function matches the pattern, and the fixture named above
+    # contributes its two. Asserted as a property rather than an exact set:
+    # `83_ternary_chains` was added to the corpus after this test was written
+    # and legitimately answers to `ternary*` too, so pinning the set made a
+    # correct selection look like a bug.
+    assert {"ternary", "ternary_nested"} <= got
+    assert all(f.startswith("ternary") for f in got)
 
 
 def test_a_globbed_fixture_drops_fixtures_without_a_matching_function():
@@ -65,7 +71,12 @@ def test_a_globbed_fixture_drops_fixtures_without_a_matching_function():
     useless — but the selector as a whole must still match something, which
     `test_a_selector_matching_a_fixture_but_no_function_is_an_error` pins."""
     lanes = D.resolve(["*:gcc:O0:ternary*"])
-    assert {lane.fixture for lane in lanes} == {"01_conditional_polarity"}
+    fixtures = {lane.fixture for lane in lanes}
+    # The property under test is the DROPPING, not the exact survivor list: any
+    # fixture the corpus later adds with a `ternary*` function belongs here too.
+    assert "01_conditional_polarity" in fixtures
+    assert "02_integer_widths" not in fixtures
+    assert all(any(f.startswith("ternary") for f in lane.funcs) for lane in lanes)
 
 
 def test_functions_the_manifest_never_declares_are_still_selectable():

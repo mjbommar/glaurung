@@ -759,7 +759,7 @@ fn is_repeatable_versioned_flag_expr(dst: &VReg, expression: &Expr) -> bool {
         match expression {
             Expr::Reg(_) | Expr::Const(_) => true,
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => pure(lhs) && pure(rhs),
-            Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => pure(src),
+            Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => pure(src),
             Expr::FloatConst { .. }
             | Expr::Addr(_)
             | Expr::Named { .. }
@@ -1464,7 +1464,7 @@ fn contains_deref(e: &Expr) -> bool {
             ..
         } => contains_deref(cond) || contains_deref(if_true) || contains_deref(if_false),
         Expr::Un { src, .. } => contains_deref(src),
-        Expr::Cast { expr, .. } => contains_deref(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => contains_deref(expr),
         Expr::WideArithmetic { args, .. } => args.iter().any(contains_deref),
     }
 }
@@ -1495,7 +1495,7 @@ fn contains_unknown(e: &Expr) -> bool {
             ..
         } => contains_unknown(cond) || contains_unknown(if_true) || contains_unknown(if_false),
         Expr::Un { src, .. } => contains_unknown(src),
-        Expr::Cast { expr, .. } => contains_unknown(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => contains_unknown(expr),
         Expr::FunctionTableEntry { index, .. } => contains_unknown(index),
         Expr::WideArithmetic { args, .. } => args.iter().any(contains_unknown),
     }
@@ -1506,7 +1506,7 @@ fn contains_select(e: &Expr) -> bool {
         Expr::Select { .. } => true,
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
-        | Expr::Cast { expr: addr, .. }
+        | Expr::Cast { expr: addr, .. } | Expr::NumericConvert { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => contains_select(addr),
         Expr::Call { target, args, .. } => {
             contains_select(target) || args.iter().any(contains_select)
@@ -1573,7 +1573,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
                 + count_reg_uses(if_false, target)
         }
         Expr::Un { src, .. } => count_reg_uses(src, target),
-        Expr::Cast { expr, .. } => count_reg_uses(expr, target),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => count_reg_uses(expr, target),
         Expr::FunctionTableEntry { index, .. } => count_reg_uses(index, target),
         Expr::WideArithmetic { args, .. } => args
             .iter()
@@ -1622,7 +1622,7 @@ fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
             count_reads_expr(if_false, reads);
         }
         Expr::Un { src, .. } => count_reads_expr(src, reads),
-        Expr::Cast { expr, .. } => count_reads_expr(expr, reads),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => count_reads_expr(expr, reads),
         Expr::FunctionTableEntry { index, .. } => count_reads_expr(index, reads),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
@@ -1847,7 +1847,7 @@ fn subst(e: &mut Expr, copies: &Copies) {
             subst(if_false, copies);
         }
         Expr::Un { src, .. } => subst(src, copies),
-        Expr::Cast { expr, .. } => subst(expr, copies),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => subst(expr, copies),
         Expr::FunctionTableEntry { index, .. } => subst(index, copies),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {

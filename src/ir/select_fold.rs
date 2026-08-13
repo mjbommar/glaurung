@@ -114,7 +114,7 @@ fn fold_masks_in_expr(expr: &mut Expr) {
             fold_masks_in_expr(if_true);
             fold_masks_in_expr(if_false);
         }
-        Expr::Cast { expr, .. } => fold_masks_in_expr(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => fold_masks_in_expr(expr),
         Expr::WideArithmetic { args, .. } => args.iter_mut().for_each(fold_masks_in_expr),
         Expr::Reg(_)
         | Expr::Const(_)
@@ -357,7 +357,7 @@ fn expression_reads_register(expression: &Expr, target: &VReg) -> bool {
             .any(|register| register == target),
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
-        | Expr::Cast { expr: addr, .. }
+        | Expr::Cast { expr: addr, .. } | Expr::NumericConvert { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => expression_reads_register(addr, target),
         Expr::Call {
             target: call_target,

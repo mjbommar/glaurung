@@ -677,7 +677,7 @@ fn seed_indexed_stack_objects(
                 collect_expr(if_false, sp_delta, ctx, address_defs, starts);
             }
             Expr::Un { src, .. } => collect_expr(src, sp_delta, ctx, address_defs, starts),
-            Expr::Cast { expr, .. } => collect_expr(expr, sp_delta, ctx, address_defs, starts),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => collect_expr(expr, sp_delta, ctx, address_defs, starts),
             Expr::FunctionTableEntry { index, .. } => {
                 collect_expr(index, sp_delta, ctx, address_defs, starts)
             }
@@ -1392,7 +1392,7 @@ fn rewrite_expr(
             rewrite_expr(if_false, map, names, ctx, sp_delta, address_defs);
         }
         Expr::Un { src, .. } => rewrite_expr(src, map, names, ctx, sp_delta, address_defs),
-        Expr::Cast { expr, .. } => rewrite_expr(expr, map, names, ctx, sp_delta, address_defs),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => rewrite_expr(expr, map, names, ctx, sp_delta, address_defs),
         Expr::FunctionTableEntry { index, .. } => {
             rewrite_expr(index, map, names, ctx, sp_delta, address_defs)
         }
@@ -1527,7 +1527,7 @@ fn reconcile_late_address_taken_objects(body: &mut [Stmt], map: &HashMap<SlotKey
                 rewrite_value(if_false, objects);
             }
             Expr::Un { src, .. } => rewrite_value(src, objects),
-            Expr::Cast { expr, .. } => rewrite_value(expr, objects),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => rewrite_value(expr, objects),
             Expr::FunctionTableEntry { index, .. } => rewrite_value(index, objects),
             Expr::WideArithmetic { args, .. } => {
                 for arg in args {

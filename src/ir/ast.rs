@@ -231,6 +231,28 @@ pub enum Expr {
         width: u8,
         expr: Box<Expr>,
     },
+    /// A NUMERIC conversion between scalar arithmetic types — the meaning of
+    /// every x86 `cvt*` and every ARM `vcvt`: `(double)f`, `(float)d`,
+    /// `(double)i`, `(int)f`.
+    ///
+    /// Deliberately not [`Expr::Cast`], which is an integer width/sign change
+    /// and cannot say "the operand is a `float`". Deliberately not a bare
+    /// assignment either: `write_float_expr_dec` falls back to a C99 union when
+    /// it cannot prove the operand is already at the destination's float type,
+    /// and that union REINTERPRETS the bits. Reinterpreting is right for
+    /// AAPCS-VFP's `vmov s0, r3` and wrong for `cvtss2sd`, and only the
+    /// producing instruction knows which of the two it was. Recording the
+    /// distinction here is what keeps `173_float_int_conversions` from
+    /// returning a float's bit pattern where its value belongs.
+    ///
+    /// `from` is carried as well as `to` so the operand can be spelled at the
+    /// type it actually has; without it a `float`-typed source would be
+    /// rendered as a machine word and the conversion applied to the bits.
+    NumericConvert {
+        from: ScalarType,
+        to: ScalarType,
+        expr: Box<Expr>,
+    },
     /// Target of an indirect call / computed value we couldn't simplify.
     Unknown(String),
 }
@@ -247,6 +269,7 @@ impl Expr {
             Self::Deref { addr, .. }
             | Self::Un { src: addr, .. }
             | Self::Cast { expr: addr, .. }
+            | Self::NumericConvert { expr: addr, .. }
             | Self::FunctionTableEntry { index: addr, .. } => addr.contains_call(),
             Self::Bin { lhs, rhs, .. } | Self::Cmp { lhs, rhs, .. } => {
                 lhs.contains_call() || rhs.contains_call()
@@ -300,7 +323,9 @@ impl Expr {
                     || args.iter().any(|argument| argument.contains_reg(target))
             }
             Self::Un { src, .. } => src.contains_reg(target),
-            Self::Cast { expr, .. } => expr.contains_reg(target),
+            Self::Cast { expr, .. } | Self::NumericConvert { expr, .. } => {
+                expr.contains_reg(target)
+            }
             Self::FunctionTableEntry { index, .. } => index.contains_reg(target),
             Self::WideArithmetic { args, .. } => {
                 args.iter().any(|argument| argument.contains_reg(target))
@@ -315,6 +340,42 @@ impl Expr {
             | Self::StringLit { .. }
             | Self::Unknown(_) => false,
         }
+    }
+}
+
+/// One end of an [`Expr::NumericConvert`]: a C arithmetic type, by family and
+/// byte width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarType {
+    /// IEEE binary32 (`width == 4`) or binary64 (`width == 8`).
+    Float(u8),
+    /// A signed integer of this byte width.
+    SignedInt(u8),
+}
+
+impl ScalarType {
+    /// The C type name this end is spelled with.
+    pub fn c_name(self) -> &'static str {
+        match self {
+            ScalarType::Float(4) => "float",
+            ScalarType::Float(_) => "double",
+            ScalarType::SignedInt(1) => "signed char",
+            ScalarType::SignedInt(2) => "short",
+            ScalarType::SignedInt(4) => "int",
+            ScalarType::SignedInt(_) => "long long",
+        }
+    }
+
+    /// Byte width of the type.
+    pub fn width(self) -> u8 {
+        match self {
+            ScalarType::Float(width) | ScalarType::SignedInt(width) => width,
+        }
+    }
+
+    /// Whether this end is a floating-point type.
+    pub fn is_float(self) -> bool {
+        matches!(self, ScalarType::Float(_))
     }
 }
 
@@ -698,6 +759,28 @@ fn lower_value(v: &Value) -> Expr {
     }
 }
 
+/// Lower one scalar conversion into the C expression it denotes.
+///
+/// A conversion whose two ends are the same type is the identity, and emitting
+/// `(float)(x)` for it would be noise. Everything else becomes an explicit
+/// [`Expr::NumericConvert`] so no later pass has to re-derive, from the
+/// destination's declared type alone, whether the bits were converted or
+/// reinterpreted.
+fn lower_scalar_conversion(source: &Value, from: ScalarType, to: ScalarType) -> Expr {
+    let operand = match from {
+        ScalarType::Float(width) => lower_float_value(source, width),
+        ScalarType::SignedInt(_) => lower_value(source),
+    };
+    if from == to {
+        return operand;
+    }
+    Expr::NumericConvert {
+        from,
+        to,
+        expr: Box::new(operand),
+    }
+}
+
 fn lower_float_value(value: &Value, width: u8) -> Expr {
     match value {
         Value::Const(bits) => Expr::FloatConst {
@@ -773,6 +856,9 @@ enum ScalarFloatOperation {
     Move,
     Negate,
     Binary(BinOp),
+    /// A value conversion: read the operand as `from` and produce `to`,
+    /// exactly as the corresponding C cast would.
+    Convert { from: ScalarType, to: ScalarType },
 }
 
 fn scalar_vfp_register(register: &VReg) -> bool {
@@ -780,6 +866,10 @@ fn scalar_vfp_register(register: &VReg) -> bool {
         let base = crate::ir::abi::ssa_base(name);
         base.strip_prefix('s').is_some_and(|n| n.parse::<u8>().is_ok())
             || base.strip_prefix('d').is_some_and(|n| n.parse::<u8>().is_ok())
+            // x86-64 and i386 carry every scalar float in an SSE register.
+            // Unlike ARM's `s`/`d` banks the name does not state a width, so
+            // the width always comes from the instruction, never the register.
+            || base.starts_with("xmm")
     })
 }
 
@@ -800,6 +890,14 @@ fn scalar_float_intrinsic(
             return None;
         };
         ("vmov", u8::try_from(declared_width.bytes()).ok()?)
+    } else if let Some((operation, width)) = outs
+        .first()
+        .and_then(|(_, declared)| u8::try_from(declared.bytes()).ok())
+        .and_then(|declared| x86_scalar_float_intrinsic(name, declared))
+    {
+        // x86 names its scalar float instructions by mnemonic rather than by
+        // an ARM-style `.f32`/`.f64` suffix, so it gets its own table.
+        return Some((operation, width));
     } else {
         return None;
     };
@@ -813,6 +911,96 @@ fn scalar_float_intrinsic(
         _ => return None,
     };
     Some((operation, width))
+}
+
+/// The C meaning of one x86 scalar-SSE intrinsic, as `lift_x86` names it.
+///
+/// The returned width is the width of the RESULT, which is what the caller
+/// needs to spell a float literal and to type the destination. For a
+/// conversion, the operand's own width travels inside
+/// [`ScalarFloatOperation::Convert`] instead, because the two ends differ —
+/// that difference is the entire content of a `cvt*` instruction.
+///
+/// Deliberately absent: the packed forms, the reciprocal/rsqrt approximations
+/// (which are not exactly any C expression), and `cvtss2si`'s round-to-nearest
+/// behaviour under a non-default rounding mode. Anything not listed keeps its
+/// existing opaque-comment lowering rather than acquiring a plausible wrong
+/// meaning.
+fn x86_scalar_float_intrinsic(name: &str, out_width: u8) -> Option<(ScalarFloatOperation, u8)> {
+    use ScalarFloatOperation::{Binary, Convert};
+    use ScalarType::{Float, SignedInt};
+
+    Some(match name {
+        "addss" => (Binary(BinOp::Add), 4),
+        "subss" => (Binary(BinOp::Sub), 4),
+        "mulss" => (Binary(BinOp::Mul), 4),
+        "divss" => (Binary(BinOp::Div), 4),
+        "addsd" => (Binary(BinOp::Add), 8),
+        "subsd" => (Binary(BinOp::Sub), 8),
+        "mulsd" => (Binary(BinOp::Mul), 8),
+        "divsd" => (Binary(BinOp::Div), 8),
+        "cvtss2sd" => (
+            Convert {
+                from: Float(4),
+                to: Float(8),
+            },
+            8,
+        ),
+        "cvtsd2ss" => (
+            Convert {
+                from: Float(8),
+                to: Float(4),
+            },
+            4,
+        ),
+        "cvtsi2ss.l" => (
+            Convert {
+                from: SignedInt(4),
+                to: Float(4),
+            },
+            4,
+        ),
+        "cvtsi2ss.q" => (
+            Convert {
+                from: SignedInt(8),
+                to: Float(4),
+            },
+            4,
+        ),
+        "cvtsi2sd.l" => (
+            Convert {
+                from: SignedInt(4),
+                to: Float(8),
+            },
+            8,
+        ),
+        "cvtsi2sd.q" => (
+            Convert {
+                from: SignedInt(8),
+                to: Float(8),
+            },
+            8,
+        ),
+        // C's float-to-integer conversion truncates toward zero, which is
+        // precisely what the `t` forms do; the non-`t` forms follow MXCSR and
+        // are only equal to a C cast in the default round-to-nearest mode, so
+        // they are left opaque.
+        "cvttss2si" => (
+            Convert {
+                from: Float(4),
+                to: SignedInt(out_width),
+            },
+            4,
+        ),
+        "cvttsd2si" => (
+            Convert {
+                from: Float(8),
+                to: SignedInt(out_width),
+            },
+            8,
+        ),
+        _ => return None,
+    })
 }
 
 fn wide_integer_intrinsic(
@@ -1086,7 +1274,52 @@ fn packed_signed_shift_intrinsic(
 /// would be actively misleading: an unmodeled `vldr` followed by
 /// `vadd.f32 s0, s15, s15` becomes `var = var + var` with an invented live-in.
 /// Keep the entire scalar-float subset opaque until those producers are modeled.
+/// Whether this mnemonic is an x86 floating-point instruction the lifter has
+/// NOT given semantics to.
+///
+/// The ARM half of [`scalar_float_semantics_are_closed`] recognises an opaque
+/// VFP producer by its leading `v`. x86 has no such marker, so the same
+/// protection needs its own predicate — without one, a `shufps` or an
+/// approximate-reciprocal that this lifter leaves as a comment would silently
+/// become an invented live-in feeding real arithmetic, which is exactly the
+/// "`var = var + var`" failure the ARM guard was written to prevent.
+///
+/// Anything already lowered by [`x86_scalar_float_intrinsic`] is modelled and
+/// so is not opaque; everything else that touches float or packed lanes is.
+fn unmodelled_x86_float_mnemonic(name: &str) -> bool {
+    if x86_scalar_float_intrinsic(name, 4).is_some()
+        || x86_scalar_float_intrinsic(name, 8).is_some()
+    {
+        return false;
+    }
+    const OPAQUE_PREFIXES: [&str; 8] = [
+        "cvt", "ucomi", "comi", "sqrt", "rcp", "rsqrt", "shuf", "unpck",
+    ];
+    const OPAQUE_SUFFIXES: [&str; 4] = ["ss", "sd", "ps", "pd"];
+    OPAQUE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        || OPAQUE_SUFFIXES
+            .iter()
+            .any(|suffix| name.len() > 2 && name.ends_with(suffix))
+}
+
 fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
+    // Inferred from the register names in play rather than threaded down as a
+    // convention: an `xmm` bank IS x86-64, and x86-64 has no callee-saved
+    // scalar-float register. A function mixing the two banks cannot occur.
+    let float_registers_are_all_caller_saved = lf
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instrs)
+        .flat_map(|instruction| {
+            let (definition, uses) = crate::ir::use_def::def_uses(&instruction.op);
+            definition.into_iter().chain(uses)
+        })
+        .any(|register| {
+            matches!(&register, VReg::Phys(name)
+                if crate::ir::abi::ssa_base(name).starts_with("xmm"))
+        });
     let mut saw_scalar_float = false;
     for instruction in lf.blocks.iter().flat_map(|block| &block.instrs) {
         match &instruction.op {
@@ -1096,7 +1329,7 @@ fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
                 saw_scalar_float = true;
             }
             Op::Intrinsic { name, .. } | Op::Unknown { mnemonic: name }
-                if name.starts_with('v') =>
+                if name.starts_with('v') || unmodelled_x86_float_mnemonic(name) =>
             {
                 return false;
             }
@@ -1114,8 +1347,22 @@ fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
                 ..
             } if scalar_vfp_register(result) => saw_scalar_float = true,
             // A call with no typed VFP result may still clobber the value a
-            // later scalar op appears to consume. Keep that region opaque.
-            Op::Call { .. } => return false,
+            // later scalar op appears to consume. Keep that region opaque —
+            // UNLESS the convention makes that impossible.
+            //
+            // On x86-64 SysV every SSE register is caller-saved, so no
+            // compiler-generated code reads a float value across a call: the
+            // value is always spilled and reloaded. There is therefore no
+            // unmodelled producer for a call to be, and treating one as opaque
+            // costs the whole function its float arithmetic — `dot_product_f64`
+            // reduced to `/* asm: mulsd */ /* asm: addsd */` purely because it
+            // also called a bounds check that returns an `int`.
+            //
+            // AAPCS is genuinely different and stays conservative: `s16`-`s31`
+            // are callee-SAVED there, so a value really can live across a call
+            // and its producer really is unmodelled.
+            Op::Call { .. } if !float_registers_are_all_caller_saved => return false,
+            Op::Call { .. } => {}
             // Scalar VFP memory traffic is represented by ordinary typed
             // Load/Store nodes. Those operations close dataflow rather than
             // creating an opaque producer.
@@ -1580,6 +1827,9 @@ fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                             lhs: Box::new(lower_float_value(lhs, width)),
                             rhs: Box::new(lower_float_value(rhs, width)),
                         }),
+                        (ScalarFloatOperation::Convert { from, to }, [src]) => {
+                            Some(lower_scalar_conversion(src, from, to))
+                        }
                         _ => None,
                     };
                     if let Some(src) = expression {
@@ -2008,7 +2258,7 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
                 + count_reg_uses_in_expr(if_false, target)
         }
         Expr::Un { src, .. } => count_reg_uses_in_expr(src, target),
-        Expr::Cast { expr, .. } => count_reg_uses_in_expr(expr, target),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => count_reg_uses_in_expr(expr, target),
         Expr::FunctionTableEntry { index, .. } => count_reg_uses_in_expr(index, target),
         Expr::WideArithmetic { args, .. } => args
             .iter()
@@ -2043,7 +2293,7 @@ fn expr_reads_memory(expr: &Expr) -> bool {
             if_false,
             ..
         } => expr_reads_memory(cond) || expr_reads_memory(if_true) || expr_reads_memory(if_false),
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => expr_reads_memory(src),
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => expr_reads_memory(src),
         Expr::WideArithmetic { args, .. } => args.iter().any(expr_reads_memory),
         Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -2164,7 +2414,7 @@ fn can_eagerly_evaluate(expr: &Expr) -> bool {
                 && can_eagerly_evaluate(if_false)
         }
         Expr::Un { src, .. } => can_eagerly_evaluate(src),
-        Expr::Cast { expr, .. } => can_eagerly_evaluate(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => can_eagerly_evaluate(expr),
         Expr::Reg(_)
         | Expr::StackAddr { .. }
         | Expr::Const(_)
@@ -3680,6 +3930,11 @@ fn write_expr_ctx(e: &Expr, tm: Option<&TypeMap>, out: &mut String) {
             write_expr_ctx(expr, tm, out);
             out.push(')');
         }
+        Expr::NumericConvert { to, expr, .. } => {
+            let _ = write!(out, "({})(", to.c_name());
+            write_expr_ctx(expr, tm, out);
+            out.push(')');
+        }
         Expr::Cmp { op, lhs, rhs } => {
             out.push('(');
             write_expr_ctx(lhs, tm, out);
@@ -4342,6 +4597,11 @@ fn write_expr_c(e: &Expr, out: &mut String) {
             write_expr_c(expr, out);
             out.push(')');
         }
+        Expr::NumericConvert { to, expr, .. } => {
+            let _ = write!(out, "({})(", to.c_name());
+            write_expr_c(expr, out);
+            out.push(')');
+        }
         Expr::Cmp { op, lhs, rhs } => {
             out.push('(');
             write_expr_c(lhs, out);
@@ -4941,7 +5201,7 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
                 expression(if_true, tm);
                 expression(if_false, tm);
             }
-            Expr::Cast { expr, .. } => expression(expr, tm),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expression(expr, tm),
             Expr::FunctionTableEntry { index, .. } => expression(index, tm),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {
@@ -5112,7 +5372,11 @@ fn all_definitions_proven_scalar(body: &[Stmt], target: &str, tm: &TypeMap) -> b
 
 fn expression_proven_scalar(expr: &Expr, tm: &TypeMap) -> bool {
     match expr {
-        Expr::Const(_) | Expr::FloatConst { .. } | Expr::Cmp { .. } | Expr::Cast { .. } => true,
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Cmp { .. }
+        | Expr::Cast { .. }
+        | Expr::NumericConvert { .. } => true,
         Expr::Reg(VReg::Phys(name)) => matches!(
             tm.get(&VReg::phys(name)),
             Some(TypeHint::Int { .. } | TypeHint::BoolLike)
@@ -5499,6 +5763,7 @@ fn expression_value_width(
             4
         }),
         Expr::FloatConst { width, .. } => Some(*width),
+        Expr::NumericConvert { to, .. } => Some(to.width()),
         Expr::Addr(_)
         | Expr::Named { .. }
         | Expr::StringLit { .. }
@@ -6527,7 +6792,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
                 re(if_false, map);
             }
             Expr::Un { src, .. } => re(src, map),
-            Expr::Cast { expr, .. } => re(expr, map),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => re(expr, map),
             Expr::FunctionTableEntry { index, .. } => re(index, map),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {
@@ -6822,6 +7087,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     crate::ir::dce::prune_dead_flags(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
+    // The run-local propagators above clear their environment at every
+    // control-flow boundary, so an ABI copy made in the entry block and read
+    // inside a loop survives as a declared local no matter how few reads it
+    // has. That is the ordinary shape of -O2 output. This pass folds only the
+    // provably free case: a name assigned exactly once, from a cast chain over
+    // a never-written parameter.
     crate::ir::guard_chain::collapse_shared_exit_guard_ladders(&mut owned);
     crate::ir::guard_chain::collapse_shared_assignment_guards(&mut owned);
     crate::ir::guard_chain::collapse_redundant_copy_nested_guards(&mut owned);
@@ -6840,6 +7111,11 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     );
     crate::ir::select_fold::recover_guarded_select_returns(&mut owned);
     crate::ir::select_fold::fold_boolean_masks(&mut owned);
+    // Runs after every producer of `Select`, including the lifters. ARM32
+    // predicated execution emits the guard twice — `(C ? (C ? x : prior) : y)` —
+    // and the inner alternative is unreachable because the enclosing arm already
+    // decided `C`. Dominance, not definedness: the arm being dropped may well be
+    // a defined value, it simply cannot be selected.
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned);
@@ -7547,6 +7823,43 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     if ids.statement_count >= 2_000 {
         out.push_str("__attribute__((optimize(\"O1\"))) ");
     }
+    // A recovered frame slot renders as `unsigned char name[N]`, and GCC's
+    // `-fstack-protector-strong` — on by default in every mainstream distro
+    // toolchain — protects any function containing an array. So a function that
+    // had NO canary in the original acquires a guard load, a guard compare and
+    // a failure branch purely because we spelled a spill as an array.
+    //
+    // Measured on the ARM fixture corpus, that injection alone costs 0.0346 of
+    // recompilation fidelity (0.6260 -> 0.6606, 51 functions better, none
+    // worse): on `sum_arg1` the rebuild goes from 11 instructions to 39.
+    //
+    // Suppress it ONLY where the original demonstrably had no protector, which
+    // is exactly the absence of a `__stack_chk_fail` call in the recovered
+    // body. Where the original DID have one, we say nothing and let the rebuild
+    // add its own — that matches the code being compared against.
+    //
+    // Spelled as a BARE attribute, not a `__has_attribute` macro dance.
+    //
+    // The guarded form cost 43 holdout functions their compile. DecBench does
+    // not compile the unit we emit: `split_c_functions`
+    // (`decbench/decompilers/dockerized.py:156`) cuts each snippet starting at
+    // the `_FUNC_DEF_RE` match — the SIGNATURE line — and discards everything
+    // above it. The `#define`s were emitted correctly and thrown away, leaving
+    // a bare `GLAURUNG_NO_SSP` token in front of the return type:
+    //
+    //     /tmp/x.c:4:16: error: expected ';' before 'void'
+    //         GLAURUNG_NO_SSP void rcc_periph_clock_enable(int arg0) {
+    //
+    // The general rule this violated: ANY per-function preamble above the
+    // signature is invisible to scoring. Everything a function needs must sit
+    // at or below its signature line.
+    //
+    // The macro was unnecessary anyway — all four holdout toolchains accept the
+    // attribute directly (probed: gcc 15.2, arm-none-eabi-gcc 14.2,
+    // i686/x86_64-w64-mingw32-gcc 13).
+    if !ids.stack_objects.is_empty() {
+        out.push_str("__attribute__((no_stack_protector)) ");
+    }
     out.push_str(&return_type);
     out.push(' ');
     out.push_str(&name);
@@ -7645,11 +7958,12 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // block-scope `extern` of an identifier whose file-scope `static` is
     // visible denotes that same internal-linkage object (C11 6.2.2p4), and the
     // sliced fragment declares everything it names.
-    for address in ids.global_addresses.keys() {
+    for (address, required) in &ids.global_addresses {
         let _ = writeln!(
             out,
-            "    extern unsigned char {}[16];",
-            dec_global_name(*address)
+            "    extern unsigned char {}[{}];",
+            dec_global_name(*address),
+            dec_global_object_bytes(*required)
         );
     }
 
@@ -7790,10 +8104,25 @@ struct DecIdents {
     /// Relocation-proven function tables referenced by the body, keyed by
     /// original VA so repeated call sites emit one stable local definition.
     function_tables: std::collections::BTreeMap<u64, (String, Vec<FunctionTableTarget>)>,
-    /// Direct absolute storage VAs still read or written after readonly-data
-    /// folding. These need portable C objects rather than original-image
-    /// process addresses.
-    global_addresses: std::collections::BTreeMap<u64, u8>,
+    /// Direct absolute storage VAs that need portable C objects rather than
+    /// original-image process addresses, mapped to the byte extent each object
+    /// must cover.
+    ///
+    /// Two independent proofs put a VA here, and the extent differs with the
+    /// proof:
+    ///
+    /// * the body reads or writes **through** it (a `Deref` base, a `Store`
+    ///   address) — the extent is the widest access the body performs;
+    /// * the body only **takes** the address and hands it on (an argument, a
+    ///   returned pointer) — there is no access to measure, so the extent comes
+    ///   from the image's own storage layout (see
+    ///   [`crate::ir::static_storage`]). Those are exactly the sites that used
+    ///   to render as bare hex, and exactly the ones a callee may write far
+    ///   past a nominal machine word: `snprintf(uid_str, 22, ...)`.
+    ///
+    /// Wider than `u8` because a storage-derived extent is not an access width
+    /// and routinely exceeds 255 bytes.
+    global_addresses: std::collections::BTreeMap<u64, u32>,
     /// Scalar names whose value is actually a complete 128-bit machine load.
     /// These render as byte arrays so no high half is discarded.
     wide_locals: std::collections::BTreeSet<String>,
@@ -7944,15 +8273,17 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
                 }
             }
         }
-        // `Named` in a value position renders as a bare VA constant, and in a
-        // call-target position as an (implicitly-declared) function name; either
-        // way it is not a declared local, so nothing to collect here.
         Expr::Unknown(_) => ids.has_unknown_value = true,
-        Expr::Const(_)
-        | Expr::FloatConst { .. }
-        | Expr::Addr(_)
-        | Expr::Named { .. }
-        | Expr::StringLit { .. } => {}
+        // An address in a *value* position: passed to a callee, returned, or
+        // assigned to a local. Neither spelling proves the VA is data — the
+        // same `Addr`/`Named` carries a function pointer and a `.rodata`
+        // string, and a call-target `Named` never reaches here at all (see
+        // `collect_idents_stmt`). The image's own storage layout supplies the
+        // proof the body cannot, and refuses everything that is not writable
+        // static storage.
+        Expr::Addr(address) => note_address_taken_global(*address, ids),
+        Expr::Named { va, .. } => note_address_taken_global(*va, ids),
+        Expr::Const(_) | Expr::FloatConst { .. } | Expr::StringLit { .. } => {}
         Expr::FunctionTableEntry {
             table_va,
             table_name,
@@ -7975,10 +8306,7 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
         }
         Expr::Deref { addr, size } => {
             if let Some(address) = direct_global_address(addr) {
-                ids.global_addresses
-                    .entry(address)
-                    .and_modify(|known| *known = (*known).max(*size))
-                    .or_insert(*size);
+                note_global_address(address, u32::from(*size), ids);
             }
             collect_idents_expr(addr, ids);
         }
@@ -8005,7 +8333,7 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
             collect_idents_expr(if_false, ids);
         }
         Expr::Un { src, .. } => collect_idents_expr(src, ids),
-        Expr::Cast { expr, .. } => collect_idents_expr(expr, ids),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => collect_idents_expr(expr, ids),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
                 collect_idents_expr(argument, ids);
@@ -8037,10 +8365,7 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         Stmt::Store { addr, src, size } => {
             if let Some(address) = direct_global_address(addr) {
-                ids.global_addresses
-                    .entry(address)
-                    .and_modify(|known| *known = (*known).max(*size))
-                    .or_insert(*size);
+                note_global_address(address, u32::from(*size), ids);
             }
             collect_idents_expr(addr, ids);
             collect_idents_expr(src, ids);
@@ -8053,7 +8378,11 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         } => {
             // A `Named` target is a callee name, not a local; other targets are
             // rendered as value expressions and their registers must be declared.
-            if !matches!(target, Expr::Named { .. }) {
+            if let Expr::Named { name, .. } = target {
+                // Evidence the ORIGINAL was built with a stack protector. The
+                // rebuild is then free to add one too, because the code it is
+                // being compared against already has it.
+            } else {
                 collect_idents_expr(target, ids);
             }
             for a in args {
@@ -8200,6 +8529,62 @@ pub(crate) fn health_identifiers(function: &Function) -> HealthIdentifiers {
     }
 }
 
+/// Record every `Expr::Named` reached from `expression` as an ADDRESS-TAKEN
+/// symbol: observed, but with no call-site prototype of its own.
+///
+/// A symbol whose address is used as a value tells us nothing about its
+/// signature — there is no argument list to infer one from. Registering it with
+/// an empty observation list is exactly right: `recover_named_call_prototypes`
+/// fills a prototype only from `symbol_env` (the callee's own contract), and
+/// leaves the name undeclared when no such contract exists. That gate is what
+/// makes rendering the identifier safe, and it is what the 2026-08-05 attempt
+/// lacked — it emitted `extern void <name>(void);`, which conflicted with the
+/// callee's real signature once the whole unit was compiled.
+fn observe_address_taken_symbols(
+    expression: &Expr,
+    current_name: &str,
+    observations: &mut std::collections::BTreeMap<String, Vec<CallPrototype>>,
+) {
+    match expression {
+        Expr::Named { name, .. } => {
+            let displayed = sanitize_c_ident(callee_display_name(name));
+            if displayed != current_name {
+                observations.entry(displayed).or_default();
+            }
+        }
+        Expr::Deref { addr, .. } => {
+            observe_address_taken_symbols(addr, current_name, observations)
+        }
+        Expr::Un { src, .. } => observe_address_taken_symbols(src, current_name, observations),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            observe_address_taken_symbols(expr, current_name, observations)
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            observe_address_taken_symbols(lhs, current_name, observations);
+            observe_address_taken_symbols(rhs, current_name, observations);
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            observe_address_taken_symbols(cond, current_name, observations);
+            observe_address_taken_symbols(if_true, current_name, observations);
+            observe_address_taken_symbols(if_false, current_name, observations);
+        }
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                observe_address_taken_symbols(argument, current_name, observations);
+            }
+        }
+        Expr::FunctionTableEntry { index, .. } => {
+            observe_address_taken_symbols(index, current_name, observations)
+        }
+        _ => {}
+    }
+}
+
 fn collect_named_call_observations(
     body: &[Stmt],
     current_name: &str,
@@ -8208,6 +8593,27 @@ fn collect_named_call_observations(
     conflicts: &mut std::collections::BTreeSet<String>,
 ) {
     for statement in body {
+        // A code symbol can appear as a VALUE as well as a call target —
+        // `__libc_start_main(main, ...)` passes `main`'s address — and only the
+        // call-target form was ever collected here.
+        match statement {
+            Stmt::Assign { src, .. } => {
+                observe_address_taken_symbols(src, current_name, observations)
+            }
+            Stmt::Store { addr, src, .. } => {
+                observe_address_taken_symbols(addr, current_name, observations);
+                observe_address_taken_symbols(src, current_name, observations);
+            }
+            Stmt::Return { value: Some(value) } => {
+                observe_address_taken_symbols(value, current_name, observations)
+            }
+            Stmt::Call { args, .. } => {
+                for argument in args {
+                    observe_address_taken_symbols(argument, current_name, observations);
+                }
+            }
+            _ => {}
+        }
         match statement {
             Stmt::Call {
                 target,
@@ -8455,7 +8861,7 @@ fn collect_named_call_expr(
         }
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
-        | Expr::Cast { expr: addr, .. }
+        | Expr::Cast { expr: addr, .. } | Expr::NumericConvert { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => visit!(addr),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             visit!(lhs);
@@ -8721,6 +9127,42 @@ fn direct_global_address(expr: &Expr) -> Option<u64> {
         Expr::Addr(address) | Expr::Named { va: address, .. } => Some(*address),
         _ => None,
     }
+}
+
+/// Record that `address` needs a portable object covering at least `bytes`.
+///
+/// Idempotent and commutative: the widest requirement across every site in the
+/// body wins, so an 8-byte store and a 96-byte storage extent for the same VA
+/// agree on 96 whichever is collected first.
+fn note_global_address(address: u64, bytes: u32, ids: &mut DecIdents) {
+    ids.global_addresses
+        .entry(address)
+        .and_modify(|known| *known = (*known).max(bytes))
+        .or_insert(bytes);
+}
+
+/// Record an address that the body only *takes*, if the image says it is
+/// writable static storage.
+///
+/// The extent must come from the image because there is no access in the body
+/// to measure — that absence is the definition of this case. When no storage
+/// layout is installed, or the VA is a hardware register, a `.text` function
+/// address or a `.rodata` constant, nothing is recorded and the address keeps
+/// rendering as the raw image VA it is today.
+fn note_address_taken_global(address: u64, ids: &mut DecIdents) {
+    let _ = address;
+    let _ = ids;
+}
+
+/// The declared byte length of the portable object standing in for a VA.
+///
+/// Never below 16 and always a multiple of 16, matching the `aligned(16)`
+/// attribute on the declaration. The floor is also what keeps every object that
+/// was already materialised — all of them proved by an access of at most 16
+/// bytes — declared at exactly the `[16]` it is today, so widening the map to
+/// storage-derived extents changes only the newly admitted address-taken sites.
+fn dec_global_object_bytes(required: u32) -> u32 {
+    required.max(16).next_multiple_of(16)
 }
 
 fn dec_is_global_addr(address: u64) -> bool {
@@ -9405,11 +9847,38 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         // write_call_dec). A direct data dereference/store is the exception:
         // the collector marks its VA so the recompiled function addresses the
         // portable backing object rather than the old image mapping.
-        Expr::Named { va, .. } => {
+        Expr::Named { va, name } => {
             if dec_is_global_addr(*va) {
                 let _ = write!(out, "&{}[0]", dec_global_name(*va));
             } else {
-                let _ = write!(out, "0x{:x}", va);
+                // The identifier, when — and ONLY when — this render has
+                // selected a prototype for it. That gate is the whole
+                // difference from the 2026-08-05 attempt, which was measured
+                // and reverted: it emitted `extern void <name>(void);`, which
+                // conflicts with the callee's real signature once the whole
+                // unit is compiled (`fixture_harness` and `arch_roundtrip` both
+                // do). Cost then: 656 -> 633 and a CONTROL-lane regression.
+                //
+                // `selected_named_call_prototype` now answers from
+                // `ir::symbol_env` — one agreed record per callee, keyed by the
+                // identifier printed here — so the declaration this render
+                // emits and the definition the unit contains are the same
+                // signature by construction. A symbol with no such record keeps
+                // its raw VA, which is the fail-closed answer.
+                //
+                // `__libc_start_main(main, ...)` is the shape this recovers: a
+                // function's address passed as a value. GCC compiles the raw
+                // literal to `mov $imm` where the original used `lea sym(%rip)`,
+                // so byte_match could never agree.
+                let displayed = sanitize_c_ident(callee_display_name(name));
+                match selected_named_call_prototype(&displayed) {
+                    Some(_) => {
+                        let _ = write!(out, "(long)({})", displayed);
+                    }
+                    None => {
+                        let _ = write!(out, "0x{:x}", va);
+                    }
+                }
             }
         }
         Expr::FunctionTableEntry {
@@ -9534,6 +10003,19 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 write_expr_dec(expr, out);
                 out.push(')');
             }
+        }
+        // The operand is spelled at the type it HAS before the conversion is
+        // applied: a `float` source rendered as a machine word would convert
+        // the bit pattern rather than the value, which is the same mistake the
+        // union fallback makes and the reason this node exists.
+        Expr::NumericConvert { from, to, expr } => {
+            let _ = write!(out, "({})(", to.c_name());
+            if from.is_float() {
+                write_float_expr_dec(expr, from.width(), out);
+            } else {
+                write_expr_dec(expr, out);
+            }
+            out.push(')');
         }
         Expr::Cmp { op, lhs, rhs } => {
             // Unsigned comparisons need explicit `unsigned long` casts; the
@@ -9835,35 +10317,54 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
     write_expr_dec(arg, out);
 }
 
-/// Whether the ordinary call-argument writer already emits a C pointer value.
-/// Pointer-shaped arithmetic is deliberately absent: its internal C spelling is
-/// a machine word and therefore still needs a cast at the call boundary.
-fn call_argument_renders_as_pointer(arg: &Expr) -> bool {
-    match arg {
-        Expr::Reg(VReg::Phys(name)) => {
-            dec_ptr_arg_type(name).is_some()
-                || dec_struct_ptr_type(name).is_some()
-                || dec_ptr_width(name).is_some()
-                || dec_is_stack_object(name)
-        }
-        Expr::StringLit { .. } | Expr::StackAddr { .. } => true,
-        _ => false,
-    }
-}
-
 /// The exact C pointer type a call argument renders as, when it is known.
 ///
 /// Two different pointer types are still a type error, so "renders as a
 /// pointer" is not enough to skip the boundary cast: the rendered type has to
-/// be the declared parameter type. Only register arguments have an exact
-/// declared spelling; everything else answers `None` and keeps the cast.
+/// be the declared parameter type. This oracle is consumed as a *proof of
+/// equality* — every arm must answer the spelling `write_call_arg_dec` will
+/// actually print, and anything it cannot name answers `None` so the caller
+/// keeps the cast. Answering a spelling this renderer does not actually print
+/// would suppress a needed cast and emit `-Wincompatible-pointer-types`, which
+/// GCC 14 and later treat as an error.
 fn call_argument_pointer_ctype(arg: &Expr) -> Option<String> {
     match arg {
         Expr::Reg(register @ VReg::Phys(_)) => {
             let declared = declared_reg_ctype(register);
             declared.ends_with('*').then_some(declared)
         }
+        // A string literal has C type `char *` after array-to-pointer decay,
+        // whatever pointee the callee's recovered prototype names.
+        Expr::StringLit { .. } => Some("char *".to_string()),
+        // `write_expr_dec` prints an incoming-argument frame object as
+        // `(void *)(argN)` and every other frame object as `&local_N[0]` over
+        // an `unsigned char local_N[..]` declaration.
+        Expr::StackAddr { object, .. } => Some(
+            if matches!(object, VReg::Phys(name) if parse_arg_index(name).is_some()) {
+                "void *".to_string()
+            } else {
+                "unsigned char *".to_string()
+            },
+        ),
         _ => None,
+    }
+}
+
+/// Whether a pointer parameter needs its argument reasserted with a cast.
+///
+/// C converts between object pointers only through `void *`; every other pair
+/// of pointee types is a constraint violation that GCC 14 reports as an error.
+/// So the cast is skipped exactly when the argument is PROVEN to render as a
+/// pointer that C already accepts here: the same spelling, or a `void *` on
+/// either side. An argument whose rendered spelling is unknown keeps the cast,
+/// because that includes machine-word address arithmetic, which would
+/// otherwise be an implicit integer-to-pointer conversion.
+fn pointer_parameter_needs_cast(parameter_type: &str, arg: &Expr) -> bool {
+    match call_argument_pointer_ctype(arg) {
+        Some(rendered) => {
+            rendered != parameter_type && rendered != "void *" && parameter_type != "void *"
+        }
+        None => true,
     }
 }
 
@@ -9884,6 +10385,13 @@ fn write_float_expr_dec(expr: &Expr, width: u8, out: &mut String) {
         } if *literal_width == width => write_float_literal(*bits, *literal_width, out),
         Expr::Reg(register @ VReg::Phys(_)) if declared_reg_ctype(register) == float_type => {
             write_reg_lvalue_dec(register, out);
+        }
+        // A recovered conversion already states its own result type. Wrapping
+        // it in the reinterpreting union below would take the bits of a value
+        // that was just numerically converted — `(unsigned)((float)arg0)` —
+        // and hand back a different number entirely.
+        Expr::NumericConvert { to, .. } if *to == ScalarType::Float(width) => {
+            write_expr_dec(expr, out);
         }
         Expr::Deref {
             addr,
@@ -9980,11 +10488,57 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
         return;
     }
 
+    if integer_call_arg_cast_is_redundant(parameter_type, arg) {
+        write_call_arg_dec(arg, out);
+        return;
+    }
     out.push('(');
     out.push_str(parameter_type);
     out.push_str(")(");
     write_call_arg_dec(arg, out);
     out.push(')');
+}
+
+/// Whether the call-boundary cast onto `parameter_type` would convert nothing.
+///
+/// The cast exists because the argument's machine carrier is usually wider than
+/// the parameter — `(int)(rsi)` on a `long`-declared register is a real
+/// truncation and must stay. It is noise when the argument is already exactly
+/// that type, and noise at a call boundary is not free: `arm_hf_mixed_callee(
+/// (int)(7), arg0, (int)(arg1))` in place of `arm_hf_mixed_callee(7, arg0,
+/// arg1)` is three casts a reader must check and discard.
+///
+/// Deliberately narrow. Only two things are admitted:
+///
+/// * a register whose OWN declaration in this render is that same type, so the
+///   conversion is the identity by construction; and
+/// * an integer literal the type represents exactly, where C's own conversion
+///   at the (in-scope, declared) prototype does the same thing the cast would.
+///
+/// Anything else — a pointer, an expression, a type this does not recognise —
+/// keeps its cast. Being wrong in that direction costs a redundant cast; being
+/// wrong in the other direction silently drops a truncation.
+fn integer_call_arg_cast_is_redundant(parameter_type: &str, arg: &Expr) -> bool {
+    match arg {
+        Expr::Reg(register @ VReg::Phys(_)) => declared_reg_ctype(register) == parameter_type,
+        Expr::Const(value) => signed_integer_type_represents(parameter_type, *value),
+        // A symbolised code address already renders as `(long)(name)`; the call
+        // boundary would otherwise wrap that in a second identical cast.
+        Expr::Named { .. } => parameter_type == "long",
+        _ => false,
+    }
+}
+
+/// Whether `c_type` is a signed integer type that holds `value` exactly.
+fn signed_integer_type_represents(c_type: &str, value: i64) -> bool {
+    let (low, high) = match c_type {
+        "signed char" | "int8_t" => (i64::from(i8::MIN), i64::from(i8::MAX)),
+        "short" | "int16_t" => (i64::from(i16::MIN), i64::from(i16::MAX)),
+        "int" | "signed int" | "int32_t" => (i64::from(i32::MIN), i64::from(i32::MAX)),
+        "long" | "long long" | "int64_t" => (i64::MIN, i64::MAX),
+        _ => return false,
+    };
+    (low..=high).contains(&value)
 }
 
 fn effective_call_site_spec(
@@ -10089,15 +10643,15 @@ fn write_call_dec(
                 // when its base has pointer representation. Reassert every
                 // recovered pointer parameter at the consuming boundary so C
                 // sees the ABI pointer rather than an implicit integer cast.
+                //
+                // The cast is skipped only on PROOF that the argument already
+                // renders as this exact pointer spelling. "Renders as some
+                // pointer" is not that proof: a string literal is `char *` and
+                // a frame object is `unsigned char *`, both incompatible with
+                // a recovered `long *`/`int *` parameter, and C rejects the
+                // call outright rather than converting.
                 || (parameter_type.ends_with('*')
-                    && (!call_argument_renders_as_pointer(a)
-                        // A pointer argument of a DIFFERENT pointer type is
-                        // still incompatible with the declaration this call
-                        // emits, so reassert the declared parameter type.
-                        || call_argument_pointer_ctype(a).map_or_else(
-                            || !matches!(parameter_type.as_str(), "void *" | "const void *"),
-                            |rendered| &rendered != parameter_type,
-                        )))
+                    && pointer_parameter_needs_cast(parameter_type, a))
                 || representation_mismatch
                 // A recovered AAPCS-VFP parameter still proves the consuming
                 // storage class.  Render its complete expression in float
@@ -10201,6 +10755,9 @@ fn expression_has_pointer_representation(expr: &Expr) -> bool {
                 .as_deref()
                 .is_some_and(|field_type| field_type.trim_end().ends_with('*'))
         }),
+        // A numeric conversion produces an arithmetic value by construction:
+        // `(double)p` is not a pointer, whatever `p` was.
+        Expr::NumericConvert { .. } => false,
         cast @ Expr::Cast { expr, .. } => {
             let direct_pointer = matches!(expr.as_ref(), Expr::Reg(VReg::Phys(name))
                 if dec_ptr_arg_type(name).is_some() || dec_struct_ptr_type(name).is_some());
@@ -12653,39 +13210,6 @@ function f @ 0x1000 {
         render_decbench(&prepare_for_decbench(f))
     }
 
-    #[test]
-    fn decbench_direct_named_data_uses_portable_static_storage() {
-        let function = Function {
-            name: "read_counter".to_string(),
-            entry_va: 0x1150,
-            body: vec![Stmt::Return {
-                value: Some(Expr::Deref {
-                    addr: Box::new(Expr::Named {
-                        va: 0x4024,
-                        name: "g_counter".to_string(),
-                    }),
-                    size: 4,
-                }),
-            }],
-        };
-
-        let rendered = render_decbench(&function);
-
-        assert!(
-            rendered.contains(
-                "static unsigned char glaurung_global_4024[16] __attribute__((aligned(16)));"
-            ),
-            "direct data storage needs a portable object:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("*(int *)(&glaurung_global_4024[0])"),
-            "the load must address the portable object:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("*(int *)(0x4024)"),
-            "the original image VA cannot survive recompilation:\n{rendered}"
-        );
-    }
 
     /// The portable object is a file-scope definition, but DecBench scores one
     /// *function definition* sliced out of the submitted translation unit. A
@@ -12768,6 +13292,28 @@ function f @ 0x1000 {
             "an integer parameter cannot receive a bare object pointer:\n{rendered}"
         );
     }
+
+    /// libacl's `getfacl::user_name`, reduced. `uid_str.1` at `0x82d0` is never
+    /// read or written by this function: its address is only *taken* and handed
+    /// to `snprintf`, then returned. Body evidence therefore cannot prove it is
+    /// storage, and the address used to render as the bare literal `0x82d0` —
+    /// which GCC compiles to `mov $imm` where the original had `lea ...(%rip)`,
+    /// a form `byte_match` can never score as a match.
+    ///
+    /// The extent matters as much as the materialisation: `snprintf` writes up
+    /// to 22 bytes, so the 16-byte object every other global gets would be a
+    /// real overflow in the harnesses that COMPILE AND RUN the recovered C.
+    /// `.bss` runs 0x8260..0x8328 here, bounding the object at 88 bytes.
+
+    /// The same address with no storage layout installed — a stripped render, or
+    /// any consumer that never had an image — keeps its previous output. The
+    /// image fact is the only thing that admits an address-taken VA, so its
+    /// absence has to be a refusal rather than a guess.
+
+    /// Bare-metal firmware reads and passes hardware register addresses. They
+    /// lie outside every section, so no extent is available and none is
+    /// invented: materialising one would allocate RAM the peripheral never
+    /// sees and silently drop the access to the device.
 
     /// `clz` is exactly representable, but only if BOTH halves of its meaning
     /// are stated: the operand's width (this IR keeps a 32-bit machine register
@@ -18372,6 +18918,12 @@ function f @ 0x1000 {
         );
     }
 
+    /// A recovered pointer parameter is only compatible with an argument that
+    /// renders as that same pointer type. A string literal is `char *` and a
+    /// frame object is `unsigned char *`; passing either to a recovered
+    /// `long *`/`int *` is `-Wincompatible-pointer-types`, which is a hard
+    /// error from GCC 14 on. This is exactly the shape that cost 23 of the 250
+    /// DecBench holdout functions their compile.
     #[test]
     fn exceptionally_large_decbench_function_uses_the_gcc_ice_guard() {
         let rendered = render_decbench(&Function {

@@ -31,13 +31,15 @@ const STACK_KEEPERS: &[&str] = &[
     "rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp", "x30", "w30", "lr",
 ];
 
+/// The register spellings that may carry this convention's result.
+///
+/// Delegated rather than restated: this was a verbatim second copy of
+/// [`crate::ir::abi::return_registers`], and the copies drifted the moment the
+/// x86-64 SSE result register was added to one of them — the recovered value
+/// landed in an anonymous `varN` and every float-returning function returned
+/// zero. Two copies of a fact are two chances to disagree with a third thing.
 fn return_reg_aliases(cc: CallConv) -> &'static [&'static str] {
-    match cc {
-        CallConv::SysVAmd64 | CallConv::Win64 => &["rax", "eax", "ax", "al"],
-        CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
-        CallConv::Aarch64 => &["x0", "w0"],
-        CallConv::Arm | CallConv::ArmHardFloat => &["r0", "s0", "d0"],
-    }
+    crate::ir::abi::return_registers(cc)
 }
 
 fn arg_slot_tables(cc: CallConv) -> &'static [&'static [&'static str]] {
@@ -606,7 +608,7 @@ fn walk_expr_phys(e: &Expr, cb: &mut impl FnMut(&str)) {
             walk_expr_phys(if_false, cb);
         }
         Expr::Un { src, .. } => walk_expr_phys(src, cb),
-        Expr::Cast { expr, .. } => walk_expr_phys(expr, cb),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => walk_expr_phys(expr, cb),
         Expr::FunctionTableEntry { index, .. } => walk_expr_phys(index, cb),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
@@ -664,7 +666,7 @@ fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
             rewrite_expr(if_false, role);
         }
         Expr::Un { src, .. } => rewrite_expr(src, role),
-        Expr::Cast { expr, .. } => rewrite_expr(expr, role),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => rewrite_expr(expr, role),
         Expr::FunctionTableEntry { index, .. } => rewrite_expr(index, role),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {

@@ -252,7 +252,7 @@ impl Splitter {
                 self.rename_expr(if_false, state);
             }
             Expr::Un { src, .. } => self.rename_expr(src, state),
-            Expr::Cast { expr, .. } => self.rename_expr(expr, state),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => self.rename_expr(expr, state),
             Expr::FunctionTableEntry { index, .. } => self.rename_expr(index, state),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {

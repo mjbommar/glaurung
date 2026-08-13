@@ -13,6 +13,7 @@ pub(crate) fn explicit_expression_width(expression: &Expr) -> Option<u8> {
         | Expr::Select { width: size, .. }
         | Expr::WideArithmetic { width: size, .. } => Some(*size),
         Expr::Cast { width, .. } | Expr::FloatConst { width, .. } => Some(*width),
+        Expr::NumericConvert { to, .. } => Some(to.width()),
         Expr::FunctionTableEntry { pointer_size, .. } => Some(*pointer_size),
         Expr::Call { result_width, .. } => *result_width,
         Expr::Cmp { .. } => Some(1),
@@ -52,6 +53,8 @@ pub(crate) fn can_carry_bits_above(expression: &Expr, narrow_width: u8) -> bool 
                         .is_some_and(|source_width| source_width <= narrow_width))
                     || can_carry_bits_above(expr, narrow_width))
         }
+        // A numeric conversion states its own result type.
+        Expr::NumericConvert { to, .. } => to.width() > narrow_width,
         Expr::Deref { size, .. }
         | Expr::Select { width: size, .. }
         | Expr::WideArithmetic { width: size, .. } => *size > narrow_width,

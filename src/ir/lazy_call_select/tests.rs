@@ -107,6 +107,7 @@ fn count_calls(expression: &Expr) -> usize {
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
         | Expr::Cast { expr: addr, .. }
+        | Expr::NumericConvert { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => count_calls(addr),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             count_calls(lhs) + count_calls(rhs)

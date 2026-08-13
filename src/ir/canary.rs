@@ -662,7 +662,7 @@ fn rewrite_expr(e: &mut Expr) {
             rewrite_expr(if_false);
         }
         Expr::Un { src, .. } => rewrite_expr(src),
-        Expr::Cast { expr, .. } => rewrite_expr(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => rewrite_expr(expr),
         Expr::FunctionTableEntry { index, .. } => rewrite_expr(index),
         Expr::WideArithmetic { args, .. } => args.iter_mut().for_each(rewrite_expr),
         Expr::Reg(_)

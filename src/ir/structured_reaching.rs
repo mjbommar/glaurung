@@ -249,7 +249,7 @@ fn expression_reads(expression: &Expr, value: &VReg) -> bool {
                 || expression_reads(if_true, value)
                 || expression_reads(if_false, value)
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => expression_reads(src, value),
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => expression_reads(src, value),
         Expr::FunctionTableEntry { index, .. } => expression_reads(index, value),
         Expr::WideArithmetic { args, .. } => args
             .iter()

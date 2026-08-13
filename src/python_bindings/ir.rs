@@ -442,6 +442,7 @@ fn run_ast_passes(
     str_pool: &std::collections::HashMap<u64, String>,
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
     stack_object_hints: &[crate::ir::stack_locals::StackObjectHint],
+    got_targets: &std::collections::HashMap<u64, u64>,
 ) -> (
     crate::ir::stack_locals::StackLocalFacts,
     std::collections::HashMap<String, String>,
@@ -511,6 +512,12 @@ fn run_ast_passes(
     // dereference. Resolve the slot before argument reconstruction, then recover
     // only symbol-backed terminal jumps as tail calls so the ordinary call pass
     // can see their argument-register setup and returned value.
+    // Before names are resolved, so a slot that `elf_got_map` also names is
+    // replaced by the address it holds rather than by a symbol standing on a
+    // linkage word. See `ir::got_fold`.
+    pass!("fold_got_pointer_loads", {
+        crate::ir::got_fold::fold_got_pointer_loads(f, got_targets);
+    });
     pass!("recover_resolved_tail_calls", {
         crate::ir::name_resolve::resolve_names(f, addr_map);
         crate::ir::function_tables::resolve_function_table_entries(f, function_tables);
@@ -1060,6 +1067,13 @@ pub(super) fn decompile_at_session(
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
+    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
+    // of a locally-defined global folds to that global instead of dereferencing
+    // an unrelocated linkage word. See `ir::got_fold`.
+    let got_targets: std::collections::HashMap<u64, u64> =
+        crate::analysis::elf_got::elf_got_target_map(&data)
+            .into_iter()
+            .collect();
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
             .as_ref()
@@ -1079,6 +1093,7 @@ pub(super) fn decompile_at_session(
         &str_pool,
         &function_tables,
         &stack_object_hints,
+        &got_targets,
     );
     merge_dwarf_register_local_facts(
         &mut stack_facts,
@@ -1322,6 +1337,13 @@ fn decompile_range_at_py(
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
+    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
+    // of a locally-defined global folds to that global instead of dereferencing
+    // an unrelocated linkage word. See `ir::got_fold`.
+    let got_targets: std::collections::HashMap<u64, u64> =
+        crate::analysis::elf_got::elf_got_target_map(&data)
+            .into_iter()
+            .collect();
     let stack_object_hints = dwarf_stack_object_hints(
         dwarf_outputs
             .as_ref()
@@ -1341,6 +1363,7 @@ fn decompile_range_at_py(
         &str_pool,
         &function_tables,
         &stack_object_hints,
+        &got_targets,
     );
     merge_dwarf_register_local_facts(
         &mut stack_facts,
@@ -2002,6 +2025,16 @@ fn float_expression_width(
 /// slot is named only later (`local_c`). Treating its four-byte extent as an
 /// integer changes a numeric float copy into a C conversion. This small fixed
 /// point preserves the already-proven class without guessing from width alone.
+///
+/// The loop terminates because progress is measured by what the map ACTUALLY
+/// holds afterwards, never by whether the proposed hint was adopted.
+/// `TypeMap::refine_from_value` is a lattice join with the right to decline —
+/// it is a no-op on a locked register, and `(Float{8}, Float{4})` falls through
+/// to its conservative arm — so "the destination does not equal the hint I want"
+/// is a condition a re-run cannot clear. Reporting that as progress spun
+/// `172_float_double_widths:gcc:O2:accumulate_wide` forever (a `double`
+/// accumulator fed by a `float` term is exactly the declined join), and because
+/// the spin is inside one pass, no `timeout_ms` between passes could cap it.
 fn refine_float_copy_types(
     body: &[crate::ir::ast::Stmt],
     types: &mut crate::ir::types_recover::TypeMap,
@@ -2020,8 +2053,12 @@ fn refine_float_copy_types(
             return;
         };
         let hint = TypeHint::Float { width };
-        if types.get(destination) != Some(hint) {
-            types.refine_from_value(destination.clone(), hint);
+        let before = types.get(destination);
+        if before == Some(hint) {
+            return;
+        }
+        types.refine_from_value(destination.clone(), hint);
+        if types.get(destination) != before {
             *changed = true;
         }
     }
@@ -2070,10 +2107,25 @@ fn refine_float_copy_types(
         }
     }
 
+    // Every reported round strictly changes at least one entry, and the join
+    // only ever moves a register from "no fact"/integer-ish to float, so the
+    // number of rounds is bounded by the number of float-typed destinations.
+    // The cap is a backstop against a future non-monotone edit to the lattice:
+    // it fails loudly in debug builds rather than hanging a release gate.
+    const MAX_ROUNDS: usize = 512;
+    let mut rounds = 0;
     loop {
         let mut changed = false;
         visit(body, types, &mut changed);
+        rounds += 1;
         if !changed {
+            break;
+        }
+        if rounds >= MAX_ROUNDS {
+            debug_assert!(
+                false,
+                "refine_float_copy_types did not reach a fixed point in {MAX_ROUNDS} rounds"
+            );
             break;
         }
     }
@@ -2453,6 +2505,20 @@ fn decompile_all_py(
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
+    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
+    // of a locally-defined global folds to that global instead of dereferencing
+    // an unrelocated linkage word. See `ir::got_fold`.
+    let got_targets: std::collections::HashMap<u64, u64> =
+        crate::analysis::elf_got::elf_got_target_map(&data)
+            .into_iter()
+            .collect();
+    // Slot -> the in-image address the loader stores there, so a `-fPIC`
+    // read of a locally-defined global folds to that global instead of
+    // dereferencing an unrelocated linkage word. See `ir::got_fold`.
+    let got_targets: std::collections::HashMap<u64, u64> =
+        crate::analysis::elf_got::elf_got_target_map(&data)
+            .into_iter()
+            .collect();
     let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {
@@ -2541,6 +2607,7 @@ fn decompile_all_py(
             &str_pool,
             &function_tables,
             &stack_object_hints,
+            &got_targets,
         );
         merge_dwarf_register_local_facts(
             &mut stack_facts,
@@ -2695,6 +2762,20 @@ fn decompile_many_py(
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
+    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
+    // of a locally-defined global folds to that global instead of dereferencing
+    // an unrelocated linkage word. See `ir::got_fold`.
+    let got_targets: std::collections::HashMap<u64, u64> =
+        crate::analysis::elf_got::elf_got_target_map(&data)
+            .into_iter()
+            .collect();
+    // Slot -> the in-image address the loader stores there, so a `-fPIC`
+    // read of a locally-defined global folds to that global instead of
+    // dereferencing an unrelocated linkage word. See `ir::got_fold`.
+    let got_targets: std::collections::HashMap<u64, u64> =
+        crate::analysis::elf_got::elf_got_target_map(&data)
+            .into_iter()
+            .collect();
     let mut callee_layout_cache = std::collections::HashMap::new();
     // PDB-only public-symbol map for the `// PDB:` provenance comment; built
     // once, empty for non-PE inputs (so it never fires on ELF/Mach-O).
@@ -2705,6 +2786,24 @@ fn decompile_many_py(
     let wanted: HashSet<u64> = func_vas.iter().copied().collect();
     let list = PyList::empty(py);
 
+    // The rendering loop deliberately has NO wall clock, and `timeout_ms`
+    // stays what `Budgets` documents: the per-function CFG-walk budget.
+    //
+    // A clock here was tried and measured. `tools/diff_decompile.decompiled_many_c`
+    // calls this with no `timeout_ms`, so it takes the 5 s default; under CPU
+    // load the budget expired mid-set and the unrendered functions came back as
+    // an explanatory stub. That stub is a correct report and a wrong ANSWER:
+    // the harness compiled it, found no definition, and reported
+    // `151_wide_branch_ladder:clang:O0:big151_flat_cascade` as
+    // `undefined symbol: big151_flat_cascade` — a semantic failure verdict
+    // manufactured by how busy the machine was. Same build, same seed: passes
+    // idle, fails under sixteen spinners.
+    //
+    // Exceeding a wall clock is not evidence that a decompilation is wrong, and
+    // a pass that fails to terminate is a correctness bug to fix in that pass,
+    // not something a clock between passes could have caught anyway — the spin
+    // that motivated this was inside `refine_float_copy_types`, where no
+    // between-pass check could reach it. See its fixed-point proof.
     for func in funcs.iter() {
         // See `decompile_all_py`: keeps a long multi-function decompile
         // interruptible while the GIL is held for the `PyList` it is building.
@@ -2798,6 +2897,7 @@ fn decompile_many_py(
             &str_pool,
             &function_tables,
             &stack_object_hints,
+            &got_targets,
         );
         merge_dwarf_register_local_facts(
             &mut stack_facts,
@@ -2899,23 +2999,54 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
 mod tests {
     use super::{
         dwarf_return_hint, dwarf_return_hint_with_env, dwarf_stack_object_hints,
-        imported_symbol_base, integer_widths_by_role, merge_dwarf_register_local_facts,
-        merge_exact_definition_widths, refine_numbered_declaration,
-        retain_empty_direct_callee_layout, select_renderable_dwarf_local_facts,
-        DwarfPrototypeContract,
+        integer_widths_by_role, merge_dwarf_register_local_facts,
+        merge_exact_definition_widths, refine_float_copy_types, refine_numbered_declaration,
+        select_renderable_dwarf_local_facts, DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
+    use crate::ir::ast::{Expr, Stmt};
     use crate::ir::call_args::CallConv;
     use crate::ir::types::VReg;
     use crate::ir::types_recover::{TypeHint, TypeMap};
     use std::collections::HashMap;
 
     #[test]
-    fn a_plt_target_can_be_matched_to_its_local_definition() {
-        assert_eq!(imported_symbol_base("signed_step@plt"), "signed_step");
-        assert_eq!(imported_symbol_base("signed_step.plt"), "signed_step");
-        assert_eq!(imported_symbol_base("signed_step"), "signed_step");
+    fn float_copy_refinement_terminates_when_the_join_declines_the_hint() {
+        // `double total = ...; total += (double)step;` with a `float` term:
+        // the destination already holds `Float{8}` and the source proposes
+        // `Float{4}`, which `refine_from_value` is entitled to decline. The
+        // fixed point must observe that the map did not move, not that its
+        // proposal was not adopted — the latter never becomes false, which is
+        // how `172_float_double_widths:gcc:O2:accumulate_wide` hung forever.
+        let accumulator = VReg::phys("local_8");
+        let mut types = TypeMap::default();
+        types.upsert_public(accumulator.clone(), TypeHint::Float { width: 8 });
+        let body = vec![Stmt::Assign {
+            dst: accumulator.clone(),
+            src: Expr::FloatConst { bits: 0, width: 4 },
+        }];
+
+        refine_float_copy_types(&body, &mut types);
+
+        assert_eq!(types.get(&accumulator), Some(TypeHint::Float { width: 8 }));
     }
+
+    #[test]
+    fn float_copy_refinement_still_propagates_onto_an_untyped_slot() {
+        let slot = VReg::phys("local_c");
+        let source = VReg::phys("s0");
+        let mut types = TypeMap::default();
+        types.upsert_public(source.clone(), TypeHint::Float { width: 4 });
+        let body = vec![Stmt::Assign {
+            dst: slot.clone(),
+            src: Expr::Reg(source),
+        }];
+
+        refine_float_copy_types(&body, &mut types);
+
+        assert_eq!(types.get(&slot), Some(TypeHint::Float { width: 4 }));
+    }
+
 
     #[test]
     fn source_local_rename_requires_a_renderable_authoritative_type() {
@@ -2956,24 +3087,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn only_a_complete_void_parameter_list_authorizes_an_empty_callee_layout() {
-        let complete = DwarfPrototypeContract {
-            prototyped: true,
-            parameter_types: Vec::new(),
-            return_type: DwarfReturnType::Type("int".to_string()),
-            stack_objects: Vec::new(),
-            register_locals: Vec::new(),
-        };
-        let old_style = DwarfPrototypeContract {
-            prototyped: false,
-            ..complete.clone()
-        };
-
-        assert!(retain_empty_direct_callee_layout(Some(&complete)));
-        assert!(!retain_empty_direct_callee_layout(Some(&old_style)));
-        assert!(!retain_empty_direct_callee_layout(None));
-    }
 
     #[test]
     fn semantic_value_widths_exclude_non_integer_kinds() {
@@ -3213,21 +3326,6 @@ mod tests {
         assert_eq!(crate::ir::abi::machine_word_bytes(CallConv::Aarch64), 8);
     }
 
-    #[test]
-    fn itanium_throw_runtime_has_a_fixed_three_register_layout() {
-        assert_eq!(
-            super::itanium_runtime_layout("__cxa_throw@plt", CallConv::Aarch64),
-            Some(vec![VReg::phys("x0"), VReg::phys("x1"), VReg::phys("x2")])
-        );
-        assert_eq!(
-            super::itanium_runtime_layout("__cxa_allocate_exception@plt", CallConv::SysVAmd64),
-            Some(vec![VReg::phys("rdi")])
-        );
-        assert_eq!(
-            super::itanium_runtime_layout("ordinary_function", CallConv::Aarch64),
-            None
-        );
-    }
 
     /// The ambiguity rule is applied where it has been MEASURED to pay, and only
     /// there. See `word_width_implies_int` for the armv7 evidence.

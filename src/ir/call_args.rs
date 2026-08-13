@@ -611,7 +611,7 @@ fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
                 || expr_reads_storage(if_false, storage)
         }
         Expr::Un { src, .. } => expr_reads_storage(src, storage),
-        Expr::Cast { expr, .. } => expr_reads_storage(expr, storage),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expr_reads_storage(expr, storage),
         Expr::FunctionTableEntry { index, .. } => expr_reads_storage(index, storage),
         Expr::WideArithmetic { args, .. } => args
             .iter()
@@ -1729,7 +1729,20 @@ fn fold_one_call(
             // the same unversioned scratch register. Give the call result its
             // own identity before deleting the register-move setup; otherwise
             // a later `rax = ...` silently becomes the argument's definition.
-            let return_register = VReg::phys(return_reg(arch));
+            // The register the arguments would actually name. A call result is
+            // not always the BARE return register: once value numbering gives
+            // it an ordinary SSA version (`rax#1`), captured arguments read
+            // that spelling, and looking for the bare one found nothing — so
+            // this branch was skipped and `call_into_spill` kept none of its
+            // eight arguments. `is_return_register` tolerates the `#version`
+            // suffix, which is what makes the versioned spelling recognisable.
+            let return_register = match &body[i] {
+                Stmt::Call {
+                    dst: Some(VReg::Phys(name)),
+                    ..
+                } if crate::ir::abi::is_return_register(arch, name) => VReg::phys(name),
+                _ => VReg::phys(return_reg(arch)),
+            };
             // ABI arguments form a contiguous prefix. If the current call has
             // an explicit slot one, its unwritten slot zero is necessarily the
             // value left in the return register by this immediately preceding
@@ -1971,18 +1984,46 @@ fn resolve_captured_definition(
     src: &Expr,
     substitutable: bool,
 ) -> bool {
-    let feeds = found
+    resolve_captured_definition_in(found, stack_args, dst, src, substitutable, true)
+}
+
+/// As [`resolve_captured_definition`], with control over whether REGISTER slots
+/// participate in the substitution.
+///
+/// A versioned scratch name already has a distinct SSA identity, so a register
+/// slot may keep naming it — following the definition edge one step further
+/// changes which spelling the argument is rendered under for no gain, and
+/// `resolved_got_tail_jump_becomes_a_call_and_return` pins that. A STACK
+/// argument cannot: its capture is an expression that must stand on its own
+/// once the push is folded away, so the definition has to be substituted in or
+/// the argument is lost with it.
+fn resolve_captured_definition_in(
+    found: &mut [Option<(usize, Expr)>],
+    stack_args: &mut [Expr],
+    dst: &VReg,
+    src: &Expr,
+    substitutable: bool,
+    register_slots: bool,
+) -> bool {
+    let feeds_registers = found
         .iter()
         .flatten()
-        .any(|(_, captured)| reads_reg_in_expr(captured, dst))
-        || stack_args
-            .iter()
-            .any(|captured| reads_reg_in_expr(captured, dst));
+        .any(|(_, captured)| reads_reg_in_expr(captured, dst));
+    let feeds_stack = stack_args
+        .iter()
+        .any(|captured| reads_reg_in_expr(captured, dst));
+    let feeds = if register_slots {
+        feeds_registers || feeds_stack
+    } else {
+        feeds_stack
+    };
     if !feeds || !substitutable {
         return feeds;
     }
-    for (_, captured) in found.iter_mut().flatten() {
-        let _ = substitute_exact_reg(captured, dst, src);
+    if register_slots {
+        for (_, captured) in found.iter_mut().flatten() {
+            let _ = substitute_exact_reg(captured, dst, src);
+        }
     }
     for captured in stack_args {
         let _ = substitute_exact_reg(captured, dst, src);
@@ -2081,7 +2122,7 @@ fn collect_fixed_frame_reads(expr: &Expr, reads: &mut Vec<(String, i64, u8)>) ->
                 && collect_fixed_frame_reads(if_false, reads)
         }
         Expr::Un { src, .. } => collect_fixed_frame_reads(src, reads),
-        Expr::Cast { expr, .. } => collect_fixed_frame_reads(expr, reads),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => collect_fixed_frame_reads(expr, reads),
         Expr::WideArithmetic { args, .. } => args
             .iter()
             .all(|argument| collect_fixed_frame_reads(argument, reads)),
@@ -2173,7 +2214,7 @@ fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> b
             cond || if_true || if_false
         }
         Expr::Un { src, .. } => substitute_exact_reg(src, target, replacement),
-        Expr::Cast { expr, .. } => substitute_exact_reg(expr, target, replacement),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => substitute_exact_reg(expr, target, replacement),
         Expr::FunctionTableEntry { index, .. } => substitute_exact_reg(index, target, replacement),
         Expr::WideArithmetic { args, .. } => {
             let mut changed = false;
@@ -2211,7 +2252,7 @@ fn is_pure_arg_normalisation(expr: &Expr) -> bool {
                 && is_pure_arg_normalisation(if_false)
         }
         Expr::Un { src, .. } => is_pure_arg_normalisation(src),
-        Expr::Cast { expr, .. } => is_pure_arg_normalisation(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => is_pure_arg_normalisation(expr),
         Expr::WideArithmetic { op, args, .. } => {
             matches!(
                 op,
@@ -2899,7 +2940,7 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
             mark_arg_reads_in_expr(if_false, arch, read_between);
         }
         Expr::Un { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
-        Expr::Cast { expr, .. } => mark_arg_reads_in_expr(expr, arch, read_between),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => mark_arg_reads_in_expr(expr, arch, read_between),
         Expr::FunctionTableEntry { index, .. } => mark_arg_reads_in_expr(index, arch, read_between),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
@@ -3199,7 +3240,7 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
                 || reads_reg_in_expr(if_false, target)
         }
         Expr::Un { src, .. } => reads_reg_in_expr(src, target),
-        Expr::Cast { expr, .. } => reads_reg_in_expr(expr, target),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => reads_reg_in_expr(expr, target),
         Expr::FunctionTableEntry { index, .. } => reads_reg_in_expr(index, target),
         Expr::WideArithmetic { args, .. } => args
             .iter()

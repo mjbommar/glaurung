@@ -72,7 +72,7 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
                 expression(if_true, tm);
                 expression(if_false, tm);
             }
-            Expr::Cast { expr, .. } => expression(expr, tm),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expression(expr, tm),
             Expr::FunctionTableEntry { index, .. } => expression(index, tm),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {
@@ -244,7 +244,7 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
                 expression(if_true, tm);
                 expression(if_false, tm);
             }
-            Expr::Cast { expr, .. } => expression(expr, tm),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expression(expr, tm),
             Expr::FunctionTableEntry { index, .. } => expression(index, tm),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {
@@ -1126,7 +1126,7 @@ fn is_short_circuit_safe_value(expr: &Expr) -> bool {
         | Expr::StackAddr { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => true,
-        Expr::Cast { expr, .. } | Expr::Un { src: expr, .. } => is_short_circuit_safe_value(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } | Expr::Un { src: expr, .. } => is_short_circuit_safe_value(expr),
         Expr::Bin { op, lhs, rhs } => {
             *op != BinOp::Div
                 && is_short_circuit_safe_value(lhs)

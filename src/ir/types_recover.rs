@@ -926,6 +926,13 @@ fn scalar_float_intrinsic_name_width(name: &str) -> Option<u8> {
     match name {
         "addss" | "subss" | "mulss" | "divss" => Some(4),
         "addsd" | "subsd" | "mulsd" | "divsd" => Some(8),
+        // The x86 conversions, keyed by the width of what they PRODUCE — the
+        // question this function answers is "what type does the destination
+        // hold". `cvttss2si` and `cvttsd2si` produce an integer, so they are
+        // deliberately absent: claiming a float destination for them would
+        // type the very register the program then uses as an `int`.
+        "sqrtss" | "cvtsd2ss" | "cvtsi2ss.l" | "cvtsi2ss.q" => Some(4),
+        "sqrtsd" | "cvtss2sd" | "cvtsi2sd.l" | "cvtsi2sd.q" => Some(8),
         name if [
             "vmov.f32", "vneg.f32", "vadd.f32", "vsub.f32", "vmul.f32", "vdiv.f32",
         ]
@@ -975,14 +982,43 @@ fn scalar_float_intrinsic_width(
     matches!(width, 4 | 8).then_some(width)
 }
 
-fn arm_single_vfp_slot(register: &VReg) -> Option<usize> {
-    match register {
-        VReg::Phys(name) => name
+/// The float-argument-bank index a register denotes, or `None`.
+///
+/// Every convention this decompiler models that passes floats in registers does
+/// so from a bank that is SEPARATE from the integer one and allocated in its own
+/// contiguous order: AAPCS-VFP's `s0..s15`, and the x86-64 SysV / Windows x64
+/// SSE class's `xmm0..xmm7`. The bank index is not the source parameter
+/// position in a mixed signature — that is what [`mixed_entry_spill_order`]
+/// recovers — but it IS the order within the bank, which is what a pure-float
+/// signature needs and all a live-in scan can prove.
+fn float_argument_bank_slot(cc: crate::ir::call_args::CallConv, register: &VReg) -> Option<usize> {
+    use crate::ir::call_args::CallConv;
+    let VReg::Phys(name) = register else {
+        return None;
+    };
+    let base = crate::ir::abi::ssa_base(name);
+    match cc {
+        CallConv::Arm | CallConv::ArmHardFloat => base
             .strip_prefix('s')
             .and_then(|index| index.parse::<usize>().ok())
             .filter(|index| *index < 16),
-        _ => None,
+        // Eight SSE argument registers; `xmm8` and above are never parameters,
+        // so a scratch use of one must not be read as a ninth.
+        CallConv::SysVAmd64 | CallConv::Win64 => base
+            .strip_prefix("xmm")
+            .and_then(|index| index.parse::<usize>().ok())
+            .filter(|index| *index < 8),
+        CallConv::Aarch64 | CallConv::Cdecl32 => None,
     }
+}
+
+/// Whether `cc` passes floating-point arguments in a register bank of its own.
+fn has_float_argument_bank(cc: crate::ir::call_args::CallConv) -> bool {
+    use crate::ir::call_args::CallConv;
+    matches!(
+        cc,
+        CallConv::Arm | CallConv::ArmHardFloat | CallConv::SysVAmd64 | CallConv::Win64
+    )
 }
 
 /// Contiguous scalar VFP registers whose first touch is a read.
@@ -990,7 +1026,7 @@ fn arm_single_vfp_slot(register: &VReg) -> Option<usize> {
 /// A hard-float argument is a version-zero use.  A scratch/result register is
 /// defined before it is read.  Requiring a contiguous `s0..sN` prefix follows
 /// AAPCS allocation and rejects isolated callee-saved/scratch registers.
-fn arm_vfp_live_in_slots(lf: &LlirFunction) -> Vec<usize> {
+fn float_live_in_slots(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) -> Vec<usize> {
     let mut first_touch: HashMap<usize, bool> = HashMap::new();
     // `LlirFunction::blocks` is a CFG collection, not a guaranteed address or
     // dominance order. A join/return block can therefore precede the entry
@@ -1014,16 +1050,22 @@ fn arm_vfp_live_in_slots(lf: &LlirFunction) -> Vec<usize> {
             // parameter evidence comes from machine instructions before the
             // call; counting the conservative s0-s15 call footprint here
             // inflated every hard-float caller to sixteen parameters.
+            // `use_is_proven_input` supersedes the cruder "skip every call"
+            // guard: a call's argument registers are an ABI-wide may-read set,
+            // not evidence that those registers entered THIS function live.
+            // The slot lookup is the CONVENTION's, not ARM's: x86-64 SysV
+            // passes floats in `xmm0`-`xmm7`, a bank as separate from the
+            // integer one as AAPCS-VFP's `s0`-`s15`.
             for (use_index, used) in uses.into_iter().enumerate() {
                 if !use_is_proven_input(&instruction.op, use_index) {
                     continue;
                 }
-                if let Some(slot) = arm_single_vfp_slot(&used) {
+                if let Some(slot) = float_argument_bank_slot(cc, &used) {
                     first_touch.entry(slot).or_insert(true);
                 }
             }
             if let Some(definition) = definition {
-                if let Some(slot) = arm_single_vfp_slot(&definition) {
+                if let Some(slot) = float_argument_bank_slot(cc, &definition) {
                     first_touch.entry(slot).or_insert(false);
                 }
             }
@@ -1052,7 +1094,11 @@ fn arm_vfp_live_in_slots(lf: &LlirFunction) -> Vec<usize> {
 /// independently: instruction order alone could be register-class grouping,
 /// and offsets alone could be unrelated saves.  Every candidate must occur
 /// exactly once before a control-transfer boundary; otherwise this declines.
-fn arm_mixed_entry_spill_order(lf: &LlirFunction, candidates: &[VReg]) -> Option<Vec<VReg>> {
+fn mixed_entry_spill_order(
+    lf: &LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+    candidates: &[VReg],
+) -> Option<Vec<VReg>> {
     let entry = lf
         .blocks
         .iter()
@@ -1063,7 +1109,18 @@ fn arm_mixed_entry_spill_order(lf: &LlirFunction, candidates: &[VReg]) -> Option
         .cloned()
         .map(|register| (register.clone(), register))
         .collect();
-    let mut stack_bases = HashSet::from([VReg::phys("sp")]);
+    // The frame registers the entry spills are written through. AAPCS
+    // prologues address the frame from `sp`; an x86-64 `-O0` prologue has
+    // already established `rbp` by the time it spills its arguments, and a
+    // frame-pointer-omitted one spills through `rsp`.
+    let mut stack_bases: HashSet<VReg> = match cc {
+        crate::ir::call_args::CallConv::SysVAmd64
+        | crate::ir::call_args::CallConv::Win64
+        | crate::ir::call_args::CallConv::Cdecl32 => {
+            HashSet::from([VReg::phys("rbp"), VReg::phys("rsp")])
+        }
+        _ => HashSet::from([VReg::phys("sp")]),
+    };
     let mut spills: Vec<(i64, VReg)> = Vec::new();
 
     for instruction in &entry.instrs {
@@ -1717,6 +1774,22 @@ pub fn recover_prototype_with_arm_vfp_args(
                 let Some(value) = ssa.def_value(lf, addr) else {
                     continue;
                 };
+                // The whole-register view `lift_x86::synchronise_xmm_views`
+                // appends after a packed lane write is not a value this
+                // function produced — it is the lanes it just wrote, under
+                // their other name. Offering it as an output trial made every
+                // vectorised `void` function (clang -O2 `mem_copy`) report an
+                // unknown result where it had correctly reported none.
+                if matches!(
+                    &ins.op,
+                    Op::Concat {
+                        dst: VReg::Phys(name),
+                        hi: Value::Reg(VReg::Phys(hi)),
+                        lo: Value::Reg(VReg::Phys(lo)),
+                    } if hi == &format!("{name}_d1") && lo == &format!("{name}_d0")
+                ) {
+                    continue;
+                }
                 let guarded_call_result =
                     call_result_has_only_guard_uses(lf, ssa, &value, &definitions);
                 let is_direct =
@@ -1893,18 +1966,36 @@ pub fn recover_prototype_with_arm_vfp_args(
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
-    if arm_vfp_args
-        && matches!(
-            cc,
-            crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat
-        )
-    {
-        let vfp_parameters: Vec<RecoveredParameter> = arm_vfp_live_in_slots(lf)
+    // AAPCS-VFP has to be asked for (`arm_vfp_args`) because the same ARM
+    // convention enum covers soft-float builds, where `s0` is not a parameter
+    // at all. The x86-64 conventions have no such variant: SSE arguments are
+    // the only way a `float` or `double` is passed, so the bank is always live
+    // and needs no opt-in. Without this, every float parameter on x86-64 was an
+    // undefined live-in and the whole float corpus assigned `local_4 = var0`
+    // where `local_4 = arg0` belonged.
+    let float_bank_applies = has_float_argument_bank(cc)
+        && (arm_vfp_args
+            || matches!(
+                cc,
+                crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
+            ));
+    if float_bank_applies {
+        let float_register = |slot: usize| match cc {
+            crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64 => {
+                format!("xmm{slot}")
+            }
+            _ => format!("s{slot}"),
+        };
+        // Width four is a floor, not a claim: `s0` IS binary32 under AAPCS, and
+        // on x86-64 an `xmm` live-in is at least a `float`. A `double`
+        // parameter is corrected by the DWARF contract when one is available
+        // and by the arithmetic that consumes it otherwise.
+        let vfp_parameters: Vec<RecoveredParameter> = float_live_in_slots(lf, cc)
             .into_iter()
             .map(|slot| RecoveredParameter {
                 slot,
                 value: SsaValue {
-                    base: VReg::phys(format!("s{slot}")),
+                    base: VReg::phys(float_register(slot)),
                     version: 0,
                 },
                 hint: Some(TypeHint::Float { width: 4 }),
@@ -1913,7 +2004,7 @@ pub fn recover_prototype_with_arm_vfp_args(
 
         if parameters.is_empty() {
             // Pure-float signatures are ordered directly by their contiguous
-            // AAPCS VFP allocation, exactly as before.
+            // bank allocation, exactly as before.
             parameters = vfp_parameters;
         } else if !vfp_parameters.is_empty() {
             // The two AAPCS storage classes do not by themselves identify
@@ -1924,7 +2015,7 @@ pub fn recover_prototype_with_arm_vfp_args(
                 .chain(&vfp_parameters)
                 .map(|parameter| parameter.value.base.clone())
                 .collect();
-            if let Some(source_order) = arm_mixed_entry_spill_order(lf, &candidates) {
+            if let Some(source_order) = mixed_entry_spill_order(lf, cc, &candidates) {
                 let mut by_register: HashMap<VReg, RecoveredParameter> = parameters
                     .into_iter()
                     .chain(vfp_parameters)
@@ -4675,7 +4766,10 @@ int never_returns(void) { for (;;) {} }
             }],
         };
 
-        assert_eq!(arm_vfp_live_in_slots(&lf), vec![0]);
+        assert_eq!(
+            float_live_in_slots(&lf, crate::ir::call_args::CallConv::ArmHardFloat),
+            vec![0]
+        );
     }
 
     #[test]

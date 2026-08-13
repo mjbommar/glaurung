@@ -17,6 +17,7 @@ use crate::symbols::pdb::{
 pub fn register_debug_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let debug_mod = pyo3::types::PyModule::new(py, "debug")?;
     debug_mod.add_function(wrap_pyfunction!(extract_dwarf_types_path_py, &debug_mod)?)?;
+    debug_mod.add_function(wrap_pyfunction!(extract_dwarf_signatures_path_py, &debug_mod)?)?;
     debug_mod.add_function(wrap_pyfunction!(analyze_pe_pdb_cache_path_py, &debug_mod)?)?;
     m.add_submodule(&debug_mod)?;
     Ok(())
@@ -217,4 +218,102 @@ fn analyze_pe_pdb_cache_path_py<'py>(
     }
     d.set_item("public_symbols", public_symbols)?;
     Ok(d)
+}
+
+/// One [`crate::debug::dwarf_signatures::DwarfType`] as the harness's dict.
+///
+/// The shape is the one `tools/diff_decompile.py` already consumes, so the
+/// switch from its pyelftools reader to this one is a change of SOURCE and not
+/// of vocabulary: `{'k':'int','w':N,'s':bool}`, `{'k':'float','w':4|8}`,
+/// `{'k':'ptr','p':pointee,'const':bool}`, `{'k':'self_ptr','w':N}`,
+/// `{'k':'struct','w':bytes,'fields':[{'name':…,'off':N,'t':desc}]}`,
+/// `{'k':'void'}`.
+///
+/// An INTEGER pointee additionally carries the legacy `pw`/`ps` keys. Those
+/// mean "integer of this width/signedness" to every existing reader of a
+/// manifest override, so a float pointee deliberately does not claim them — it
+/// would be read as an integer buffer.
+fn _signature_type_to_dict<'py>(
+    py: Python<'py>,
+    ty: &crate::debug::dwarf_signatures::DwarfType,
+) -> PyResult<Bound<'py, PyDict>> {
+    use crate::debug::dwarf_signatures::DwarfType as T;
+
+    let d = PyDict::new(py);
+    match ty {
+        T::Void => {
+            d.set_item("k", "void")?;
+        }
+        T::Int { width, signed } => {
+            d.set_item("k", "int")?;
+            d.set_item("w", *width)?;
+            d.set_item("s", *signed)?;
+        }
+        T::Float { width } => {
+            d.set_item("k", "float")?;
+            d.set_item("w", *width)?;
+        }
+        T::SelfPointer { width } => {
+            d.set_item("k", "self_ptr")?;
+            d.set_item("w", *width)?;
+        }
+        T::Pointer { pointee, konst } => {
+            d.set_item("k", "ptr")?;
+            let inner = _signature_type_to_dict(py, pointee)?;
+            d.set_item("p", &inner)?;
+            d.set_item("const", *konst)?;
+            if let T::Int { width, signed } = pointee.as_ref() {
+                d.set_item("pw", *width)?;
+                d.set_item("ps", *signed)?;
+            }
+        }
+        T::Struct {
+            byte_size,
+            fields,
+            name,
+        } => {
+            d.set_item("k", "struct")?;
+            d.set_item("w", *byte_size)?;
+            // Emitted only when present, matching the reader this replaces: a
+            // by-value aggregate has no `name` key at all there.
+            if let Some(name) = name {
+                d.set_item("name", name)?;
+            }
+            let items = pyo3::types::PyList::empty(py);
+            for field in fields {
+                let entry = PyDict::new(py);
+                entry.set_item("name", &field.name)?;
+                entry.set_item("off", field.offset)?;
+                entry.set_item("t", _signature_type_to_dict(py, &field.ty)?)?;
+                items.append(entry)?;
+            }
+            d.set_item("fields", items)?;
+        }
+    }
+    Ok(d)
+}
+
+#[pyfunction]
+#[pyo3(name = "extract_dwarf_signatures_path")]
+fn extract_dwarf_signatures_path_py<'py>(
+    py: Python<'py>,
+    path: String,
+) -> PyResult<Vec<Bound<'py, PyDict>>> {
+    let bytes = std::fs::read(&path)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{}: {}", path, e)))?;
+    crate::debug::dwarf_signatures::extract_dwarf_signatures(&bytes)
+        .iter()
+        .map(|signature| {
+            let d = PyDict::new(py);
+            d.set_item("name", &signature.name)?;
+            d.set_item("va", signature.va)?;
+            let params = pyo3::types::PyList::empty(py);
+            for parameter in &signature.parameters {
+                params.append(_signature_type_to_dict(py, parameter)?)?;
+            }
+            d.set_item("params", params)?;
+            d.set_item("ret", _signature_type_to_dict(py, &signature.result)?)?;
+            Ok(d)
+        })
+        .collect()
 }

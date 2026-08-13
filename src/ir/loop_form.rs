@@ -894,7 +894,7 @@ fn stable_value_expr(expr: &Expr) -> bool {
             ..
         } => stable_value_expr(cond) && stable_value_expr(if_true) && stable_value_expr(if_false),
         Expr::Un { src, .. } => stable_value_expr(src),
-        Expr::Cast { expr, .. } => stable_value_expr(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => stable_value_expr(expr),
         Expr::WideArithmetic { op, args, .. } => {
             matches!(
                 op,
@@ -939,7 +939,7 @@ fn collect_expr_regs(expr: &Expr, out: &mut Vec<VReg>) {
             collect_expr_regs(if_false, out);
         }
         Expr::Un { src, .. } => collect_expr_regs(src, out),
-        Expr::Cast { expr, .. } => collect_expr_regs(expr, out),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => collect_expr_regs(expr, out),
         Expr::FunctionTableEntry { index, .. } => collect_expr_regs(index, out),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {

@@ -199,7 +199,7 @@ fn contains_reg(e: &Expr, target: &VReg) -> bool {
                 || contains_reg(if_false, target)
         }
         Expr::Un { src, .. } => contains_reg(src, target),
-        Expr::Cast { expr, .. } => contains_reg(expr, target),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => contains_reg(expr, target),
         Expr::FunctionTableEntry { index, .. } => contains_reg(index, target),
         Expr::WideArithmetic { args, .. } => {
             args.iter().any(|argument| contains_reg(argument, target))
@@ -245,7 +245,7 @@ fn reads_as_address_register(s: &Stmt, target: &VReg) -> bool {
                 ..
             } => in_expr(cond, target) || in_expr(if_true, target) || in_expr(if_false, target),
             Expr::Un { src, .. } => in_expr(src, target),
-            Expr::Cast { expr, .. } => in_expr(expr, target),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => in_expr(expr, target),
             Expr::FunctionTableEntry { index, .. } => in_expr(index, target),
             Expr::WideArithmetic { args, .. } => {
                 args.iter().any(|argument| in_expr(argument, target))
@@ -332,7 +332,7 @@ fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
                 + count_reg_uses(if_false, target)
         }
         Expr::Un { src, .. } => count_reg_uses(src, target),
-        Expr::Cast { expr, .. } => count_reg_uses(expr, target),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => count_reg_uses(expr, target),
         Expr::FunctionTableEntry { index, .. } => count_reg_uses(index, target),
         Expr::WideArithmetic { args, .. } => args
             .iter()
@@ -440,6 +440,10 @@ fn substitute_in_expr(e: &mut Expr, target: &VReg, with: &Expr) {
         Expr::Reg(r) if &r == target => with.clone(),
         Expr::Reg(r) => Expr::Reg(r),
         Expr::StackAddr { object, size } => Expr::StackAddr { object, size },
+        Expr::NumericConvert { from, to, mut expr } => {
+            substitute_in_expr(&mut expr, target, with);
+            Expr::NumericConvert { from, to, expr }
+        }
         Expr::Const(c) => Expr::Const(c),
         Expr::FloatConst { bits, width } => Expr::FloatConst { bits, width },
         Expr::Addr(a) => Expr::Addr(a),

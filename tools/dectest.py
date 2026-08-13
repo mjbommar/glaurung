@@ -60,9 +60,31 @@ if __name__ == "__main__":
 import fixture_harness as H
 import manifest as M  # ty: ignore[unresolved-import]
 
-COMPILERS = ("gcc", "clang")
+COMPILERS = ("gcc", "clang", "rustc")
 OPTS = ("O0", "O2")
-FULL_MATRIX_LANES = len(M.REQUIRED_FUNCTIONS) * len(COMPILERS) * len(OPTS)
+
+
+def fixture_lanes(fixture: str) -> list[tuple[str, str]]:
+    """The `(compiler, opt)` lanes that EXIST for one fixture.
+
+    Not the cross product. A Rust fixture is built by `rustc` and by nothing
+    else, so `170_rust_panic_unwind:clang:O2` names an object no toolchain
+    produces. `dectest` used to manufacture it anyway; the harness then read a
+    file that was not there and the lane died inside pyelftools with
+    `ELFError: Magic number does not match` — reported as an INFRASTRUCTURE
+    error, which blocks `--write-baseline` outright.
+    ``fixture_harness.matrix_for`` is the gate's own answer to this question, so
+    it is the one consulted here rather than a second list to fall out of step
+    with it.
+    """
+    source = next(
+        (path for path in FIXTURES.glob(f"src/{fixture}.*") if path.stem == fixture),
+        None,
+    )
+    return list(H.matrix_for(source)) if source is not None else list(H.REQUIRED_MATRIX)
+
+
+FULL_MATRIX_LANES = sum(len(fixture_lanes(name)) for name in M.REQUIRED_FUNCTIONS)
 
 
 class NoMatch(Exception):
@@ -111,8 +133,7 @@ def lane_function_universe() -> dict[tuple[str, str, str], list[str]]:
     universe = {
         (fixture, cc, opt): set(required)
         for fixture, required in M.REQUIRED_FUNCTIONS.items()
-        for cc in COMPILERS
-        for opt in OPTS
+        for cc, opt in fixture_lanes(fixture)
     }
     if BASELINE.is_file():
         observed = json.loads(BASELINE.read_text())
@@ -213,6 +234,11 @@ def resolve(raws: list[str]) -> list[Lane]:
         for fixture in fixtures:
             for cc in ccs:
                 for opt in opts:
+                    # A lane that does not exist for this fixture is skipped,
+                    # not matched: `*:clang:O2` must cover every C fixture
+                    # without claiming a clang build of a Rust one.
+                    if (fixture, cc, opt) not in lane_universe:
+                        continue
                     funcs = fnmatch.filter(lane_universe[(fixture, cc, opt)], sel.func)
                     if not funcs:
                         continue

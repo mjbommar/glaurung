@@ -470,7 +470,7 @@ fn count_register_uses(expression: &Expr, target: &VReg) -> Option<usize> {
         Expr::Cmp { lhs, rhs, .. } => {
             Some(count_register_uses(lhs, target)? + count_register_uses(rhs, target)?)
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => count_register_uses(src, target),
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => count_register_uses(src, target),
         Expr::WideArithmetic { args, .. } => args.iter().try_fold(0usize, |count, argument| {
             Some(count + count_register_uses(argument, target)?)
         }),
@@ -491,6 +491,11 @@ fn count_register_uses(expression: &Expr, target: &VReg) -> Option<usize> {
 fn substitute_call_result(expression: &Expr, target: &VReg, call: &Expr) -> Option<Expr> {
     match expression {
         Expr::Reg(register) if register == target => Some(call.clone()),
+        Expr::NumericConvert { from, to, expr } => Some(Expr::NumericConvert {
+            from: *from,
+            to: *to,
+            expr: Box::new(substitute_call_result(expr, target, call)?),
+        }),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }

@@ -460,7 +460,7 @@ fn resolve_expr(
             resolve_expr(if_true, tables, definitions);
             resolve_expr(if_false, tables, definitions);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
+        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => {
             resolve_expr(src, tables, definitions)
         }
         Expr::FunctionTableEntry { index, .. } => resolve_expr(index, tables, definitions),

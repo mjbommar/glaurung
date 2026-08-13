@@ -51,6 +51,14 @@ FIXTURE_FUZZ = 12
 #                          Optimisation changes the SHAPE, so a function can be
 #                          unexecutable at -O0 and correct at -O2; skipping it
 #                          everywhere would discard the lanes that do work.
+#                          NOTE the vocabulary: `fixture_harness` names a lane by
+#                          COMPILER (`gcc:O2`), while `tools/arch_roundtrip.py`
+#                          names it by ARCHITECTURE (`x86_64:O2`). An entry here
+#                          therefore never applies to a cross-architecture lane,
+#                          and an entry that a cross-architecture run must also
+#                          honour has to name both spellings. This is why the
+#                          only live entry made the x86-64 control lane disagree
+#                          with the gate and blocked `--write-baseline`.
 #   pointer_return_arg: int — compare a returned pointer by its element index
 #                          within this caller-owned pointer-argument buffer.
 #   non_length_args: [int] — human-reviewed scalar parameters beside a pointer
@@ -608,6 +616,993 @@ OVERRIDES: dict[tuple[str, str], dict] = {
         "len_args": [2],
         "extra_vectors": [[[0], [0, 0, 100, 0, 0], 5]],
     },
+    # --- domain expansion contracts (fixtures 31-80) ---
+    ("31_edit_distance", "edit_distance"): {
+        "arg_values": {1: [0, 1, 2, 5, 8], 3: [0, 1, 3, 8]},
+    },
+    ("31_edit_distance", "hamming_distance"): {
+        "arg_values": {2: [0, 1, 4, 8]},
+    },
+    ("32_longest_common_subsequence", "lcs_length"): {
+        "arg_values": {1: [0, 1, 4, 8], 3: [0, 2, 8]},
+    },
+    ("32_longest_common_subsequence", "lcs_recover"): {
+        "arg_values": {1: [0, 1, 4, 8], 3: [0, 2, 8]},
+    },
+    ("33_knapsack", "knapsack_best_value"): {
+        "arg_values": {2: [0, 1, 4, 8], 3: [0, 1, 8, 16]},
+    },
+    ("33_knapsack", "unbounded_knapsack"): {
+        "arg_values": {2: [0, 1, 4, 8], 3: [0, 1, 8, 16]},
+    },
+    ("34_coin_change", "min_coins"): {
+        "arg_values": {1: [0, 1, 3, 8], 2: [0, 1, 6, 11, 32]},
+        "extra_vectors": [[[1, 3, 4], 3, 6], [[2, 5], 2, 3]],
+    },
+    ("34_coin_change", "count_change"): {
+        "arg_values": {1: [0, 1, 3, 8], 2: [0, 1, 5, 32]},
+        "extra_vectors": [[[1, 2, 5], 3, 5]],
+    },
+    ("35_matrix_chain", "matrix_chain_cost"): {
+        "arg_values": {1: [1, 2, 3, 7]},
+        "extra_vectors": [[[10, 30, 5, 60], 3], [[5, 4, 6, 2, 7], 4]],
+    },
+    ("36_quicksort", "quicksort_i32"): {
+        "len_args": [1],
+    },
+    ("37_heapsort", "heapsort_i32"): {
+        "len_args": [1],
+    },
+    ("38_insertion_shell_sort", "insertion_sort_i32"): {
+        "len_args": [1],
+    },
+    ("38_insertion_shell_sort", "shell_sort_i32"): {
+        "len_args": [1],
+    },
+    ("39_counting_radix_sort", "counting_sort_u8"): {
+        "len_args": [1],
+    },
+    ("39_counting_radix_sort", "radix_sort_u32"): {
+        "len_args": [1],
+    },
+    ("40_quickselect", "quickselect_kth"): {
+        "len_args": [1, 2],
+    },
+    ("41_tokenizer", "tokenize"): {
+        "len_args": [1],
+        "extra_vectors": [[[97, 98, 32, 49, 50, 0, 0, 0], 5, [0], [0]]],
+    },
+    ("42_rpn_evaluator", "rpn_evaluate"): {
+        "len_args": [2],
+        "extra_vectors": [[[35, 35, 43], [2, 3, 0], 3, [0]]],
+    },
+    ("43_base64", "base64_encode"): {
+        "arg_values": {1: [0, 1, 2, 3, 6, 9, 12]},
+        "extra_vectors": [[[77, 97, 110], 3, [0]]],
+    },
+    ("43_base64", "base64_decode"): {
+        "arg_values": {1: [0, 4, 8, 12, 16]},
+        "extra_vectors": [[[84, 87, 70, 117], 4, [0]]],
+    },
+    ("44_run_length", "rle_encode"): {
+        "len_args": [1, 3],
+    },
+    ("44_run_length", "rle_decode"): {
+        "len_args": [1, 3],
+    },
+    ("45_string_algorithms", "parse_decimal"): {
+        "len_args": [1],
+        "extra_vectors": [[[45, 49, 50, 51], 4, [0]], [[57, 57, 57], 3, [0]]],
+    },
+    ("45_string_algorithms", "format_decimal"): {
+        "len_args": [2],
+        "extra_vectors": [[-4096, [0], 8], [0, [0], 4]],
+    },
+    ("45_string_algorithms", "is_palindrome"): {
+        "len_args": [1],
+    },
+    ("46_bitset", "bitset_population"): {
+        "arg_values": {1: [0, 1, 4, 8]},
+    },
+    ("46_bitset", "bitset_rank"): {
+        "arg_values": {1: [0, 1, 4, 8], 2: [0, 1, 31, 32, 64, 128, 256]},
+    },
+    ("46_bitset", "bitset_select"): {
+        "arg_values": {1: [0, 1, 4, 8], 2: [0, 1, 5, 31, 255]},
+    },
+    ("47_huffman", "huffman_code_lengths"): {
+        "arg_values": {1: [1, 2, 4, 8]},
+        "extra_vectors": [[[5, 9, 12, 13, 16, 45], 6, [0]]],
+    },
+    ("47_huffman", "kraft_sum_q16"): {
+        "arg_values": {1: [0, 1, 4, 8]},
+    },
+    ("48_gray_code", "gray_sequence"): {
+        "len_args": [1],
+    },
+    ("49_crc32", "crc32_bitwise"): {
+        "len_args": [1],
+        "extra_vectors": [[[49, 50, 51, 52, 53, 54, 55, 56, 57], 9]],
+    },
+    ("49_crc32", "crc32_table_driven"): {
+        "len_args": [1],
+        "extra_vectors": [[[49, 50, 51, 52, 53, 54, 55, 56, 57], 9]],
+    },
+    ("49_crc32", "internet_checksum"): {
+        "len_args": [1],
+    },
+    ("50_varint", "varint_encode"): {
+        "len_args": [2],
+    },
+    ("50_varint", "varint_decode"): {
+        "len_args": [1],
+        "extra_vectors": [[[172, 2], 2, [0]], [[1], 1, [0]]],
+    },
+    ("51_rc4", "rc4_keystream_checksum"): {
+        "arg_values": {1: [1, 2, 8, 16], 2: [0, 1, 16, 64]},
+        "extra_vectors": [[[75, 101, 121], 3, 16]],
+    },
+    ("52_hash_functions", "fnv1a_32"): {
+        "len_args": [1],
+    },
+    ("52_hash_functions", "djb2_xor"): {
+        "len_args": [1],
+    },
+    ("53_pseudorandom", "bounded_sample"): {
+        "len_args": [3],
+        "arg_values": {1: [1, 2, 10, 1024]},
+    },
+    ("54_sha256_block", "sha256_compress_block"): {
+        "ptr_len": 16,
+    },
+    ("55_modular_arithmetic", "extended_gcd"): {
+        "arg_values": {0: [0, 1, 12, 240, 100000], 1: [0, 1, 8, 46, 100000]},
+    },
+    ("56_sieve", "sieve_primes"): {
+        "len_args": [1],
+    },
+    ("56_sieve", "factorize"): {
+        "arg_values": {0: [2, 3, 12, 97, 360, 999983], 2: [1, 4, 8]},
+    },
+    ("57_bignum", "bignum_add"): {
+        "arg_values": {1: [0, 1, 4, 8], 3: [0, 1, 4, 8], 5: [1, 4, 8]},
+    },
+    ("57_bignum", "bignum_mul_small"): {
+        "arg_values": {1: [0, 1, 4, 8], 2: [0, 1, 7, 65535], 4: [1, 4, 8]},
+    },
+    ("58_rational", "rational_add"): {
+        "arg_values": {
+            0: [-7, 0, 1, 3, 10000],
+            1: [-4, 1, 2, 6, 10000],
+            2: [-3, 0, 1, 5, 10000],
+            3: [-2, 1, 3, 8, 10000],
+        },
+    },
+    ("58_rational", "rational_compare"): {
+        "arg_values": {
+            0: [-7, 0, 1, 3, 10000],
+            1: [-4, 1, 2, 6, 10000],
+            2: [-3, 0, 1, 5, 10000],
+            3: [-2, 1, 3, 8, 10000],
+        },
+    },
+    ("59_combinatorics", "pascal_row"): {
+        "arg_values": {0: [0, 1, 2, 5, 12], 2: [13]},
+    },
+    ("60_integer_matrix", "matrix_multiply"): {
+        "arg_values": {3: [0, 1, 2, 3, 4]},
+    },
+    ("60_integer_matrix", "matrix_transpose"): {
+        "arg_values": {2: [0, 1, 2, 3, 4]},
+    },
+    ("60_integer_matrix", "determinant3"): {
+        "ptr_len": 16,
+    },
+    ("62_gaussian_elimination", "gaussian_solve"): {
+        "ptr_len": 20,
+        "arg_values": {1: [1, 2, 3, 4]},
+        "extra_vectors": [[[131072, 65536, 196608, 65536, 262144, 327680], 2, [0, 0]]],
+    },
+    ("63_numerical_integration", "trapezoid_integrate"): {
+        "arg_values": {2: [1, 2, 4, 8, 32]},
+    },
+    ("63_numerical_integration", "simpson_integrate"): {
+        "arg_values": {2: [2, 4, 8, 32]},
+    },
+    ("64_root_finding", "bisection_sqrt"): {
+        "arg_values": {1: [1, 16, 256, 65536]},
+    },
+    ("64_root_finding", "newton_sqrt"): {
+        "arg_values": {1: [1, 16, 256, 65536]},
+    },
+    ("65_projectile_motion", "projectile_step"): {
+        "arg_values": {2: [1, 256, 6553, 65536], 3: [0, 1, 8, 32]},
+    },
+    ("66_orbital_step", "orbital_step"): {
+        "arg_values": {
+            4: [1, 65536, 655360],
+            5: [1, 256, 6553, 65536],
+            6: [0, 1, 4, 16],
+        },
+    },
+    ("68_thermodynamics", "newton_cooling"): {
+        "arg_values": {2: [0, 1024, 32768, 65536], 3: [0, 1, 8, 24]},
+    },
+    ("69_molar_mass", "molar_mass_centi"): {
+        "len_args": [1],
+        "extra_vectors": [
+            [[72, 50, 79], 3],
+            [[67, 54, 72, 49, 50, 79, 54], 7],
+            [[78, 97, 67, 108], 4],
+        ],
+    },
+    ("70_reaction_balance", "balance_reaction"): {
+        "arg_values": {4: [1, 2, 3, 4]},
+        "extra_vectors": [[[0, 2], [2, 0], [2, 1], [0, 0], 2, [0, 0, 0, 0]]],
+    },
+    ("71_compound_interest", "compound_balance"): {
+        "arg_values": {1: [0, 655, 6553, 65536], 2: [0, 1, 8, 32]},
+    },
+    ("71_compound_interest", "annuity_future_value"): {
+        "arg_values": {1: [0, 655, 6553, 65536], 2: [0, 1, 8, 32]},
+    },
+    ("72_loan_amortization", "amortization_schedule"): {
+        "arg_values": {1: [0, 655, 6553], 2: [1, 65536, 655360], 3: [0, 1, 6, 12]},
+    },
+    ("72_loan_amortization", "remaining_balance"): {
+        "arg_values": {1: [0, 655, 6553], 2: [1, 65536, 655360], 3: [0, 1, 6, 12]},
+    },
+    ("73_present_value", "net_present_value"): {
+        "arg_values": {1: [0, 1, 4, 12], 2: [0, 655, 6553, 65536]},
+    },
+    ("73_present_value", "internal_rate_of_return"): {
+        "arg_values": {1: [1, 4, 12]},
+    },
+    ("74_moving_statistics", "simple_moving_average"): {
+        "len_args": [1, 2],
+    },
+    ("74_moving_statistics", "exponential_moving_average"): {
+        "arg_values": {1: [1, 4, 16], 2: [0, 6553, 32768, 65536]},
+    },
+    ("74_moving_statistics", "population_variance"): {
+        "arg_values": {1: [1, 4, 16]},
+    },
+    ("75_order_book", "match_order"): {
+        "arg_values": {2: [0, 1, 4, 8], 4: [0, 1, 100, 1000000], 5: [0, 1]},
+        "extra_vectors": [[[100, 101, 102], [5, 5, 5], 3, 101, 7, 1, [0]]],
+    },
+    ("76_portfolio_rebalance", "maximum_drift"): {
+        "arg_values": {2: [1, 2, 4, 8]},
+    },
+    ("76_portfolio_rebalance", "rebalance_trades"): {
+        "arg_values": {2: [1, 2, 4, 8]},
+    },
+    ("77_lru_cache", "lru_access"): {
+        "arg_values": {2: [1, 2, 4, 8], 4: [0, 1, 100]},
+    },
+    ("78_ring_buffer", "ring_push"): {
+        "ptr_len": 16,
+    },
+    ("78_ring_buffer", "ring_pop"): {
+        "ptr_len": 16,
+    },
+    ("79_segment_tree", "segment_build"): {
+        "arg_values": {1: [0, 1, 4, 8]},
+    },
+    ("79_segment_tree", "segment_update"): {
+        "arg_values": {1: [0, 1, 4, 7]},
+    },
+    ("79_segment_tree", "segment_range_sum"): {
+        "arg_values": {1: [0, 1, 4], 2: [0, 2, 5, 8]},
+    },
+    ("80_trie", "trie_insert"): {
+        "ptr_len": 96,
+        "arg_values": {4: [0, 1, 3, 8]},
+        "extra_vectors": [[[0], [0], [1], [97, 98], 2]],
+    },
+    # --- packed and unaligned wire formats ---
+    # --- scale and complexity stress ---
+    # --- IEEE floating point (harness FP support landed with these) ---
+    ("172_float_double_widths", "accumulate_narrow"): {
+        "len_args": [1],
+    },
+    ("172_float_double_widths", "accumulate_wide"): {
+        "len_args": [1],
+        # The `gcc:O2` skip that used to live here worked around a HANG, not an
+        # unexecutable shape: `refine_float_copy_types` reported "the map did
+        # not take my hint" as progress, and this function — a `double`
+        # accumulator fed by `float` terms, the exact declined join — spun
+        # forever. That is fixed (it now decompiles in ~0.03s), so the skip is
+        # removed and the lane records its real verdict.
+        #
+        # Removing it also settles a disagreement between the two harnesses.
+        # `skip_exec_lanes` is keyed by `"<compiler>:<opt>"`, which is what
+        # `fixture_harness` passes; `tools/arch_roundtrip.py` passes
+        # `"<arch>:<opt>"`, so no entry here has ever applied to a
+        # cross-architecture lane. This function was the only live entry, and
+        # it made the x86-64 control lane (`x86_64:O2`, executed) disagree with
+        # the gate (`gcc:O2`, skipped) — which blocks `--write-baseline`.
+    },
+    ("174_float_compare_classify", "ordered_compare_binary32"): {
+        "extra_vectors": [[0.0, -0.0], [-0.0, 0.0], [1.0, -1.0]],
+    },
+    ("175_float_matrix_kernel", "dot_product_f32"): {
+        "len_args": [2],
+    },
+    ("175_float_matrix_kernel", "dot_product_f64"): {
+        "len_args": [2],
+    },
+    ("175_float_matrix_kernel", "sum_of_squares_f32"): {
+        "len_args": [1],
+    },
+    ("175_float_matrix_kernel", "scale_series_f32"): {
+        "len_args": [1],
+    },
+    # --- coverage-directed additions ------------------------------------
+    # 181: `terms` is a float buffer read at `count` elements.
+    ("181_compensated_summation", "naive_sum_f64"): {
+        "len_args": [1],
+    },
+    ("181_compensated_summation", "kahan_sum_f64"): {
+        "len_args": [1],
+    },
+    ("181_compensated_summation", "summation_disagrees"): {
+        "len_args": [1],
+    },
+    # 183: index-list walks over a caller-owned integer buffer. `key` is a
+    # value being searched for, never a bound.
+    ("183_sentinel_list_search", "find_by_key"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("183_sentinel_list_search", "find_terminated_by_sentinel"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("183_sentinel_list_search", "find_before_either_sentinel"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("183_sentinel_list_search", "find_byte_before_nul"): {
+        "ptr_elem": "cstr",
+        "non_length_args": [1],
+    },
+    ("183_sentinel_list_search", "length_to_nul"): {
+        "ptr_elem": "cstr",
+    },
+    # 184: every fill WRITES its buffer, so both the count and the probe index
+    # must be clamped into it.
+    ("184_rep_stos_widths", "fill_bytes_and_probe"): {
+        "ptr_elem": "u8",
+        "len_args": [1, 2],
+    },
+    ("184_rep_stos_widths", "fill_dwords_and_probe"): {
+        "len_args": [1, 2],
+    },
+    ("184_rep_stos_widths", "fill_qwords_and_probe"): {
+        # Eight-byte elements in a buffer measured in four-byte units: halve the
+        # element count so the fill stays inside the allocation.
+        "ptr_len": 8,
+        "len_args": [1, 2],
+    },
+    ("184_rep_stos_widths", "fill_then_patch_and_probe"): {
+        "ptr_elem": "u8",
+        "len_args": [1, 2],
+    },
+    ("184_rep_stos_widths", "zero_fixed_block_and_probe"): {
+        # The fixed block is FILL184_LIMIT dwords; the buffer must hold them.
+        "ptr_len": 16,
+        "non_length_args": [1],
+    },
+    # 186: the discriminant is a value, not a bound. Every real case constant
+    # is driven exactly, plus at least one value that falls off the end — the
+    # answer for THAT input is what separates a defaultless switch from one
+    # whose out-of-range edge was recovered as an invented default arm, and a
+    # random -64..63 would never reach the sparse cases at all.
+    ("186_defaultless_guarded_switch", "dense_no_default"): {
+        "extra_vectors": [[0], [1], [2], [3], [4], [5], [6], [7], [8], [-1]],
+    },
+    ("186_defaultless_guarded_switch", "sparse_no_default"): {
+        "extra_vectors": [[-1000], [0], [17], [4096], [1000000], [1], [-1], [INT_MAX]],
+    },
+    ("186_defaultless_guarded_switch", "fallthrough_no_default"): {
+        "extra_vectors": [[0], [1], [2], [3], [4], [5], [6], [7]],
+    },
+    ("186_defaultless_guarded_switch", "returning_arms_no_default"): {
+        "extra_vectors": [[10], [11], [12], [13], [9], [14], [0]],
+    },
+    ("186_defaultless_guarded_switch", "loop_switch_no_default"): {
+        "len_args": [1],
+    },
+    # 185: sub-word division. The boundary sweep supplies the extremes; these
+    # add the pairs where sign extension is the whole answer — a negative
+    # dividend with a positive divisor, and both `INT*_MIN / -1` guards.
+    ("185_subword_signed_division", "divide_signed_bytes"): {
+        "extra_vectors": [[-7, 2], [7, -2], [-128, -1], [-128, 1], [127, -1], [0, -3]],
+    },
+    ("185_subword_signed_division", "remainder_signed_bytes"): {
+        "extra_vectors": [[-7, 2], [7, -2], [-128, -1], [-128, 3], [127, -1], [0, -3]],
+    },
+    ("185_subword_signed_division", "divide_signed_shorts"): {
+        "extra_vectors": [
+            [-30000, 7],
+            [30000, -7],
+            [-32768, -1],
+            [-32768, 3],
+            [32767, -1],
+            [0, -3],
+        ],
+    },
+    ("185_subword_signed_division", "remainder_signed_shorts"): {
+        "extra_vectors": [
+            [-30000, 7],
+            [30000, -7],
+            [-32768, -1],
+            [-32768, 3],
+            [32767, -1],
+            [0, -3],
+        ],
+    },
+    ("185_subword_signed_division", "divide_short_by_seven"): {
+        "extra_vectors": [[-30000], [-7], [-6], [-1], [0], [6], [7], [32767]],
+    },
+    ("151_wide_branch_ladder", "big151_branch_ladder"): {
+        "len_args": [2],
+        "non_length_args": [0],
+    },
+    ("152_deep_nesting", "deep152_nested_loops"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("152_deep_nesting", "deep152_while_tower"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("153_many_live_locals", "spill153_live_set"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("153_many_live_locals", "spill153_static_web"): {
+        "len_args": [1],
+    },
+    ("154_wide_switch", "wide154_dense_effects"): {
+        "len_args": [2],
+        "non_length_args": [0],
+    },
+    ("155_long_dependency_chain", "chain155_buffered"): {
+        "len_args": [1],
+    },
+    ("161_packed_struct_layout", "pk161_member_offset"): {
+        "arg_values": {0: [0, 1, 2, 3, 4, 5, 6, 7]},
+    },
+    ("161_packed_struct_layout", "pk161_encode"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "non_length_args": [2, 3],
+    },
+    ("161_packed_struct_layout", "pk161_read_field"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "arg_values": {2: [0, 1, 2, 3]},
+        "extra_vectors": [[[52, 239, 190, 173, 222, 18, 0, 222], 8, 1]],
+    },
+    ("162_unaligned_memcpy_access", "ua162_load_native32"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1, 2],
+    },
+    ("162_unaligned_memcpy_access", "ua162_load_native16"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1, 2],
+    },
+    ("162_unaligned_memcpy_access", "ua162_load_be32"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1, 2],
+        "extra_vectors": [[[17, 34, 51, 68, 85, 102, 119, 136], 16, 1]],
+    },
+    ("162_unaligned_memcpy_access", "ua162_store_native32"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1, 2],
+        "non_length_args": [3],
+    },
+    ("162_unaligned_memcpy_access", "ua162_store_be32"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1, 2],
+        "non_length_args": [3],
+    },
+    ("162_unaligned_memcpy_access", "ua162_move_field32"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1, 2, 3],
+    },
+    ("162_unaligned_memcpy_access", "ua162_roundtrip"): {
+        "arg_values": {0: [-1, 0, 1, 2, 3, 5, 11, 12, 13, 16]},
+    },
+    ("163_wire_header_parser", "hdr163_validate"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "extra_vectors": [
+            [[90, 71, 2, 3, 222, 173, 190, 239, 0, 4, 65, 66, 67, 68, 0, 0], 14],
+            [[90, 71, 2, 3, 222, 173, 190, 239, 0, 4, 65, 66, 67, 68, 0, 0], 12],
+            [[90, 71, 2, 3, 222, 173, 190, 239, 0, 4, 65, 66, 67, 68, 0, 0], 6],
+        ],
+    },
+    ("163_wire_header_parser", "hdr163_stream_id"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "extra_vectors": [
+            [[90, 71, 2, 3, 222, 173, 190, 239, 0, 4, 65, 66, 67, 68, 0, 0], 14]
+        ],
+    },
+    ("163_wire_header_parser", "hdr163_payload_digest"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "extra_vectors": [
+            [[90, 71, 2, 3, 222, 173, 190, 239, 0, 4, 65, 66, 67, 68, 0, 0], 14]
+        ],
+    },
+    ("163_wire_header_parser", "hdr163_copy_payload"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1, 3],
+    },
+    ("163_wire_header_parser", "hdr163_build"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "arg_values": {3: [-1, 0, 1, 4, 6, 7, 100]},
+        "non_length_args": [2],
+    },
+    ("164_nested_tlv_walker", "tlv164_node_count"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "extra_vectors": [
+            [[129, 8, 1, 2, 170, 187, 130, 2, 3, 0, 4, 1, 119, 0, 0, 0], 13]
+        ],
+    },
+    ("164_nested_tlv_walker", "tlv164_max_depth"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "extra_vectors": [
+            [[129, 8, 1, 2, 170, 187, 130, 2, 3, 0, 4, 1, 119, 0, 0, 0], 13]
+        ],
+    },
+    ("164_nested_tlv_walker", "tlv164_leaf_sum"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "extra_vectors": [
+            [[129, 8, 1, 2, 170, 187, 130, 2, 3, 0, 4, 1, 119, 0, 0, 0], 13]
+        ],
+    },
+    ("164_nested_tlv_walker", "tlv164_find_type"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "arg_values": {2: [0, 1, 3, 4, 129, 130, 9, 255]},
+        "non_length_args": [2],
+        "extra_vectors": [
+            [[129, 8, 1, 2, 170, 187, 130, 2, 3, 0, 4, 1, 119, 0, 0, 0], 13, 3]
+        ],
+    },
+    ("164_nested_tlv_walker", "tlv164_encode_nested"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "arg_values": {3: [-1, 0, 1, 2, 4, 5, 100]},
+        "non_length_args": [2],
+    },
+    ("165_bitstream_reader", "bit165_read_bits"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "arg_values": {
+            2: [-1, 0, 1, 3, 7, 8, 15, 16, 31, 32, 35, 39, 40, 127, 128],
+            3: [-1, 0, 1, 3, 8, 13, 19, 24, 25, 32],
+        },
+        "extra_vectors": [
+            [[191, 255, 18, 52, 86, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 5, 3, 13],
+            [[191, 255, 18, 52, 86, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 5, 16, 19],
+            [[191, 255, 18, 52, 86, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 5, 0, 3],
+        ],
+    },
+    ("165_bitstream_reader", "bit165_cross_check"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "arg_values": {
+            2: [-1, 0, 1, 3, 7, 8, 15, 16, 31, 32, 35, 39, 40, 127, 128],
+            3: [-1, 0, 1, 3, 8, 13, 19, 24, 25, 32],
+        },
+        "extra_vectors": [
+            [[191, 255, 18, 52, 86, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 5, 3, 13]
+        ],
+    },
+    ("165_bitstream_reader", "bit165_read_sequence"): {
+        "ptr_len": 16,
+        "len_args": [1, 4],
+        "arg_values": {2: [-1, 0, 1, 3, 5, 8, 13, 24, 25, 64]},
+    },
+    ("165_bitstream_reader", "bit165_write_frame"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "non_length_args": [2, 3],
+    },
+    # --- ELF linking and dynamic-loading shapes ---
+    ("156_plt_and_got_calls", "plt_fold_calls"): {
+        "len_args": [1],
+    },
+    ("157_symbol_visibility", "vis_read_bias"): {
+        "arg_values": {0: [0, 1, 2, 3, -1]},
+    },
+    ("157_symbol_visibility", "vis_fold_with_biases"): {
+        "len_args": [1],
+    },
+    ("158_weak_symbols", "weak_dispatch"): {
+        "arg_values": {1: [0, 1]},
+    },
+    ("158_weak_symbols", "weak_fold"): {
+        "len_args": [1],
+    },
+    ("159_ifunc_resolver", "ifunc_fold"): {
+        "len_args": [1],
+    },
+    # 160: .init_array state cannot survive rebuilding ONE function. The rebuilt
+    # object has no constructor and no .init_array entry, so these globals hold
+    # their .data image values (-1 / 0 / zeroed) while the original holds the
+    # post-constructor values (1 / 12 / 10,20,30,40). Verified NOT a decompiler
+    # defect: a hand-written faithful recovery returning the true image value
+    # still fails (1 != -1, 12 != 0, 10 != 0). Contracts kept intact so they
+    # remain correct if skip_exec is ever removed.
+    ("160_init_and_fini", "initfini_ready"): {"skip_exec": True},
+    ("160_init_and_fini", "initfini_order"): {"skip_exec": True},
+    ("160_init_and_fini", "initfini_table"): {
+        "arg_values": {0: [-1, 0, 1, 2, 3, 4]},
+        "skip_exec": True,
+    },
+    ("160_init_and_fini", "initfini_fold"): {
+        "len_args": [1],
+        "skip_exec": True,
+    },
+    # --- obfuscated and adversarial constructs ---
+    ("145_control_flow_flattening", "flattened_accumulate"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("145_control_flow_flattening", "flattened_search"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("146_opaque_predicates", "opaque_loop_filter"): {
+        "len_args": [1],
+    },
+    ("146_opaque_predicates", "opaque_guarded_store"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("147_instruction_substitution", "substituted_checksum"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+    },
+    ("148_dispatch_obfuscation", "chained_table_walk"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("149_mba_expressions", "mba_mix_buffer"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("150_obfuscation_composite", "obfuscated_transform"): {
+        "len_args": [1],
+        "non_length_args": [2],
+    },
+    ("150_obfuscation_composite", "obfuscated_digest"): {
+        "ptr_len": 16,
+        "ptr_elem": "u8",
+        "len_args": [1],
+        "arg_values": {2: [0, 1, 2, 3, 4]},
+    },
+    # --- systems and ABI: TLS, atomics, non-local control, inline asm ---
+    ("140_thread_local_storage", "tls_indexed"): {
+        "arg_values": {0: [-1, 0, 1, 3, 4]},
+    },
+    ("141_atomics", "atomic_increment"): {
+        "arg_values": {1: [0, 1, 8, 16]},
+    },
+    ("142_nonlocal_control", "setjmp_returns_twice"): {
+        "arg_values": {0: [0, 1, 4, 8, 9]},
+    },
+    ("142_nonlocal_control", "longjmp_unwinds_frames"): {
+        "arg_values": {0: [0, 1, 4, 8], 1: [1, 3, 8]},
+    },
+    ("143_dynamic_frames", "alloca_dynamic_frame"): {
+        "arg_values": {0: [1, 2, 8, 16]},
+    },
+    ("143_dynamic_frames", "alloca_in_loop"): {
+        "arg_values": {0: [0, 1, 2, 4], 1: [1, 4, 8]},
+    },
+    ("143_dynamic_frames", "cleanup_on_every_exit"): {
+        "ptr_len": 4,
+        "arg_values": {1: [0, 1, 2, 3]},
+    },
+    ("144_inline_asm", "asm_memory_barrier"): {
+        "ptr_len": 4,
+    },
+    ("144_inline_asm", "builtin_bit_intrinsics"): {
+        "arg_values": {1: [0, 1, 2, 3]},
+    },
+    ("144_inline_asm", "builtin_overflow_checked"): {
+        "ptr_len": 4,
+    },
+    # --- C++ runtime shape contracts ---
+    ("136_cpp_exception_unwinding", "cpp_catch_by_type"): {
+        "arg_values": {0: [0, 1, 2, 3]},
+    },
+    ("136_cpp_exception_unwinding", "cpp_destructors_run_while_unwinding"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 2, 3]},
+    },
+    ("136_cpp_exception_unwinding", "cpp_rethrow_and_nest"): {
+        "arg_values": {0: [0, 1, 2, 3]},
+    },
+    ("137_cpp_templates", "cpp_template_int32"): {
+        "len_args": [1],
+    },
+    ("137_cpp_templates", "cpp_template_int16"): {
+        "len_args": [1],
+    },
+    ("137_cpp_templates", "cpp_template_uint8"): {
+        "len_args": [1],
+    },
+    ("137_cpp_templates", "cpp_template_predicate"): {
+        "len_args": [1],
+    },
+    ("137_cpp_templates", "cpp_template_nontype"): {
+        "len_args": [1],
+    },
+    ("139_cpp_object_lifetime", "cpp_destruction_order"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1]},
+    },
+    ("139_cpp_object_lifetime", "cpp_array_destruction"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 2, 3, 4]},
+    },
+    ("139_cpp_object_lifetime", "cpp_live_object_count"): {
+        "arg_values": {0: [-1, 0, 1, 2, 4]},
+    },
+    ("132_cpp_vtable_layout", "cpp_vtable_area"): {
+        "arg_values": {0: [0, 1, 2, 3]},
+    },
+    ("132_cpp_vtable_layout", "cpp_vtable_inherited_slot"): {
+        "arg_values": {0: [0, 1, 2, 3]},
+    },
+    ("134_cpp_virtual_inheritance", "cpp_virtual_final_overrider"): {
+        "arg_values": {0: [0, 1, 2, 3]},
+    },
+    ("135_cpp_rtti", "cpp_dynamic_cast_succeeds"): {
+        "arg_values": {0: [0, 1]},
+    },
+    ("135_cpp_rtti", "cpp_dynamic_cast_fails"): {
+        "arg_values": {0: [0, 1]},
+    },
+    ("135_cpp_rtti", "cpp_typeid_compare"): {
+        "arg_values": {0: [0, 1, 2, 3]},
+    },
+    ("138_cpp_operators", "cpp_operator_compound"): {
+        "arg_values": {1: [0, 1, 8, 16]},
+    },
+    # --- C language edge-case contracts (fixtures 82-131) ---
+    ("82_comma_operator", "comma_chain"): {
+        "ptr_len": 4,
+    },
+    ("82_comma_operator", "comma_in_for"): {
+        "arg_values": {0: [0, 1, 2, 7, 16]},
+    },
+    ("82_comma_operator", "comma_in_condition"): {
+        "arg_values": {0: [0, 1, 5, 32]},
+    },
+    ("83_ternary_chains", "nested_ternary_assignment"): {
+        "ptr_len": 4,
+    },
+    ("86_flexible_array_member", "flexible_sum"): {
+        "len_args": [1],
+        "extra_vectors": [[[3, 7, 10, 20, 30], 5]],
+    },
+    ("87_variable_length_array", "vla_reverse_sum"): {
+        "arg_values": {1: [1, 2, 5, 16]},
+    },
+    ("87_variable_length_array", "vla_two_dimensional"): {
+        "arg_values": {0: [1, 2, 4], 1: [1, 3, 4]},
+    },
+    ("88_restrict_pointers", "restrict_accumulate"): {
+        "len_args": [2],
+    },
+    ("88_restrict_pointers", "aliasing_accumulate"): {
+        "len_args": [2],
+    },
+    ("95_function_pointer_table", "dispatch_operation"): {
+        "arg_values": {0: [-1, 0, 1, 2, 3, 4, 5]},
+    },
+    ("95_function_pointer_table", "fold_operations"): {
+        "len_args": [1],
+    },
+    ("99_char_and_endianness", "load_big_endian"): {
+        "len_args": [1],
+    },
+    ("102_duffs_device", "duff_copy"): {
+        "arg_values": {2: [1, 2, 3, 7, 8, 9, 16]},
+    },
+    ("103_computed_goto", "threaded_interpreter"): {
+        "len_args": [1],
+    },
+    ("104_statement_expression", "single_evaluation"): {
+        "ptr_len": 4,
+    },
+    ("105_goto_ladder", "acquire_and_release"): {
+        "arg_values": {0: [0, 1, 2, 3, 4], 2: [4, 8, 16]},
+    },
+    ("107_short_circuit", "short_circuit_and"): {
+        "ptr_len": 4,
+    },
+    ("107_short_circuit", "short_circuit_or"): {
+        "ptr_len": 4,
+    },
+    ("107_short_circuit", "guarded_dereference"): {
+        "len_args": [1, 2],
+    },
+    ("108_multidimensional_arrays", "sum_true_2d"): {
+        "arg_values": {1: [0, 1, 2, 4]},
+    },
+    ("108_multidimensional_arrays", "sum_flat_with_stride"): {
+        "arg_values": {1: [0, 1, 2, 4], 2: [0, 1, 2, 4]},
+    },
+    ("108_multidimensional_arrays", "row_decay_span"): {
+        "arg_values": {1: [0, 1, 2, 3]},
+    },
+    ("109_subscript_commutativity", "reversed_subscript"): {
+        "len_args": [1, 2],
+    },
+    ("109_subscript_commutativity", "mixed_subscript_sum"): {
+        "len_args": [1],
+    },
+    ("109_subscript_commutativity", "negative_offset_from_interior"): {
+        "arg_values": {1: [2, 3, 8, 16]},
+    },
+    ("110_pointer_arithmetic", "element_distance"): {
+        "len_args": [1],
+    },
+    ("110_pointer_arithmetic", "byte_versus_element_step"): {
+        "len_args": [1],
+    },
+    ("110_pointer_arithmetic", "walk_until_sentinel"): {
+        "len_args": [1],
+    },
+    ("111_self_referential_struct", "link_and_sum"): {
+        "arg_values": {1: [0, 1, 4, 8]},
+    },
+    ("113_varargs", "variadic_three"): {
+        "arg_values": {0: [-3, 0, 7], 1: [-1, 2, 9], 2: [0, 4, 11]},
+    },
+    ("113_varargs", "variadic_weighted_four"): {
+        "arg_values": {0: [-3, 0, 7], 1: [-1, 2, 9], 2: [0, 4, 11], 3: [1, 5, 13]},
+    },
+    ("116_string_literals", "literal_index"): {
+        "arg_values": {0: [-1, 0, 3, 5, 6]},
+    },
+    ("116_string_literals", "count_matching"): {
+        "len_args": [1],
+    },
+    ("116_string_literals", "escape_sequences"): {
+        "arg_values": {0: [-1, 0, 1, 2, 3, 4, 5]},
+    },
+    ("117_modular_arithmetic", "modular_exponent_of_two"): {
+        "arg_values": {0: [-1, 0, 1, 16, 31, 32]},
+    },
+    ("118_bit_tricks", "xor_swap"): {
+        "ptr_len": 4,
+    },
+    ("119_branch_hints", "hinted_validation"): {
+        "len_args": [1],
+    },
+    ("119_branch_hints", "unhinted_validation"): {
+        "len_args": [1],
+    },
+    ("120_const_and_literals", "pointer_to_const_still_loads"): {
+        "len_args": [1],
+    },
+    ("120_const_and_literals", "const_array_of_pointers"): {
+        "arg_values": {0: [-1, 0, 1, 2, 3]},
+    },
+    ("121_dense_expression", "dense_fold"): {
+        "len_args": [1],
+    },
+    ("121_dense_expression", "chained_assignment"): {
+        "ptr_len": 4,
+    },
+    ("121_dense_expression", "conditional_lvalue_select"): {
+        "ptr_len": 4,
+    },
+    ("122_compound_assignment", "subscript_evaluated_once"): {
+        "len_args": [1],
+    },
+    ("122_compound_assignment", "narrow_compound_truncates"): {
+        "arg_values": {1: [0, 1, 5, 16]},
+    },
+    ("123_sizeof_semantics", "sizeof_probe_sets_flag"): {
+        "ptr_len": 4,
+    },
+    ("123_sizeof_semantics", "sizeof_does_not_evaluate"): {
+        "ptr_len": 4,
+    },
+    ("123_sizeof_semantics", "sizeof_after_decay"): {
+        "ptr_len": 8,
+    },
+    ("123_sizeof_semantics", "sizeof_vla_is_evaluated"): {
+        "arg_values": {0: [1, 2, 8, 16]},
+    },
+    ("124_loop_break_continue", "break_binds_to_switch"): {
+        "len_args": [1],
+    },
+    ("124_loop_break_continue", "nested_loop_early_exit"): {
+        "arg_values": {1: [0, 1, 2, 4], 2: [0, 1, 2, 4]},
+    },
+    ("124_loop_break_continue", "continue_in_do_while"): {
+        "arg_values": {0: [0, 1, 5, 16]},
+    },
+    ("125_loop_shapes", "while_zero_trips"): {
+        "arg_values": {0: [0, 1, 5, 16]},
+    },
+    ("125_loop_shapes", "do_while_always_once"): {
+        "arg_values": {0: [0, 1, 5, 16]},
+    },
+    ("125_loop_shapes", "infinite_with_internal_exit"): {
+        "arg_values": {0: [0, 1, 5, 16]},
+    },
+    ("125_loop_shapes", "decrementing_loop"): {
+        "arg_values": {0: [0, 1, 5, 16]},
+    },
+    ("126_x_macros", "opcode_weight"): {
+        "arg_values": {0: [-1, 0, 1, 2, 3, 4, 5]},
+    },
+    ("126_x_macros", "apply_opcode"): {
+        "arg_values": {0: [-1, 0, 1, 2, 3, 4, 5]},
+    },
+    ("127_inline_linkage", "inline_in_loop"): {
+        "len_args": [1],
+    },
+    ("128_qualifier_combinations", "pointer_to_const_walks"): {
+        "len_args": [1],
+    },
+    ("128_qualifier_combinations", "const_pointer_writes"): {
+        "len_args": [1],
+    },
+    ("131_obfuscated_composite", "obfuscated_pipeline"): {
+        "len_args": [1],
+    },
+    ("81_call_argument_identity", "two_decrements_one_scratch"): {
+        "arg_values": {1: [0, 1, 7], 2: [0, 2, 9], 3: [1, 4, 32]},
+        "extra_vectors": [[[5], 1, 2, 9]],
+    },
+    ("80_trie", "trie_lookup"): {
+        "ptr_len": 96,
+        "arg_values": {3: [0, 1, 3, 8]},
+    },
 }
 
 # Structural expectations for the structural lane (checked on decompiled text, not
@@ -642,7 +1637,15 @@ STRUCTURAL: dict[tuple[str, str], dict] = {
     ("10_cpp_runtime_shapes", "cpp_raii_guard"): {
         "memory_store": True
     },  # cleanup write
-    ("10_cpp_runtime_shapes", "cpp_exception"): {"nonempty": True},  # EH body recovered
+    ("10_cpp_runtime_shapes", "cpp_exception"): {"nonempty": True},
+    # Skipped for execution (see OVERRIDES): checked structurally instead.
+    ("160_init_and_fini", "initfini_ready"): {"nonempty": True},
+    ("160_init_and_fini", "initfini_order"): {"nonempty": True},
+    ("160_init_and_fini", "initfini_table"): {"nonempty": True},
+    ("160_init_and_fini", "initfini_fold"): {
+        "nonempty": True,
+        "for_loop": True,
+    },  # EH body recovered
 }
 
 
@@ -671,6 +1674,70 @@ CURRICULUM_PROJECTS: dict[str, list[str]] = {
     "28_euler_ode": ["euler_decay_q16"],
     "29_polynomial": ["polynomial_eval_mod32", "polynomial_derivative_mod32"],
     "30_finite_difference": ["heat_step_1d"],
+    # --- domain expansion: algorithms, numerics, and applied-science kernels ---
+    "31_edit_distance": ["edit_distance", "hamming_distance"],
+    "32_longest_common_subsequence": ["lcs_length", "lcs_recover"],
+    "33_knapsack": ["knapsack_best_value", "unbounded_knapsack"],
+    "34_coin_change": ["min_coins", "count_change"],
+    "35_matrix_chain": ["matrix_chain_cost"],
+    "36_quicksort": ["quicksort_i32"],
+    "37_heapsort": ["heapsort_i32"],
+    "38_insertion_shell_sort": ["insertion_sort_i32", "shell_sort_i32"],
+    "39_counting_radix_sort": ["counting_sort_u8", "radix_sort_u32"],
+    "40_quickselect": ["quickselect_kth", "median_of_three"],
+    "41_tokenizer": ["tokenize"],
+    "42_rpn_evaluator": ["rpn_evaluate"],
+    "43_base64": ["base64_encode", "base64_decode"],
+    "44_run_length": ["rle_encode", "rle_decode"],
+    "45_string_algorithms": ["parse_decimal", "format_decimal", "is_palindrome"],
+    "46_bitset": ["bitset_population", "bitset_rank", "bitset_select"],
+    "47_huffman": ["huffman_code_lengths", "kraft_sum_q16"],
+    "48_gray_code": [
+        "binary_to_gray",
+        "gray_to_binary",
+        "reverse_bits32",
+        "gray_sequence",
+    ],
+    "49_crc32": ["crc32_bitwise", "crc32_table_driven", "internet_checksum"],
+    "50_varint": ["zigzag_encode", "zigzag_decode", "varint_encode", "varint_decode"],
+    "51_rc4": ["rc4_keystream_checksum"],
+    "52_hash_functions": ["fnv1a_32", "djb2_xor", "murmur3_finalize"],
+    "53_pseudorandom": ["xorshift32", "lcg64_next_high", "bounded_sample"],
+    "54_sha256_block": ["sha256_compress_block"],
+    "55_modular_arithmetic": ["gcd_i32", "extended_gcd", "mod_pow"],
+    "56_sieve": ["sieve_primes", "factorize"],
+    "57_bignum": ["bignum_add", "bignum_mul_small"],
+    "58_rational": ["rational_add", "rational_compare"],
+    "59_combinatorics": ["pascal_row", "binomial", "catalan"],
+    "60_integer_matrix": ["matrix_multiply", "matrix_transpose", "determinant3"],
+    "61_fixed_point": ["fixed_multiply", "fixed_divide", "fixed_sqrt", "fixed_lerp"],
+    "62_gaussian_elimination": ["gaussian_solve"],
+    "63_numerical_integration": ["trapezoid_integrate", "simpson_integrate"],
+    "64_root_finding": ["bisection_sqrt", "newton_sqrt"],
+    "65_projectile_motion": ["projectile_step", "kinetic_energy"],
+    "66_orbital_step": ["orbital_step"],
+    "67_elastic_collision": [
+        "elastic_velocity_a",
+        "inelastic_velocity",
+        "momentum_residual",
+    ],
+    "68_thermodynamics": ["ideal_gas_pressure", "newton_cooling", "mixing_temperature"],
+    "69_molar_mass": ["molar_mass_centi"],
+    "70_reaction_balance": ["balance_reaction"],
+    "71_compound_interest": ["compound_balance", "annuity_future_value"],
+    "72_loan_amortization": ["amortization_schedule", "remaining_balance"],
+    "73_present_value": ["net_present_value", "internal_rate_of_return"],
+    "74_moving_statistics": [
+        "simple_moving_average",
+        "exponential_moving_average",
+        "population_variance",
+    ],
+    "75_order_book": ["match_order"],
+    "76_portfolio_rebalance": ["maximum_drift", "rebalance_trades"],
+    "77_lru_cache": ["lru_access"],
+    "78_ring_buffer": ["ring_push", "ring_pop", "ring_occupancy"],
+    "79_segment_tree": ["segment_build", "segment_update", "segment_range_sum"],
+    "80_trie": ["trie_insert", "trie_lookup"],
 }
 
 # Functions that MUST be present in each fixture (real names; a missing one fails
@@ -800,6 +1867,632 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "call_forward_result",
         "call_result_unused",
     ],
+    # --- ELF linking and dynamic-loading shapes ---
+    # --- scale and complexity stress ---
+    "151_wide_branch_ladder": [
+        "big151_branch_ladder",
+        "big151_flat_cascade",
+    ],
+    "152_deep_nesting": [
+        "deep152_conditional_tower",
+        "deep152_nested_loops",
+        "deep152_while_tower",
+    ],
+    "153_many_live_locals": [
+        "spill153_live_set",
+        "spill153_static_web",
+    ],
+    "154_wide_switch": [
+        "wide154_dense_effects",
+        "wide154_dense_switch",
+        "wide154_sparse_switch",
+    ],
+    "155_long_dependency_chain": [
+        "chain155_buffered",
+        "chain155_scalar",
+        "chain155_signed",
+    ],
+    # --- packed and unaligned wire formats ---
+    "161_packed_struct_layout": [
+        "pk161_encode",
+        "pk161_layout_delta",
+        "pk161_member_offset",
+        "pk161_read_field",
+        "pk161_roundtrip",
+    ],
+    "162_unaligned_memcpy_access": [
+        "ua162_load_be32",
+        "ua162_load_native16",
+        "ua162_load_native32",
+        "ua162_move_field32",
+        "ua162_roundtrip",
+        "ua162_store_be32",
+        "ua162_store_native32",
+    ],
+    "163_wire_header_parser": [
+        "hdr163_build",
+        "hdr163_copy_payload",
+        "hdr163_payload_digest",
+        "hdr163_stream_id",
+        "hdr163_validate",
+    ],
+    "164_nested_tlv_walker": [
+        "tlv164_encode_nested",
+        "tlv164_find_type",
+        "tlv164_leaf_sum",
+        "tlv164_max_depth",
+        "tlv164_node_count",
+    ],
+    "165_bitstream_reader": [
+        "bit165_cross_check",
+        "bit165_read_bits",
+        "bit165_read_sequence",
+        "bit165_roundtrip",
+        "bit165_write_frame",
+    ],
+    "156_plt_and_got_calls": [
+        "plt_call_interposable",
+        "plt_call_local",
+        "plt_call_via_address",
+        "plt_fold_calls",
+        "plt_paths_agree",
+        "plt_step_public",
+    ],
+    "157_symbol_visibility": [
+        "vis_call_both",
+        "vis_fold_with_biases",
+        "vis_public_helper",
+        "vis_read_bias",
+        "vis_set_biases",
+    ],
+    "158_weak_symbols": [
+        "weak_absent_probe",
+        "weak_defined_probe",
+        "weak_dispatch",
+        "weak_fold",
+        "weak_scale",
+    ],
+    "159_ifunc_resolver": [
+        "ifunc_call_double",
+        "ifunc_fold",
+        "ifunc_lazy_double",
+        "ifunc_matches_reference",
+        "ifunc_paths_agree",
+    ],
+    "160_init_and_fini": [
+        "initfini_fold",
+        "initfini_order",
+        "initfini_ready",
+        "initfini_table",
+        "initfini_witness",
+    ],
+    # --- obfuscation and adversarial shapes ---
+    "145_control_flow_flattening": [
+        "flattened_accumulate",
+        "flattened_classify",
+        "flattened_gcd",
+        "flattened_search",
+    ],
+    "146_opaque_predicates": [
+        "opaque_always_true",
+        "opaque_guarded_store",
+        "opaque_loop_filter",
+        "opaque_square_residue",
+        "opaque_two_way_join",
+        "opaque_volatile_select",
+    ],
+    "147_instruction_substitution": [
+        "substituted_add",
+        "substituted_bitops",
+        "substituted_checksum",
+        "substituted_multiply",
+        "substituted_negate",
+        "substituted_sub",
+    ],
+    "148_dispatch_obfuscation": [
+        "chained_table_walk",
+        "computed_index_dispatch",
+        "obfuscated_dispatch",
+        "permuted_switch",
+    ],
+    "149_mba_expressions": [
+        "mba_add_identities",
+        "mba_bit_population",
+        "mba_mix_buffer",
+        "mba_select",
+        "mba_sub_identity",
+        "mba_zero_polynomial",
+    ],
+    "150_obfuscation_composite": [
+        "obfuscated_digest",
+        "obfuscated_predicate_chain",
+        "obfuscated_transform",
+    ],
+    # --- systems and ABI shapes ---
+    "140_thread_local_storage": [
+        "tls_address_is_stable",
+        "tls_increment",
+        "tls_indexed",
+        "tls_versus_global",
+    ],
+    "141_atomics": [
+        "atomic_compare_exchange_loop",
+        "atomic_exchange_and_or",
+        "atomic_flag_round_trip",
+        "atomic_increment",
+    ],
+    "142_nonlocal_control": [
+        "longjmp_unwinds_frames",
+        "setjmp_returns_twice",
+    ],
+    "143_dynamic_frames": [
+        "alloca_dynamic_frame",
+        "alloca_in_loop",
+        "cleanup_on_every_exit",
+    ],
+    "144_inline_asm": [
+        "asm_add_via_constraints",
+        "asm_memory_barrier",
+        "builtin_bit_intrinsics",
+        "builtin_overflow_checked",
+    ],
+    # --- C++ runtime shapes: vtables, RTTI, unwinding, templates ---
+    "132_cpp_vtable_layout": [
+        "cpp_vtable_area",
+        "cpp_vtable_devirtualized",
+        "cpp_vtable_inherited_slot",
+    ],
+    "133_cpp_multiple_inheritance": [
+        "cpp_mi_cross_cast",
+        "cpp_mi_dispatch",
+        "cpp_mi_pointer_adjustment",
+    ],
+    "134_cpp_virtual_inheritance": [
+        "cpp_virtual_base_is_shared",
+        "cpp_virtual_base_offset",
+        "cpp_virtual_final_overrider",
+    ],
+    "135_cpp_rtti": [
+        "cpp_dynamic_cast_fails",
+        "cpp_dynamic_cast_succeeds",
+        "cpp_typeid_compare",
+    ],
+    "136_cpp_exception_unwinding": [
+        "cpp_catch_by_type",
+        "cpp_destructors_run_while_unwinding",
+        "cpp_rethrow_and_nest",
+    ],
+    "137_cpp_templates": [
+        "cpp_template_int16",
+        "cpp_template_int32",
+        "cpp_template_nontype",
+        "cpp_template_predicate",
+        "cpp_template_uint8",
+    ],
+    "138_cpp_operators": [
+        "cpp_operator_arithmetic",
+        "cpp_operator_compound",
+        "cpp_operator_conversion",
+    ],
+    "139_cpp_object_lifetime": [
+        "cpp_array_destruction",
+        "cpp_destruction_order",
+        "cpp_live_object_count",
+    ],
+    # --- C language edge cases, gotchas, and flexible constructs ---
+    "100_struct_layout": [
+        "layout_offsets",
+        "layout_size_delta",
+        "struct_assignment_copies",
+    ],
+    "101_static_locals": [
+        "counter_next",
+        "counter_reset",
+        "static_table_lookup",
+    ],
+    "102_duffs_device": [
+        "duff_copy",
+    ],
+    "103_computed_goto": [
+        "threaded_interpreter",
+    ],
+    "104_statement_expression": [
+        "single_evaluation",
+        "statement_expression_max",
+    ],
+    "105_goto_ladder": [
+        "acquire_and_release",
+    ],
+    "106_switch_shapes_dense_sparse": [
+        "dense_switch",
+        "hybrid_switch",
+        "sparse_switch",
+    ],
+    "107_short_circuit": [
+        "guarded_dereference",
+        "short_circuit_and",
+        "short_circuit_or",
+    ],
+    "108_multidimensional_arrays": [
+        "row_decay_span",
+        "sum_flat_with_stride",
+        "sum_true_2d",
+    ],
+    "109_subscript_commutativity": [
+        "mixed_subscript_sum",
+        "negative_offset_from_interior",
+        "reversed_subscript",
+    ],
+    "110_pointer_arithmetic": [
+        "byte_versus_element_step",
+        "element_distance",
+        "walk_until_sentinel",
+    ],
+    "111_self_referential_struct": [
+        "link_and_sum",
+    ],
+    "112_recursion_shapes": [
+        "mutual_parity",
+        "nontail_depth",
+        "recursion_entry",
+        "tail_countdown",
+    ],
+    "113_varargs": [
+        "variadic_none",
+        "variadic_three",
+        "variadic_weighted_four",
+    ],
+    "114_volatile_access": [
+        "nonvolatile_control",
+        "volatile_loop_bound",
+        "volatile_reads_are_not_merged",
+        "volatile_store_then_load",
+    ],
+    "115_enum_semantics": [
+        "enum_arithmetic",
+        "enum_sizes",
+        "enum_switch",
+    ],
+    "116_string_literals": [
+        "count_matching",
+        "escape_sequences",
+        "literal_index",
+        "literal_size_versus_length",
+    ],
+    "117_modular_arithmetic": [
+        "absolute_without_branch",
+        "maximum_plus_one",
+        "modular_exponent_of_two",
+        "signed_overflow_avoided",
+        "wraps_to_zero",
+    ],
+    "118_bit_tricks": [
+        "clear_lowest_set",
+        "is_power_of_two",
+        "isolate_lowest_set",
+        "round_up_to_power_of_two",
+        "sign_without_branch",
+        "xor_swap",
+    ],
+    "119_branch_hints": [
+        "hinted_validation",
+        "unhinted_validation",
+    ],
+    "120_const_and_literals": [
+        "const_array_of_pointers",
+        "pointer_to_const_still_loads",
+        "reads_foldable_constant",
+    ],
+    "121_dense_expression": [
+        "chained_assignment",
+        "conditional_lvalue_select",
+        "dense_fold",
+    ],
+    "122_compound_assignment": [
+        "mixed_compound_operators",
+        "narrow_compound_truncates",
+        "subscript_evaluated_once",
+    ],
+    "123_sizeof_semantics": [
+        "sizeof_after_decay",
+        "sizeof_array_versus_pointer",
+        "sizeof_does_not_evaluate",
+        "sizeof_probe_sets_flag",
+        "sizeof_vla_is_evaluated",
+    ],
+    "124_loop_break_continue": [
+        "break_binds_to_switch",
+        "continue_in_do_while",
+        "nested_loop_early_exit",
+    ],
+    "125_loop_shapes": [
+        "decrementing_loop",
+        "do_while_always_once",
+        "infinite_with_internal_exit",
+        "while_zero_trips",
+    ],
+    "126_x_macros": [
+        "apply_opcode",
+        "opcode_weight",
+        "total_weight",
+    ],
+    "127_inline_linkage": [
+        "inline_address_taken",
+        "inline_in_loop",
+        "inline_used_twice",
+    ],
+    "128_qualifier_combinations": [
+        "const_pointer_writes",
+        "pointer_to_const_walks",
+        "volatile_const_is_readable",
+    ],
+    "129_struct_by_value": [
+        "pass_large_by_value",
+        "pass_small_by_value",
+        "returns_small_struct_field",
+    ],
+    "130_bitpacked_codec": [
+        "codec_roundtrip",
+        "pack_fields",
+        "unpack_field",
+    ],
+    "131_obfuscated_composite": [
+        "nested_conditional_matrix",
+        "obfuscated_pipeline",
+    ],
+    "82_comma_operator": [
+        "comma_chain",
+        "comma_in_condition",
+        "comma_in_for",
+    ],
+    "83_ternary_chains": [
+        "classify_ladder",
+        "nested_ternary_assignment",
+        "ternary_mixed_types",
+    ],
+    "84_compound_literals": [
+        "compound_literal_argument",
+        "compound_literal_array",
+        "compound_literal_in_loop",
+    ],
+    "85_designated_initializers": [
+        "designated_array_out_of_order",
+        "designated_struct",
+        "designated_sum",
+    ],
+    "86_flexible_array_member": [
+        "flexible_header_size",
+        "flexible_sum",
+    ],
+    "87_variable_length_array": [
+        "vla_reverse_sum",
+        "vla_two_dimensional",
+    ],
+    "88_restrict_pointers": [
+        "aliasing_accumulate",
+        "restrict_accumulate",
+    ],
+    "89_bool_semantics": [
+        "bool_arithmetic",
+        "bool_normalizes",
+        "bool_roundtrip_mask",
+    ],
+    "90_bitfields": [
+        "bitfield_extract",
+        "bitfield_signed_range",
+        "bitfield_struct_size",
+    ],
+    "91_union_type_punning": [
+        "pun_byte_of_word",
+        "pun_halves_swapped",
+        "pun_is_little_endian",
+    ],
+    "92_anonymous_members": [
+        "anonymous_overlap_proof",
+        "anonymous_select",
+    ],
+    "93_generic_selection": [
+        "generic_dispatch",
+        "generic_tag_of_int16",
+        "generic_tag_of_int32",
+        "generic_tag_of_int64",
+    ],
+    "94_alignment": [
+        "alignment_of_padded",
+        "offset_of_payload",
+        "padded_roundtrip",
+        "size_difference",
+    ],
+    "95_function_pointer_table": [
+        "dispatch_operation",
+        "fold_operations",
+    ],
+    "96_integer_promotion": [
+        "promote_narrow_product",
+        "promote_then_truncate",
+        "short_promotion_sign",
+        "unsigned_conversion_rank",
+    ],
+    "97_signed_unsigned_pitfalls": [
+        "division_truncates_toward_zero",
+        "negative_compares_greater",
+        "size_like_loop",
+        "unsigned_subtraction_wraps",
+    ],
+    "98_shift_semantics": [
+        "arithmetic_right_shift",
+        "logical_right_shift",
+        "masked_left_shift",
+        "rotate_left",
+        "shift_wider_than_operand",
+    ],
+    "99_char_and_endianness": [
+        "byte_swap32",
+        "char_widening",
+        "load_big_endian",
+        "plain_char_is_signed",
+    ],
+    "81_call_argument_identity": [
+        "argument_sink",
+        "two_decrements_one_scratch",
+    ],
+    # --- Rust runtime shapes (rustc lanes; see matrix_for) ---
+    "166_rust_generics": [
+        "rust_generic_dispatch",
+        "rust_generic_fill",
+        "rust_generic_i16",
+        "rust_generic_i32",
+        "rust_generic_i8",
+        "rust_generic_max",
+        "rust_generic_mixed",
+    ],
+    "167_rust_trait_objects": [
+        "rust_dyn_apply",
+        "rust_dyn_boxed",
+        "rust_dyn_fill",
+        "rust_dyn_pass_fat",
+        "rust_dyn_pipeline",
+        "rust_dyn_two_slots",
+    ],
+    "168_rust_enum_niche": [
+        "rust_enum_by_value",
+        "rust_enum_discriminant",
+        "rust_enum_eval",
+        "rust_niche_sizes",
+        "rust_option_nested",
+        "rust_option_niche_fill",
+        "rust_option_nonzero",
+        "rust_option_ref",
+        "rust_option_ref_find",
+    ],
+    "169_rust_slices_bounds": [
+        "rust_slice_chunks",
+        "rust_slice_get",
+        "rust_slice_get_range",
+        "rust_slice_index",
+        "rust_slice_index_pair",
+        "rust_slice_iter_sum",
+        "rust_slice_rev_enumerate",
+        "rust_slice_reverse",
+        "rust_slice_split_zip",
+        "rust_slice_windows",
+        "rust_slice_write",
+    ],
+    "170_rust_panic_unwind": [
+        "rust_panic_assert",
+        "rust_panic_bounds",
+        "rust_panic_caught",
+        "rust_panic_expect",
+        "rust_panic_guarded_div",
+        "rust_panic_multi",
+        "rust_panic_unreachable",
+        "rust_panic_unwrap",
+    ],
+    "171_rust_overflow": [
+        "rust_cast_chain",
+        "rust_checked_add",
+        "rust_checked_div",
+        "rust_checked_mul",
+        "rust_checked_rem",
+        "rust_checked_shift",
+        "rust_overflow_matrix",
+        "rust_overflowing_add",
+        "rust_overflowing_mul",
+        "rust_saturating_add",
+        "rust_saturating_mul",
+        "rust_saturating_sub",
+        "rust_shift_family",
+        "rust_u32_bits",
+        "rust_u32_rotate",
+        "rust_u32_sub_family",
+        "rust_wrapping_add",
+        "rust_wrapping_mul",
+        "rust_wrapping_neg_abs",
+        "rust_wrapping_sub",
+    ],
+    # --- IEEE floating point ---
+    "172_float_double_widths": [
+        "accumulate_narrow",
+        "accumulate_wide",
+        "double_precision_horner",
+        "narrow_after_double_math",
+        "single_precision_horner",
+        "width_disagreement",
+    ],
+    "173_float_int_conversions": [
+        "int32_round_trip_delta",
+        "round_half_away_from_zero",
+        "truncate_double_to_i64",
+        "truncate_to_unsigned",
+        "truncate_toward_zero",
+        "widen_int_to_float",
+        "widen_long_to_double",
+    ],
+    "174_float_compare_classify": [
+        "absolute_binary32",
+        "classify_binary32",
+        "negate_binary32",
+        "ordered_compare_binary32",
+        "sign_bit_of_binary32",
+        "unordered_compare_flags",
+        "zero_sign_from_product",
+    ],
+    "175_float_matrix_kernel": [
+        "dot_product_f32",
+        "dot_product_f64",
+        "matrix2_determinant",
+        "matrix2_multiply",
+        "scale_series_f32",
+        "sum_of_squares_f32",
+    ],
+    # --- coverage-directed additions ------------------------------------
+    # Each of these six exists because a specific instruction or transform in
+    # the product had NO lane exercising it. The header comment in each source
+    # file names the target; that is the reason the fixture is here, and the
+    # reason to keep it even if it passes on the day it lands.
+    "181_compensated_summation": [
+        "compensation_of_step",
+        "difference_of_products",
+        "kahan_sum_f64",
+        "naive_sum_f64",
+        "summation_disagrees",
+    ],
+    "182_cold_and_part_splits": [
+        "always_reaches_the_cold_chunk",
+        "mix_with_outlinable_tail",
+        "scan_with_two_cold_exits",
+        "validate_with_cold_path",
+    ],
+    "183_sentinel_list_search": [
+        "find_before_either_sentinel",
+        "find_byte_before_nul",
+        "find_by_key",
+        "find_terminated_by_sentinel",
+        "length_to_nul",
+    ],
+    "184_rep_stos_widths": [
+        "fill_bytes_and_probe",
+        "fill_dwords_and_probe",
+        "fill_qwords_and_probe",
+        "fill_then_patch_and_probe",
+        "zero_fixed_block_and_probe",
+    ],
+    "185_subword_signed_division": [
+        "divide_short_by_seven",
+        "divide_signed_bytes",
+        "divide_signed_shorts",
+        "divide_unsigned_bytes",
+        "divide_unsigned_shorts",
+        "remainder_signed_bytes",
+        "remainder_signed_shorts",
+    ],
+    "186_defaultless_guarded_switch": [
+        "dense_no_default",
+        "fallthrough_no_default",
+        "loop_switch_no_default",
+        "returning_arms_no_default",
+        "sparse_no_default",
+    ],
     **CURRICULUM_PROJECTS,
 }
 
@@ -877,7 +2570,12 @@ def assert_fixtures_declared() -> None:
     """
     on_disk = {
         p.stem
-        for p in sorted(FIXTURE_SRC.glob("*.c")) + sorted(FIXTURE_SRC.glob("*.cpp"))
+        # .rs sources are declared in REQUIRED_FUNCTIONS but only enter the
+        # matrix when GLAURUNG_FIXTURE_RUST=1 (see fixture_harness.
+        # rust_lanes_enabled): rustc is not in the pinned toolchain image yet.
+        for p in sorted(FIXTURE_SRC.glob("*.c"))
+        + sorted(FIXTURE_SRC.glob("*.cpp"))
+        + sorted(FIXTURE_SRC.glob("*.rs"))
     }
     declared = set(REQUIRED_FUNCTIONS)
     if on_disk != declared:

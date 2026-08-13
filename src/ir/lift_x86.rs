@@ -1472,6 +1472,195 @@ fn scalar_float_binary_ops(instr: &iced_x86::Instruction, width: Width, mnemonic
     ops
 }
 
+/// Encoded source width, in bytes, of a `cvtsi2ss`/`cvtsi2sd`.
+///
+/// The mnemonic alone is ambiguous: the `l` and `q` forms differ only in REX.W,
+/// so the width has to come from the encoding. A memory source states its size
+/// directly; a register source states it through the register chosen.
+fn scalar_convert_source_bytes(instr: &iced_x86::Instruction) -> u8 {
+    match instr.op_kind(1) {
+        OpKind::Register => reg_size(instr.op_register(1)),
+        OpKind::Memory => instr.memory_size().size() as u8,
+        _ => 4,
+    }
+}
+
+/// Lift a scalar SSE conversion (`cvtss2sd`, `cvttsd2si`, `cvtsi2ss`, …).
+///
+/// One typed intrinsic per instruction, in the same shape
+/// [`scalar_float_binary_ops`] uses: the architectural destination and its
+/// width are recorded so SSA, liveness and ABI recovery stay sound, and the AST
+/// layer turns the mnemonic into the C cast it denotes.
+///
+/// The SOURCE width is carried by the mnemonic rather than by the operand, and
+/// deliberately so. `cvtsi2sdq %rax,%xmm0` and `cvtsi2sdl %eax,%xmm0` are
+/// different instructions with different source widths but the same
+/// destination, and reading the width off the destination would make a
+/// `long`-to-`double` conversion indistinguishable from an `int`-to-`double`
+/// one — which is exactly the disagreement `173_float_int_conversions`
+/// separates `widen_int_to_float` from `widen_long_to_double` to detect.
+fn scalar_convert_ops(
+    instr: &iced_x86::Instruction,
+    mnemonic: &str,
+    source_bytes: u8,
+    destination: Width,
+) -> Vec<Op> {
+    if instr.op_count() != 2 || instr.op_kind(0) != OpKind::Register {
+        return vec![Op::Unknown {
+            mnemonic: mnemonic.into(),
+        }];
+    }
+
+    let dst = VReg::phys(reg_name(instr.op_register(0)));
+    let mut ops = Vec::new();
+    let src = match instr.op_kind(1) {
+        OpKind::Register => Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+        OpKind::Memory => {
+            let tmp = VReg::Temp(13);
+            let mut addr = mem_op_of(instr);
+            addr.size = source_bytes;
+            ops.push(Op::Load {
+                dst: tmp.clone(),
+                addr,
+            });
+            Value::Reg(tmp)
+        }
+        _ => {
+            return vec![Op::Unknown {
+                mnemonic: mnemonic.into(),
+            }];
+        }
+    };
+    ops.push(Op::Intrinsic {
+        name: mnemonic.into(),
+        ins: vec![src],
+        outs: vec![(dst, destination)],
+        reads_mem: false,
+        writes_mem: false,
+    });
+    ops
+}
+
+/// The exact ZF/CF/PF/OF/SF/AF effect of `ucomiss`/`comiss`/`ucomisd`/`comisd`.
+///
+/// A float compare has FOUR outcomes where an integer compare has three, and
+/// the fourth is the whole point: when either operand is a NaN the operands are
+/// UNORDERED and x86 reports it by setting ZF, CF **and** PF at once. Lowering
+/// these as if they were `cmp` produces code that is right on ordered inputs
+/// and silently wrong on every NaN — which is what `174_float_compare_classify`
+/// exists to catch, and what makes `ordered_compare_binary32`'s fourth return
+/// value unreachable.
+///
+/// Intel SDM Vol. 2A (COMISS/UCOMISD), "Operation":
+///
+/// ```text
+///   UNORDERED:  ZF=1 PF=1 CF=1
+///   GREATER:    ZF=0 PF=0 CF=0
+///   LESS:       ZF=0 PF=0 CF=1
+///   EQUAL:      ZF=1 PF=0 CF=0
+///   OF, SF, AF := 0                (always)
+/// ```
+///
+/// so `PF = unordered`, `ZF = (a == b) | unordered`, `CF = (a < b) | unordered`.
+/// Unorderedness is spelled `(a != a) | (b != b)`, which is exactly "either is
+/// a NaN" for IEEE operands and needs no predicate the LLIR does not have.
+/// Every `jb`/`jae`/`je`/`jbe`/`ja`/`jp`/`jnp` and every `setcc` then falls out
+/// of the existing condition machinery unchanged — see [`materialize_condition`].
+///
+/// The comparison is `xmm1 <=> xmm2` in Intel operand order: `comiss %xmm0,%xmm1`
+/// in AT&T syntax asks whether `xmm1` is above `xmm0`.
+fn scalar_float_compare_ops(instr: &iced_x86::Instruction, width: Width, mnemonic: &str) -> Vec<Op> {
+    if instr.op_count() != 2 || instr.op_kind(0) != OpKind::Register {
+        return vec![Op::Unknown {
+            mnemonic: mnemonic.into(),
+        }];
+    }
+
+    let lhs = Value::Reg(VReg::phys(reg_name(instr.op_register(0))));
+    let mut ops = Vec::new();
+    let rhs = match instr.op_kind(1) {
+        OpKind::Register => Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+        OpKind::Memory => {
+            let tmp = VReg::Temp(14);
+            let mut addr = mem_op_of(instr);
+            addr.size = u8::try_from(width.bytes()).expect("scalar SSE width fits MemOp");
+            ops.push(Op::Load {
+                dst: tmp.clone(),
+                addr,
+            });
+            Value::Reg(tmp)
+        }
+        _ => {
+            return vec![Op::Unknown {
+                mnemonic: mnemonic.into(),
+            }];
+        }
+    };
+
+    let lhs_is_nan = VReg::Temp(15);
+    let rhs_is_nan = VReg::Temp(16);
+    let ordered_equal = VReg::Temp(17);
+    let ordered_below = VReg::Temp(18);
+    ops.extend([
+        Op::Cmp {
+            dst: lhs_is_nan.clone(),
+            op: CmpOp::Ne,
+            lhs: lhs.clone(),
+            rhs: lhs.clone(),
+        },
+        Op::Cmp {
+            dst: rhs_is_nan.clone(),
+            op: CmpOp::Ne,
+            lhs: rhs.clone(),
+            rhs: rhs.clone(),
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::P),
+            op: BinOp::Or,
+            lhs: Value::Reg(lhs_is_nan),
+            rhs: Value::Reg(rhs_is_nan),
+        },
+        Op::Cmp {
+            dst: ordered_equal.clone(),
+            op: CmpOp::Eq,
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::Z),
+            op: BinOp::Or,
+            lhs: Value::Reg(ordered_equal),
+            rhs: Value::Reg(VReg::Flag(Flag::P)),
+        },
+        Op::Cmp {
+            dst: ordered_below.clone(),
+            op: CmpOp::Slt,
+            lhs,
+            rhs,
+        },
+        Op::Bin {
+            dst: VReg::Flag(Flag::C),
+            op: BinOp::Or,
+            lhs: Value::Reg(ordered_below),
+            rhs: Value::Reg(VReg::Flag(Flag::P)),
+        },
+        // Cleared, not poisoned: the architecture states a value for these.
+        Op::Assign {
+            dst: VReg::Flag(Flag::O),
+            src: Value::Const(0),
+        },
+        Op::Assign {
+            dst: VReg::Flag(Flag::S),
+            src: Value::Const(0),
+        },
+        Op::Assign {
+            dst: VReg::Flag(Flag::A),
+            src: Value::Const(0),
+        },
+    ]);
+    ops
+}
+
 /// `shrd dst, src, imm8` / `shld dst, src, imm8` — the double-precision shift.
 ///
 /// This is how a 32-bit compiler shifts a 64-bit value held in a register pair:
@@ -1584,6 +1773,162 @@ fn double_shift_ops(instr: &iced_x86::Instruction, right: bool) -> Vec<Op> {
         &[Flag::C, Flag::O, Flag::Z, Flag::S, Flag::P, Flag::A],
         "x86 SHRD/SHLD define CF from the last bit shifted out and leave OF/AF \
          undefined above a count of one; none of that is modelled",
+    );
+    ops
+}
+
+/// `bsr`/`bsf` — the x86 bit scans, lowered through the same exact `clz`
+/// intrinsic the ARM lifter already emits (`ast::WideArithmetic::CountLeadingZeros`,
+/// rendered as `((unsigned)(x) == 0 ? BITS : __builtin_clz((unsigned)(x)))`).
+///
+/// Left unmodelled these were an `Op::Unknown`, so the destination was never
+/// defined and every consumer read an uninitialised local. `14_flag_effects`'s
+/// `shift_until_zero` is exactly that: gcc -O2 compiles the shift-count loop to
+/// `bsr %eax,%ecx ; add $1,%ecx ; test %eax,%eax ; cmovne %ecx,%eax`, and we
+/// recovered `return ((arg0 != 0) ? (var1 + 1) : arg0);` with `var1` undefined.
+///
+/// **The x86 zero case is NOT ARM's.** `clz` answers the operand width; `bsr`
+/// and `bsf` instead set ZF and leave the DESTINATION ALONE (AMD APM v3 states
+/// "the destination is left unchanged"; Intel SDM calls it undefined, which
+/// permits that). Modelling the scan as producing `32`, `0`, or `-1` would
+/// invent a value the machine never wrote — so the scan result is gated behind
+/// `Op::Ite` on `src != 0` with the destination's PRIOR value as the else arm.
+/// `Op::Ite` rather than `Op::CondAssign` for the reason `cmovcc` uses it: a
+/// `CondAssign` destination is a pure def, so dataflow cannot see that the old
+/// value is still read and DCE drops whatever produced it.
+///
+/// The two identities, both exact for a nonzero operand at `BITS` bits:
+///
+/// * `bsr(x) = (BITS - 1) - clz(x)` — the index of the highest set bit.
+/// * `bsf(x) = (BITS - 1) - clz(x ^ (x - 1))`. `x ^ (x - 1)` is the mask of the
+///   trailing zeros together with the lowest set bit, so its highest set bit IS
+///   the lowest set bit of `x`. It is used in preference to the more familiar
+///   `x & -x` because it never negates: the operands stay non-negative in the C
+///   this renders to.
+///
+/// Deliberately narrow:
+/// * only 32- and 64-bit operands. The 16-bit form exists, but the `clz`
+///   renderer spells a sub-64-bit count as `__builtin_clz((unsigned int)(x))` —
+///   a count over 32 bits — so `x86.clz.16` would answer 16 too high. That is
+///   the renderer's contract to widen, not this lifter's to guess around, and
+///   `ast.rs` is not this change's file.
+/// * only a register destination, which is the only form the ISA encodes.
+/// * every flag other than ZF is architecturally undefined and is poisoned
+///   rather than left stale.
+fn bit_scan_ops(instr: &iced_x86::Instruction, forward: bool) -> Vec<Op> {
+    let mnemonic = if forward { "bsf" } else { "bsr" };
+    let unsupported = || {
+        vec![Op::Unknown {
+            mnemonic: mnemonic.into(),
+        }]
+    };
+    if instr.op_count() != 2 || instr.op_kind(0) != OpKind::Register {
+        return unsupported();
+    }
+    let dst_name = reg_name(instr.op_register(0));
+    let Some(width) = phys_reg_width(&dst_name) else {
+        return unsupported();
+    };
+    if !matches!(width, Width::W32 | Width::W64) {
+        return unsupported();
+    }
+
+    let mut ops = Vec::new();
+    let source = match instr.op_kind(1) {
+        OpKind::Register => {
+            if phys_reg_width(&reg_name(instr.op_register(1))) != Some(width) {
+                return unsupported();
+            }
+            Value::Reg(VReg::phys(reg_name(instr.op_register(1))))
+        }
+        OpKind::Memory => {
+            if Width::from_bytes(instr.memory_size().size() as u16) != width {
+                return unsupported();
+            }
+            let loaded = VReg::Temp(0);
+            ops.push(Op::Load {
+                dst: loaded.clone(),
+                addr: mem_op_of(instr),
+            });
+            Value::Reg(loaded)
+        }
+        _ => return unsupported(),
+    };
+
+    // The word the scan actually observes. A canonicalised 32-bit register
+    // lives in a 64-bit parent whose high half this IR never clears, so both
+    // the zero test and the leading-zero count have to name the encoded width.
+    let operand = unsigned_cmp_value(source, width, VReg::Temp(1), &mut ops);
+    let bits = i64::from(width.bits());
+    let dst = VReg::phys(dst_name);
+
+    // ZF is the one flag x86 defines here, and it is defined for BOTH cases.
+    ops.push(Op::Cmp {
+        dst: VReg::Flag(Flag::Z),
+        op: CmpOp::Eq,
+        lhs: operand.clone(),
+        rhs: Value::Const(0),
+    });
+
+    // Move the bit being searched for into the most-significant position that
+    // `clz` reports on. For a backward scan it is already there.
+    let scanned = if forward {
+        let lowered = VReg::Temp(2);
+        ops.push(Op::Bin {
+            dst: lowered.clone(),
+            op: BinOp::Sub,
+            lhs: operand.clone(),
+            rhs: Value::Const(1),
+        });
+        ops.push(Op::Bin {
+            dst: lowered.clone(),
+            op: BinOp::Xor,
+            lhs: operand.clone(),
+            rhs: Value::Reg(lowered.clone()),
+        });
+        Value::Reg(lowered)
+    } else {
+        operand.clone()
+    };
+
+    let index = VReg::Temp(3);
+    ops.push(Op::Intrinsic {
+        name: format!("x86.clz.{bits}"),
+        ins: vec![scanned],
+        outs: vec![(index.clone(), width)],
+        reads_mem: false,
+        writes_mem: false,
+    });
+    ops.push(Op::Bin {
+        dst: index.clone(),
+        op: BinOp::Sub,
+        lhs: Value::Const(bits - 1),
+        rhs: Value::Reg(index.clone()),
+    });
+
+    // Intel leaves the destination UNDEFINED when the source is zero; only AMD
+    // documents it as preserved. Writing the count unconditionally is therefore
+    // architecturally faithful, and it is the only lowering that does not read
+    // the destination before defining it.
+    //
+    // That read is not a cosmetic difference. A self-referential `dst = src ? f(src) : dst`
+    // makes `dst` live-in on the zero path, and a live-in physical register in an
+    // argument slot is exactly what parameter recovery promotes to a parameter —
+    // so preserving a value no correct program can observe cost `shift_until_zero`
+    // three phantom parameters and left the emitted C reading an unassigned local
+    // in an arm the guard never selects.
+    //
+    // ZF above still distinguishes the two cases exactly, which is what callers
+    // actually branch on. The zero case yields `bits - 1 - clz(0)`, a defined and
+    // deterministic value where the architecture permits any.
+    ops.push(Op::Assign {
+        dst,
+        src: Value::Reg(index),
+    });
+    append_undef_flags(
+        &mut ops,
+        &[Flag::C, Flag::O, Flag::S, Flag::P, Flag::A],
+        "x86 BSR/BSF define ZF only; CF/OF/SF/PF/AF are architecturally undefined",
     );
     ops
 }
@@ -2067,6 +2412,20 @@ fn packed_qword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
                     dst: packed_dword_lane(dst, 3),
                     src: Value::Const(0),
                 },
+                // The SCALAR view of the same bits. An XMM register has two
+                // representations in this LLIR — the whole-register name that
+                // scalar float ops use, and four dword lanes that packed ops
+                // use — and nothing kept them in step. A `movsd` wrote the
+                // scalar name, a following `movq %xmm0,%rax` read the lanes,
+                // and the lanes still held whatever zeroed them: GCC's `-O0`
+                // float return (`movsd -8(%rbp),%xmm0 ; movq %xmm0,%rax ;
+                // movq %rax,%xmm0`) therefore returned a zero it had
+                // reconstructed from empty lanes. Defining both here, and
+                // reading the scalar below, closes the loop in both directions.
+                Op::Assign {
+                    dst: VReg::phys(reg_name(dst)),
+                    src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
+                },
             ]
         }
         (OpKind::Register, OpKind::Register)
@@ -2074,10 +2433,9 @@ fn packed_qword_move_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
                 && is_xmm_register(instr.op_register(1))
                 && phys_reg_width(&reg_name(instr.op_register(0))) == Some(Width::W64) =>
         {
-            vec![Op::Concat {
+            vec![Op::Assign {
                 dst: VReg::phys(reg_name(instr.op_register(0))),
-                hi: Value::Reg(packed_dword_lane(instr.op_register(1), 1)),
-                lo: Value::Reg(packed_dword_lane(instr.op_register(1), 0)),
+                src: Value::Reg(VReg::phys(reg_name(instr.op_register(1)))),
             }]
         }
         _ => vec![Op::Unknown {
@@ -2833,7 +3191,115 @@ fn movd_ops(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
 }
 
 /// Lift a single iced instruction into zero or more LLIR ops.
+/// Keep an XMM register's two representations in step.
+///
+/// This LLIR gives an XMM register two names: the whole-register spelling that
+/// the scalar float operations read and write, and four `_dN` dword lanes that
+/// the packed operations do. They describe the same bits and nothing kept them
+/// in agreement, so a value written through one view was invisible through the
+/// other. GCC's `-O0` float return is exactly that crossing —
+/// `movsd -8(%rbp),%xmm0 ; movq %xmm0,%rax ; movq %rax,%xmm0` — and it returned
+/// a zero reconstructed from lanes no scalar store had ever written.
+///
+/// So: after any instruction that writes lane 0 or 1, the whole-register name
+/// is redefined from those lanes. The converse direction is handled at the
+/// producers (a scalar write defines the scalar name, which the MOVQ and MOVD
+/// GPR forms now read), and the two together make the views interchangeable.
+///
+/// Only the low two lanes participate. They are the 64 bits every scalar
+/// operation and every GPR transfer can address; a 128-bit packed value has no
+/// scalar spelling to agree with in the first place.
+fn synchronise_xmm_views(ops: &mut Vec<Op>) {
+    use std::collections::BTreeSet;
+
+    let mut already_defined: BTreeSet<String> = BTreeSet::new();
+    let mut lane_written: BTreeSet<String> = BTreeSet::new();
+    for op in ops.iter() {
+        let (definition, _) = crate::ir::use_def::def_uses(op);
+        let Some(VReg::Phys(name)) = definition else {
+            continue;
+        };
+        match name.split_once("_d") {
+            Some((register, lane)) if matches!(lane, "0" | "1") => {
+                lane_written.insert(register.to_string());
+            }
+            Some(_) => {}
+            None => {
+                already_defined.insert(name);
+            }
+        }
+    }
+    for register in lane_written {
+        if already_defined.contains(&register) {
+            continue;
+        }
+        // A register-to-register packed move copies lane N from lane N of ONE
+        // source. Rebuilding the destination's scalar view from its own lanes
+        // would be correct only if those lanes had been written — and after a
+        // `movss`/`movsd` they have not, because a scalar store writes the
+        // whole-register name instead. Carrying the SOURCE's scalar view across
+        // propagates whichever representation is actually live, which is what
+        // `movaps %xmm1,%xmm2` in a float argument setup needs.
+        if let Some(source) = single_source_of_lane_copy(ops, &register) {
+            ops.push(Op::Assign {
+                dst: VReg::phys(&register),
+                src: Value::Reg(VReg::phys(source)),
+            });
+            continue;
+        }
+        ops.push(Op::Concat {
+            dst: VReg::phys(&register),
+            hi: Value::Reg(VReg::phys(format!("{register}_d1"))),
+            lo: Value::Reg(VReg::phys(format!("{register}_d0"))),
+        });
+    }
+}
+
+/// The single XMM register every written lane of `register` was copied from,
+/// when this instruction is a plain lane-for-lane register move.
+///
+/// `None` as soon as any lane is computed, loaded, zeroed, or taken from a
+/// different register — in those cases the destination's own lanes are the only
+/// description of its value and the concat above is the right bridge.
+fn single_source_of_lane_copy(ops: &[Op], register: &str) -> Option<String> {
+    let mut source: Option<String> = None;
+    let mut lanes_seen = 0usize;
+    for op in ops {
+        let Op::Assign {
+            dst: VReg::Phys(dst),
+            src: Value::Reg(VReg::Phys(src)),
+        } = op
+        else {
+            continue;
+        };
+        let Some((dst_register, dst_lane)) = dst.split_once("_d") else {
+            continue;
+        };
+        if dst_register != register {
+            continue;
+        }
+        let (src_register, src_lane) = src.split_once("_d")?;
+        if src_lane != dst_lane {
+            return None;
+        }
+        match &source {
+            Some(known) if known != src_register => return None,
+            Some(_) => {}
+            None => source = Some(src_register.to_string()),
+        }
+        lanes_seen += 1;
+    }
+    // Every lane the instruction wrote must be accounted for by the copy.
+    (lanes_seen == 4).then_some(source?)
+}
+
 fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
+    let mut ops = lift_one_inner(instr, bits);
+    synchronise_xmm_views(&mut ops);
+    ops
+}
+
+fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     let mnem = instr.mnemonic();
     // Binary ops: dst op= src (two-operand x86 form)
     if let Some(op) = bin_for(mnem) {
@@ -3616,6 +4082,24 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 scalar_move_ops(instr, 8, "movsd")
             }
         }
+        // The binary32 sibling of the MOVSD form above, and — at 307 of the
+        // float corpus's instructions — the single most common instruction the
+        // lifter did not model. Every `float` spill, reload and argument setup
+        // GCC and Clang emit is a MOVSS, so its absence turned all of
+        // `172_float_double_widths`, `173_float_int_conversions`,
+        // `174_float_compare_classify` and `175_float_matrix_kernel` into
+        // bodies of `/* asm: movss */` comments with the values never defined.
+        Mnemonic::Movss => scalar_move_ops(instr, 4, "movss"),
+        // MOVAPD/MOVUPD transport the same sixteen bytes as MOVAPS/MOVUPS; the
+        // only architectural difference is the element type the *processor*
+        // assumes, which does not change what moves.
+        Mnemonic::Movapd | Mnemonic::Movupd => packed_dword_move_ops(instr),
+        // As XORPS: the packed-double spelling of the same bitwise lanes, which
+        // is how Clang zeroes an `xmm` before a binary64 accumulation and how
+        // both compilers flip a sign bit.
+        Mnemonic::Xorpd => packed_dword_binary_ops(instr, BinOp::Xor),
+        Mnemonic::Andpd => packed_dword_binary_ops(instr, BinOp::And),
+        Mnemonic::Orps | Mnemonic::Orpd => packed_dword_binary_ops(instr, BinOp::Or),
         Mnemonic::Addss => scalar_float_binary_ops(instr, Width::W32, "addss"),
         Mnemonic::Subss => scalar_float_binary_ops(instr, Width::W32, "subss"),
         Mnemonic::Mulss => scalar_float_binary_ops(instr, Width::W32, "mulss"),
@@ -3624,6 +4108,57 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Subsd => scalar_float_binary_ops(instr, Width::W64, "subsd"),
         Mnemonic::Mulsd => scalar_float_binary_ops(instr, Width::W64, "mulsd"),
         Mnemonic::Divsd => scalar_float_binary_ops(instr, Width::W64, "divsd"),
+        Mnemonic::Sqrtss => scalar_convert_ops(instr, "sqrtss", 4, Width::W32),
+        Mnemonic::Sqrtsd => scalar_convert_ops(instr, "sqrtsd", 8, Width::W64),
+        // Float <-> float.
+        Mnemonic::Cvtss2sd => scalar_convert_ops(instr, "cvtss2sd", 4, Width::W64),
+        Mnemonic::Cvtsd2ss => scalar_convert_ops(instr, "cvtsd2ss", 8, Width::W32),
+        // Signed integer -> float. The source width is the encoded operand's,
+        // which iced reports even for the register form.
+        Mnemonic::Cvtsi2ss => {
+            let source_bytes = scalar_convert_source_bytes(instr);
+            scalar_convert_ops(
+                instr,
+                if source_bytes == 8 {
+                    "cvtsi2ss.q"
+                } else {
+                    "cvtsi2ss.l"
+                },
+                source_bytes,
+                Width::W32,
+            )
+        }
+        Mnemonic::Cvtsi2sd => {
+            let source_bytes = scalar_convert_source_bytes(instr);
+            scalar_convert_ops(
+                instr,
+                if source_bytes == 8 {
+                    "cvtsi2sd.q"
+                } else {
+                    "cvtsi2sd.l"
+                },
+                source_bytes,
+                Width::W64,
+            )
+        }
+        // Float -> signed integer, truncating toward zero (the `t` forms) and
+        // under the current rounding mode (the plain forms; the compilers only
+        // emit these for `lrint`-family calls). The DESTINATION width is a
+        // general-purpose register's, so it is read from the operand.
+        Mnemonic::Cvttss2si => {
+            scalar_convert_ops(instr, "cvttss2si", 4, operand_width(instr, 0))
+        }
+        Mnemonic::Cvttsd2si => {
+            scalar_convert_ops(instr, "cvttsd2si", 8, operand_width(instr, 0))
+        }
+        Mnemonic::Cvtss2si => scalar_convert_ops(instr, "cvtss2si", 4, operand_width(instr, 0)),
+        Mnemonic::Cvtsd2si => scalar_convert_ops(instr, "cvtsd2si", 8, operand_width(instr, 0)),
+        Mnemonic::Ucomiss | Mnemonic::Comiss => {
+            scalar_float_compare_ops(instr, Width::W32, "comiss")
+        }
+        Mnemonic::Ucomisd | Mnemonic::Comisd => {
+            scalar_float_compare_ops(instr, Width::W64, "comisd")
+        }
         Mnemonic::Cmp => {
             if instr.op_count() == 2 {
                 // Memory operands need to be loaded into a temp first so the
@@ -3937,6 +4472,8 @@ fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Sbb => sbb_ops(instr),
         Mnemonic::Shrd => double_shift_ops(instr, true),
         Mnemonic::Shld => double_shift_ops(instr, false),
+        Mnemonic::Bsr => bit_scan_ops(instr, false),
+        Mnemonic::Bsf => bit_scan_ops(instr, true),
         Mnemonic::Pxor => packed_dword_binary_ops(instr, BinOp::Xor),
         Mnemonic::Pand => packed_dword_binary_ops(instr, BinOp::And),
         Mnemonic::Pandn => packed_dword_and_not_ops(instr),
@@ -4352,6 +4889,39 @@ mod tests {
 
     fn lift64(bytes: &[u8]) -> Vec<LlirInstr> {
         lift_bytes(bytes, 0x1000, 64)
+    }
+
+    /// `lift64` without the whole-register views [`synchronise_xmm_views`]
+    /// appends after a lane write.
+    ///
+    /// Those are a separate contract — that the scalar and lane spellings of an
+    /// XMM register stay interchangeable — and they are asserted on their own in
+    /// `a_lane_write_also_defines_the_whole_register_view`. A packed test is
+    /// about what the LANES hold, so scoping the sync out keeps its op list
+    /// about the instruction under test instead of restating a global rule at
+    /// every call site.
+    fn lift64_lanes(bytes: &[u8]) -> Vec<LlirInstr> {
+        let lifted = lift64(bytes);
+        // Which registers this instruction wrote lanes of; the whole-register
+        // definition appended for those is the sync, whichever form it took.
+        let lane_written: std::collections::BTreeSet<String> = lifted
+            .iter()
+            .filter_map(|instruction| match crate::ir::use_def::def_uses(&instruction.op).0 {
+                Some(VReg::Phys(name)) => name
+                    .split_once("_d")
+                    .map(|(register, _)| register.to_string()),
+                _ => None,
+            })
+            .collect();
+        lifted
+            .into_iter()
+            .filter(|instruction| {
+                !matches!(
+                    crate::ir::use_def::def_uses(&instruction.op).0,
+                    Some(VReg::Phys(name)) if lane_written.contains(&name)
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -6373,6 +6943,219 @@ mod tests {
         );
     }
 
+    /// `bsr` is exactly `(BITS - 1) - clz(x)` for a nonzero operand, and gcc
+    /// -O2 emits it for `14_flag_effects:shift_until_zero`. The count must be
+    /// taken at the ENCODED width: `eax` canonicalises into a 64-bit `rax`
+    /// whose high half nothing clears, so `x86.clz.64` on the raw value would
+    /// answer 32 too high.
+    #[test]
+    fn bsr_is_the_encoded_width_minus_one_less_its_leading_zero_count() {
+        // 0f bd c8 -> bsr ecx, eax
+        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xbd, 0xc8], 0x1000, 32)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::ZExt { src: Value::Reg(VReg::Phys(n)), from: Width::W32, to: Width::W64, .. }
+                    if n == "eax"
+            )),
+            "the source must be read at its encoded 32 bits: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, outs, .. }
+                    if name == "x86.clz.32" && outs[0].1 == Width::W32
+            )),
+            "a 32-bit scan counts a 32-bit quantity's leading zeros: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    op: BinOp::Sub,
+                    lhs: Value::Const(31),
+                    ..
+                }
+            )),
+            "the highest set bit's index is 31 - clz: {ops:#?}"
+        );
+    }
+
+    /// True when the op names `ecx` (or its 64-bit parent) in any input
+    /// position. Used to prove the bit-scan lowering never reads its own
+    /// destination before writing it.
+    fn reads_ecx(op: &Op) -> bool {
+        fn is_ecx(v: &Value) -> bool {
+            matches!(v, Value::Reg(VReg::Phys(name)) if name == "ecx" || name == "rcx")
+        }
+        match op {
+            Op::Assign { src, .. } => is_ecx(src),
+            Op::Bin { lhs, rhs, .. } | Op::Cmp { lhs, rhs, .. } => is_ecx(lhs) || is_ecx(rhs),
+            Op::Un { src, .. } => is_ecx(src),
+            Op::Ite { cond, t, e, .. } => {
+                matches!(cond, VReg::Phys(name) if name == "ecx" || name == "rcx")
+                    || is_ecx(t)
+                    || is_ecx(e)
+            }
+            Op::Intrinsic { ins, .. } => ins.iter().any(is_ecx),
+            Op::Load { addr, .. } => addr
+                .base
+                .as_ref()
+                .is_some_and(|b| matches!(b, VReg::Phys(name) if name == "ecx" || name == "rcx")),
+            _ => false,
+        }
+    }
+
+    /// x86's zero case is NOT ARM's, but it is also not AMD's. Intel documents
+    /// the DESTINATION as UNDEFINED when the source is zero; only AMD promises
+    /// it is preserved. So the count is written unconditionally and ZF — the one
+    /// flag x86 defines here, and the one callers actually branch on — carries
+    /// the distinction.
+    ///
+    /// The property this test exists to hold is the absence of a self-read. A
+    /// `dst = src ? f(src) : dst` gate makes `dst` live-in on the zero path, and
+    /// a live-in physical register sitting in an argument slot is promoted to a
+    /// parameter — which gave `shift_until_zero(unsigned int)` four parameters
+    /// and an unassigned local read in an arm the guard never selects. Modelling
+    /// a value the architecture refuses to define is not worth that.
+    #[test]
+    fn a_zero_bit_scan_source_sets_zf_without_reading_the_destination() {
+        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xbd, 0xc8], 0x1000, 32)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Z),
+                    op: CmpOp::Eq,
+                    rhs: Value::Const(0),
+                    ..
+                }
+            )),
+            "ZF is the one flag x86 defines here: {ops:#?}"
+        );
+        // The destination is written, and nothing anywhere in the lowering reads
+        // it first — that read is what parameter recovery mistakes for an
+        // incoming argument.
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::Assign { dst: VReg::Phys(d), .. } if d == "ecx")),
+            "the count is written unconditionally: {ops:#?}"
+        );
+        let defined_at = ops
+            .iter()
+            .position(|op| matches!(op, Op::Assign { dst: VReg::Phys(d), .. } if d == "ecx"))
+            .expect("checked above");
+        assert!(
+            !ops[..defined_at].iter().any(reads_ecx),
+            "no read of the destination may precede its definition: {ops:#?}"
+        );
+        for flag in [Flag::C, Flag::O, Flag::S, Flag::P, Flag::A] {
+            assert!(
+                ops.iter()
+                    .any(|op| matches!(op, Op::Undef { dst, .. } if *dst == VReg::Flag(flag))),
+                "{flag:?} is architecturally undefined and must not go stale: {ops:#?}"
+            );
+        }
+    }
+
+    /// The memory source form loads once and scans the loaded word. Reading the
+    /// operand twice would be two loads of an address the ISA dereferences once.
+    #[test]
+    fn a_memory_source_bit_scan_loads_once() {
+        // 0f bd 08 -> bsr ecx, dword ptr [eax]
+        let ops: Vec<Op> = lift_bytes(&[0x0f, 0xbd, 0x08], 0x1000, 32)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(
+            ops.iter()
+                .filter(|op| matches!(op, Op::Load { .. }))
+                .count(),
+            1,
+            "exactly one dereference: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, .. } if name == "x86.clz.32"
+            )),
+            "the loaded word is what gets scanned: {ops:#?}"
+        );
+    }
+
+    /// `bsf` is the same shape over `x ^ (x - 1)`, whose highest set bit is the
+    /// LOWEST set bit of `x`. The identity avoids `x & -x` so that nothing in
+    /// the rendered C negates a value.
+    #[test]
+    fn bsf_scans_the_trailing_zero_mask_rather_than_negating() {
+        // 48 0f bc c8 -> bsf rcx, rax
+        let ops: Vec<Op> = lift64(&[0x48, 0x0f, 0xbc, 0xc8])
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    op: BinOp::Sub,
+                    rhs: Value::Const(1),
+                    ..
+                }
+            )),
+            "the mask starts from x - 1: {ops:#?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Op::Bin { op: BinOp::Xor, .. })),
+            "x ^ (x - 1) isolates the trailing-zero run: {ops:#?}"
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, Op::Un { op: UnOp::Neg, .. })),
+            "nothing may negate: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Intrinsic { name, .. } if name == "x86.clz.64"
+            )) && ops.iter().any(|op| matches!(
+                op,
+                Op::Bin {
+                    op: BinOp::Sub,
+                    lhs: Value::Const(63),
+                    ..
+                }
+            )),
+            "a 64-bit scan counts 64 bits and indexes from 63: {ops:#?}"
+        );
+    }
+
+    /// The 16-bit form is real, but `ast::write_wide_arithmetic_dec` spells any
+    /// sub-64-bit count as `__builtin_clz((unsigned int)(x))` — a count over 32
+    /// bits — so `x86.clz.16` would answer 16 too high. Refuse it rather than
+    /// emit a wrong index.
+    #[test]
+    fn a_sixteen_bit_bit_scan_is_not_guessed() {
+        // 66 0f bd c8 -> bsr cx, ax
+        let ops: Vec<Op> = lift64(&[0x66, 0x0f, 0xbd, 0xc8])
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(
+            ops,
+            vec![Op::Unknown {
+                mnemonic: "bsr".into()
+            }],
+            "got: {ops:#?}"
+        );
+    }
+
     #[test]
     fn sbb_reg_reg_lifts_to_sub_with_carry_dependency() {
         let ops = lift64(&[0x48, 0x19, 0xc8]);
@@ -6626,7 +7409,7 @@ mod tests {
     #[test]
     fn movaps_reg_reg_lifts_to_assign() {
         // MOVAPS xmm0, xmm1  (0f 28 c1)
-        let ops = lift64(&[0x0f, 0x28, 0xc1]);
+        let ops = lift64_lanes(&[0x0f, 0x28, 0xc1]);
         assert_eq!(ops.len(), 4, "got: {ops:#?}");
         for lane in 0..4 {
             assert!(ops.iter().any(|instruction| matches!(
@@ -6643,7 +7426,7 @@ mod tests {
     fn movdqu_reg_mem_lifts_to_16_byte_load() {
         // MOVDQU xmm0, [rdi]   (f3 0f 6f 07). Packed dword users need four
         // explicit scalar lanes, not one opaque 128-bit scalar.
-        let ops = lift64(&[0xf3, 0x0f, 0x6f, 0x07]);
+        let ops = lift64_lanes(&[0xf3, 0x0f, 0x6f, 0x07]);
         assert_eq!(ops.len(), 4, "got: {ops:#?}");
         for (lane, instruction) in ops.iter().enumerate() {
             match &instruction.op {
@@ -6752,7 +7535,7 @@ mod tests {
 
     #[test]
     fn packed_dword_immediate_shift_obeys_large_count_zeroing_and_rejects_mmx() {
-        let xmm_ops = lift64(&[0x66, 0x0f, 0x72, 0xf2, 0x20]); // pslld xmm2,32
+        let xmm_ops = lift64_lanes(&[0x66, 0x0f, 0x72, 0xf2, 0x20]); // pslld xmm2,32
         assert_eq!(xmm_ops.len(), 4, "got: {xmm_ops:#?}");
         for (lane, instruction) in xmm_ops.iter().enumerate() {
             assert!(matches!(
@@ -6764,7 +7547,7 @@ mod tests {
             ));
         }
 
-        let mmx_ops = lift64(&[0x0f, 0x72, 0xf2, 0x05]); // pslld mm2,5
+        let mmx_ops = lift64_lanes(&[0x0f, 0x72, 0xf2, 0x05]); // pslld mm2,5
         assert_eq!(mmx_ops.len(), 1, "got: {mmx_ops:#?}");
         assert!(matches!(
             &mmx_ops[0].op,
@@ -6774,7 +7557,7 @@ mod tests {
 
     #[test]
     fn packed_dword_logical_right_shift_preserves_all_lanes_and_zeroes_large_counts() {
-        let ops = lift64(&[0x66, 0x0f, 0x72, 0xd4, 0x1f]); // psrld xmm4,31
+        let ops = lift64_lanes(&[0x66, 0x0f, 0x72, 0xd4, 0x1f]); // psrld xmm4,31
         assert_eq!(ops.len(), 8);
         for lane in 0..4 {
             assert!(matches!(
@@ -6797,7 +7580,7 @@ mod tests {
             ));
         }
 
-        let large = lift64(&[0x66, 0x0f, 0x72, 0xd4, 0x20]); // psrld xmm4,32
+        let large = lift64_lanes(&[0x66, 0x0f, 0x72, 0xd4, 0x20]); // psrld xmm4,32
         assert!(large.iter().all(|instruction| matches!(
             &instruction.op,
             Op::Assign {
@@ -6809,7 +7592,7 @@ mod tests {
 
     #[test]
     fn packed_self_equality_materializes_ones_without_reading_old_lanes() {
-        let ops = lift64(&[0x66, 0x0f, 0x76, 0xe4]); // pcmpeqd xmm4,xmm4
+        let ops = lift64_lanes(&[0x66, 0x0f, 0x76, 0xe4]); // pcmpeqd xmm4,xmm4
         assert_eq!(ops.len(), 4);
         for (lane, instruction) in ops.iter().enumerate() {
             assert!(matches!(
@@ -6824,7 +7607,7 @@ mod tests {
 
     #[test]
     fn packed_dword_arithmetic_shift_builds_sign_masks_and_saturates_count() {
-        let ops = lift64(&[
+        let ops = lift64_lanes(&[
             0x66, 0x0f, 0x72, 0xe2, 0x1f, // psrad xmm2,31
             0x66, 0x0f, 0x72, 0xe1, 0xff, // psrad xmm1,255
         ]);
@@ -7018,7 +7801,7 @@ mod tests {
         // `12_loop_rotation:skip_odd_sum`. PUNPCKLDQ constructs two 64-bit
         // masks, PADDQ horizontally adds the two qwords, and MOVQ exposes the
         // complete low qword as the function result.
-        let ops = lift64(&[
+        let ops = lift64_lanes(&[
             0x66, 0x0f, 0x62, 0xd8, // punpckldq xmm3,xmm0
             0x66, 0x0f, 0xd4, 0xc3, // paddq xmm0,xmm3
             0x66, 0x48, 0x0f, 0x7e, 0xc0, // movq rax,xmm0
@@ -7059,14 +7842,72 @@ mod tests {
             2,
             "both high dwords must retain carry from the complete qword sums: {ops:#?}"
         );
+        // MOVQ reads the WHOLE-REGISTER view now, not the two lanes directly.
+        // The reduction still reaches `rax` through exactly those lanes — the
+        // second assertion below is the link — but routing it through the
+        // scalar spelling is what lets a scalar float producer (`movsd`) and a
+        // packed producer (`paddq`) both be visible to the same MOVQ.
         assert!(ops.iter().any(|instruction| matches!(
             &instruction.op,
-            Op::Concat {
+            Op::Assign {
                 dst: VReg::Phys(dst),
-                hi: Value::Reg(VReg::Phys(hi)),
-                lo: Value::Reg(VReg::Phys(lo)),
-            } if dst == "rax" && hi == "xmm0_d1" && lo == "xmm0_d0"
+                src: Value::Reg(VReg::Phys(src)),
+            } if dst == "rax" && src == "xmm0"
         )));
+        assert!(
+            lift64(&[
+                0x66, 0x0f, 0x62, 0xd8,
+                0x66, 0x0f, 0xd4, 0xc3,
+                0x66, 0x48, 0x0f, 0x7e, 0xc0,
+            ])
+            .iter()
+            .any(|instruction| matches!(
+                &instruction.op,
+                Op::Concat {
+                    dst: VReg::Phys(dst),
+                    hi: Value::Reg(VReg::Phys(hi)),
+                    lo: Value::Reg(VReg::Phys(lo)),
+                } if dst == "xmm0" && hi == "xmm0_d1" && lo == "xmm0_d0"
+            )),
+            "the whole-register view must be defined from the summed lanes"
+        );
+    }
+
+    #[test]
+    fn a_lane_write_also_defines_the_whole_register_view() {
+        // PXOR zeroes the lanes; the scalar spelling of the same register must
+        // become readable at the same instruction, or a following scalar float
+        // operation reads a value nothing defined.
+        let ops = lift64(&[0x66, 0x0f, 0xef, 0xc9]); // pxor xmm1,xmm1
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign { dst: VReg::Phys(dst), .. } | Op::Concat { dst: VReg::Phys(dst), .. }
+                    if dst == "xmm1"
+            )),
+            "pxor must define the whole-register view: {ops:#?}"
+        );
+    }
+
+    #[test]
+    fn a_scalar_write_is_visible_through_the_gpr_transfer() {
+        // The GCC -O0 float return: `movsd -8(%rbp),%xmm0 ; movq %xmm0,%rax`.
+        // The MOVQ must read what the MOVSD wrote, which is the crossing that
+        // used to return a zero reconstructed from untouched lanes.
+        let ops = lift64(&[
+            0xf2, 0x0f, 0x10, 0x45, 0xf8, // movsd -0x8(%rbp),%xmm0
+            0x66, 0x48, 0x0f, 0x7e, 0xc0, // movq %xmm0,%rax
+        ]);
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign {
+                    dst: VReg::Phys(dst),
+                    src: Value::Reg(VReg::Phys(src)),
+                } if dst == "rax" && src == "xmm0"
+            )),
+            "movq must read the scalar view the movsd defined: {ops:#?}"
+        );
     }
 
     #[test]
