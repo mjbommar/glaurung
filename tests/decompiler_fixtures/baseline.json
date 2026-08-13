@@ -503,6 +503,178 @@
     "vec_sum": "pass",
     "vec_transform": "pass"
   },
+  "100_struct_layout:clang:O0": {
+    "layout_offsets": "pass",
+    "layout_size_delta": "pass",
+    "struct_assignment_copies": "pass"
+  },
+  "100_struct_layout:clang:O2": {
+    "layout_offsets": "pass",
+    "layout_size_delta": "pass",
+    "struct_assignment_copies": "pass"
+  },
+  "100_struct_layout:gcc:O0": {
+    "layout_offsets": "pass",
+    "layout_size_delta": "pass",
+    "struct_assignment_copies": "pass"
+  },
+  "100_struct_layout:gcc:O2": {
+    "layout_offsets": "pass",
+    "layout_size_delta": "pass",
+    "struct_assignment_copies": "pass"
+  },
+  "101_static_locals:clang:O0": {
+    "counter_next": "fail",
+    "counter_reset": "pass",
+    "static_table_lookup": "fail"
+  },
+  "101_static_locals:clang:O2": {
+    "counter_next": "fail",
+    "counter_reset": "pass",
+    "static_table_lookup": "pass"
+  },
+  "101_static_locals:gcc:O0": {
+    "counter_next": "fail",
+    "counter_reset": "pass",
+    "static_table_lookup": "fail"
+  },
+  "101_static_locals:gcc:O2": {
+    "counter_next": "fail",
+    "counter_reset": "pass",
+    "static_table_lookup": "pass"
+  },
+  "102_duffs_device:clang:O0": {
+    "duff_copy": "fail"
+  },
+  "102_duffs_device:clang:O2": {
+    "duff_copy": "fail"
+  },
+  "102_duffs_device:gcc:O0": {
+    "duff_copy": "fail"
+  },
+  "102_duffs_device:gcc:O2": {
+    "duff_copy": "fail"
+  },
+  "103_computed_goto:clang:O0": {
+    "threaded_interpreter": "fail"
+  },
+  "103_computed_goto:clang:O2": {
+    "threaded_interpreter": "fail"
+  },
+  "103_computed_goto:gcc:O0": {
+    "threaded_interpreter": "fail"
+  },
+  "103_computed_goto:gcc:O2": {
+    "threaded_interpreter": "fail"
+  },
+  "104_statement_expression:clang:O0": {
+    "single_evaluation": "pass",
+    "statement_expression_max": "pass"
+  },
+  "104_statement_expression:clang:O2": {
+    "single_evaluation": "pass",
+    "statement_expression_max": "pass"
+  },
+  "104_statement_expression:gcc:O0": {
+    "single_evaluation": "pass",
+    "statement_expression_max": "pass"
+  },
+  "104_statement_expression:gcc:O2": {
+    "single_evaluation": "pass",
+    "statement_expression_max": "pass"
+  },
+  "105_goto_ladder:clang:O0": {
+    "acquire_and_release": "pass"
+  },
+  "105_goto_ladder:clang:O2": {
+    "acquire_and_release": "pass"
+  },
+  "105_goto_ladder:gcc:O0": {
+    "acquire_and_release": "pass"
+  },
+  "105_goto_ladder:gcc:O2": {
+    "acquire_and_release": "pass"
+  },
+  "106_switch_shapes_dense_sparse:clang:O0": {
+    "dense_switch": "pass",
+    "hybrid_switch": "pass",
+    "sparse_switch": "pass"
+  },
+  "106_switch_shapes_dense_sparse:clang:O2": {
+    "dense_switch": "pass",
+    "hybrid_switch": "pass",
+    "sparse_switch": "pass"
+  },
+  "106_switch_shapes_dense_sparse:gcc:O0": {
+    "dense_switch": "pass",
+    "hybrid_switch": "pass",
+    "sparse_switch": "pass"
+  },
+  "106_switch_shapes_dense_sparse:gcc:O2": {
+    "dense_switch": "pass",
+    "hybrid_switch": "pass",
+    "sparse_switch": "pass"
+  },
+  "107_short_circuit:clang:O0": {
+    "guarded_dereference": "pass",
+    "short_circuit_and": "pass",
+    "short_circuit_or": "pass"
+  },
+  "107_short_circuit:clang:O2": {
+    "guarded_dereference": "pass",
+    "short_circuit_and": "pass",
+    "short_circuit_or": "pass"
+  },
+  "107_short_circuit:gcc:O0": {
+    "guarded_dereference": "pass",
+    "short_circuit_and": "pass",
+    "short_circuit_or": "pass"
+  },
+  "107_short_circuit:gcc:O2": {
+    "guarded_dereference": "pass",
+    "short_circuit_and": "pass",
+    "short_circuit_or": "pass"
+  },
+  "108_multidimensional_arrays:clang:O0": {
+    "row_decay_span": "structural",
+    "sum_flat_with_stride": "pass",
+    "sum_true_2d": "structural"
+  },
+  "108_multidimensional_arrays:clang:O2": {
+    "row_decay_span": "structural",
+    "sum_flat_with_stride": "pass",
+    "sum_true_2d": "structural"
+  },
+  "108_multidimensional_arrays:gcc:O0": {
+    "row_decay_span": "structural",
+    "sum_flat_with_stride": "pass",
+    "sum_true_2d": "structural"
+  },
+  "108_multidimensional_arrays:gcc:O2": {
+    "row_decay_span": "structural",
+    "sum_flat_with_stride": "pass",
+    "sum_true_2d": "structural"
+  },
+  "109_subscript_commutativity:clang:O0": {
+    "mixed_subscript_sum": "pass",
+    "negative_offset_from_interior": "fail",
+    "reversed_subscript": "pass"
+  },
+  "109_subscript_commutativity:clang:O2": {
+    "mixed_subscript_sum": "pass",
+    "negative_offset_from_interior": "pass",
+    "reversed_subscript": "pass"
+  },
+  "109_subscript_commutativity:gcc:O0": {
+    "mixed_subscript_sum": "pass",
+    "negative_offset_from_interior": "pass",
+    "reversed_subscript": "pass"
+  },
+  "109_subscript_commutativity:gcc:O2": {
+    "mixed_subscript_sum": "pass",
+    "negative_offset_from_interior": "pass",
+    "reversed_subscript": "pass"
+  },
   "10_cpp_runtime_shapes:clang:O0": {
     "_ZN4Base2opEi": "structural",
     "_ZN4BaseC2Ev": "structural",
@@ -582,6 +754,226 @@
     "cpp_raii_guard": "pass",
     "cpp_virtual_dispatch": "structural"
   },
+  "110_pointer_arithmetic:clang:O0": {
+    "byte_versus_element_step": "pass",
+    "element_distance": "pass",
+    "walk_until_sentinel": "pass"
+  },
+  "110_pointer_arithmetic:clang:O2": {
+    "byte_versus_element_step": "pass",
+    "element_distance": "pass",
+    "walk_until_sentinel": "pass"
+  },
+  "110_pointer_arithmetic:gcc:O0": {
+    "byte_versus_element_step": "pass",
+    "element_distance": "pass",
+    "walk_until_sentinel": "pass"
+  },
+  "110_pointer_arithmetic:gcc:O2": {
+    "byte_versus_element_step": "pass",
+    "element_distance": "pass",
+    "walk_until_sentinel": "pass"
+  },
+  "111_self_referential_struct:clang:O0": {
+    "link_and_sum": "pass"
+  },
+  "111_self_referential_struct:clang:O2": {
+    "link_and_sum": "fail"
+  },
+  "111_self_referential_struct:gcc:O0": {
+    "link_and_sum": "fail"
+  },
+  "111_self_referential_struct:gcc:O2": {
+    "link_and_sum": "fail"
+  },
+  "112_recursion_shapes:clang:O0": {
+    "mutual_parity": "pass",
+    "nontail_depth": "pass",
+    "recursion_entry": "pass",
+    "tail_countdown": "fail"
+  },
+  "112_recursion_shapes:clang:O2": {
+    "mutual_parity": "pass",
+    "nontail_depth": "pass",
+    "recursion_entry": "pass",
+    "tail_countdown": "pass"
+  },
+  "112_recursion_shapes:gcc:O0": {
+    "mutual_parity": "pass",
+    "nontail_depth": "pass",
+    "recursion_entry": "pass",
+    "tail_countdown": "fail"
+  },
+  "112_recursion_shapes:gcc:O2": {
+    "mutual_parity": "pass",
+    "nontail_depth": "pass",
+    "recursion_entry": "fail",
+    "tail_countdown": "pass"
+  },
+  "113_varargs:clang:O0": {
+    "variadic_none": "pass",
+    "variadic_three": "fail",
+    "variadic_weighted_four": "fail"
+  },
+  "113_varargs:clang:O2": {
+    "variadic_none": "pass",
+    "variadic_three": "fail",
+    "variadic_weighted_four": "fail"
+  },
+  "113_varargs:gcc:O0": {
+    "variadic_none": "pass",
+    "variadic_three": "fail",
+    "variadic_weighted_four": "fail"
+  },
+  "113_varargs:gcc:O2": {
+    "variadic_none": "pass",
+    "variadic_three": "fail",
+    "variadic_weighted_four": "fail"
+  },
+  "114_volatile_access:clang:O0": {
+    "nonvolatile_control": "pass",
+    "volatile_loop_bound": "pass",
+    "volatile_reads_are_not_merged": "pass",
+    "volatile_store_then_load": "pass"
+  },
+  "114_volatile_access:clang:O2": {
+    "nonvolatile_control": "pass",
+    "volatile_loop_bound": "pass",
+    "volatile_reads_are_not_merged": "pass",
+    "volatile_store_then_load": "pass"
+  },
+  "114_volatile_access:gcc:O0": {
+    "nonvolatile_control": "pass",
+    "volatile_loop_bound": "pass",
+    "volatile_reads_are_not_merged": "pass",
+    "volatile_store_then_load": "pass"
+  },
+  "114_volatile_access:gcc:O2": {
+    "nonvolatile_control": "pass",
+    "volatile_loop_bound": "pass",
+    "volatile_reads_are_not_merged": "pass",
+    "volatile_store_then_load": "pass"
+  },
+  "115_enum_semantics:clang:O0": {
+    "enum_arithmetic": "pass",
+    "enum_sizes": "pass",
+    "enum_switch": "pass"
+  },
+  "115_enum_semantics:clang:O2": {
+    "enum_arithmetic": "pass",
+    "enum_sizes": "pass",
+    "enum_switch": "pass"
+  },
+  "115_enum_semantics:gcc:O0": {
+    "enum_arithmetic": "pass",
+    "enum_sizes": "pass",
+    "enum_switch": "pass"
+  },
+  "115_enum_semantics:gcc:O2": {
+    "enum_arithmetic": "pass",
+    "enum_sizes": "pass",
+    "enum_switch": "pass"
+  },
+  "116_string_literals:clang:O0": {
+    "count_matching": "pass",
+    "escape_sequences": "fail",
+    "literal_index": "pass",
+    "literal_size_versus_length": "pass"
+  },
+  "116_string_literals:clang:O2": {
+    "count_matching": "fail",
+    "escape_sequences": "fail",
+    "literal_index": "pass",
+    "literal_size_versus_length": "pass"
+  },
+  "116_string_literals:gcc:O0": {
+    "count_matching": "pass",
+    "escape_sequences": "fail",
+    "literal_index": "pass",
+    "literal_size_versus_length": "pass"
+  },
+  "116_string_literals:gcc:O2": {
+    "count_matching": "fail",
+    "escape_sequences": "fail",
+    "literal_index": "pass",
+    "literal_size_versus_length": "pass"
+  },
+  "117_modular_arithmetic:clang:O0": {
+    "absolute_without_branch": "pass",
+    "maximum_plus_one": "pass",
+    "modular_exponent_of_two": "pass",
+    "signed_overflow_avoided": "pass",
+    "wraps_to_zero": "pass"
+  },
+  "117_modular_arithmetic:clang:O2": {
+    "absolute_without_branch": "pass",
+    "maximum_plus_one": "pass",
+    "modular_exponent_of_two": "pass",
+    "signed_overflow_avoided": "pass",
+    "wraps_to_zero": "pass"
+  },
+  "117_modular_arithmetic:gcc:O0": {
+    "absolute_without_branch": "pass",
+    "maximum_plus_one": "pass",
+    "modular_exponent_of_two": "pass",
+    "signed_overflow_avoided": "pass",
+    "wraps_to_zero": "pass"
+  },
+  "117_modular_arithmetic:gcc:O2": {
+    "absolute_without_branch": "pass",
+    "maximum_plus_one": "pass",
+    "modular_exponent_of_two": "pass",
+    "signed_overflow_avoided": "pass",
+    "wraps_to_zero": "pass"
+  },
+  "118_bit_tricks:clang:O0": {
+    "clear_lowest_set": "pass",
+    "is_power_of_two": "pass",
+    "isolate_lowest_set": "pass",
+    "round_up_to_power_of_two": "pass",
+    "sign_without_branch": "pass",
+    "xor_swap": "pass"
+  },
+  "118_bit_tricks:clang:O2": {
+    "clear_lowest_set": "pass",
+    "is_power_of_two": "pass",
+    "isolate_lowest_set": "pass",
+    "round_up_to_power_of_two": "pass",
+    "sign_without_branch": "pass",
+    "xor_swap": "pass"
+  },
+  "118_bit_tricks:gcc:O0": {
+    "clear_lowest_set": "pass",
+    "is_power_of_two": "pass",
+    "isolate_lowest_set": "pass",
+    "round_up_to_power_of_two": "pass",
+    "sign_without_branch": "pass",
+    "xor_swap": "pass"
+  },
+  "118_bit_tricks:gcc:O2": {
+    "clear_lowest_set": "pass",
+    "is_power_of_two": "pass",
+    "isolate_lowest_set": "pass",
+    "round_up_to_power_of_two": "pass",
+    "sign_without_branch": "pass",
+    "xor_swap": "pass"
+  },
+  "119_branch_hints:clang:O0": {
+    "hinted_validation": "pass",
+    "unhinted_validation": "pass"
+  },
+  "119_branch_hints:clang:O2": {
+    "hinted_validation": "pass",
+    "unhinted_validation": "pass"
+  },
+  "119_branch_hints:gcc:O0": {
+    "hinted_validation": "pass",
+    "unhinted_validation": "pass"
+  },
+  "119_branch_hints:gcc:O2": {
+    "hinted_validation": "pass",
+    "unhinted_validation": "pass"
+  },
   "11_call_shapes:clang:O0": {
     "call_accumulate_bytes": "pass",
     "call_chain_in_loop": "pass",
@@ -642,6 +1034,218 @@
     "widen_mul": "pass",
     "wrap_byte": "pass"
   },
+  "120_const_and_literals:clang:O0": {
+    "const_array_of_pointers": "fail",
+    "pointer_to_const_still_loads": "pass",
+    "reads_foldable_constant": "pass"
+  },
+  "120_const_and_literals:clang:O2": {
+    "const_array_of_pointers": "fail",
+    "pointer_to_const_still_loads": "pass",
+    "reads_foldable_constant": "pass"
+  },
+  "120_const_and_literals:gcc:O0": {
+    "const_array_of_pointers": "fail",
+    "pointer_to_const_still_loads": "pass",
+    "reads_foldable_constant": "pass"
+  },
+  "120_const_and_literals:gcc:O2": {
+    "const_array_of_pointers": "fail",
+    "pointer_to_const_still_loads": "pass",
+    "reads_foldable_constant": "pass"
+  },
+  "121_dense_expression:clang:O0": {
+    "chained_assignment": "pass",
+    "conditional_lvalue_select": "pass",
+    "dense_fold": "pass"
+  },
+  "121_dense_expression:clang:O2": {
+    "chained_assignment": "pass",
+    "conditional_lvalue_select": "pass",
+    "dense_fold": "pass"
+  },
+  "121_dense_expression:gcc:O0": {
+    "chained_assignment": "pass",
+    "conditional_lvalue_select": "pass",
+    "dense_fold": "pass"
+  },
+  "121_dense_expression:gcc:O2": {
+    "chained_assignment": "pass",
+    "conditional_lvalue_select": "pass",
+    "dense_fold": "pass"
+  },
+  "122_compound_assignment:clang:O0": {
+    "mixed_compound_operators": "pass",
+    "narrow_compound_truncates": "pass",
+    "subscript_evaluated_once": "pass"
+  },
+  "122_compound_assignment:clang:O2": {
+    "mixed_compound_operators": "pass",
+    "narrow_compound_truncates": "fail",
+    "subscript_evaluated_once": "pass"
+  },
+  "122_compound_assignment:gcc:O0": {
+    "mixed_compound_operators": "pass",
+    "narrow_compound_truncates": "pass",
+    "subscript_evaluated_once": "pass"
+  },
+  "122_compound_assignment:gcc:O2": {
+    "mixed_compound_operators": "pass",
+    "narrow_compound_truncates": "pass",
+    "subscript_evaluated_once": "pass"
+  },
+  "123_sizeof_semantics:clang:O0": {
+    "sizeof_after_decay": "pass",
+    "sizeof_array_versus_pointer": "pass",
+    "sizeof_does_not_evaluate": "pass",
+    "sizeof_probe_sets_flag": "pass",
+    "sizeof_vla_is_evaluated": "fail"
+  },
+  "123_sizeof_semantics:clang:O2": {
+    "sizeof_after_decay": "pass",
+    "sizeof_array_versus_pointer": "pass",
+    "sizeof_does_not_evaluate": "pass",
+    "sizeof_probe_sets_flag": "pass",
+    "sizeof_vla_is_evaluated": "pass"
+  },
+  "123_sizeof_semantics:gcc:O0": {
+    "sizeof_after_decay": "pass",
+    "sizeof_array_versus_pointer": "pass",
+    "sizeof_does_not_evaluate": "pass",
+    "sizeof_probe_sets_flag": "pass",
+    "sizeof_vla_is_evaluated": "fail"
+  },
+  "123_sizeof_semantics:gcc:O2": {
+    "sizeof_after_decay": "pass",
+    "sizeof_array_versus_pointer": "pass",
+    "sizeof_does_not_evaluate": "pass",
+    "sizeof_probe_sets_flag": "pass",
+    "sizeof_vla_is_evaluated": "pass"
+  },
+  "124_loop_break_continue:clang:O0": {
+    "break_binds_to_switch": "pass",
+    "continue_in_do_while": "pass",
+    "nested_loop_early_exit": "pass"
+  },
+  "124_loop_break_continue:clang:O2": {
+    "break_binds_to_switch": "pass",
+    "continue_in_do_while": "pass",
+    "nested_loop_early_exit": "pass"
+  },
+  "124_loop_break_continue:gcc:O0": {
+    "break_binds_to_switch": "pass",
+    "continue_in_do_while": "pass",
+    "nested_loop_early_exit": "pass"
+  },
+  "124_loop_break_continue:gcc:O2": {
+    "break_binds_to_switch": "pass",
+    "continue_in_do_while": "pass",
+    "nested_loop_early_exit": "pass"
+  },
+  "125_loop_shapes:clang:O0": {
+    "decrementing_loop": "pass",
+    "do_while_always_once": "pass",
+    "infinite_with_internal_exit": "pass",
+    "while_zero_trips": "pass"
+  },
+  "125_loop_shapes:clang:O2": {
+    "decrementing_loop": "pass",
+    "do_while_always_once": "pass",
+    "infinite_with_internal_exit": "pass",
+    "while_zero_trips": "pass"
+  },
+  "125_loop_shapes:gcc:O0": {
+    "decrementing_loop": "pass",
+    "do_while_always_once": "pass",
+    "infinite_with_internal_exit": "pass",
+    "while_zero_trips": "pass"
+  },
+  "125_loop_shapes:gcc:O2": {
+    "decrementing_loop": "pass",
+    "do_while_always_once": "pass",
+    "infinite_with_internal_exit": "pass",
+    "while_zero_trips": "pass"
+  },
+  "126_x_macros:clang:O0": {
+    "apply_opcode": "pass",
+    "opcode_weight": "fail",
+    "total_weight": "pass"
+  },
+  "126_x_macros:clang:O2": {
+    "apply_opcode": "fail",
+    "opcode_weight": "pass",
+    "total_weight": "pass"
+  },
+  "126_x_macros:gcc:O0": {
+    "apply_opcode": "pass",
+    "opcode_weight": "fail",
+    "total_weight": "pass"
+  },
+  "126_x_macros:gcc:O2": {
+    "apply_opcode": "pass",
+    "opcode_weight": "pass",
+    "total_weight": "pass"
+  },
+  "127_inline_linkage:clang:O0": {
+    "inline_address_taken": "pass",
+    "inline_in_loop": "pass",
+    "inline_used_twice": "pass"
+  },
+  "127_inline_linkage:clang:O2": {
+    "inline_address_taken": "pass",
+    "inline_in_loop": "fail",
+    "inline_used_twice": "pass"
+  },
+  "127_inline_linkage:gcc:O0": {
+    "inline_address_taken": "pass",
+    "inline_in_loop": "pass",
+    "inline_used_twice": "pass"
+  },
+  "127_inline_linkage:gcc:O2": {
+    "inline_address_taken": "pass",
+    "inline_in_loop": "pass",
+    "inline_used_twice": "pass"
+  },
+  "128_qualifier_combinations:clang:O0": {
+    "const_pointer_writes": "fail",
+    "pointer_to_const_walks": "pass",
+    "volatile_const_is_readable": "pass"
+  },
+  "128_qualifier_combinations:clang:O2": {
+    "const_pointer_writes": "pass",
+    "pointer_to_const_walks": "pass",
+    "volatile_const_is_readable": "pass"
+  },
+  "128_qualifier_combinations:gcc:O0": {
+    "const_pointer_writes": "fail",
+    "pointer_to_const_walks": "pass",
+    "volatile_const_is_readable": "pass"
+  },
+  "128_qualifier_combinations:gcc:O2": {
+    "const_pointer_writes": "pass",
+    "pointer_to_const_walks": "pass",
+    "volatile_const_is_readable": "pass"
+  },
+  "129_struct_by_value:clang:O0": {
+    "pass_large_by_value": "fail",
+    "pass_small_by_value": "pass",
+    "returns_small_struct_field": "pass"
+  },
+  "129_struct_by_value:clang:O2": {
+    "pass_large_by_value": "pass",
+    "pass_small_by_value": "pass",
+    "returns_small_struct_field": "pass"
+  },
+  "129_struct_by_value:gcc:O0": {
+    "pass_large_by_value": "fail",
+    "pass_small_by_value": "pass",
+    "returns_small_struct_field": "pass"
+  },
+  "129_struct_by_value:gcc:O2": {
+    "pass_large_by_value": "pass",
+    "pass_small_by_value": "pass",
+    "returns_small_struct_field": "pass"
+  },
   "12_loop_rotation:clang:O0": {
     "count_up": "pass",
     "do_while_control": "pass",
@@ -682,6 +1286,212 @@
     "nested_rotated": "pass",
     "skip_odd_sum": "pass"
   },
+  "130_bitpacked_codec:clang:O0": {
+    "codec_roundtrip": "pass",
+    "pack_fields": "pass",
+    "unpack_field": "pass"
+  },
+  "130_bitpacked_codec:clang:O2": {
+    "codec_roundtrip": "pass",
+    "pack_fields": "pass",
+    "unpack_field": "pass"
+  },
+  "130_bitpacked_codec:gcc:O0": {
+    "codec_roundtrip": "pass",
+    "pack_fields": "pass",
+    "unpack_field": "pass"
+  },
+  "130_bitpacked_codec:gcc:O2": {
+    "codec_roundtrip": "pass",
+    "pack_fields": "pass",
+    "unpack_field": "pass"
+  },
+  "131_obfuscated_composite:clang:O0": {
+    "nested_conditional_matrix": "pass",
+    "obfuscated_pipeline": "pass"
+  },
+  "131_obfuscated_composite:clang:O2": {
+    "nested_conditional_matrix": "pass",
+    "obfuscated_pipeline": "fail"
+  },
+  "131_obfuscated_composite:gcc:O0": {
+    "nested_conditional_matrix": "pass",
+    "obfuscated_pipeline": "pass"
+  },
+  "131_obfuscated_composite:gcc:O2": {
+    "nested_conditional_matrix": "pass",
+    "obfuscated_pipeline": "fail"
+  },
+  "132_cpp_vtable_layout:clang:O0": {
+    "cpp_vtable_area": "fail",
+    "cpp_vtable_devirtualized": "fail",
+    "cpp_vtable_inherited_slot": "fail"
+  },
+  "132_cpp_vtable_layout:clang:O2": {
+    "cpp_vtable_area": "fail",
+    "cpp_vtable_devirtualized": "pass",
+    "cpp_vtable_inherited_slot": "fail"
+  },
+  "132_cpp_vtable_layout:gcc:O0": {
+    "cpp_vtable_area": "fail",
+    "cpp_vtable_devirtualized": "pass",
+    "cpp_vtable_inherited_slot": "fail"
+  },
+  "132_cpp_vtable_layout:gcc:O2": {
+    "cpp_vtable_area": "fail",
+    "cpp_vtable_devirtualized": "pass",
+    "cpp_vtable_inherited_slot": "fail"
+  },
+  "133_cpp_multiple_inheritance:clang:O0": {
+    "cpp_mi_cross_cast": "fail",
+    "cpp_mi_dispatch": "fail",
+    "cpp_mi_pointer_adjustment": "pass"
+  },
+  "133_cpp_multiple_inheritance:clang:O2": {
+    "cpp_mi_cross_cast": "pass",
+    "cpp_mi_dispatch": "pass",
+    "cpp_mi_pointer_adjustment": "pass"
+  },
+  "133_cpp_multiple_inheritance:gcc:O0": {
+    "cpp_mi_cross_cast": "fail",
+    "cpp_mi_dispatch": "fail",
+    "cpp_mi_pointer_adjustment": "pass"
+  },
+  "133_cpp_multiple_inheritance:gcc:O2": {
+    "cpp_mi_cross_cast": "pass",
+    "cpp_mi_dispatch": "pass",
+    "cpp_mi_pointer_adjustment": "pass"
+  },
+  "134_cpp_virtual_inheritance:clang:O0": {
+    "cpp_virtual_base_is_shared": "fail",
+    "cpp_virtual_base_offset": "fail",
+    "cpp_virtual_final_overrider": "fail"
+  },
+  "134_cpp_virtual_inheritance:clang:O2": {
+    "cpp_virtual_base_is_shared": "pass",
+    "cpp_virtual_base_offset": "pass",
+    "cpp_virtual_final_overrider": "fail"
+  },
+  "134_cpp_virtual_inheritance:gcc:O0": {
+    "cpp_virtual_base_is_shared": "fail",
+    "cpp_virtual_base_offset": "fail",
+    "cpp_virtual_final_overrider": "fail"
+  },
+  "134_cpp_virtual_inheritance:gcc:O2": {
+    "cpp_virtual_base_is_shared": "pass",
+    "cpp_virtual_base_offset": "pass",
+    "cpp_virtual_final_overrider": "fail"
+  },
+  "135_cpp_rtti:clang:O0": {
+    "_ZNKSt9type_infoeqERKS_": "structural",
+    "cpp_dynamic_cast_fails": "fail",
+    "cpp_dynamic_cast_succeeds": "fail",
+    "cpp_typeid_compare": "fail"
+  },
+  "135_cpp_rtti:clang:O2": {
+    "cpp_dynamic_cast_fails": "fail",
+    "cpp_dynamic_cast_succeeds": "fail",
+    "cpp_typeid_compare": "fail"
+  },
+  "135_cpp_rtti:gcc:O0": {
+    "_ZNKSt9type_infoeqERKS_": "structural",
+    "cpp_dynamic_cast_fails": "fail",
+    "cpp_dynamic_cast_succeeds": "fail",
+    "cpp_typeid_compare": "fail"
+  },
+  "135_cpp_rtti:gcc:O2": {
+    "cpp_dynamic_cast_fails": "fail",
+    "cpp_dynamic_cast_succeeds": "fail",
+    "cpp_typeid_compare": "fail"
+  },
+  "136_cpp_exception_unwinding:clang:O0": {
+    "cpp_catch_by_type": "fail",
+    "cpp_destructors_run_while_unwinding": "fail",
+    "cpp_rethrow_and_nest": "fail"
+  },
+  "136_cpp_exception_unwinding:clang:O2": {
+    "cpp_catch_by_type": "fail",
+    "cpp_destructors_run_while_unwinding": "fail",
+    "cpp_rethrow_and_nest": "fail"
+  },
+  "136_cpp_exception_unwinding:gcc:O0": {
+    "cpp_catch_by_type": "fail",
+    "cpp_destructors_run_while_unwinding": "fail",
+    "cpp_rethrow_and_nest": "fail"
+  },
+  "136_cpp_exception_unwinding:gcc:O2": {
+    "cpp_catch_by_type": "fail",
+    "cpp_destructors_run_while_unwinding": "fail",
+    "cpp_rethrow_and_nest": "fail"
+  },
+  "137_cpp_templates:clang:O0": {
+    "cpp_template_int16": "pass",
+    "cpp_template_int32": "pass",
+    "cpp_template_nontype": "pass",
+    "cpp_template_predicate": "pass",
+    "cpp_template_uint8": "pass"
+  },
+  "137_cpp_templates:clang:O2": {
+    "cpp_template_int16": "fail",
+    "cpp_template_int32": "pass",
+    "cpp_template_nontype": "pass",
+    "cpp_template_predicate": "pass",
+    "cpp_template_uint8": "fail"
+  },
+  "137_cpp_templates:gcc:O0": {
+    "cpp_template_int16": "pass",
+    "cpp_template_int32": "pass",
+    "cpp_template_nontype": "pass",
+    "cpp_template_predicate": "pass",
+    "cpp_template_uint8": "pass"
+  },
+  "137_cpp_templates:gcc:O2": {
+    "cpp_template_int16": "fail",
+    "cpp_template_int32": "pass",
+    "cpp_template_nontype": "pass",
+    "cpp_template_predicate": "pass",
+    "cpp_template_uint8": "fail"
+  },
+  "138_cpp_operators:clang:O0": {
+    "cpp_operator_arithmetic": "pass",
+    "cpp_operator_compound": "pass",
+    "cpp_operator_conversion": "pass"
+  },
+  "138_cpp_operators:clang:O2": {
+    "cpp_operator_arithmetic": "pass",
+    "cpp_operator_compound": "pass",
+    "cpp_operator_conversion": "pass"
+  },
+  "138_cpp_operators:gcc:O0": {
+    "cpp_operator_arithmetic": "fail",
+    "cpp_operator_compound": "fail",
+    "cpp_operator_conversion": "fail"
+  },
+  "138_cpp_operators:gcc:O2": {
+    "cpp_operator_arithmetic": "pass",
+    "cpp_operator_compound": "pass",
+    "cpp_operator_conversion": "pass"
+  },
+  "139_cpp_object_lifetime:clang:O0": {
+    "cpp_array_destruction": "fail",
+    "cpp_destruction_order": "fail",
+    "cpp_live_object_count": "pass"
+  },
+  "139_cpp_object_lifetime:clang:O2": {
+    "cpp_array_destruction": "pass",
+    "cpp_destruction_order": "pass",
+    "cpp_live_object_count": "pass"
+  },
+  "139_cpp_object_lifetime:gcc:O0": {
+    "cpp_array_destruction": "fail",
+    "cpp_destruction_order": "fail",
+    "cpp_live_object_count": "fail"
+  },
+  "139_cpp_object_lifetime:gcc:O2": {
+    "cpp_array_destruction": "fail",
+    "cpp_destruction_order": "pass",
+    "cpp_live_object_count": "pass"
+  },
   "13_loop_early_exit:clang:O0": {
     "bisect": "pass",
     "classify_run": "pass",
@@ -713,6 +1523,258 @@
     "has_pair": "pass",
     "sum_positive": "pass",
     "sum_until_zero": "pass"
+  },
+  "140_thread_local_storage:clang:O0": {
+    "tls_address_is_stable": "fail",
+    "tls_increment": "fail",
+    "tls_indexed": "fail",
+    "tls_versus_global": "fail"
+  },
+  "140_thread_local_storage:clang:O2": {
+    "tls_address_is_stable": "pass",
+    "tls_increment": "fail",
+    "tls_indexed": "fail",
+    "tls_versus_global": "fail"
+  },
+  "140_thread_local_storage:gcc:O0": {
+    "tls_address_is_stable": "fail",
+    "tls_increment": "fail",
+    "tls_indexed": "fail",
+    "tls_versus_global": "fail"
+  },
+  "140_thread_local_storage:gcc:O2": {
+    "tls_address_is_stable": "pass",
+    "tls_increment": "fail",
+    "tls_indexed": "fail",
+    "tls_versus_global": "fail"
+  },
+  "141_atomics:clang:O0": {
+    "atomic_compare_exchange_loop": "pass",
+    "atomic_exchange_and_or": "pass",
+    "atomic_flag_round_trip": "pass",
+    "atomic_increment": "pass"
+  },
+  "141_atomics:clang:O2": {
+    "atomic_compare_exchange_loop": "pass",
+    "atomic_exchange_and_or": "pass",
+    "atomic_flag_round_trip": "pass",
+    "atomic_increment": "pass"
+  },
+  "141_atomics:gcc:O0": {
+    "atomic_compare_exchange_loop": "pass",
+    "atomic_exchange_and_or": "pass",
+    "atomic_flag_round_trip": "pass",
+    "atomic_increment": "pass"
+  },
+  "141_atomics:gcc:O2": {
+    "atomic_compare_exchange_loop": "pass",
+    "atomic_exchange_and_or": "pass",
+    "atomic_flag_round_trip": "fail",
+    "atomic_increment": "pass"
+  },
+  "142_nonlocal_control:clang:O0": {
+    "longjmp_unwinds_frames": "pass",
+    "setjmp_returns_twice": "pass"
+  },
+  "142_nonlocal_control:clang:O2": {
+    "longjmp_unwinds_frames": "fail",
+    "setjmp_returns_twice": "pass"
+  },
+  "142_nonlocal_control:gcc:O0": {
+    "longjmp_unwinds_frames": "pass",
+    "setjmp_returns_twice": "pass"
+  },
+  "142_nonlocal_control:gcc:O2": {
+    "longjmp_unwinds_frames": "pass",
+    "setjmp_returns_twice": "pass"
+  },
+  "143_dynamic_frames:clang:O0": {
+    "alloca_dynamic_frame": "fail",
+    "alloca_in_loop": "fail",
+    "cleanup_on_every_exit": "pass"
+  },
+  "143_dynamic_frames:clang:O2": {
+    "alloca_dynamic_frame": "fail",
+    "alloca_in_loop": "fail",
+    "cleanup_on_every_exit": "pass"
+  },
+  "143_dynamic_frames:gcc:O0": {
+    "alloca_dynamic_frame": "fail",
+    "alloca_in_loop": "fail",
+    "cleanup_on_every_exit": "pass"
+  },
+  "143_dynamic_frames:gcc:O2": {
+    "alloca_dynamic_frame": "fail",
+    "alloca_in_loop": "fail",
+    "cleanup_on_every_exit": "pass"
+  },
+  "144_inline_asm:clang:O0": {
+    "asm_add_via_constraints": "pass",
+    "asm_memory_barrier": "pass",
+    "builtin_bit_intrinsics": "pass",
+    "builtin_overflow_checked": "pass"
+  },
+  "144_inline_asm:clang:O2": {
+    "asm_add_via_constraints": "pass",
+    "asm_memory_barrier": "pass",
+    "builtin_bit_intrinsics": "pass",
+    "builtin_overflow_checked": "pass"
+  },
+  "144_inline_asm:gcc:O0": {
+    "asm_add_via_constraints": "pass",
+    "asm_memory_barrier": "pass",
+    "builtin_bit_intrinsics": "fail",
+    "builtin_overflow_checked": "pass"
+  },
+  "144_inline_asm:gcc:O2": {
+    "asm_add_via_constraints": "pass",
+    "asm_memory_barrier": "pass",
+    "builtin_bit_intrinsics": "fail",
+    "builtin_overflow_checked": "pass"
+  },
+  "145_control_flow_flattening:clang:O0": {
+    "flattened_accumulate": "fail",
+    "flattened_classify": "fail",
+    "flattened_gcd": "pass",
+    "flattened_search": "pass"
+  },
+  "145_control_flow_flattening:clang:O2": {
+    "flattened_accumulate": "pass",
+    "flattened_classify": "fail",
+    "flattened_gcd": "pass",
+    "flattened_search": "pass"
+  },
+  "145_control_flow_flattening:gcc:O0": {
+    "flattened_accumulate": "pass",
+    "flattened_classify": "pass",
+    "flattened_gcd": "pass",
+    "flattened_search": "pass"
+  },
+  "145_control_flow_flattening:gcc:O2": {
+    "flattened_accumulate": "pass",
+    "flattened_classify": "pass",
+    "flattened_gcd": "pass",
+    "flattened_search": "pass"
+  },
+  "146_opaque_predicates:clang:O0": {
+    "opaque_always_true": "pass",
+    "opaque_guarded_store": "pass",
+    "opaque_loop_filter": "pass",
+    "opaque_square_residue": "pass",
+    "opaque_two_way_join": "pass",
+    "opaque_volatile_select": "pass"
+  },
+  "146_opaque_predicates:clang:O2": {
+    "opaque_always_true": "pass",
+    "opaque_guarded_store": "pass",
+    "opaque_loop_filter": "pass",
+    "opaque_square_residue": "pass",
+    "opaque_two_way_join": "pass",
+    "opaque_volatile_select": "pass"
+  },
+  "146_opaque_predicates:gcc:O0": {
+    "opaque_always_true": "pass",
+    "opaque_guarded_store": "pass",
+    "opaque_loop_filter": "pass",
+    "opaque_square_residue": "pass",
+    "opaque_two_way_join": "pass",
+    "opaque_volatile_select": "pass"
+  },
+  "146_opaque_predicates:gcc:O2": {
+    "opaque_always_true": "pass",
+    "opaque_guarded_store": "pass",
+    "opaque_loop_filter": "pass",
+    "opaque_square_residue": "pass",
+    "opaque_two_way_join": "pass",
+    "opaque_volatile_select": "pass"
+  },
+  "147_instruction_substitution:clang:O0": {
+    "substituted_add": "pass",
+    "substituted_bitops": "pass",
+    "substituted_checksum": "pass",
+    "substituted_multiply": "pass",
+    "substituted_negate": "pass",
+    "substituted_sub": "pass"
+  },
+  "147_instruction_substitution:clang:O2": {
+    "substituted_add": "pass",
+    "substituted_bitops": "pass",
+    "substituted_checksum": "pass",
+    "substituted_multiply": "pass",
+    "substituted_negate": "pass",
+    "substituted_sub": "pass"
+  },
+  "147_instruction_substitution:gcc:O0": {
+    "substituted_add": "pass",
+    "substituted_bitops": "pass",
+    "substituted_checksum": "pass",
+    "substituted_multiply": "pass",
+    "substituted_negate": "pass",
+    "substituted_sub": "pass"
+  },
+  "147_instruction_substitution:gcc:O2": {
+    "substituted_add": "pass",
+    "substituted_bitops": "pass",
+    "substituted_checksum": "pass",
+    "substituted_multiply": "pass",
+    "substituted_negate": "pass",
+    "substituted_sub": "pass"
+  },
+  "148_dispatch_obfuscation:clang:O0": {
+    "chained_table_walk": "fail",
+    "computed_index_dispatch": "pass",
+    "obfuscated_dispatch": "fail",
+    "permuted_switch": "pass"
+  },
+  "148_dispatch_obfuscation:clang:O2": {
+    "chained_table_walk": "fail",
+    "computed_index_dispatch": "pass",
+    "obfuscated_dispatch": "pass",
+    "permuted_switch": "pass"
+  },
+  "148_dispatch_obfuscation:gcc:O0": {
+    "chained_table_walk": "fail",
+    "computed_index_dispatch": "pass",
+    "obfuscated_dispatch": "fail",
+    "permuted_switch": "pass"
+  },
+  "148_dispatch_obfuscation:gcc:O2": {
+    "chained_table_walk": "fail",
+    "computed_index_dispatch": "pass",
+    "obfuscated_dispatch": "pass",
+    "permuted_switch": "fail"
+  },
+  "149_mba_expressions:clang:O0": {
+    "mba_add_identities": "pass",
+    "mba_bit_population": "pass",
+    "mba_mix_buffer": "pass",
+    "mba_select": "pass",
+    "mba_sub_identity": "pass",
+    "mba_zero_polynomial": "pass"
+  },
+  "149_mba_expressions:clang:O2": {
+    "mba_add_identities": "pass",
+    "mba_bit_population": "pass",
+    "mba_mix_buffer": "pass",
+    "mba_select": "pass",
+    "mba_sub_identity": "pass",
+    "mba_zero_polynomial": "pass"
+  },
+  "149_mba_expressions:gcc:O0": {
+    "mba_add_identities": "pass",
+    "mba_bit_population": "pass",
+    "mba_mix_buffer": "pass",
+    "mba_select": "pass",
+    "mba_sub_identity": "pass",
+    "mba_zero_polynomial": "pass"
+  },
+  "149_mba_expressions:gcc:O2": {
+    "mba_add_identities": "pass",
+    "mba_bit_population": "pass",
+    "mba_mix_buffer": "pass",
+    "mba_select": "pass",
+    "mba_sub_identity": "pass",
+    "mba_zero_polynomial": "pass"
   },
   "14_flag_effects:clang:O0": {
     "add_then_negative": "pass",
@@ -750,6 +1812,234 @@
     "shift_until_zero": "pass",
     "sub_then_sign": "pass"
   },
+  "150_obfuscation_composite:clang:O0": {
+    "obfuscated_digest": "pass",
+    "obfuscated_predicate_chain": "pass",
+    "obfuscated_transform": "fail"
+  },
+  "150_obfuscation_composite:clang:O2": {
+    "obfuscated_digest": "fail",
+    "obfuscated_predicate_chain": "fail",
+    "obfuscated_transform": "fail"
+  },
+  "150_obfuscation_composite:gcc:O0": {
+    "obfuscated_digest": "pass",
+    "obfuscated_predicate_chain": "pass",
+    "obfuscated_transform": "pass"
+  },
+  "150_obfuscation_composite:gcc:O2": {
+    "obfuscated_digest": "fail",
+    "obfuscated_predicate_chain": "fail",
+    "obfuscated_transform": "fail"
+  },
+  "151_wide_branch_ladder:clang:O0": {
+    "big151_branch_ladder": "pass",
+    "big151_flat_cascade": "pass"
+  },
+  "151_wide_branch_ladder:clang:O2": {
+    "big151_branch_ladder": "fail",
+    "big151_flat_cascade": "pass"
+  },
+  "151_wide_branch_ladder:gcc:O0": {
+    "big151_branch_ladder": "pass",
+    "big151_flat_cascade": "pass"
+  },
+  "151_wide_branch_ladder:gcc:O2": {
+    "big151_branch_ladder": "pass",
+    "big151_flat_cascade": "pass"
+  },
+  "152_deep_nesting:clang:O0": {
+    "deep152_conditional_tower": "pass",
+    "deep152_nested_loops": "pass",
+    "deep152_while_tower": "pass"
+  },
+  "152_deep_nesting:clang:O2": {
+    "deep152_conditional_tower": "pass",
+    "deep152_nested_loops": "pass",
+    "deep152_while_tower": "pass"
+  },
+  "152_deep_nesting:gcc:O0": {
+    "deep152_conditional_tower": "pass",
+    "deep152_nested_loops": "pass",
+    "deep152_while_tower": "pass"
+  },
+  "152_deep_nesting:gcc:O2": {
+    "deep152_conditional_tower": "pass",
+    "deep152_nested_loops": "pass",
+    "deep152_while_tower": "pass"
+  },
+  "153_many_live_locals:clang:O0": {
+    "spill153_live_set": "pass",
+    "spill153_static_web": "pass"
+  },
+  "153_many_live_locals:clang:O2": {
+    "spill153_live_set": "pass",
+    "spill153_static_web": "fail"
+  },
+  "153_many_live_locals:gcc:O0": {
+    "spill153_live_set": "pass",
+    "spill153_static_web": "pass"
+  },
+  "153_many_live_locals:gcc:O2": {
+    "spill153_live_set": "pass",
+    "spill153_static_web": "pass"
+  },
+  "154_wide_switch:clang:O0": {
+    "wide154_dense_effects": "fail",
+    "wide154_dense_switch": "pass",
+    "wide154_sparse_switch": "pass"
+  },
+  "154_wide_switch:clang:O2": {
+    "wide154_dense_effects": "fail",
+    "wide154_dense_switch": "pass",
+    "wide154_sparse_switch": "pass"
+  },
+  "154_wide_switch:gcc:O0": {
+    "wide154_dense_effects": "fail",
+    "wide154_dense_switch": "pass",
+    "wide154_sparse_switch": "pass"
+  },
+  "154_wide_switch:gcc:O2": {
+    "wide154_dense_effects": "pass",
+    "wide154_dense_switch": "pass",
+    "wide154_sparse_switch": "pass"
+  },
+  "155_long_dependency_chain:clang:O0": {
+    "chain155_buffered": "pass",
+    "chain155_scalar": "pass",
+    "chain155_signed": "pass"
+  },
+  "155_long_dependency_chain:clang:O2": {
+    "chain155_buffered": "fail",
+    "chain155_scalar": "pass",
+    "chain155_signed": "pass"
+  },
+  "155_long_dependency_chain:gcc:O0": {
+    "chain155_buffered": "pass",
+    "chain155_scalar": "pass",
+    "chain155_signed": "pass"
+  },
+  "155_long_dependency_chain:gcc:O2": {
+    "chain155_buffered": "pass",
+    "chain155_scalar": "pass",
+    "chain155_signed": "pass"
+  },
+  "156_plt_and_got_calls:clang:O0": {
+    "plt_call_interposable": "pass",
+    "plt_call_local": "pass",
+    "plt_call_via_address": "fail",
+    "plt_fold_calls": "pass",
+    "plt_paths_agree": "pass",
+    "plt_step_public": "pass"
+  },
+  "156_plt_and_got_calls:clang:O2": {
+    "plt_call_interposable": "pass",
+    "plt_call_local": "fail",
+    "plt_call_via_address": "pass",
+    "plt_fold_calls": "fail",
+    "plt_paths_agree": "pass",
+    "plt_step_public": "pass"
+  },
+  "156_plt_and_got_calls:gcc:O0": {
+    "plt_call_interposable": "pass",
+    "plt_call_local": "pass",
+    "plt_call_via_address": "fail",
+    "plt_fold_calls": "pass",
+    "plt_paths_agree": "pass",
+    "plt_step_public": "pass"
+  },
+  "156_plt_and_got_calls:gcc:O2": {
+    "plt_call_interposable": "pass",
+    "plt_call_local": "fail",
+    "plt_call_via_address": "pass",
+    "plt_fold_calls": "fail",
+    "plt_paths_agree": "pass",
+    "plt_step_public": "pass"
+  },
+  "157_symbol_visibility:clang:O0": {
+    "vis_call_both": "pass",
+    "vis_fold_with_biases": "fail",
+    "vis_public_helper": "pass",
+    "vis_read_bias": "fail",
+    "vis_set_biases": "fail"
+  },
+  "157_symbol_visibility:clang:O2": {
+    "vis_call_both": "pass",
+    "vis_fold_with_biases": "fail",
+    "vis_public_helper": "pass",
+    "vis_read_bias": "fail",
+    "vis_set_biases": "fail"
+  },
+  "157_symbol_visibility:gcc:O0": {
+    "vis_call_both": "pass",
+    "vis_fold_with_biases": "fail",
+    "vis_public_helper": "pass",
+    "vis_read_bias": "fail",
+    "vis_set_biases": "fail"
+  },
+  "157_symbol_visibility:gcc:O2": {
+    "vis_call_both": "pass",
+    "vis_fold_with_biases": "fail",
+    "vis_public_helper": "pass",
+    "vis_read_bias": "fail",
+    "vis_set_biases": "fail"
+  },
+  "158_weak_symbols:clang:O0": {
+    "weak_absent_probe": "fail",
+    "weak_defined_probe": "fail",
+    "weak_dispatch": "fail",
+    "weak_fold": "fail",
+    "weak_scale": "pass"
+  },
+  "158_weak_symbols:clang:O2": {
+    "weak_absent_probe": "fail",
+    "weak_defined_probe": "fail",
+    "weak_dispatch": "fail",
+    "weak_fold": "fail",
+    "weak_scale": "pass"
+  },
+  "158_weak_symbols:gcc:O0": {
+    "weak_absent_probe": "fail",
+    "weak_defined_probe": "fail",
+    "weak_dispatch": "fail",
+    "weak_fold": "fail",
+    "weak_scale": "pass"
+  },
+  "158_weak_symbols:gcc:O2": {
+    "weak_absent_probe": "fail",
+    "weak_defined_probe": "fail",
+    "weak_dispatch": "fail",
+    "weak_fold": "fail",
+    "weak_scale": "pass"
+  },
+  "159_ifunc_resolver:clang:O0": {
+    "ifunc_call_double": "pass",
+    "ifunc_fold": "pass",
+    "ifunc_lazy_double": "fail",
+    "ifunc_matches_reference": "pass",
+    "ifunc_paths_agree": "pass"
+  },
+  "159_ifunc_resolver:clang:O2": {
+    "ifunc_call_double": "pass",
+    "ifunc_fold": "pass",
+    "ifunc_lazy_double": "fail",
+    "ifunc_matches_reference": "pass",
+    "ifunc_paths_agree": "pass"
+  },
+  "159_ifunc_resolver:gcc:O0": {
+    "ifunc_call_double": "pass",
+    "ifunc_fold": "pass",
+    "ifunc_lazy_double": "fail",
+    "ifunc_matches_reference": "pass",
+    "ifunc_paths_agree": "pass"
+  },
+  "159_ifunc_resolver:gcc:O2": {
+    "ifunc_call_double": "pass",
+    "ifunc_fold": "pass",
+    "ifunc_lazy_double": "fail",
+    "ifunc_matches_reference": "pass",
+    "ifunc_paths_agree": "pass"
+  },
   "15_binary_search_tree:clang:O0": {
     "bst_inorder_checksum": "pass",
     "bst_search": "pass"
@@ -766,6 +2056,264 @@
     "bst_inorder_checksum": "pass",
     "bst_search": "pass"
   },
+  "160_init_and_fini:clang:O0": {
+    "initfini_fold": "structural",
+    "initfini_order": "structural",
+    "initfini_ready": "structural",
+    "initfini_table": "structural",
+    "initfini_witness": "fail"
+  },
+  "160_init_and_fini:clang:O2": {
+    "initfini_fold": "structural",
+    "initfini_order": "structural",
+    "initfini_ready": "structural",
+    "initfini_table": "structural",
+    "initfini_witness": "fail"
+  },
+  "160_init_and_fini:gcc:O0": {
+    "initfini_fold": "structural",
+    "initfini_order": "structural",
+    "initfini_ready": "structural",
+    "initfini_table": "structural",
+    "initfini_witness": "fail"
+  },
+  "160_init_and_fini:gcc:O2": {
+    "initfini_fold": "structural",
+    "initfini_order": "structural",
+    "initfini_ready": "structural",
+    "initfini_table": "structural",
+    "initfini_witness": "fail"
+  },
+  "161_packed_struct_layout:clang:O0": {
+    "pk161_encode": "pass",
+    "pk161_layout_delta": "pass",
+    "pk161_member_offset": "pass",
+    "pk161_read_field": "pass",
+    "pk161_roundtrip": "pass"
+  },
+  "161_packed_struct_layout:clang:O2": {
+    "pk161_encode": "pass",
+    "pk161_layout_delta": "pass",
+    "pk161_member_offset": "pass",
+    "pk161_read_field": "pass",
+    "pk161_roundtrip": "fail"
+  },
+  "161_packed_struct_layout:gcc:O0": {
+    "pk161_encode": "pass",
+    "pk161_layout_delta": "pass",
+    "pk161_member_offset": "pass",
+    "pk161_read_field": "pass",
+    "pk161_roundtrip": "pass"
+  },
+  "161_packed_struct_layout:gcc:O2": {
+    "pk161_encode": "pass",
+    "pk161_layout_delta": "pass",
+    "pk161_member_offset": "pass",
+    "pk161_read_field": "pass",
+    "pk161_roundtrip": "fail"
+  },
+  "162_unaligned_memcpy_access:clang:O0": {
+    "ua162_load_be32": "pass",
+    "ua162_load_native16": "pass",
+    "ua162_load_native32": "pass",
+    "ua162_move_field32": "pass",
+    "ua162_roundtrip": "pass",
+    "ua162_store_be32": "pass",
+    "ua162_store_native32": "pass"
+  },
+  "162_unaligned_memcpy_access:clang:O2": {
+    "ua162_load_be32": "pass",
+    "ua162_load_native16": "pass",
+    "ua162_load_native32": "pass",
+    "ua162_move_field32": "fail",
+    "ua162_roundtrip": "fail",
+    "ua162_store_be32": "pass",
+    "ua162_store_native32": "pass"
+  },
+  "162_unaligned_memcpy_access:gcc:O0": {
+    "ua162_load_be32": "pass",
+    "ua162_load_native16": "pass",
+    "ua162_load_native32": "pass",
+    "ua162_move_field32": "pass",
+    "ua162_roundtrip": "pass",
+    "ua162_store_be32": "pass",
+    "ua162_store_native32": "pass"
+  },
+  "162_unaligned_memcpy_access:gcc:O2": {
+    "ua162_load_be32": "pass",
+    "ua162_load_native16": "pass",
+    "ua162_load_native32": "pass",
+    "ua162_move_field32": "pass",
+    "ua162_roundtrip": "fail",
+    "ua162_store_be32": "pass",
+    "ua162_store_native32": "pass"
+  },
+  "163_wire_header_parser:clang:O0": {
+    "hdr163_build": "pass",
+    "hdr163_copy_payload": "pass",
+    "hdr163_payload_digest": "pass",
+    "hdr163_stream_id": "pass",
+    "hdr163_validate": "pass"
+  },
+  "163_wire_header_parser:clang:O2": {
+    "hdr163_build": "pass",
+    "hdr163_copy_payload": "pass",
+    "hdr163_payload_digest": "pass",
+    "hdr163_stream_id": "pass",
+    "hdr163_validate": "pass"
+  },
+  "163_wire_header_parser:gcc:O0": {
+    "hdr163_build": "pass",
+    "hdr163_copy_payload": "pass",
+    "hdr163_payload_digest": "pass",
+    "hdr163_stream_id": "pass",
+    "hdr163_validate": "pass"
+  },
+  "163_wire_header_parser:gcc:O2": {
+    "hdr163_build": "pass",
+    "hdr163_copy_payload": "pass",
+    "hdr163_payload_digest": "pass",
+    "hdr163_stream_id": "pass",
+    "hdr163_validate": "pass"
+  },
+  "164_nested_tlv_walker:clang:O0": {
+    "tlv164_encode_nested": "pass",
+    "tlv164_find_type": "pass",
+    "tlv164_leaf_sum": "pass",
+    "tlv164_max_depth": "pass",
+    "tlv164_node_count": "pass"
+  },
+  "164_nested_tlv_walker:clang:O2": {
+    "tlv164_encode_nested": "pass",
+    "tlv164_find_type": "fail",
+    "tlv164_leaf_sum": "fail",
+    "tlv164_max_depth": "fail",
+    "tlv164_node_count": "fail"
+  },
+  "164_nested_tlv_walker:gcc:O0": {
+    "tlv164_encode_nested": "pass",
+    "tlv164_find_type": "pass",
+    "tlv164_leaf_sum": "pass",
+    "tlv164_max_depth": "pass",
+    "tlv164_node_count": "pass"
+  },
+  "164_nested_tlv_walker:gcc:O2": {
+    "tlv164_encode_nested": "pass",
+    "tlv164_find_type": "pass",
+    "tlv164_leaf_sum": "fail",
+    "tlv164_max_depth": "fail",
+    "tlv164_node_count": "fail"
+  },
+  "165_bitstream_reader:clang:O0": {
+    "bit165_cross_check": "pass",
+    "bit165_read_bits": "pass",
+    "bit165_read_sequence": "pass",
+    "bit165_roundtrip": "pass",
+    "bit165_write_frame": "pass"
+  },
+  "165_bitstream_reader:clang:O2": {
+    "bit165_cross_check": "fail",
+    "bit165_read_bits": "pass",
+    "bit165_read_sequence": "pass",
+    "bit165_roundtrip": "fail",
+    "bit165_write_frame": "fail"
+  },
+  "165_bitstream_reader:gcc:O0": {
+    "bit165_cross_check": "pass",
+    "bit165_read_bits": "pass",
+    "bit165_read_sequence": "pass",
+    "bit165_roundtrip": "pass",
+    "bit165_write_frame": "pass"
+  },
+  "165_bitstream_reader:gcc:O2": {
+    "bit165_cross_check": "fail",
+    "bit165_read_bits": "fail",
+    "bit165_read_sequence": "pass",
+    "bit165_roundtrip": "fail",
+    "bit165_write_frame": "pass"
+  },
+  "166_rust_generics:rustc:O0": {
+    "rust_generic_dispatch": "fail",
+    "rust_generic_fill": "fail",
+    "rust_generic_i16": "pass",
+    "rust_generic_i32": "pass",
+    "rust_generic_i8": "fail",
+    "rust_generic_max": "fail",
+    "rust_generic_mixed": "fail"
+  },
+  "166_rust_generics:rustc:O2": {
+    "rust_generic_dispatch": "pass",
+    "rust_generic_fill": "fail",
+    "rust_generic_i16": "fail",
+    "rust_generic_i32": "fail",
+    "rust_generic_i8": "fail",
+    "rust_generic_max": "fail",
+    "rust_generic_mixed": "fail"
+  },
+  "167_rust_trait_objects:rustc:O0": {
+    "rust_dyn_apply": "fail",
+    "rust_dyn_boxed": "fail",
+    "rust_dyn_fill": "fail",
+    "rust_dyn_pass_fat": "fail",
+    "rust_dyn_pipeline": "fail",
+    "rust_dyn_two_slots": "fail"
+  },
+  "167_rust_trait_objects:rustc:O2": {
+    "rust_dyn_apply": "fail",
+    "rust_dyn_boxed": "fail",
+    "rust_dyn_fill": "fail",
+    "rust_dyn_pass_fat": "fail",
+    "rust_dyn_pipeline": "pass",
+    "rust_dyn_two_slots": "fail"
+  },
+  "168_rust_enum_niche:rustc:O0": {
+    "rust_enum_by_value": "fail",
+    "rust_enum_discriminant": "fail",
+    "rust_enum_eval": "fail",
+    "rust_niche_sizes": "pass",
+    "rust_option_nested": "pass",
+    "rust_option_niche_fill": "fail",
+    "rust_option_nonzero": "pass",
+    "rust_option_ref": "pass",
+    "rust_option_ref_find": "fail"
+  },
+  "168_rust_enum_niche:rustc:O2": {
+    "rust_enum_by_value": "fail",
+    "rust_enum_discriminant": "pass",
+    "rust_enum_eval": "fail",
+    "rust_niche_sizes": "pass",
+    "rust_option_nested": "pass",
+    "rust_option_niche_fill": "pass",
+    "rust_option_nonzero": "pass",
+    "rust_option_ref": "pass",
+    "rust_option_ref_find": "fail"
+  },
+  "169_rust_slices_bounds:rustc:O0": {
+    "rust_slice_chunks": "fail",
+    "rust_slice_get": "pass",
+    "rust_slice_get_range": "fail",
+    "rust_slice_index": "fail",
+    "rust_slice_index_pair": "fail",
+    "rust_slice_iter_sum": "fail",
+    "rust_slice_rev_enumerate": "fail",
+    "rust_slice_reverse": "fail",
+    "rust_slice_split_zip": "fail",
+    "rust_slice_windows": "fail",
+    "rust_slice_write": "fail"
+  },
+  "169_rust_slices_bounds:rustc:O2": {
+    "rust_slice_chunks": "pass",
+    "rust_slice_get": "pass",
+    "rust_slice_get_range": "pass",
+    "rust_slice_index": "pass",
+    "rust_slice_index_pair": "pass",
+    "rust_slice_iter_sum": "pass",
+    "rust_slice_rev_enumerate": "pass",
+    "rust_slice_reverse": "pass",
+    "rust_slice_split_zip": "pass",
+    "rust_slice_windows": "pass",
+    "rust_slice_write": "fail"
+  },
   "16_red_black_tree:clang:O0": {
     "rb_validate": "pass"
   },
@@ -777,6 +2325,206 @@
   },
   "16_red_black_tree:gcc:O2": {
     "rb_validate": "pass"
+  },
+  "170_rust_panic_unwind:rustc:O0": {
+    "rust_panic_assert": "fail",
+    "rust_panic_bounds": "fail",
+    "rust_panic_caught": "fail",
+    "rust_panic_expect": "fail",
+    "rust_panic_guarded_div": "fail",
+    "rust_panic_multi": "fail",
+    "rust_panic_unreachable": "fail",
+    "rust_panic_unwrap": "fail"
+  },
+  "170_rust_panic_unwind:rustc:O2": {
+    "rust_panic_assert": "pass",
+    "rust_panic_bounds": "fail",
+    "rust_panic_caught": "pass",
+    "rust_panic_expect": "fail",
+    "rust_panic_guarded_div": "pass",
+    "rust_panic_multi": "fail",
+    "rust_panic_unreachable": "pass",
+    "rust_panic_unwrap": "fail"
+  },
+  "171_rust_overflow:rustc:O0": {
+    "rust_cast_chain": "pass",
+    "rust_checked_add": "fail",
+    "rust_checked_div": "fail",
+    "rust_checked_mul": "fail",
+    "rust_checked_rem": "fail",
+    "rust_checked_shift": "fail",
+    "rust_overflow_matrix": "fail",
+    "rust_overflowing_add": "pass",
+    "rust_overflowing_mul": "fail",
+    "rust_saturating_add": "pass",
+    "rust_saturating_mul": "fail",
+    "rust_saturating_sub": "pass",
+    "rust_shift_family": "fail",
+    "rust_u32_bits": "pass",
+    "rust_u32_rotate": "pass",
+    "rust_u32_sub_family": "fail",
+    "rust_wrapping_add": "pass",
+    "rust_wrapping_mul": "pass",
+    "rust_wrapping_neg_abs": "pass",
+    "rust_wrapping_sub": "pass"
+  },
+  "171_rust_overflow:rustc:O2": {
+    "rust_cast_chain": "pass",
+    "rust_checked_add": "pass",
+    "rust_checked_div": "pass",
+    "rust_checked_mul": "fail",
+    "rust_checked_rem": "pass",
+    "rust_checked_shift": "pass",
+    "rust_overflow_matrix": "fail",
+    "rust_overflowing_add": "pass",
+    "rust_overflowing_mul": "fail",
+    "rust_saturating_add": "pass",
+    "rust_saturating_mul": "fail",
+    "rust_saturating_sub": "pass",
+    "rust_shift_family": "pass",
+    "rust_u32_bits": "fail",
+    "rust_u32_rotate": "pass",
+    "rust_u32_sub_family": "pass",
+    "rust_wrapping_add": "pass",
+    "rust_wrapping_mul": "pass",
+    "rust_wrapping_neg_abs": "pass",
+    "rust_wrapping_sub": "pass"
+  },
+  "172_float_double_widths:clang:O0": {
+    "accumulate_narrow": "fail",
+    "accumulate_wide": "fail",
+    "double_precision_horner": "fail",
+    "narrow_after_double_math": "fail",
+    "single_precision_horner": "fail",
+    "width_disagreement": "fail"
+  },
+  "172_float_double_widths:clang:O2": {
+    "accumulate_narrow": "fail",
+    "accumulate_wide": "fail",
+    "double_precision_horner": "pass",
+    "narrow_after_double_math": "fail",
+    "single_precision_horner": "pass",
+    "width_disagreement": "fail"
+  },
+  "172_float_double_widths:gcc:O0": {
+    "accumulate_narrow": "fail",
+    "accumulate_wide": "fail",
+    "double_precision_horner": "fail",
+    "narrow_after_double_math": "fail",
+    "single_precision_horner": "fail",
+    "width_disagreement": "pass"
+  },
+  "172_float_double_widths:gcc:O2": {
+    "accumulate_narrow": "fail",
+    "accumulate_wide": "fail",
+    "double_precision_horner": "fail",
+    "narrow_after_double_math": "fail",
+    "single_precision_horner": "fail",
+    "width_disagreement": "fail"
+  },
+  "173_float_int_conversions:clang:O0": {
+    "int32_round_trip_delta": "fail",
+    "round_half_away_from_zero": "fail",
+    "truncate_double_to_i64": "fail",
+    "truncate_to_unsigned": "pass",
+    "truncate_toward_zero": "fail",
+    "widen_int_to_float": "pass",
+    "widen_long_to_double": "pass"
+  },
+  "173_float_int_conversions:clang:O2": {
+    "int32_round_trip_delta": "fail",
+    "round_half_away_from_zero": "fail",
+    "truncate_double_to_i64": "fail",
+    "truncate_to_unsigned": "pass",
+    "truncate_toward_zero": "fail",
+    "widen_int_to_float": "pass",
+    "widen_long_to_double": "pass"
+  },
+  "173_float_int_conversions:gcc:O0": {
+    "int32_round_trip_delta": "fail",
+    "round_half_away_from_zero": "fail",
+    "truncate_double_to_i64": "fail",
+    "truncate_to_unsigned": "pass",
+    "truncate_toward_zero": "fail",
+    "widen_int_to_float": "pass",
+    "widen_long_to_double": "pass"
+  },
+  "173_float_int_conversions:gcc:O2": {
+    "int32_round_trip_delta": "pass",
+    "round_half_away_from_zero": "fail",
+    "truncate_double_to_i64": "fail",
+    "truncate_to_unsigned": "pass",
+    "truncate_toward_zero": "fail",
+    "widen_int_to_float": "pass",
+    "widen_long_to_double": "pass"
+  },
+  "174_float_compare_classify:clang:O0": {
+    "absolute_binary32": "fail",
+    "classify_binary32": "fail",
+    "negate_binary32": "fail",
+    "ordered_compare_binary32": "pass",
+    "sign_bit_of_binary32": "fail",
+    "unordered_compare_flags": "pass",
+    "zero_sign_from_product": "fail"
+  },
+  "174_float_compare_classify:clang:O2": {
+    "absolute_binary32": "fail",
+    "classify_binary32": "fail",
+    "negate_binary32": "fail",
+    "ordered_compare_binary32": "fail",
+    "sign_bit_of_binary32": "fail",
+    "unordered_compare_flags": "fail",
+    "zero_sign_from_product": "fail"
+  },
+  "174_float_compare_classify:gcc:O0": {
+    "absolute_binary32": "fail",
+    "classify_binary32": "fail",
+    "negate_binary32": "fail",
+    "ordered_compare_binary32": "pass",
+    "sign_bit_of_binary32": "fail",
+    "unordered_compare_flags": "fail",
+    "zero_sign_from_product": "fail"
+  },
+  "174_float_compare_classify:gcc:O2": {
+    "absolute_binary32": "fail",
+    "classify_binary32": "fail",
+    "negate_binary32": "fail",
+    "ordered_compare_binary32": "pass",
+    "sign_bit_of_binary32": "fail",
+    "unordered_compare_flags": "fail",
+    "zero_sign_from_product": "fail"
+  },
+  "175_float_matrix_kernel:clang:O0": {
+    "dot_product_f32": "pass",
+    "dot_product_f64": "pass",
+    "matrix2_determinant": "fail",
+    "matrix2_multiply": "fail",
+    "scale_series_f32": "fail",
+    "sum_of_squares_f32": "pass"
+  },
+  "175_float_matrix_kernel:clang:O2": {
+    "dot_product_f32": "fail",
+    "dot_product_f64": "fail",
+    "matrix2_determinant": "pass",
+    "matrix2_multiply": "fail",
+    "scale_series_f32": "fail",
+    "sum_of_squares_f32": "fail"
+  },
+  "175_float_matrix_kernel:gcc:O0": {
+    "dot_product_f32": "fail",
+    "dot_product_f64": "pass",
+    "matrix2_determinant": "pass",
+    "matrix2_multiply": "fail",
+    "scale_series_f32": "fail",
+    "sum_of_squares_f32": "pass"
+  },
+  "175_float_matrix_kernel:gcc:O2": {
+    "dot_product_f32": "fail",
+    "dot_product_f64": "fail",
+    "matrix2_determinant": "pass",
+    "matrix2_multiply": "fail",
+    "scale_series_f32": "fail",
+    "sum_of_squares_f32": "pass"
   },
   "17_hash_table:clang:O0": {
     "hash_insert": "pass",
@@ -793,6 +2541,178 @@
   "17_hash_table:gcc:O2": {
     "hash_insert": "pass",
     "hash_lookup": "pass"
+  },
+  "181_compensated_summation:clang:O0": {
+    "compensation_of_step": "pass",
+    "difference_of_products": "fail",
+    "kahan_sum_f64": "pass",
+    "naive_sum_f64": "pass",
+    "summation_disagrees": "pass"
+  },
+  "181_compensated_summation:clang:O2": {
+    "compensation_of_step": "fail",
+    "difference_of_products": "pass",
+    "kahan_sum_f64": "fail",
+    "naive_sum_f64": "fail",
+    "summation_disagrees": "fail"
+  },
+  "181_compensated_summation:gcc:O0": {
+    "compensation_of_step": "fail",
+    "difference_of_products": "fail",
+    "kahan_sum_f64": "pass",
+    "naive_sum_f64": "pass",
+    "summation_disagrees": "pass"
+  },
+  "181_compensated_summation:gcc:O2": {
+    "compensation_of_step": "pass",
+    "difference_of_products": "pass",
+    "kahan_sum_f64": "fail",
+    "naive_sum_f64": "fail",
+    "summation_disagrees": "fail"
+  },
+  "182_cold_and_part_splits:clang:O0": {
+    "always_reaches_the_cold_chunk": "pass",
+    "mix_with_outlinable_tail": "pass",
+    "scan_with_two_cold_exits": "fail",
+    "validate_with_cold_path": "pass"
+  },
+  "182_cold_and_part_splits:clang:O2": {
+    "always_reaches_the_cold_chunk": "fail",
+    "mix_with_outlinable_tail": "pass",
+    "scan_with_two_cold_exits": "fail",
+    "validate_with_cold_path": "fail"
+  },
+  "182_cold_and_part_splits:gcc:O0": {
+    "always_reaches_the_cold_chunk": "pass",
+    "mix_with_outlinable_tail": "pass",
+    "scan_with_two_cold_exits": "fail",
+    "validate_with_cold_path": "pass"
+  },
+  "182_cold_and_part_splits:gcc:O2": {
+    "always_reaches_the_cold_chunk": "fail",
+    "mix_with_outlinable_tail": "pass",
+    "scan_with_two_cold_exits": "fail",
+    "validate_with_cold_path": "fail"
+  },
+  "183_sentinel_list_search:clang:O0": {
+    "find_before_either_sentinel": "pass",
+    "find_by_key": "pass",
+    "find_byte_before_nul": "pass",
+    "find_terminated_by_sentinel": "pass",
+    "length_to_nul": "pass"
+  },
+  "183_sentinel_list_search:clang:O2": {
+    "find_before_either_sentinel": "pass",
+    "find_by_key": "pass",
+    "find_byte_before_nul": "pass",
+    "find_terminated_by_sentinel": "pass",
+    "length_to_nul": "pass"
+  },
+  "183_sentinel_list_search:gcc:O0": {
+    "find_before_either_sentinel": "pass",
+    "find_by_key": "pass",
+    "find_byte_before_nul": "pass",
+    "find_terminated_by_sentinel": "pass",
+    "length_to_nul": "pass"
+  },
+  "183_sentinel_list_search:gcc:O2": {
+    "find_before_either_sentinel": "pass",
+    "find_by_key": "pass",
+    "find_byte_before_nul": "pass",
+    "find_terminated_by_sentinel": "pass",
+    "length_to_nul": "pass"
+  },
+  "184_rep_stos_widths:clang:O0": {
+    "fill_bytes_and_probe": "pass",
+    "fill_dwords_and_probe": "pass",
+    "fill_qwords_and_probe": "pass",
+    "fill_then_patch_and_probe": "pass",
+    "zero_fixed_block_and_probe": "pass"
+  },
+  "184_rep_stos_widths:clang:O2": {
+    "fill_bytes_and_probe": "pass",
+    "fill_dwords_and_probe": "pass",
+    "fill_qwords_and_probe": "pass",
+    "fill_then_patch_and_probe": "pass",
+    "zero_fixed_block_and_probe": "pass"
+  },
+  "184_rep_stos_widths:gcc:O0": {
+    "fill_bytes_and_probe": "pass",
+    "fill_dwords_and_probe": "pass",
+    "fill_qwords_and_probe": "pass",
+    "fill_then_patch_and_probe": "pass",
+    "zero_fixed_block_and_probe": "pass"
+  },
+  "184_rep_stos_widths:gcc:O2": {
+    "fill_bytes_and_probe": "pass",
+    "fill_dwords_and_probe": "pass",
+    "fill_qwords_and_probe": "pass",
+    "fill_then_patch_and_probe": "pass",
+    "zero_fixed_block_and_probe": "pass"
+  },
+  "185_subword_signed_division:clang:O0": {
+    "divide_short_by_seven": "pass",
+    "divide_signed_bytes": "pass",
+    "divide_signed_shorts": "pass",
+    "divide_unsigned_bytes": "pass",
+    "divide_unsigned_shorts": "pass",
+    "remainder_signed_bytes": "fail",
+    "remainder_signed_shorts": "fail"
+  },
+  "185_subword_signed_division:clang:O2": {
+    "divide_short_by_seven": "pass",
+    "divide_signed_bytes": "fail",
+    "divide_signed_shorts": "pass",
+    "divide_unsigned_bytes": "fail",
+    "divide_unsigned_shorts": "fail",
+    "remainder_signed_bytes": "fail",
+    "remainder_signed_shorts": "pass"
+  },
+  "185_subword_signed_division:gcc:O0": {
+    "divide_short_by_seven": "pass",
+    "divide_signed_bytes": "pass",
+    "divide_signed_shorts": "pass",
+    "divide_unsigned_bytes": "fail",
+    "divide_unsigned_shorts": "fail",
+    "remainder_signed_bytes": "pass",
+    "remainder_signed_shorts": "pass"
+  },
+  "185_subword_signed_division:gcc:O2": {
+    "divide_short_by_seven": "pass",
+    "divide_signed_bytes": "pass",
+    "divide_signed_shorts": "pass",
+    "divide_unsigned_bytes": "fail",
+    "divide_unsigned_shorts": "fail",
+    "remainder_signed_bytes": "pass",
+    "remainder_signed_shorts": "pass"
+  },
+  "186_defaultless_guarded_switch:clang:O0": {
+    "dense_no_default": "pass",
+    "fallthrough_no_default": "pass",
+    "loop_switch_no_default": "pass",
+    "returning_arms_no_default": "pass",
+    "sparse_no_default": "pass"
+  },
+  "186_defaultless_guarded_switch:clang:O2": {
+    "dense_no_default": "pass",
+    "fallthrough_no_default": "pass",
+    "loop_switch_no_default": "pass",
+    "returning_arms_no_default": "pass",
+    "sparse_no_default": "pass"
+  },
+  "186_defaultless_guarded_switch:gcc:O0": {
+    "dense_no_default": "pass",
+    "fallthrough_no_default": "pass",
+    "loop_switch_no_default": "pass",
+    "returning_arms_no_default": "pass",
+    "sparse_no_default": "pass"
+  },
+  "186_defaultless_guarded_switch:gcc:O2": {
+    "dense_no_default": "pass",
+    "fallthrough_no_default": "pass",
+    "loop_switch_no_default": "pass",
+    "returning_arms_no_default": "pass",
+    "sparse_no_default": "pass"
   },
   "18_binary_heap:clang:O0": {
     "heap_pop": "pass",
@@ -961,6 +2881,1214 @@
   },
   "30_finite_difference:gcc:O2": {
     "heat_step_1d": "pass"
+  },
+  "31_edit_distance:clang:O0": {
+    "edit_distance": "pass",
+    "hamming_distance": "pass"
+  },
+  "31_edit_distance:clang:O2": {
+    "edit_distance": "pass",
+    "hamming_distance": "pass"
+  },
+  "31_edit_distance:gcc:O0": {
+    "edit_distance": "pass",
+    "hamming_distance": "pass"
+  },
+  "31_edit_distance:gcc:O2": {
+    "edit_distance": "pass",
+    "hamming_distance": "pass"
+  },
+  "32_longest_common_subsequence:clang:O0": {
+    "lcs_length": "pass",
+    "lcs_recover": "pass"
+  },
+  "32_longest_common_subsequence:clang:O2": {
+    "lcs_length": "pass",
+    "lcs_recover": "pass"
+  },
+  "32_longest_common_subsequence:gcc:O0": {
+    "lcs_length": "pass",
+    "lcs_recover": "pass"
+  },
+  "32_longest_common_subsequence:gcc:O2": {
+    "lcs_length": "pass",
+    "lcs_recover": "pass"
+  },
+  "33_knapsack:clang:O0": {
+    "knapsack_best_value": "pass",
+    "unbounded_knapsack": "pass"
+  },
+  "33_knapsack:clang:O2": {
+    "knapsack_best_value": "fail",
+    "unbounded_knapsack": "pass"
+  },
+  "33_knapsack:gcc:O0": {
+    "knapsack_best_value": "pass",
+    "unbounded_knapsack": "pass"
+  },
+  "33_knapsack:gcc:O2": {
+    "knapsack_best_value": "pass",
+    "unbounded_knapsack": "pass"
+  },
+  "34_coin_change:clang:O0": {
+    "count_change": "pass",
+    "min_coins": "pass"
+  },
+  "34_coin_change:clang:O2": {
+    "count_change": "pass",
+    "min_coins": "pass"
+  },
+  "34_coin_change:gcc:O0": {
+    "count_change": "pass",
+    "min_coins": "pass"
+  },
+  "34_coin_change:gcc:O2": {
+    "count_change": "pass",
+    "min_coins": "pass"
+  },
+  "35_matrix_chain:clang:O0": {
+    "matrix_chain_cost": "pass"
+  },
+  "35_matrix_chain:clang:O2": {
+    "matrix_chain_cost": "pass"
+  },
+  "35_matrix_chain:gcc:O0": {
+    "matrix_chain_cost": "pass"
+  },
+  "35_matrix_chain:gcc:O2": {
+    "matrix_chain_cost": "pass"
+  },
+  "36_quicksort:clang:O0": {
+    "quicksort_i32": "pass"
+  },
+  "36_quicksort:clang:O2": {
+    "quicksort_i32": "fail"
+  },
+  "36_quicksort:gcc:O0": {
+    "quicksort_i32": "pass"
+  },
+  "36_quicksort:gcc:O2": {
+    "quicksort_i32": "fail"
+  },
+  "37_heapsort:clang:O0": {
+    "heapsort_i32": "pass"
+  },
+  "37_heapsort:clang:O2": {
+    "heapsort_i32": "pass"
+  },
+  "37_heapsort:gcc:O0": {
+    "heapsort_i32": "pass"
+  },
+  "37_heapsort:gcc:O2": {
+    "heapsort_i32": "pass"
+  },
+  "38_insertion_shell_sort:clang:O0": {
+    "insertion_sort_i32": "pass",
+    "shell_sort_i32": "pass"
+  },
+  "38_insertion_shell_sort:clang:O2": {
+    "insertion_sort_i32": "pass",
+    "shell_sort_i32": "pass"
+  },
+  "38_insertion_shell_sort:gcc:O0": {
+    "insertion_sort_i32": "pass",
+    "shell_sort_i32": "pass"
+  },
+  "38_insertion_shell_sort:gcc:O2": {
+    "insertion_sort_i32": "pass",
+    "shell_sort_i32": "pass"
+  },
+  "39_counting_radix_sort:clang:O0": {
+    "counting_sort_u8": "pass",
+    "radix_sort_u32": "pass"
+  },
+  "39_counting_radix_sort:clang:O2": {
+    "counting_sort_u8": "pass",
+    "radix_sort_u32": "pass"
+  },
+  "39_counting_radix_sort:gcc:O0": {
+    "counting_sort_u8": "pass",
+    "radix_sort_u32": "pass"
+  },
+  "39_counting_radix_sort:gcc:O2": {
+    "counting_sort_u8": "pass",
+    "radix_sort_u32": "fail"
+  },
+  "40_quickselect:clang:O0": {
+    "median_of_three": "pass",
+    "quickselect_kth": "pass"
+  },
+  "40_quickselect:clang:O2": {
+    "median_of_three": "pass",
+    "quickselect_kth": "pass"
+  },
+  "40_quickselect:gcc:O0": {
+    "median_of_three": "pass",
+    "quickselect_kth": "pass"
+  },
+  "40_quickselect:gcc:O2": {
+    "median_of_three": "pass",
+    "quickselect_kth": "pass"
+  },
+  "41_tokenizer:clang:O0": {
+    "tokenize": "pass"
+  },
+  "41_tokenizer:clang:O2": {
+    "tokenize": "pass"
+  },
+  "41_tokenizer:gcc:O0": {
+    "tokenize": "pass"
+  },
+  "41_tokenizer:gcc:O2": {
+    "tokenize": "pass"
+  },
+  "42_rpn_evaluator:clang:O0": {
+    "rpn_evaluate": "pass"
+  },
+  "42_rpn_evaluator:clang:O2": {
+    "rpn_evaluate": "fail"
+  },
+  "42_rpn_evaluator:gcc:O0": {
+    "rpn_evaluate": "pass"
+  },
+  "42_rpn_evaluator:gcc:O2": {
+    "rpn_evaluate": "pass"
+  },
+  "43_base64:clang:O0": {
+    "base64_decode": "pass",
+    "base64_encode": "pass"
+  },
+  "43_base64:clang:O2": {
+    "base64_decode": "pass",
+    "base64_encode": "pass"
+  },
+  "43_base64:gcc:O0": {
+    "base64_decode": "pass",
+    "base64_encode": "pass"
+  },
+  "43_base64:gcc:O2": {
+    "base64_decode": "pass",
+    "base64_encode": "pass"
+  },
+  "44_run_length:clang:O0": {
+    "rle_decode": "pass",
+    "rle_encode": "pass"
+  },
+  "44_run_length:clang:O2": {
+    "rle_decode": "pass",
+    "rle_encode": "pass"
+  },
+  "44_run_length:gcc:O0": {
+    "rle_decode": "pass",
+    "rle_encode": "pass"
+  },
+  "44_run_length:gcc:O2": {
+    "rle_decode": "pass",
+    "rle_encode": "pass"
+  },
+  "45_string_algorithms:clang:O0": {
+    "format_decimal": "fail",
+    "is_palindrome": "pass",
+    "parse_decimal": "pass"
+  },
+  "45_string_algorithms:clang:O2": {
+    "format_decimal": "pass",
+    "is_palindrome": "pass",
+    "parse_decimal": "pass"
+  },
+  "45_string_algorithms:gcc:O0": {
+    "format_decimal": "fail",
+    "is_palindrome": "pass",
+    "parse_decimal": "pass"
+  },
+  "45_string_algorithms:gcc:O2": {
+    "format_decimal": "pass",
+    "is_palindrome": "pass",
+    "parse_decimal": "pass"
+  },
+  "46_bitset:clang:O0": {
+    "bitset_population": "pass",
+    "bitset_rank": "pass",
+    "bitset_select": "pass"
+  },
+  "46_bitset:clang:O2": {
+    "bitset_population": "pass",
+    "bitset_rank": "pass",
+    "bitset_select": "pass"
+  },
+  "46_bitset:gcc:O0": {
+    "bitset_population": "pass",
+    "bitset_rank": "pass",
+    "bitset_select": "pass"
+  },
+  "46_bitset:gcc:O2": {
+    "bitset_population": "pass",
+    "bitset_rank": "pass",
+    "bitset_select": "pass"
+  },
+  "47_huffman:clang:O0": {
+    "huffman_code_lengths": "pass",
+    "kraft_sum_q16": "pass"
+  },
+  "47_huffman:clang:O2": {
+    "huffman_code_lengths": "pass",
+    "kraft_sum_q16": "pass"
+  },
+  "47_huffman:gcc:O0": {
+    "huffman_code_lengths": "pass",
+    "kraft_sum_q16": "pass"
+  },
+  "47_huffman:gcc:O2": {
+    "huffman_code_lengths": "pass",
+    "kraft_sum_q16": "pass"
+  },
+  "48_gray_code:clang:O0": {
+    "binary_to_gray": "pass",
+    "gray_sequence": "pass",
+    "gray_to_binary": "pass",
+    "reverse_bits32": "pass"
+  },
+  "48_gray_code:clang:O2": {
+    "binary_to_gray": "pass",
+    "gray_sequence": "pass",
+    "gray_to_binary": "pass",
+    "reverse_bits32": "pass"
+  },
+  "48_gray_code:gcc:O0": {
+    "binary_to_gray": "pass",
+    "gray_sequence": "pass",
+    "gray_to_binary": "pass",
+    "reverse_bits32": "pass"
+  },
+  "48_gray_code:gcc:O2": {
+    "binary_to_gray": "pass",
+    "gray_sequence": "pass",
+    "gray_to_binary": "pass",
+    "reverse_bits32": "pass"
+  },
+  "49_crc32:clang:O0": {
+    "crc32_bitwise": "pass",
+    "crc32_table_driven": "pass",
+    "internet_checksum": "pass"
+  },
+  "49_crc32:clang:O2": {
+    "crc32_bitwise": "pass",
+    "crc32_table_driven": "pass",
+    "internet_checksum": "fail"
+  },
+  "49_crc32:gcc:O0": {
+    "crc32_bitwise": "pass",
+    "crc32_table_driven": "pass",
+    "internet_checksum": "pass"
+  },
+  "49_crc32:gcc:O2": {
+    "crc32_bitwise": "pass",
+    "crc32_table_driven": "pass",
+    "internet_checksum": "pass"
+  },
+  "50_varint:clang:O0": {
+    "varint_decode": "pass",
+    "varint_encode": "pass",
+    "zigzag_decode": "pass",
+    "zigzag_encode": "pass"
+  },
+  "50_varint:clang:O2": {
+    "varint_decode": "pass",
+    "varint_encode": "pass",
+    "zigzag_decode": "pass",
+    "zigzag_encode": "pass"
+  },
+  "50_varint:gcc:O0": {
+    "varint_decode": "pass",
+    "varint_encode": "pass",
+    "zigzag_decode": "pass",
+    "zigzag_encode": "pass"
+  },
+  "50_varint:gcc:O2": {
+    "varint_decode": "pass",
+    "varint_encode": "pass",
+    "zigzag_decode": "pass",
+    "zigzag_encode": "pass"
+  },
+  "51_rc4:clang:O0": {
+    "rc4_keystream_checksum": "pass"
+  },
+  "51_rc4:clang:O2": {
+    "rc4_keystream_checksum": "pass"
+  },
+  "51_rc4:gcc:O0": {
+    "rc4_keystream_checksum": "pass"
+  },
+  "51_rc4:gcc:O2": {
+    "rc4_keystream_checksum": "fail"
+  },
+  "52_hash_functions:clang:O0": {
+    "djb2_xor": "pass",
+    "fnv1a_32": "pass",
+    "murmur3_finalize": "pass"
+  },
+  "52_hash_functions:clang:O2": {
+    "djb2_xor": "pass",
+    "fnv1a_32": "pass",
+    "murmur3_finalize": "pass"
+  },
+  "52_hash_functions:gcc:O0": {
+    "djb2_xor": "pass",
+    "fnv1a_32": "pass",
+    "murmur3_finalize": "pass"
+  },
+  "52_hash_functions:gcc:O2": {
+    "djb2_xor": "pass",
+    "fnv1a_32": "pass",
+    "murmur3_finalize": "pass"
+  },
+  "53_pseudorandom:clang:O0": {
+    "bounded_sample": "pass",
+    "lcg64_next_high": "pass",
+    "xorshift32": "pass"
+  },
+  "53_pseudorandom:clang:O2": {
+    "bounded_sample": "fail",
+    "lcg64_next_high": "pass",
+    "xorshift32": "pass"
+  },
+  "53_pseudorandom:gcc:O0": {
+    "bounded_sample": "pass",
+    "lcg64_next_high": "pass",
+    "xorshift32": "pass"
+  },
+  "53_pseudorandom:gcc:O2": {
+    "bounded_sample": "fail",
+    "lcg64_next_high": "pass",
+    "xorshift32": "pass"
+  },
+  "54_sha256_block:clang:O0": {
+    "sha256_compress_block": "fail"
+  },
+  "54_sha256_block:clang:O2": {
+    "sha256_compress_block": "fail"
+  },
+  "54_sha256_block:gcc:O0": {
+    "sha256_compress_block": "fail"
+  },
+  "54_sha256_block:gcc:O2": {
+    "sha256_compress_block": "fail"
+  },
+  "55_modular_arithmetic:clang:O0": {
+    "extended_gcd": "pass",
+    "gcd_i32": "pass",
+    "mod_pow": "pass"
+  },
+  "55_modular_arithmetic:clang:O2": {
+    "extended_gcd": "pass",
+    "gcd_i32": "pass",
+    "mod_pow": "pass"
+  },
+  "55_modular_arithmetic:gcc:O0": {
+    "extended_gcd": "pass",
+    "gcd_i32": "pass",
+    "mod_pow": "pass"
+  },
+  "55_modular_arithmetic:gcc:O2": {
+    "extended_gcd": "pass",
+    "gcd_i32": "pass",
+    "mod_pow": "pass"
+  },
+  "56_sieve:clang:O0": {
+    "factorize": "pass",
+    "sieve_primes": "pass"
+  },
+  "56_sieve:clang:O2": {
+    "factorize": "pass",
+    "sieve_primes": "fail"
+  },
+  "56_sieve:gcc:O0": {
+    "factorize": "pass",
+    "sieve_primes": "pass"
+  },
+  "56_sieve:gcc:O2": {
+    "factorize": "pass",
+    "sieve_primes": "fail"
+  },
+  "57_bignum:clang:O0": {
+    "bignum_add": "pass",
+    "bignum_mul_small": "pass"
+  },
+  "57_bignum:clang:O2": {
+    "bignum_add": "pass",
+    "bignum_mul_small": "pass"
+  },
+  "57_bignum:gcc:O0": {
+    "bignum_add": "pass",
+    "bignum_mul_small": "pass"
+  },
+  "57_bignum:gcc:O2": {
+    "bignum_add": "pass",
+    "bignum_mul_small": "pass"
+  },
+  "58_rational:clang:O0": {
+    "rational_add": "pass",
+    "rational_compare": "pass"
+  },
+  "58_rational:clang:O2": {
+    "rational_add": "pass",
+    "rational_compare": "fail"
+  },
+  "58_rational:gcc:O0": {
+    "rational_add": "fail",
+    "rational_compare": "fail"
+  },
+  "58_rational:gcc:O2": {
+    "rational_add": "pass",
+    "rational_compare": "pass"
+  },
+  "59_combinatorics:clang:O0": {
+    "binomial": "pass",
+    "catalan": "pass",
+    "pascal_row": "pass"
+  },
+  "59_combinatorics:clang:O2": {
+    "binomial": "pass",
+    "catalan": "pass",
+    "pascal_row": "pass"
+  },
+  "59_combinatorics:gcc:O0": {
+    "binomial": "pass",
+    "catalan": "pass",
+    "pascal_row": "pass"
+  },
+  "59_combinatorics:gcc:O2": {
+    "binomial": "pass",
+    "catalan": "pass",
+    "pascal_row": "pass"
+  },
+  "60_integer_matrix:clang:O0": {
+    "determinant3": "pass",
+    "matrix_multiply": "pass",
+    "matrix_transpose": "pass"
+  },
+  "60_integer_matrix:clang:O2": {
+    "determinant3": "pass",
+    "matrix_multiply": "pass",
+    "matrix_transpose": "pass"
+  },
+  "60_integer_matrix:gcc:O0": {
+    "determinant3": "pass",
+    "matrix_multiply": "pass",
+    "matrix_transpose": "pass"
+  },
+  "60_integer_matrix:gcc:O2": {
+    "determinant3": "pass",
+    "matrix_multiply": "pass",
+    "matrix_transpose": "pass"
+  },
+  "61_fixed_point:clang:O0": {
+    "fixed_divide": "pass",
+    "fixed_lerp": "pass",
+    "fixed_multiply": "pass",
+    "fixed_sqrt": "pass"
+  },
+  "61_fixed_point:clang:O2": {
+    "fixed_divide": "pass",
+    "fixed_lerp": "pass",
+    "fixed_multiply": "pass",
+    "fixed_sqrt": "pass"
+  },
+  "61_fixed_point:gcc:O0": {
+    "fixed_divide": "pass",
+    "fixed_lerp": "pass",
+    "fixed_multiply": "pass",
+    "fixed_sqrt": "pass"
+  },
+  "61_fixed_point:gcc:O2": {
+    "fixed_divide": "pass",
+    "fixed_lerp": "pass",
+    "fixed_multiply": "pass",
+    "fixed_sqrt": "pass"
+  },
+  "62_gaussian_elimination:clang:O0": {
+    "gaussian_solve": "pass"
+  },
+  "62_gaussian_elimination:clang:O2": {
+    "gaussian_solve": "fail"
+  },
+  "62_gaussian_elimination:gcc:O0": {
+    "gaussian_solve": "pass"
+  },
+  "62_gaussian_elimination:gcc:O2": {
+    "gaussian_solve": "pass"
+  },
+  "63_numerical_integration:clang:O0": {
+    "simpson_integrate": "pass",
+    "trapezoid_integrate": "pass"
+  },
+  "63_numerical_integration:clang:O2": {
+    "simpson_integrate": "pass",
+    "trapezoid_integrate": "pass"
+  },
+  "63_numerical_integration:gcc:O0": {
+    "simpson_integrate": "pass",
+    "trapezoid_integrate": "pass"
+  },
+  "63_numerical_integration:gcc:O2": {
+    "simpson_integrate": "fail",
+    "trapezoid_integrate": "fail"
+  },
+  "64_root_finding:clang:O0": {
+    "bisection_sqrt": "pass",
+    "newton_sqrt": "pass"
+  },
+  "64_root_finding:clang:O2": {
+    "bisection_sqrt": "pass",
+    "newton_sqrt": "pass"
+  },
+  "64_root_finding:gcc:O0": {
+    "bisection_sqrt": "pass",
+    "newton_sqrt": "pass"
+  },
+  "64_root_finding:gcc:O2": {
+    "bisection_sqrt": "pass",
+    "newton_sqrt": "pass"
+  },
+  "65_projectile_motion:clang:O0": {
+    "kinetic_energy": "pass",
+    "projectile_step": "pass"
+  },
+  "65_projectile_motion:clang:O2": {
+    "kinetic_energy": "pass",
+    "projectile_step": "pass"
+  },
+  "65_projectile_motion:gcc:O0": {
+    "kinetic_energy": "pass",
+    "projectile_step": "pass"
+  },
+  "65_projectile_motion:gcc:O2": {
+    "kinetic_energy": "pass",
+    "projectile_step": "fail"
+  },
+  "66_orbital_step:clang:O0": {
+    "orbital_step": "pass"
+  },
+  "66_orbital_step:clang:O2": {
+    "orbital_step": "pass"
+  },
+  "66_orbital_step:gcc:O0": {
+    "orbital_step": "pass"
+  },
+  "66_orbital_step:gcc:O2": {
+    "orbital_step": "pass"
+  },
+  "67_elastic_collision:clang:O0": {
+    "elastic_velocity_a": "pass",
+    "inelastic_velocity": "pass",
+    "momentum_residual": "pass"
+  },
+  "67_elastic_collision:clang:O2": {
+    "elastic_velocity_a": "fail",
+    "inelastic_velocity": "pass",
+    "momentum_residual": "pass"
+  },
+  "67_elastic_collision:gcc:O0": {
+    "elastic_velocity_a": "pass",
+    "inelastic_velocity": "pass",
+    "momentum_residual": "pass"
+  },
+  "67_elastic_collision:gcc:O2": {
+    "elastic_velocity_a": "pass",
+    "inelastic_velocity": "pass",
+    "momentum_residual": "pass"
+  },
+  "68_thermodynamics:clang:O0": {
+    "ideal_gas_pressure": "pass",
+    "mixing_temperature": "pass",
+    "newton_cooling": "pass"
+  },
+  "68_thermodynamics:clang:O2": {
+    "ideal_gas_pressure": "pass",
+    "mixing_temperature": "pass",
+    "newton_cooling": "pass"
+  },
+  "68_thermodynamics:gcc:O0": {
+    "ideal_gas_pressure": "pass",
+    "mixing_temperature": "pass",
+    "newton_cooling": "pass"
+  },
+  "68_thermodynamics:gcc:O2": {
+    "ideal_gas_pressure": "pass",
+    "mixing_temperature": "pass",
+    "newton_cooling": "pass"
+  },
+  "69_molar_mass:clang:O0": {
+    "molar_mass_centi": "pass"
+  },
+  "69_molar_mass:clang:O2": {
+    "molar_mass_centi": "pass"
+  },
+  "69_molar_mass:gcc:O0": {
+    "molar_mass_centi": "pass"
+  },
+  "69_molar_mass:gcc:O2": {
+    "molar_mass_centi": "pass"
+  },
+  "70_reaction_balance:clang:O0": {
+    "balance_reaction": "pass"
+  },
+  "70_reaction_balance:clang:O2": {
+    "balance_reaction": "pass"
+  },
+  "70_reaction_balance:gcc:O0": {
+    "balance_reaction": "pass"
+  },
+  "70_reaction_balance:gcc:O2": {
+    "balance_reaction": "pass"
+  },
+  "71_compound_interest:clang:O0": {
+    "annuity_future_value": "pass",
+    "compound_balance": "pass"
+  },
+  "71_compound_interest:clang:O2": {
+    "annuity_future_value": "pass",
+    "compound_balance": "pass"
+  },
+  "71_compound_interest:gcc:O0": {
+    "annuity_future_value": "pass",
+    "compound_balance": "pass"
+  },
+  "71_compound_interest:gcc:O2": {
+    "annuity_future_value": "pass",
+    "compound_balance": "pass"
+  },
+  "72_loan_amortization:clang:O0": {
+    "amortization_schedule": "pass",
+    "remaining_balance": "pass"
+  },
+  "72_loan_amortization:clang:O2": {
+    "amortization_schedule": "pass",
+    "remaining_balance": "pass"
+  },
+  "72_loan_amortization:gcc:O0": {
+    "amortization_schedule": "pass",
+    "remaining_balance": "pass"
+  },
+  "72_loan_amortization:gcc:O2": {
+    "amortization_schedule": "pass",
+    "remaining_balance": "pass"
+  },
+  "73_present_value:clang:O0": {
+    "internal_rate_of_return": "pass",
+    "net_present_value": "pass"
+  },
+  "73_present_value:clang:O2": {
+    "internal_rate_of_return": "pass",
+    "net_present_value": "pass"
+  },
+  "73_present_value:gcc:O0": {
+    "internal_rate_of_return": "pass",
+    "net_present_value": "pass"
+  },
+  "73_present_value:gcc:O2": {
+    "internal_rate_of_return": "pass",
+    "net_present_value": "pass"
+  },
+  "74_moving_statistics:clang:O0": {
+    "exponential_moving_average": "pass",
+    "population_variance": "pass",
+    "simple_moving_average": "pass"
+  },
+  "74_moving_statistics:clang:O2": {
+    "exponential_moving_average": "pass",
+    "population_variance": "pass",
+    "simple_moving_average": "fail"
+  },
+  "74_moving_statistics:gcc:O0": {
+    "exponential_moving_average": "pass",
+    "population_variance": "pass",
+    "simple_moving_average": "pass"
+  },
+  "74_moving_statistics:gcc:O2": {
+    "exponential_moving_average": "pass",
+    "population_variance": "pass",
+    "simple_moving_average": "pass"
+  },
+  "75_order_book:clang:O0": {
+    "match_order": "pass"
+  },
+  "75_order_book:clang:O2": {
+    "match_order": "pass"
+  },
+  "75_order_book:gcc:O0": {
+    "match_order": "pass"
+  },
+  "75_order_book:gcc:O2": {
+    "match_order": "pass"
+  },
+  "76_portfolio_rebalance:clang:O0": {
+    "maximum_drift": "pass",
+    "rebalance_trades": "pass"
+  },
+  "76_portfolio_rebalance:clang:O2": {
+    "maximum_drift": "pass",
+    "rebalance_trades": "pass"
+  },
+  "76_portfolio_rebalance:gcc:O0": {
+    "maximum_drift": "pass",
+    "rebalance_trades": "pass"
+  },
+  "76_portfolio_rebalance:gcc:O2": {
+    "maximum_drift": "pass",
+    "rebalance_trades": "pass"
+  },
+  "77_lru_cache:clang:O0": {
+    "lru_access": "pass"
+  },
+  "77_lru_cache:clang:O2": {
+    "lru_access": "fail"
+  },
+  "77_lru_cache:gcc:O0": {
+    "lru_access": "pass"
+  },
+  "77_lru_cache:gcc:O2": {
+    "lru_access": "pass"
+  },
+  "78_ring_buffer:clang:O0": {
+    "ring_occupancy": "pass",
+    "ring_pop": "pass",
+    "ring_push": "pass"
+  },
+  "78_ring_buffer:clang:O2": {
+    "ring_occupancy": "pass",
+    "ring_pop": "pass",
+    "ring_push": "pass"
+  },
+  "78_ring_buffer:gcc:O0": {
+    "ring_occupancy": "pass",
+    "ring_pop": "pass",
+    "ring_push": "pass"
+  },
+  "78_ring_buffer:gcc:O2": {
+    "ring_occupancy": "pass",
+    "ring_pop": "pass",
+    "ring_push": "pass"
+  },
+  "79_segment_tree:clang:O0": {
+    "segment_build": "pass",
+    "segment_range_sum": "pass",
+    "segment_update": "pass"
+  },
+  "79_segment_tree:clang:O2": {
+    "segment_build": "pass",
+    "segment_range_sum": "pass",
+    "segment_update": "pass"
+  },
+  "79_segment_tree:gcc:O0": {
+    "segment_build": "pass",
+    "segment_range_sum": "pass",
+    "segment_update": "pass"
+  },
+  "79_segment_tree:gcc:O2": {
+    "segment_build": "pass",
+    "segment_range_sum": "pass",
+    "segment_update": "pass"
+  },
+  "80_trie:clang:O0": {
+    "trie_insert": "pass",
+    "trie_lookup": "pass"
+  },
+  "80_trie:clang:O2": {
+    "trie_insert": "pass",
+    "trie_lookup": "pass"
+  },
+  "80_trie:gcc:O0": {
+    "trie_insert": "pass",
+    "trie_lookup": "pass"
+  },
+  "80_trie:gcc:O2": {
+    "trie_insert": "pass",
+    "trie_lookup": "pass"
+  },
+  "81_call_argument_identity:clang:O0": {
+    "argument_sink": "pass",
+    "two_decrements_one_scratch": "pass"
+  },
+  "81_call_argument_identity:clang:O2": {
+    "argument_sink": "pass",
+    "two_decrements_one_scratch": "fail"
+  },
+  "81_call_argument_identity:gcc:O0": {
+    "argument_sink": "pass",
+    "two_decrements_one_scratch": "pass"
+  },
+  "81_call_argument_identity:gcc:O2": {
+    "argument_sink": "pass",
+    "two_decrements_one_scratch": "fail"
+  },
+  "82_comma_operator:clang:O0": {
+    "comma_chain": "pass",
+    "comma_in_condition": "pass",
+    "comma_in_for": "pass"
+  },
+  "82_comma_operator:clang:O2": {
+    "comma_chain": "pass",
+    "comma_in_condition": "pass",
+    "comma_in_for": "pass"
+  },
+  "82_comma_operator:gcc:O0": {
+    "comma_chain": "pass",
+    "comma_in_condition": "pass",
+    "comma_in_for": "pass"
+  },
+  "82_comma_operator:gcc:O2": {
+    "comma_chain": "pass",
+    "comma_in_condition": "pass",
+    "comma_in_for": "pass"
+  },
+  "83_ternary_chains:clang:O0": {
+    "classify_ladder": "pass",
+    "nested_ternary_assignment": "pass",
+    "ternary_mixed_types": "pass"
+  },
+  "83_ternary_chains:clang:O2": {
+    "classify_ladder": "pass",
+    "nested_ternary_assignment": "pass",
+    "ternary_mixed_types": "pass"
+  },
+  "83_ternary_chains:gcc:O0": {
+    "classify_ladder": "pass",
+    "nested_ternary_assignment": "pass",
+    "ternary_mixed_types": "pass"
+  },
+  "83_ternary_chains:gcc:O2": {
+    "classify_ladder": "pass",
+    "nested_ternary_assignment": "pass",
+    "ternary_mixed_types": "pass"
+  },
+  "84_compound_literals:clang:O0": {
+    "compound_literal_argument": "fail",
+    "compound_literal_array": "fail",
+    "compound_literal_in_loop": "pass"
+  },
+  "84_compound_literals:clang:O2": {
+    "compound_literal_argument": "pass",
+    "compound_literal_array": "pass",
+    "compound_literal_in_loop": "pass"
+  },
+  "84_compound_literals:gcc:O0": {
+    "compound_literal_argument": "pass",
+    "compound_literal_array": "pass",
+    "compound_literal_in_loop": "pass"
+  },
+  "84_compound_literals:gcc:O2": {
+    "compound_literal_argument": "pass",
+    "compound_literal_array": "pass",
+    "compound_literal_in_loop": "pass"
+  },
+  "85_designated_initializers:clang:O0": {
+    "designated_array_out_of_order": "fail",
+    "designated_struct": "pass",
+    "designated_sum": "pass"
+  },
+  "85_designated_initializers:clang:O2": {
+    "designated_array_out_of_order": "pass",
+    "designated_struct": "pass",
+    "designated_sum": "pass"
+  },
+  "85_designated_initializers:gcc:O0": {
+    "designated_array_out_of_order": "fail",
+    "designated_struct": "pass",
+    "designated_sum": "pass"
+  },
+  "85_designated_initializers:gcc:O2": {
+    "designated_array_out_of_order": "pass",
+    "designated_struct": "pass",
+    "designated_sum": "fail"
+  },
+  "86_flexible_array_member:clang:O0": {
+    "flexible_header_size": "pass",
+    "flexible_sum": "pass"
+  },
+  "86_flexible_array_member:clang:O2": {
+    "flexible_header_size": "pass",
+    "flexible_sum": "pass"
+  },
+  "86_flexible_array_member:gcc:O0": {
+    "flexible_header_size": "pass",
+    "flexible_sum": "pass"
+  },
+  "86_flexible_array_member:gcc:O2": {
+    "flexible_header_size": "pass",
+    "flexible_sum": "pass"
+  },
+  "87_variable_length_array:clang:O0": {
+    "vla_reverse_sum": "fail",
+    "vla_two_dimensional": "fail"
+  },
+  "87_variable_length_array:clang:O2": {
+    "vla_reverse_sum": "fail",
+    "vla_two_dimensional": "fail"
+  },
+  "87_variable_length_array:gcc:O0": {
+    "vla_reverse_sum": "fail",
+    "vla_two_dimensional": "fail"
+  },
+  "87_variable_length_array:gcc:O2": {
+    "vla_reverse_sum": "fail",
+    "vla_two_dimensional": "fail"
+  },
+  "88_restrict_pointers:clang:O0": {
+    "aliasing_accumulate": "pass",
+    "restrict_accumulate": "structural"
+  },
+  "88_restrict_pointers:clang:O2": {
+    "aliasing_accumulate": "pass",
+    "restrict_accumulate": "structural"
+  },
+  "88_restrict_pointers:gcc:O0": {
+    "aliasing_accumulate": "pass",
+    "restrict_accumulate": "structural"
+  },
+  "88_restrict_pointers:gcc:O2": {
+    "aliasing_accumulate": "pass",
+    "restrict_accumulate": "structural"
+  },
+  "89_bool_semantics:clang:O0": {
+    "bool_arithmetic": "pass",
+    "bool_normalizes": "pass",
+    "bool_roundtrip_mask": "pass"
+  },
+  "89_bool_semantics:clang:O2": {
+    "bool_arithmetic": "pass",
+    "bool_normalizes": "pass",
+    "bool_roundtrip_mask": "pass"
+  },
+  "89_bool_semantics:gcc:O0": {
+    "bool_arithmetic": "pass",
+    "bool_normalizes": "pass",
+    "bool_roundtrip_mask": "pass"
+  },
+  "89_bool_semantics:gcc:O2": {
+    "bool_arithmetic": "pass",
+    "bool_normalizes": "pass",
+    "bool_roundtrip_mask": "pass"
+  },
+  "90_bitfields:clang:O0": {
+    "bitfield_extract": "pass",
+    "bitfield_signed_range": "pass",
+    "bitfield_struct_size": "pass"
+  },
+  "90_bitfields:clang:O2": {
+    "bitfield_extract": "pass",
+    "bitfield_signed_range": "pass",
+    "bitfield_struct_size": "pass"
+  },
+  "90_bitfields:gcc:O0": {
+    "bitfield_extract": "pass",
+    "bitfield_signed_range": "pass",
+    "bitfield_struct_size": "pass"
+  },
+  "90_bitfields:gcc:O2": {
+    "bitfield_extract": "pass",
+    "bitfield_signed_range": "pass",
+    "bitfield_struct_size": "pass"
+  },
+  "91_union_type_punning:clang:O0": {
+    "pun_byte_of_word": "pass",
+    "pun_halves_swapped": "pass",
+    "pun_is_little_endian": "pass"
+  },
+  "91_union_type_punning:clang:O2": {
+    "pun_byte_of_word": "pass",
+    "pun_halves_swapped": "pass",
+    "pun_is_little_endian": "pass"
+  },
+  "91_union_type_punning:gcc:O0": {
+    "pun_byte_of_word": "pass",
+    "pun_halves_swapped": "pass",
+    "pun_is_little_endian": "pass"
+  },
+  "91_union_type_punning:gcc:O2": {
+    "pun_byte_of_word": "pass",
+    "pun_halves_swapped": "pass",
+    "pun_is_little_endian": "pass"
+  },
+  "92_anonymous_members:clang:O0": {
+    "anonymous_overlap_proof": "pass",
+    "anonymous_select": "pass"
+  },
+  "92_anonymous_members:clang:O2": {
+    "anonymous_overlap_proof": "pass",
+    "anonymous_select": "pass"
+  },
+  "92_anonymous_members:gcc:O0": {
+    "anonymous_overlap_proof": "pass",
+    "anonymous_select": "pass"
+  },
+  "92_anonymous_members:gcc:O2": {
+    "anonymous_overlap_proof": "pass",
+    "anonymous_select": "pass"
+  },
+  "93_generic_selection:clang:O0": {
+    "generic_dispatch": "pass",
+    "generic_tag_of_int16": "pass",
+    "generic_tag_of_int32": "pass",
+    "generic_tag_of_int64": "pass"
+  },
+  "93_generic_selection:clang:O2": {
+    "generic_dispatch": "pass",
+    "generic_tag_of_int16": "pass",
+    "generic_tag_of_int32": "pass",
+    "generic_tag_of_int64": "pass"
+  },
+  "93_generic_selection:gcc:O0": {
+    "generic_dispatch": "pass",
+    "generic_tag_of_int16": "pass",
+    "generic_tag_of_int32": "pass",
+    "generic_tag_of_int64": "pass"
+  },
+  "93_generic_selection:gcc:O2": {
+    "generic_dispatch": "pass",
+    "generic_tag_of_int16": "pass",
+    "generic_tag_of_int32": "pass",
+    "generic_tag_of_int64": "pass"
+  },
+  "94_alignment:clang:O0": {
+    "alignment_of_padded": "pass",
+    "offset_of_payload": "pass",
+    "padded_roundtrip": "pass",
+    "size_difference": "pass"
+  },
+  "94_alignment:clang:O2": {
+    "alignment_of_padded": "pass",
+    "offset_of_payload": "pass",
+    "padded_roundtrip": "pass",
+    "size_difference": "pass"
+  },
+  "94_alignment:gcc:O0": {
+    "alignment_of_padded": "pass",
+    "offset_of_payload": "pass",
+    "padded_roundtrip": "pass",
+    "size_difference": "pass"
+  },
+  "94_alignment:gcc:O2": {
+    "alignment_of_padded": "pass",
+    "offset_of_payload": "pass",
+    "padded_roundtrip": "pass",
+    "size_difference": "pass"
+  },
+  "95_function_pointer_table:clang:O0": {
+    "dispatch_operation": "pass",
+    "fold_operations": "pass"
+  },
+  "95_function_pointer_table:clang:O2": {
+    "dispatch_operation": "pass",
+    "fold_operations": "fail"
+  },
+  "95_function_pointer_table:gcc:O0": {
+    "dispatch_operation": "pass",
+    "fold_operations": "pass"
+  },
+  "95_function_pointer_table:gcc:O2": {
+    "dispatch_operation": "fail",
+    "fold_operations": "fail"
+  },
+  "96_integer_promotion:clang:O0": {
+    "promote_narrow_product": "pass",
+    "promote_then_truncate": "pass",
+    "short_promotion_sign": "pass",
+    "unsigned_conversion_rank": "pass"
+  },
+  "96_integer_promotion:clang:O2": {
+    "promote_narrow_product": "pass",
+    "promote_then_truncate": "pass",
+    "short_promotion_sign": "pass",
+    "unsigned_conversion_rank": "pass"
+  },
+  "96_integer_promotion:gcc:O0": {
+    "promote_narrow_product": "pass",
+    "promote_then_truncate": "fail",
+    "short_promotion_sign": "pass",
+    "unsigned_conversion_rank": "pass"
+  },
+  "96_integer_promotion:gcc:O2": {
+    "promote_narrow_product": "pass",
+    "promote_then_truncate": "pass",
+    "short_promotion_sign": "pass",
+    "unsigned_conversion_rank": "pass"
+  },
+  "97_signed_unsigned_pitfalls:clang:O0": {
+    "division_truncates_toward_zero": "pass",
+    "negative_compares_greater": "pass",
+    "size_like_loop": "pass",
+    "unsigned_subtraction_wraps": "pass"
+  },
+  "97_signed_unsigned_pitfalls:clang:O2": {
+    "division_truncates_toward_zero": "pass",
+    "negative_compares_greater": "pass",
+    "size_like_loop": "pass",
+    "unsigned_subtraction_wraps": "pass"
+  },
+  "97_signed_unsigned_pitfalls:gcc:O0": {
+    "division_truncates_toward_zero": "pass",
+    "negative_compares_greater": "pass",
+    "size_like_loop": "pass",
+    "unsigned_subtraction_wraps": "pass"
+  },
+  "97_signed_unsigned_pitfalls:gcc:O2": {
+    "division_truncates_toward_zero": "pass",
+    "negative_compares_greater": "pass",
+    "size_like_loop": "pass",
+    "unsigned_subtraction_wraps": "pass"
+  },
+  "98_shift_semantics:clang:O0": {
+    "arithmetic_right_shift": "pass",
+    "logical_right_shift": "pass",
+    "masked_left_shift": "pass",
+    "rotate_left": "pass",
+    "shift_wider_than_operand": "pass"
+  },
+  "98_shift_semantics:clang:O2": {
+    "arithmetic_right_shift": "pass",
+    "logical_right_shift": "pass",
+    "masked_left_shift": "pass",
+    "rotate_left": "pass",
+    "shift_wider_than_operand": "pass"
+  },
+  "98_shift_semantics:gcc:O0": {
+    "arithmetic_right_shift": "pass",
+    "logical_right_shift": "pass",
+    "masked_left_shift": "pass",
+    "rotate_left": "pass",
+    "shift_wider_than_operand": "pass"
+  },
+  "98_shift_semantics:gcc:O2": {
+    "arithmetic_right_shift": "pass",
+    "logical_right_shift": "pass",
+    "masked_left_shift": "pass",
+    "rotate_left": "pass",
+    "shift_wider_than_operand": "pass"
+  },
+  "99_char_and_endianness:clang:O0": {
+    "byte_swap32": "pass",
+    "char_widening": "pass",
+    "load_big_endian": "pass",
+    "plain_char_is_signed": "pass"
+  },
+  "99_char_and_endianness:clang:O2": {
+    "byte_swap32": "pass",
+    "char_widening": "pass",
+    "load_big_endian": "pass",
+    "plain_char_is_signed": "pass"
+  },
+  "99_char_and_endianness:gcc:O0": {
+    "byte_swap32": "pass",
+    "char_widening": "pass",
+    "load_big_endian": "pass",
+    "plain_char_is_signed": "pass"
+  },
+  "99_char_and_endianness:gcc:O2": {
+    "byte_swap32": "pass",
+    "char_widening": "pass",
+    "load_big_endian": "pass",
+    "plain_char_is_signed": "pass"
   },
   "__toolchain__": {
     "clang": "Ubuntu clang version 14.0.0-1ubuntu1.1",
