@@ -11,11 +11,16 @@ mod memory;
 mod model;
 mod query;
 mod verify;
+mod verify_objects;
 
 #[cfg(test)]
 #[path = "memory_tests.rs"]
 mod memory_tests;
 
+pub use crate::ir::memory_objects::{
+    AccessPath, AccessRole, AccessSource, LayoutConflict, MemoryObject, MemoryStateIdentity,
+    ObjectId, ObjectIdentity, ObjectOrigin,
+};
 pub use builder::lower_verified;
 pub use memory::lower_verified_with_image;
 pub use model::{
@@ -29,7 +34,9 @@ pub use verify::verify;
 #[cfg(test)]
 mod tests {
     use crate::core::binary::{Arch, Endianness, Format};
-    use crate::ir::types::{BinOp, LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value, Width};
+    use crate::ir::types::{
+        BinOp, Flag, LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value, Width,
+    };
     use crate::target::TargetSpec;
 
     use super::{lower_verified, lower_verified_with_image, verify, Definition, DefinitionOracle};
@@ -284,6 +291,54 @@ mod tests {
             errors
                 .iter()
                 .any(|error| error.contains("storage mismatch")),
+            "unexpected verifier errors: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn sparse_source_operand_indexes_remain_valid() {
+        let llir = function(vec![(
+            0x4400,
+            vec![Op::Bin {
+                dst: VReg::Temp(0),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::FlagValue {
+                    flag: Flag::Z,
+                    version: 1,
+                }),
+                rhs: Value::Reg(VReg::phys("rax")),
+            }],
+            vec![],
+        )]);
+
+        let mir = lower_verified(&llir, target(Arch::X86_64))
+            .expect("a skipped non-SSA operand must not invalidate a later source operand");
+        let use_id = mir.instructions()[0].uses[0];
+        assert_eq!(mir.use_(use_id).index, 1);
+        assert!(verify(&mir).is_empty());
+    }
+
+    #[test]
+    fn verifier_rejects_duplicate_source_operand_indexes() {
+        let llir = function(vec![(
+            0x4600,
+            vec![Op::Bin {
+                dst: VReg::Temp(0),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("rax")),
+                rhs: Value::Reg(VReg::phys("rbx")),
+            }],
+            vec![],
+        )]);
+        let mut mir = lower_verified(&llir, target(Arch::X86_64)).expect("valid MIR");
+        let second = mir.instructions()[0].uses[1];
+        mir.use_mut_for_test(second).index = 0;
+
+        let errors = verify(&mir);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("operand indexes are not strictly increasing")),
             "unexpected verifier errors: {errors:#?}"
         );
     }

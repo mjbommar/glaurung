@@ -945,9 +945,12 @@ Acceptance:
 - [x] Validate a real stripped 64-byte record walk by recompiling and executing
   original and recovered code, with architecture-neutral positive and negative
   model tests.
-- [ ] Replace the AST adapter with MIR/MemorySSA access collection and real
-  memory-version/lifetime identities.
-- [ ] Connect debug and inferred layouts through `TypeStore`, then recover
+- [x] Add MIR/MemorySSA access collection with stable object and exact cursor-
+  lifetime identities, exact memory-state/access provenance, affine-copy/root
+  unification, loop strides, and independent cross-reference verification.
+- [ ] Replace the AST adapter in the production aggregate consumer after
+  parity against the MIR object model; the diagnostics path now consumes MIR.
+- [ ] Import debug and inferred layouts into the program `TypeStore`, then recover
   nested pointees, arrays, fields, overlaps, aggregate names, and ABI transfers.
 - [ ] Project solved accesses as semantic `Field`/`Index` HIR and remove the
   temporary character-pointer representation seam.
@@ -974,9 +977,28 @@ Acceptance:
   may-alias region. This remains diagnostic-only until typed MIR owns it.
 - [x] Carry verified region-specific memory values, instruction effects, phis,
   clobbers, and definition/use queries into stable typed-MIR identities.
-- [ ] Carry stable object/lifetime identities through typed MIR and connect the
-  MIR evidence to the production aggregate consumer before removing the AST
-  compatibility adapter.
+- [x] Carry stable object and cursor-lifetime identities through typed MIR,
+  joined to exact region-specific memory states and accesses.
+- [ ] Connect that MIR evidence to the production aggregate consumer before
+  removing the AST compatibility adapter.
+
+### First canonical TypeStore increment — 2026-08-13
+
+- [x] Add stable `TypeId` arena identities and deterministic, input-order-
+  independent import of recursive `core::DataType` graphs.
+- [x] Intern anonymous inferred shapes and retain recursive primitive, pointer,
+  array, struct, union, enum, function, and typedef forms without C spelling.
+- [x] Attach provenance and an explicit inference < binary < debug < analyst
+  authority order; retain incompatible alternatives and missing references
+  instead of silently overwriting facts.
+- [x] Bind function-qualified stable MIR `ObjectId` values to type facts through
+  `ObjectTypeKey`, with the same provenance and conflict-preserving selection.
+- [x] Verify arena/index/reference/object-binding consistency and reject invalid
+  anonymous shapes before mutating the store.
+- [ ] Import DWARF/PDB facts once per `ProgramSession`, add interprocedural type
+  constraints, and migrate the production aggregate/type consumers.
+- [ ] Project selected language-neutral types into HIR and source-language
+  spellings only after solving.
 
 This is a concrete dependency of the unchecked replacement item above, not a
 claim that it is complete. The fresh 224-binary replay is byte-identical to the
@@ -1239,7 +1261,7 @@ Until then, each completed phase must be independently usable, tested, and
 releasable. “Architecture work” is not a reason to leave the score or user-facing
 output unchanged for months.
 
-## Current architecture increment — verified typed value and memory identity
+## Current architecture increment — verified typed value, memory, object, and type identity
 
 The first Phase-2 value-identity boundary is implemented and locally verified:
 
@@ -1256,12 +1278,20 @@ The first Phase-2 value-identity boundary is implemented and locally verified:
 - the same definition oracle exposes register and memory definition/use queries;
 - MIR verification independently checks memory ownership, region consistency,
   phi predecessor sets, output backreferences, write/output agreement, and
-  dominance, and malformed owners fail closed without panicking; and
-- real x86-64 and ARM32 lifted functions pass the value-and-memory boundary.
+  dominance, and malformed owners fail closed without panicking;
+- MIR object identities retain exact access-cursor lifetimes, memory states,
+  access IDs, affine roots/offsets, origins, strides, and conflicts; affine
+  copies and loop-carried pointer recurrences join without conflating destructive
+  register reuse;
+- object/access cross-references have an independent verifier and malformed links
+  fail closed;
+- the program environment owns an interned, recursive, provenance-bearing
+  `TypeStore` with conflict-preserving authority and stable object bindings; and
+- real x86-64 and ARM32 lifted functions pass the value, memory, and object boundary.
 
-This does not complete Phase 2. Before the first production consumer migrates,
-the MIR must join stable object/lifetime identities and program `TypeStore`
-facts, expose the remaining dominance/clobber/value-at queries needed by that
-consumer, and pass output parity plus real aggregate/type fixtures. The existing
-LLIR and AST adapters remain authoritative until that evidence exists; do not
-create a second heuristic type or aggregate path beside them.
+This does not complete the redesign. Before the first production aggregate/type
+consumer migrates, debug/PDB and inference facts must populate the program store,
+the MIR must expose the remaining dominance/clobber/value-at queries needed by
+that consumer, and the migration must pass output parity plus real aggregate/type
+fixtures. The AST compatibility adapter remains authoritative until that
+evidence exists; do not create a second heuristic type or aggregate path beside it.

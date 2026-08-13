@@ -31,6 +31,7 @@ pub fn lower_verified_with_image(
         .map_err(|error| vec![error.to_string()])?;
     let mut mir = lower(llir, *image.target());
     attach_memory(&mut mir, llir, &memory);
+    crate::ir::memory_objects::mir::attach(&mut mir, llir, image);
     let errors = verify(&mir);
     if errors.is_empty() {
         Ok(mir)
@@ -138,6 +139,7 @@ fn attach_memory(mir: &mut MirFunction, llir: &LlirFunction, memory: &MemorySsaI
                 kind: access.kind,
                 input: value_ids[&access.input],
                 output: access.output.map(|output| value_ids[&output]),
+                object: None,
             }
         })
         .collect();

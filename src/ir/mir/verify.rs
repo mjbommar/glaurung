@@ -106,6 +106,22 @@ pub fn verify(function: &MirFunction) -> Vec<String> {
                 )),
             }
         }
+        let mut previous_operand_index = None;
+        for use_id in &instruction.uses {
+            let Some(use_) = function.uses.get(use_id.0) else {
+                errors.push(format!("instruction {index} has invalid use {}", use_id.0));
+                continue;
+            };
+            if use_.instruction != instruction.id {
+                errors.push(format!("instruction {index} does not own use {}", use_id.0));
+            }
+            if previous_operand_index.is_some_and(|previous| use_.index <= previous) {
+                errors.push(format!(
+                    "instruction {index} use operand indexes are not strictly increasing"
+                ));
+            }
+            previous_operand_index = Some(use_.index);
+        }
         let mut seen_memory_regions = BTreeSet::new();
         for access in &instruction.memory_effects {
             if access.0 >= function.memory_accesses.len() {
@@ -221,12 +237,6 @@ pub fn verify(function: &MirFunction) -> Vec<String> {
                 .contains(&use_.id)
         {
             errors.push(format!("use {index} is not owned by its instruction"));
-        } else if function.instructions[use_.instruction.0]
-            .uses
-            .get(use_.index)
-            != Some(&use_.id)
-        {
-            errors.push(format!("use {index} has an inconsistent operand index"));
         }
         if use_.value.0 >= function.values.len() {
             errors.push(format!("use {index} has invalid value {}", use_.value.0));
@@ -355,6 +365,7 @@ pub fn verify(function: &MirFunction) -> Vec<String> {
             }
         }
     }
+    super::verify_objects::verify_objects(function, &mut errors);
     errors
 }
 

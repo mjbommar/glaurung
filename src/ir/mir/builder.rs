@@ -310,6 +310,7 @@ pub(super) fn lower(llir: &LlirFunction, target: TargetSpec) -> MirFunction {
         uses,
         memory_values: Vec::new(),
         memory_accesses: Vec::new(),
+        object_model: Default::default(),
     }
 }
 

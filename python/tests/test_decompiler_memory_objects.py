@@ -109,13 +109,15 @@ int main(void) {
         style="decbench",
     )
     diagnostic = capfd.readouterr().err
-    assert "===== verified LLIR memory SSA =====" in diagnostic
-    assert "===== LLIR memory objects =====" in diagnostic
-    assert "LlirInstruction" in diagnostic
+    assert "===== verified typed MIR memory values =====" in diagnostic
+    assert "===== typed MIR memory objects =====" in diagnostic
+    assert "MirInstruction" in diagnostic
+    assert "MirValue(" in diagnostic
+    assert "mir_access: Some(" in diagnostic
     assert "region: HeapUnknown" in diagnostic
     assert re.search(r"memory_region: Some\(\s+HeapUnknown,", diagnostic)
     assert "region: FullyUnknown" in diagnostic
-    assert "===== invalid LLIR memory analysis =====" not in diagnostic
+    assert "===== invalid typed MIR memory analysis =====" not in diagnostic
     cursor_match = re.search(r"char \* (local_[0-9a-f]+);", generated)
     assert cursor_match is not None, generated
     cursor_name = cursor_match.group(1)

@@ -846,14 +846,19 @@ fn prepare_llir_for_lowering(
                 eprintln!("  0x{:x}: {}", instruction.va, instruction.op);
             }
         }
-        let memory = crate::ir::memory_ssa::compute_memory_ssa(&numbered, image);
-        match crate::ir::memory_objects::llir::infer_from_llir(&numbered, &memory, image) {
-            Ok(objects) => {
-                eprintln!("\n===== verified LLIR memory SSA =====\n{memory:#?}");
-                eprintln!("\n===== LLIR memory objects =====\n{objects:#?}");
+        match crate::ir::mir::lower_verified_with_image(&numbered, image) {
+            Ok(mir) => {
+                eprintln!(
+                    "\n===== verified typed MIR memory values =====\n{:#?}",
+                    mir.memory_values()
+                );
+                eprintln!(
+                    "\n===== typed MIR memory objects =====\n{:#?}",
+                    mir.objects()
+                );
             }
             Err(error) => {
-                eprintln!("\n===== invalid LLIR memory analysis =====\n{error}");
+                eprintln!("\n===== invalid typed MIR memory analysis =====\n{error:#?}");
             }
         }
     }
@@ -2999,9 +3004,9 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
 mod tests {
     use super::{
         dwarf_return_hint, dwarf_return_hint_with_env, dwarf_stack_object_hints,
-        integer_widths_by_role, merge_dwarf_register_local_facts,
-        merge_exact_definition_widths, refine_float_copy_types, refine_numbered_declaration,
-        select_renderable_dwarf_local_facts, DwarfPrototypeContract,
+        integer_widths_by_role, merge_dwarf_register_local_facts, merge_exact_definition_widths,
+        refine_float_copy_types, refine_numbered_declaration, select_renderable_dwarf_local_facts,
+        DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
     use crate::ir::ast::{Expr, Stmt};
@@ -3047,7 +3052,6 @@ mod tests {
         assert_eq!(types.get(&slot), Some(TypeHint::Float { width: 4 }));
     }
 
-
     #[test]
     fn source_local_rename_requires_a_renderable_authoritative_type() {
         use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
@@ -3086,7 +3090,6 @@ mod tests {
             Some("column")
         );
     }
-
 
     #[test]
     fn semantic_value_widths_exclude_non_integer_kinds() {
@@ -3325,7 +3328,6 @@ mod tests {
         assert_eq!(crate::ir::abi::machine_word_bytes(CallConv::Win64), 8);
         assert_eq!(crate::ir::abi::machine_word_bytes(CallConv::Aarch64), 8);
     }
-
 
     /// The ambiguity rule is applied where it has been MEASURED to pay, and only
     /// there. See `word_width_implies_int` for the armv7 evidence.

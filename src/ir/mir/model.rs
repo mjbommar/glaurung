@@ -1,5 +1,6 @@
 //! Stable, arena-backed MIR identities and records.
 
+use crate::ir::memory_objects::{MemoryObject, MemoryObjectModel, ObjectId};
 use crate::ir::types::{VReg, Width};
 use crate::target::TargetSpec;
 
@@ -54,6 +55,9 @@ pub struct MirMemoryAccess {
     pub kind: MemoryAccessKind,
     pub input: MemoryValueId,
     pub output: Option<MemoryValueId>,
+    /// Canonical object observed by this exact effect, when its address has a
+    /// proven affine MIR identity.
+    pub object: Option<ObjectId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +142,7 @@ pub struct MirFunction {
     pub(crate) uses: Vec<MirUse>,
     pub(crate) memory_values: Vec<MirMemoryValue>,
     pub(crate) memory_accesses: Vec<MirMemoryAccess>,
+    pub(crate) object_model: MemoryObjectModel,
 }
 
 impl MirFunction {
@@ -167,6 +172,14 @@ impl MirFunction {
 
     pub fn memory_accesses(&self) -> &[MirMemoryAccess] {
         &self.memory_accesses
+    }
+
+    pub fn objects(&self) -> &[MemoryObject] {
+        self.object_model.objects()
+    }
+
+    pub fn object_for_value(&self, value: ValueId) -> Option<&MemoryObject> {
+        self.object_model.object_for_value(value)
     }
 
     pub fn value(&self, id: ValueId) -> &MirValue {

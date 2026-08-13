@@ -15,6 +15,7 @@ use crate::ir::lift_function::lift_function_from_image;
 use crate::ir::types::{BinOp, CallTarget, LlirFunction, MemOp, Op, VReg, Value};
 use crate::ir::types_recover::{RecoveredOutputKind, TypeHint};
 use crate::program::image::ProgramImage;
+use crate::program::types::TypeStore;
 
 const MAX_CODE_TARGETS: usize = 8;
 const LINUX_SA_SIGINFO: i64 = 4;
@@ -39,6 +40,7 @@ pub struct FunctionPrototypeFact {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProgramEnvironment {
     prototypes: HashMap<u64, FunctionPrototypeFact>,
+    types: TypeStore,
 }
 
 impl ProgramEnvironment {
@@ -50,6 +52,11 @@ impl ProgramEnvironment {
     /// Number of non-conflicting function contracts in this environment.
     pub fn prototype_count(&self) -> usize {
         self.prototypes.len()
+    }
+
+    /// Canonical recursive type environment shared by every function query.
+    pub fn types(&self) -> &TypeStore {
+        &self.types
     }
 }
 
@@ -909,7 +916,10 @@ pub fn recover_program_environment(
             },
         );
     }
-    ProgramEnvironment { prototypes }
+    ProgramEnvironment {
+        prototypes,
+        types: TypeStore::default(),
+    }
 }
 
 #[cfg(test)]

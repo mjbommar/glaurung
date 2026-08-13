@@ -11,52 +11,90 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::memory_ssa::{MemoryRegion, MemoryVersionId};
+use crate::ir::mir::{InstructionId, MemoryAccessId, MemoryValueId, ValueId};
 use crate::ir::types::VReg;
 use crate::ir::use_def::InstrAddr;
 
 mod ast;
 pub(crate) mod llir;
+pub(crate) mod mir;
 
 pub(crate) use ast::infer_from_ast;
 
 /// Stable identity within one inferred object model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct ObjectId(u32);
+pub struct ObjectId(pub usize);
+
+/// Stable identity of an object root or of the exact cursor lifetime used by
+/// an access. Legacy adapters retain register identities until they migrate.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ObjectIdentity {
+    LegacyRegister(VReg),
+    MirValue(ValueId),
+    AbsoluteAddress(u64),
+    TlsAddress { segment: String, offset: i64 },
+}
+
+impl From<VReg> for ObjectIdentity {
+    fn from(value: VReg) -> Self {
+        Self::LegacyRegister(value)
+    }
+}
+
+impl From<ValueId> for ObjectIdentity {
+    fn from(value: ValueId) -> Self {
+        Self::MirValue(value)
+    }
+}
 
 /// How one memory access observes an object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum AccessRole {
+pub enum AccessRole {
     Read,
     Write,
 }
 
 /// Provenance available at the current compatibility boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum AccessSource {
+pub enum AccessSource {
     /// Pre-order statement ordinal in the prepared AST.
     AstStatement(u32),
     /// Exact instruction position in the LLIR CFG.
     LlirInstruction(InstrAddr),
+    /// Stable instruction identity in typed MIR.
+    MirInstruction(InstructionId),
+}
+
+/// Reaching memory state attached to an access at its owning IR boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MemoryStateIdentity {
+    Llir(MemoryVersionId),
+    Mir(MemoryValueId),
 }
 
 /// One affine byte access relative to an object cursor.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct AccessPath {
-    pub(crate) object: ObjectId,
-    pub(crate) offset: i64,
-    pub(crate) width: u8,
-    pub(crate) alignment: u8,
-    pub(crate) role: AccessRole,
-    pub(crate) source: AccessSource,
+pub struct AccessPath {
+    pub object: ObjectId,
+    /// Exact value lifetime used to compute this access, distinct from the
+    /// canonical object root after affine-copy unification.
+    pub cursor: ObjectIdentity,
+    pub offset: i64,
+    pub width: u8,
+    pub alignment: u8,
+    pub role: AccessRole,
+    pub source: AccessSource,
     /// Alias region selected by target/image-backed LLIR classification.
-    pub(crate) memory_region: Option<MemoryRegion>,
-    /// Filled by the MIR/MemorySSA adapter when that owner is installed.
-    pub(crate) memory_version: Option<MemoryVersionId>,
+    pub memory_region: Option<MemoryRegion>,
+    /// Exact reaching state at the adapter boundary.
+    pub memory_state: Option<MemoryStateIdentity>,
+    /// Exact MIR memory-effect owner when this access came from typed MIR.
+    pub mir_access: Option<MemoryAccessId>,
 }
 
 /// Why an observed object cannot yet receive a concrete layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum LayoutConflict {
+pub enum LayoutConflict {
     MissingOrigin,
     ConflictingOrigins,
     MissingStride,
@@ -70,48 +108,54 @@ pub(crate) enum LayoutConflict {
 
 /// Conservative origin classification for a cursor value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ObjectOrigin {
+pub enum ObjectOrigin {
     GlobalPointerSlot(u64),
     Address(u64),
+    TlsAddress { segment: String, offset: i64 },
     StackObject(VReg),
     CallResult(AccessSource),
+    ParameterPointee(ValueId),
+    StackValue(ValueId),
     Copy { base: VReg, offset: i64 },
     Null,
 }
 
 /// One inferred memory object and its retained constraints.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MemoryObject {
-    pub(crate) id: ObjectId,
-    pub(crate) base: VReg,
-    pub(crate) origins: Vec<ObjectOrigin>,
-    pub(crate) accesses: Vec<AccessPath>,
-    pub(crate) stride: Option<u64>,
-    pub(crate) extent: Option<u64>,
-    pub(crate) conflicts: BTreeSet<LayoutConflict>,
+pub struct MemoryObject {
+    pub id: ObjectId,
+    pub identity: ObjectIdentity,
+    pub origins: Vec<ObjectOrigin>,
+    pub accesses: Vec<AccessPath>,
+    pub stride: Option<u64>,
+    pub extent: Option<u64>,
+    pub conflicts: BTreeSet<LayoutConflict>,
 }
 
 /// Deterministic function-local object model.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct MemoryObjectModel {
+pub struct MemoryObjectModel {
     objects: Vec<MemoryObject>,
-    by_base: BTreeMap<VReg, ObjectId>,
+    by_identity: BTreeMap<ObjectIdentity, ObjectId>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct RawAccess {
+    cursor: ObjectIdentity,
     offset: i64,
     width: u8,
     role: AccessRole,
     source: AccessSource,
     memory_region: Option<MemoryRegion>,
-    memory_version: Option<MemoryVersionId>,
+    memory_state: Option<MemoryStateIdentity>,
+    mir_access: Option<MemoryAccessId>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct ObjectObservations {
     origins: Vec<ObjectOrigin>,
     accesses: Vec<RawAccess>,
+    aliases: BTreeSet<ObjectIdentity>,
     strides: Vec<i64>,
     conflicts: BTreeSet<LayoutConflict>,
 }
@@ -119,53 +163,48 @@ struct ObjectObservations {
 /// Shared deterministic reducer from adapter observations to object layouts.
 #[derive(Debug, Clone, Default)]
 pub(super) struct MemoryObjectBuilder {
-    observations: BTreeMap<VReg, ObjectObservations>,
+    observations: BTreeMap<ObjectIdentity, ObjectObservations>,
 }
 
 impl MemoryObjectBuilder {
-    pub(super) fn observe_access(
-        &mut self,
-        base: VReg,
-        offset: i64,
-        width: u8,
-        role: AccessRole,
-        source: AccessSource,
-        memory_region: Option<MemoryRegion>,
-        memory_version: Option<MemoryVersionId>,
-    ) {
+    pub(super) fn observe_access(&mut self, object: impl Into<ObjectIdentity>, access: RawAccess) {
         self.observations
-            .entry(base.clone())
+            .entry(object.into())
             .or_default()
             .accesses
-            .push(RawAccess {
-                offset,
-                width,
-                role,
-                source,
-                memory_region,
-                memory_version,
-            });
+            .push(access);
     }
 
-    pub(super) fn observe_stride(&mut self, base: VReg, stride: i64) {
+    pub(super) fn observe_alias(
+        &mut self,
+        object: impl Into<ObjectIdentity>,
+        alias: impl Into<ObjectIdentity>,
+    ) {
         self.observations
-            .entry(base)
+            .entry(object.into())
+            .or_default()
+            .aliases
+            .insert(alias.into());
+    }
+
+    pub(super) fn observe_stride(&mut self, base: impl Into<ObjectIdentity>, stride: i64) {
+        self.observations
+            .entry(base.into())
             .or_default()
             .strides
             .push(stride);
     }
 
-    pub(super) fn observe_origin(&mut self, base: VReg, origin: ObjectOrigin) {
-        self.observations
-            .entry(base)
-            .or_default()
-            .origins
-            .push(origin);
+    pub(super) fn observe_origin(&mut self, base: impl Into<ObjectIdentity>, origin: ObjectOrigin) {
+        let origins = &mut self.observations.entry(base.into()).or_default().origins;
+        if !origins.contains(&origin) {
+            origins.push(origin);
+        }
     }
 
-    pub(super) fn conflict(&mut self, base: VReg, conflict: LayoutConflict) {
+    pub(super) fn conflict(&mut self, base: impl Into<ObjectIdentity>, conflict: LayoutConflict) {
         self.observations
-            .entry(base)
+            .entry(base.into())
             .or_default()
             .conflicts
             .insert(conflict);
@@ -173,12 +212,12 @@ impl MemoryObjectBuilder {
 
     pub(super) fn finish(self) -> MemoryObjectModel {
         let mut objects = Vec::new();
-        let mut by_base = BTreeMap::new();
-        for (base, observation) in self.observations {
+        let mut by_identity = BTreeMap::new();
+        for (identity, observation) in self.observations {
             if observation.accesses.is_empty() {
                 continue;
             }
-            let id = ObjectId(objects.len() as u32);
+            let id = ObjectId(objects.len());
             let mut conflicts = observation.conflicts;
             let origins = observation.origins;
             if origins.is_empty() {
@@ -214,13 +253,15 @@ impl MemoryObjectBuilder {
                 .into_iter()
                 .map(|access| AccessPath {
                     object: id,
+                    cursor: access.cursor,
                     offset: access.offset,
                     width: access.width,
                     alignment: inferred_alignment(access.offset, access.width),
                     role: access.role,
                     source: access.source,
                     memory_region: access.memory_region,
-                    memory_version: access.memory_version,
+                    memory_state: access.memory_state,
+                    mir_access: access.mir_access,
                 })
                 .collect::<Vec<_>>();
             access_paths.sort();
@@ -244,10 +285,13 @@ impl MemoryObjectBuilder {
                 Some(stride)
             });
 
-            by_base.insert(base.clone(), id);
+            by_identity.insert(identity.clone(), id);
+            for alias in observation.aliases {
+                by_identity.insert(alias, id);
+            }
             objects.push(MemoryObject {
                 id,
-                base,
+                identity,
                 origins,
                 accesses: access_paths,
                 stride,
@@ -255,7 +299,10 @@ impl MemoryObjectBuilder {
                 conflicts,
             });
         }
-        MemoryObjectModel { objects, by_base }
+        MemoryObjectModel {
+            objects,
+            by_identity,
+        }
     }
 }
 
@@ -284,9 +331,25 @@ fn inferred_alignment(offset: i64, width: u8) -> u8 {
 }
 
 impl MemoryObjectModel {
+    pub fn objects(&self) -> &[MemoryObject] {
+        &self.objects
+    }
+
+    pub fn object(&self, id: ObjectId) -> Option<&MemoryObject> {
+        self.objects.get(id.0)
+    }
+
+    pub fn object_for_identity(&self, identity: &ObjectIdentity) -> Option<&MemoryObject> {
+        let id = self.by_identity.get(identity)?;
+        self.object(*id)
+    }
+
+    pub fn object_for_value(&self, value: ValueId) -> Option<&MemoryObject> {
+        self.object_for_identity(&ObjectIdentity::MirValue(value))
+    }
+
     pub(crate) fn object_for_base(&self, base: &VReg) -> Option<&MemoryObject> {
-        let id = self.by_base.get(base)?;
-        self.objects.get(id.0 as usize)
+        self.object_for_identity(&ObjectIdentity::LegacyRegister(base.clone()))
     }
 
     /// Whether this base has one conflict-free, concretely bounded layout.

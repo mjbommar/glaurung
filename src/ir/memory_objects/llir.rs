@@ -1,6 +1,9 @@
 //! LLIR and MemorySSA adapter for common memory-object access evidence.
 
-use crate::ir::memory_objects::{AccessRole, AccessSource, MemoryObjectBuilder, MemoryObjectModel};
+use crate::ir::memory_objects::{
+    AccessRole, AccessSource, MemoryObjectBuilder, MemoryObjectModel, MemoryStateIdentity,
+    RawAccess,
+};
 use crate::ir::memory_ssa::{primary_region_for_memop, MemorySsaError, MemorySsaInfo};
 use crate::ir::types::{LlirFunction, MemOp, Op};
 use crate::ir::use_def::InstrAddr;
@@ -62,11 +65,15 @@ fn observe_memop(
         });
     builder.observe_access(
         base.clone(),
-        memop.disp,
-        memop.size,
-        role,
-        AccessSource::LlirInstruction(address),
-        Some(region),
-        memory_version,
+        RawAccess {
+            cursor: base.clone().into(),
+            offset: memop.disp,
+            width: memop.size,
+            role,
+            source: AccessSource::LlirInstruction(address),
+            memory_region: Some(region),
+            memory_state: memory_version.map(MemoryStateIdentity::Llir),
+            mir_access: None,
+        },
     );
 }

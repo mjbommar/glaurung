@@ -3850,3 +3850,78 @@ consumer uses MIR yet, so emitted C and the fresh local-only DecBench scores are
 unchanged. The next dependency is stable object/lifetime identity plus
 `TypeStore` evidence on these MIR memory versions, followed by one parity-gated
 consumer migration; the AST compatibility adapter is not removed early.
+
+## 2026-08-13 15:10–17:10 — stable MIR objects meet the program TypeStore
+
+The next architectural slice closes two identity gaps without changing emitted
+C. `MemoryObjectModel` now admits stable `ObjectId` values and source-independent
+roots for exact MIR values, absolute addresses, TLS addresses, and the legacy
+compatibility registers. Each access retains both its canonical object and the
+exact cursor lifetime (`ValueId`) that performed it, plus affine byte offset,
+width, alignment, role, instruction, region, MemorySSA state, and MIR access ID.
+This distinction is important: an affine copy can identify the same object while
+a later destructive reuse of the same machine register remains a different MIR
+value and cannot accidentally inherit the earlier pointee type.
+
+The MIR adapter joins direct affine copies and loop-carried pointer phis, records
+parameter-pointee, stack, address, call-result, and TLS origins, and recovers
+proven recurrence stride/extent. The existing common reducer remains the only
+owner of access deduplication, extent/stride inference, aliases, and conflicts;
+AST, LLIR, and MIR are adapters rather than three layout implementations. MIR
+memory effects link back to their object, and an independent object verifier
+checks both directions of every object/access edge as well as cursor, region,
+state, source-instruction, and arena identities. A deliberately dangling link
+first passed verification in RED; the verifier now rejects it fail-closed.
+
+`ProgramEnvironment` now owns the first canonical `TypeStore`. Stable `TypeId`
+values support recursive primitive, pointer, array, struct, union, enum,
+function, and typedef shapes. Deterministic batch import reserves nominal IDs
+before resolving references, so recursive graphs import independently of input
+order. Anonymous inferred shapes intern once. Every fact carries provenance and
+an explicit inference < binary < debug < analyst authority; incompatible weaker
+facts are retained as alternatives instead of replacing stronger selections.
+Missing references remain explicit conflicts, and invalid anonymous shapes are
+rejected before store mutation. `ObjectTypeKey` joins a function-qualified MIR
+object identity to the same authority/provenance model.
+
+TDD covers exact cursor and memory-state retention, affine aliasing, destructive
+reuse, dangling object links, a 64-byte loop recurrence, recursive import order,
+anonymous interning, analyst/debug precedence, missing references, stable object
+binding with alternatives, and pre-mutation validation. The loop fixture also
+binds its exact MIR object to an inferred 64-byte struct, proving the two stores
+compose without source variable names.
+
+The diagnostic pass dump now consumes the verified MIR object/memory graph
+instead of reconstructing the LLIR sidecar. Normal decompilation and the
+production aggregate consumer still use the compatibility path; removing that
+path before debug import and parity evidence would turn this architecture work
+into a user-visible regression risk. The next dependency is therefore one real
+program-session debug-type import, followed by a parity-gated aggregate consumer
+migration—not another AST-local heuristic.
+
+The first complete Python run exposed one additional failure in that migrated
+diagnostic: the real stripped record-walk function was rejected because nine MIR
+uses had source operand indexes with gaps. `MirUse.index` is deliberately the
+original LLIR operand position; filtered non-SSA operands can make those indexes
+sparse, but the verifier had incorrectly indexed the dense retained-use vector
+with them. A RED unit test now constructs that exact sparse shape. Verification
+checks instruction ownership plus strictly increasing source indexes instead,
+and a separate corruption test rejects duplicated indexes. The real stripped
+compile/decompile/recompile/execute test then passed with typed MIR object IDs,
+cursor values, memory states, and access backreferences present in diagnostics.
+
+Final validation uses a fresh CPython 3.14 release extension. The complete Rust
+suite passes 2,116 library tests plus every integration target and doctest;
+`cargo clippy --lib` completes with repository baseline warnings. The complete
+Python suite reports 2,989 passed, 43 skipped, three expected failures, and the
+same six pre-existing output-shape failures: four ARM32 assertions require a
+redundant `(int)(0)` around `memset`'s already-correct zero argument, the vector
+copy assertion requires `__builtin_memmove` despite execution parity, and the
+i386 assertion requires redundant casts around already-typed call arguments.
+The local four-lane decompiler smoke set reports no regressions. The changed
+Python test is Ruff format/lint clean; repository-wide Ruff and Ty remain
+baseline-red at 29,793 and 1,976 diagnostics respectively. `git diff --check`
+passes. Production owners introduced or expanded here remain bounded: the common
+object reducer is 366 lines, MIR adapter 361, main MIR verifier 491 with its
+128-line object verifier split out, and TypeStore ownership is split into 475,
+223, and 62-line modules.

@@ -1,5 +1,5 @@
 use super::llir::infer_from_llir;
-use super::{infer_from_ast, AccessRole, AccessSource, LayoutConflict};
+use super::{infer_from_ast, AccessRole, AccessSource, LayoutConflict, MemoryStateIdentity};
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::memory_ssa::{compute_memory_ssa, MemoryRegion};
 use crate::ir::types::{BinOp, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value};
@@ -329,7 +329,7 @@ fn llir_accesses_retain_instruction_and_memory_version_provenance() {
         })
     );
     assert_eq!(
-        object.accesses[0].memory_version,
+        object.accesses[0].memory_state,
         memory
             .access_at(
                 InstrAddr {
@@ -339,11 +339,12 @@ fn llir_accesses_retain_instruction_and_memory_version_provenance() {
                 MemoryRegion::HeapUnknown
             )
             .and_then(|access| access.output)
+            .map(MemoryStateIdentity::Llir)
     );
     assert_eq!(object.accesses[1].offset, 8);
     assert_eq!(object.accesses[1].role, AccessRole::Read);
     assert_eq!(
-        object.accesses[1].memory_version,
+        object.accesses[1].memory_state,
         memory
             .access_at(
                 InstrAddr {
@@ -352,7 +353,7 @@ fn llir_accesses_retain_instruction_and_memory_version_provenance() {
                 },
                 MemoryRegion::HeapUnknown
             )
-            .map(|access| access.input)
+            .map(|access| MemoryStateIdentity::Llir(access.input))
     );
     assert!(object.conflicts.contains(&LayoutConflict::MissingOrigin));
     assert!(object.conflicts.contains(&LayoutConflict::MissingStride));

@@ -14,7 +14,7 @@ use crate::program::image::{ImageMemoryKind, ProgramImage};
 
 /// Identity of one reaching memory state within a function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct MemoryVersionId(usize);
+pub struct MemoryVersionId(usize);
 
 impl MemoryVersionId {
     /// Region-specific memory entering the function.

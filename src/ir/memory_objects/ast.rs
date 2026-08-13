@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::memory_objects::{
     AccessRole, AccessSource, LayoutConflict, MemoryObjectBuilder, MemoryObjectModel, ObjectOrigin,
+    RawAccess,
 };
 use crate::ir::types::{is_promoted_local_reg, BinOp, VReg};
 
@@ -224,7 +225,9 @@ fn observe_expr(
                 observe_expr(argument, ExprContext::Escape, source, observations);
             }
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => {
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => {
             observe_expr(src, ExprContext::Integer, source, observations)
         }
         Expr::FunctionTableEntry { index, .. } => {
@@ -269,9 +272,19 @@ fn record_access(
     let Some((base, offset)) = affine_address(address) else {
         return;
     };
-    observations
-        .objects
-        .observe_access(base, offset, width, role, source, None, None);
+    observations.objects.observe_access(
+        base.clone(),
+        RawAccess {
+            cursor: base.into(),
+            offset,
+            width,
+            role,
+            source,
+            memory_region: None,
+            memory_state: None,
+            mir_access: None,
+        },
+    );
 }
 
 fn affine_address(expression: &Expr) -> Option<(VReg, i64)> {
