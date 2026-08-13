@@ -205,6 +205,25 @@ import diff_decompile as D  # ty: ignore[unresolved-import]
 import fixture_toolchain as TC  # ty: ignore[unresolved-import]
 
 
+def _c_source(stem: str) -> Path | None:
+    """The fixture's C or C++ source, or None if it is written in something else.
+
+    The corpus is no longer C-only: it carries Rust (`.rs`), Go (`.go`) and hand
+    -written assembly (`.S`) fixtures. This lane compiles with `gcc -O0 -g` and
+    grades the decompiled C against a committed structural map, so it applies
+    only to the C-family sources — and it used to *assume* that, falling back to
+    `<stem>.cpp` for anything that was not `<stem>.c` and then handing a path
+    that does not exist to `g++`. With the curriculum fixtures in the manifest
+    that turned into `cc1plus: fatal error: 166_rust_generics.cpp: No such file`,
+    which errored the whole lane at setup rather than skipping one fixture.
+    """
+    for suffix in (".c", ".cpp"):
+        candidate = SRC / f"{stem}{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _build(stem: str, workdir: Path) -> Path:
     """Compile one fixture with gcc -O0 -g for structural inspection.
 
@@ -214,9 +233,9 @@ def _build(stem: str, workdir: Path) -> Path:
     host's gcc release — labels move, indirect-call recovery changes — so the
     committed map would only be checkable on the machine that wrote it.
     """
-    src = SRC / f"{stem}.c"
-    if not src.exists():
-        src = SRC / f"{stem}.cpp"
+    src = _c_source(stem)
+    if src is None:
+        raise RuntimeError(f"compile {stem}: no C/C++ source")
     cc = "g++" if src.suffix == ".cpp" else "gcc"
     so = workdir / f"{stem}.so"
     r = TC.run([cc, "-shared", "-fPIC", "-g", "-O0", "-w", "-o", str(so), str(src)])
@@ -246,7 +265,14 @@ def structural_report(workdir: Path) -> dict:
     placeholder: dict[str, bool] = {}
     verify: dict[str, list[str]] = {}
     gaps: list[str] = []
+    #: Fixtures this lane cannot grade because they are not C-family sources.
+    #: Reported rather than dropped: a silently shortened corpus reads as
+    #: "everything passed" when it means "we did not look".
+    skipped: list[str] = []
     for fixture, funcs in M.REQUIRED_FUNCTIONS.items():
+        if _c_source(fixture) is None:
+            skipped.append(fixture)
+            continue
         so = _build(fixture, workdir)
         per_style = {style: decompile_all(so, style) for style in STYLES}
         for fn in funcs:
@@ -278,6 +304,7 @@ def structural_report(workdir: Path) -> dict:
         "placeholder": placeholder,
         "verify": verify,
         "gaps": sorted(gaps),
+        "skipped": sorted(skipped),
     }
 
 

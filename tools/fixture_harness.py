@@ -51,6 +51,35 @@ def matrix_for(src) -> list[tuple[str, str]]:
     return RUST_MATRIX if str(src).endswith(".rs") else REQUIRED_MATRIX
 
 
+def lanes_for(src, matrix) -> list[tuple[str, str]]:
+    """The lanes to run for one fixture, narrowed by a caller-supplied matrix.
+
+    The fixture's LANGUAGE decides which compilers can build it; `matrix` may
+    then narrow that set. Callers routinely pass the UNION of every lane in the
+    baseline (`sorted({tuple(k.split(":")[1:]) for k in lanes(baseline)})`), and
+    once the corpus contained a single Rust fixture that union grew `rustc`
+    lanes -- which the old `matrix if src.suffix != ".rs" else matrix_for(src)`
+    then handed to every C and C++ source. That is how
+    `10_cpp_runtime_shapes:rustc:O0` came to exist: a C++ fixture built by g++
+    and recorded, with its Itanium-mangled symbols, under a Rust lane label.
+
+    Narrowing to the intersection fixes that. An EMPTY intersection means the
+    caller's matrix names no compiler this language has -- a C matrix against a
+    Rust source -- which is an omission rather than a request for nothing, so
+    fall back to the language's own compilers at whichever optimisation levels
+    were asked for. `--gcc-o0-only` therefore still means O0-only for a Rust
+    fixture instead of silently running both levels.
+    """
+    language = matrix_for(src)
+    if matrix is None:
+        return list(language)
+    narrowed = [lane for lane in language if lane in matrix]
+    if narrowed:
+        return narrowed
+    opts = {opt for _cc, opt in matrix}
+    return [lane for lane in language if lane[1] in opts]
+
+
 def rust_lanes_enabled() -> bool:
     """Whether Rust fixtures participate in the matrix.
 
@@ -218,7 +247,7 @@ def strict_compile_problems(matrix=None, allowed_missing=None) -> list[str]:
     for src in srcs:
         # A Rust fixture has rustc lanes only; cross-producting it with the C
         # matrix would demand `166_rust_generics:gcc:O0`, which never exists.
-        for cc, opt in matrix if src.suffix != ".rs" else matrix_for(src):
+        for cc, opt in lanes_for(src, matrix):
             so, err = compile_fixture(src, cc, opt, strict=True)
             if (cc, opt, src.stem) in allowed_missing:
                 # declared gap: must genuinely fail (env runtime absent)
@@ -319,7 +348,7 @@ def run_matrix(
     lanes_to_run = [
         (f"{src.stem}:{cc}:{opt}", src, cc, opt, (cc, opt, src.stem) in allowed_missing)
         for src in srcs
-        for cc, opt in (matrix if src.suffix != ".rs" else matrix_for(src))
+        for cc, opt in lanes_for(src, matrix)
     ]
     if jobs == 1:
         for key, src, cc, opt, env_missing in lanes_to_run:
@@ -512,7 +541,7 @@ def schema_problems(result: dict, matrix) -> list[str]:
         # clang lane at all, so cross-producting every stem with the global
         # matrix would demand `171_rust_overflow:gcc:O2` and report it missing.
         src = sources.get(stem)
-        lanes = matrix if src is None or src.suffix != ".rs" else matrix_for(src)
+        lanes = matrix if src is None else lanes_for(src, matrix)
         for cc, opt in lanes:
             key = f"{stem}:{cc}:{opt}"
             if key not in result:

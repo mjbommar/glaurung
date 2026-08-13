@@ -7857,7 +7857,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // The macro was unnecessary anyway — all four holdout toolchains accept the
     // attribute directly (probed: gcc 15.2, arm-none-eabi-gcc 14.2,
     // i686/x86_64-w64-mingw32-gcc 13).
-    if !ids.stack_objects.is_empty() {
+    if !ids.stack_objects.is_empty() && !ids.calls_stack_check {
         out.push_str("__attribute__((no_stack_protector)) ");
     }
     out.push_str(&return_type);
@@ -8095,6 +8095,10 @@ struct DecIdents {
     goto_count: usize,
     /// Computed transfers and unsupported instructions retained in the AST.
     unresolved_transfer_count: usize,
+    /// The recovered body calls `__stack_chk_fail`, i.e. the ORIGINAL function
+    /// was compiled with a stack protector. Gates the `no_stack_protector`
+    /// suppression: a function that already had a canary must keep it.
+    calls_stack_check: bool,
     /// At least one expression contains an explicit unknown/poison value and
     /// therefore needs the C23-compatible helper declaration.
     has_unknown_value: bool,
@@ -8382,6 +8386,20 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
                 // Evidence the ORIGINAL was built with a stack protector. The
                 // rebuild is then free to add one too, because the code it is
                 // being compared against already has it.
+                // The callee is `__stack_chk_fail@plt` through a PLT thunk and
+                // plain `__stack_chk_fail` when bound directly; the suffix is
+                // stripped at print time, so split it the way `ir::canary` does.
+                // On i386 `-fPIC` glibc routes the failure through its hidden
+                // alias `__stack_chk_fail_local` instead, so match the prefix
+                // rather than the exact name — otherwise every 32-bit protected
+                // function keeps the suppression it must not have.
+                if name
+                    .split('@')
+                    .next()
+                    .is_some_and(|base| base.starts_with("__stack_chk_fail"))
+                {
+                    ids.calls_stack_check = true;
+                }
             } else {
                 collect_idents_expr(target, ids);
             }

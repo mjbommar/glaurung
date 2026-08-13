@@ -3220,7 +3220,7 @@
     "rc4_keystream_checksum": "pass"
   },
   "51_rc4:gcc:O2": {
-    "rc4_keystream_checksum": "fail"
+    "rc4_keystream_checksum": "pass"
   },
   "52_hash_functions:clang:O0": {
     "djb2_xor": "pass",
