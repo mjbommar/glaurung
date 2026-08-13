@@ -1,12 +1,16 @@
 //! Fixed-point definedness queries over verified MIR.
 
-use super::model::{Definition, MirFunction, UseId, ValueId};
+use super::model::{
+    Definition, MemoryAccessId, MemoryDefinition, MemoryValueId, MirFunction, UseId, ValueId,
+};
 
 pub struct DefinitionOracle {
     all_paths_defined: Vec<bool>,
     use_values: Vec<usize>,
     definitions: Vec<Definition>,
     uses_by_value: Vec<Vec<UseId>>,
+    memory_definitions: Vec<MemoryDefinition>,
+    memory_uses_by_value: Vec<Vec<MemoryAccessId>>,
 }
 
 impl DefinitionOracle {
@@ -52,6 +56,12 @@ impl DefinitionOracle {
                 uses.push(use_.id);
             }
         }
+        let mut memory_uses_by_value = vec![Vec::new(); function.memory_values().len()];
+        for access in function.memory_accesses() {
+            if let Some(uses) = memory_uses_by_value.get_mut(access.input.0) {
+                uses.push(access.id);
+            }
+        }
         Self {
             all_paths_defined: defined,
             use_values: function.uses().iter().map(|use_| use_.value.0).collect(),
@@ -61,6 +71,12 @@ impl DefinitionOracle {
                 .map(|value| value.definition.clone())
                 .collect(),
             uses_by_value,
+            memory_definitions: function
+                .memory_values()
+                .iter()
+                .map(|value| value.definition.clone())
+                .collect(),
+            memory_uses_by_value,
         }
     }
 
@@ -85,6 +101,17 @@ impl DefinitionOracle {
 
     pub fn uses(&self, value: ValueId) -> &[UseId] {
         self.uses_by_value
+            .get(value.0)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    pub fn memory_definition(&self, value: MemoryValueId) -> Option<&MemoryDefinition> {
+        self.memory_definitions.get(value.0)
+    }
+
+    pub fn memory_uses(&self, value: MemoryValueId) -> &[MemoryAccessId] {
+        self.memory_uses_by_value
             .get(value.0)
             .map(Vec::as_slice)
             .unwrap_or_default()

@@ -26,7 +26,7 @@ pub fn lower_verified(llir: &LlirFunction, target: TargetSpec) -> Result<MirFunc
     }
 }
 
-fn lower(llir: &LlirFunction, target: TargetSpec) -> MirFunction {
+pub(super) fn lower(llir: &LlirFunction, target: TargetSpec) -> MirFunction {
     let ssa = compute_ssa_for_target(llir, target);
     let va_to_block: BTreeMap<u64, BlockId> = llir
         .blocks
@@ -90,6 +90,7 @@ fn lower(llir: &LlirFunction, target: TargetSpec) -> MirFunction {
                 source_va: instruction.va,
                 uses: Vec::new(),
                 outputs: Vec::new(),
+                memory_effects: Vec::new(),
             });
         }
     }
@@ -307,6 +308,8 @@ fn lower(llir: &LlirFunction, target: TargetSpec) -> MirFunction {
         storages,
         values,
         uses,
+        memory_values: Vec::new(),
+        memory_accesses: Vec::new(),
     }
 }
 

@@ -3,6 +3,8 @@
 use crate::ir::types::{VReg, Width};
 use crate::target::TargetSpec;
 
+pub use crate::ir::memory_ssa::{MemoryAccessKind, MemoryRegion};
+
 macro_rules! id_type {
     ($name:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -15,6 +17,44 @@ id_type!(InstructionId);
 id_type!(StorageId);
 id_type!(ValueId);
 id_type!(UseId);
+id_type!(MemoryValueId);
+id_type!(MemoryAccessId);
+
+/// Exact owner of a memory state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryDefinition {
+    Entry {
+        region: MemoryRegion,
+    },
+    InstructionOutput {
+        access: MemoryAccessId,
+    },
+    Phi {
+        block: BlockId,
+        region: MemoryRegion,
+        /// `None` is the implicit function-entry edge of a looping entry block.
+        incoming: Vec<(Option<BlockId>, MemoryValueId)>,
+    },
+}
+
+/// One stable memory-state identity in the MIR arena.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirMemoryValue {
+    pub id: MemoryValueId,
+    pub region: MemoryRegion,
+    pub definition: MemoryDefinition,
+}
+
+/// One instruction's use and optional definition of a memory region.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirMemoryAccess {
+    pub id: MemoryAccessId,
+    pub instruction: InstructionId,
+    pub region: MemoryRegion,
+    pub kind: MemoryAccessKind,
+    pub input: MemoryValueId,
+    pub output: Option<MemoryValueId>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Definition {
@@ -73,6 +113,7 @@ pub struct MirInstruction {
     pub source_va: u64,
     pub uses: Vec<UseId>,
     pub outputs: Vec<ValueId>,
+    pub memory_effects: Vec<MemoryAccessId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +136,8 @@ pub struct MirFunction {
     pub(crate) storages: Vec<MirStorage>,
     pub(crate) values: Vec<MirValue>,
     pub(crate) uses: Vec<MirUse>,
+    pub(crate) memory_values: Vec<MirMemoryValue>,
+    pub(crate) memory_accesses: Vec<MirMemoryAccess>,
 }
 
 impl MirFunction {
@@ -118,12 +161,24 @@ impl MirFunction {
         &self.uses
     }
 
+    pub fn memory_values(&self) -> &[MirMemoryValue] {
+        &self.memory_values
+    }
+
+    pub fn memory_accesses(&self) -> &[MirMemoryAccess] {
+        &self.memory_accesses
+    }
+
     pub fn value(&self, id: ValueId) -> &MirValue {
         &self.values[id.0]
     }
 
     pub fn use_(&self, id: UseId) -> &MirUse {
         &self.uses[id.0]
+    }
+
+    pub fn memory_value(&self, id: MemoryValueId) -> &MirMemoryValue {
+        &self.memory_values[id.0]
     }
 
     #[cfg(test)]
@@ -134,5 +189,18 @@ impl MirFunction {
     #[cfg(test)]
     pub(crate) fn storage_mut_for_test(&mut self, id: StorageId) -> &mut MirStorage {
         &mut self.storages[id.0]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn memory_access_mut_for_test(
+        &mut self,
+        id: MemoryAccessId,
+    ) -> &mut MirMemoryAccess {
+        &mut self.memory_accesses[id.0]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn memory_value_mut_for_test(&mut self, id: MemoryValueId) -> &mut MirMemoryValue {
+        &mut self.memory_values[id.0]
     }
 }

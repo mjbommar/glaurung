@@ -26,7 +26,7 @@ impl MemoryVersionId {
 /// Conservative alias regions shared by MemorySSA and memory-object recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
-pub(crate) enum MemoryRegion {
+pub enum MemoryRegion {
     /// Proven stack/frame-coordinate memory.
     Stack,
     /// Proven writable storage mapped by the program image.
@@ -55,14 +55,14 @@ impl MemoryRegion {
 
 /// Observable memory effect of one LLIR instruction in one region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum MemoryAccessKind {
+pub enum MemoryAccessKind {
     Read,
     Write,
     Clobber,
 }
 
 impl MemoryAccessKind {
-    fn writes(self) -> bool {
+    pub(crate) fn writes(self) -> bool {
         matches!(self, Self::Write | Self::Clobber)
     }
 }
@@ -159,6 +159,10 @@ impl MemorySsaInfo {
         self.phis
             .iter()
             .find(|phi| phi.block_idx == block_idx && phi.region == region)
+    }
+
+    pub(crate) fn phis(&self) -> &[MemoryPhi] {
+        &self.phis
     }
 
     /// Recheck target classification, CFG shape, exact effect coverage, state

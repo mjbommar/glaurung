@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use super::model::{Definition, MirFunction};
+use super::model::{Definition, MemoryDefinition, MirFunction};
 
 pub fn verify(function: &MirFunction) -> Vec<String> {
     let mut errors = Vec::new();
@@ -104,6 +104,29 @@ pub fn verify(function: &MirFunction) -> Vec<String> {
                 other => errors.push(format!(
                     "instruction {index} output {output_index} has inconsistent definition {other:?}"
                 )),
+            }
+        }
+        let mut seen_memory_regions = BTreeSet::new();
+        for access in &instruction.memory_effects {
+            if access.0 >= function.memory_accesses.len() {
+                errors.push(format!(
+                    "instruction {index} has invalid memory access {}",
+                    access.0
+                ));
+                continue;
+            }
+            let record = &function.memory_accesses[access.0];
+            if record.instruction != instruction.id {
+                errors.push(format!(
+                    "instruction {index} does not own memory access {}",
+                    access.0
+                ));
+            }
+            if !seen_memory_regions.insert(record.region) {
+                errors.push(format!(
+                    "instruction {index} has duplicate {:?} memory effects",
+                    record.region
+                ));
             }
         }
     }
@@ -215,6 +238,123 @@ pub fn verify(function: &MirFunction) -> Vec<String> {
             ));
         }
     }
+    for (index, value) in function.memory_values.iter().enumerate() {
+        if value.id.0 != index {
+            errors.push(format!(
+                "memory value id {} does not match arena index {index}",
+                value.id.0
+            ));
+        }
+        match &value.definition {
+            MemoryDefinition::Entry { region } => {
+                if *region != value.region {
+                    errors.push(format!("memory value {index} entry region mismatch"));
+                }
+            }
+            MemoryDefinition::InstructionOutput { access } => {
+                if function.memory_accesses.get(access.0).is_none_or(|owner| {
+                    owner.output != Some(value.id) || owner.region != value.region
+                }) {
+                    errors.push(format!(
+                        "memory value {index} is orphaned from its defining access"
+                    ));
+                }
+            }
+            MemoryDefinition::Phi {
+                block,
+                region,
+                incoming,
+            } => {
+                if *region != value.region {
+                    errors.push(format!("memory value {index} phi region mismatch"));
+                }
+                if block.0 >= function.blocks.len() {
+                    errors.push(format!(
+                        "memory value {index} phi has invalid block {}",
+                        block.0
+                    ));
+                    continue;
+                }
+                let mut expected = function.blocks[block.0]
+                    .predecessors
+                    .iter()
+                    .copied()
+                    .map(Some)
+                    .collect::<BTreeSet<_>>();
+                if *block == function.entry {
+                    expected.insert(None);
+                }
+                let actual = incoming
+                    .iter()
+                    .map(|(predecessor, _)| *predecessor)
+                    .collect::<BTreeSet<_>>();
+                if actual != expected || actual.len() != incoming.len() {
+                    errors.push(format!(
+                        "memory value {index} phi predecessor set does not match CFG"
+                    ));
+                }
+                for (_, incoming_value) in incoming {
+                    if function
+                        .memory_values
+                        .get(incoming_value.0)
+                        .is_none_or(|incoming| incoming.region != value.region)
+                    {
+                        errors.push(format!(
+                            "memory value {index} phi has an incoming region mismatch"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for (index, access) in function.memory_accesses.iter().enumerate() {
+        if access.id.0 != index {
+            errors.push(format!(
+                "memory access id {} does not match arena index {index}",
+                access.id.0
+            ));
+        }
+        if function
+            .instructions
+            .get(access.instruction.0)
+            .is_none_or(|owner| !owner.memory_effects.contains(&access.id))
+        {
+            errors.push(format!(
+                "memory access {index} is not owned by its instruction"
+            ));
+        }
+        let Some(input) = function.memory_values.get(access.input.0) else {
+            errors.push(format!(
+                "memory access {index} has invalid input {}",
+                access.input.0
+            ));
+            continue;
+        };
+        if input.region != access.region {
+            errors.push(format!("memory access {index} memory region mismatch"));
+        }
+        if !memory_definition_dominates_access(function, &dominators, access.input.0, index) {
+            errors.push(format!(
+                "memory access {index} reaching state does not dominate the access"
+            ));
+        }
+        if access.kind.writes() != access.output.is_some() {
+            errors.push(format!(
+                "memory access {index} definition presence mismatch"
+            ));
+        }
+        if let Some(output) = access.output {
+            if function.memory_values.get(output.0).is_none_or(|value| {
+                value.region != access.region
+                    || value.definition
+                        != (MemoryDefinition::InstructionOutput { access: access.id })
+            }) {
+                errors.push(format!(
+                    "memory access {index} has an inconsistent output definition"
+                ));
+            }
+        }
+    }
     errors
 }
 
@@ -292,6 +432,49 @@ fn definition_dominates_use(
         }
         Definition::Unreachable { block } => {
             !function.blocks[use_instruction.block.0].reachable && *block == use_instruction.block
+        }
+    }
+}
+
+fn memory_definition_dominates_access(
+    function: &MirFunction,
+    dominators: &[BTreeSet<usize>],
+    value_index: usize,
+    access_index: usize,
+) -> bool {
+    let Some(access) = function.memory_accesses.get(access_index) else {
+        return false;
+    };
+    let Some(use_instruction) = function.instructions.get(access.instruction.0) else {
+        return false;
+    };
+    let Some(value) = function.memory_values.get(value_index) else {
+        return false;
+    };
+    match &value.definition {
+        MemoryDefinition::Entry { .. } => true,
+        MemoryDefinition::Phi { block, .. } => {
+            if block.0 >= function.blocks.len() || use_instruction.block.0 >= dominators.len() {
+                return false;
+            }
+            *block == use_instruction.block
+                || dominators[use_instruction.block.0].contains(&block.0)
+        }
+        MemoryDefinition::InstructionOutput { access } => {
+            let Some(definition_access) = function.memory_accesses.get(access.0) else {
+                return false;
+            };
+            let Some(definition_instruction) =
+                function.instructions.get(definition_access.instruction.0)
+            else {
+                return false;
+            };
+            if definition_instruction.block == use_instruction.block {
+                definition_instruction.index < use_instruction.index
+            } else {
+                use_instruction.block.0 < dominators.len()
+                    && dominators[use_instruction.block.0].contains(&definition_instruction.block.0)
+            }
         }
     }
 }

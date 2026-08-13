@@ -7,14 +7,21 @@
 //! source until individual consumers migrate.
 
 mod builder;
+mod memory;
 mod model;
 mod query;
 mod verify;
 
+#[cfg(test)]
+#[path = "memory_tests.rs"]
+mod memory_tests;
+
 pub use builder::lower_verified;
+pub use memory::lower_verified_with_image;
 pub use model::{
-    BlockId, Definition, InstructionId, MirBlock, MirFunction, MirInstruction, MirStorage, MirUse,
-    MirValue, StorageId, UseId, ValueId,
+    BlockId, Definition, InstructionId, MemoryAccessId, MemoryAccessKind, MemoryDefinition,
+    MemoryRegion, MemoryValueId, MirBlock, MirFunction, MirInstruction, MirMemoryAccess,
+    MirMemoryValue, MirStorage, MirUse, MirValue, StorageId, UseId, ValueId,
 };
 pub use query::DefinitionOracle;
 pub use verify::verify;
@@ -25,7 +32,7 @@ mod tests {
     use crate::ir::types::{BinOp, LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value, Width};
     use crate::target::TargetSpec;
 
-    use super::{lower_verified, verify, Definition, DefinitionOracle};
+    use super::{lower_verified, lower_verified_with_image, verify, Definition, DefinitionOracle};
 
     fn target(arch: Arch) -> TargetSpec {
         TargetSpec::from_image_metadata(arch, Endianness::Little, Format::ELF, false)
@@ -414,10 +421,14 @@ mod tests {
                 .find(|function| image.normalize_function_entry(function.entry_point.value) == main)
                 .expect("discover main");
             let llir = lift_function_from_image(&image, source).expect("lift main");
-            let mir = lower_verified(&llir, *image.target()).expect("verify real MIR");
+            let mir = lower_verified_with_image(&llir, &image).expect("verify real MIR");
 
             assert!(!mir.blocks().is_empty());
             assert!(!mir.instructions().is_empty());
+            assert!(
+                !mir.memory_accesses().is_empty(),
+                "real {expected_target:?} main must carry memory effects"
+            );
             assert!(verify(&mir).is_empty());
         }
     }

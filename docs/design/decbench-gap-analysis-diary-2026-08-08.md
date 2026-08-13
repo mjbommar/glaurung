@@ -3807,3 +3807,46 @@ execution lane passes, and one i386 assertion requires redundant `(int)` casts
 around already-typed call arguments. This increment changes no Python, emitter,
 fixture, or production-decompiler path, so these are tracked output-shape debt,
 not regressions caused by the diagnostic MIR boundary.
+
+## 2026-08-13 11:35–12:12 — verified MemorySSA identities enter typed MIR
+
+The next Phase-3 slice replaces the boundary between the diagnostic LLIR
+MemorySSA sidecar and typed MIR with one verified projection. Image-qualified
+MIR lowering now carries stable memory-value and memory-access IDs for the five
+target-backed regions. Each effect names its owning instruction, kind, input
+version, and optional output version; entries, instruction definitions, and
+phis have explicit owners. Diamond joins retain exact predecessor/value pairs,
+and opaque calls remain clobbers rather than accidentally preserving memory.
+
+`DefinitionOracle` now serves register and memory definition/use queries from
+the same verified artifact. The MIR verifier independently checks memory arena
+identity, instruction ownership, unique per-instruction regions, input/output
+region consistency, write/output agreement, definition backreferences, phi
+predecessors, and dominance. A RED corruption test showed that an invalid
+memory-definition owner was diagnosed and then indexed during the dominance
+walk, causing a panic. The fixed verifier uses checked lookups throughout that
+path and reports the malformed owner fail-closed.
+
+The implementation was split by semantic ownership after its first draft made
+`builder.rs` exceed the roadmap's 500-line ceiling. Register/value construction
+is 390 lines, image-qualified memory projection is 144, the model is 206, the
+shared query service is 119, and the verifier is 480; five memory tests live in
+a separate sibling test module. No production MIR owner exceeds 500 lines.
+
+Sixteen MIR tests pass, including straight-line store/load threading, diamond
+phis, unknown-call clobbers, malformed-region and malformed-owner rejection,
+and real lifted x86-64 and ARM32 functions through the image-qualified path.
+The complete Rust gate passes 2,103 library tests plus every integration target;
+the focused MemorySSA suite adds eight direct tests. `cargo clippy --lib`
+completes with only the repository's existing warnings. The complete Python
+run is unchanged at 2,989 passed, 43 skipped, three expected failures, and the
+same six output-shape failures documented above. Repository-wide Python lint
+and type checks remain baseline-red; Ty reports 1,976 diagnostics in `python/`.
+Scoped Rust formatting and `git diff --check` pass without reformatting
+unrelated files.
+
+This remains diagnostic architecture: no production renderer or AST aggregate
+consumer uses MIR yet, so emitted C and the fresh local-only DecBench scores are
+unchanged. The next dependency is stable object/lifetime identity plus
+`TypeStore` evidence on these MIR memory versions, followed by one parity-gated
+consumer migration; the AST compatibility adapter is not removed early.

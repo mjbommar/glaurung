@@ -972,8 +972,10 @@ Acceptance:
   stack/global accesses stay separated; arbitrary pointers observe every
   may-alias region; arbitrary writes and opaque effects clobber every mutable
   may-alias region. This remains diagnostic-only until typed MIR owns it.
-- [ ] Carry stable value/object identities through typed MIR and connect the
-  LLIR evidence to the production aggregate consumer before removing the AST
+- [x] Carry verified region-specific memory values, instruction effects, phis,
+  clobbers, and definition/use queries into stable typed-MIR identities.
+- [ ] Carry stable object/lifetime identities through typed MIR and connect the
+  MIR evidence to the production aggregate consumer before removing the AST
   compatibility adapter.
 
 This is a concrete dependency of the unchecked replacement item above, not a
@@ -1237,7 +1239,7 @@ Until then, each completed phase must be independently usable, tested, and
 releasable. “Architecture work” is not a reason to leave the score or user-facing
 output unchanged for months.
 
-## Current architecture increment — verified typed value identity
+## Current architecture increment — verified typed value and memory identity
 
 The first Phase-2 value-identity boundary is implemented and locally verified:
 
@@ -1248,11 +1250,18 @@ The first Phase-2 value-identity boundary is implemented and locally verified:
 - verification covers ownership, CFG/phi consistency, storage, order, and dominance;
 - greatest-fixed-point all-paths-defined queries preserve valid loop cycles and
   fail closed through poisoned instruction and phi dependencies; and
-- real x86-64 and ARM32 lifted functions pass the boundary.
+- image-qualified lowering projects verified `Stack`, `KnownGlobal`,
+  `ReadOnlyImage`, `HeapUnknown`, and `FullyUnknown` MemorySSA into stable memory
+  values and effects, including joins and opaque-call clobbers;
+- the same definition oracle exposes register and memory definition/use queries;
+- MIR verification independently checks memory ownership, region consistency,
+  phi predecessor sets, output backreferences, write/output agreement, and
+  dominance, and malformed owners fail closed without panicking; and
+- real x86-64 and ARM32 lifted functions pass the value-and-memory boundary.
 
 This does not complete Phase 2. Before the first production consumer migrates,
-the MIR must join verified MemorySSA identities and program `TypeStore` facts,
-expose definition/use/dominance query surfaces needed by that consumer, and pass
-output parity plus real aggregate/type fixtures. The existing LLIR and AST
-adapters remain authoritative until that evidence exists; do not create a
-second heuristic type or aggregate path beside them.
+the MIR must join stable object/lifetime identities and program `TypeStore`
+facts, expose the remaining dominance/clobber/value-at queries needed by that
+consumer, and pass output parity plus real aggregate/type fixtures. The existing
+LLIR and AST adapters remain authoritative until that evidence exists; do not
+create a second heuristic type or aggregate path beside them.
