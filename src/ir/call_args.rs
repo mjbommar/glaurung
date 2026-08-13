@@ -1696,19 +1696,38 @@ fn fold_one_call(
                 // identities and should remain statement-rooted. This repair
                 // is specifically for unversioned lifter output where several
                 // reaching definitions otherwise collapse to one register.
-                if !name.contains('#') && !is_frame_coordinate_storage(arch, name) {
+                // A versioned scratch name already has a distinct identity, so a
+                // REGISTER slot may go on naming it. A STACK argument cannot:
+                // its captured expression must stand alone once the push is
+                // folded away, so the definition has to be substituted in or
+                // the argument is lost with it. That is how
+                // `11_call_shapes:gcc:O2:call_into_spill` lost all eight of its
+                // arguments once `value_number` stopped keeping the scratch
+                // `%rax` bare.
+                //
+                // Admitted for the x86-64 conventions only, where it was
+                // measured. The frame-coordinate guard still applies to both:
+                // AAPCS resolves stack coordinates against a live `sp`, and
+                // folding a definition into one rewrites `sp + 12` into the
+                // whole frame-adjust chain.
+                let versioned_stack_capture =
+                    name.contains('#') && matches!(arch, CallConv::SysVAmd64 | CallConv::Win64);
+                if (!name.contains('#') || versioned_stack_capture)
+                    && !is_frame_coordinate_storage(arch, name)
+                {
                     if opaque_reaching_defs.contains(dst) {
                         continue;
                     }
                     let substitutable = (is_pure_arg_normalisation(src)
                         || is_stable_frame_arg_definition(src, body, i, call_idx))
                         && !versioned_operand_is_reassigned(src, body, i, call_idx);
-                    if resolve_captured_definition(
+                    if resolve_captured_definition_in(
                         &mut found,
                         &mut stack_args,
                         dst,
                         src,
                         substitutable,
+                        !name.contains('#'),
                     ) {
                         if !substitutable {
                             opaque_reaching_defs.insert(dst.clone());
