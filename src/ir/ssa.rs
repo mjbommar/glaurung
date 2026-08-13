@@ -25,7 +25,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::ir::regview;
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, VReg, Value};
-use crate::ir::use_def::{def_uses, InstrAddr};
+use crate::ir::use_def::{defs_uses, InstrAddr};
+use crate::target::{TargetId, TargetSpec};
 
 /// The identity of one machine value in SSA form.
 ///
@@ -67,15 +68,35 @@ pub struct SsaInfo {
     /// Version read at this `(instruction, use_index)` pair. The use_index
     /// corresponds to the source-order uses enumerated by [`def_uses`].
     pub use_versions: HashMap<(InstrAddr, usize), u32>,
+    /// Complete output identities, including every output of a multi-output
+    /// intrinsic. The legacy `def_versions` map remains the output-zero view.
+    def_values_all: HashMap<(InstrAddr, usize), SsaValue>,
+    /// Complete use identities with canonical storage captured at analysis
+    /// time. This prevents queries from re-canonicalizing under a different
+    /// architecture later.
+    use_values_all: HashMap<(InstrAddr, usize), SsaValue>,
 }
 
 impl SsaInfo {
     /// Return the SSA value defined by the instruction at `addr`.
     pub fn def_value(&self, lf: &LlirFunction, addr: InstrAddr) -> Option<SsaValue> {
-        let ins = lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
-        let base = write_reg(&ins.op)?;
-        let version = self.def_versions.get(&addr).copied()?;
-        Some(SsaValue { base, version })
+        lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
+        self.def_values_all.get(&(addr, 0)).cloned()
+    }
+
+    /// Return every SSA value defined by one instruction, in output order.
+    pub fn def_values(&self, lf: &LlirFunction, addr: InstrAddr) -> Vec<SsaValue> {
+        if lf
+            .blocks
+            .get(addr.block_idx)
+            .and_then(|block| block.instrs.get(addr.instr_idx))
+            .is_none()
+        {
+            return Vec::new();
+        }
+        (0..)
+            .map_while(|index| self.def_values_all.get(&(addr, index)).cloned())
+            .collect()
     }
 
     /// Return the SSA value read at the source-order use `use_index` of the
@@ -87,13 +108,8 @@ impl SsaInfo {
         addr: InstrAddr,
         use_index: usize,
     ) -> Option<SsaValue> {
-        let ins = lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
-        let base = uses_of_op_ordered(&ins.op).get(use_index)?.clone();
-        if !is_ssa_reg(&base) {
-            return None;
-        }
-        let version = self.use_versions.get(&(addr, use_index)).copied()?;
-        Some(SsaValue { base, version })
+        lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
+        self.use_values_all.get(&(addr, use_index)).cloned()
     }
 }
 
@@ -146,18 +162,49 @@ pub fn canon_gpr(v: &VReg) -> VReg {
     v.clone()
 }
 
-/// Walk operand values and memops for *register* uses in source order,
-/// returning each as a VReg (GP sub-registers canonicalized to their 64-bit
-/// parent so aliased widths share a version). Order must match [`def_uses`] so
-/// that `use_index` aligns between the two modules.
-fn uses_of_op_ordered(op: &Op) -> Vec<VReg> {
-    let (_, uses) = def_uses(op);
-    uses.iter().map(canon_gpr).collect()
+fn write_regs(op: &Op, canonicalize: &impl Fn(&VReg) -> VReg) -> Vec<VReg> {
+    defs_uses(op)
+        .0
+        .into_iter()
+        .filter(is_ssa_reg)
+        .map(|register| canonicalize(&register))
+        .collect()
 }
 
-fn write_reg(op: &Op) -> Option<VReg> {
-    let (def, _) = def_uses(op);
-    def.filter(is_ssa_reg).map(|d| canon_gpr(&d))
+fn uses_of_op_canonical(op: &Op, canonicalize: &impl Fn(&VReg) -> VReg) -> Vec<VReg> {
+    defs_uses(op).1.iter().map(canonicalize).collect()
+}
+
+/// Canonicalize one register under the function's actual target.
+pub fn canon_gpr_for_target(target: TargetSpec, value: &VReg) -> VReg {
+    let VReg::Phys(name) = value else {
+        return value.clone();
+    };
+    let parent = match target.id() {
+        TargetId::X86_64 => regview::ssa_parent(regview::Arch::X86_64, name),
+        TargetId::AArch64 => regview::ssa_parent(regview::Arch::AArch64, name),
+        TargetId::Arm32 => match name.as_str() {
+            "a1" => Some("r0"),
+            "a2" => Some("r1"),
+            "a3" => Some("r2"),
+            "a4" => Some("r3"),
+            "v1" => Some("r4"),
+            "v2" => Some("r5"),
+            "v3" => Some("r6"),
+            "v4" => Some("r7"),
+            "v5" => Some("r8"),
+            "v6" | "sb" => Some("r9"),
+            "v7" | "sl" => Some("r10"),
+            "v8" | "fp" => Some("r11"),
+            "ip" => Some("r12"),
+            "r13" | "sp" => Some("sp"),
+            "r14" | "lr" => Some("lr"),
+            "r15" | "pc" => Some("pc"),
+            _ => None,
+        },
+        TargetId::X86_32 | TargetId::Unsupported(_) => None,
+    };
+    VReg::Phys(parent.unwrap_or(name).to_string())
 }
 
 /// Compute predecessor lists derived from each block's `succs`.
@@ -336,11 +383,14 @@ fn compute_frontiers(idom: &[Option<usize>], preds: &[Vec<usize>]) -> Vec<BTreeS
 }
 
 /// Compute which blocks define each SSA-eligible VReg.
-fn def_blocks(lf: &LlirFunction) -> BTreeMap<VReg, BTreeSet<usize>> {
+fn def_blocks(
+    lf: &LlirFunction,
+    canonicalize: &impl Fn(&VReg) -> VReg,
+) -> BTreeMap<VReg, BTreeSet<usize>> {
     let mut out: BTreeMap<VReg, BTreeSet<usize>> = BTreeMap::new();
     for (bi, b) in lf.blocks.iter().enumerate() {
         for ins in &b.instrs {
-            if let Some(d) = write_reg(&ins.op) {
+            for d in write_regs(&ins.op, canonicalize) {
                 out.entry(d).or_default().insert(bi);
             }
         }
@@ -397,6 +447,7 @@ fn rename(
     lf: &LlirFunction,
     idom: &[Option<usize>],
     phi_blocks: &[Vec<(VReg, Vec<usize>)>],
+    canonicalize: &impl Fn(&VReg) -> VReg,
 ) -> (SsaInfo, Vec<Vec<Phi>>) {
     let n = lf.blocks.len();
     let children = dom_children(idom);
@@ -407,6 +458,8 @@ fn rename(
 
     let mut def_versions: HashMap<InstrAddr, u32> = HashMap::new();
     let mut use_versions: HashMap<(InstrAddr, usize), u32> = HashMap::new();
+    let mut def_values_all = HashMap::new();
+    let mut use_values_all = HashMap::new();
     // Phi results and incoming version slots, filled in as we rename.
     let mut phi_dst: Vec<HashMap<VReg, u32>> = vec![HashMap::new(); n];
     let mut phi_inputs: Vec<HashMap<VReg, HashMap<usize, u32>>> = vec![HashMap::new(); n];
@@ -436,8 +489,12 @@ fn rename(
 
     // Iterative DFS of the dominator tree so we don't blow the stack on deep
     // CFGs. Each stack entry is (block, child_cursor, pushed_vregs).
-    let mut dfs: Vec<(usize, usize, Vec<VReg>)> = Vec::new();
-    dfs.push((0, 0, Vec::new()));
+    let mut dfs: Vec<(usize, usize, Vec<VReg>)> = idom
+        .iter()
+        .enumerate()
+        .rev()
+        .filter_map(|(block, immediate)| immediate.is_none().then_some((block, 0, Vec::new())))
+        .collect();
 
     while let Some(&mut (block, cursor, _)) = dfs.last_mut() {
         if cursor == 0 {
@@ -457,15 +514,32 @@ fn rename(
                     block_idx: block,
                     instr_idx: ii,
                 };
-                let uses = uses_of_op_ordered(&ins.op);
+                let uses = uses_of_op_canonical(&ins.op, canonicalize);
                 for (ui, u) in uses.iter().enumerate() {
                     if is_ssa_reg(u) {
-                        use_versions.insert((addr, ui), top_version(&stack, u));
+                        let version = top_version(&stack, u);
+                        use_versions.insert((addr, ui), version);
+                        use_values_all.insert(
+                            (addr, ui),
+                            SsaValue {
+                                base: u.clone(),
+                                version,
+                            },
+                        );
                     }
                 }
-                if let Some(d) = write_reg(&ins.op) {
+                for (output_index, d) in write_regs(&ins.op, canonicalize).into_iter().enumerate() {
                     let ver = new_version(&mut counter, &mut stack, &d);
-                    def_versions.insert(addr, ver);
+                    if output_index == 0 {
+                        def_versions.insert(addr, ver);
+                    }
+                    def_values_all.insert(
+                        (addr, output_index),
+                        SsaValue {
+                            base: d.clone(),
+                            version: ver,
+                        },
+                    );
                     pushed_here.push(d);
                 }
             }
@@ -547,18 +621,29 @@ fn rename(
         phis,
         def_versions,
         use_versions,
+        def_values_all,
+        use_values_all,
     };
     (info, per_block_phis)
 }
 
 /// Compute SSA information for `lf`.
 pub fn compute_ssa(lf: &LlirFunction) -> SsaInfo {
+    compute_ssa_canonicalized(lf, &canon_gpr)
+}
+
+/// Compute SSA using the canonical register identity of `target`.
+pub fn compute_ssa_for_target(lf: &LlirFunction, target: TargetSpec) -> SsaInfo {
+    compute_ssa_canonicalized(lf, &|value| canon_gpr_for_target(target, value))
+}
+
+fn compute_ssa_canonicalized(lf: &LlirFunction, canonicalize: &impl Fn(&VReg) -> VReg) -> SsaInfo {
     let preds = build_preds(lf);
     let (idom, _rpo) = compute_dominators(lf, &preds);
     let frontier = compute_frontiers(&idom, &preds);
-    let def_blocks = def_blocks(lf);
+    let def_blocks = def_blocks(lf, canonicalize);
     let phi_blocks = place_phis(&def_blocks, &frontier, &preds);
-    let (mut info, _per_block) = rename(lf, &idom, &phi_blocks);
+    let (mut info, _per_block) = rename(lf, &idom, &phi_blocks, canonicalize);
     info.frontier = frontier;
     info
 }

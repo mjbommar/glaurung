@@ -1236,3 +1236,23 @@ score, safety, and performance gates above.
 Until then, each completed phase must be independently usable, tested, and
 releasable. “Architecture work” is not a reason to leave the score or user-facing
 output unchanged for months.
+
+## Current architecture increment — verified typed value identity
+
+The first Phase-2 value-identity boundary is implemented and locally verified:
+
+- stable arena IDs exist for MIR blocks, instructions, storages, values, and uses;
+- register storage is canonicalized by `TargetSpec`, including ARM32 aliases;
+- all intrinsic outputs participate in use-def and SSA;
+- `Input`, `Phi`, `Undef`, opaque-effect, and unreachable definitions are explicit;
+- verification covers ownership, CFG/phi consistency, storage, order, and dominance;
+- greatest-fixed-point all-paths-defined queries preserve valid loop cycles and
+  fail closed through poisoned instruction and phi dependencies; and
+- real x86-64 and ARM32 lifted functions pass the boundary.
+
+This does not complete Phase 2. Before the first production consumer migrates,
+the MIR must join verified MemorySSA identities and program `TypeStore` facts,
+expose definition/use/dominance query surfaces needed by that consumer, and pass
+output parity plus real aggregate/type fixtures. The existing LLIR and AST
+adapters remain authoritative until that evidence exists; do not create a
+second heuristic type or aggregate path beside them.

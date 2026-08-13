@@ -64,6 +64,7 @@ pub mod loop_form;
 pub(crate) mod machine_register;
 pub(crate) mod memory_objects;
 pub(crate) mod memory_ssa;
+pub mod mir;
 pub mod name_resolve;
 pub mod naming;
 pub mod pdb_fields;

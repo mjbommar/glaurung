@@ -232,6 +232,22 @@ pub fn def_uses(op: &Op) -> (Option<VReg>, Vec<VReg>) {
     (def, uses)
 }
 
+/// Return every register definition and every register use of an operation.
+///
+/// [`def_uses`] is the compatibility surface for legacy three-address
+/// consumers and therefore exposes only the first definition.  MIR and every
+/// new data-flow consumer must use this complete surface: an intrinsic may
+/// write multiple independent values, and dropping outputs after index zero
+/// makes later reads look like live-ins.
+pub fn defs_uses(op: &Op) -> (Vec<VReg>, Vec<VReg>) {
+    let (first, uses) = def_uses(op);
+    let definitions = match op {
+        Op::Intrinsic { outs, .. } => outs.iter().map(|(register, _)| register.clone()).collect(),
+        _ => first.into_iter().collect(),
+    };
+    (definitions, uses)
+}
+
 /// Mutable handle to the register an operation defines.
 ///
 /// This is the write-side sibling of [`def_uses`]; keeping the operation-shape

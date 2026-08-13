@@ -3762,3 +3762,48 @@ split across 23-line ABI, 76-line register-role, and 239-line spec modules;
 target. The next aligned implementation step is stable typed MIR value/object
 identity joined to `TypeStore`, so region/version evidence can replace the AST
 adapter in the production aggregate consumer without a second heuristic path.
+
+## 2026-08-13 10:05–15:05 — first verified typed-MIR boundary
+
+A fresh score audit was performed entirely in the private local evaluation
+tree. Its results and leaderboard projection remain local by request: no
+benchmark PR, comment, commit, result, upload, tracked Glaurung report, or other
+public surface contains them. The architectural conclusion was unchanged: the
+next dependency is a stable, target-qualified value identity plus a verifier-
+backed reaching-definition query, not another AST-local type heuristic.
+
+The first typed-MIR increment now exists under `src/ir/mir/`. Arena newtypes give
+blocks, instructions, storage locations, values, and uses deterministic stable
+identities. Definitions distinguish inputs, instruction outputs, phis, explicit
+undefined values, opaque effects, and unreachable code. Storage canonicalization
+uses the function's `TargetSpec`; ARM `r13`/`sp`, `r14`/`lr`, and `r15`/`pc`
+aliases no longer depend on an architecture-blind x86/AArch64 fallback.
+Multi-output intrinsics retain every output in use-def and SSA, rather than
+silently dropping all but output zero. Disconnected dominator roots are renamed
+and represented instead of disappearing.
+
+The MIR verifier checks arena ownership, reciprocal CFG edges, phi predecessor
+sets and storage compatibility, output-definition backreferences, use/value
+storage agreement, and instruction/block dominance. `DefinitionOracle` solves
+instruction and phi dependencies to a greatest fixed point, preserving defined
+loop-carried cycles while failing closed when an operand or incoming path
+reaches `Undef` or unreachable state. The boundary is deliberately not a production
+decompiler consumer yet: normal emitted C is unchanged by this diagnostic
+foundation until real parity supports migration.
+
+TDD covered complete intrinsic outputs, target-specific ARM aliasing, a diamond
+with poison on one arm, storage corruption, a future definition substituted as
+a reaching value, poison transported through an ordinary instruction, a
+defined loop-carried cycle, empty LLIR, disconnected blocks, and real lifted
+x86-64 and ARM32 `main` functions. All eleven MIR tests, all nine SSA tests, and all fourteen
+use-def tests pass. The complete Rust gate passes 2,098 library tests plus every
+integration target and doctest with zero failures. Repository-wide Ruff and Ty
+remain non-gates with 29,793 and 11,234 pre-existing diagnostics respectively;
+neither reports a changed Rust file. The full Python run reports 2,989 passed,
+43 skipped, three expected failures, and six failures. Four ARM32 assertions
+require a redundant `(int)(0)` spelling around `memset`'s already-correct zero
+argument, one vector-copy assertion requires `__builtin_memmove` even though its
+execution lane passes, and one i386 assertion requires redundant `(int)` casts
+around already-typed call arguments. This increment changes no Python, emitter,
+fixture, or production-decompiler path, so these are tracked output-shape debt,
+not regressions caused by the diagnostic MIR boundary.
