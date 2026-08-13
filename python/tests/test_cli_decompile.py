@@ -95,6 +95,43 @@ def test_decompile_all_emits_multiple_functions():
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
+def test_decompile_vas_reports_entries_that_produced_no_body():
+    """`--vas` names an exact request, so a VA that yields nothing is a failure.
+
+    Batch consumers (DecBench's `glaurung_raw` backend among them) shell out and
+    parse the JSON array. A requested entry that discovery never resolves, or
+    whose lift bails, is simply absent from that array — so a short result set
+    was indistinguishable from a short request. Name the missing entries on
+    stderr; stdout stays exactly the record array the consumers parse.
+    """
+    result = _run([str(SAMPLE), "--vas", "0x1840,0xdeadbeef", "--format", "json"])
+    # Partial success still exits 0 and still yields the records that worked:
+    # one unsupported function must not discard a whole binary's run.
+    assert result.returncode == 0, result.stderr
+    import json
+
+    payload = json.loads(result.stdout)
+    assert [entry["entry_va"] for entry in payload] == [0x1840]
+    assert "0xdeadbeef" in result.stderr
+    assert "1 of 2" in result.stderr
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
+def test_decompile_vas_fails_when_no_entry_resolves():
+    """Zero records from a non-empty request is a failed run, not an empty one."""
+    result = _run([str(SAMPLE), "--vas", "0xdeadbeef", "--format", "json"])
+    assert result.returncode == 2
+    assert "0xdeadbeef" in result.stderr
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
+def test_decompile_vas_is_silent_when_every_entry_resolves():
+    result = _run([str(SAMPLE), "--vas", "0x1840", "--format", "json"])
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.strip() == ""
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")
 def test_decompile_no_types_suppresses_annotations():
     result = _run([str(SAMPLE), "--no-types"])
     assert result.returncode == 0, result.stderr
@@ -543,7 +580,12 @@ def test_real_arm_mixed_hard_float_call_round_trip(tmp_path: Path) -> None:
     )
 
     assert "float arm_hf_mixed_caller(float arg0, int arg1)" in generated, generated
-    assert "arm_hf_mixed_callee((int)(7), arg0, (int)(arg1))" in generated, generated
+    # The callee prototype types every argument, so each one is already the
+    # parameter's type and needs no conversion: `7` is an `int` literal and
+    # `arg1` is a declared `int`. This used to render `(int)(7), arg0,
+    # (int)(arg1)` — casts that state nothing and that a C-signature type_match
+    # has to parse around. See the ARM hard-float call-argument cast fix.
+    assert "arm_hf_mixed_callee(7, arg0, arg1)" in generated, generated
     assert "asm:" not in generated, generated
 
     driver = tmp_path / "mixed_call_driver.c"

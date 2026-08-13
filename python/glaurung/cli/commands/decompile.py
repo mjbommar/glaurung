@@ -128,9 +128,9 @@ class DecompileCommand(BaseCommand):
             type=parse_func_arg,
             default=None,
             help="Function selector: hex VA (0x140001480), decimal, or a "
-                 "function name like 'main' resolved against analysis. If "
-                 "omitted, the detected entry point is used. Stripped "
-                 "binaries only have sub_<VA> names so VA is preferred.",
+            "function name like 'main' resolved against analysis. If "
+            "omitted, the detected entry point is used. Stripped "
+            "binaries only have sub_<VA> names so VA is preferred.",
         )
         parser.add_argument(
             "--all",
@@ -143,10 +143,12 @@ class DecompileCommand(BaseCommand):
             dest="vas",
             default=None,
             help="Decompile exactly this comma/space-separated list of entry "
-                 "VAs (each hex 0x... or decimal) in a single analysis pass. "
-                 "Emits a JSON list of {name, entry_va, pseudocode}. Intended "
-                 "for batch/benchmark harnesses that already know their target "
-                 "function set (e.g. DWARF low_pc addresses).",
+            "VAs (each hex 0x... or decimal) in a single analysis pass. "
+            "Emits a JSON list of {name, entry_va, pseudocode}. Intended "
+            "for batch/benchmark harnesses that already know their target "
+            "function set (e.g. DWARF low_pc addresses). Entries that "
+            "recover no body are named on stderr and omitted from the "
+            "list; exits 2 only when no requested entry recovers at all.",
         )
         parser.add_argument(
             "--limit",
@@ -196,25 +198,25 @@ class DecompileCommand(BaseCommand):
             choices=["plain", "c", "decbench"],
             default="plain",
             help="Pseudocode style: 'plain' keeps the register-level detail "
-                 "(default); 'c' strips the %% prefix and annotations for a "
-                 "closer-to-C view; 'decbench' emits parseable C (a real "
-                 "'long name(long arg0, ...)' signature with declared locals) "
-                 "for external tooling that parses the output as C.",
+            "(default); 'c' strips the %% prefix and annotations for a "
+            "closer-to-C view; 'decbench' emits parseable C (a real "
+            "'long name(long arg0, ...)' signature with declared locals) "
+            "for external tooling that parses the output as C.",
         )
         parser.add_argument(
             "--pdb-cache",
             default="",
             help="Optional Microsoft-style PDB cache directory used to resolve "
-                 "PE/PDB public function names in decompile output.",
+            "PE/PDB public function names in decompile output.",
         )
         parser.add_argument(
             "--cache-dir",
             default=None,
             help="Optional persistent cache directory for single-function "
-                 "decompile output. Entries are keyed by (glaurung version, "
-                 "sha256(binary), VA, decompile flags). Falls back to "
-                 "$GLAURUNG_CACHE_DIR when unset. Append-only — clear the "
-                 "directory manually if disk fills up.",
+            "decompile output. Entries are keyed by (glaurung version, "
+            "sha256(binary), VA, decompile flags). Falls back to "
+            "$GLAURUNG_CACHE_DIR when unset. Append-only — clear the "
+            "directory manually if disk fills up.",
         )
 
     def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
@@ -268,7 +270,7 @@ class DecompileCommand(BaseCommand):
                 else:
                     for name, va, text in results:
                         formatter.output_plain(text)
-                return 0
+                return _report_unresolved_vas(vas, results)
 
             if args.all:
                 results = g.ir.decompile_all(
@@ -298,7 +300,8 @@ class DecompileCommand(BaseCommand):
                 # the lookup terminates predictably on large binaries.
                 try:
                     discovered = g.analysis.analyze_functions_path(
-                        str(path), max_functions=2000,
+                        str(path),
+                        max_functions=2000,
                     )[0]
                 except Exception as e:
                     formatter.output_plain(
@@ -321,9 +324,15 @@ class DecompileCommand(BaseCommand):
 
             try:
                 if args.range_end is not None or args.range_start is not None:
-                    range_start = args.range_start if args.range_start is not None else int(func_va)
+                    range_start = (
+                        args.range_start
+                        if args.range_start is not None
+                        else int(func_va)
+                    )
                     if args.range_end is None:
-                        formatter.output_plain("Error: --range-end is required with --range-start")
+                        formatter.output_plain(
+                            "Error: --range-end is required with --range-start"
+                        )
                         return 2
                     text = g.ir.decompile_range_at(
                         str(path),
@@ -394,3 +403,42 @@ def _parse_va_list(raw: str) -> list[int]:
 def _requested_function_budget(vas: list[int]) -> int:
     """Bound address-scoped discovery to the unique requested entries."""
     return max(len(set(vas)), 1)
+
+
+def _report_unresolved_vas(requested: list[int], results: list) -> int:
+    """Name the ``--vas`` entries that produced no body; return the exit code.
+
+    ``decompile_many`` walks *discovered* functions and skips any requested entry
+    that discovery never resolved or whose lift bailed, so its result list can be
+    shorter than the request with nothing to say so. That left a batch consumer
+    unable to tell "this binary has no such function" from "we asked for fewer".
+
+    Partial results still exit 0 — one unsupported function must not discard a
+    whole binary's run — but an empty result set from a non-empty request is a
+    failed run, not an empty one. Diagnostics go to stderr so stdout stays
+    exactly the payload (JSON array or concatenated bodies) callers parse.
+    """
+    import sys
+
+    produced = {int(va) for _name, va, _text in results}
+    # An ARM32 Thumb `.symtab` value carries the Thumb bit and is normalised away
+    # before discovery, so the record comes back at the even address the caller
+    # asked about with an odd one. See `program::image::normalize_function_entry`.
+    missing = [
+        va for va in requested if va not in produced and (va & ~1) not in produced
+    ]
+    if not missing:
+        return 0
+    listed = ", ".join(hex(va) for va in missing)
+    if not produced:
+        print(
+            f"Error: no function body recovered for any requested VA ({listed})",
+            file=sys.stderr,
+        )
+        return 2
+    print(
+        f"Warning: decompiled {len(produced)} of {len(requested)} requested VAs; "
+        f"no body recovered for: {listed}",
+        file=sys.stderr,
+    )
+    return 0
