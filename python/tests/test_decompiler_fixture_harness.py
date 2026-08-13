@@ -6,6 +6,7 @@ zero DWARF signatures, zero cases, a required function missing) must produce a
 FAILURE, never a silent skip or a green 0/0 run. A harness that fails open is
 worse than no harness — it hides regressions.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -46,6 +47,7 @@ def _compile_so(
     compiler, and the host is not assumed to ship a C compiler at all.
     """
     import os
+
     fd, path = tempfile.mkstemp(suffix=".so", prefix=f"h_{tag}_", **WORKDIR_KW)
     os.close(fd)
     src = path[:-3] + ".c"
@@ -112,7 +114,12 @@ def test_every_declared_fixture_source_is_discovered():
     REQUIRED_FUNCTIONS catches strictly more: a vanished source, a renamed one,
     and one added without being declared.
     """
-    on_disk = {p.stem for p in SRC.glob("*.c")} | {p.stem for p in SRC.glob("*.cpp")}
+    # Every language the manifest declares, which is what
+    # `manifest.assert_fixtures_declared` — the shared precondition both baseline
+    # refreshers call — already globs. Omitting `.rs` here made the six Rust
+    # fixtures read as "only declared" the moment they landed, reporting a
+    # manifest disagreement that did not exist.
+    on_disk = {p.stem for suffix in ("*.c", "*.cpp", "*.rs") for p in SRC.glob(suffix)}
     declared = set(M.REQUIRED_FUNCTIONS)
     assert on_disk == declared, (
         f"only on disk {sorted(on_disk - declared)}, "
@@ -386,16 +393,16 @@ def test_cfg_owns_lsda_only_cpp_landing_pad_blocks() -> None:
 
     functions, _callgraph = D.g.analysis.analyze_functions_path(binary)
     function = next(fn for fn in functions if fn.name == "catches_int")
-    owned_end = max(
-        chunk.start.value + chunk.size for chunk in function.all_ranges()
-    )
+    owned_end = max(chunk.start.value + chunk.size for chunk in function.all_ranges())
     recovered_end = max(block.end_address.value for block in function.basic_blocks)
     ordered_blocks = sorted(
         function.basic_blocks, key=lambda block: block.start_address.value
     )
 
     assert function.has_flag(0x4), "LSDA-owned handlers must set HAS_EH"
-    assert recovered_end == owned_end, "the handler tail must not be omitted from the CFG"
+    assert recovered_end == owned_end, (
+        "the handler tail must not be omitted from the CFG"
+    )
     assert all(
         left.end_address.value <= right.start_address.value
         for left, right in pairwise(ordered_blocks)
@@ -650,7 +657,7 @@ def test_real_stripped_elf_tail_wrapper_does_not_absorb_its_local_callee():
         "struct tail_state { unsigned long values[32]; unsigned long patlen; };\n"
         "static __attribute__((noinline)) long tail_worker(\n"
         "    struct tail_state *state, int command);\n"
-        "__attribute__((noinline, visibility(\"default\")))\n"
+        '__attribute__((noinline, visibility("default")))\n'
         "long reset_then_tail(struct tail_state *state) {\n"
         "    state->patlen = 0;\n"
         "    return tail_worker(state, 24);\n"
@@ -658,7 +665,7 @@ def test_real_stripped_elf_tail_wrapper_does_not_absorb_its_local_callee():
         "static __attribute__((noinline)) long tail_worker(\n"
         "    struct tail_state *state, int command) {\n"
         "    char text[128];\n"
-        "    int count = snprintf(text, sizeof(text), \"%lu:%d\",\n"
+        '    int count = snprintf(text, sizeof(text), "%lu:%d",\n'
         "                         state->values[0], command);\n"
         "    for (int i = 1; i < 32; ++i)\n"
         "        state->values[i] += (unsigned char)text[i & 7] + command;\n"
@@ -783,8 +790,7 @@ def test_real_noreturn_guard_preserves_machine_fallthrough_order():
         copy_call = body.rfind("strncpy(")
         assert min(guard, exit_call, guard_close, copy_call) >= 0, decompiled
         assert guard < exit_call < guard_close < copy_call, (
-            "the terminal machine fallthrough became the trailing path:\n"
-            f"{decompiled}"
+            f"the terminal machine fallthrough became the trailing path:\n{decompiled}"
         )
 
         rebuilt_path = Path(td) / "noreturn_fallthrough_rebuilt.so"
@@ -1011,7 +1017,7 @@ def test_real_x86_shared_epilogue_keeps_one_copy_of_each_return():
             function = library.shared_terminal_guard
             function.argtypes = [ctypes.c_int]
             function.restype = ctypes.c_int
-        for value in (-2**31, -100, -1, 0, 1, 21, 22, 2**31 - 1):
+        for value in (-(2**31), -100, -1, 0, 1, 21, 22, 2**31 - 1):
             expected = original_library.shared_terminal_guard(value)
             actual = rebuilt_library.shared_terminal_guard(value)
             assert actual == expected, (value, expected, actual, decompiled)
@@ -1290,7 +1296,7 @@ def test_real_pointer_literal_to_machine_word_is_an_explicit_conversion():
     matches the diagnostic that blocked blinded DecBench functions.
     """
     binary = _compile_so(
-        '__attribute__((noinline)) long literal_address_word(void) {\n'
+        "__attribute__((noinline)) long literal_address_word(void) {\n"
         '    return (long)"glaurung-pointer-word";\n'
         "}",
         "pointer_literal_word",
@@ -1574,20 +1580,20 @@ def test_real_mixed_arity_known_calls_keep_callee_and_callsite_prototypes():
     binary = _compile_so(
         "#include <stdlib.h>\n"
         "__asm__(\n"
-        '    \".text\\n\"\n'
-        '    \".globl mixed_free_calls\\n\"\n'
-        '    \".type mixed_free_calls,@function\\n\"\n'
-        '    \"mixed_free_calls:\\n\"\n'
-        '    \"push %rbp\\n\"\n'
-        '    \"mov %rsp,%rbp\\n\"\n'
-        '    \"sub $16,%rsp\\n\"\n'
-        '    \"mov %rdi,-8(%rbp)\\n\"\n'
-        '    \"mov -8(%rbp),%rdi\\n\"\n'
-        '    \"call free@PLT\\n\"\n'
-        '    \"call free@PLT\\n\"\n'
-        '    \"leave\\n\"\n'
-        '    \"ret\\n\"\n'
-        '    \".size mixed_free_calls,.-mixed_free_calls\\n\"\n'
+        '    ".text\\n"\n'
+        '    ".globl mixed_free_calls\\n"\n'
+        '    ".type mixed_free_calls,@function\\n"\n'
+        '    "mixed_free_calls:\\n"\n'
+        '    "push %rbp\\n"\n'
+        '    "mov %rsp,%rbp\\n"\n'
+        '    "sub $16,%rsp\\n"\n'
+        '    "mov %rdi,-8(%rbp)\\n"\n'
+        '    "mov -8(%rbp),%rdi\\n"\n'
+        '    "call free@PLT\\n"\n'
+        '    "call free@PLT\\n"\n'
+        '    "leave\\n"\n'
+        '    "ret\\n"\n'
+        '    ".size mixed_free_calls,.-mixed_free_calls\\n"\n'
         ");",
         "mixed_arity_free",
     )
@@ -1701,7 +1707,9 @@ def test_real_void_libc_call_is_not_rendered_as_a_value():
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         source_path = Path(td) / "void_libc_call.c"
         output_path = Path(td) / "void_libc_call.so"
-        source_path.write_text("#include <stdio.h>\n" + D.PRELUDE + "\n" + decompiled + "\n")
+        source_path.write_text(
+            "#include <stdio.h>\n" + D.PRELUDE + "\n" + decompiled + "\n"
+        )
         rebuilt = TC.run(
             [
                 "gcc",
@@ -1732,11 +1740,11 @@ def test_real_pointer_locals_keep_value_identity_across_round_trip():
     binary = _compile_so(
         "#include <stdlib.h>\n"
         "__attribute__((noinline)) char *lookup_path(void) {\n"
-        "    char *value = getenv(\"PATH\");\n"
+        '    char *value = getenv("PATH");\n'
         "    return value;\n"
         "}\n"
         "__attribute__((noinline)) const char *literal_path(void) {\n"
-        "    const char *value = \"/tmp/fallback\";\n"
+        '    const char *value = "/tmp/fallback";\n'
         "    return value;\n"
         "}",
         "pointer_high_variables",
@@ -1773,7 +1781,9 @@ def test_real_pointer_locals_keep_value_identity_across_round_trip():
 def test_compile_failure_of_decompilation_is_fail(monkeypatch, tmp_path):
     # If the decompiled C does not compile, the function FAILS (not skip).
     sig = {"name": "f", "va": 0, "params": ["int"], "ret": "int"}
-    monkeypatch.setattr(D, "decompiled_c", lambda *_a, **_k: "int f(int arg0){ this is not c }")
+    monkeypatch.setattr(
+        D, "decompiled_c", lambda *_a, **_k: "int f(int arg0){ this is not c }"
+    )
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         r = D.run_function(sig, "fx", "unused", Path(td), seed=1, fuzz=1)
     assert r["status"] == "fail" and "compile" in r["detail"]
@@ -1793,7 +1803,9 @@ def test_worker_crash_is_fail(monkeypatch, tmp_path):
     sig = {"name": "boom", "va": 0, "params": [], "ret": "int"}
     # Compile a real original + a decompilation that dereferences null on call.
     orig_so = _compile_so("int boom(void){return 1;}", "boom")
-    monkeypatch.setattr(D, "decompiled_c", lambda *_a, **_k: "int boom(void){ int*p=0; return *p; }")
+    monkeypatch.setattr(
+        D, "decompiled_c", lambda *_a, **_k: "int boom(void){ int*p=0; return *p; }"
+    )
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         r = D.run_function(sig, "fx", orig_so, Path(td), seed=1, fuzz=1)
     assert r["status"] == "fail", r
@@ -1810,11 +1822,16 @@ def test_a_nonterminating_decompilation_is_a_divergence_not_a_timeout(monkeypatc
     """
     orig = _compile_so("int spin(int a){ return a; }", "term")
     monkeypatch.setattr(
-        D, "decompiled_c",
-        lambda *_a, **_k: "int spin(int a){ volatile int i=1; while(i){ i++; if(i==0) i=1; } return a; }")
+        D,
+        "decompiled_c",
+        lambda *_a, **_k: (
+            "int spin(int a){ volatile int i=1; while(i){ i++; if(i==0) i=1; } return a; }"
+        ),
+    )
     sig = {"name": "spin", "va": 0, "params": ["int"], "ret": "int"}
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         import time
+
         t0 = time.time()
         r = D.run_function(sig, "fx", orig, Path(td), seed=1, fuzz=1)
         elapsed = time.time() - t0
@@ -1832,8 +1849,12 @@ def test_worker_nonzero_exit_is_fail(tmp_path):
     # the parent's subprocess check must treat it as a failure.
     spec = tmp_path / "bad.json"
     spec.write_text("{ not json")
-    r = subprocess.run([sys.executable, str(TOOLS / "diff_decompile.py"), "--worker", str(spec)],
-                       capture_output=True, text=True, check=False)
+    r = subprocess.run(
+        [sys.executable, str(TOOLS / "diff_decompile.py"), "--worker", str(spec)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     assert r.returncode != 0
 
 
@@ -1842,7 +1863,9 @@ def test_skip_exec_is_structural_not_pass(monkeypatch, tmp_path):
     # status the structural lane must check — never a silent pass.
     sig = {"name": "apply", "va": 0, "params": ["int", "int"], "ret": "int"}
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
-        r = D.run_function(sig, "08_indirect_dispatch", "unused", Path(td), seed=1, fuzz=1)
+        r = D.run_function(
+            sig, "08_indirect_dispatch", "unused", Path(td), seed=1, fuzz=1
+        )
     assert r["status"] == "structural"
 
 
@@ -1873,7 +1896,9 @@ def test_no_executable_cases_is_not_a_pass(monkeypatch, tmp_path):
     # Zero generated cases is an infra failure (distinct `nocases` status so
     # --write-baseline refuses it), never a silent pass.
     sig = {"name": "f", "va": 0, "params": ["int"], "ret": "int"}
-    monkeypatch.setattr(D, "decompiled_c", lambda *_a, **_k: "int f(int arg0){return arg0;}")
+    monkeypatch.setattr(
+        D, "decompiled_c", lambda *_a, **_k: "int f(int arg0){return arg0;}"
+    )
     monkeypatch.setattr(D, "make_vectors", lambda *_a, **_k: [])
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         r = D.run_function(sig, "fx", "unused", Path(td), seed=1, fuzz=1)
@@ -1902,11 +1927,18 @@ def test_vector_generation_is_reproducible_across_processes():
         "{'len_args':[1]},1,6)))"
     )
     outs = [
-        subprocess.run([sys.executable, "-c", prog], cwd=ROOT, capture_output=True,
-                       text=True, check=True).stdout
+        subprocess.run(
+            [sys.executable, "-c", prog],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
         for _ in range(2)
     ]
-    assert outs[0] == outs[1], "fuzz vectors differ across processes (non-deterministic seed)"
+    assert outs[0] == outs[1], (
+        "fuzz vectors differ across processes (non-deterministic seed)"
+    )
 
 
 def test_stable_seed_is_independent_of_python_hash_randomization():
@@ -1933,7 +1965,9 @@ def test_harness_runs_without_the_nas_scratch_path(monkeypatch):
     # Prove run_function works when /nas4/.../rdtmp does not exist: point the
     # scratch dir at a plain system tempdir and execute a trivially-correct
     # decompilation end to end.
-    monkeypatch.setattr(D, "decompiled_c", lambda *_a, **_k: "int f(int arg0){return arg0;}")
+    monkeypatch.setattr(
+        D, "decompiled_c", lambda *_a, **_k: "int f(int arg0){return arg0;}"
+    )
     sig = {"name": "f", "va": 0, "params": ["int"], "ret": "int"}
     with tempfile.TemporaryDirectory() as bwd:
         # a real original .so so the worker has something to call
@@ -1950,8 +1984,9 @@ def test_wrong_high_32_bits_of_a_64bit_return_fails(monkeypatch):
     # A 64-bit return whose high half the decompilation drops must FAIL — only
     # possible if the return width is modeled as 8 bytes, not truncated to int.
     orig = _compile_so("long f(long a){ return a; }", "hi")
-    monkeypatch.setattr(D, "decompiled_c",
-                        lambda *_a, **_k: "long f(long a){ return a & 0xFFFFFFFF; }")
+    monkeypatch.setattr(
+        D, "decompiled_c", lambda *_a, **_k: "long f(long a){ return a & 0xFFFFFFFF; }"
+    )
     sig = {"name": "f", "va": 0, "params": ["long"], "ret": "long"}
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         r = D.run_function(sig, "fx", orig, Path(td), seed=1, fuzz=2)
@@ -1962,8 +1997,9 @@ def test_wrong_sign_extension_fails(monkeypatch):
     # orig sign-extends a 32-bit arg into a 64-bit return; the decompilation
     # zero-extends. On a negative input the two differ only in the high 32 bits.
     orig = _compile_so("long f(int a){ return a; }", "sx")
-    monkeypatch.setattr(D, "decompiled_c",
-                        lambda *_a, **_k: "long f(int a){ return (unsigned int)a; }")
+    monkeypatch.setattr(
+        D, "decompiled_c", lambda *_a, **_k: "long f(int a){ return (unsigned int)a; }"
+    )
     sig = {"name": "f", "va": 0, "params": ["int"], "ret": "long"}
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         r = D.run_function(sig, "fx", orig, Path(td), seed=1, fuzz=2)
@@ -1974,14 +2010,16 @@ def test_signatures_recover_width_and_signedness():
     # DWARF recovery must carry width + signedness, not collapse to int.
     so = _compile_so(
         "long g(unsigned char b, int i, long l, const unsigned char* p){"
-        " (void)b;(void)i;(void)l;return p?p[0]:0; }", "sg")
+        " (void)b;(void)i;(void)l;return p?p[0]:0; }",
+        "sg",
+    )
     sigs = {s["name"]: s for s in D.signatures(so)}
     g = sigs["g"]
     assert D._as_desc(g["ret"]) == {"k": "int", "w": 8, "s": True}
     ps = [D._as_desc(p) for p in g["params"]]
-    assert ps[0] == {"k": "int", "w": 1, "s": False}          # unsigned char
-    assert ps[1] == {"k": "int", "w": 4, "s": True}           # int
-    assert ps[2] == {"k": "int", "w": 8, "s": True}           # long
+    assert ps[0] == {"k": "int", "w": 1, "s": False}  # unsigned char
+    assert ps[1] == {"k": "int", "w": 4, "s": True}  # int
+    assert ps[2] == {"k": "int", "w": 8, "s": True}  # long
     assert ps[3]["k"] == "ptr" and ps[3]["pw"] == 1 and ps[3]["const"] is True
 
 
@@ -2021,14 +2059,15 @@ def test_struct_signatures_are_executed_at_the_real_sysv_abi(monkeypatch):
             "long dy=(int)((unsigned long)a>>32)-(int)((unsigned long)b>>32);"
             "return dx*dx+dy*dy;}"
         ),
-        "rect_area": (
-            "int rect_area(const int *p){"
-            "return (p[2]-p[0])*(p[3]-p[1]);}"
-        ),
+        "rect_area": ("int rect_area(const int *p){return (p[2]-p[0])*(p[3]-p[1]);}"),
     }
-    monkeypatch.setattr(D, "decompiled_c", lambda _b, va: recovered[next(
-        name for name, sig in sigs.items() if sig["va"] == va
-    )])
+    monkeypatch.setattr(
+        D,
+        "decompiled_c",
+        lambda _b, va: recovered[
+            next(name for name, sig in sigs.items() if sig["va"] == va)
+        ],
+    )
 
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         for sig in (dist, rect):
@@ -2202,12 +2241,8 @@ def test_run_uses_injected_backend_source_without_invoking_glaurung(monkeypatch)
         fuzz=8,
         only={"injected"},
         decompiled_by_va={
-            address: (
-                "int injected(int value) { return injected_helper(value); }"
-            ),
-            helper_address: (
-                "int injected_helper(int value)\n\n{ return value + 1; }"
-            ),
+            address: ("int injected(int value) { return injected_helper(value); }"),
+            helper_address: ("int injected_helper(int value)\n\n{ return value + 1; }"),
         },
     )
 
@@ -2237,8 +2272,12 @@ def test_json_mode_returns_two_on_infra(tmp_path):
     src = tmp_path / "x.c"
     src.write_text("int f(int a){return a;}\n")
     so = _compile_so("int f(int a){return a;}", "jsoninfra", debug=False)  # no -g
-    r = subprocess.run([sys.executable, str(TOOLS / "diff_decompile.py"), str(so), str(src), "--json"],
-                       capture_output=True, text=True, check=False)
+    r = subprocess.run(
+        [sys.executable, str(TOOLS / "diff_decompile.py"), str(so), str(src), "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     assert r.returncode == 2, r.stderr
 
 

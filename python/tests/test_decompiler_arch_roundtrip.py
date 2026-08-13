@@ -1444,10 +1444,18 @@ def test_the_committed_baseline_is_valid_and_has_a_clean_control_lane():
     import json
 
     baseline = json.loads(A.BASELINE.read_text())
+    # The control lane is trustworthy when it AGREES WITH THE GATE, not when it
+    # is free of failure — see `control_problems`, which takes the x86-64 gate
+    # baseline for exactly this comparison. Omitting it here silently selected
+    # the stricter fallback ("every control verdict must be `pass`"), and that
+    # is what held `arch_baseline.json` to the 30 fixtures the decompiler
+    # happens to be perfect on: a function with a known, recorded x86-64 failure
+    # still has a meaningful ARM comparison against that recorded result.
+    gate_baseline = json.loads(H.BASELINE.read_text())
     problems = (
         A.baseline_problems(baseline)
         + A.schema_problems(baseline, A.REQUIRED_MATRIX)
-        + A.control_problems(baseline, A.REQUIRED_MATRIX)
+        + A.control_problems(baseline, A.REQUIRED_MATRIX, gate_baseline)
     )
     assert not problems, "COMMITTED ARCH BASELINE INVALID:\n  " + "\n  ".join(problems)
 
