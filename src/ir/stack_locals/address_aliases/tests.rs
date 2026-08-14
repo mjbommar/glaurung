@@ -40,6 +40,7 @@ fn arm_context() -> StackContext {
         cc: Some(CallConv::ArmHardFloat),
         rbp_repurposed: false,
         frame_pointer_established: false,
+        arm_frame_register: Some("fp"),
         parameter_count: Some(3),
     }
 }

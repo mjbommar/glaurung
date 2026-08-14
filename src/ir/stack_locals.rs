@@ -92,6 +92,9 @@ struct StackContext {
     /// `entry_rsp-0x8` are different storage that would want the same
     /// offset-bearing name.
     frame_pointer_established: bool,
+    /// The ARM32 register this body proves is its frame anchor, in the
+    /// encoding's own spelling. See [`arm_frame_register`].
+    arm_frame_register: Option<&'static str>,
     /// Exact source-level arity when debug/prototype evidence locks it.
     /// Candidate stack arguments at or beyond this bound are frame storage,
     /// never additional parameters invented from a recovered displacement.
@@ -151,8 +154,64 @@ fn is_active_stack_base(name: &str, ctx: StackContext) -> bool {
 }
 
 fn is_arm_frame_pointer(name: &str, ctx: StackContext) -> bool {
+    let base = crate::ir::abi::ssa_base(name);
     matches!(ctx.cc, Some(CallConv::Arm | CallConv::ArmHardFloat))
-        && matches!(crate::ir::abi::ssa_base(name), "fp" | "r7" | "r11")
+        && (matches!(base, "fp" | "r11") || ctx.arm_frame_register == Some(base))
+}
+
+/// The ARM32 register this body establishes as its frame anchor, in the
+/// encoding's own spelling.
+///
+/// A32 keeps AAPCS's `fp` (r11), which the disassembler already spells with the
+/// architectural name that [`STACK_BASES`] carries. Thumb-2 cannot reach the
+/// high registers from most sixteen-bit encodings, so GCC anchors Thumb frames
+/// on `r7` instead — an ordinary callee-saved register everywhere else, and one
+/// that frame-pointer-omitted code at `-O2` uses as scratch in both encodings.
+///
+/// The anchor is therefore recognised only from a prologue that derives it from
+/// the stack pointer. That proof is what makes `[r7+4]` an argument home rather
+/// than a dereference of whatever pointer the caller left in `r7`, and it is
+/// the piece ARM32's Thumb mode was missing: `entry_sp` reached A32's `fp`
+/// through [`STACK_BASES`] and never reached Thumb's `r7` at all.
+fn arm_frame_register(body: &[Stmt], cc: Option<CallConv>) -> Option<&'static str> {
+    if !matches!(cc, Some(CallConv::Arm | CallConv::ArmHardFloat)) {
+        return None;
+    }
+    fn derived_from_the_stack_pointer(src: &Expr) -> bool {
+        match src {
+            Expr::Reg(VReg::Phys(name)) => crate::ir::abi::ssa_base(name) == "sp",
+            Expr::Lea {
+                base: Some(VReg::Phys(name)),
+                index: None,
+                ..
+            } => crate::ir::abi::ssa_base(name) == "sp",
+            Expr::Bin {
+                op: crate::ir::types::BinOp::Add | crate::ir::types::BinOp::Sub,
+                lhs,
+                rhs,
+            } => matches!(rhs.as_ref(), Expr::Const(_)) && derived_from_the_stack_pointer(lhs),
+            _ => false,
+        }
+    }
+    // The prologue is a top-level statement, exactly as `frame_pointer_assignment`
+    // assumes for x86. A frame register first assigned inside a branch is not a
+    // frame establishment this pass will trust.
+    body.iter().find_map(|statement| {
+        let Stmt::Assign {
+            dst: VReg::Phys(dst),
+            src,
+        } = statement
+        else {
+            return None;
+        };
+        let candidate = match crate::ir::abi::ssa_base(dst) {
+            "fp" => "fp",
+            "r7" => "r7",
+            "r11" => "r11",
+            _ => return None,
+        };
+        derived_from_the_stack_pointer(src).then_some(candidate)
+    })
 }
 
 /// Whether the function's first assignment to x86's nominal frame register
@@ -256,6 +315,7 @@ pub fn promote_stack_locals_with_facts(
         cc,
         rbp_repurposed: rbp_is_repurposed(&f.body, cc),
         frame_pointer_established: frame_pointer_is_established(&f.body, cc),
+        arm_frame_register: arm_frame_register(&f.body, cc),
         parameter_count,
     };
     address_aliases::expand(&mut f.body, ctx);
@@ -1289,6 +1349,52 @@ fn merge_stack_deltas(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     (a == b).then_some(a).flatten()
 }
 
+/// Whether `expr` would carry `register`'s frame coordinate.
+///
+/// This mirrors exactly the shapes [`resolve_stack_address`] resolves: a copy,
+/// a displaced address, and a dereference of either. A cast, a comparison, or
+/// any other arithmetic cannot produce a stack address from one, so a use in
+/// those positions consumes the register's bits without inheriting its
+/// coordinate.
+fn expression_roots_at(expr: &Expr, register: &VReg) -> bool {
+    match expr {
+        Expr::Reg(reg) => reg == register,
+        Expr::Lea { base, index, .. } => {
+            base.as_ref() == Some(register) || index.as_ref() == Some(register)
+        }
+        Expr::Deref { addr, .. } => expression_roots_at(addr, register),
+        Expr::Bin {
+            op: crate::ir::types::BinOp::Add | crate::ir::types::BinOp::Sub,
+            lhs,
+            rhs,
+        } => expression_roots_at(lhs, register) || expression_roots_at(rhs, register),
+        _ => false,
+    }
+}
+
+/// Whether `register`'s frame coordinate is dead over the rest of the body.
+///
+/// The value a Thumb epilogue writes back into `r7` is the restored entry-stack
+/// address (`adds r7, #32; mov sp, r7`). Its consumers are the stack-pointer
+/// restore and the flag and width temporaries ARM's lowering hangs off the same
+/// add — machine bookkeeping that names no source storage and cannot compete
+/// with the coordinate the prologue established. A memory access through the
+/// register, a copy that would inherit the coordinate, an escape into a call,
+/// or a returned address all keep the overwrite ambiguous.
+fn frame_coordinate_is_dead_after(body: &[Stmt], register: &VReg, ctx: StackContext) -> bool {
+    body.iter().all(|statement| {
+        if !crate::ir::dead_stores::stmt_reads(statement, register) {
+            return true;
+        }
+        match statement {
+            // The stack-pointer restore is the teardown's whole purpose.
+            Stmt::Assign { dst, .. } if is_stack_pointer_reg(dst, ctx) => true,
+            Stmt::Assign { src, .. } => !expression_roots_at(src, register),
+            _ => false,
+        }
+    })
+}
+
 fn body_falls_through(body: &[Stmt]) -> bool {
     let Some(last) = body.last() else {
         return true;
@@ -1738,6 +1844,20 @@ fn promote_address_taken_stack_object(
         *expr = object_addr;
         return;
     }
+    // `push {r7, lr}` saves the CALLER's frame register, and the alias map is
+    // keyed by register rather than by program point, so that store's source
+    // resolves to THIS frame's anchor coordinate. The anchor is by construction
+    // the base of the whole frame, so the "grow conservatively to the frame
+    // base" extent below measures the frame, not an object: A32's `fp` sits one
+    // word below the CFA and produced a harmless four-byte slot, while Thumb's
+    // `r7` sits at the bottom and produced a forty-byte array that swallowed
+    // `seed`'s argument home. A bare anchor is evidence of a machine word at
+    // that coordinate and of nothing wider. Every path that joins an ALREADY
+    // proven object — a DWARF aggregate, a seeded partition, an observed run of
+    // slots — has run above, so a genuine escape into a known object still
+    // resolves at its real extent.
+    let bare_frame_anchor =
+        matches!(expr, Expr::Reg(VReg::Phys(name)) if is_arm_frame_pointer(name, ctx));
     let recovered = escaped_stack_address(expr, sp_delta, ctx, address_defs, false);
     let Some((base, disp)) = recovered else {
         return;
@@ -1809,7 +1929,11 @@ fn promote_address_taken_stack_object(
     // boundary.  Without it, an address-taken struct at rbp-0x20 absorbs an
     // independent argument at rbp-0x14 merely because its source type is not
     // yet known.
-    let size = next_slot_extent.unwrap_or(conservative_size);
+    let size = if bare_frame_anchor {
+        u16::from(pointer_size)
+    } else {
+        next_slot_extent.unwrap_or(conservative_size)
+    };
     // Persist the storage identity in the slot map, not only in this call
     // argument.  Later loads/stores must remain dereferences of the same byte
     // array; rewriting them as scalar `Reg(local)` values would make C decay
@@ -1849,7 +1973,20 @@ fn collect_stack_address_defs(
                 out.remove(dst);
                 ambiguous.insert(dst.clone());
             }
-            (None, None) => {}
+            // A definition that carries no stack address makes the register
+            // ambiguous even when it is seen FIRST. The map is keyed by
+            // register, not by program point, so a single later address
+            // definition would otherwise claim the whole body — including the
+            // region where the register held something else entirely. GCC's
+            // pre-value-folding Thumb lowering reuses one temporary for both a
+            // loaded integer and the epilogue's frame address, and the frame
+            // coordinate leaking backwards over the integer uses made four
+            // ordinary adds look like subscripted frame accesses, seeding a
+            // byte array over the whole frame. Value-numbered bodies define
+            // each name once and are unaffected.
+            (None, None) => {
+                ambiguous.insert(dst.clone());
+            }
         }
     }
 
@@ -1869,34 +2006,37 @@ fn collect_stack_address_defs(
                         *sp_delta = address.and_then(|(base, disp)| {
                             (base == entry_stack_base(ctx)).then_some(disp)
                         });
-                    } else if matches!(dst, VReg::Phys(name) if is_active_stack_base(name, ctx)) {
-                        if matches!(dst, VReg::Phys(name) if is_arm_frame_pointer(name, ctx)) {
-                            // Thumb's frame register is normally SSA-versioned,
-                            // while A32 names the architectural `fp` directly.
-                            // An A32 epilogue restores that unversioned register
-                            // from its saved stack word, which is a terminal
-                            // overwrite rather than a competing reaching frame
-                            // definition. Ignore it only when the current path
-                            // terminates and the old frame value is provably
-                            // unread afterwards; a fall-through nested body or
-                            // any live redefinition remains ambiguous.
-                            let terminal_dead_overwrite = address.is_none()
-                                && out.contains_key(dst)
-                                && !body_falls_through(&body[statement_index + 1..])
-                                && body[statement_index + 1..]
-                                    .iter()
-                                    .all(|later| !crate::ir::dead_stores::stmt_reads(later, dst));
-                            if terminal_dead_overwrite {
-                                continue;
-                            }
-                            // Preserve the exact entry-SP coordinate captured
-                            // by `r7#1 = sp` or `fp = sp + 4`; later direct
-                            // arithmetic must resolve to the same DWARF CFA
-                            // object. x86's `rbp = rsp` remains a coordinate-
-                            // system establishment below.
-                            record_definition(dst, address, out, ambiguous);
+                    } else if matches!(dst, VReg::Phys(name) if is_arm_frame_pointer(name, ctx)) {
+                        // An epilogue overwrite of the frame register is frame
+                        // teardown, not a competing reaching frame definition.
+                        // A32 restores the unversioned `fp` from its saved stack
+                        // word; Thumb first re-adds the prologue constant
+                        // (`adds r7, #32; mov sp, r7`), which GCC lowers through
+                        // register temporaries so it is not a foldable stack
+                        // expression. Ignore either only when the current path
+                        // terminates and every later read of the register feeds
+                        // a stack-pointer restore — machine bookkeeping that
+                        // addresses no source storage. A fall-through nested
+                        // body or any other live use remains ambiguous.
+                        let terminal_teardown = address.is_none()
+                            && out.contains_key(dst)
+                            && !body_falls_through(&body[statement_index + 1..])
+                            && frame_coordinate_is_dead_after(
+                                &body[statement_index + 1..],
+                                dst,
+                                ctx,
+                            );
+                        if terminal_teardown {
                             continue;
                         }
+                        // Preserve the exact entry-SP coordinate captured
+                        // by `r7#1 = sp` or `fp = sp + 4`; later direct
+                        // arithmetic must resolve to the same DWARF CFA
+                        // object. x86's `rbp = rsp` remains a coordinate-
+                        // system establishment below.
+                        record_definition(dst, address, out, ambiguous);
+                        continue;
+                    } else if matches!(dst, VReg::Phys(name) if is_active_stack_base(name, ctx)) {
                         // Architectural frame bases define the coordinate
                         // system used by DWARF and local naming. In particular,
                         // `rbp = rsp` is a frame establishment, not an immutable
@@ -5332,6 +5472,7 @@ mod tests {
             cc: Some(CallConv::Arm),
             rbp_repurposed: false,
             frame_pointer_established: false,
+            arm_frame_register: None,
             parameter_count: None,
         };
 
@@ -5743,6 +5884,7 @@ mod tests {
                 cc: Some(CallConv::Aarch64),
                 rbp_repurposed: false,
                 frame_pointer_established: false,
+                arm_frame_register: None,
                 parameter_count: Some(2),
             },
             &address_defs,
