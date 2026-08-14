@@ -498,7 +498,13 @@ End-state fitness targets:
 | `src/ir` median | below 500 LOC |
 | `src/ir` files above 1,000 LOC | at most 5 |
 
-- [ ] Add a reporting and ratchet check for these measurements.
+- [x] Add a reporting and ratchet check for these measurements. `tools/fitness_report.py`
+  measures them over `src/` (test files/modules and generated tables excluded) and
+  prints each current value against its target; `tools/fitness_baseline.json` is
+  the committed baseline and `python/tests/test_fitness_report.py` fails the
+  suite if a fresh measurement is worse than that baseline. The targets
+  themselves are not met yet (see Entry 19 in the diary for current numbers) --
+  this box is only the measurement and ratchet infrastructure, not the fitness.
 - [ ] Reject new production modules over 1,000 LOC without a documented review.
 - [ ] Exempt generated tables/data only; mixed-responsibility logic is not an
   exemption.
@@ -786,8 +792,38 @@ This is the practical next-work queue as of the planning baseline.
    reconstruct actual reaching call arguments.
 7. Build the canonical `SymbolStore` and contextual operand-reference index;
    migrate exact symbols/relocations first, then bounded library-name knowledge.
-8. Investigate the linked-list ByteMatch regression and the 43 AArch64-only
-   failures with pass-attributed traces.
+8. **[restated — no DecBench required]** Investigate the linked-list correctness
+   defect and the architecture-only failures with pass-attributed traces.
+
+   This item was written against DecBench metrics, and it does not need them.
+   Our own corpus answers the same questions with EXECUTION ground truth rather
+   than a similarity score, which is strictly more actionable: DecBench says the
+   output looks less like the original, the fixture corpus says it computes the
+   wrong answer.
+
+   Architecture-only failures, computed directly from `arch_baseline.json` as
+   "passes on x86-64, fails here":
+
+   | architecture | functions |
+   |---|---:|
+   | armv7_a32 | 153 |
+   | armv7 | 144 |
+   | i386 | 102 |
+   | aarch64 | 94 |
+   | x86_64_gcc15 | 22 |
+
+   That is 94 AArch64-only failures against the item's 43, and they cluster:
+   `141_atomics` (7), `173_float_int_conversions` (6), `175_float_matrix_kernel`
+   (5), `181_compensated_summation` (5) — a float and atomics cluster. Note ARM32
+   is worse than AArch64 and was never the item's subject.
+
+   The linked-list half is already a recorded correctness defect rather than a
+   metric movement: `111_self_referential_struct:link_and_sum` declares `rbp` as
+   a local and never assigns it, so every address computed from it is an
+   uninitialised read. A self-referential struct is the linked list.
+
+   Pass-attributed traces are now actually obtainable; the instrumentation was
+   only reconnected in `0ecb8e1`.
 9. Finish CFG completeness and verified region ownership, then target the large
    O2-noinline GED cohort.
 10. Complete aggregate constraints and ABI handling, then project them to HIR.
