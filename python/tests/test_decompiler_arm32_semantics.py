@@ -231,9 +231,18 @@ def test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution(
     assert decompiled.returncode == 0, decompiled.stderr
     assert "===== prototype-resolved LLIR =====" in decompiled.stderr
     assert "===== prepared numbered LLIR =====" in decompiled.stderr
-    assert re.search(r"memset\([^\n]+,\s*\(int\)\(0\),[^\n]+64", decompiled.stdout), (
+    # The fill byte renders as a bare `0`, not `(int)(0)`. `5e24383` added
+    # `integer_call_arg_cast_is_redundant` (src/ir/ast.rs), which drops a call
+    # argument cast only when `declared_reg_ctype(register) == parameter_type`
+    # — the identity, here `int` to `int`. The size argument keeps its
+    # `(__SIZE_TYPE__)` cast in the same call because that one is NOT the
+    # identity, which is what shows the elision is proof-backed rather than
+    # cosmetic. Asserted both ways so a re-regression fails in either
+    # direction.
+    assert re.search(r"memset\([^\n]+,\s*0,[^\n]+64", decompiled.stdout), (
         decompiled.stdout
     )
+    assert "(int)(0)" not in decompiled.stdout, decompiled.stdout
     assert "memset()" not in decompiled.stdout
     assert re.search(r"local_[0-9a-f]+\[64\]", decompiled.stdout), decompiled.stdout
     assert not re.search(r"\*\(int \*\)\(\(sp \+", decompiled.stdout), decompiled.stdout
@@ -418,8 +427,11 @@ def test_arm32_o0_rb_validate_round_trips_split_frame_addresses(
             rf'base: "entry_sp",\s+disp: {displacement},\s+size: {size}',
             decompiled.stderr,
         ), decompiled.stderr
+    # `0` rather than `(int)(0)`; see the note on the other memset assertion.
+    # The `(__SIZE_TYPE__)` cast beside it must survive — dropping that one too
+    # would mean the elision had stopped checking the declared type.
     assert re.search(
-        r"memset\(\(void \*\)\(&local_[0-9a-f]+\[0\]\),\s*\(int\)\(0\),"
+        r"memset\(\(void \*\)\(&local_[0-9a-f]+\[0\]\),\s*0,"
         r"\s*\(__SIZE_TYPE__\)\(64\)\)",
         decompiled.stdout,
     ), decompiled.stdout

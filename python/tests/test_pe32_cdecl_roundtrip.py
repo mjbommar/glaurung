@@ -113,7 +113,16 @@ int main(int argc, char **argv) {
         style="decbench",
     )
     assert "cdecl_chain(int arg0, int arg1, int arg2)" in generated, generated
-    assert "helper3((int)(arg0), (int)(arg1), (int)(arg2))" in generated, generated
+    # The recovered `helper3` prototype types every parameter `int`, and every
+    # argument is a register this render already declared `int`, so the
+    # call-boundary conversion is the identity and is not written. This used to
+    # render `helper3((int)(arg0), (int)(arg1), (int)(arg2))`; that expectation
+    # was pinned one commit before `integer_call_arg_cast_is_redundant` landed
+    # (5e24383) and the elision is the correct behaviour, not a regression —
+    # the round trip below rebuilds and executes this exact text. Same rule,
+    # same reason as `arm_hf_mixed_callee(7, arg0, arg1)` in test_cli_decompile.
+    assert "helper3(arg0, arg1, arg2)" in generated, generated
+    assert "(int)(arg" not in generated, generated
 
     rebuilt_source = tmp_path / "rebuilt.c"
     rebuilt_source.write_text(
