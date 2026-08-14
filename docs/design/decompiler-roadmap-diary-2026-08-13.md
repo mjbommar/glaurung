@@ -1074,3 +1074,433 @@ a pass with one shape tested, and the shapes that break it are the ones nobody
 wrote down. Adding the fixture cost minutes; it caught a silent wrong answer in
 code that had already passed a full matrix run, a structural lane, and 2218 unit
 tests.
+
+---
+
+## Entry 10 — MIR definedness queries
+
+Roadmap item 3: *"Complete the MIR queries that consumer needs (`value_at`,
+clobbers, reaching sets) instead of adding local scans."* EPIC 5 already had
+`definition`, `uses`, dominance verification, `all_paths_defined`, and a
+region-aware MemorySSA. This closes `value_at`, `clobbers_between`, the
+reaching-definition set, and — because it fell out of the same walker —
+`memory_version`. That is the whole EPIC 5 minimum query surface.
+
+All work is confined to `src/ir/mir/`. `DefinitionOracle` still has zero
+production callers; this is the surface the first migrated consumer will use,
+not a migration.
+
+### The thing that shaped every decision
+
+An unannotated `Op::Call` contributes **no register definition at all**.
+`def_uses` returns `None` for it, so SSA never versions the ABI result, so the
+use edge after the call still names the pre-call value. An annotated call is
+barely better: `CallEffects` declares `result` and `args` but has no clobber
+list, and `TargetSpec` does not own one either (EPIC 4, still open).
+
+A `value_at` built naively on the use edges would therefore have answered *"rax
+still holds the value from before the callee ran"* — confidently, and wrongly.
+That is exactly what rule 5 forbids, so the queries are deliberately **stricter
+than the SSA edges they are derived from**.
+
+`MirInstruction` gained one field to carry that:
+
+```rust
+pub enum EffectCompleteness { Complete, Opaque }
+```
+
+`builder::register_effects` marks an instruction `Opaque` when any of three
+things is true, each of which is a real way MIR loses a write:
+
+1. it is `Op::Call` or `Op::Unknown` — no enumerable clobber set exists yet;
+2. its canonicalized `defs_uses` destinations outnumber `ssa.def_values` — SSA's
+   `write_regs` keeps only `Phys`/`Temp`/`Flag`, so a `FlagValue` destination
+   writes a storage that has no MIR value at all; or
+3. it writes a bit-preserving sub-register view. `al` is deliberately *not*
+   merged into `rax` by the SSA parent rule (`regview::ssa_parent` declines it),
+   so a write through the narrow view leaves the wide storage's MIR value
+   untouched while the machine bits move. Detected with
+   `regview::parent_of` and gated to targets that have sub-register views at
+   all, so ARM32 does not borrow the AArch64 table.
+
+One deliberate narrowing: `VReg::Temp` is exempt from opaque clobbering. A
+lifter temporary has no machine existence, so no callee can write it. Without
+that exemption every query after every call would be `Unknown` and the surface
+would be useless as well as correct.
+
+### Exact semantics
+
+A `ProgramPoint { block, index }` names the gap immediately **before** the
+instruction at `index`; `index == instructions.len()` is the block's outgoing
+edges. Block phis execute on the incoming edges, so they are already applied at
+`index == 0`. Constructors: `block_entry`, `block_exit`, `before`, `after`.
+
+Every state-returning query answers one type:
+
+```rust
+pub enum DefinitionState<T> {
+    Exact(T),
+    Set { values: Vec<T>, undefined_path: bool },
+    NoDefinition,
+    Unreachable,
+    Unknown(UnknownReason),
+}
+```
+
+`Set` is rule 6's *proved set*. It is retained, never collapsed to its most
+plausible member; `undefined_path` records that at least one path arrives with
+no MIR definition of the storage at all. `NoDefinition` is honest rather than
+alarming: the machine location holds bits, MIR simply has no identity for them
+here (e.g. asking about `rax` before its first write, where SSA created no
+version-0 input because nothing read it).
+
+**`value_at(storage, point) -> DefinitionState<ValueId>`** — a forward fixed
+point over reachable blocks, seeded with the function's explicit `Input` value
+for the storage, overridden on entry to each block by that storage's phi, killed
+by every instruction output naming the storage, and driven to
+`Unknown(OpaqueInstruction)` by an opaque instruction. A named output is
+authoritative for its own storage even on an otherwise opaque instruction, and a
+later definition recovers from the unknown, so an annotated call still yields
+`Exact` for its declared result register. Fails closed on: a storage outside the
+arena (`UnknownStorage`), a point naming no real position (`InvalidPoint`), and
+an opaque instruction on a path (`OpaqueInstruction`). Returns `Unreachable`,
+not `Unknown`, for a point in an unreachable block — that is a proof, not a
+failure.
+
+**`memory_version(region, point) -> DefinitionState<MemoryValueId>`** — the same
+walker over the region's MemorySSA chain. It deliberately does **not** add a
+second opaque rule on top: MemorySSA already owns conservative call and
+unknown-instruction clobbers as explicit `Clobber` accesses and gives every
+region an explicit entry state, and duplicating that here would replace verified
+conservatism with a guess about it.
+
+**`clobbers_between(value, from, to) -> ClobberAnswer`** — `None`,
+`Clobbered(Vec<ClobberKind>)`, or `Unknown(reason)`. Three things clobber:
+`Definition` (an instruction output names the storage with a *different* value),
+`Opaque` (an instruction MIR cannot enumerate, machine storages only), and `Phi`
+(entering a block merges a different value into the storage across an edge that
+is actually traversed). Writing the same `ValueId` again is not a clobber; SSA
+identity is what is being tracked.
+
+Interval membership is computed on a **point graph** — one node per
+`ProgramPoint`, intra-block gap edges plus CFG edges — with forward reachability
+from `from` and backward reachability from `to`. An instruction at `(b, i)`
+counts iff `forward[(b, i)] && backward[(b, i+1)]`. Block-level reachability
+cannot distinguish "the interval re-enters this block" from "this block merely
+lies between the two", so a loop back edge that rewrites the storage is found
+even when `to` textually precedes `from`. Fails closed on: an unowned value
+(`UnknownValue`), an invalid or unreachable point, **no path at all** from
+`from` to `to` (`NoPath` — the question is malformed, not vacuously true), and
+`value` not being the proved `Exact` state of its own storage at `from`
+(`ValueNotHeldAtOrigin`). A `value_at` failure at `from` propagates its reason
+verbatim.
+
+**`reaching_definitions(use) -> ReachingSet`** (and
+`reaching_definitions_of_value`) — resolves transitively through phis to the
+non-phi roots: `Input`, `InstructionOutput`, `Undef`, `UnknownEffect`, or
+`Unreachable`. Roots and traversed phis are reported separately, sorted and
+deduplicated. Phi cycles terminate because each value is expanded at most once,
+so a loop-carried phi that names itself is fine. `single()` returns `Some` only
+when the set is complete *and* a singleton — a two-element set never degrades
+into one plausible answer. `incomplete_reasons()` carries `BrokenPhiEdge` /
+`UnknownValue` when the walk could not finish; `is_complete()` is the guard.
+
+### Tests
+
+23 new tests in `src/ir/mir/query_tests.rs`, each written failing first.
+
+| EPIC 5 case | covered by |
+|---|---|
+| diamonds | `value_at_a_diamond_join_is_the_merging_phi` |
+| conditional definitions | `value_at_a_conditional_definition_merges_the_untracked_live_in` — the unconditional arm keeps its explicit `Input` root rather than inheriting the defined arm |
+| loops | `value_at_a_loop_header_is_the_loop_carried_phi`, `clobbers_between_sees_a_loop_back_edge_rewrite`, `reaching_definitions_terminate_through_a_phi_cycle` |
+| irreducible flow | `value_at_irreducible_flow_still_resolves_to_one_phi` (two-entry `b1`/`b2` loop) |
+| calls | `value_at_after_an_unannotated_call_fails_closed`, `clobbers_between_reports_an_unannotated_call_conservatively`, `memory_version_after_an_unannotated_call_is_its_clobber` |
+| multi-output intrinsics | `value_at_after_a_multi_output_intrinsic_names_each_declared_output` — each declared output is `Exact` *and* an `UnknownEffect` value; footprint and value-knowledge are separate axes |
+| undef / poison | `value_at_a_poisoned_storage_is_the_explicit_undef_value`, `reaching_definitions_keep_a_poisoned_arm_in_the_proved_set` |
+| memory aliases | `memory_version_advances_every_region_an_unproven_pointer_may_alias`, `memory_version_leaves_the_heap_alone_for_a_proven_frame_store`, `memory_version_at_a_join_is_the_memory_phi` |
+| unreachable | `value_at_in_an_unreachable_block_is_explicitly_unreachable` |
+| explicit failure | `value_at_rejects_an_out_of_range_storage_and_point`, `clobbers_between_fails_closed_without_a_path`, `clobbers_between_refuses_a_value_that_does_not_hold_the_storage` |
+| **exceptions** | **not covered** — LLIR has no exceptional-edge representation to test against (see the open "Complete CFG" workstream) |
+
+Negative controls are paired throughout: the opaque-call case has
+`an_opaque_call_cannot_clobber_a_lifter_temporary` and
+`clobbers_between_proves_an_undisturbed_value`; the alias case has the
+proven-frame-store control.
+
+The load-bearing test is `real_functions_never_answer_with_the_wrong_value`,
+which lowers `main` from the real x86-64 and ARM32 fixtures and holds the
+surface to a one-directional invariant: **a query may refuse to answer, but it
+may never answer with a different value than the verified SSA edge it is derived
+from.** For every reachable use it asserts `value_at` is either `Exact(use
+value)` or `Unknown(OpaqueInstruction)` — never a different `Exact`, never
+`NoDefinition`, never a silent `Set`. It also asserts every reaching set is
+complete and contains no phi roots, that `clobbers_between == None` implies
+`value_at == Exact` (the two queries cannot disagree), and that every region's
+memory state is `Exact` at every reachable block entry.
+
+`cargo test`: **2246 passed, 0 failed** (49 in `ir::mir`, of which 27 are the
+new query tests). Clippy is clean on the four touched files.
+
+### What this does not do
+
+- **No consumer is migrated.** Item 3 built the surface item 2 will consume;
+  call-argument recovery, copy propagation, DCE, stack promotion, return
+  recovery, and expression reconstruction all still run their own local backward
+  scans. Deleting those is the next step, and each needs its own parity work.
+- **`Set` never occurred in practice.** SSA here places phis at the full
+  iterated dominance frontier, not pruned by liveness, so every join already has
+  a merged identity and every real query answered `Exact` or `Unknown`. The
+  variant exists because rule 6 requires the *representation* — and because a
+  transactional graph editor (the next EPIC 5 item) can produce merges SSA
+  construction never would. It is currently unexercised by a real binary.
+- **Opaque is very coarse for calls.** Every call poisons every machine storage
+  it does not explicitly name, because no clobber contract exists to consult.
+  This is correct and useless in roughly equal measure: on real `main` bodies the
+  post-call answers are all `Unknown(OpaqueInstruction)`. Narrowing it is EPIC
+  4's *"make all call and intrinsic read/write/clobber effects target-owned"*,
+  and until that lands a consumer migrating to this surface must be prepared for
+  honest unknowns where its old backward scan produced a confident wrong answer.
+  That is the point, but it is a real migration cost and should be planned for.
+- **Sub-register writes fail closed rather than resolve.** A write to `al` marks
+  the instruction opaque instead of updating `rax`'s state, because MIR has no
+  partial-write model. Fixing it properly is EPIC 4 register-view work; the
+  interim behaviour is conservative, not silent.
+- **No caching.** Each `value_at` / `memory_version` call runs its own fixed
+  point over the function, and each `clobbers_between` builds a fresh point
+  graph. That is fine for the current zero callers and fine for interactive
+  queries; the first pass that calls it per instruction will need a memoized
+  per-storage solve. Deliberately not built ahead of a measured consumer.
+- **`cargo fmt` collateral.** Running it repo-wide reformatted in-progress files
+  owned by concurrent work outside `src/ir/mir/`. Semantically inert, but
+  future workers on a shared tree should scope it to their own paths.
+
+---
+
+## Entry 11 — Fixture coverage survey
+
+*Analysis only. No fixtures, source, or baselines were touched. Scope: every
+production pass that shapes decompiler OUTPUT — the ordered AST pipeline in
+`src/python_bindings/ir.rs` (the `pass!` macro), the ~50-step cleanup pipeline
+in `ir::ast::prepare_for_decbench_with_output_and_protected_locals`, the
+lifters, and `ir::structure`. Method: read the pass in source, then check
+whether `tests/decompiler_fixtures/src/*` actually drives its precondition —
+by an explicit `COVERAGE TARGET` doc comment where one exists, by direct
+evidence (a diary/design doc that measured a fire rate), or by grepping fixture
+sources for the relevant C shape and inferring. Every inferred (not confirmed)
+claim below is labeled as such.*
+
+### What Entry 9 actually proved about the corpus
+
+The `188_vector_transport` incident is not really a story about `vector_copy.rs`.
+It is a story about what "one lane" hides: a pass with a single fixture is a
+pass whose only proof of correctness is that ONE shape happens not to trigger
+its worst assumption. The question this entry answers is which other passes
+are in that position right now, ranked by how bad "wrong" would be if they are.
+
+### The authoritative pass list
+
+`run_ast_passes` (`src/python_bindings/ir.rs:432`, its `pass!` macro body
+starting around line 480) runs 12 named stages in order, several of
+which bundle multiple sub-transforms:
+
+```
+recover_wide_copies -> reconstruct -> fold_constants -> fold_boolean_masks
+-> prune_dead_flags -> fold_got_pointer_loads -> recover_resolved_tail_calls
+-> reconstruct_args -> apply_known_call_contracts -> split_call_result_lifetimes
+-> canary+strings -> promote_stack_locals -> recognise_machine_frame
+-> materialize_direct_output -> split_argument_storage_reuse -> apply_role_names
+-> eliminate_dead_stores -> stack_idiom+label_prune
+```
+
+Downstream of that, `ir::ast::prepare_for_decbench_with_output_and_protected_locals`
+(`src/ir/ast.rs:7080`) is a second, larger ordered pipeline — the semantic AST
+cleanup and CFG-structuring stage — that calls roughly 50 further named
+transforms across `copy_prop`, `guard_chain` (6 distinct `collapse_*`
+functions), `switch_ladder`, `guarded_switch`, `select_fold`, `guarded_call`,
+`lazy_call_select`, `terminal_loop`, `label_prune`, `loop_form` (6 distinct
+`recover_*`/`promote_*` functions), and `latch_predicate`, each run once or
+twice to a bounded fixpoint. This second pipeline is where the `[r]`-flagged
+always-hoist and goto-sinking experiments lived, and where the still-open
+sentinel-search gap lives. `ir::structure::recover_verified_with_health` (CFG
+region recovery) runs once, earlier, to produce the input both pipelines
+share. The three lifters (`lift_x86.rs`, `lift_arm32.rs`, `lift_arm64.rs`) sit
+upstream of all of it and are exercised by construction on every lane, so
+their coverage question is about specific rare instruction forms, not about
+whether they run at all.
+
+### Instrumentation check: `pass_stats` is currently disconnected
+
+The 2026-08-12 measurement that found `recover_sentinel_search_loops` at
+0/5695 and `recover_guarded_do_whiles` at 1/1984
+(`docs/design/dormant-transforms-2026-08-12.md`) worked because
+`GLAURUNG_PASS_STATS` call sites had been added to `loop_form.rs` in commit
+`51514cc`. **They are gone now.** `grep -rn "pass_stats::" src/` finds zero
+call sites anywhere in the crate; `src/ir/pass_stats.rs` compiles, has its own
+passing unit test, and is never invoked. The roadmap's own ask — "keep
+pass-fire instrumentation and either add standing real coverage for extremely
+rare transforms or retire them deliberately" — is unmet on the instrumentation
+side as well as the coverage side: the tool that found the two dormant
+transforms cannot currently be used to check whether they, or any other pass,
+have drifted further toward (or past) zero. This is a correctness-adjacent gap
+in its own right — confirmed by direct grep, not inferred.
+
+### Roadmap cross-references
+
+- **"Add a real end-to-end fixture for an array indexed with a constant
+  bias"** — **SATISFIED.** `187_constant_bias_index.c` (read directly) has
+  `bias_forward_sum` (`values[index + FORWARD_BIAS]`), a two-object biased
+  case (`adjacent_difference`), and two negative controls
+  (`value_bias_not_index` adds the constant to the loaded value, not the
+  index; `variable_bias` uses a runtime displacement) — exactly the shape and
+  the negative-control discipline `stack-bias-affine-index-2026-08-13.md`
+  asked for. Already closed per Entry 10's `8f661ff`/`d3578ad`.
+- **"Add a linked-structure argument kind to the differential harness before
+  changing the nearly dormant sentinel-list recovery pass"** — **NOT
+  satisfied.** `183_sentinel_list_search.c`'s own doc comment states its
+  "COVERAGE TARGET" is `recover_sentinel_search_loops`, but
+  `dormant-transforms-2026-08-12.md` explicitly recorded that this exact
+  fixture's index-walk shape is 0 fires — the pass needs a real pointer chase
+  through a struct field over caller-owned, harness-relocated memory, which
+  `tools/diff_decompile.py` cannot synthesize today. The fixture that exists
+  documents the gap; it does not close it.
+- **"Keep pass-fire instrumentation and either add standing real coverage for
+  extremely rare transforms or retire them deliberately"** — **regressed**, per
+  the instrumentation check above: the instrument that would tell you this now
+  has no call sites.
+- **The `[r]` measured rejections:**
+  - *Always-hoist loop recovery* — **already defended.** The four functions
+    across six lanes that the experiment broke
+    (`03_loop_shapes:while_prefix:gcc:O2`,
+    `12_loop_rotation:find_first_set:gcc:O2`,
+    `13_loop_early_exit:classify_run:{clang,gcc}:O2`,
+    `14_flag_effects:countdown:{clang,gcc}:O0`) are all live, named functions
+    in fixtures already in this corpus today (confirmed by filename match
+    against `ged-recovery-measured-trade.md`). A repeat attempt would fail the
+    ordinary fixture matrix without any new fixture.
+  - *Goto sinking* — **moot, not defended.** `src/ir/goto_sink.rs` no longer
+    exists (confirmed: no such file). The GED regression it caused
+    (`statemachine:gcc:O0`) was measured on a DecBench external project, which
+    has no equivalent in this repo-native corpus — there is no local
+    behavioral fixture that would re-catch a *readability* regression from a
+    revived sinking pass (this corpus checks execution-differential and
+    structural facts, not GED/readability). Not urgent while the pass stays
+    deleted; worth a line in whatever readability metric eventually gets
+    defined, per the roadmap's own next step for that item.
+  - *The late table-layout patch* (function-pointer-table call-argument
+    recovery) — **already defended, and proven so.**
+    `95_function_pointer_table.c:dispatch_operation` is a real
+    execution-differential fixture (not just structural) and currently
+    records `fail` at `gcc:O2` in `baseline.json`. Per
+    `table-dispatch-arguments-2026-08-12.md`, this is the exact fixture whose
+    behavioral mismatch is how the "plausible, well-typed, but wrong
+    arguments" attempt was caught and reverted. The remaining work here is
+    implementing the fix correctly (per that doc's two suggested approaches),
+    not adding coverage.
+
+### Ranked gap table
+
+Ranked by (coverage thinness) x (blast radius if wrong) among passes that
+still lack standing, targeted, real-execution coverage.
+
+| pass | current lanes | risk if wrong | proposed fixture shape | roadmap item it serves |
+|---|---|---|---|---|
+| `loop_form::recover_sentinel_search_loops` / `recover_guarded_do_whiles` | 0 confirmed fires / 1 fire in 1984 (2026-08-12 measurement); `183_sentinel_list_search` targets but does not trigger it; instrumentation to re-check is currently disconnected | A rotation-matching pass this narrow silently doing nothing is invisible (identical output to "did not fire"); a future edit could subtly mismatch and nobody would see a lane move | A `struct node { struct node *next; int key; }` search over a **parameter-supplied, harness-relocated** linked list, walked by pointer chase (`p = p->next`), searched under `clang -O1`+ — the exact trigger `dormant-transforms-2026-08-12.md` isolated. Requires the harness's "linked-structure argument kind" first | "Add a linked-structure argument kind to the differential harness before changing the nearly dormant sentinel-list recovery pass" (open) |
+| `lazy_call_select::collapse_lazy_call_diamonds` + `copy_prop::move_adjacent_effectful_scratch_values` | No fixture found with an externally observable side effect (a write to caller memory or an accumulator) inside a call folded into a ternary/diamond; `83_ternary_chains.c` has no call in any arm (grep-confirmed) | Same failure family as the `188_vector_transport` bug: an assumption ("this call has exactly one evaluation") that only a differential over a side channel, not just the return value, can falsify. A silently double-executed side-effecting call is a correctness bug indistinguishable from "the return value matches" | `int r = flag ? record_event(&counter, x) : default_value(x);` where `record_event` writes to a caller-owned counter/buffer AND returns a value used further; assert the counter's final state, not only `r` | Not separately named in the roadmap; same soundness class as EPIC 5 (`clobbers_between`, exactly-once effect evaluation) and the ast.rs comment at line ~7180 ("an `Expr::Call` must retain exactly one evaluation") |
+| `ir::structure` irreducible-flow fallback | No hand-written genuinely irreducible C found (checked `145_control_flow_flattening.c`/`146`/`148`: all are single-loop dispatcher/switch flattening, which is reducible); `structure.rs` self-describes this path as a "safety net" | Highest blast radius in the survey: this is the pass the roadmap calls "the current large structuring owner" and flags for irreducible/unresolved-edge honesty. A wrong fallback here can invent or drop CFG edges, which is silent-wrong-answer territory at the level below any AST pass | Two `goto`s into the same loop body from two different, non-dominating outer branches (the textbook irreducible CFG), built so each entry path produces a distinguishable accumulated result; execution-differential proves whichever edge set the structurer actually emitted | "Preserve irreducible and unresolved flow with explicit goto/indirect fallback rather than inventing structure" (open); "Separate dominance/loop discovery, region selection, verification, and HIR projection from the current large structuring owner" (open) |
+| `ir::guard_chain`'s six `collapse_*` functions (`collapse_shared_exit_guard_ladders`, `collapse_shared_assignment_guards`, `collapse_redundant_copy_nested_guards`, `collapse_nested_terminal_return_guards`, `collapse_adjacent_break_guards`, `collapse_matching_terminal_return_guard`) | Each is almost certainly exercised incidentally by guard-heavy fixtures (`07_packet_parser`, `163_wire_header_parser`, `164_nested_tlv_walker`) — **inferred, not confirmed** — but none has a fixture written to pin its specific merge precondition the way `188_vector_transport` pins `vector_copy`'s exclusivity rule | Six separate shape-conjunctions in one 1384-line file, each a candidate for the same "one clause too strict, or one clause missing" failure mode already proven twice in this codebase (`vector_copy`, `recover_sentinel_search_loops`) | A guard ladder where two of three early-return guards share an assignment AND a third shares only the return constant but reads a value the others do not — the near-miss that would defeat an over-eager merge; run through all six functions' preconditions in one fixture family | Not separately named; supports the same-family caution the `[r]` entries already record |
+| `ir::call_result_split::split_call_result_lifetimes` / `ir::value_split::split_argument_storage_reuse` (AArch64 dual-role register splitting, e.g. `UMULL`-shaped widening multiply) | `02_integer_widths.c` and several curriculum fixtures (`61_fixed_point`, `65_projectile_motion`, etc.) contain widening-multiply source shapes and run through the required `armv7_a32`/AArch64 arch lanes — **inferred coverage**, not confirmed to actually produce the dual-role register pattern the pass's own doc comment names | Splitting a value that should stay unified (or failing to split one that must) silently aliases two logically distinct values; the module's own doc comment calls out this exact hazard for AArch64 | An AArch64-targeted fixture computing `(int64_t)a * (int64_t)b` from two 32-bit parameters where the low and high halves are both used afterward (forcing the dual-role register to serve two live purposes) | ARM32 acceptance work: "Cover VFP s/d/q overlap" and general "ARM32 is a conformance architecture" (open, adjacent) |
+
+### What ranked lower, and why
+
+- **`ir::canary` (`recognise_canary`/`collapse_canary_save`, 1379 lines)** —
+  initially looked exactly like `vector_copy`'s risk shape (pattern-matches
+  compiler bookkeeping and deletes it), but `nm -D` against the 738 already-
+  built fixture `.so` files shows 89 of them import `__stack_chk_fail`
+  (Ubuntu 22.04's gcc/clang default to `-fstack-protector-strong` and the
+  harness never disables it). A regression here would move dozens of lanes at
+  once, not one silently — the opposite risk profile from `vector_copy`'s
+  single lane. Deprioritized on that basis (confirmed by direct binary
+  inspection, not inferred).
+- **`ir::readonly_fold::fold_guarded_readonly_lookups`** — four fixtures
+  (`101_static_locals`, `116_string_literals`, `126_x_macros`,
+  `85_designated_initializers`) contain `static const` array/table shapes.
+  Plausible incidental coverage; not investigated further given the budget
+  here.
+- **Lifters (`lift_x86`/`lift_arm32`/`lift_arm64`)** — coverage is broad by
+  construction (every lane exercises every lifter); the real gap is specific
+  rare instruction forms, and the corpus already shows the right pattern for
+  closing those one at a time (`181_compensated_summation` for `subsd`,
+  `184_rep_stos_widths` for `rep stos{b,d,q}`, `185_subword_signed_division`
+  for `cbw`/`cwd`). No new lifter gap was found beyond what the roadmap's ARM32
+  acceptance section already lists open (A32/Thumb condition execution, VFP
+  s/d/q overlap, literal pools) — those remain valid but are not newly
+  discovered here.
+
+### Honesty note on method
+
+Everything in the "ranked lower" section and three of the five ranked-gap rows
+rest on grepping fixture sources for a plausible C shape, not on tracing an
+actual pass-fire event — because the one instrument that could confirm firing
+(`pass_stats`) is disconnected (see above). The `recover_sentinel_search_loops`
+row and the three roadmap-satisfied cross-references are the only claims here
+backed by a prior direct measurement or a fixture read rather than an inferred
+shape match.
+
+---
+
+## Entry 12 — Two dead transforms, now measurable
+
+Entry 11's survey reported that `src/ir/pass_stats.rs` had zero call sites and
+described the instrumentation as removed. The first half is right; the second is
+not, and the distinction matters.
+
+`git merge-base --is-ancestor 51514cc HEAD` says the commit carrying the
+`loop_form.rs` call sites is **not an ancestor of master**. The instrumentation
+never landed here. Nothing broke it — it was simply never wired, so the
+roadmap's "keep pass-fire instrumentation" ask was unmet from the start rather
+than regressed. Worth checking ancestry before believing a removal story: the
+grep evidence for "it used to be here" is identical either way.
+
+### Restored
+
+`attempt()` at both public entry points and `fire()` at both rewrite sites, so
+`fire / attempt` measures the selectivity of the match. Instrumenting only
+attempts would have produced an unfalsifiable zero.
+
+### What it says immediately
+
+Across `183_sentinel_list_search`, `13_loop_early_exit`, `03_loop_shapes` and
+`12_loop_rotation`, gcc and clang at -O0:
+
+```
+280  recover_guarded_do_whiles      attempt        0  fire
+140  recover_sentinel_search_loops  attempt        0  fire
+```
+
+`183_sentinel_list_search.c` documents itself as the sentinel pass's coverage
+target. It offers the pass 13 bodies and gets no match. This reproduces the
+2026-08-12 dormant-transform finding (0/5695 and 1/1984) on fresh input and with
+a different corpus slice.
+
+Both passes are a shape conjunction one clause too strict, and the failure mode
+is invisible by construction: the pass compiles, its unit tests pass because
+they construct exactly the shape it wants, the gate stays green, and "did not
+fire" is indistinguishable from "fired and changed nothing" in the output.
+
+### What this does not decide
+
+Whether to widen the match or retire the passes is the deliberate choice the
+roadmap asks for, and it is a product decision. This restores the measurement so
+that choice rests on evidence rather than on nobody having looked. The roadmap's
+own framing — "either add standing real coverage for extremely rare transforms
+or retire them deliberately" — is now actionable.
+
+### Session note on agent output
+
+Two agent reports in this session contained a claim that did not survive
+checking: one described the pass-stats instrumentation as removed when it had
+never landed, and one reported `cargo test` totals alongside a type error that
+rust-analyzer was still showing. The second turned out to be analyzer lag —
+`cargo check` exited 0 and 2246 tests passed — but both were worth verifying
+directly rather than relaying. An agent's conclusion is evidence, not a result.

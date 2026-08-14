@@ -371,17 +371,22 @@ memory_version(region, point)
 - [x] Add conservative region-aware MemorySSA with explicit call/unknown clobbers.
 - [x] Verify memory ownership, region consistency, phi predecessors, effects,
   backreferences, and dominance independently.
-- [ ] Complete `value_at`, reaching-set, and `clobbers_between` queries needed by
-  production consumers.
+- [~] `value_at`, `clobbers_between`, the reaching-definition set, and
+  `memory_version` are implemented and tested in `src/ir/mir/query.rs`; the whole
+  EPIC 5 minimum surface now exists. No production consumer has been migrated to
+  it yet, and every call still poisons every unnamed machine storage because no
+  target-owned clobber contract exists (EPIC 4). See diary entry 10.
 - [ ] Add transactional graph editing and precise analysis invalidation.
 - [ ] Port call argument recovery, copy propagation, DCE, stack promotion,
   return recovery, expression reconstruction, and aggregate recovery to oracle
   proofs.
 - [ ] Delete local backward scans and AST reaching-definition approximations as
   each consumer reaches parity.
-- [ ] Cover diamonds, loops, irreducible flow, conditional definitions,
-  exceptions, multi-output intrinsics, undef/poison, calls, and memory aliases in
-  verifier and property tests.
+- [~] Diamonds, loops, irreducible flow, conditional definitions, multi-output
+  intrinsics, undef/poison, calls, and memory aliases are covered by
+  `src/ir/mir/query_tests.rs`, including a real x86-64/ARM32 property test that
+  a query may refuse to answer but may never contradict the verified SSA edge.
+  Exceptions are not covered: LLIR has no exceptional-edge representation yet.
 
 ## Cross-cutting decompiler workstreams
 
@@ -665,7 +670,8 @@ behavior.
 
 - [x] Land typed MIR identities and baseline verifier.
 - [x] Land region-aware MemorySSA and object identities.
-- [ ] Complete value-at, clobber, reaching-set, and mutation APIs.
+- [~] Value-at, clobber, reaching-set, and memory-version queries are complete;
+  the transactional mutation/invalidation API is still open.
 - [ ] Model complete call/intrinsic effects.
 - [ ] Migrate high-risk consumers in order: call arguments, copy propagation,
   DCE, stack promotion, return recovery, expression reconstruction, aggregates.
