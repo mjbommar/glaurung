@@ -1491,6 +1491,26 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # Counts are pinned rather than clamped so the vectorized path is actually
     # entered: a count below the vector width never emits a packed batch, and a
     # count past the guard must return -1 identically on both sides.
+    # scratch[0] is the effect counter, scratch[1] the selected value,
+    # scratch[2] the witnessed count; flags are pinned to both polarities so
+    # each arm of every diamond is actually taken.
+    ("189_effectful_select", "se189_bump"): {"ptr_len": 4},
+    ("189_effectful_select", "se189_select_call"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1]},
+    },
+    ("189_effectful_select", "se189_select_one_arm"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1]},
+    },
+    ("189_effectful_select", "se189_nested_select"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1], 2: [0, 1]},
+    },
+    ("189_effectful_select", "se189_select_pure"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1]},
+    },
     ("188_vector_transport", "vt188_copy_forward"): {
         "ptr_len": 64,
         "arg_values": {2: [0, 1, 4, 8, 16, 33, 64, 65]},
@@ -2551,6 +2571,22 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     # one a fix passed its unit tests against while still failing on a real
     # binary. `vt188_lane_math` is the control: it transforms every element, so
     # it is lane computation and must not be rejoined into a copy.
+    # A side-effecting call inside a diamond select. lazy_call_select and
+    # copy_prop::move_adjacent_effectful_scratch_values fold a diamond into a
+    # ternary, which is sound only if the folded call is evaluated exactly as
+    # often as the machine evaluated it. A fold that hoists or duplicates the
+    # call still yields the right RETURN VALUE, so only counting the effect
+    # catches it — the same soundness class as 188's multi-consumer bug.
+    # se189_select_pure is the control: no call in either arm, so folding is
+    # correct there and must still happen, or the fixture would be satisfied by
+    # a decompiler that never folds.
+    "189_effectful_select": [
+        "se189_bump",
+        "se189_nested_select",
+        "se189_select_call",
+        "se189_select_one_arm",
+        "se189_select_pure",
+    ],
     "188_vector_transport": [
         "vt188_copy_backward",
         "vt188_copy_forward",
