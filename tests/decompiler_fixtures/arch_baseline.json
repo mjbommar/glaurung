@@ -7572,6 +7572,90 @@
     "returning_arms_no_default": "pass",
     "sparse_no_default": "pass"
   },
+  "187_constant_bias_index:aarch64:O0": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:aarch64:O2": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:armv7:O0": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:armv7:O2": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:armv7_a32:O0": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:armv7_a32:O2": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:i386:O0": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:i386:O2": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:x86_64:O0": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:x86_64:O2": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:x86_64_gcc15:O0": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "pass",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
+  "187_constant_bias_index:x86_64_gcc15:O2": {
+    "adjacent_difference": "pass",
+    "bias_backward_pair": "fail",
+    "bias_forward_sum": "pass",
+    "value_bias_not_index": "pass",
+    "variable_bias": "pass"
+  },
   "18_binary_heap:aarch64:O0": {
     "heap_pop": "pass",
     "heap_push": "pass"
