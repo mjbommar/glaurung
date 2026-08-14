@@ -3,15 +3,15 @@
     "file_count": 91,
     "files_above_1000": 13,
     "files_above_2000": 8,
-    "loc_in_files_above_1000": 42038,
-    "mean_loc": 811.7912087912088,
+    "loc_in_files_above_1000": 42288,
+    "mean_loc": 814.6483516483516,
     "median_loc": 464,
-    "pct_loc_above_1000": 56.90577071460479,
-    "total_loc": 73873
+    "pct_loc_above_1000": 57.04342195783254,
+    "total_loc": 74133
   },
   "largest_files": [
     {
-      "loc": 11525,
+      "loc": 11566,
       "path": "ir/ast.rs"
     },
     {
@@ -23,7 +23,7 @@
       "path": "ir/lift_x86.rs"
     },
     {
-      "loc": 3638,
+      "loc": 3685,
       "path": "ir/types_recover.rs"
     },
     {
@@ -59,7 +59,7 @@
       "path": "ir/structure.rs"
     },
     {
-      "loc": 2354,
+      "loc": 2516,
       "path": "ir/lift_arm64.rs"
     },
     {
@@ -76,19 +76,19 @@
     "ir_median_loc": 464,
     "product_files_above_1000": 27,
     "product_files_above_2000": 13,
-    "product_mean_loc": 517.8193548387097,
+    "product_mean_loc": 518.658064516129,
     "product_median_loc": 274.0,
-    "product_pct_loc_above_1000": 44.539757294859335
+    "product_pct_loc_above_1000": 44.623221216041394
   },
   "product": {
     "file_count": 310,
     "files_above_1000": 27,
     "files_above_2000": 13,
-    "loc_in_files_above_1000": 71497,
-    "mean_loc": 517.8193548387097,
+    "loc_in_files_above_1000": 71747,
+    "mean_loc": 518.658064516129,
     "median_loc": 274.0,
-    "pct_loc_above_1000": 44.539757294859335,
-    "total_loc": 160524
+    "pct_loc_above_1000": 44.623221216041394,
+    "total_loc": 160784
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -98,7 +98,7 @@
       "measure": "product_mean_loc",
       "meets_target": false,
       "target": 450.0,
-      "value": 517.8193548387097
+      "value": 518.658064516129
     },
     {
       "label": "Product-code median",
@@ -126,7 +126,7 @@
       "measure": "product_pct_loc_above_1000",
       "meets_target": false,
       "target": 25.0,
-      "value": 44.539757294859335
+      "value": 44.623221216041394
     },
     {
       "label": "src/ir median",
