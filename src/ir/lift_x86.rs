@@ -96,8 +96,15 @@ pub fn pc_thunk_register(body: &[u8]) -> Option<&'static str> {
 /// `None` when the destination is a full-width or zero-extending view that needs
 /// no read-modify-write. Covers the 8-/16-bit low views AND the legacy high bytes
 /// (`ah`/`bh`/`ch`/`dh`, bit offset 8).
+///
+/// The bank filter is load-bearing: a packed dword lane (`xmm0_d0`) is also a
+/// bit-preserving view of its parent, but of a 128-bit one that this lifter
+/// scalarises rather than reconstructs. Lowering `paddd`'s lane destination as a
+/// masked read-modify-write of `xmm0` would both be wrong (the masks here are
+/// 64-bit) and destroy the lane representation every packed op depends on.
 fn partial_gp_view(name: &str) -> Option<regview::RegView> {
-    regview::view(regview::Arch::X86_64, name).filter(|v| v.preserves_parent())
+    regview::view(regview::Arch::X86_64, name)
+        .filter(|v| v.bank == regview::RegBank::Gp && v.preserves_parent())
 }
 
 /// A 32-bit GP view whose write clears the upper half of its 64-bit parent.
@@ -133,7 +140,9 @@ fn const_written_through_view(dst_name: &str, src: Value, bits: u32) -> Value {
         return src;
     };
     match regview::view(regview::Arch::X86_64, dst_name) {
-        Some(v) if v.zero_extends() => Value::Const((c as u64 & v.value_mask()) as i64),
+        Some(v) if v.zero_extends() => {
+            Value::Const((u128::from(c as u64) & v.value_mask()) as u64 as i64)
+        }
         _ => src,
     }
 }
@@ -157,9 +166,9 @@ fn partial_write_ops(v: regview::RegView, src: Value) -> Vec<Op> {
         dst: p.clone(),
         op: BinOp::And,
         lhs: Value::Reg(p.clone()),
-        rhs: Value::Const(v.keep_mask() as i64),
+        rhs: Value::Const(v.keep_mask() as u64 as i64),
     }];
-    let value_mask = (v.value_mask() >> v.offset) as i64;
+    let value_mask = (v.value_mask() >> v.offset) as u64 as i64;
     let positioned = match src {
         Value::Const(c) => {
             let m = (c & value_mask) << v.offset;
@@ -205,7 +214,7 @@ fn partial_write_ops(v: regview::RegView, src: Value) -> Vec<Op> {
 /// it was already correct; the decompiler was not.
 fn read_view_ops(v: regview::RegView, dst: VReg) -> Vec<Op> {
     let p = Value::Reg(VReg::phys(v.parent));
-    let mask = (v.value_mask() >> v.offset) as i64;
+    let mask = (v.value_mask() >> v.offset) as u64 as i64;
     let mut ops = Vec::new();
     if v.offset == 0 {
         ops.push(Op::Bin {
@@ -251,15 +260,15 @@ fn read_view_ops(v: regview::RegView, dst: VReg) -> Vec<Op> {
 fn partial_alu_ops(v: regview::RegView, op: BinOp, src: Value, bits: u32) -> Vec<Op> {
     let parent = VReg::phys(v.parent);
     let acc = VReg::Temp(0);
-    let mask = (v.value_mask() >> v.offset) as i64;
+    let mask = (v.value_mask() >> v.offset) as u64 as i64;
     let mut ops = read_view_ops(v, acc.clone());
 
     let rhs = match &src {
         Value::Reg(VReg::Phys(n)) if n == v.view => Value::Reg(acc.clone()),
-        Value::Reg(VReg::Phys(n)) => match regview::view(regview::Arch::X86_64, n) {
+        Value::Reg(VReg::Phys(n)) => match partial_gp_view(n) {
             // A partial-view SOURCE needs the same treatment, or it too is just a
             // name (e.g. `add %ah,%al`).
-            Some(sv) if sv.preserves_parent() => {
+            Some(sv) => {
                 let t = VReg::Temp(1);
                 ops.extend(read_view_ops(sv, t.clone()));
                 Value::Reg(t)
@@ -279,7 +288,7 @@ fn partial_alu_ops(v: regview::RegView, op: BinOp, src: Value, bits: u32) -> Vec
         dst: parent.clone(),
         op: BinOp::And,
         lhs: Value::Reg(parent.clone()),
-        rhs: Value::Const(v.keep_mask() as i64),
+        rhs: Value::Const(v.keep_mask() as u64 as i64),
     });
     ops.push(Op::Bin {
         dst: acc.clone(),
@@ -7886,6 +7895,124 @@ mod tests {
                     if dst == "xmm1"
             )),
             "pxor must define the whole-register view: {ops:#?}"
+        );
+    }
+
+    /// PIN — the remaining root cause, stated against the register-view model.
+    ///
+    /// This lifter has TWO spellings for the same 32 bits of an XMM register and
+    /// they are not the same name: `movss` writes the whole-register spelling
+    /// `xmm0` with a 4-byte operand, while `movd` writes and reads the dword lane
+    /// `xmm0_d0`. [`crate::ir::regview`] now says outright that those name the
+    /// same storage — the lane defines bits 0..32 of the parent — but the lifter
+    /// still emits both, so nothing in SSA connects them.
+    ///
+    /// That single inconsistency is what both symptom patches exist to bridge:
+    /// [`synchronise_xmm_views`] reconciles the two spellings per instruction,
+    /// and `ir::abi::touches_result_candidate` has to accept either spelling of a
+    /// call's float result. Neither can be deleted while the spellings differ.
+    /// The fix is to give the scalar views their own names in the same
+    /// namespace as the lanes, not to add another bridge.
+    #[test]
+    fn the_same_thirty_two_bits_still_have_two_spellings() {
+        use crate::ir::regview::{self, Arch, ParentDefinition};
+
+        // `movss (%rax),%xmm0` — a 32-BIT load that names the 128-bit register.
+        let movss = lift64(&[0xF3, 0x0F, 0x10, 0x00]);
+        let [LlirInstr {
+            op: Op::Load { dst, addr },
+            ..
+        }] = &movss[..]
+        else {
+            panic!("movss did not lift to one load: {movss:#?}");
+        };
+        assert_eq!(dst, &VReg::phys("xmm0"));
+        assert_eq!(addr.size, 4, "the transfer really is 32 bits wide");
+        assert!(
+            regview::view(Arch::X86_64, "xmm0").is_some_and(|v| v.is_parent() && v.width == 128),
+            "yet the destination it names is the whole 128-bit parent"
+        );
+
+        // `movd %xmm0,%eax` — the SAME 32 bits, spelled as the lane.
+        let movd = lift64(&[0x66, 0x0F, 0x7E, 0xC0]);
+        let [LlirInstr {
+            op: Op::ZExt {
+                src: Value::Reg(src),
+                ..
+            },
+            ..
+        }] = &movd[..]
+        else {
+            panic!("movd did not lift to one zero-extend: {movd:#?}");
+        };
+        assert_eq!(src, &VReg::phys("xmm0_d0"));
+
+        // The model relates them; the IR does not.
+        assert_eq!(regview::parent_of(Arch::X86_64, "xmm0_d0"), Some("xmm0"));
+        assert_eq!(
+            regview::parent_definition(Arch::X86_64, "xmm0", ["xmm0_d0"]),
+            Some(ParentDefinition::Partial {
+                defined: 0xFFFF_FFFF,
+                undefined: !0xFFFF_FFFFu128,
+            })
+        );
+        assert_eq!(
+            regview::ssa_parent(Arch::X86_64, "xmm0_d0"),
+            None,
+            "SSA gives the lane its own identity, so a definition of `xmm0` does \
+             not reach a use of `xmm0_d0` — which is the whole reason both \
+             symptom patches exist"
+        );
+    }
+
+    /// PIN — the bridge over-claims, and the model now says by how much.
+    ///
+    /// `movd %eax,%xmm0` writes all four lanes (`eax` into lane 0, zeroes above),
+    /// which is a COMPLETE definition of `xmm0`. [`synchronise_xmm_views`] then
+    /// appends `xmm0 = concat(xmm0_d1, xmm0_d0)`, defining the 128-bit register
+    /// from 64 bits — because LLIR has no way to spell a partial definition, and
+    /// because the scalar spelling `xmm0` has to be given a value somehow.
+    #[test]
+    fn the_scalar_view_bridge_defines_a_128_bit_name_from_64_bits() {
+        use crate::ir::regview::{self, Arch, ParentDefinition};
+
+        let ops = lift64(&[0x66, 0x0F, 0x6E, 0xC0]); // movd %eax,%xmm0
+        let lanes: Vec<String> = ops
+            .iter()
+            .filter_map(
+                |instruction| match crate::ir::use_def::def_uses(&instruction.op).0 {
+                    Some(VReg::Phys(name)) if name.contains("_d") => Some(name),
+                    _ => None,
+                },
+            )
+            .collect();
+        assert_eq!(
+            regview::parent_definition(Arch::X86_64, "xmm0", lanes.iter().map(String::as_str)),
+            Some(ParentDefinition::Complete),
+            "the instruction's own lane writes already cover the whole register"
+        );
+
+        let bridge = ops
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Concat {
+                    dst: VReg::Phys(dst),
+                    hi: Value::Reg(VReg::Phys(hi)),
+                    lo: Value::Reg(VReg::Phys(lo)),
+                } if dst == "xmm0" => Some((hi.clone(), lo.clone())),
+                _ => None,
+            })
+            .next()
+            .expect("the scalar-view bridge is appended: {ops:#?}");
+        assert_eq!(bridge, ("xmm0_d1".to_string(), "xmm0_d0".to_string()));
+        let low_qword = u128::from(u64::MAX);
+        assert_eq!(
+            regview::parent_definition(Arch::X86_64, "xmm0", ["xmm0_d0", "xmm0_d1"]),
+            Some(ParentDefinition::Partial {
+                defined: low_qword,
+                undefined: !low_qword,
+            }),
+            "but the bridge redefines it from half of them"
         );
     }
 

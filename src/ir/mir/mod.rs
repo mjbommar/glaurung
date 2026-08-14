@@ -47,7 +47,10 @@ mod tests {
     };
     use crate::target::TargetSpec;
 
-    use super::{lower_verified, lower_verified_with_image, verify, Definition, DefinitionOracle};
+    use super::{
+        lower_verified, lower_verified_with_image, verify, Definition, DefinitionOracle,
+        EffectCompleteness,
+    };
 
     fn target(arch: Arch) -> TargetSpec {
         TargetSpec::from_image_metadata(arch, Endianness::Little, Format::ELF, false)
@@ -160,6 +163,64 @@ mod tests {
         let written = x86.value(x86.instructions()[0].outputs[0]).storage;
         let read = x86.use_(x86.instructions()[1].uses[0]).storage;
         assert_ne!(written, read, "ARM aliases must not leak into x86");
+    }
+
+    /// A scalar 32-bit XMM transfer writes ONE dword lane of a 128-bit
+    /// register. That is a partial definition of `xmm0`, and until the register
+    /// view model described the lanes, MIR called it a COMPLETE register effect
+    /// — a total write of storage unrelated to the whole register, which is the
+    /// worst of both readings.
+    ///
+    /// Design rule 5: unknown never means "no effect". The instruction must be
+    /// `Opaque` for exactly the same reason `mov $0xAA,%al` is — its result
+    /// depends on bits it does not write — with the only difference being that
+    /// `xmm0`'s parent is 128 bits wide.
+    #[test]
+    fn a_scalar_xmm_lane_write_is_an_incomplete_register_effect() {
+        let llir = function(vec![(
+            0x2100,
+            vec![
+                // `movd %eax,%xmm0` — the low lane only.
+                Op::Assign {
+                    dst: VReg::phys("xmm0_d0"),
+                    src: Value::Reg(VReg::phys("eax")),
+                },
+                // The GP control: a total write of the same shape.
+                Op::Assign {
+                    dst: VReg::phys("rbx"),
+                    src: Value::Reg(VReg::phys("rax")),
+                },
+                // The GP partial-write precedent this now matches.
+                Op::Assign {
+                    dst: VReg::phys("cl"),
+                    src: Value::Const(1),
+                },
+            ],
+            vec![],
+        )]);
+        let mir = lower_verified(&llir, target(Arch::X86_64)).expect("x86 MIR");
+        assert_eq!(
+            mir.instructions()[0].register_effects,
+            EffectCompleteness::Opaque,
+            "a lane write leaves bits 32..127 of xmm0 in an unproven state"
+        );
+        assert_eq!(
+            mir.instructions()[1].register_effects,
+            EffectCompleteness::Complete,
+            "a whole-register move is still a complete effect"
+        );
+        assert_eq!(
+            mir.instructions()[2].register_effects,
+            EffectCompleteness::Opaque,
+            "the GP precedent: a bit-preserving sub-register write is opaque"
+        );
+
+        // The lane keeps its own SSA storage — this makes the effect honest, it
+        // does not merge the lane into the whole register.
+        let lane = mir.storages()[mir.value(mir.instructions()[0].outputs[0]).storage.0]
+            .register
+            .clone();
+        assert_eq!(lane, VReg::phys("xmm0_d0"));
     }
 
     #[test]

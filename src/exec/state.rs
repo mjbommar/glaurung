@@ -118,10 +118,16 @@ fn parent_idx(arch: RegArch, name: &str) -> Option<u8> {
 }
 
 /// Build the name → slot map for `arch` from the shared register-view descriptor.
-/// Every view the descriptor knows becomes a slot, so a name the lifter can emit
-/// can never be one the register file silently ignores.
+/// Every GP view the descriptor knows becomes a slot, so a general-purpose name
+/// the lifter can emit can never be one the register file silently ignores.
+///
+/// The descriptor's VECTOR views are deliberately excluded rather than
+/// forgotten. A cell here is one `D::Val`, and a 128-bit packed register has no
+/// such cell — so `xmm0` and its dword lanes take the `other` map's slow path
+/// and are each their own full-width value, which is what the lifters' scalarised
+/// lane representation already assumes.
 fn slots_for(arch: RegArch) -> HashMap<&'static str, RegSlot> {
-    let views = regview::views(arch);
+    let views: Vec<&regview::RegView> = regview::gp_views(arch).collect();
     let mut m = HashMap::with_capacity(views.len());
     for v in views {
         let parent = parent_idx(arch, v.parent)

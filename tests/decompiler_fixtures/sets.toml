@@ -30,6 +30,26 @@ selectors = [
     "12_loop_rotation:clang:O0:factorial_while",    # clang's rotated loop form
 ]
 
+[vector-float]
+description = "Every fixture whose C actually reaches xmm/vector or scalar-float registers: the blast radius of any register-view or lane-spelling change."
+# Assembled for the regview work (task #24), where a change to the x86-64 view
+# table flipped `movd %eax,%xmm0` from a complete definition to an opaque one.
+# That is fail-closed and right, but opacity PROPAGATES — it can suppress
+# transforms in any function that touches a vector register, which is a much
+# wider surface than the one or two fixtures that motivate such a change. The
+# members are grepped, not guessed: each one's source names float, double, a
+# vector type, or an intrinsic.
+selectors = [
+    "172_float_double_widths",
+    "173_float_int_conversions",
+    "174_float_compare_classify",
+    "175_float_matrix_kernel",
+    "181_compensated_summation",
+    "188_vector_transport",
+    "121_dense_expression",
+    "09_memory_effects",
+]
+
 [region]
 description = "The Phase 4 region-ownership set: loops, switches, rotation, and early exits."
 selectors = [

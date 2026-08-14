@@ -2780,3 +2780,366 @@ property tends to trip over a shallower one on the way in, and the shallower
 one was worth four unrelated cells. Its intended target remains untested, and
 the control (`se189_select_pure`, which must still fold) is what stops the
 whole fixture from being satisfied by a decompiler that folds nothing.
+
+## Entry 22 — Register views for XMM lanes
+
+(Assigned as "Entry 21" in the task; 21 was already taken by the
+effectful-select entry above by the time this landed.)
+
+Worked in an isolated worktree at `f72851e` with a private on-disk
+`CARGO_TARGET_DIR` while a baseline regeneration ran against the shared tree.
+
+### The gap
+
+The x86 lifter spells a scalar 32-bit XMM transfer as one dword lane —
+`xmm0_d0`..`xmm0_d3` — and `src/ir/regview.rs`, the descriptor that owns every
+other register-view fact in this codebase, did not contain those names at all.
+`regview::view(Arch::X86_64, "xmm0_d0")` was `None`, so `parent_of` was `None`,
+so every consumer treated a lane as storage UNRELATED to `xmm0`. Two symptom
+patches followed from that single omission and both were repaired at their call
+sites this session:
+
+- `lift_x86::synchronise_xmm_views` appends a `concat` bridge per instruction
+  precisely because a lane write does not define the parent. That bridge then
+  blocked 16-byte transport recovery, fixed in `ac8d7df`/`d4fb502` by deleting
+  provably-dead bridges downstream.
+- `abi::touches_result_candidate` had to reconstruct the lane relation from the
+  spelling, by `strip_prefix(candidate)` then `strip_prefix("_d")`, because
+  `call; movd eax,%xmm0` otherwise looked like nobody consumed the float result
+  (`76f9825`).
+
+### What the model says now
+
+`RegView` gained a `bank: RegBank` field (`Gp` / `Vector`), its masks widened
+from `u64` to `u128`, and it gained `parent_span()` plus `defines_mask()` — the
+parent bits a write through the view leaves in a KNOWN state, which is the exact
+complement of `keep_mask()` within the parent. The x86-64 table gained
+`xmm0`..`xmm15` as 128-bit parents with their four 32-bit dword lanes at offsets
+0/32/64/96; the AArch64 table gained `v0`..`v31` the same way, because
+`lift_arm64::packed` scalarises through the same `packed_dword_lane` spelling.
+
+The new fact is `ParentDefinition`:
+
+    Complete                              every bit of the parent is defined
+    Partial { defined, undefined }        some are, some are not
+    Undefined                             none are
+
+`parent_definition(arch, whole, written)` folds `defines_mask()` over the writes
+that belong to `whole`. So:
+
+    xmm0 <- {xmm0_d0}                     Partial, bits 32..127 undefined
+    xmm0 <- {d0,d1,d2,d3}                 Complete
+    xmm0 <- {xmm1_d0, rax}                Undefined  (negative control)
+    rax  <- {eax}                         Complete   (a 32-bit write zero-extends)
+    rax  <- {al, ah}                      Partial, bits 16..63 undefined
+
+The GP bank was always governed by the same rule; stating it in one type is what
+makes the vector case ordinary instead of special.
+
+### The consequence that fails closed
+
+`mir::builder::is_partial_register_write` already asked `regview` whether a
+destination is a bit-preserving view of a wider family, and marked such
+instructions `EffectCompleteness::Opaque`. It needed no change: once the lanes
+are in the table, a lane write answers yes. Verified as a real RED, by disabling
+only the XMM rows and rerunning:
+
+    a_scalar_xmm_lane_write_is_an_incomplete_register_effect
+      left: Complete   right: Opaque
+
+So a `movd %eax,%xmm0` is now an explicitly incomplete register effect rather
+than a complete write of unrelated storage — design rule 5, with the GP
+precedent (`mov $1,%cl`) asserted alongside it as the control.
+
+Adding a bank required auditing every consumer that read the table as
+"general-purpose":
+
+- `exec::state::slots_for` panics if a parent has no 64-bit cell, so it now
+  builds from a new `regview::gp_views(arch)`. The filter is explicit and
+  documented; an engine silently dropping rows from a table it believed complete
+  is the failure this descriptor exists to prevent.
+- `lift_x86::partial_gp_view` gained the bank filter, and the ALU source path now
+  goes through it too. Without that, `paddd`'s lane destination would have been
+  lowered as a masked read-modify-write of `xmm0` with 64-bit masks — wrong, and
+  destructive of the lane representation every packed op depends on.
+- `ssa_parent` declines the vector bank outright, whole registers included.
+  Answering `Some("xmm0")` for `xmm0` would be a harmless identity merge, but
+  every caller reads `is_some()` as "this table settles the name's SSA identity",
+  and for a vector register it does not. A test asserts no vector row moves any
+  SSA identity, so `ssa::parent64`, `canon_gpr_for_target` and `value_number`'s
+  alias rule are provably unchanged.
+
+Conformance is generated over both tables rather than hand-listed, which is the
+EPIC 4 bullet "conformance tests for every register view and partial-write rule":
+for every row, `keep | defines == parent_span` and `keep & defines == 0`; a
+bit-preserving write defines exactly its window and a total write defines the
+whole parent; a single write is never `Undefined` and is `Complete` exactly when
+it is not bit-preserving. For every vector parent, the four lanes tile it exactly
+and dropping any one leaves a hole of exactly that lane's width.
+
+### Did either symptom patch become removable? No — and here is why
+
+**`touches_result_candidate` did not.** Its name parsing is gone: it now asks
+`regview::is_lane_of`. But the call site still has to ask, because `ssa_parent`
+declines the vector bank, so a definition of `xmm0` genuinely does not reach a
+use of `xmm0_d0`. The knowledge moved into the model; the query did not
+disappear. Behaviour is identical on real input and strictly narrower on
+impossible input — the old predicate accepted `xmm0_d4`..`xmm0_d9`, which no
+lifter emits and the table rejects.
+
+**The bridge did not.** Deleting the `synchronise_xmm_views` call still fails
+`unpack_and_qword_reduction_preserve_full_width_lane_semantics`, so it remains
+load-bearing. And the model now says exactly why it cannot simply be made
+honest: LLIR has no way to spell a partial definition, so
+`xmm0 = concat(xmm0_d1, xmm0_d0)` is a total definition of a 128-bit name from
+64 bits.
+
+### The actual remaining root cause, pinned
+
+Probing the lifter directly showed the thing underneath both defects, and it is
+not the model — it is a spelling inconsistency in `lift_x86`:
+
+    movss (%rax),%xmm0    ->  Load  { dst: xmm0,    addr.size: 4 }
+    movd  %xmm0,%eax      ->  ZExt  { src: xmm0_d0 }
+
+The SAME 32 bits have two names. `movss` writes the 128-bit parent spelling with
+a 4-byte operand; `movd` writes and reads the dword lane. `synchronise_xmm_views`
+exists to reconcile those two spellings once per instruction, and
+`touches_result_candidate` exists to accept either of them at a call boundary.
+Neither can be deleted while the spellings differ. Two pin tests in `lift_x86`
+record this against the model — `the_same_thirty_two_bits_still_have_two_spellings`
+and `the_scalar_view_bridge_defines_a_128_bit_name_from_64_bits`, the latter
+showing that `movd %eax,%xmm0` already defines all four lanes (`Complete`) before
+the bridge redefines the register from two of them.
+
+The fix is to give the scalar views their own names in the same namespace as the
+lanes — a 32-bit `movss` destination is `xmm0_d0`, a 64-bit `movsd` destination
+is a 64-bit view the table does not yet carry — not to add a third bridge. That
+is a lifter-wide rename touching type recovery, `vector_copy`, `value_number` and
+the renderers, and it needs the full gate, so it was deliberately not attempted
+here.
+
+### Gates
+
+`cargo test`: 2295 passed, 0 failed, 1 ignored, against a baseline of 2284/0/1
+measured on the same worktree before any change (+11: eight `regview`, one
+`mir`, two `lift_x86`). `cargo clippy --all-targets` emits 287 warnings both with
+the change stashed and with it applied — no new lint; `-D warnings` was already
+red at the base commit and `--all-features` cannot build here at all
+(`solver-bitwuzla` needs `BITWUZLA_LIB_DIR`). `rustfmt --edition 2021` on the
+five touched files.
+
+Scoped fixture lanes, rebuilt `.so`, run at the final state:
+
+    tools/dectest.py 188_vector_transport   --full   16/16 pass, no regressions
+    tools/dectest.py 175_float_matrix_kernel --full   10 pass / 14 fail, no regressions
+
+The 14 failures in `175` are the baseline's own recorded verdicts, not new — the
+harness compares against `baseline.json` and reports no regression in scope. Not
+run, and not claimed: DecBench, Joern, the full fixture matrix,
+`arch_roundtrip.py`, and the Python suite.
+
+### Not finished
+
+- The scalar/lane spelling unification described above. It is the root cause;
+  this entry only makes the model able to state it.
+- `types.rs::phys_reg_width` still recognises `xmm`/`_dN`/`ymm`/`zmm` by parsing
+  the name. Routing it through `regview` is blocked on the lookup being
+  architecture-blind: consulting the x86-64 table first would resolve `sp` to a
+  16-bit view, which is not what any current caller means.
+- `vector_copy`, `value_number` and `types_recover` each still parse the `_dN`
+  suffix themselves. Those are the next centralisation targets now that the
+  spelling has an owner.
+- AArch64's `s`/`d`/`q` register spellings are not in the table. The `v0..v31`
+  lanes are, but a `d0` that means the low 64 bits of `v0` has no row, so the
+  vector bank is complete for the scalarised lane representation only.
+- A `Concat` that defines a vector parent from fewer bits than the parent has is
+  still `EffectCompleteness::Complete` in MIR. Detecting it needs the op's result
+  width, which `register_effects` does not have; the view model alone cannot see
+  it.
+
+## Entry 23 — AArch64-only failures
+
+(Numbered 23, not 22: a concurrent worktree had already claimed "Entry 22 —
+Register views for XMM lanes" in this file. Same ranked roadmap item.)
+
+Ranked item 8's architecture-only half, restated against our own corpus instead
+of DecBench. `tests/decompiler_fixtures/arch_baseline.json` answers the same
+question with EXECUTION ground truth: a function that passes on x86-64 and fails
+on another architecture computes the wrong answer there, which is a stronger
+claim than a similarity score.
+
+### The failure set, recomputed
+
+Recomputed from the committed `arch_baseline.json` (md5
+`d341fda8cafe51d9e355665177248359`) as "verdict `pass` on `x86_64` in the same
+fixture/opt cell, verdict `fail` here". It reproduces the roadmap's table
+exactly:
+
+    armv7_a32     153
+    armv7         144
+    i386          102
+    aarch64        94
+    x86_64_gcc15   22
+
+94 AArch64-only failures, 35 at `-O0` and 59 at `-O2`, and the roadmap's cluster
+heads reproduce too: `141_atomics` 7, `173_float_int_conversions` 6,
+`175_float_matrix_kernel` 5, `181_compensated_summation` 5, then `46_bitset`,
+`71_compound_interest` and `72_loan_amortization` at 4 each.
+
+### Grouping by cause, not by fixture
+
+Cross-compiled each fixture and read the DISASSEMBLY of each failing function
+rather than trusting the fixture name. That corrects the roadmap's reading:
+`71_compound_interest`, `72_loan_amortization` and `64_root_finding` are
+FIXED-POINT integer fixtures and contain no floating-point instruction at all.
+The honest split of the 94 is
+
+* **22** whose failing function contains a scalar-FP or FP-adjacent instruction;
+* **7** `141_atomics`, a separate cause: every one of those functions uses
+  `ldar` (acquire load) or `stlrb` (release store) — verified by disassembly at
+  both opt levels — and neither mnemonic appears anywhere in `lift_arm64.rs`, so
+  both become `Op::Unknown`. Not exclusive-monitor loops: gcc emits plain
+  acquire/release accessors plus `bl` to the `__atomic_*` helpers here. An
+  acquire load IS a load, so this looks like a bounded next fix; it was not
+  attempted or measured in this entry;
+* **65** with no FP instruction, no single cause identified.
+
+Of those 22, **20** had a floating-point mnemonic rendered as an `/* asm: … */`
+comment in the recovered C — measured by decompiling each one, not inferred. So
+the largest attributable cluster is 20 of 94, not the ~38 a fixture-name reading
+suggests.
+
+### First wrong stage: LIFTING
+
+Representative: `173_float_int_conversions:widen_int_to_float` at `gcc -O0`,
+which is `return (float)value;` and seven instructions. With
+`GLAURUNG_DUMP_PASSES=1` the very first dump already carries the defect:
+
+    ===== prototype-resolved LLIR =====
+      0x8cc: %s31 = load[4 bytes] MemOp { base: sp, disp: 12, size: 4 }
+      0x8d0: [] = intrinsic scvtf()
+      0x8d4: [] = intrinsic fmov()
+      0x8dc: ret %x0
+
+`scvtf` and `fmov` arrive with NO output, NO input and no register footprint at
+all. Every pass after that is correct on its input and the final MIR is
+`unknown(scvtf); unknown(fmov); return %arg0;`. The renderer then spells the
+only thing left true — the integer's bits sitting where a float is expected:
+
+    float widen_int_to_float(int32_t arg0) {
+        /* asm: scvtf */  /* asm: fmov */
+        return ((union { unsigned int bits; float value; }){ .bits = (unsigned int)(arg0) }).value;
+    }
+
+That is `*(float *)&value`, not `(float)value`. Nothing downstream is at fault.
+`src/ir/lift_arm64.rs` had NO scalar floating-point lifting whatsoever: grepping
+the whole `src/ir/` tree for `fadd|fsub|fmul|fdiv|scvtf|fcvtz|fcmp|fneg|fsqrt`
+returned zero hits outside `lift_arm32.rs` and `lift_x86.rs`.
+
+Two ABI holes sat behind it, both visible in the same dump:
+
+* `abi::return_registers(Aarch64)` was `["x0", "w0"]` — no `v0`/`d0`/`s0`, so a
+  float result could never be named `ret`. On an identity-shaped body the
+  fallback is `x0`, which is *the first argument*. That is the AArch64 twin of
+  the `xmm0` hole `76f9825` closed for x86-64.
+* `types_recover::float_argument_bank_slot` returned `None` for `Aarch64`, so
+  AAPCS64's `v0`-`v7` parameter bank did not exist. `compensation_of_step`
+  (`181_compensated_summation`, `-O2`, `double(double,double)`) reported
+  `roles={"x0": 0, "x1": 1}` — both parameters bound to integer registers the
+  function never reads.
+
+### What was changed
+
+* `src/ir/lift_arm64.rs` — `scalar_float_ops` lifts `fadd`/`fsub`/`fmul`/`fdiv`/
+  `fneg` and the float-to-float `fmov` to typed intrinsics with an exact
+  register footprint, and `scalar_conversion_ops` lifts `scvtf`/`fcvtzs`/`fcvt`.
+  Both emit ARM32's existing `vadd.f64` / `vcvt.f64.s32` spellings rather than a
+  new AArch64 namespace, so `ast::scalar_float_intrinsic` already lowers them —
+  the same "accept every producer's namespace" choice `wide_integer_intrinsic`
+  records for `umulh`/`sdiv`. A general-register `fmov` is a BIT reinterpretation
+  and stays on `packed::scalar_fmov`'s lane path; a negative test pins that.
+* `src/ir/ast.rs` — `arm_scalar_conversion_intrinsic` parses `vcvt.<to>.<from>`
+  into the existing `ScalarFloatOperation::Convert`.
+* `src/ir/abi.rs` — `return_registers(Aarch64)` gains `v0`, `d0`, `s0`, ordered
+  after the integer names.
+* `src/ir/dead_stores.rs` — the AArch64 return aliases gain `d0`, `s0`.
+* `src/ir/types_recover.rs` — AAPCS64 joins the float argument bank.
+  `float_live_in_slots` now returns the EXACT register spelling of the first
+  touch alongside the slot, because `d0` and `s0` are unrelated SSA identities
+  for one AAPCS64 register: naming a parameter `s0` when the body only reads
+  `d0` leaves every use of it undefined. AArch64 is also the one convention that
+  need not guess the width — the spelling states it.
+
+`ucvtf` and `fcvtzu` are deliberately NOT lifted. `ast::ScalarType` has no
+unsigned variant, so the only available spelling is the signed neighbour, which
+disagrees for every value above the signed maximum — exactly the disagreement
+`173_float_int_conversions:truncate_to_unsigned` exists to detect. A wrong cast
+that type-checks is worse than a visible opaque comment. A negative test pins
+that too.
+
+`compensation_of_step` now recovers exactly, from three instructions:
+
+    double compensation_of_step(double arg0, double arg1) {
+        double next;
+        return (((arg0 + arg1) - arg0) - arg1);
+    }
+
+### Measured
+
+Per-function verdicts from `tools/arch_roundtrip.py --json`, diffed against the
+committed baseline. Over the seven FP-bearing fixtures at both opt levels:
+**12 functions fail -> pass, 0 pass -> fail**, and the x86-64 control lane in the
+same runs is verdict-identical to the baseline. Six of the twelve are members of
+the 94; the other six were failing on x86-64 too, so they were never
+"AArch64-only".
+
+    173:O0 widen_int_to_float, widen_long_to_double        [in the 94]
+    175:O0 matrix2_determinant                             [in the 94]
+    181:O0 kahan_sum_f64, naive_sum_f64                    [in the 94]
+    181:O2 compensation_of_step                            [in the 94]
+    172:O0 double_precision_horner
+    174:O0/O2 negate_binary32
+    175:O0 dot_product_f32
+    181:O0 compensation_of_step, difference_of_products
+
+Regression sweep: 18 non-float fixtures x {aarch64, armv7, i386} x {O0, O2},
+plus the x86-64 control carried in each run — **0 changes in either direction**.
+That is the cross-lifter control for the shared `types_recover` and `ast` edits.
+
+`cargo test`: 2194 passed, 0 failed across all 23 test binaries. `cargo clippy
+--all-targets`: 287 warnings with the change and 287 with it stashed — no new
+lint. `rustfmt --edition 2021` on the five touched files.
+
+NOT run, and not claimed: DecBench, Joern, `decbench_matrix.py`, the full
+`arch_roundtrip.py` matrix, the full fixture matrix, and
+`scripts/decbench-local-gate.sh`. `arch_baseline.json` was NOT regenerated; every
+comparison above is against the committed file.
+
+### What remains, with the blocker named
+
+Ten of the 22 FP-bearing AArch64-only failures still carry a dropped mnemonic:
+
+* **`fcmp`/`fcmpe`** — 5 cells (`172:O0`, `173:O0/O2 truncate_to_unsigned`,
+  `174:O0/O2`, `181:O0 summation_disagrees`). The largest remaining group. Float
+  comparison writes NZCV with unordered semantics that the integer
+  `compare_flags` path cannot express; this needs a real float flag model, not a
+  mnemonic table.
+* **`fcvtzu`/`ucvtf`** — 2 cells, blocked on `ScalarType` gaining an unsigned
+  variant.
+* **`fmadd`/`fnmsub`** — 3 cells. Fused multiply-add is not any C expression
+  without `fma()`, so this is a rendering decision, not a lifting one.
+* **`movi v31.2d, #0`** — the zero splat into a scalar FP register, present in 7
+  of the cells (several of which now pass anyway).
+* `175:O0:dot_product_f64` is a DIFFERENT stage: its `vadd.f64`/`vmul.f64` DO
+  lift now and are still dropped, by `ast`'s `lower_scalar_float` closed-value
+  gate. Diagnosing that one starts at lowering, not at the lifter.
+* `46_bitset`'s `addv`/`cnt` and `146_opaque_predicates`'s SIMD `orr` are NEON,
+  not scalar FP, and were never this cause.
+
+Untouched by design, because concurrent work owns them: `src/target/*`,
+`src/ir/lift_x86.rs`, `src/ir/call_args.rs`, `src/ir/memory_objects*`,
+`src/program/*`. The `d0`-versus-`s0` identity problem noted above is the same
+scalar/lane spelling unification Entry 22 describes; this entry works around it
+by carrying the observed spelling rather than unifying the model.
+

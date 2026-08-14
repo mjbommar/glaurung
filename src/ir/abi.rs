@@ -24,6 +24,7 @@
 //! different purpose — printing an assignment.
 
 use crate::ir::call_args::CallConv;
+use crate::ir::regview;
 use crate::ir::types::{CallEffects, LlirFunction, Op, VReg};
 use crate::ir::use_def::def_uses;
 
@@ -325,24 +326,40 @@ pub fn arm_hard_float_argument_slots() -> &'static [&'static [&'static str]] {
     ]
 }
 
-/// Whether value-numbered register `base` is a spelling of whole-register
-/// `candidate` — either the same name, or one of its 32-bit XMM dword lanes.
+/// The register-view namespace a convention's result registers are spelled in,
+/// or `None` for a convention whose architecture has no modelled sub-register
+/// views (ARM32 has none).
+fn result_view_arch(cc: CallConv) -> Option<regview::Arch> {
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 => Some(regview::Arch::X86_64),
+        CallConv::Aarch64 => Some(regview::Arch::AArch64),
+        CallConv::ArmHardFloat | CallConv::Arm | CallConv::Cdecl32 => None,
+    }
+}
+
+/// Whether value-numbered register `base` reads storage a definition of
+/// whole-register `candidate` would have to land on — the same name, or one of
+/// its scalarised dword lanes.
 ///
 /// A scalar 32-bit XMM transfer (`movd`/`movss`) lifts as a read or write of
-/// exactly one lane, spelled `xmm0_d0`..`xmm0_d3` in this IR's register model
-/// (see `vector_copy`) — a name distinct from the whole-register `xmm0` that
-/// `def_uses` reports on a call's synthetic result. Without this, a `call`
-/// immediately followed by `movd eax, xmm0` (as in `dot_product_f32`, which
-/// calls a float-returning function and reads its result that way) never
-/// matched the `"xmm0"` candidate: the read was invisible, the caller fell
-/// through to the integer `rax` fallback, and the call's real float result
-/// went unread while a DIFFERENT, never-defined value reached the `return`.
-fn touches_result_candidate(base: &str, candidate: &str) -> bool {
-    base == candidate
-        || base
-            .strip_prefix(candidate)
-            .and_then(|suffix| suffix.strip_prefix("_d"))
-            .is_some_and(|lane| matches!(lane.as_bytes(), [digit] if digit.is_ascii_digit()))
+/// exactly one lane, spelled `xmm0_d0`..`xmm0_d3`. Those lanes name real bits of
+/// `xmm0`, but `crate::ir::regview::ssa_parent` deliberately declines to merge a
+/// vector view with its parent, so a definition of `xmm0` does NOT reach a use
+/// of `xmm0_d0`. Without this, a `call` immediately followed by `movd eax, xmm0`
+/// (as in `dot_product_f32`, which calls a float-returning function and reads
+/// its result that way) never matched the `"xmm0"` candidate: the read was
+/// invisible, the caller fell through to the integer `rax` fallback, and the
+/// call's real float result went unread while a DIFFERENT, never-defined value
+/// reached the `return`.
+///
+/// The lane relation is asked of the shared register-view descriptor rather
+/// than reconstructed from the spelling here. Sub-64-bit GP views are
+/// deliberately NOT matched: `eax` and `al` reach a definition of `rax` through
+/// the SSA parent rule and the parent's own read-modify-write lowering, so
+/// re-deciding that here would move a call's result onto a partial register name
+/// for no gain.
+fn touches_result_candidate(arch: Option<regview::Arch>, base: &str, candidate: &str) -> bool {
+    base == candidate || arch.is_some_and(|arch| regview::is_lane_of(arch, base, candidate))
 }
 
 /// Which of `candidates` a call's result actually lands in, decided by what the
@@ -366,6 +383,7 @@ fn touches_result_candidate(base: &str, candidate: &str) -> bool {
 /// synthetic definition has to land on the precise spelling the next
 /// instruction reads, or that read still resolves to an undefined live-in.
 fn result_register_consumed_after(
+    arch: Option<regview::Arch>,
     block: &crate::ir::types::LlirBlock,
     call_idx: usize,
     candidates: &[&'static str],
@@ -381,14 +399,14 @@ fn result_register_consumed_after(
             let base = ssa_base(&name);
             if candidates
                 .iter()
-                .any(|candidate| touches_result_candidate(base, candidate))
+                .any(|candidate| touches_result_candidate(arch, base, candidate))
             {
                 return VReg::phys(base.to_string());
             }
         }
         if let Some(VReg::Phys(name)) = definition {
             let base = ssa_base(&name);
-            candidates.retain(|candidate| !touches_result_candidate(base, candidate));
+            candidates.retain(|candidate| !touches_result_candidate(arch, base, candidate));
             if candidates.is_empty() {
                 break;
             }
@@ -427,7 +445,11 @@ pub fn annotate_calls(lf: &mut LlirFunction, cc: CallConv) {
             let mut effects = call_effects(cc);
             if let Some((candidates, fallback)) = result_register_candidates(cc) {
                 effects.result = Some(result_register_consumed_after(
-                    block, index, candidates, fallback,
+                    result_view_arch(cc),
+                    block,
+                    index,
+                    candidates,
+                    fallback,
                 ));
             }
             let instr = &mut block.instrs[index];

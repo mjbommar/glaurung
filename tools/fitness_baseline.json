@@ -3,11 +3,11 @@
     "file_count": 91,
     "files_above_1000": 13,
     "files_above_2000": 8,
-    "loc_in_files_above_1000": 41730,
-    "mean_loc": 805.7362637362637,
-    "median_loc": 449,
-    "pct_loc_above_1000": 56.9133411527236,
-    "total_loc": 73322
+    "loc_in_files_above_1000": 42038,
+    "mean_loc": 811.7912087912088,
+    "median_loc": 464,
+    "pct_loc_above_1000": 56.90577071460479,
+    "total_loc": 73873
   },
   "largest_files": [
     {
@@ -19,7 +19,7 @@
       "path": "analysis/cfg.rs"
     },
     {
-      "loc": 4883,
+      "loc": 4892,
       "path": "ir/lift_x86.rs"
     },
     {
@@ -27,12 +27,12 @@
       "path": "ir/types_recover.rs"
     },
     {
-      "loc": 3357,
-      "path": "symbolic/solver/axeyum_backend.rs"
+      "loc": 3624,
+      "path": "ir/call_args.rs"
     },
     {
-      "loc": 3325,
-      "path": "ir/call_args.rs"
+      "loc": 3357,
+      "path": "symbolic/solver/axeyum_backend.rs"
     },
     {
       "loc": 3025,
@@ -73,22 +73,22 @@
   ],
   "measures": {
     "ir_files_above_1000": 13,
-    "ir_median_loc": 449,
+    "ir_median_loc": 464,
     "product_files_above_1000": 27,
     "product_files_above_2000": 13,
-    "product_mean_loc": 515.9064516129032,
+    "product_mean_loc": 517.8193548387097,
     "product_median_loc": 274.0,
-    "product_pct_loc_above_1000": 44.512320938404685
+    "product_pct_loc_above_1000": 44.539757294859335
   },
   "product": {
     "file_count": 310,
     "files_above_1000": 27,
     "files_above_2000": 13,
-    "loc_in_files_above_1000": 71189,
-    "mean_loc": 515.9064516129032,
+    "loc_in_files_above_1000": 71497,
+    "mean_loc": 517.8193548387097,
     "median_loc": 274.0,
-    "pct_loc_above_1000": 44.512320938404685,
-    "total_loc": 159931
+    "pct_loc_above_1000": 44.539757294859335,
+    "total_loc": 160524
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -98,7 +98,7 @@
       "measure": "product_mean_loc",
       "meets_target": false,
       "target": 450.0,
-      "value": 515.9064516129032
+      "value": 517.8193548387097
     },
     {
       "label": "Product-code median",
@@ -126,14 +126,14 @@
       "measure": "product_pct_loc_above_1000",
       "meets_target": false,
       "target": 25.0,
-      "value": 44.512320938404685
+      "value": 44.539757294859335
     },
     {
       "label": "src/ir median",
       "measure": "ir_median_loc",
       "meets_target": true,
       "target": 500.0,
-      "value": 449
+      "value": 464
     },
     {
       "label": "src/ir files above 1,000 LOC",
