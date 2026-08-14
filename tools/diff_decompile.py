@@ -894,6 +894,51 @@ def _rebind_function_definition(code: str, target: str) -> str | None:
     return function_token.sub(target, code)
 
 
+#: Upper bound on helper bodies pulled into one differential translation unit.
+_MAX_HELPERS = 32
+
+#: Above this many local symbols, decompiling all of them up front would cost
+#: more than the CLI spawns it saves, so the walk falls back to fetching bodies
+#: one at a time. Fixtures sit an order of magnitude below it (6-11 locals);
+#: the bound exists so this stays sane on a real binary.
+_MAX_PREFETCH_LOCALS = 64
+
+#: Decompiled local-helper bodies per binary. `include_referenced_local_callees`
+#: is called once per function under test, and every one of those calls walks
+#: into the SAME pool of local helpers, so without this the pool is re-derived
+#: for each function.
+_LOCAL_BODY_CACHE: dict[str, dict[int, str]] = {}
+
+
+def _local_helper_bodies(
+    binary: str, local: dict[str, tuple[str, int]]
+) -> dict[int, str]:
+    """Decompile every local helper in `binary` once, in a single native pass.
+
+    The transitive walk below cannot know a helper's own callees until it has
+    decompiled it, so fetching on demand costs one CLI startup per helper —
+    measured at 4 for `164_nested_tlv_walker` and 5 for `95_function_pointer_table`
+    per lane, each paying full interpreter and import cost for one function.
+
+    Fetching by depth instead would still cost one native analysis pass per
+    level. The candidate set is known up front and small, so the whole pool goes
+    in one pass and every later question is answered from memory. Bodies the
+    walk never asks for are the price, and it is a much lower one.
+
+    This warms a cache and decides nothing: `visit` is unchanged, so which
+    snippets are included, and in what order, is exactly what it was.
+    """
+    cached = _LOCAL_BODY_CACHE.get(binary)
+    if cached is not None:
+        return cached
+    vas = sorted({va for _symbol, va in local.values()})
+    bodies = (
+        decompiled_many_c(binary, vas) if 0 < len(vas) <= _MAX_PREFETCH_LOCALS else {}
+    )
+    _LOCAL_BODY_CACHE[binary] = bodies
+    return bodies
+
+
 def include_referenced_local_callees(
     binary: str,
     root_c: str,
@@ -956,13 +1001,37 @@ def include_referenced_local_callees(
             )
         )
 
+    may_fall_back = decompiled_by_va is None or allow_native_fallback
+    #: Filled on the first genuine miss, never before. Most functions resolve
+    #: every callee out of the batch they arrived with and must not pay for a
+    #: pool they will not read — measured: prefetching unconditionally cost more
+    #: across `@region`/`@calls` than the spawns it saved.
+    native_by_va: dict[int, str] | None = None
+
+    def helper_body(va: int) -> str | None:
+        nonlocal native_by_va
+        if decompiled_by_va is not None:
+            hit = decompiled_by_va.get(va)
+            if hit is not None or not allow_native_fallback:
+                return hit
+        if not may_fall_back:
+            return None
+        if native_by_va is None:
+            native_by_va = _local_helper_bodies(binary, local)
+        return native_by_va.get(va)
+
     def visit(name: str) -> None:
-        if name in snippets or name in visiting or len(snippets) + len(visiting) >= 32:
+        if (
+            name in snippets
+            or name in visiting
+            or len(snippets) + len(visiting) >= _MAX_HELPERS
+        ):
             return
         visiting.add(name)
         _symbol, va = local[name]
-        helper = None if decompiled_by_va is None else decompiled_by_va.get(va)
-        if helper is None and (decompiled_by_va is None or allow_native_fallback):
+        helper = helper_body(va)
+        if helper is None and may_fall_back:
+            # A body the warming pass could not reach (it stops at the cap).
             helper = decompiled_c(binary, va)
         if helper is not None:
             for dependency in references(helper):
