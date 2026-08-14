@@ -5,6 +5,7 @@ pub mod environment;
 mod format_environment;
 pub mod image;
 pub mod session;
+pub mod symbols;
 pub mod types;
 
 #[cfg(test)]

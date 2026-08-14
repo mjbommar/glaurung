@@ -12,6 +12,7 @@ use crate::program::environment::{
     callback_api_identity, recover_program_environment, ProgramEnvironment,
 };
 use crate::program::image::{ProgramImage, ProgramImageError};
+use crate::program::symbols::{SymbolIncompleteness, SymbolStore};
 use crate::program::types::TypeStore;
 
 #[derive(Debug)]
@@ -178,6 +179,7 @@ pub struct ProgramSession {
     discovery: Arc<DiscoveryCache>,
     environments: Arc<Mutex<HashMap<EnvironmentKey, Arc<ProgramEnvironment>>>>,
     type_artifacts: Arc<OnceLock<ProgramTypeArtifacts>>,
+    symbol_artifacts: Arc<OnceLock<Arc<SymbolStore>>>,
 }
 
 impl ProgramSession {
@@ -193,7 +195,23 @@ impl ProgramSession {
             discovery: Arc::new(DiscoveryCache::default()),
             environments: Arc::new(Mutex::new(HashMap::new())),
             type_artifacts: Arc::new(OnceLock::new()),
+            symbol_artifacts: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Canonical program symbol environment imported once from exact object
+    /// symbol, import, export, and relocation tables.
+    pub fn symbol_store(&self) -> Arc<SymbolStore> {
+        self.symbol_artifacts
+            .get_or_init(|| {
+                let mut store = SymbolStore::default();
+                match crate::decompile::profile::parse_object(self.image.bytes()) {
+                    Ok(object) => store.import_object(&object, &self.image),
+                    Err(_) => store.note_incomplete(SymbolIncompleteness::UnreadableImage),
+                }
+                Arc::new(store)
+            })
+            .clone()
     }
 
     fn type_artifacts(&self) -> &ProgramTypeArtifacts {

@@ -3,6 +3,10 @@ use std::sync::Arc;
 
 use crate::analysis::cfg::Budgets;
 use crate::ir::call_args::CallConv;
+use crate::program::symbols::{
+    AddressSymbol, AddressUnknown, NameMatch, SymbolAuthority, SymbolBinding, SymbolConflict,
+    SymbolDefinition, SymbolIncompleteness, SymbolKind, SymbolSource,
+};
 use crate::program::types::{TypeAuthority, TypeShape};
 
 use super::session::ProgramSession;
@@ -390,5 +394,427 @@ fn same_named_debug_layouts_from_different_units_are_retained_as_conflicts() {
         retained,
         debug_layouts.into_iter().collect::<Vec<_>>(),
         "every disagreeing layout must be retained, not overwritten"
+    );
+}
+
+/// Compile one real fixture and own the resulting session. The temporary
+/// directory is dropped on return; the session already owns the image bytes.
+fn compiled_session(units: &[(&str, &str)], flags: &[&str]) -> ProgramSession {
+    let directory = tempfile::tempdir().expect("temporary fixture directory");
+    let executable = directory.path().join("fixture");
+    let mut command = Command::new("cc");
+    command.args(flags).arg("-o").arg(&executable);
+    for (name, contents) in units {
+        let source = directory.path().join(name);
+        std::fs::write(&source, contents).expect("write real C fixture");
+        command.arg(&source);
+    }
+    let output = command.output().expect("host C compiler is available");
+    assert!(
+        output.status.success(),
+        "compile real symbol fixture: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    ProgramSession::from_path(&executable).expect("fixture is a real object")
+}
+
+const SYMBOL_FIXTURE: &str = "#include <stdio.h>\n\
+     __attribute__((noinline)) int symbol_target(int x) { return x + 1; }\n\
+     int main(void) { printf(\"%d\\n\", symbol_target(4)); return 0; }\n";
+
+#[test]
+fn real_object_symbols_import_once_with_exact_provenance() {
+    let session = compiled_session(&[("symbols.c", SYMBOL_FIXTURE)], &["-g", "-O0"]);
+
+    let first = session.symbol_store();
+    let second = session.symbol_store();
+    assert!(Arc::ptr_eq(&first, &second), "one image, one symbol store");
+    assert!(first.verify().is_empty(), "{:?}", first.verify());
+
+    let id = first
+        .symbol_by_linkage("symbol_target")
+        .expect("the defined text symbol is imported");
+    let record = first.get(id).expect("record");
+    let selected = record
+        .selected()
+        .expect("an object symbol has a definition");
+    assert_eq!(selected.kind, SymbolKind::Function);
+    assert_eq!(selected.binding, SymbolBinding::Global);
+    let entry = session
+        .image()
+        .defined_text_symbol_address("symbol_target")
+        .expect("fixture target symbol");
+    match selected.definition {
+        SymbolDefinition::Defined { address, size } => {
+            assert_eq!(address, entry);
+            assert!(size.is_some_and(|size| size > 0), "ELF states a FUNC size");
+        }
+        other => panic!("expected a defined symbol, got {other:?}"),
+    }
+    assert!(
+        selected.evidence().iter().any(|evidence| {
+            evidence.authority == SymbolAuthority::Binary
+                && evidence.source == SymbolSource::ObjectSymbolTable
+        }),
+        "the object symbol table is exact binary evidence, got {:?}",
+        selected.evidence()
+    );
+    assert!(
+        record
+            .names()
+            .all(|name| name.match_kind == NameMatch::Exact),
+        "every imported name is read verbatim, never a resemblance"
+    );
+    assert!(record.conflicts().is_empty());
+}
+
+#[test]
+fn contextual_address_queries_resolve_exact_starts_offsets_and_unknowns() {
+    let session = compiled_session(&[("symbols.c", SYMBOL_FIXTURE)], &["-g", "-O0"]);
+    let store = session.symbol_store();
+    let entry = session
+        .image()
+        .defined_text_symbol_address("symbol_target")
+        .expect("fixture target symbol");
+    let id = store.symbol_by_linkage("symbol_target").expect("identity");
+
+    match store.resolve_address(entry) {
+        AddressSymbol::Exact { symbols } => assert!(symbols.contains(&id)),
+        other => panic!("expected an exact start, got {other:?}"),
+    }
+    match store.resolve_address(entry + 4) {
+        AddressSymbol::Containing { symbols, offset } => {
+            assert!(symbols.contains(&id));
+            assert_eq!(offset, 4);
+        }
+        other => panic!("expected a containing range, got {other:?}"),
+    }
+    assert!(
+        matches!(
+            store.resolve_address(0xdead_0000_0000),
+            AddressSymbol::Unknown(AddressUnknown::NoSymbolEvidence)
+        ),
+        "an unmapped address is an explicit unknown, not a nearest guess"
+    );
+}
+
+#[test]
+fn real_dynamic_imports_preserve_module_version_and_binding() {
+    let session = compiled_session(&[("symbols.c", SYMBOL_FIXTURE)], &["-g", "-O0"]);
+    let store = session.symbol_store();
+
+    let id = store
+        .symbol_by_linkage("printf")
+        .expect("the dynamic import is present");
+    let record = store.get(id).expect("record");
+    let selected = record.selected().expect("an import has a definition state");
+    assert_eq!(selected.definition, SymbolDefinition::Undefined);
+    assert_eq!(selected.kind, SymbolKind::Function);
+    assert_eq!(selected.binding, SymbolBinding::Global);
+    assert!(
+        selected.evidence().iter().any(|evidence| {
+            evidence.source == SymbolSource::ImportTable
+                && evidence
+                    .module
+                    .as_deref()
+                    .is_some_and(|module| !module.is_empty())
+        }),
+        "an import records its defining module, got {:?}",
+        selected.evidence()
+    );
+    assert!(
+        selected.evidence().iter().any(|evidence| {
+            evidence
+                .version
+                .as_deref()
+                .is_some_and(|version| version.contains('_'))
+        }),
+        "ELF symbol versions are retained, got {:?}",
+        selected.evidence()
+    );
+
+    let weak = store
+        .symbol_by_linkage("__cxa_finalize")
+        .and_then(|id| store.get(id))
+        .and_then(|record| record.selected());
+    assert_eq!(
+        weak.map(|fact| fact.binding),
+        Some(SymbolBinding::Weak),
+        "a weak binding is preserved, not normalized to global"
+    );
+}
+
+#[test]
+fn real_relocations_index_exact_reference_sites() {
+    let session = compiled_session(&[("symbols.c", SYMBOL_FIXTURE)], &["-g", "-O0"]);
+    let store = session.symbol_store();
+    let id = store.symbol_by_linkage("printf").expect("dynamic import");
+
+    let references = store.references_to(id).collect::<Vec<_>>();
+    assert!(
+        !references.is_empty(),
+        "the loader relocation naming printf must be indexed"
+    );
+    for reference in &references {
+        assert_eq!(reference.symbol, id);
+        assert_eq!(reference.evidence.source, SymbolSource::DynamicRelocation);
+        assert!(
+            reference.format_type.is_some(),
+            "the exact format relocation type is retained"
+        );
+        assert_eq!(
+            session.image().memory_kind_at(reference.site),
+            Some(crate::program::image::ImageMemoryKind::Writable),
+            "a loader-bound slot is mapped writable storage"
+        );
+        assert!(store
+            .references_at(reference.site)
+            .any(|indexed| indexed.symbol == id));
+    }
+}
+
+/// Negative control: a stripped image must not invent a single name. Only the
+/// dynamic table survives, and the store must say so rather than look complete.
+#[test]
+fn a_real_stripped_image_invents_no_symbols() {
+    let debug = compiled_session(&[("symbols.c", SYMBOL_FIXTURE)], &["-g", "-O0"]);
+    let entry = debug
+        .image()
+        .defined_text_symbol_address("symbol_target")
+        .expect("fixture target symbol");
+
+    let stripped = compiled_session(&[("symbols.c", SYMBOL_FIXTURE)], &["-O0", "-s"]);
+    let store = stripped.symbol_store();
+    assert!(store.verify().is_empty(), "{:?}", store.verify());
+
+    assert!(
+        store.symbol_by_linkage("symbol_target").is_none(),
+        "a stripped image cannot name its own functions"
+    );
+    assert!(store.symbol_by_linkage("main").is_none());
+    assert!(
+        store.symbols_named("symbol_target").is_empty(),
+        "no alias may resurrect a stripped name"
+    );
+    assert!(
+        matches!(
+            store.resolve_address(entry),
+            AddressSymbol::Unknown(AddressUnknown::NoSymbolEvidence)
+        ),
+        "an unnamed address stays explicitly unknown, got {:?}",
+        store.resolve_address(entry)
+    );
+    assert!(
+        !store.is_complete()
+            && store
+                .incompleteness()
+                .contains(&SymbolIncompleteness::NoObjectSymbolTable),
+        "the missing object symbol table is a declared incompleteness, got {:?}",
+        store.incompleteness()
+    );
+    for record in store.records() {
+        let selected = record.selected().expect("every record has a state");
+        assert!(
+            !matches!(selected.definition, SymbolDefinition::Defined { .. }),
+            "the stripped dynamic table defines nothing, but {} claims {:?}",
+            record.linkage_name(),
+            selected.definition
+        );
+        assert!(selected
+            .evidence()
+            .iter()
+            .all(|evidence| evidence.source != SymbolSource::ObjectSymbolTable));
+    }
+}
+
+/// Negative control: two translation units may legally define distinct local
+/// symbols with the same spelling. Both must survive as an explicit conflict.
+#[test]
+fn same_named_local_symbols_from_different_units_are_retained_as_conflicts() {
+    let session = compiled_session(
+        &[
+            (
+                "unit_a.c",
+                "static __attribute__((noinline)) int helper(int x) { return x + 1; }\n\
+                 __attribute__((noinline)) int use_a(int x) { return helper(x); }\n\
+                 int use_b(int);\n\
+                 int main(void) { return use_a(1) + use_b(2); }\n",
+            ),
+            (
+                "unit_b.c",
+                "static __attribute__((noinline)) int helper(int x) { return x * 3; }\n\
+                 __attribute__((noinline)) int use_b(int x) { return helper(x); }\n",
+            ),
+        ],
+        &["-O0"],
+    );
+    let store = session.symbol_store();
+    assert!(store.verify().is_empty(), "{:?}", store.verify());
+
+    let id = store.symbol_by_linkage("helper").expect("local symbol");
+    let record = store.get(id).expect("record");
+    assert!(
+        record
+            .conflicts()
+            .contains(&SymbolConflict::IncompatibleDefinition),
+        "two local definitions of one name are a retained conflict"
+    );
+    let mut addresses = record
+        .selected()
+        .into_iter()
+        .chain(record.alternatives())
+        .filter_map(|fact| match fact.definition {
+            SymbolDefinition::Defined { address, .. } => Some(address),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    addresses.sort_unstable();
+    addresses.dedup();
+    assert_eq!(
+        addresses.len(),
+        2,
+        "both real definitions must be retained, got {addresses:?}"
+    );
+    for address in addresses {
+        assert!(
+            matches!(store.resolve_address(address), AddressSymbol::Exact { ref symbols } if symbols.contains(&id)),
+            "each retained definition stays addressable at {address:#x}"
+        );
+    }
+    assert_eq!(
+        record.selected().map(|fact| fact.binding),
+        Some(SymbolBinding::Local),
+        "a static function keeps its local binding"
+    );
+}
+
+#[test]
+fn real_portable_executable_imports_and_exports_carry_their_module() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let executable = root.join(
+        "samples/binaries/platforms/windows/i386/export/windows/i686/O0/hello-c-mingw32-O0.exe",
+    );
+    let session = ProgramSession::from_path(&executable).expect("checked-in PE image");
+    let store = session.symbol_store();
+    assert!(store.verify().is_empty(), "{:?}", store.verify());
+
+    let imports = store
+        .records()
+        .iter()
+        .filter(|record| {
+            record.selected().is_some_and(|fact| {
+                fact.evidence()
+                    .iter()
+                    .any(|evidence| evidence.source == SymbolSource::ImportTable)
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(!imports.is_empty(), "a real PE declares imports");
+    for record in imports {
+        let selected = record.selected().expect("checked");
+        assert_eq!(
+            selected.definition,
+            SymbolDefinition::Undefined,
+            "{} is imported and therefore undefined here",
+            record.linkage_name()
+        );
+        assert!(
+            selected.evidence().iter().any(|evidence| {
+                evidence.source == SymbolSource::ImportTable
+                    && evidence
+                        .module
+                        .as_deref()
+                        .is_some_and(|module| module.to_ascii_lowercase().ends_with(".dll"))
+            }),
+            "{} must name the DLL it comes from, got {:?}",
+            record.linkage_name(),
+            selected.evidence()
+        );
+    }
+}
+
+#[test]
+fn real_portable_executable_exports_resolve_by_address() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let library =
+        root.join("samples/binaries/platforms/windows/vendor/realworld/win10-dismapi.dll");
+    let session = ProgramSession::from_path(&library).expect("checked-in PE library");
+    let store = session.symbol_store();
+    assert!(store.verify().is_empty(), "{:?}", store.verify());
+
+    let exported = store
+        .records()
+        .iter()
+        .filter(|record| {
+            record.selected().is_some_and(|fact| {
+                fact.evidence()
+                    .iter()
+                    .any(|evidence| evidence.source == SymbolSource::ExportTable)
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(!exported.is_empty(), "a real DLL declares exports");
+    for record in exported {
+        let SymbolDefinition::Defined { address, .. } =
+            record.selected().expect("checked").definition
+        else {
+            panic!("{} is exported and must be defined", record.linkage_name());
+        };
+        assert!(
+            matches!(store.resolve_address(address), AddressSymbol::Exact { ref symbols } if symbols.contains(&record.id)),
+            "the export at {address:#x} resolves to its own identity"
+        );
+    }
+}
+
+#[test]
+fn real_mangled_symbols_carry_a_demangled_alias_with_its_scheme() {
+    let directory = tempfile::tempdir().expect("temporary fixture directory");
+    let source = directory.path().join("mangled.cpp");
+    let executable = directory.path().join("mangled");
+    std::fs::write(
+        &source,
+        "namespace glaurung {\n\
+         __attribute__((noinline)) int add(int a, int b) { return a + b; }\n\
+         }\n\
+         int main() { return glaurung::add(1, 2); }\n",
+    )
+    .expect("write real C++ fixture");
+    let output = std::process::Command::new("c++")
+        .args(["-O0", "-o"])
+        .arg(&executable)
+        .arg(&source)
+        .output()
+        .expect("host C++ compiler is available");
+    assert!(
+        output.status.success(),
+        "compile real C++ fixture: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let session = ProgramSession::from_path(&executable).expect("fixture is a real object");
+    let store = session.symbol_store();
+    assert!(store.verify().is_empty(), "{:?}", store.verify());
+
+    let id = store
+        .symbol_by_linkage("_ZN8glaurung3addEii")
+        .expect("the mangled linkage name is the identity");
+    let record = store.get(id).expect("record");
+    let demangled = record
+        .names()
+        .find(|name| {
+            matches!(
+                name.form,
+                crate::program::symbols::NameForm::Demangled(
+                    crate::program::symbols::DemangleScheme::Itanium
+                )
+            )
+        })
+        .expect("an itanium alias with its scheme");
+    assert_eq!(demangled.text, "glaurung::add(int, int)");
+    assert_eq!(demangled.match_kind, NameMatch::Exact);
+    assert_eq!(store.symbols_named(&demangled.text), &[id]);
+    assert!(
+        store.symbol_by_linkage(&demangled.text).is_none(),
+        "a demangled spelling is an alias, never the linkage identity"
     );
 }
