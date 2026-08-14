@@ -1484,6 +1484,25 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     ("109_subscript_commutativity", "negative_offset_from_interior"): {
         "arg_values": {1: [2, 3, 8, 16]},
     },
+    # A constant bias is only exercised when `count` actually reaches the
+    # guarded domain, so every entry pins the domain rather than clamping it:
+    # the boundary value and the first rejected value are both swept, and a
+    # rejected count must return -1 identically on both sides.
+    ("187_constant_bias_index", "bias_forward_sum"): {
+        "arg_values": {1: [0, 1, 2, 7, 13, 14, 15]},
+    },
+    ("187_constant_bias_index", "bias_backward_pair"): {
+        "arg_values": {1: [0, 1, 2, 8, 15, 16, 17]},
+    },
+    ("187_constant_bias_index", "adjacent_difference"): {
+        "arg_values": {1: [0, 1, 2, 8, 15, 16, 17]},
+    },
+    ("187_constant_bias_index", "value_bias_not_index"): {
+        "arg_values": {1: [0, 1, 2, 8, 15, 16, 17]},
+    },
+    ("187_constant_bias_index", "variable_bias"): {
+        "arg_values": {1: [0, 1, 2, 8, 16, 17], 2: [0, 1, 2, 3]},
+    },
     ("110_pointer_arithmetic", "element_distance"): {
         "len_args": [1],
     },
@@ -2492,6 +2511,20 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "loop_switch_no_default",
         "returning_arms_no_default",
         "sparse_no_default",
+    ],
+    # --- aggregate-recovery prerequisites --------------------------------
+    # A constant bias folded into a subscript (`a[i + 3]`) is the shape the
+    # affine-index analysis targets, and the corpus had no lane for it: 109
+    # covers subscript spelling and an interior-pointer negative offset, not a
+    # constant bias on the index. The last two functions are the controls that
+    # make a recovered bias meaningful — one biases the loaded value instead of
+    # the address, the other displaces the index by a runtime argument.
+    "187_constant_bias_index": [
+        "adjacent_difference",
+        "bias_backward_pair",
+        "bias_forward_sum",
+        "value_bias_not_index",
+        "variable_bias",
     ],
     **CURRICULUM_PROJECTS,
 }

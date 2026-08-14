@@ -71,6 +71,28 @@ selectors = ["02_integer_widths"]
 description = "Aggregates/memory (09) plus C++ runtime shapes (10)."
 selectors = ["09_memory_effects", "10_cpp_runtime_shapes"]
 
+[aggregates]
+description = "Stack and pointer aggregates: layout, arrays, subscripts, bias, packing, and by-value transfer. The EPIC 3 object-recovery set."
+# @structs is about memory *effects* surviving lowering; this set is about
+# recovering the *object* — extent, stride, field offset, and index bias. The
+# fixtures were reachable only by explicit name, which made the aggregate work
+# the one workstream with no iteration loop of its own.
+selectors = [
+    "100_struct_layout",
+    "108_multidimensional_arrays",
+    "109_subscript_commutativity",
+    "110_pointer_arithmetic",
+    "111_self_referential_struct",
+    "129_struct_by_value",
+    "161_packed_struct_layout",
+    "162_unaligned_memcpy_access",
+    "187_constant_bias_index",
+]
+
+[bias]
+description = "Constant-bias array indexing (187) — the shape the affine-index analysis targets, with its value-bias and runtime-bias controls."
+selectors = ["187_*"]
+
 [o0]
 description = "Every fixture, unoptimised, both compilers. Where structuring bugs are legible."
 selectors = ["*:gcc:O0", "*:clang:O0"]
