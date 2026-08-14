@@ -1488,6 +1488,25 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # guarded domain, so every entry pins the domain rather than clamping it:
     # the boundary value and the first rejected value are both swept, and a
     # rejected count must return -1 identically on both sides.
+    # Counts are pinned rather than clamped so the vectorized path is actually
+    # entered: a count below the vector width never emits a packed batch, and a
+    # count past the guard must return -1 identically on both sides.
+    ("188_vector_transport", "vt188_copy_forward"): {
+        "ptr_len": 64,
+        "arg_values": {2: [0, 1, 4, 8, 16, 33, 64, 65]},
+    },
+    ("188_vector_transport", "vt188_copy_backward"): {
+        "ptr_len": 64,
+        "arg_values": {2: [0, 1, 4, 8, 16, 33, 64, 65]},
+    },
+    ("188_vector_transport", "vt188_copy_two_streams"): {
+        "ptr_len": 64,
+        "arg_values": {3: [0, 1, 4, 8, 16, 33, 64, 65]},
+    },
+    ("188_vector_transport", "vt188_lane_math"): {
+        "ptr_len": 64,
+        "arg_values": {2: [0, 1, 4, 8, 16, 33, 64, 65]},
+    },
     ("187_constant_bias_index", "bias_forward_sum"): {
         "arg_values": {1: [0, 1, 2, 7, 13, 14, 15]},
     },
@@ -2525,6 +2544,18 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "bias_forward_sum",
         "value_bias_not_index",
         "variable_bias",
+    ],
+    # 128-bit transports in the shapes that reach src/ir/vector_copy.rs. That
+    # pass had ONE lane (09_memory_effects:clang:O2) and nothing covering two
+    # INTERLEAVED transports, which is the layout clang actually emits and the
+    # one a fix passed its unit tests against while still failing on a real
+    # binary. `vt188_lane_math` is the control: it transforms every element, so
+    # it is lane computation and must not be rejoined into a copy.
+    "188_vector_transport": [
+        "vt188_copy_backward",
+        "vt188_copy_forward",
+        "vt188_copy_two_streams",
+        "vt188_lane_math",
     ],
     **CURRICULUM_PROJECTS,
 }

@@ -2742,6 +2742,30 @@
     "value_bias_not_index": "pass",
     "variable_bias": "pass"
   },
+  "188_vector_transport:clang:O0": {
+    "vt188_copy_backward": "pass",
+    "vt188_copy_forward": "pass",
+    "vt188_copy_two_streams": "pass",
+    "vt188_lane_math": "pass"
+  },
+  "188_vector_transport:clang:O2": {
+    "vt188_copy_backward": "pass",
+    "vt188_copy_forward": "pass",
+    "vt188_copy_two_streams": "pass",
+    "vt188_lane_math": "pass"
+  },
+  "188_vector_transport:gcc:O0": {
+    "vt188_copy_backward": "pass",
+    "vt188_copy_forward": "pass",
+    "vt188_copy_two_streams": "pass",
+    "vt188_lane_math": "pass"
+  },
+  "188_vector_transport:gcc:O2": {
+    "vt188_copy_backward": "pass",
+    "vt188_copy_forward": "pass",
+    "vt188_copy_two_streams": "pass",
+    "vt188_lane_math": "pass"
+  },
   "18_binary_heap:clang:O0": {
     "heap_pop": "pass",
     "heap_push": "pass"

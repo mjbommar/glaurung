@@ -284,7 +284,71 @@ fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet
     });
 }
 
-fn recover_body(body: &mut Vec<Stmt>) {
+/// How many statements anywhere in `body` read `register`.
+///
+/// Used to prove a lane batch has exactly one consumer. Counting statements
+/// rather than occurrences is enough: the store batch reads each lane once, so
+/// a second consumer of any kind pushes the count above one.
+fn count_reading_statements(body: &[Stmt], register: &VReg) -> usize {
+    body.iter()
+        .map(|statement| {
+            usize::from(crate::ir::dead_stores::stmt_reads(statement, register))
+                + child_bodies(statement)
+                    .into_iter()
+                    .map(|nested| count_reading_statements(nested, register))
+                    .sum::<usize>()
+        })
+        .sum()
+}
+
+/// Wide registers whose lane values have exactly one reader each.
+///
+/// `recover_wide_copies` replaces four lane loads with one 16-byte load into
+/// the whole-register name, which stops defining the lanes. That is only sound
+/// when nothing else reads them. `188_vector_transport::vt188_copy_two_streams`
+/// copies one source into TWO destinations, so clang emits one load batch
+/// feeding two store batches; rejoining the first pair left the second store
+/// reading lanes nothing defines any more, and it silently wrote garbage.
+///
+/// The actual lane `VReg`s are collected rather than rebuilt from the wide
+/// name. `lane_name` folds a value version into the wide half — `xmm0_d0#3`
+/// parses to wide `xmm0#3`, lane 0 — so `format!("{wide}_d{lane}")` yields
+/// `xmm0#3_d0`, which names nothing and silently made every batch look
+/// exclusive.
+///
+/// Counted once up front: this pass only removes and replaces statements, so a
+/// count taken before mutation still decides correctly.
+fn exclusive_lane_registers(body: &[Stmt]) -> std::collections::HashSet<String> {
+    fn collect(
+        body: &[Stmt],
+        out: &mut std::collections::HashMap<String, std::collections::BTreeSet<VReg>>,
+    ) {
+        for statement in body {
+            if let Stmt::Assign { dst, .. } = statement {
+                if let Some((wide, _)) = lane_name(dst) {
+                    out.entry(wide).or_default().insert(dst.clone());
+                }
+            }
+            for nested in child_bodies(statement) {
+                collect(nested, out);
+            }
+        }
+    }
+    let mut lanes: std::collections::HashMap<String, std::collections::BTreeSet<VReg>> =
+        std::collections::HashMap::new();
+    collect(body, &mut lanes);
+    lanes
+        .into_iter()
+        .filter(|(_, registers)| {
+            registers
+                .iter()
+                .all(|register| count_reading_statements(body, register) <= 1)
+        })
+        .map(|(wide, _)| wide)
+        .collect()
+}
+
+fn recover_body(body: &mut Vec<Stmt>, exclusive: &std::collections::HashSet<String>) {
     for statement in body.iter_mut() {
         match statement {
             Stmt::If {
@@ -292,25 +356,25 @@ fn recover_body(body: &mut Vec<Stmt>) {
                 else_body,
                 ..
             } => {
-                recover_body(then_body);
+                recover_body(then_body, exclusive);
                 if let Some(else_body) = else_body {
-                    recover_body(else_body);
+                    recover_body(else_body, exclusive);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => recover_body(body),
-            Stmt::For { body, .. } => recover_body(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => recover_body(body, exclusive),
+            Stmt::For { body, .. } => recover_body(body, exclusive),
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    recover_body(case);
+                    recover_body(case, exclusive);
                 }
                 if let Some(default) = default {
-                    recover_body(default);
+                    recover_body(default, exclusive);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_body(try_body);
+                recover_body(try_body, exclusive);
                 for catch in catches {
-                    recover_body(&mut catch.body);
+                    recover_body(&mut catch.body, exclusive);
                 }
             }
             _ => {}
@@ -322,6 +386,11 @@ fn recover_body(body: &mut Vec<Stmt>) {
         let Some(load) = load_batch_at(body, index) else {
             continue;
         };
+        // Rejoining stops defining the lanes, so a second consumer would be
+        // left reading values nothing writes.
+        if !matches!(&load.wide, VReg::Phys(name) if exclusive.contains(name)) {
+            continue;
+        }
         let store_index = if store_batch_at(body, index + 4, &load.wide).is_some() {
             Some(index + 4)
         } else if (load_batch_at(body, index + 4).is_some_and(|other| other.wide != load.wide)
@@ -368,7 +437,8 @@ pub fn recover_wide_copies(function: &mut Function) {
     if !dead.is_empty() {
         drop_dead_scalar_views(&mut function.body, &dead);
     }
-    recover_body(&mut function.body);
+    let exclusive = exclusive_lane_registers(&function.body);
+    recover_body(&mut function.body, &exclusive);
 }
 
 #[cfg(test)]
@@ -415,6 +485,53 @@ mod tests {
     ///
     /// This pass must run before copy propagation erases the transport
     /// identity, so the bridge cannot simply be left to DCE.
+
+    /// Soundness: one load batch feeding TWO store batches must not be
+    /// rejoined.
+    ///
+    /// Rejoining replaces the four lane loads with one 16-byte load into the
+    /// whole-register name, so the lanes stop being defined. With a second
+    /// consumer that leaves the other store batch reading values nothing
+    /// writes. `188_vector_transport::vt188_copy_two_streams` is the real
+    /// shape: `first_dst[i] = src[i]; second_dst[i] = src[i];` at clang -O2
+    /// emitted one load feeding two stores, and rejoining the first pair wrote
+    /// garbage into the second buffer while every other cell still passed.
+    #[test]
+    fn a_lane_batch_with_two_consumers_is_not_rejoined() {
+        let mut body = Vec::new();
+        for lane in 0..4 {
+            body.push(Stmt::Assign {
+                dst: VReg::phys(format!("xmm0_d{lane}")),
+                src: Expr::Deref {
+                    addr: Box::new(address("rsi", lane * 4)),
+                    size: 4,
+                },
+            });
+        }
+        for destination in ["rdi", "rdx"] {
+            for lane in 0..4 {
+                body.push(Stmt::Store {
+                    addr: address(destination, lane * 4),
+                    src: Expr::Reg(VReg::phys(format!("xmm0_d{lane}"))),
+                    size: 4,
+                });
+            }
+        }
+        let original = body.clone();
+        let mut function = Function {
+            name: "two_streams".into(),
+            entry_va: 0,
+            body,
+        };
+
+        recover_wide_copies(&mut function);
+
+        assert_eq!(
+            function.body, original,
+            "a lane read by two store batches must keep its explicit lane form"
+        );
+    }
+
     #[test]
     fn a_dead_scalar_view_bridge_does_not_hide_the_transport() {
         let mut body = Vec::new();

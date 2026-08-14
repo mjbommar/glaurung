@@ -993,3 +993,84 @@ closed, keeping the explicit lane form.
   16-byte transfers *and* remove the bridge; the control, where the scalar view
   is read later, must leave the body byte-for-byte unchanged.
 - Fixture matrix and structural lane: run because this changes emitted output.
+
+---
+
+## Entry 9 — The fixture that caught the fix
+
+Entry 8 removed dead xmm scalar-view bridges so `recover_wide_copies` could see
+its store batch. That landed as `ac8d7df` with the fixture matrix and structural
+lane green. It was still wrong, and the existing corpus could not tell.
+
+### Why a new fixture
+
+The whole of `src/ir/vector_copy.rs` was covered by ONE lane:
+`09_memory_effects:clang:O2`, whose `mem_copy` is a single `dst[i] = src[i]`
+loop. Nothing exercised two transports in one body — which is exactly the
+layout that had just defeated the first attempt at the fix. A pass that had just
+proved fragile was being defended by one shape.
+
+`188_vector_transport` adds four functions: forward copy, backward copy, two
+streams from one source, and `vt188_lane_math` as the control (every element is
+transformed, so it is lane computation and must NOT be rejoined). `clang -O2`
+emits 116 packed moves for it, so the pass is genuinely exercised.
+
+### What it caught, immediately
+
+First run: 15 of 16 cells passed. The failure was
+`clang:O2:vt188_copy_two_streams` — and it was a correctness bug in the fix
+committed minutes earlier:
+
+```c
+__builtin_memcpy(var39, (void *)((long)arg2 + var38 * 4), 16);
+__builtin_memmove((void *)((long)arg0 + var38 * 4), var39, 16);
+*(int *)((long)arg1 + var38 * 4)       = var40;   /* var40..43 never assigned */
+*(int *)((long)arg1 + var38 * 4 + 0x4) = var41;
+```
+
+`first_dst[i] = src[i]; second_dst[i] = src[i];` compiles to ONE load batch
+feeding TWO store batches. Rejoining the first pair replaces the four lane loads
+with a single 16-byte load into the whole-register name, so the lanes stop being
+defined — and the second store batch is left reading them. It wrote garbage into
+the second buffer.
+
+`recover_wide_copies` had always assumed a load batch belongs to exactly one
+store batch. The bug predates entry 8; the dead bridge had been accidentally
+masking it by preventing the rejoin from ever firing. Removing the bridge did
+not create the unsoundness, it exposed it — which is the more useful thing a
+fixture can do than confirm the happy path.
+
+### The guard, and a second mistake
+
+Only rejoin when every lane register has at most one reading statement in the
+whole function. Counted once before mutation, since the pass only removes and
+replaces.
+
+The first version of that guard silently never fired. Lane registers carry value
+versions — `xmm0_d0#3` — and `lane_name` folds the version into the WIDE half,
+parsing that as wide `xmm0#3`, lane 0. So reconstructing the lane name as
+`format!("{wide}_d{lane}")` produced `xmm0#3_d0`, which names nothing, every
+lookup returned a count of zero, and every batch looked exclusive. The fix is to
+collect the actual `VReg`s off the load statements instead of rebuilding names
+from a lossy parse. Inverting a parser by string concatenation is a bug waiting
+for a version suffix.
+
+### Evidence
+
+- `188_vector_transport`: 16/16 cells pass (was 15/16 with a silent wrong
+  answer).
+- `cargo test`: 2219 passed, 0 failed.
+- Five `vector_copy` unit tests, including
+  `a_lane_batch_with_two_consumers_is_not_rejoined` pinning the soundness rule.
+- `test_vectorized_mem_copy_round_trips_clang_o2` still passes, so the guard did
+  not simply disable the optimisation.
+- `baseline.json`: 16 additions, zero other verdicts moved.
+- `structural_baseline.json`: 20 additions, zero other entries changed.
+
+### The lesson
+
+The corpus is the thing that finds what review does not. A pass with one lane is
+a pass with one shape tested, and the shapes that break it are the ones nobody
+wrote down. Adding the fixture cost minutes; it caught a silent wrong answer in
+code that had already passed a full matrix run, a structural lane, and 2218 unit
+tests.
