@@ -900,3 +900,96 @@ Per the session constraints, DecBench, Joern, `decbench_matrix.py`, the full
 fixture matrix, and `scripts/decbench-local-gate.sh --decbench` were not run.
 Only scoped single-fixture builds and direct `diff_decompile.run`/
 `GLAURUNG_DUMP_PASSES=1` invocations were used. No product code was changed.
+
+---
+
+## Entry 8 — The xmm scalar-view bridge that hid every 16-byte transport
+
+Entry 7 classified `test_vectorized_mem_copy_round_trips_clang_o2` as the one
+real defect among the five round-trip failures. Fixed here.
+
+### What was wrong
+
+`synchronise_xmm_views` (`src/ir/lift_x86.rs:3212`) appends
+`Op::Concat { dst: xmmN, hi: xmmN_d1, lo: xmmN_d0 }` to any instruction that
+wrote lanes but not the whole-register name, so a later scalar read still sees a
+defined value. It exists for a real bug — a GCC `-O0` scalar-float return — and
+is correct in that role.
+
+It runs per INSTRUCTION, so it cannot know whether the scalar view is ever read.
+A plain 128-bit `movups` load gets one unconditionally. Lowered, the concat is
+`xmm0 = xmm0_d1 | xmm0_d0`, and it lands between the lane loads and the lane
+stores — exactly where `vector_copy::recover_wide_copies` expects the store
+batch. The rejoin never fired, so no 16-byte `Store`/`Deref` existed for the
+renderer to fold, and `__builtin_memmove` never appeared.
+
+Execution was unaffected throughout: the test's own `H.run_lanes` assertion
+passed. This was an output-quality defect, not a semantic one.
+
+### Why the two obvious fixes do not work
+
+- **Scope the concat to real scalar reads.** `synchronise_xmm_views` sees one
+  instruction's ops. The whole point of the bridge is a read in some *later*
+  instruction, so the information is not available where the decision is made.
+- **Let DCE remove it.** `recover_wide_copies` is deliberately the first AST
+  pass (`python_bindings/ir.rs:495`, "before copy propagation erases the common
+  16-byte transport identity"). DCE runs after, by design.
+
+### The hazard neither the triage nor the first attempt caught
+
+Rejoining the lanes stops defining `xmmN_d0`/`xmmN_d1`. A bridge that survived
+the rejoin would therefore read undefined operands and overwrite the recovered
+value with garbage. Any fix that merely lets the matcher *skip* the bridge is
+wrong unless it also deletes it.
+
+### First attempt, and why the real IR rejected it
+
+Teaching the matcher to skip a bridge at `index + 4` passed both unit tests and
+still failed on the real binary. Dumping the actual lifted IR
+(`GLAURUNG_DUMP_PASSES=1` on `09_memory_effects-clang-O2.so`, `mem_copy`) showed
+why — clang emits the batches interleaved, each load batch followed by its own
+bridge:
+
+```
+0x1260: %xmm0_d0..d3 = load ...
+0x1260: %xmm0 = concat %xmm0_d1:%xmm0_d0
+0x1264: %xmm1_d0..d3 = load ...
+0x1264: %xmm1 = concat %xmm1_d1:%xmm1_d0
+0x1269: store ... <- %xmm0_d0..d3
+0x126d: store ... <- %xmm1_d0..d3
+```
+
+The store batch for `xmm0` is at `index + 10`, not `index + 4` or the existing
+interleave fallback's `index + 8`. Patching offsets was chasing one layout out
+of many. A synthetic unit test that passes while the real binary still fails is
+the signal to go and look at the real IR.
+
+### The fix
+
+Delete provably-dead bridges in a pre-pass, then run the batch matcher
+completely unchanged:
+
+1. `dead_scalar_views` collects every bridge target in the function and keeps
+   those read nowhere. Reads are found with `dead_stores::stmt_reads`, which
+   already walks every statement and expression shape — hand-rolling a second
+   walker here produced four wrong variant guesses before I threw it away, and
+   would have been a second place to forget a variant.
+2. `drop_dead_scalar_views` removes them at any nesting depth.
+3. `recover_body` is untouched.
+
+Deleting a definition nothing reads is correct on its own terms, independent of
+whether any rejoin fires, and it makes the matcher's layout arithmetic
+irrelevant — every interleaving works for free.
+
+The liveness test is deliberately coarse and whole-function: a bridge is dropped
+only when its view is read nowhere at all. Over-approximating reads fails
+closed, keeping the explicit lane form.
+
+### Evidence
+
+- `test_vectorized_mem_copy_round_trips_clang_o2`: **passes**.
+- `cargo test`: 2218 passed, 0 failed.
+- Two unit tests, written failing first: the dead-bridge case must recover both
+  16-byte transfers *and* remove the bridge; the control, where the scalar view
+  is read later, must leave the body byte-for-byte unchanged.
+- Fixture matrix and structural lane: run because this changes emitted output.

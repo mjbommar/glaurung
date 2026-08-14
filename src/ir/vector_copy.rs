@@ -132,6 +132,158 @@ fn store_batch_at(body: &[Stmt], start: usize, wide: &VReg) -> Option<Expr> {
     (candidate_wide == *wide).then_some(address)
 }
 
+/// The whole-register name a lifted scalar-view bridge defines.
+///
+/// `synchronise_xmm_views` (`src/ir/lift_x86.rs`) appends
+/// `Op::Concat { dst: xmmN, hi: xmmN_d1, lo: xmmN_d0 }` to any instruction that
+/// wrote lanes but not the whole-register name, so a later scalar read still
+/// sees a defined value. It runs per instruction and therefore cannot know
+/// whether that view is ever read; a plain 128-bit `movups` load gets one
+/// unconditionally. Lowered, the concat is `dst = hi | lo`.
+fn scalar_view_bridge_target(statement: &Stmt) -> Option<String> {
+    let Stmt::Assign {
+        dst: VReg::Phys(dst),
+        src:
+            Expr::Bin {
+                op: crate::ir::types::BinOp::Or,
+                lhs,
+                rhs,
+            },
+    } = statement
+    else {
+        return None;
+    };
+    if !dst.starts_with("xmm") {
+        return None;
+    }
+    let (Expr::Reg(hi), Expr::Reg(lo)) = (lhs.as_ref(), rhs.as_ref()) else {
+        return None;
+    };
+    (lane_name(hi) == Some((dst.clone(), 1)) && lane_name(lo) == Some((dst.clone(), 0)))
+        .then(|| dst.clone())
+}
+
+/// Whether `register` is read anywhere in `body`, at any nesting depth.
+///
+/// Deliberately whole-function and deliberately coarse: a bridge is skipped
+/// only when its scalar view is read nowhere at all. Rejoining the lanes stops
+/// defining `xmmN_d0`/`xmmN_d1`, so a bridge that survived the rejoin would
+/// overwrite the recovered value with undefined operands. Over-approximating
+/// the reads fails closed, keeping the explicit lane form.
+///
+/// `dead_stores::stmt_reads` already walks every statement and expression
+/// shape, including nested bodies; duplicating that match here would only add
+/// a second place to forget a variant.
+fn reads_register(body: &[Stmt], register: &VReg) -> bool {
+    body.iter().any(|statement| {
+        // A bridge's own read of its lanes is not a read of the view itself.
+        if scalar_view_bridge_target(statement)
+            .is_some_and(|target| matches!(register, VReg::Phys(name) if *name == target))
+        {
+            return false;
+        }
+        crate::ir::dead_stores::stmt_reads(statement, register)
+    })
+}
+
+/// Whole-register xmm views that a bridge defines and nothing ever reads.
+///
+/// Computed once over the whole function, because `recover_body` recurses into
+/// nested bodies and a read may live in any of them.
+fn dead_scalar_views(body: &[Stmt]) -> std::collections::HashSet<String> {
+    fn collect(body: &[Stmt], out: &mut std::collections::HashSet<String>) {
+        for statement in body {
+            if let Some(target) = scalar_view_bridge_target(statement) {
+                out.insert(target);
+            }
+            for nested in child_bodies(statement) {
+                collect(nested, out);
+            }
+        }
+    }
+    fn read_anywhere(body: &[Stmt], register: &VReg) -> bool {
+        reads_register(body, register)
+            || body.iter().any(|statement| {
+                child_bodies(statement)
+                    .into_iter()
+                    .any(|nested| read_anywhere(nested, register))
+            })
+    }
+    let mut targets = std::collections::HashSet::new();
+    collect(body, &mut targets);
+    targets.retain(|name| !read_anywhere(body, &VReg::phys(name)));
+    targets
+}
+
+fn child_bodies(statement: &Stmt) -> Vec<&Vec<Stmt>> {
+    match statement {
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => std::iter::once(then_body)
+            .chain(else_body.as_ref())
+            .collect(),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            vec![body]
+        }
+        Stmt::Switch { cases, default, .. } => cases
+            .iter()
+            .map(|(_, case)| case)
+            .chain(default.as_ref())
+            .collect(),
+        Stmt::TryCatch { try_body, catches } => std::iter::once(try_body)
+            .chain(catches.iter().map(|catch| &catch.body))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Delete every provably-dead scalar-view bridge, at any nesting depth.
+///
+/// Done as a pre-pass so the batch matcher below never has to reason about
+/// bridges at all. Removing a definition nothing reads is correct on its own
+/// terms; it also happens to be required, because rejoining the lanes stops
+/// defining `xmmN_d0`/`xmmN_d1` and a surviving bridge would then overwrite the
+/// recovered value with undefined operands.
+fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet<String>) {
+    for statement in body.iter_mut() {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                drop_dead_scalar_views(then_body, dead);
+                if let Some(else_body) = else_body {
+                    drop_dead_scalar_views(else_body, dead);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                drop_dead_scalar_views(body, dead)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, case) in cases {
+                    drop_dead_scalar_views(case, dead);
+                }
+                if let Some(default) = default {
+                    drop_dead_scalar_views(default, dead);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                drop_dead_scalar_views(try_body, dead);
+                for catch in catches {
+                    drop_dead_scalar_views(&mut catch.body, dead);
+                }
+            }
+            _ => {}
+        }
+    }
+    body.retain(|statement| {
+        !scalar_view_bridge_target(statement).is_some_and(|target| dead.contains(&target))
+    });
+}
+
 fn recover_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
         match statement {
@@ -212,6 +364,10 @@ fn recover_body(body: &mut Vec<Stmt>) {
 
 /// Rejoin exact four-lane load/store batches into one 128-bit copy.
 pub fn recover_wide_copies(function: &mut Function) {
+    let dead = dead_scalar_views(&function.body);
+    if !dead.is_empty() {
+        drop_dead_scalar_views(&mut function.body, &dead);
+    }
     recover_body(&mut function.body);
 }
 
@@ -227,6 +383,131 @@ mod tests {
             disp,
             segment: None,
         }
+    }
+
+    /// The lowered form of `synchronise_xmm_views`' scalar-view bridge:
+    /// `Op::Concat { dst, hi, lo }` becomes `dst = hi | lo`.
+    fn scalar_view_bridge(register: &str) -> Stmt {
+        Stmt::Assign {
+            dst: VReg::phys(register),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Or,
+                lhs: Box::new(Expr::Reg(VReg::phys(format!("{register}_d1")))),
+                rhs: Box::new(Expr::Reg(VReg::phys(format!("{register}_d0")))),
+            },
+        }
+    }
+
+    fn is_scalar_view_bridge(statement: &Stmt) -> bool {
+        super::scalar_view_bridge_target(statement).is_some()
+    }
+
+    /// Lane loads, the lifter's scalar-view bridge, then lane stores.
+    ///
+    /// `synchronise_xmm_views` (src/ir/lift_x86.rs) appends
+    /// `%xmm0 = concat %xmm0_d1:%xmm0_d0` to any instruction that wrote lanes
+    /// but not the whole-register name, so a later scalar read sees a defined
+    /// value. It runs per INSTRUCTION, so it cannot know whether the scalar view
+    /// is ever read, and a plain 128-bit `movups` load gets one unconditionally.
+    /// Lowered it is `xmm0 = xmm0_d1 | xmm0_d0`, and it lands exactly where this
+    /// pass expects the store batch, so the 16-byte transport was never
+    /// recovered and `__builtin_memmove` folding downstream never fired.
+    ///
+    /// This pass must run before copy propagation erases the transport
+    /// identity, so the bridge cannot simply be left to DCE.
+    #[test]
+    fn a_dead_scalar_view_bridge_does_not_hide_the_transport() {
+        let mut body = Vec::new();
+        for lane in 0..4 {
+            body.push(Stmt::Assign {
+                dst: VReg::phys(format!("xmm0_d{lane}")),
+                src: Expr::Deref {
+                    addr: Box::new(address("rsi", lane * 4)),
+                    size: 4,
+                },
+            });
+        }
+        body.push(scalar_view_bridge("xmm0"));
+        for lane in 0..4 {
+            body.push(Stmt::Store {
+                addr: address("rdi", lane * 4),
+                src: Expr::Reg(VReg::phys(format!("xmm0_d{lane}"))),
+                size: 4,
+            });
+        }
+        let mut function = Function {
+            name: "bridged".into(),
+            entry_va: 0,
+            body,
+        };
+
+        recover_wide_copies(&mut function);
+
+        assert!(
+            matches!(
+                &function.body[0],
+                Stmt::Assign { dst: VReg::Phys(name), src: Expr::Deref { size: 16, .. } }
+                    if name == "xmm0"
+            ),
+            "the 16-byte load must be recovered: {:#?}",
+            function.body
+        );
+        assert!(
+            function.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Store { src: Expr::Reg(VReg::Phys(name)), size: 16, .. } if name == "xmm0"
+            )),
+            "the 16-byte store must be recovered: {:#?}",
+            function.body
+        );
+        // The bridge read lanes the rejoin no longer defines, so leaving it
+        // would overwrite the recovered value with undefined operands.
+        assert!(
+            !function.body.iter().any(is_scalar_view_bridge),
+            "the dead bridge must be removed with the lanes it read: {:#?}",
+            function.body
+        );
+    }
+
+    /// The control. A bridge whose scalar view IS read later is live, so the
+    /// rejoin must not fire: recovering the 16-byte transport stops defining
+    /// `xmm0_d0`/`xmm0_d1`, and the surviving bridge would then overwrite
+    /// `xmm0` with undefined operands. Failing closed keeps the lane form.
+    #[test]
+    fn a_live_scalar_view_bridge_blocks_the_rejoin() {
+        let mut body = Vec::new();
+        for lane in 0..4 {
+            body.push(Stmt::Assign {
+                dst: VReg::phys(format!("xmm0_d{lane}")),
+                src: Expr::Deref {
+                    addr: Box::new(address("rsi", lane * 4)),
+                    size: 4,
+                },
+            });
+        }
+        body.push(scalar_view_bridge("xmm0"));
+        for lane in 0..4 {
+            body.push(Stmt::Store {
+                addr: address("rdi", lane * 4),
+                src: Expr::Reg(VReg::phys(format!("xmm0_d{lane}"))),
+                size: 4,
+            });
+        }
+        // Somebody reads the whole-register view.
+        body.push(Stmt::Assign {
+            dst: VReg::phys("rax"),
+            src: Expr::Reg(VReg::phys("xmm0")),
+        });
+        let original = body.clone();
+        let mut function = Function {
+            name: "live_bridge".into(),
+            entry_va: 0,
+            body,
+        };
+
+        recover_wide_copies(&mut function);
+
+        assert_eq!(function.body, original);
     }
 
     #[test]

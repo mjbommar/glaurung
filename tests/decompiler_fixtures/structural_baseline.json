@@ -2777,7 +2777,7 @@
     "174_float_compare_classify:unordered_compare_flags": [],
     "174_float_compare_classify:zero_sign_from_product": [],
     "175_float_matrix_kernel:dot_product_f32": [
-      "var12 is read but never defined"
+      "var11 is read but never defined"
     ],
     "175_float_matrix_kernel:dot_product_f64": [],
     "175_float_matrix_kernel:matrix2_determinant": [],
