@@ -70,21 +70,20 @@ else
   lanes=3
 fi
 : "${CARGO_TARGET_DIR:=$PWD/target}"
-# Scale to the host instead of a hardcoded 4. These lanes are overwhelmingly
-# CONTAINER-STARTUP bound, not CPU bound: `tools/fixture_toolchain.py` runs each
-# compile as its own `docker run --rm`, measured at ~1.07 s against ~0.085 s for
-# `docker exec` into a live container. Lane 2 issues roughly 3,300 of them (728
-# fixture compiles plus 2,568 recompiles of decompiled C), i.e. ~59 minutes of
-# pure container spawn, which is essentially the whole lane.
+# Do NOT raise this to fill the host. It was tried, at nproc*2/3 (16 on a
+# 24-core box), and it produced a FAKE VERDICT: an `arch_roundtrip
+# --write-baseline` run under that load recorded
+# `112_recursion_shapes:armv7_a32:O2:tail_countdown` as a regression from pass
+# to fail, and the same lane then passed 4/4 on three consecutive isolated
+# runs. `fixture_harness.default_jobs` says exactly why — a decompilation is
+# bounded by its worker's wall-clock timeout, so oversubscribing turns a
+# scheduling artifact into a recorded failure. A baseline is the wrong artifact
+# to be racy about: a bogus `fail` written there becomes the accepted truth.
 #
-# Concurrency changes wall-clock, not verdicts — lanes are independent binaries
-# with per-function workers and stable per-function fuzz seeds. It is capped
-# below `nproc` on purpose: `fixture_harness.default_jobs` notes that
-# oversubscribing can push a slow-but-correct decompilation past its worker
-# wall-clock timeout, which would turn a scheduling artifact into a fake verdict.
-: "${GLAURUNG_FIXTURE_JOBS:=$(( $(nproc 2>/dev/null || echo 4) * 2 / 3 ))}"
+# The lanes are not CPU-bound anyway, so the headroom buys little. Leave the
+# harness's own conservative default (min(8, cores-1)) in charge; an explicit
+# GLAURUNG_FIXTURE_JOBS still wins for anyone who wants to experiment.
 : "${GLAURUNG_DECBENCH_JOBS:=4}"
-[ "$GLAURUNG_FIXTURE_JOBS" -lt 1 ] && GLAURUNG_FIXTURE_JOBS=1
 # The harness shells out to `glaurung`, so this script used to require an
 # ACTIVATED venv and otherwise died with `FileNotFoundError: 'glaurung'` — an
 # environment problem wearing a harness bug's clothes. Put the venv first
