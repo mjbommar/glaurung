@@ -68,12 +68,35 @@ fn clip_block_to_owned_ranges(func: &Function, start: u64, end: u64) -> Option<(
     })
 }
 
+/// An explicit "these bytes were never decoded" marker.
+///
+/// Design rule 8: a failed proof becomes an explicit unknown, never a silent
+/// omission. Bytes we could not read still transfer control and still touch
+/// memory, so the marker declares the maximal footprint — reads memory, writes
+/// memory, no known outputs. That keeps every dataflow consumer conservative,
+/// where dropping the block instead invites the much worse conclusion that the
+/// code was never there at all.
+fn undecoded_bytes(va: u64) -> LlirInstr {
+    LlirInstr {
+        va,
+        op: Op::Intrinsic {
+            name: "undecoded_bytes".to_string(),
+            ins: Vec::new(),
+            outs: Vec::new(),
+            reads_mem: true,
+            writes_mem: true,
+        },
+    }
+}
+
 /// Lift every basic block of `func` from `data` into LLIR blocks.
 ///
 /// Returns `None` when the architecture has no LLIR lifter yet.
-/// Individual blocks whose bytes cannot be located (e.g. VA outside any
-/// mapped segment) are skipped silently; the function's other blocks still
-/// produce LLIR.
+///
+/// Blocks outside every range the function owns belong to a neighbouring
+/// function and are excluded. Blocks the function *does* own whose bytes cannot
+/// be located, or whose window is clipped by the end of the image, are kept and
+/// marked [`undecoded_bytes`] rather than skipped.
 pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Option<LlirFunction> {
     lift_function(data, func, arch, None)
 }
@@ -110,25 +133,19 @@ fn lift_function(
         let Some((start, end)) =
             clip_block_to_owned_ranges(func, bb.start_address.value, bb.end_address.value)
         else {
+            // Outside every range this function owns, so the block belongs to a
+            // neighbouring function. Excluding it — and pruning edges into it
+            // below — is correct, not lossy.
             continue;
         };
-        let Some(foff) = image.map_or_else(
-            || va_to_code_file_offset(data, start),
-            |image| image.va_to_code_file_offset(start),
-        ) else {
-            continue;
-        };
-        let size = (end - start) as usize;
-        let end_off = foff.saturating_add(size).min(data.len());
-        if foff >= end_off {
-            continue;
-        }
-        let window = &data[foff..end_off];
-        let thumb = func.has_flag(crate::core::function::FunctionFlags::IS_THUMB);
-        let instrs = lift_window(window, start, arch, thumb, data);
 
         // Successors are the CFG successor block starts, which we can recover
         // from bb.successor_ids by finding the corresponding BasicBlock.
+        //
+        // Computed before the bytes are located, because they must survive the
+        // case where the bytes cannot be: a block we failed to decode still
+        // transfers control, and dropping its edges would leave the CFG better
+        // formed than the truth.
         let mut succs: Vec<u64> = Vec::new();
         for sid in &bb.successor_ids {
             if let Some(target) = func
@@ -140,6 +157,32 @@ fn lift_function(
                 succs.push(target);
             }
         }
+
+        let size = (end - start) as usize;
+        let thumb = func.has_flag(crate::core::function::FunctionFlags::IS_THUMB);
+        let window = image
+            .map_or_else(
+                || va_to_code_file_offset(data, start),
+                |image| image.va_to_code_file_offset(start),
+            )
+            .map(|foff| (foff, foff.saturating_add(size).min(data.len())))
+            .filter(|(foff, end_off)| foff < end_off);
+
+        let instrs = match window {
+            // The VA maps to no file offset, or maps past the end of the image.
+            // Emit the block as explicitly undecoded rather than dropping it.
+            None => vec![undecoded_bytes(start)],
+            Some((foff, end_off)) => {
+                let mut instrs = lift_window(&data[foff..end_off], start, arch, thumb, data);
+                if end_off - foff < size {
+                    // The window was clipped by the end of the image, so this
+                    // block's tail was never decoded. A silently short block
+                    // reads downstream as a complete one.
+                    instrs.push(undecoded_bytes(start + (end_off - foff) as u64));
+                }
+                instrs
+            }
+        };
 
         blocks.push(LlirBlock {
             start_va: start,
@@ -1171,5 +1214,142 @@ mod tests {
             .instrs
             .iter()
             .any(|i| !matches!(&i.op, Op::Unknown { .. }))));
+    }
+
+    /// How often does the undecodable path actually fire on real input?
+    ///
+    /// The marker is the honest representation, but a marker that fires
+    /// routinely would mean the lifter is losing real code and the CFG has been
+    /// quietly approximate all along. Measured here rather than assumed: across
+    /// every sample binary this test can find, no owned block fails to decode.
+    /// If that ever stops being true the count is a finding, not a nuisance —
+    /// re-read the failing VAs before relaxing the assertion.
+    #[test]
+    fn no_owned_block_in_the_sample_corpus_is_undecodable() {
+        let mut lifted = 0usize;
+        let mut undecoded = Vec::new();
+        for (rel, arch) in [
+            (
+                "samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2",
+                Arch::X86_64,
+            ),
+            (
+                "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0",
+                Arch::X86_64,
+            ),
+            (
+                "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-arm64-gcc",
+                Arch::AArch64,
+            ),
+        ] {
+            let path = Path::new(rel);
+            if !path.exists() {
+                continue;
+            }
+            let data = std::fs::read(path).expect("read sample");
+            let budgets = Budgets {
+                max_functions: 64,
+                max_blocks: 512,
+                max_instructions: 40_000,
+                timeout_ms: 4000,
+                total_timeout_ms: 0,
+            };
+            let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
+            for f in &funcs {
+                let Some(lf) = lift_function_from_bytes(&data, f, arch) else {
+                    continue;
+                };
+                lifted += 1;
+                for block in &lf.blocks {
+                    for instr in &block.instrs {
+                        if matches!(&instr.op, Op::Intrinsic { name, .. } if name == "undecoded_bytes")
+                        {
+                            undecoded.push((rel, instr.va));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(lifted > 0, "no sample binary was available to measure");
+        assert!(
+            undecoded.is_empty(),
+            "{} owned block(s) failed to decode across {lifted} functions: {:x?}",
+            undecoded.len(),
+            undecoded
+        );
+    }
+
+    /// Build a function of `n` adjacent 4-byte blocks, each falling through to
+    /// the next, at VAs that no byte buffer here will ever map.
+    #[cfg(test)]
+    fn chain_at_unmapped_vas(n: usize) -> crate::core::function::Function {
+        use crate::core::address::{Address, AddressKind};
+        use crate::core::basic_block::BasicBlock;
+        use crate::core::function::{Function, FunctionKind};
+
+        let va = |v: u64| Address::new(AddressKind::VA, v, 64, None, None).unwrap();
+        let base = 0x7fff_0000_0000u64;
+        let mut f = Function::new("unmapped".into(), va(base), FunctionKind::Normal).unwrap();
+        for i in 0..n as u64 {
+            let succ = (i + 1 < n as u64).then(|| vec![format!("b{}", i + 1)]);
+            f.basic_blocks.push(BasicBlock::new(
+                format!("b{i}"),
+                va(base + i * 4),
+                va(base + i * 4 + 4),
+                1,
+                succ,
+                None,
+            ));
+        }
+        f
+    }
+
+    /// Design rule 8: a block we own but cannot decode becomes an explicit
+    /// unknown, never a silent omission. Before this, both the block and every
+    /// edge into it disappeared, leaving a CFG strictly better formed than the
+    /// truth — the one shape no consumer can detect, because there is nothing
+    /// left to detect.
+    #[test]
+    fn undecodable_owned_blocks_survive_as_explicit_unknowns() {
+        let f = chain_at_unmapped_vas(3);
+        let data = vec![0u8; 16]; // not an object file: nothing maps
+        let lf = lift_function_from_bytes(&data, &f, Arch::X86_64)
+            .expect("a function of undecodable blocks is still a function");
+
+        assert_eq!(lf.blocks.len(), 3, "every owned block must survive");
+        for block in &lf.blocks {
+            assert!(
+                matches!(
+                    block.instrs.as_slice(),
+                    [LlirInstr {
+                        op: Op::Intrinsic { name, reads_mem: true, writes_mem: true, .. },
+                        ..
+                    }] if name == "undecoded_bytes"
+                ),
+                "undecoded block must carry a maximal-footprint marker, got {:?}",
+                block.instrs
+            );
+        }
+    }
+
+    /// The edges matter as much as the blocks. A dropped block used to take its
+    /// predecessors' edges with it via the `succs.retain` prune below, which is
+    /// how an unreadable block turned into a plausible-looking straight line.
+    #[test]
+    fn edges_into_undecodable_blocks_are_not_pruned() {
+        let f = chain_at_unmapped_vas(3);
+        let data = vec![0u8; 16];
+        let lf = lift_function_from_bytes(&data, &f, Arch::X86_64).expect("lift");
+
+        let succs: Vec<&[u64]> = lf.blocks.iter().map(|b| b.succs.as_slice()).collect();
+        assert_eq!(
+            succs,
+            vec![
+                &[0x7fff_0000_0004u64][..],
+                &[0x7fff_0000_0008u64][..],
+                &[][..],
+            ],
+            "the chain must stay a chain"
+        );
     }
 }
