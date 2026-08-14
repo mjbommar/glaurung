@@ -181,7 +181,15 @@ pub fn return_registers(cc: CallConv) -> &'static [&'static str] {
         // the head of the alias set as the decompiler's logical return value.
         // i386 returns floating point on the x87 stack, not in an SSE register.
         CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
-        CallConv::Aarch64 => &["x0", "w0"],
+        // AAPCS64 returns an integer or pointer in `x0` and a scalar float or
+        // double in `v0`, whose scalar views are spelled `d0` and `s0`. Listing
+        // the float names is what lets the naming pass call that value `ret`
+        // instead of an anonymous `varN` — the same reason `xmm0` is listed
+        // above, and its absence here is why every float-returning AArch64
+        // function returned its first argument. Ordered after the integer
+        // names for the same reason: when a function writes both, `x0` is the
+        // result and the vector register was scratch.
+        CallConv::Aarch64 => &["x0", "w0", "v0", "d0", "s0"],
         // AAPCS hard-float returns scalar FP values in s0/d0. Keep those
         // storage alternatives visible to value numbering; prototype recovery
         // decides which class is the actual source result.
@@ -730,6 +738,29 @@ mod tests {
                 Some(&return_register(cc)),
                 "{cc:?}"
             );
+        }
+    }
+
+    /// AAPCS64 returns a scalar float or double in `v0`, whose scalar views are
+    /// spelled `s0` and `d0`. Omitting them made every float-returning AArch64
+    /// function render its result into a dead variable and return `x0` — which
+    /// on an identity-shaped body is the first ARGUMENT.
+    /// `181_compensated_summation:compensation_of_step` (`gcc -O2`) recovered
+    /// as `return arg0;` for exactly this reason.
+    #[test]
+    fn aarch64_float_results_are_return_storage() {
+        for name in ["d0", "s0", "v0"] {
+            assert!(
+                is_return_register(CallConv::Aarch64, name),
+                "{name} is AAPCS64 result storage"
+            );
+        }
+        // The integer name still leads, so a function writing both keeps `x0`
+        // as its result and the vector register as scratch.
+        assert_eq!(return_registers(CallConv::Aarch64).first(), Some(&"x0"));
+        // `v1`/`d1` are ARGUMENT storage, never a result.
+        for name in ["d1", "s1", "v1"] {
+            assert!(!is_return_register(CallConv::Aarch64, name), "{name}");
         }
     }
 }

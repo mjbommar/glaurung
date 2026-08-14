@@ -1020,6 +1020,160 @@ fn bitfield_operands(ins: &Instruction) -> Option<(VReg, Value, u16, u16, Width)
     Some((dst, src, lsb, field, dst_width))
 }
 
+/// The scalar IEEE width an AArch64 floating-point register name states.
+///
+/// Unlike x86's `xmm0`, the AArch64 spelling carries the width: `s0` is
+/// binary32 and `d0` binary64, so nothing has to be inferred from the mnemonic.
+/// The half/byte views (`h`, `b`) and the vector spellings (`q`, `v`) have no
+/// scalar C type in this lowering and get `None`, which leaves them on the
+/// existing paths instead of giving them a plausible wrong width.
+fn scalar_float_width(register: &VReg) -> Option<Width> {
+    let VReg::Phys(name) = register else {
+        return None;
+    };
+    let base = crate::ir::abi::ssa_base(name);
+    let (class, index) = base.split_at(base.char_indices().nth(1)?.0);
+    if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    match class {
+        "s" => Some(Width::W32),
+        "d" => Some(Width::W64),
+        _ => None,
+    }
+}
+
+/// Lift one AArch64 scalar floating-point instruction.
+///
+/// IEEE arithmetic has semantics `Op::Bin` — integer arithmetic — cannot
+/// represent, so these become typed intrinsics carrying an exact register
+/// footprint, exactly as `lift_arm32` does for VFP. The names emitted are
+/// deliberately ARM32's `vadd.f64`/`vmov.f32` spellings rather than a new
+/// AArch64 namespace: `ast::scalar_float_intrinsic` already lowers those to C
+/// arithmetic, so one lowering serves both producers — the same choice
+/// `ast::wide_integer_intrinsic` records for `umulh`/`sdiv`.
+///
+/// Before this, EVERY AArch64 scalar float instruction lifted to `Op::Unknown`:
+/// no definition, no use, no footprint at all. `compensation_of_step`
+/// (`181_compensated_summation`, `-O2`) is three instructions —
+/// `fadd d31,d0,d1; fsub d0,d31,d0; fsub d0,d0,d1` — and recovered as
+/// `return arg0;` with all three dropped to asm comments.
+fn scalar_float_ops(ins: &Instruction, mnem: &str) -> Option<Vec<Op>> {
+    let stem = match mnem {
+        "fadd" => "vadd",
+        "fsub" => "vsub",
+        "fmul" => "vmul",
+        "fdiv" => "vdiv",
+        "fneg" => "vneg",
+        "fmov" => "vmov",
+        _ => return None,
+    };
+    let arity = if matches!(stem, "vneg" | "vmov") {
+        2
+    } else {
+        3
+    };
+    if ins.operands.len() != arity {
+        return None;
+    }
+    let dst = operand_reg(ins.operands.first()?)?;
+    let width = scalar_float_width(&dst)?;
+    let mut sources = Vec::with_capacity(arity - 1);
+    for operand in &ins.operands[1..] {
+        let source = operand_reg(operand)?;
+        // Every operand of a scalar FP instruction is the same IEEE width as
+        // its destination. An `fmov` reading a general register is a BIT
+        // reinterpretation rather than this conversion-free move, and a
+        // register whose name states a different width is a form this lowering
+        // does not model; both stay on `packed::scalar_fmov`'s exact-lane path.
+        if scalar_float_width(&source) != Some(width) {
+            return None;
+        }
+        sources.push(Value::Reg(source));
+    }
+    Some(vec![Op::Intrinsic {
+        name: format!("{stem}.f{}", width.bits()),
+        ins: sources,
+        outs: vec![(dst, width)],
+        reads_mem: false,
+        writes_mem: false,
+    }])
+}
+
+/// The C arithmetic type an AArch64 register holds under a conversion
+/// mnemonic, spelled the way ARM's `vcvt.<to>.<from>` suffix does.
+///
+/// `float_class` says how the mnemonic READS the register, which is the whole
+/// content of a conversion instruction: `scvtf s0, s0` reads `s0` as a 32-bit
+/// signed integer and writes it back as binary32, so the same register name is
+/// `s32` at one end and `f32` at the other. The width still comes from the
+/// name — `w`/`s` are four bytes, `x`/`d` eight — because AArch64 states it
+/// there.
+fn conversion_end(register: &VReg, float_class: bool) -> Option<String> {
+    let VReg::Phys(name) = register else {
+        return None;
+    };
+    let base = crate::ir::abi::ssa_base(name);
+    let (class, index) = base.split_at(base.char_indices().nth(1)?.0);
+    if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let bits = match class {
+        "w" | "s" => 32,
+        "x" | "d" => 64,
+        _ => return None,
+    };
+    Some(format!("{}{bits}", if float_class { 'f' } else { 's' }))
+}
+
+/// Lift one AArch64 scalar conversion between a signed integer and an IEEE
+/// value, or between the two IEEE widths.
+///
+/// The name emitted is ARM32's `vcvt.<to>.<from>` spelling, which
+/// `ast::arm_scalar_conversion_intrinsic` lowers to the exact C cast.
+///
+/// `ucvtf`/`fcvtzu` are absent on purpose: `ast::ScalarType` cannot say
+/// "unsigned", and rendering them as their signed neighbour disagrees for every
+/// value above the signed maximum — which is precisely what
+/// `173_float_int_conversions:truncate_to_unsigned` measures. A wrong answer
+/// that type-checks is worse than the opaque comment.
+///
+/// `fcvtzs` is the truncating form, which is what a C cast does; the
+/// rounding-mode variants (`fcvtas`, `fcvtms`, `fcvtns`, `fcvtps`) are not C
+/// casts and stay opaque.
+fn scalar_conversion_ops(ins: &Instruction, mnem: &str) -> Option<Vec<Op>> {
+    let (destination_is_float, source_is_float) = match mnem {
+        "scvtf" => (true, false),
+        "fcvtzs" => (false, true),
+        "fcvt" => (true, true),
+        _ => return None,
+    };
+    if ins.operands.len() != 2 {
+        return None;
+    }
+    let dst = operand_reg(&ins.operands[0])?;
+    let src = operand_reg(&ins.operands[1])?;
+    let to = conversion_end(&dst, destination_is_float)?;
+    let from = conversion_end(&src, source_is_float)?;
+    if to == from {
+        return None;
+    }
+    // The destination of every one of these is a floating-point register except
+    // `fcvtzs`, which writes a general one; either way its declared width is
+    // the width its name states.
+    let width = match to.strip_prefix(['f', 's'])? {
+        "32" => Width::W32,
+        _ => Width::W64,
+    };
+    Some(vec![Op::Intrinsic {
+        name: format!("vcvt.{to}.{from}"),
+        ins: vec![Value::Reg(src)],
+        outs: vec![(dst, width)],
+        reads_mem: false,
+        writes_mem: false,
+    }])
+}
+
 fn lift_one(ins: &Instruction) -> Vec<Op> {
     let mnem = ins.mnemonic.to_ascii_lowercase();
 
@@ -1027,6 +1181,14 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
         if let Some(ops) = packed::dword_binary(ins, BinOp::Add) {
             return ops;
         }
+    }
+
+    if let Some(ops) = scalar_float_ops(ins, &mnem) {
+        return ops;
+    }
+
+    if let Some(ops) = scalar_conversion_ops(ins, &mnem) {
+        return ops;
     }
 
     // Three-operand arithmetic: <op> Xd, Xn, <reg|imm>
@@ -3752,6 +3914,141 @@ mod tests {
                 out.iter()
                     .all(|i| !matches!(&i.op, Op::Intrinsic { outs, .. } if !outs.is_empty())),
                 "{name} must not claim to define a value"
+            );
+        }
+    }
+
+    /// `181_compensated_summation:compensation_of_step` at `gcc -O2` on
+    /// AArch64 is three instructions and no memory:
+    ///
+    ///     fadd d31, d0, d1
+    ///     fsub d0, d31, d0
+    ///     fsub d0, d0, d1
+    ///     ret
+    ///
+    /// Every AArch64 scalar floating-point instruction used to lift to
+    /// `Op::Unknown` — no definition, no use, no register footprint at all —
+    /// so the recovered C was `return arg0;` with all three dropped to
+    /// `/* asm: */` comments. It was one of 20 aarch64-only fixture failures
+    /// whose recovered body still names a dropped scalar FP mnemonic.
+    #[test]
+    fn scalar_double_arithmetic_carries_its_exact_register_footprint() {
+        let out = lift_bytes(
+            &[
+                0x1f, 0x28, 0x61, 0x1e, // fadd d31, d0, d1
+                0xe0, 0x3b, 0x60, 0x1e, // fsub d0, d31, d0
+                0x00, 0x38, 0x61, 0x1e, // fsub d0, d0, d1
+            ],
+            0x768,
+        );
+        let observed: Vec<_> = out
+            .iter()
+            .map(|instruction| match &instruction.op {
+                Op::Intrinsic {
+                    name, ins, outs, ..
+                } => (name.clone(), ins.clone(), outs.clone()),
+                other => panic!("scalar FP arithmetic did not lift: {other:#?}"),
+            })
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                (
+                    "vadd.f64".to_string(),
+                    vec![Value::Reg(VReg::phys("d0")), Value::Reg(VReg::phys("d1"))],
+                    vec![(VReg::phys("d31"), Width::W64)],
+                ),
+                (
+                    "vsub.f64".to_string(),
+                    vec![Value::Reg(VReg::phys("d31")), Value::Reg(VReg::phys("d0"))],
+                    vec![(VReg::phys("d0"), Width::W64)],
+                ),
+                (
+                    "vsub.f64".to_string(),
+                    vec![Value::Reg(VReg::phys("d0")), Value::Reg(VReg::phys("d1"))],
+                    vec![(VReg::phys("d0"), Width::W64)],
+                ),
+            ],
+            "the names must be ARM32's `.f64` spellings, which \
+             `ast::scalar_float_intrinsic` already lowers to C arithmetic"
+        );
+    }
+
+    /// `fmov` spans two unrelated operations. Between two floating-point
+    /// registers it is the conversion-free move this lowering models; with a
+    /// general-purpose register on either end it is a BIT reinterpretation that
+    /// `packed::scalar_fmov` owns, and claiming it here would silently turn a
+    /// reinterpreted integer into a float value.
+    #[test]
+    fn only_the_float_to_float_fmov_becomes_a_scalar_move() {
+        let float_to_float = lift_bytes(&0x1e604000u32.to_le_bytes(), 0x1000); // fmov d0, d0
+        assert!(
+            matches!(&float_to_float[0].op, Op::Intrinsic { name, outs, .. }
+                if name == "vmov.f64" && outs == &[(VReg::phys("d0"), Width::W64)]),
+            "fmov d0,d0 must be a scalar move: {float_to_float:#?}"
+        );
+
+        // `fmov w0, s31` — the lane extraction `packed::scalar_fmov` lowers.
+        let float_to_general = lift_bytes(&0x1e2603e0u32.to_le_bytes(), 0x1000);
+        assert!(
+            !float_to_general.iter().any(
+                |instruction| matches!(&instruction.op, Op::Intrinsic { name, .. }
+                    if name.starts_with("vmov"))
+            ),
+            "a float-to-general fmov is a bit reinterpretation, not a scalar \
+             move: {float_to_general:#?}"
+        );
+    }
+
+    /// `173_float_int_conversions:widen_int_to_float` is `return (float)value;`
+    /// and at `gcc -O0` on AArch64 it is `scvtf s31, s31` — the SIMD form,
+    /// which reads `s31` as a 32-bit SIGNED INTEGER and writes it back as
+    /// binary32. Dropping it left the integer's bits in a float register, and
+    /// the renderer then spelled the only thing that remained true: a
+    /// reinterpreting `union { unsigned int bits; float value; }`, which is
+    /// `*(float *)&value`, not `(float)value`.
+    #[test]
+    fn signed_integer_to_float_conversions_name_both_ends() {
+        for (word, expected, width) in [
+            (0x5e21dbffu32, "vcvt.f32.s32", Width::W32), // scvtf s31, s31
+            (0x5e61dbffu32, "vcvt.f64.s64", Width::W64), // scvtf d31, d31
+        ] {
+            let out = lift_bytes(&word.to_le_bytes(), 0x1000);
+            let [instruction] = out.as_slice() else {
+                panic!("expected one op: {out:#?}");
+            };
+            match &instruction.op {
+                Op::Intrinsic {
+                    name, ins, outs, ..
+                } => {
+                    assert_eq!(name, expected);
+                    assert_eq!(ins.len(), 1, "a conversion reads exactly one value");
+                    assert_eq!(outs.len(), 1);
+                    assert_eq!(outs[0].1, width);
+                }
+                other => panic!("{expected} did not lift: {other:#?}"),
+            }
+        }
+    }
+
+    /// The unsigned conversions must NOT be lifted: `ast::ScalarType` cannot
+    /// say "unsigned", so the only available spelling is the signed neighbour,
+    /// which disagrees for every value above the signed maximum — the exact
+    /// disagreement `truncate_to_unsigned` exists to catch. An opaque comment
+    /// is a visible gap; a wrong cast that type-checks is not.
+    #[test]
+    fn unsigned_conversions_stay_opaque_rather_than_render_a_signed_cast() {
+        for (name, word) in [
+            ("ucvtf", 0x7e21d800u32),  // ucvtf s0, s0
+            ("fcvtzu", 0x7ea1b800u32), // fcvtzu s0, s0
+        ] {
+            let out = lift_bytes(&word.to_le_bytes(), 0x1000);
+            assert!(
+                out.iter().all(|instruction| !matches!(
+                    &instruction.op,
+                    Op::Intrinsic { name, .. } if name.starts_with("vcvt")
+                )),
+                "{name} must not acquire a signed meaning: {out:#?}"
             );
         }
     }

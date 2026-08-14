@@ -1008,7 +1008,18 @@ fn float_argument_bank_slot(cc: crate::ir::call_args::CallConv, register: &VReg)
             .strip_prefix("xmm")
             .and_then(|index| index.parse::<usize>().ok())
             .filter(|index| *index < 8),
-        CallConv::Aarch64 | CallConv::Cdecl32 => None,
+        // AAPCS64 passes the first eight floating-point arguments in `v0`-`v7`,
+        // a bank as separate from `x0`-`x7` as AAPCS-VFP's is from `r0`-`r3`.
+        // The scalar views of one such register are spelled `s{n}` (binary32)
+        // and `d{n}` (binary64) and denote the SAME parameter slot, so both
+        // spellings map here; which one a given callee reads is a property of
+        // the parameter's width, and the caller of this keeps the exact
+        // spelling rather than reconstructing it.
+        CallConv::Aarch64 => base
+            .strip_prefix(['s', 'd'])
+            .and_then(|index| index.parse::<usize>().ok())
+            .filter(|index| *index < 8),
+        CallConv::Cdecl32 => None,
     }
 }
 
@@ -1017,17 +1028,32 @@ fn has_float_argument_bank(cc: crate::ir::call_args::CallConv) -> bool {
     use crate::ir::call_args::CallConv;
     matches!(
         cc,
-        CallConv::Arm | CallConv::ArmHardFloat | CallConv::SysVAmd64 | CallConv::Win64
+        CallConv::Arm
+            | CallConv::ArmHardFloat
+            | CallConv::SysVAmd64
+            | CallConv::Win64
+            | CallConv::Aarch64
     )
 }
 
-/// Contiguous scalar VFP registers whose first touch is a read.
+/// Contiguous scalar VFP registers whose first touch is a read, each paired
+/// with the EXACT register spelling that touch used.
 ///
 /// A hard-float argument is a version-zero use.  A scratch/result register is
 /// defined before it is read.  Requiring a contiguous `s0..sN` prefix follows
 /// AAPCS allocation and rejects isolated callee-saved/scratch registers.
-fn float_live_in_slots(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) -> Vec<usize> {
+///
+/// The spelling is returned because AAPCS64's `v0` has two scalar views —
+/// `s0` is binary32 and `d0` binary64 — which this IR's SSA tracks as unrelated
+/// identities. Naming the parameter `s0` when the body only ever reads `d0`
+/// would leave every use of it undefined, so the observed name is carried out
+/// rather than reconstructed from the slot index.
+fn float_live_in_slots(
+    lf: &LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+) -> Vec<(usize, String)> {
     let mut first_touch: HashMap<usize, bool> = HashMap::new();
+    let mut spelling: HashMap<usize, String> = HashMap::new();
     // `LlirFunction::blocks` is a CFG collection, not a guaranteed address or
     // dominance order. A join/return block can therefore precede the entry
     // block in the vector and make the function's final `s0` result definition
@@ -1061,7 +1087,14 @@ fn float_live_in_slots(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) ->
                     continue;
                 }
                 if let Some(slot) = float_argument_bank_slot(cc, &used) {
-                    first_touch.entry(slot).or_insert(true);
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        first_touch.entry(slot)
+                    {
+                        entry.insert(true);
+                        if let VReg::Phys(name) = &used {
+                            spelling.insert(slot, crate::ir::abi::ssa_base(name).to_string());
+                        }
+                    }
                 }
             }
             if let Some(definition) = definition {
@@ -1081,7 +1114,8 @@ fn float_live_in_slots(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) ->
         if slot != prefix.len() {
             break;
         }
-        prefix.push(slot);
+        let name = spelling.remove(&slot).unwrap_or_default();
+        prefix.push((slot, name));
     }
     prefix
 }
@@ -1973,32 +2007,45 @@ pub fn recover_prototype_with_arm_vfp_args(
     // and needs no opt-in. Without this, every float parameter on x86-64 was an
     // undefined live-in and the whole float corpus assigned `local_4 = var0`
     // where `local_4 = arg0` belonged.
+    // AAPCS64 needs no opt-in either: unlike ARM32 there is no soft-float
+    // variant of the convention, so `v0`-`v7` are always the float bank.
     let float_bank_applies = has_float_argument_bank(cc)
         && (arm_vfp_args
             || matches!(
                 cc,
-                crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64
+                crate::ir::call_args::CallConv::SysVAmd64
+                    | crate::ir::call_args::CallConv::Win64
+                    | crate::ir::call_args::CallConv::Aarch64
             ));
     if float_bank_applies {
-        let float_register = |slot: usize| match cc {
+        let float_register = |slot: usize, observed: String| match cc {
             crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64 => {
                 format!("xmm{slot}")
             }
+            // `d0` and `s0` are different SSA identities for the same AAPCS64
+            // register, so the parameter must carry the spelling the body
+            // actually reads or every use of it stays undefined.
+            crate::ir::call_args::CallConv::Aarch64 if !observed.is_empty() => observed,
             _ => format!("s{slot}"),
         };
         // Width four is a floor, not a claim: `s0` IS binary32 under AAPCS, and
         // on x86-64 an `xmm` live-in is at least a `float`. A `double`
         // parameter is corrected by the DWARF contract when one is available
-        // and by the arithmetic that consumes it otherwise.
+        // and by the arithmetic that consumes it otherwise. AArch64 is the one
+        // case that does not have to guess: the register spelling states the
+        // width, `d0` being binary64 exactly as `s0` is binary32.
         let vfp_parameters: Vec<RecoveredParameter> = float_live_in_slots(lf, cc)
             .into_iter()
-            .map(|slot| RecoveredParameter {
-                slot,
-                value: SsaValue {
-                    base: VReg::phys(float_register(slot)),
-                    version: 0,
-                },
-                hint: Some(TypeHint::Float { width: 4 }),
+            .map(|(slot, observed)| {
+                let width = if observed.starts_with('d') { 8 } else { 4 };
+                RecoveredParameter {
+                    slot,
+                    value: SsaValue {
+                        base: VReg::phys(float_register(slot, observed)),
+                        version: 0,
+                    },
+                    hint: Some(TypeHint::Float { width }),
+                }
             })
             .collect();
 
@@ -4768,7 +4815,7 @@ int never_returns(void) { for (;;) {} }
 
         assert_eq!(
             float_live_in_slots(&lf, crate::ir::call_args::CallConv::ArmHardFloat),
-            vec![0]
+            vec![(0, "s0".to_string())]
         );
     }
 

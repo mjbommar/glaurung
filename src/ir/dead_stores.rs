@@ -38,7 +38,9 @@ fn return_reg_aliases(cc: CallConv) -> Vec<&'static str> {
     match cc {
         CallConv::SysVAmd64 | CallConv::Win64 => vec!["rax", "eax", "ax", "al", "ret"],
         CallConv::Cdecl32 => vec!["rax", "eax", "ax", "al", "ret"],
-        CallConv::Aarch64 => vec!["x0", "w0", "arg0", "ret"],
+        // `d0`/`s0` are the scalar views of AAPCS64's `v0` float result. Without
+        // them the write that produces a float return looked dead.
+        CallConv::Aarch64 => vec!["x0", "w0", "d0", "s0", "arg0", "ret"],
         CallConv::Arm | CallConv::ArmHardFloat => vec!["r0", "s0", "d0", "arg0", "ret"],
     }
 }

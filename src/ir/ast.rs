@@ -881,6 +881,9 @@ fn scalar_float_intrinsic(
     ins: &[Value],
     outs: &[(VReg, crate::ir::types::Width)],
 ) -> Option<(ScalarFloatOperation, u8)> {
+    if let Some(converted) = arm_scalar_conversion_intrinsic(name) {
+        return Some(converted);
+    }
     let (base, width) = if let Some(base) = name.strip_suffix(".f32") {
         (base, 4)
     } else if let Some(base) = name.strip_suffix(".f64") {
@@ -914,6 +917,44 @@ fn scalar_float_intrinsic(
         _ => return None,
     };
     Some((operation, width))
+}
+
+/// One end of an ARM-syntax conversion suffix: `f32`, `f64`, `s32` or `s64`.
+///
+/// Unsigned ends are deliberately absent. [`ScalarType`] has no unsigned
+/// variant, so `ucvtf`/`fcvtzu` would have to be spelled as their signed
+/// neighbour — which disagrees for every value above the signed maximum, and
+/// that disagreement is exactly what `173_float_int_conversions` measures. They
+/// stay on the opaque path until the type carries signedness.
+fn arm_conversion_end(text: &str) -> Option<ScalarType> {
+    Some(match text {
+        "f32" => ScalarType::Float(4),
+        "f64" => ScalarType::Float(8),
+        "s32" => ScalarType::SignedInt(4),
+        "s64" => ScalarType::SignedInt(8),
+        _ => return None,
+    })
+}
+
+/// The C meaning of a scalar conversion named in ARM's `vcvt.<to>.<from>`
+/// syntax — `vcvt.f64.s32` is `(double)(int)x`.
+///
+/// ARM32's assembler spells its VFP conversions this way already, and
+/// `lift_arm64` emits the same canonical name for AArch64's `scvtf`, `fcvtzs`
+/// and `fcvt`, whose mnemonics carry the same two ends in a different notation.
+/// One lowering therefore serves both producers, the choice
+/// [`wide_integer_intrinsic`] records for `umulh`/`sdiv`.
+///
+/// The returned width is the RESULT's, matching
+/// [`x86_scalar_float_intrinsic`]: it is what types the destination.
+fn arm_scalar_conversion_intrinsic(name: &str) -> Option<(ScalarFloatOperation, u8)> {
+    let (to, from) = name.strip_prefix("vcvt.")?.split_once('.')?;
+    let to = arm_conversion_end(to)?;
+    let from = arm_conversion_end(from)?;
+    if to == from {
+        return None;
+    }
+    Some((ScalarFloatOperation::Convert { from, to }, to.width()))
 }
 
 /// The C meaning of one x86 scalar-SSE intrinsic, as `lift_x86` names it.

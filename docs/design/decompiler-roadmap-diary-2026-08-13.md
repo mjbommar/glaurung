@@ -3111,6 +3111,17 @@ That is the cross-lifter control for the shared `types_recover` and `ast` edits.
 --all-targets`: 287 warnings with the change and 287 with it stashed — no new
 lint. `rustfmt --edition 2021` on the five touched files.
 
+`uv run pytest python/tests/ -x -q`: one failure,
+`test_decompiler_fixture_matrix.py::test_no_lane_became_broken`, with the
+message `lane 189_effectful_select:clang:O0 disappeared from the current run`.
+That is a worktree-vintage artifact, not this change: `baseline.json` at
+`f72851e` already lists `189_effectful_select`'s lanes while
+`tests/decompiler_fixtures/src/189_effectful_select.c` does not exist at that
+commit, so the fixture cannot be built and its lanes cannot be produced. It is
+the same gap the concurrent baseline refresh was scheduled to close. Because
+`-x` stopped there, the rest of the Python suite after that file did NOT run and
+is not claimed.
+
 NOT run, and not claimed: DecBench, Joern, `decbench_matrix.py`, the full
 `arch_roundtrip.py` matrix, the full fixture matrix, and
 `scripts/decbench-local-gate.sh`. `arch_baseline.json` was NOT regenerated; every
