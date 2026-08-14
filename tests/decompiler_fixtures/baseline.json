@@ -2186,7 +2186,7 @@
   "164_nested_tlv_walker:clang:O2": {
     "tlv164_encode_nested": "pass",
     "tlv164_find_type": "fail",
-    "tlv164_leaf_sum": "fail",
+    "tlv164_leaf_sum": "pass",
     "tlv164_max_depth": "fail",
     "tlv164_node_count": "fail"
   },
@@ -2202,7 +2202,7 @@
     "tlv164_find_type": "pass",
     "tlv164_leaf_sum": "fail",
     "tlv164_max_depth": "fail",
-    "tlv164_node_count": "fail"
+    "tlv164_node_count": "pass"
   },
   "165_bitstream_reader:clang:O0": {
     "bit165_cross_check": "pass",
@@ -2226,7 +2226,7 @@
     "bit165_write_frame": "pass"
   },
   "165_bitstream_reader:gcc:O2": {
-    "bit165_cross_check": "fail",
+    "bit165_cross_check": "pass",
     "bit165_read_bits": "fail",
     "bit165_read_sequence": "pass",
     "bit165_roundtrip": "fail",
@@ -2789,8 +2789,8 @@
   },
   "189_effectful_select:gcc:O2": {
     "se189_bump": "pass",
-    "se189_nested_select": "fail",
-    "se189_select_call": "fail",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
     "se189_select_one_arm": "pass",
     "se189_select_pure": "pass"
   },
@@ -3388,7 +3388,7 @@
   },
   "56_sieve:gcc:O2": {
     "factorize": "pass",
-    "sieve_primes": "fail"
+    "sieve_primes": "pass"
   },
   "57_bignum:clang:O0": {
     "bignum_add": "pass",
