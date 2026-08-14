@@ -82,6 +82,11 @@ for the corpus-specific contracts.
 
 ## Getting started
 
+The repository-wide modularization work is organized as independently gated
+mini-projects in the [architecture refactoring portfolio](../refactoring/README.md).
+Those plans supplement the source-tree map; they do not describe already
+completed moves.
+
 ```bash
 uv sync --locked --dev
 uv run glaurung --help
