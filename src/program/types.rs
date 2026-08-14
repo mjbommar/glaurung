@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::DataType;
 
+mod dwarf;
 mod import;
 mod verify;
 

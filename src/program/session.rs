@@ -3,7 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::analysis::cfg::{analyze_functions_image_with_seeds, Budgets};
 use crate::core::function::Function;
@@ -12,6 +12,13 @@ use crate::program::environment::{
     callback_api_identity, recover_program_environment, ProgramEnvironment,
 };
 use crate::program::image::{ProgramImage, ProgramImageError};
+use crate::program::types::TypeStore;
+
+#[derive(Debug)]
+struct ProgramTypeArtifacts {
+    debug_types: Arc<[crate::debug::dwarf::DwarfType]>,
+    store: Arc<TypeStore>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct DiscoveryKey {
@@ -170,6 +177,7 @@ pub struct ProgramSession {
     image: ProgramImage,
     discovery: Arc<DiscoveryCache>,
     environments: Arc<Mutex<HashMap<EnvironmentKey, Arc<ProgramEnvironment>>>>,
+    type_artifacts: Arc<OnceLock<ProgramTypeArtifacts>>,
 }
 
 impl ProgramSession {
@@ -184,7 +192,36 @@ impl ProgramSession {
             image,
             discovery: Arc::new(DiscoveryCache::default()),
             environments: Arc::new(Mutex::new(HashMap::new())),
+            type_artifacts: Arc::new(OnceLock::new()),
         }
+    }
+
+    fn type_artifacts(&self) -> &ProgramTypeArtifacts {
+        self.type_artifacts.get_or_init(|| {
+            let debug_types: Arc<[crate::debug::dwarf::DwarfType]> =
+                crate::debug::dwarf::extract_dwarf_types(self.image.bytes()).into();
+            let mut store = TypeStore::default();
+            let address_size = self
+                .image
+                .target()
+                .address_bits()
+                .map_or(8, |bits| u64::from(bits).div_ceil(8));
+            store.import_dwarf_types(&debug_types, address_size);
+            ProgramTypeArtifacts {
+                debug_types,
+                store: Arc::new(store),
+            }
+        })
+    }
+
+    /// DWARF types parsed once from this session's immutable image.
+    pub fn debug_types(&self) -> Arc<[crate::debug::dwarf::DwarfType]> {
+        self.type_artifacts().debug_types.clone()
+    }
+
+    /// Canonical program type graph populated from available debug evidence.
+    pub fn type_store(&self) -> Arc<TypeStore> {
+        self.type_artifacts().store.clone()
     }
 
     /// The session's single immutable program image.
@@ -252,6 +289,7 @@ impl ProgramSession {
             calling_convention,
             address_names,
             &key.requested_vas,
+            self.type_store(),
         ));
         let mut environments = self
             .environments
@@ -266,7 +304,8 @@ impl ProgramSession {
             .clone()
     }
 
-    /// Drop all reusable analysis artifacts and reset their counters.
+    /// Drop budget-dependent analysis artifacts and reset discovery counters.
+    /// Immutable image-derived debug/type facts remain shared for the session.
     pub fn clear_caches(&self) {
         self.discovery.clear();
         self.environments

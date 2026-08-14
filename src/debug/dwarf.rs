@@ -147,6 +147,20 @@ pub struct DwarfType {
     pub source_file: Option<String>,
 }
 
+impl DwarfType {
+    /// Whether two records describe the same layout, ignoring which
+    /// compilation unit emitted them. A header included by many units yields
+    /// the same definition repeatedly; that repetition is not disagreement.
+    fn is_same_definition(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.name == other.name
+            && self.byte_size == other.byte_size
+            && self.fields == other.fields
+            && self.variants == other.variants
+            && self.typedef_target == other.typedef_target
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DwarfTypeKind {
     Struct,
@@ -959,13 +973,29 @@ pub fn extract_dwarf_types(data: &[u8]) -> Vec<DwarfType> {
         out.extend(emitted);
     }
 
-    // Dedup by (kind, name) — DWARF often emits the same type in many
-    // CUs. Keep the first seen, which is also the richest with the
-    // current ordering.
-    let mut seen: std::collections::HashSet<(DwarfTypeKind, String)> =
-        std::collections::HashSet::new();
-    out.retain(|t| seen.insert((t.kind, t.name.clone())));
-    out
+    // DWARF repeats the same definition in every compilation unit that
+    // included it; collapse those exact repetitions to the first occurrence.
+    // Records that genuinely disagree are all retained: two units may legally
+    // define one struct tag with different layouts, and deduplicating by name
+    // alone would silently promote whichever unit happened to link first into
+    // an authoritative layout. Consumers select from the retained set.
+    let mut by_name: std::collections::HashMap<(DwarfTypeKind, String), Vec<usize>> =
+        std::collections::HashMap::new();
+    let mut retained: Vec<DwarfType> = Vec::with_capacity(out.len());
+    for record in out {
+        let slot = by_name
+            .entry((record.kind, record.name.clone()))
+            .or_default();
+        if slot
+            .iter()
+            .any(|&index| retained[index].is_same_definition(&record))
+        {
+            continue;
+        }
+        slot.push(retained.len());
+        retained.push(record);
+    }
+    retained
 }
 
 /// Give an anonymous aggregate the public name of a direct typedef alias.
@@ -1029,6 +1059,39 @@ fn _byte_size_of(entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>) -> 
         Some(gimli::AttributeValue::Data2(v)) => v as u64,
         Some(gimli::AttributeValue::Data4(v)) => v as u64,
         Some(gimli::AttributeValue::Data8(v)) => v,
+        _ => 0,
+    }
+}
+
+fn _resolved_type_byte_size(
+    dwarf: &gimli::Dwarf<Slice<'_>>,
+    unit: &Unit<'_>,
+    type_attr: gimli::AttributeValue<Slice<'_>>,
+    depth: usize,
+) -> u64 {
+    if depth >= 32 {
+        return 0;
+    }
+    let gimli::AttributeValue::UnitRef(offset) = type_attr else {
+        return 0;
+    };
+    let Ok(entry) = unit.entry(offset) else {
+        return 0;
+    };
+    let direct = _byte_size_of(&entry);
+    if direct != 0 {
+        return direct;
+    }
+    match entry.tag() {
+        gimli::DW_TAG_pointer_type | gimli::DW_TAG_reference_type => {
+            u64::from(unit.encoding().address_size)
+        }
+        gimli::DW_TAG_typedef
+        | gimli::DW_TAG_const_type
+        | gimli::DW_TAG_volatile_type
+        | gimli::DW_TAG_restrict_type => entry.attr_value(gimli::DW_AT_type).map_or(0, |target| {
+            _resolved_type_byte_size(dwarf, unit, target, depth + 1)
+        }),
         _ => 0,
     }
 }
@@ -1097,13 +1160,12 @@ fn _build_typedef(
     source_file: &Option<String>,
 ) -> Option<DwarfType> {
     let name = _name_of(dwarf, unit, entry)?;
-    let target = entry
-        .attr_value(gimli::DW_AT_type)
-        .and_then(|v| _resolve_type_string(dwarf, unit, v));
+    let target_attr = entry.attr_value(gimli::DW_AT_type);
+    let target = target_attr.and_then(|v| _resolve_type_string(dwarf, unit, v));
     Some(DwarfType {
         kind: DwarfTypeKind::Typedef,
         name,
-        byte_size: _byte_size_of(entry),
+        byte_size: target_attr.map_or(0, |target| _resolved_type_byte_size(dwarf, unit, target, 0)),
         fields: Vec::new(),
         variants: Vec::new(),
         typedef_target: target,
@@ -1125,15 +1187,15 @@ fn _build_field(
         Some(gimli::AttributeValue::Data8(v)) => v,
         _ => 0,
     };
-    let c_type = entry
-        .attr_value(gimli::DW_AT_type)
+    let type_attr = entry.attr_value(gimli::DW_AT_type);
+    let c_type = type_attr
         .and_then(|v| _resolve_type_string(dwarf, unit, v))
         .unwrap_or_else(|| String::from("/* unknown */"));
     Some(DwarfField {
         offset,
         name,
         c_type,
-        size: _byte_size_of(entry),
+        size: type_attr.map_or(0, |target| _resolved_type_byte_size(dwarf, unit, target, 0)),
     })
 }
 

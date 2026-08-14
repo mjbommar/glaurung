@@ -7,6 +7,7 @@
 //! and keeps it separate from function-local LLIR/type recovery.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::analysis::cfg::{discover_function_image_at, Budgets};
 use crate::core::binary::{Arch, Endianness};
@@ -40,7 +41,7 @@ pub struct FunctionPrototypeFact {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProgramEnvironment {
     prototypes: HashMap<u64, FunctionPrototypeFact>,
-    types: TypeStore,
+    types: Arc<TypeStore>,
 }
 
 impl ProgramEnvironment {
@@ -795,6 +796,7 @@ pub fn recover_program_environment(
     cc: CallConv,
     address_names: &HashMap<u64, String>,
     requested_vas: &[u64],
+    types: Arc<TypeStore>,
 ) -> ProgramEnvironment {
     let dump = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
     let api_targets = callback_api_targets(address_names);
@@ -804,7 +806,10 @@ pub fn recover_program_environment(
     let has_format_sink = super::format_environment::has_format_consumer(address_names);
     let fdes = image.eh_frame_functions();
     if fdes.is_empty() {
-        return ProgramEnvironment::default();
+        return ProgramEnvironment {
+            prototypes: HashMap::new(),
+            types,
+        };
     }
     let requested_vas = requested_vas
         .iter()
@@ -916,10 +921,7 @@ pub fn recover_program_environment(
             },
         );
     }
-    ProgramEnvironment {
-        prototypes,
-        types: TypeStore::default(),
-    }
+    ProgramEnvironment { prototypes, types }
 }
 
 #[cfg(test)]

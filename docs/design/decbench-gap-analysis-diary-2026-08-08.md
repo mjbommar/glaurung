@@ -3925,3 +3925,40 @@ passes. Production owners introduced or expanded here remain bounded: the common
 object reducer is 366 lines, MIR adapter 361, main MIR verifier 491 with its
 128-line object verifier split out, and TypeStore ownership is split into 475,
 223, and 62-line modules.
+
+## 2026-08-13 15:20–15:57 — one session-owned DWARF type graph
+
+The first real producer now populates the canonical `TypeStore`. A lazy,
+thread-safe `ProgramSession` artifact owns both the immutable extracted DWARF
+records and the imported language-neutral store. `decompile_at`, range, many,
+and all now borrow those session records instead of independently calling the
+DWARF parser, and every budget-keyed `ProgramEnvironment` shares the same store
+by identity. Clearing budget-dependent discovery/environment caches deliberately
+does not discard immutable image-derived types.
+
+The adapter reserves stable `dwarf:{struct,union,enum,typedef}:name` identities
+before resolving fields, so a real `Node` containing `struct Node *next`
+remains a recursive graph. Synthesized primitive and pointer nodes are canonical
+within the import and retain debug authority plus their DWARF-origin tag;
+nominal records retain compilation-unit provenance. Unsupported spellings stay
+as explicit missing-reference conflicts. Source C spellings remain an input
+adapter rather than leaking into `TypeShape`.
+
+TDD found a safety problem in the pre-existing DWARF reader: `DwarfField.size`
+read `DW_AT_byte_size` from the member DIE itself, where producers normally omit
+it. The real fixture failed with a zero size for both `int value` and `Node
+*next`. The reader now follows the referenced type through typedef and qualifier
+chains, uses the compilation unit's encoded address size for pointers and
+references, caps traversal depth, and fails closed at zero for unsupported
+forms. The same real `cc -g -O0` fixture now proves exact 4-byte `int`, native
+pointer width, recursive identity, debug provenance, one-time extraction, and
+store sharing across distinct environment cache keys. The fixture also catches
+an enum-soundness edge: because the legacy record omits `DW_AT_encoding`, the
+store retains an explicitly neutral integer underlying type instead of
+inventing signed `int` evidence from width alone.
+
+This is intentionally DWARF-only. PDB ingestion still feeds a separate field
+map, interprocedural constraints are not solved, and the production aggregate
+consumer still uses `DwarfTypeEnv`; those remain explicit unchecked work rather
+than being hidden under the earlier compound checklist item. The new owners are
+bounded at 258 lines for the DWARF adapter and 316 lines for `ProgramSession`.

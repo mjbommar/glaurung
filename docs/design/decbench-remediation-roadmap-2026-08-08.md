@@ -995,8 +995,15 @@ Acceptance:
   `ObjectTypeKey`, with the same provenance and conflict-preserving selection.
 - [x] Verify arena/index/reference/object-binding consistency and reject invalid
   anonymous shapes before mutating the store.
-- [ ] Import DWARF/PDB facts once per `ProgramSession`, add interprocedural type
-  constraints, and migrate the production aggregate/type consumers.
+- [x] Parse DWARF type records once per `ProgramSession`, import their recursive
+  nominal graph into the canonical `TypeStore`, and share the exact immutable
+  records/store across distinct environment keys and all four decompiler entry
+  paths. Referenced member widths now follow the DWARF type graph instead of
+  guessing from usually-empty member DIEs.
+- [ ] Import PDB type facts into the same store rather than retaining a separate
+  field-map authority.
+- [ ] Add interprocedural type constraints and migrate the production
+  aggregate/type consumers.
 - [ ] Project selected language-neutral types into HIR and source-language
   spellings only after solving.
 

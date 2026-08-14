@@ -942,8 +942,7 @@ pub(super) fn decompile_at_session(
     let func_va = image.normalize_function_entry(func_va);
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
-    let dwarf_types =
-        (style == "decbench" && types).then(|| crate::debug::dwarf::extract_dwarf_types(&data));
+    let dwarf_types = (style == "decbench" && types).then(|| session.debug_types());
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
@@ -1241,8 +1240,7 @@ fn decompile_range_at_py(
     let data = image.bytes();
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
-    let dwarf_types =
-        (style == "decbench" && types).then(|| crate::debug::dwarf::extract_dwarf_types(&data));
+    let dwarf_types = (style == "decbench" && types).then(|| session.debug_types());
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
@@ -2473,8 +2471,7 @@ fn decompile_all_py(
     let data = image.bytes();
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
-    let dwarf_types =
-        (style == "decbench").then(|| crate::debug::dwarf::extract_dwarf_types(&data));
+    let dwarf_types = (style == "decbench").then(|| session.debug_types());
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
@@ -2720,8 +2717,7 @@ fn decompile_many_py(
         .collect();
     let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
     let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
-    let dwarf_types =
-        (style == "decbench").then(|| crate::debug::dwarf::extract_dwarf_types(&data));
+    let dwarf_types = (style == "decbench").then(|| session.debug_types());
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
