@@ -49,7 +49,9 @@ fn pure_address_expression(expr: &Expr) -> bool {
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => true,
         Expr::Bin { lhs, rhs, .. } => pure_address_expression(lhs) && pure_address_expression(rhs),
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => pure_address_expression(src),
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => pure_address_expression(src),
         Expr::Deref { .. }
         | Expr::Call { .. }
         | Expr::Cmp { .. }
@@ -131,7 +133,9 @@ fn contains_active_stack_base(expr: &Expr, ctx: StackContext) -> bool {
                 || contains_active_stack_base(if_true, ctx)
                 || contains_active_stack_base(if_false, ctx)
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => contains_active_stack_base(src, ctx),
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => contains_active_stack_base(src, ctx),
         Expr::FunctionTableEntry { index, .. } => contains_active_stack_base(index, ctx),
         Expr::WideArithmetic { args, .. } => args
             .iter()
@@ -177,7 +181,9 @@ fn contains_register(expr: &Expr, target: &VReg) -> bool {
                 || contains_register(if_true, target)
                 || contains_register(if_false, target)
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => contains_register(src, target),
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => contains_register(src, target),
         Expr::FunctionTableEntry { index, .. } => contains_register(index, target),
         Expr::WideArithmetic { args, .. } => args
             .iter()
@@ -235,9 +241,9 @@ fn replace_register(expr: &mut Expr, target: &VReg, replacement: &VReg) {
             replace_register(if_true, target, replacement);
             replace_register(if_false, target, replacement);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => {
-            replace_register(src, target, replacement)
-        }
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => replace_register(src, target, replacement),
         Expr::FunctionTableEntry { index, .. } => replace_register(index, target, replacement),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
@@ -331,7 +337,9 @@ fn expand_expr(expr: &mut Expr, aliases: &HashMap<VReg, Expr>) {
             expand_expr(if_true, aliases);
             expand_expr(if_false, aliases);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => expand_expr(src, aliases),
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => expand_expr(src, aliases),
         Expr::FunctionTableEntry { index, .. } => expand_expr(index, aliases),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
@@ -418,7 +426,9 @@ fn expand_memory_address_components(expr: &mut Expr, components: &HashMap<VReg, 
             expand_memory_address_components(if_true, components);
             expand_memory_address_components(if_false, components);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => {
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => {
             expand_memory_address_components(src, components)
         }
         Expr::FunctionTableEntry { index, .. } => {

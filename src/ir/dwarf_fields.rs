@@ -655,7 +655,9 @@ fn annotate_expr(
             annotate_expr(if_true, layouts, pointer_width, pointer_types, definitions);
             annotate_expr(if_false, layouts, pointer_width, pointer_types, definitions);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => {
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => {
             annotate_expr(src, layouts, pointer_width, pointer_types, definitions)
         }
         Expr::FunctionTableEntry { index, .. } => {

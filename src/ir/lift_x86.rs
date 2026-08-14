@@ -1569,7 +1569,11 @@ fn scalar_convert_ops(
 ///
 /// The comparison is `xmm1 <=> xmm2` in Intel operand order: `comiss %xmm0,%xmm1`
 /// in AT&T syntax asks whether `xmm1` is above `xmm0`.
-fn scalar_float_compare_ops(instr: &iced_x86::Instruction, width: Width, mnemonic: &str) -> Vec<Op> {
+fn scalar_float_compare_ops(
+    instr: &iced_x86::Instruction,
+    width: Width,
+    mnemonic: &str,
+) -> Vec<Op> {
     if instr.op_count() != 2 || instr.op_kind(0) != OpKind::Register {
         return vec![Op::Unknown {
             mnemonic: mnemonic.into(),
@@ -4145,12 +4149,8 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // under the current rounding mode (the plain forms; the compilers only
         // emit these for `lrint`-family calls). The DESTINATION width is a
         // general-purpose register's, so it is read from the operand.
-        Mnemonic::Cvttss2si => {
-            scalar_convert_ops(instr, "cvttss2si", 4, operand_width(instr, 0))
-        }
-        Mnemonic::Cvttsd2si => {
-            scalar_convert_ops(instr, "cvttsd2si", 8, operand_width(instr, 0))
-        }
+        Mnemonic::Cvttss2si => scalar_convert_ops(instr, "cvttss2si", 4, operand_width(instr, 0)),
+        Mnemonic::Cvttsd2si => scalar_convert_ops(instr, "cvttsd2si", 8, operand_width(instr, 0)),
         Mnemonic::Cvtss2si => scalar_convert_ops(instr, "cvtss2si", 4, operand_width(instr, 0)),
         Mnemonic::Cvtsd2si => scalar_convert_ops(instr, "cvtsd2si", 8, operand_width(instr, 0)),
         Mnemonic::Ucomiss | Mnemonic::Comiss => {
@@ -4906,12 +4906,14 @@ mod tests {
         // definition appended for those is the sync, whichever form it took.
         let lane_written: std::collections::BTreeSet<String> = lifted
             .iter()
-            .filter_map(|instruction| match crate::ir::use_def::def_uses(&instruction.op).0 {
-                Some(VReg::Phys(name)) => name
-                    .split_once("_d")
-                    .map(|(register, _)| register.to_string()),
-                _ => None,
-            })
+            .filter_map(
+                |instruction| match crate::ir::use_def::def_uses(&instruction.op).0 {
+                    Some(VReg::Phys(name)) => name
+                        .split_once("_d")
+                        .map(|(register, _)| register.to_string()),
+                    _ => None,
+                },
+            )
             .collect();
         lifted
             .into_iter()
@@ -7856,9 +7858,7 @@ mod tests {
         )));
         assert!(
             lift64(&[
-                0x66, 0x0f, 0x62, 0xd8,
-                0x66, 0x0f, 0xd4, 0xc3,
-                0x66, 0x48, 0x0f, 0x7e, 0xc0,
+                0x66, 0x0f, 0x62, 0xd8, 0x66, 0x0f, 0xd4, 0xc3, 0x66, 0x48, 0x0f, 0x7e, 0xc0,
             ])
             .iter()
             .any(|instruction| matches!(

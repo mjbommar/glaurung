@@ -759,7 +759,9 @@ fn is_repeatable_versioned_flag_expr(dst: &VReg, expression: &Expr) -> bool {
         match expression {
             Expr::Reg(_) | Expr::Const(_) => true,
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => pure(lhs) && pure(rhs),
-            Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => pure(src),
+            Expr::Un { src, .. }
+            | Expr::Cast { expr: src, .. }
+            | Expr::NumericConvert { expr: src, .. } => pure(src),
             Expr::FloatConst { .. }
             | Expr::Addr(_)
             | Expr::Named { .. }
@@ -1506,7 +1508,8 @@ fn contains_select(e: &Expr) -> bool {
         Expr::Select { .. } => true,
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
-        | Expr::Cast { expr: addr, .. } | Expr::NumericConvert { expr: addr, .. }
+        | Expr::Cast { expr: addr, .. }
+        | Expr::NumericConvert { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => contains_select(addr),
         Expr::Call { target, args, .. } => {
             contains_select(target) || args.iter().any(contains_select)
@@ -1622,7 +1625,9 @@ fn count_reads_expr(e: &Expr, reads: &mut HashMap<VReg, usize>) {
             count_reads_expr(if_false, reads);
         }
         Expr::Un { src, .. } => count_reads_expr(src, reads),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => count_reads_expr(expr, reads),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            count_reads_expr(expr, reads)
+        }
         Expr::FunctionTableEntry { index, .. } => count_reads_expr(index, reads),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {

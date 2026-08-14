@@ -655,7 +655,9 @@ fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
                 || expr_reads_storage(if_false, storage)
         }
         Expr::Un { src, .. } => expr_reads_storage(src, storage),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expr_reads_storage(expr, storage),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            expr_reads_storage(expr, storage)
+        }
         Expr::FunctionTableEntry { index, .. } => expr_reads_storage(index, storage),
         Expr::WideArithmetic { args, .. } => args
             .iter()
@@ -2186,7 +2188,9 @@ fn collect_fixed_frame_reads(expr: &Expr, reads: &mut Vec<(String, i64, u8)>) ->
                 && collect_fixed_frame_reads(if_false, reads)
         }
         Expr::Un { src, .. } => collect_fixed_frame_reads(src, reads),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => collect_fixed_frame_reads(expr, reads),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            collect_fixed_frame_reads(expr, reads)
+        }
         Expr::WideArithmetic { args, .. } => args
             .iter()
             .all(|argument| collect_fixed_frame_reads(argument, reads)),
@@ -2278,7 +2282,9 @@ fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> b
             cond || if_true || if_false
         }
         Expr::Un { src, .. } => substitute_exact_reg(src, target, replacement),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => substitute_exact_reg(expr, target, replacement),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            substitute_exact_reg(expr, target, replacement)
+        }
         Expr::FunctionTableEntry { index, .. } => substitute_exact_reg(index, target, replacement),
         Expr::WideArithmetic { args, .. } => {
             let mut changed = false;
@@ -2316,7 +2322,9 @@ fn is_pure_arg_normalisation(expr: &Expr) -> bool {
                 && is_pure_arg_normalisation(if_false)
         }
         Expr::Un { src, .. } => is_pure_arg_normalisation(src),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => is_pure_arg_normalisation(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            is_pure_arg_normalisation(expr)
+        }
         Expr::WideArithmetic { op, args, .. } => {
             matches!(
                 op,
@@ -3004,7 +3012,9 @@ fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
             mark_arg_reads_in_expr(if_false, arch, read_between);
         }
         Expr::Un { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => mark_arg_reads_in_expr(expr, arch, read_between),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            mark_arg_reads_in_expr(expr, arch, read_between)
+        }
         Expr::FunctionTableEntry { index, .. } => mark_arg_reads_in_expr(index, arch, read_between),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
@@ -3304,7 +3314,9 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
                 || reads_reg_in_expr(if_false, target)
         }
         Expr::Un { src, .. } => reads_reg_in_expr(src, target),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => reads_reg_in_expr(expr, target),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            reads_reg_in_expr(expr, target)
+        }
         Expr::FunctionTableEntry { index, .. } => reads_reg_in_expr(index, target),
         Expr::WideArithmetic { args, .. } => args
             .iter()

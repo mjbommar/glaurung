@@ -491,7 +491,8 @@ fn count_reads_in_expr(expr: &Expr, target: &VReg) -> usize {
         Expr::Reg(register) => usize::from(register == target),
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
-        | Expr::Cast { expr: addr, .. } | Expr::NumericConvert { expr: addr, .. }
+        | Expr::Cast { expr: addr, .. }
+        | Expr::NumericConvert { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => count_reads_in_expr(addr, target),
         Expr::Call {
             target: call_target,

@@ -357,7 +357,8 @@ fn expression_reads_register(expression: &Expr, target: &VReg) -> bool {
             .any(|register| register == target),
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
-        | Expr::Cast { expr: addr, .. } | Expr::NumericConvert { expr: addr, .. }
+        | Expr::Cast { expr: addr, .. }
+        | Expr::NumericConvert { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => expression_reads_register(addr, target),
         Expr::Call {
             target: call_target,

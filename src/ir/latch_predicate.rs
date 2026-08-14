@@ -746,9 +746,9 @@ fn expression_reads(expression: &Expr, target: &VReg) -> bool {
         Expr::WideArithmetic { args, .. } => args
             .iter()
             .any(|argument| expression_reads(argument, target)),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } | Expr::FunctionTableEntry { index: expr, .. } => {
-            expression_reads(expr, target)
-        }
+        Expr::Cast { expr, .. }
+        | Expr::NumericConvert { expr, .. }
+        | Expr::FunctionTableEntry { index: expr, .. } => expression_reads(expr, target),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -806,7 +806,9 @@ fn replace_register(expression: &mut Expr, target: &VReg, replacement: &VReg) {
                 replace_register(argument, target, replacement);
             }
         }
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } | Expr::FunctionTableEntry { index: expr, .. } => {
+        Expr::Cast { expr, .. }
+        | Expr::NumericConvert { expr, .. }
+        | Expr::FunctionTableEntry { index: expr, .. } => {
             replace_register(expr, target, replacement);
         }
         Expr::Const(_)

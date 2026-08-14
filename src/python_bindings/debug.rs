@@ -17,7 +17,10 @@ use crate::symbols::pdb::{
 pub fn register_debug_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let debug_mod = pyo3::types::PyModule::new(py, "debug")?;
     debug_mod.add_function(wrap_pyfunction!(extract_dwarf_types_path_py, &debug_mod)?)?;
-    debug_mod.add_function(wrap_pyfunction!(extract_dwarf_signatures_path_py, &debug_mod)?)?;
+    debug_mod.add_function(wrap_pyfunction!(
+        extract_dwarf_signatures_path_py,
+        &debug_mod
+    )?)?;
     debug_mod.add_function(wrap_pyfunction!(analyze_pe_pdb_cache_path_py, &debug_mod)?)?;
     m.add_submodule(&debug_mod)?;
     Ok(())

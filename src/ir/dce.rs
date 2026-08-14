@@ -423,7 +423,9 @@ fn count_reads_in_expr(e: &Expr, target: &VReg) -> usize {
                 + count_reads_in_expr(if_false, target)
         }
         Expr::Un { src, .. } => count_reads_in_expr(src, target),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => count_reads_in_expr(expr, target),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            count_reads_in_expr(expr, target)
+        }
         Expr::FunctionTableEntry { index, .. } => count_reads_in_expr(index, target),
         Expr::WideArithmetic { args, .. } => args
             .iter()

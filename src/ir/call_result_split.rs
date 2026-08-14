@@ -149,7 +149,9 @@ impl Splitter {
                 self.rewrite_expr(if_false, state);
             }
             Expr::Un { src, .. } => self.rewrite_expr(src, state),
-            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => self.rewrite_expr(expr, state),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+                self.rewrite_expr(expr, state)
+            }
             Expr::FunctionTableEntry { index, .. } => self.rewrite_expr(index, state),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {

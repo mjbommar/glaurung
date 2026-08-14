@@ -1126,7 +1126,9 @@ fn is_short_circuit_safe_value(expr: &Expr) -> bool {
         | Expr::StackAddr { .. }
         | Expr::Lea { .. }
         | Expr::PdbFieldAddr { .. } => true,
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } | Expr::Un { src: expr, .. } => is_short_circuit_safe_value(expr),
+        Expr::Cast { expr, .. }
+        | Expr::NumericConvert { expr, .. }
+        | Expr::Un { src: expr, .. } => is_short_circuit_safe_value(expr),
         Expr::Bin { op, lhs, rhs } => {
             *op != BinOp::Div
                 && is_short_circuit_safe_value(lhs)

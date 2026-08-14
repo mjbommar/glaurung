@@ -858,7 +858,10 @@ enum ScalarFloatOperation {
     Binary(BinOp),
     /// A value conversion: read the operand as `from` and produce `to`,
     /// exactly as the corresponding C cast would.
-    Convert { from: ScalarType, to: ScalarType },
+    Convert {
+        from: ScalarType,
+        to: ScalarType,
+    },
 }
 
 fn scalar_vfp_register(register: &VReg) -> bool {
@@ -2258,7 +2261,9 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
                 + count_reg_uses_in_expr(if_false, target)
         }
         Expr::Un { src, .. } => count_reg_uses_in_expr(src, target),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => count_reg_uses_in_expr(expr, target),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            count_reg_uses_in_expr(expr, target)
+        }
         Expr::FunctionTableEntry { index, .. } => count_reg_uses_in_expr(index, target),
         Expr::WideArithmetic { args, .. } => args
             .iter()
@@ -2293,7 +2298,9 @@ fn expr_reads_memory(expr: &Expr) -> bool {
             if_false,
             ..
         } => expr_reads_memory(cond) || expr_reads_memory(if_true) || expr_reads_memory(if_false),
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => expr_reads_memory(src),
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => expr_reads_memory(src),
         Expr::WideArithmetic { args, .. } => args.iter().any(expr_reads_memory),
         Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -8376,7 +8383,9 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
             collect_idents_expr(if_false, ids);
         }
         Expr::Un { src, .. } => collect_idents_expr(src, ids),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => collect_idents_expr(expr, ids),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            collect_idents_expr(expr, ids)
+        }
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
                 collect_idents_expr(argument, ids);
@@ -8609,9 +8618,7 @@ fn observe_address_taken_symbols(
                 observations.entry(displayed).or_default();
             }
         }
-        Expr::Deref { addr, .. } => {
-            observe_address_taken_symbols(addr, current_name, observations)
-        }
+        Expr::Deref { addr, .. } => observe_address_taken_symbols(addr, current_name, observations),
         Expr::Un { src, .. } => observe_address_taken_symbols(src, current_name, observations),
         Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
             observe_address_taken_symbols(expr, current_name, observations)
@@ -8918,7 +8925,8 @@ fn collect_named_call_expr(
         }
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
-        | Expr::Cast { expr: addr, .. } | Expr::NumericConvert { expr: addr, .. }
+        | Expr::Cast { expr: addr, .. }
+        | Expr::NumericConvert { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => visit!(addr),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             visit!(lhs);
@@ -13270,7 +13278,6 @@ function f @ 0x1000 {
     fn dec_pipeline(f: &Function) -> String {
         render_decbench(&prepare_for_decbench(f))
     }
-
 
     /// The portable object is a file-scope definition, but DecBench scores one
     /// *function definition* sliced out of the submitted translation unit. A

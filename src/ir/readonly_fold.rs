@@ -405,7 +405,9 @@ fn fold_expr(
             fold_expr(if_true, data, aliases, bounds, active_guard);
             fold_expr(if_false, data, aliases, bounds, active_guard);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::NumericConvert { expr: src, .. } => {
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => {
             fold_expr(src, data, aliases, bounds, active_guard)
         }
         Expr::FunctionTableEntry { index, .. } => {
