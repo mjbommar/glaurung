@@ -28,8 +28,31 @@ cost barely more than 4.
 | did I break anything, behaviourally | `pytest -m slow python/tests/test_decompiler_fixture_matrix.py` | ~2 min |
 | did I break a NON-x86-64 lifter | `tools/arch_roundtrip.py --check` | **4.4 min** |
 | does recovered C still build for a 32-bit target | `pytest -m slow python/tests/test_decompiler_wide_arithmetic_width.py` | ~25 s |
-| did I move the metrics on this program | `tools/decbench_matrix.py --check --only statemachine` | ~3 min |
-| is it safe to push | `scripts/decbench-local-gate.sh` | ~45 min |
+| is it safe to push | `scripts/decbench-local-gate.sh` | ~50 min |
+| did I move a PUBLISHED metric (ask first) | `tools/decbench_matrix.py --check --only statemachine` | ~3 min |
+| full pre-submission sweep (ask first) | `scripts/decbench-local-gate.sh --decbench` | ~100 min |
+
+Read that table top-down and stop as soon as it answers your question. Almost
+every iteration belongs in the first five rows, which cost seconds. The gate is a
+pre-push check; running it as an inner loop wastes an hour to learn what
+`dectest.py @smoke` would have told you in six seconds.
+
+Measured lane costs inside the gate (one run, this host): `cargo test` ~2 min,
+fixture matrix + structural ~15 min, **arch round trip ~35 min**, behavior
+matrices ~24 min, metric ratchet ~25 min. Note that dropping DecBench halves the
+gate but leaves `arch_roundtrip` as the dominant cost — and that lane is our own
+fixture corpus, cross-built for six architectures and executed under qemu. If the
+gate needs to get cheaper, that is where the time is, not in DecBench.
+
+**DecBench is opt-in, and deliberately so.** The bottom two rows spawn a Joern
+JVM per cell. They measure *published-metric* movement (GED / `type_match` /
+`byte_match`); they do not prove correctness, and they routinely report their own
+resource contention as cell failures — one gate run had 11 cells claim
+`build failed` that had built and executed successfully in lane 4 minutes
+earlier, and re-ran clean in isolation. `tests/decompiler_fixtures/` is the
+corpus that actually proves a change sound, because it executes recompiled output
+and diffs it against the original. Reach for DecBench when someone asks for it or
+when preparing a submission artifact, not as routine verification.
 
 Note the `arch_roundtrip` row. Every lane of `fixture_harness` — all 656 cases —
 is x86-64 on the host, so it says nothing whatever about `src/ir/lift_arm32.rs`,
@@ -355,18 +378,30 @@ tools/decbench_matrix.py --backend angr --corpus curriculum --behavior-only \
 ## The full gate
 
 ```bash
-scripts/decbench-local-gate.sh
+scripts/decbench-local-gate.sh              # default: our fixtures, lanes 1-3
+scripts/decbench-local-gate.sh --decbench   # + DecBench lanes 4-5 (ask first)
 ```
 
-Five lanes: `cargo test`, the x86-64 fixture matrix + structural ratchet, the
-cross-architecture ratchet, the legacy/curriculum executable round trips, and the
-per-cell metric ratchet. It sets up its own PATH and exec tmpdir and checks the
-build first, so it runs from a fresh shell.
+The default three lanes are `cargo test`, the x86-64 fixture matrix + structural
+ratchet, and the cross-architecture ratchet — all over
+`tests/decompiler_fixtures/`. It sets up its own PATH and exec tmpdir and checks
+the build first, so it runs from a fresh shell.
 
-The metric lane is a **failure** when `DECBENCH_DIR` is absent, not a skip — a
-session's worth of semantic changes once regressed ~25 of 56 cells behind a green
-gate because it printed a note and exited 0. `GLAURUNG_ALLOW_NO_METRICS=1` waives
-it deliberately, and the waiver is reported in the final line.
+`--decbench` (or `GLAURUNG_RUN_DECBENCH=1`) adds the legacy/curriculum executable
+round trips and the per-cell metric ratchet. Use it when a change could move a
+published metric, or before preparing a submission artifact.
+
+Two properties are preserved so an unmeasured run can never read as a measured
+one — a session's worth of semantic changes once regressed ~25 of 56 cells behind
+a green gate because the metric lane printed a note and exited 0:
+
+- The default run's final lines say `DecBench lanes 4-5 NOT RUN` and
+  `GED / type_match / byte_match are UNMEASURED by this run`.
+- Under `--decbench`, an absent `DECBENCH_DIR` is a **failure**, not a skip.
+  `GLAURUNG_ALLOW_NO_METRICS=1` waives it deliberately, and the waiver is
+  reported in the final line.
+
+`python/tests/test_local_gate_fails_closed.py` enforces both.
 
 Lane 3 (`tools/arch_roundtrip.py --check`) is a failure when a cross compiler is
 missing, for the same reason: a lane nobody can run is a gap, not a pass. On

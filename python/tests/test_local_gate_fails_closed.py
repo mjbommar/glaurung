@@ -85,8 +85,48 @@ def test_the_success_line_does_not_claim_more_than_it_ran():
         "the old hedged success line is back; a pass must not carry a caveat that "
         "points at earlier output"
     )
-    assert 'echo "HEAVY GATE: passed (all five lanes ran)"' in text, (
+    assert 'echo "HEAVY GATE: passed (all five lanes ran, DecBench included)"' in text, (
         "the unqualified pass must state that all five lanes ran"
+    )
+
+
+def test_the_decbench_lanes_are_opt_in():
+    """DecBench is an evaluation harness, not the day-to-day correctness gate.
+
+    Lanes 4 and 5 spawn a Joern JVM per cell, cost tens of minutes, and report
+    harness problems as cell failures — one run had 11 cells claim `build failed`
+    that had built and executed in lane 4 minutes earlier and re-ran clean in
+    isolation. Lanes 1-3 execute real recompiled output against the original and
+    are what actually proves a decompiler change sound, so they are the default.
+    """
+    text = _text()
+    assert "GLAURUNG_RUN_DECBENCH" in text, (
+        "the DecBench lanes must be gated behind an explicit opt-in"
+    )
+    assert "--decbench)" in text, "there must be a --decbench flag as well as the env var"
+
+
+def test_the_default_run_states_that_metrics_were_not_measured():
+    """The opt-in must not recreate the silent-skip failure this file exists for.
+
+    Making DecBench opt-in is only safe if the default exit says so in the line a
+    human actually reads. `passed` on its own would be the same lie the old
+    `SKIPPED ... exit 0` told.
+    """
+    text = _text()
+    m = re.search(
+        r'if \[ -z "\$GLAURUNG_RUN_DECBENCH" \]; then(.*?)\n  exit 0\n',
+        text,
+        re.DOTALL,
+    )
+    assert m, "expected an early-exit branch for the default (fixtures-only) run"
+    branch = m.group(1)
+    assert "NOT RUN" in branch and "UNMEASURED" in branch, (
+        "the fixtures-only exit must state that the DecBench metrics did not run:\n"
+        + branch
+    )
+    assert re.search(r'echo "GATE: FAILED', branch), (
+        "a fixture-lane failure must still exit non-zero on the default path"
     )
 
 

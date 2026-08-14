@@ -51,7 +51,9 @@ tools/build_guard.py                              # is the .so current?
 tools/dectest.py 13_loop_early_exit:gcc:O0:bisect --show   # ONE function, ~3s
 tools/dectest.py @loops                           # a named set (sets.toml)
 tools/dectest.py --list-sets                      # what sets exist
-scripts/decbench-local-gate.sh                    # the full 3-lane gate (~40m)
+# Iterate with dectest (seconds). The gate below is a PRE-PUSH check, not a loop.
+scripts/decbench-local-gate.sh                    # OUR fixture lanes 1-3 (~50m)
+scripts/decbench-local-gate.sh --decbench         # + DecBench/Joern lanes 4-5 (~100m)
 
 # Bench / regression scorecard
 uv run python -m glaurung.bench
@@ -83,6 +85,26 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   `tests/fixtures/`.
 - **Don't claim "done" without running tests + ruff + ty.**
 - Surface real results faithfully (if a test fails or a step was skipped, say so).
+- **Never run DecBench / Joern unless explicitly asked.** `tests/decompiler_fixtures/`
+  is the corpus we verify against: it executes recompiled output and diffs it
+  against the original, which is what actually proves a decompiler change sound.
+  DecBench (`tools/decbench_matrix.py`, gate lanes 4-5, anything spawning a Joern
+  JVM) is an *evaluation* harness for published metrics — it costs tens of minutes
+  and reports its own resource problems as cell failures. Default to
+  `tools/dectest.py <selector>` while iterating and
+  `scripts/decbench-local-gate.sh` before a push. Reach for `--decbench` only when
+  the user asks, or when preparing a submission artifact.
+- **Extend `tests/decompiler_fixtures/` when a shape has no lane.** A new numbered
+  fixture plus a `manifest.py` contract is cheap and permanent; adding one requires
+  refreshing `baseline.json`, `structural_baseline.json`, and `arch_baseline.json`.
+- **Never `mktemp -d -t glaurung-...` in `/tmp`.** Use the session scratchpad
+  directory. Ad-hoc `/tmp` scratch is never cleaned up: on 2026-08-13 there were
+  663 abandoned `glaurung-<topic>.XXXXXX` directories totalling 13 GB from past
+  sessions. A full `/tmp` does not fail as "disk full" — it surfaced as a
+  plausible assertion failure in a DecBench test, then as `OSError: [Errno 122]
+  Disk quota exceeded` mid-baseline, and it took the Bash tool down entirely for
+  an hour. Infrastructure exhaustion wearing a product defect's clothes costs far
+  more to diagnose than to prevent.
 
 ## LLM model policy (project-critical — keep in sync with `python/glaurung/llm/config.py`)
 
