@@ -26,6 +26,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Process language detection for a batch of strings with parallel/sequential handling
+///
+/// Budget reservation runs first, strictly in the batch's original order (never
+/// through `par_iter`): see [`reserve_language_detect_budget`] for why. Only the
+/// expensive `router.detect` call for the items that won a slot is eligible to
+/// run in parallel; which items win never depends on how many threads are used.
 fn process_language_detection_batch(
     items: &[(String, usize)],
     cfg: &StringsConfig,
@@ -34,50 +39,74 @@ fn process_language_detection_batch(
 ) -> Vec<(Option<String>, Option<String>, Option<f64>)> {
     const PAR_THRESHOLD: usize = 128;
 
+    let reserved: Vec<bool> = items
+        .iter()
+        .map(|(text, _off)| reserve_language_detect_budget(text, cfg, budget))
+        .collect();
+
     if items.len() >= PAR_THRESHOLD {
         items
             .par_iter()
-            .map(|(text, _off)| detect_language_for_text(text, cfg, router, budget))
+            .zip(reserved.par_iter())
+            .map(|((text, _off), won)| detect_language_for_text(text, router, *won))
             .collect()
     } else {
         items
             .iter()
-            .map(|(text, _off)| detect_language_for_text(text, cfg, router, budget))
+            .zip(reserved.iter())
+            .map(|((text, _off), won)| detect_language_for_text(text, router, *won))
             .collect()
     }
 }
 
-/// Detect language for a single text string with budget management
-fn detect_language_for_text(
+/// Decide, in the caller's original sequential order, whether one string is
+/// eligible for language detection and — if so — spend one unit of the shared
+/// budget on it.
+///
+/// This MUST run sequentially over the whole batch before any parallel work
+/// starts. It used to run per-item as part of the parallel `par_iter` closure,
+/// spending the budget through a compare-exchange loop on a shared
+/// `AtomicUsize`. That made the WINNING subset depend on thread-scheduling
+/// order: two identical calls to `extract_summary` on the same bytes, or the
+/// same call under a different Rayon thread count, could pick a different set
+/// of strings to annotate with a language — a real violation of "serial and
+/// parallel analysis must produce identical facts and output" (roadmap design
+/// rule 12). Measured directly: 30 back-to-back calls with `max_lang_detect:
+/// 20` over 240 eligible strings from a real binary
+/// (`samples/binaries/platforms/linux/amd64/libraries/shared/mathlib.dll`)
+/// produced 2 runs whose winning set differed from the other 28. Deciding
+/// eligibility up front, in original order, with no concurrent access to
+/// `budget`, makes the winning set a pure function of the input and the
+/// budget — independent of thread count or scheduling. See
+/// `language_detect_budget_reservation_is_deterministic_across_thread_counts`.
+fn reserve_language_detect_budget(
     text: &str,
     cfg: &StringsConfig,
-    router: &LanguageRouter,
     budget: &Arc<AtomicUsize>,
-) -> (Option<String>, Option<String>, Option<f64>) {
-    if cfg.enable_language
-        && budget.load(Ordering::Relaxed) > 0
+) -> bool {
+    if !(cfg.enable_language
         && text.len() >= cfg.min_len_for_detect
-        && detect::is_texty_for_lang_with_policy(text, cfg.texty_strict)
+        && detect::is_texty_for_lang_with_policy(text, cfg.texty_strict))
     {
-        let mut ok = false;
-        loop {
-            let cur = budget.load(Ordering::Relaxed);
-            if cur == 0 {
-                break;
-            }
-            if budget
-                .compare_exchange_weak(cur, cur - 1, Ordering::SeqCst, Ordering::Relaxed)
-                .is_ok()
-            {
-                ok = true;
-                break;
-            }
-        }
-        if ok {
-            router.detect(text).tuple()
-        } else {
-            (None, None, None)
-        }
+        return false;
+    }
+    let cur = budget.load(Ordering::Relaxed);
+    if cur == 0 {
+        return false;
+    }
+    budget.store(cur - 1, Ordering::Relaxed);
+    true
+}
+
+/// Run the (expensive, thread-safe) detector for one string, but only if it
+/// already won a budget slot in [`reserve_language_detect_budget`].
+fn detect_language_for_text(
+    text: &str,
+    router: &LanguageRouter,
+    won_budget: bool,
+) -> (Option<String>, Option<String>, Option<f64>) {
+    if won_budget {
+        router.detect(text).tuple()
     } else {
         (None, None, None)
     }
@@ -375,5 +404,105 @@ mod tests {
         // Only one detection should be counted due to budget
         let total: u32 = counts.values().copied().sum();
         assert_eq!(total, 1);
+    }
+}
+/// Regression coverage for roadmap design rule 12 ("Serial and parallel
+/// analysis must produce identical facts and output") as it applies to the
+/// one Rayon fork-join surface reachable from `extract_summary`: batched
+/// language detection. See `reserve_language_detect_budget` for the bug this
+/// pins (a shared-atomic budget race whose winners depended on thread
+/// scheduling) and the exact real-binary divergence that motivated the fix.
+#[cfg(test)]
+mod language_detect_determinism_tests {
+    use super::*;
+
+    /// A real binary with well over `PAR_THRESHOLD` (128) qualifying strings,
+    /// so `process_language_detection_batch` actually takes its `par_iter`
+    /// branch. Kept small (232 KiB) so the test stays fast.
+    const REAL_BINARY: &str = "samples/binaries/platforms/linux/amd64/libraries/shared/mathlib.dll";
+
+    /// A config that forces contention: `max_lang_detect` is far smaller than
+    /// the number of eligible strings scanned out of `REAL_BINARY`, so which
+    /// strings "win" a budget slot is exactly the property under test.
+    fn contended_cfg() -> StringsConfig {
+        StringsConfig {
+            min_length: 3,
+            max_samples: 400,
+            max_scan_bytes: 10_000_000,
+            max_lang_detect: 20,
+            ..StringsConfig::default()
+        }
+    }
+
+    fn winners(summary: &StringsSummary) -> Vec<bool> {
+        summary
+            .strings
+            .as_ref()
+            .expect("language detection enabled")
+            .iter()
+            .map(|s| s.language.is_some())
+            .collect()
+    }
+
+    /// Repeated in-process calls on identical input must pick the identical
+    /// winning subset every time. Before the fix, 2 of 30 back-to-back runs
+    /// disagreed with the rest (measured on this exact binary and config).
+    #[test]
+    fn extract_summary_repeats_are_byte_identical_in_one_process() {
+        let data = std::fs::read(REAL_BINARY).expect("real binary fixture");
+        let cfg = contended_cfg();
+
+        let scanned = scan::scan_strings(&data, &cfg, std::time::Instant::now());
+        assert!(
+            scanned.ascii_strings.len() >= 128,
+            "fixture must exercise the par_iter branch (got {})",
+            scanned.ascii_strings.len()
+        );
+
+        let baseline = extract_summary(&data, &cfg);
+        let baseline_winners = winners(&baseline);
+        let baseline_language_counts = baseline.language_counts.clone();
+
+        for run in 0..40 {
+            let repeat = extract_summary(&data, &cfg);
+            assert_eq!(
+                winners(&repeat),
+                baseline_winners,
+                "run {run}: language-detection winners diverged from the first run"
+            );
+            assert_eq!(
+                repeat.language_counts, baseline_language_counts,
+                "run {run}: language_counts diverged from the first run"
+            );
+        }
+    }
+
+    /// The winning subset must not depend on the Rayon thread count: a
+    /// single-threaded pool (effectively serial) and an 8-thread pool must
+    /// both reproduce the same baseline winners, several times each.
+    #[test]
+    fn language_detect_budget_reservation_is_deterministic_across_thread_counts() {
+        let data = std::fs::read(REAL_BINARY).expect("real binary fixture");
+        let cfg = contended_cfg();
+        let baseline_winners = winners(&extract_summary(&data, &cfg));
+
+        let pool1 = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("1-thread pool");
+        let pool8 = rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .build()
+            .expect("8-thread pool");
+
+        for pool in [&pool1, &pool8] {
+            for run in 0..10 {
+                let got = pool.install(|| winners(&extract_summary(&data, &cfg)));
+                assert_eq!(
+                    got, baseline_winners,
+                    "run {run}: winners under a fixed thread-pool size diverged from baseline"
+                );
+            }
+        }
     }
 }

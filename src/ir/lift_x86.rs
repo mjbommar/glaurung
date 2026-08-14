@@ -8553,4 +8553,54 @@ mod tests {
             "expected a -1 immediate for `add ax, -1`, got:\n{ops16:#?}"
         );
     }
+
+    /// Bounded property test (roadmap safety-plan item: "fuzz decoders,
+    /// register contracts, lifters..."): `lift_bytes` must never panic and
+    /// must always terminate on ARBITRARY bytes, including bytes that are
+    /// not valid x86 at all and bytes that happen to decode as unusual-but-
+    /// valid instructions this file has no example-based test for.
+    ///
+    /// This is deliberately not a real fuzzer (no corpus, no coverage
+    /// guidance, no crate dependency beyond what's already linked) — it is
+    /// one seeded, reproducible property test so a regression here shows up
+    /// in `cargo test` rather than needing `cargo fuzz` set up separately.
+    /// A splitmix64 PRNG is used instead of adding the `rand` crate, which
+    /// is not currently a dependency of this crate.
+    #[test]
+    fn lift_bytes_never_panics_or_hangs_on_arbitrary_input() {
+        fn splitmix64(state: &mut u64) -> u64 {
+            *state = state.wrapping_add(0x9E3779B97F4A7C15);
+            let mut z = *state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+            z ^ (z >> 31)
+        }
+
+        // Fixed seed: reproducible across runs/machines, no external entropy
+        // source needed. Any future failure reported by this test reproduces
+        // exactly by re-running it.
+        let mut state: u64 = 0xD1CE_C0DE_F00D_BA5E;
+        const ITERATIONS: usize = 4_000;
+        const MAX_LEN: usize = 32;
+
+        for iter in 0..ITERATIONS {
+            let len = (splitmix64(&mut state) as usize % MAX_LEN) + 1;
+            let mut buf = vec![0u8; len];
+            for b in &mut buf {
+                *b = (splitmix64(&mut state) & 0xFF) as u8;
+            }
+            // Every start VA and bit-width the lifter's callers actually use
+            // (see `python_bindings::ir::lift_bytes_py`): 16/32/64-bit modes,
+            // and a start VA with high bits set so any VA-dependent RIP-math
+            // path gets exercised too, not just small offsets from zero.
+            for bits in [16u32, 32, 64] {
+                let start_va = 0xFFFF_FFFF_0000_1000u64 ^ (iter as u64);
+                // Panicking here fails the test with the exact `buf`/`bits`
+                // in the backtrace; looping forever would hang `cargo test`
+                // instead of passing, which is exactly the "terminates"
+                // half of the property.
+                let _ = std::hint::black_box(lift_bytes(&buf, start_va, bits));
+            }
+        }
+    }
 }

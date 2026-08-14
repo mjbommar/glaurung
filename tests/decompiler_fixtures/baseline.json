@@ -2766,6 +2766,34 @@
     "vt188_copy_two_streams": "pass",
     "vt188_lane_math": "pass"
   },
+  "189_effectful_select:clang:O0": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:clang:O2": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:gcc:O0": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:gcc:O2": {
+    "se189_bump": "pass",
+    "se189_nested_select": "fail",
+    "se189_select_call": "fail",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
   "18_binary_heap:clang:O0": {
     "heap_pop": "pass",
     "heap_push": "pass"
