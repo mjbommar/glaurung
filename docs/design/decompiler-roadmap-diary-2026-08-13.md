@@ -1658,3 +1658,1125 @@ identical with the change stashed. Python: 11 decompiler suites plus
 - VFP s/d/q overlap, hard-float versus soft-float selection, PC bias, literal
   pools, and condition execution — the rest of EPIC 4's ARM32 list — are
   untouched.
+
+## Entry 15 — Partitioning the MIR frame object
+
+Roadmap ranked item 10, the piece that unblocks item 2: "partition the single
+MIR frame object into per-variable extents from proven accesses, so a
+per-variable question can be asked of MIR at all." Owned files only:
+`src/ir/memory_objects.rs`, `src/ir/memory_objects/*`, `src/ir/mir/*`.
+DecBench, Joern, the fixture matrix, `arch_roundtrip.py`, and repo-wide
+`cargo fmt` were not run.
+
+### The shape the model was in
+
+`src/ir/memory_objects/mir.rs` keys every stack access by
+`ObjectIdentity::MirValue(root)`, where `root` is the SP/FP `Input` value, and
+folds the displacement into each access's `offset`. One object per root
+pointer. Measured on `20_graph_bfs.c:graph_bfs` (gcc `-O0`, x86-64), that is a
+single object carrying offsets -160, -152, -148, -144, -124, -120, -116, -112,
+-108, -40, -32, -16 and -8 — the four spilled arguments, the five scalar
+locals, the two eight-byte stores that zero `seen`, and the stack canary, all
+in one bag. Nothing can ask that object about one variable.
+
+### The partitioning rule
+
+New `src/ir/memory_objects/partition.rs`, computed once in
+`MemoryObjectBuilder::finish` for every object and reachable as
+`MirFunction::object_partition(ObjectId)`.
+
+1. Each access contributes the byte interval `[offset, offset + width)`.
+2. A **covered run** (`PartitionExtent`) is a maximal contiguous span of
+   covered bytes. Runs are separated by bytes no access reaches.
+3. Inside a run, every position where an access starts or ends is a *candidate*
+   variable boundary and is retained with its evidence:
+   - `Spanned` — some single access covers bytes on both sides, so one machine
+     access treats them as one storage unit;
+   - `Abutting` — accesses meet there and none spans it, so the evidence
+     neither joins nor separates the two sides.
+4. `bounds_at(offset)` answers a per-variable question with two bounds:
+   `at_least` is the interval between the nearest *abutting* boundaries (no
+   observed access divides it), and `at_most` is the covered run (no observed
+   access joins it to anything outside).
+
+### What it refuses to split, and why
+
+Nothing in a set of machine accesses proves that two adjacent bytes belong to
+two different source variables. Compilers pack frames densely: at `-O0`,
+`162_unaligned_memcpy_access.c:ua162_store_be32` covers -44 through 0 with no
+hole at all. A rule that split at every abutment would invent variable
+boundaries, and a rule that merged whole runs would merge distinct variables —
+the worse error. So the model splits only where the bytes themselves are
+unobserved, and reports every interior candidate with its evidence instead of
+deciding. `at_least` and `at_most` are both evidence-backed; neither is a
+guess, and both are monotone under new evidence (rule 4).
+
+It also refuses *entirely* — `bounds_at` returns `None` while `extents` keeps
+everything observed (rule 3) — when a `PartitionConflict` exists:
+
+- `UnmodeledAccess` — an access rooted here was seen and could not be placed:
+  a scaled index (`queue[head]`), or a memory effect the adapter could not
+  attach. `direct_memop` used to drop indexed memops silently; it is now
+  `address_memop` and reports them against the pointer they came from. This is
+  the conflict `graph_bfs` raises, and it is the honest verdict: the 64-byte
+  `queue` and the 16-byte `seen` are read and written only through scaled
+  indices, so apart from `seen`'s zero-initialisation those 80 bytes are
+  invisible to the object model and could join any two extents.
+- `EscapedRoot` — a pointer into the object reached an operand position this
+  adapter does not interpret, so a callee or an unmodelled operation may touch
+  bytes it never saw.
+- `UnboundedCursor` — the object is walked by a cursor with a stride, so a
+  constant offset no longer names fixed bytes.
+- `UnresolvedCoordinate` — a retained `LayoutConflict` invalidates the offset
+  coordinate itself. Stride conflicts (`MissingStride`, `AccessPastStride`,
+  `NegativeOffset`, `ConflictingStrides`) deliberately do *not*: they describe
+  an array layout over the coordinate, not a wrong coordinate. Every frame
+  object carries `MissingStride`, so mapping them all would have refused every
+  frame.
+
+### One x86 detail that decides whether this is usable at all
+
+Escape detection marks every use of an affine-rooted pointer that the adapter
+did not itself interpret. On x86-64 that fired on every single frame, because
+`sub rsp, N` lifts to the subtraction plus four flag `Cmp`s that read the frame
+root. A comparison reduces its operands to a boolean, so the address can go no
+further; `consumes_pointer` exempts exactly `Op::Cmp` and nothing else. Every
+other unmodelled operand position still escapes, because an unmodelled address
+computation (`lea rax, [rbp+rcx]`) produces a *different* object whose accesses
+would silently leave the frame's evidence.
+
+Escape detection also needs `abi::annotate_calls` to have run: an argument
+register is where a frame address leaves a function, and without the call's
+may-use list the call has no use edges at all. Production lowers MIR from
+annotated LLIR (`annotate_calls_in` runs before `prepare_llir_for_lowering`),
+so the fixture harness annotates too.
+
+### Evidence
+
+Five real GCC `-O0` x86-64 fixtures, compiled in the test:
+
+| fixture / function | what it proves |
+|---|---|
+| `162_unaligned_memcpy_access.c:ua162_store_be32` | the four byte-writes of `uint8_t staging[4]` have interior boundaries -19, -18, -17, all `Spanned` by the dword read that copies the array out: `at_least(-20) = [-20, -16)`. The 4-byte local at -24 abuts it and is not absorbed: `at_least(-24) = [-24, -20)`. `at_most` is the whole run `[-44, 0)`. |
+| `91_union_type_punning.c:pun_halves_swapped` | the union's interior boundary at -18 is `Spanned` by the dword access, so the two `uint16_t` halves are one unit; the separate `uint16_t swap` at -22 abuts and stays separable. An unaccessed 2-byte hole really does split the frame into `[-28, -24)` and `[-22, 0)`. |
+| `129_struct_by_value.c:pass_large_by_value` | the eight-byte by-value transfer spans -36 and -28 but not -40, -32, -24 — evidence exactly as wide as the copies. It also escapes: GCC leaves a frame-derived pointer in `rcx` at the call, so the whole partition refuses while keeping every extent. |
+| `20_graph_bfs.c:graph_bfs` | two scaled-index arrays raise `UnmodeledAccess`; every offset in every extent returns `None`. |
+| `84_compound_literals.c:compound_literal_argument` | `&(struct Pair){left, right}` handed to a callee raises `EscapedRoot`; nothing is bounded. |
+
+Two synthetic-LLIR controls cover shapes no fixture provides: a frame pointer
+in an annotated call argument, and a frame cursor with a stride.
+
+Refusal rate, measured over `tests/decompiler_fixtures/build` (x86-64 only, one
+partition per stack-rooted object, throwaway harness not committed):
+
+| corpus | frame objects | bounded | EscapedRoot | UnmodeledAccess | UnboundedCursor |
+|---|---:|---:|---:|---:|---:|
+| `gcc-O0` | 1,339 | 1,253 (93.6%) | 58 | 33 | 5 |
+| all `-O2` | 2,533 | 1,767 (69.8%) | 717 | 120 | 54 |
+
+So the conservative reading costs 6% of `-O0` frames and 30% of `-O2` frames.
+At `-O2` the dominant refusal is `EscapedRoot`, and most of those are the
+convention-wide may-read list rather than a proven callee input — which is
+EPIC 4's target-owned call contract, the same gap entry 10 recorded.
+
+`cargo test` (default features): 23 test binaries, 2,278 passed, 0 failed, 1
+ignored (pre-existing), on the shared tree at `6783274` with this increment
+applied. `cargo clippy --all-targets` reports nothing on the new files.
+`--all-features` was not run (needs `BITWUZLA_LIB_DIR`, absent on this host).
+
+For most of the increment the shared tree could not compile at all: a
+concurrent worker's in-flight `src/program/symbols` slice left ten unresolved
+references in `src/program/session_tests.rs`. The RED/GREEN cycles therefore
+ran in a detached worktree at `13f00ef` with a private target directory,
+holding exactly the six files of this increment. The numbers above are from the
+shared tree after that worker committed.
+
+### What is left
+
+- **No consumer has migrated.** This makes item 2 *expressible*: a promoted
+  local's frame coordinate can now be handed to `bounds_at` and get an
+  evidence-backed answer or an explicit refusal. Actually joining
+  `high_variables::refine_object_cursor_values` to it is the next step and
+  touches files this increment does not own.
+- Classification (struct versus array versus union versus bitfield) is **not**
+  done. The partition reports extents and boundary evidence; it does not name
+  a shape. `Spanned` boundaries are where a union or a wide copy shows itself,
+  but calling one a union needs the stride and type constraints of the rest of
+  EPIC 3.
+- Projection to HIR `Field` / `Index` / `AddressOf` is untouched, as instructed.
+- The indexed-access hole is *reported*, not closed. Recovering `queue[i]` as
+  an access to a bounded frame extent needs the affine-index slice the roadmap
+  keeps under "near-term retained work"; until then every frame containing a
+  subscripted local refuses, which is 33 of 1,339 `-O0` frames.
+- Escape granularity is all-or-nothing. A callee that receives `&x` can compute
+  any address from it, so nothing narrower is sound without a call contract.
+- The partition is computed for every object, not only stack roots.
+  Parameter-pointee objects get the same treatment for free, which is where
+  struct-field recovery for pointer arguments would start.
+
+## Entry 16 — CFG completeness and edge accounting
+
+Scope: roadmap rank 9, "Finish CFG completeness and verified region
+ownership." Its second half ("target the large O2-noinline GED cohort") is out
+of scope — needs DecBench, which is forbidden this session. Owned files only:
+`src/ir/structure.rs`, `src/ir/structure_accounting.rs`,
+`src/ir/structured_reaching/*`, `src/ir/health.rs`, `src/ir/loop_form.rs`.
+DecBench, Joern, the full fixture matrix, and `cargo fmt` (repo-wide) were not
+run.
+
+### The map: what edge completeness is tracked today, and what is dropped
+
+Read `src/ir/structure.rs`, `src/ir/structure_accounting.rs`,
+`src/ir/cfg_edges.rs`, `src/ir/health.rs`, and (read-only, out of ownership)
+`src/ir/lift_function.rs` and `src/ir/ast.rs`'s `Region::Unstructured`
+lowering, to answer the roadmap's five open bullets under "Complete CFG and
+semantic structuring" directly.
+
+**Tracked, with a real producer:**
+
+- `crate::ir::cfg_edges::EdgeKind` — six edge kinds, each derived from the
+  instruction stream rather than block position: `Taken`, `Fallthrough`,
+  `SwitchCase`, `SwitchDefault` (derived: "the conditional edge that bypasses
+  an indirect dispatch"), `Jump`, `Linear`. `Edge::back` is a separate flag
+  computed from dominance (`to` dominates `from`), not folded into `kind`.
+- `crate::ir::structure_accounting::account` — the total edge-accounting
+  proof `recover_verified_with_health` itself uses to decide whether to
+  trust a speculative region or fall back. It answers, for the WHOLE
+  reachable graph: is any block dropped or duplicated, is any real edge
+  unaccounted-for or expressed only by a weaker goto, is any implied edge
+  absent from the real CFG, is any back edge un-owned by a loop header, is
+  any `Goto` target never emitted, is a `Switch` dispatch structured outside
+  the loop that contains it.
+- `crate::ir::health::CfgHealth` (`uncovered_cfg_edges`, `invented_cfg_edges`,
+  `structure_fallbacks`) is the immutable summary of that accounting for the
+  SELECTED region, threaded through `AstHealth` and out to
+  `PassHealthEvent`/`GLAURUNG_PASS_HEALTH` and the three PyO3
+  `cfg_health` sites in `src/python_bindings/ir.rs`. It reaches the Python
+  boundary.
+- `AstHealth::unresolved_transfers` (`src/ir/health.rs`,
+  `src/ir/ast.rs:8578`) counts indirect/unsupported-instruction transfers at
+  the AST identifier-collector level.
+- `recover_verified_with_health` (`src/ir/structure.rs:640`) is confirmed by
+  reading it to be the single production entry point: on any accounting
+  finding classified unsound (`structure_accounting_is_unsound` —
+  `BlockDropped`, `EdgeUnaccounted`, `BackEdgeUnowned`, `ImpliedEdgeAbsent`,
+  `GotoTargetMissing`, `SwitchArmOutsideLoop`) it discards the speculative
+  tree and substitutes `Region::Unstructured((0..blocks.len()).collect())` —
+  the complete labelled CFG over every block, not a partial guess.
+  `Region::Unstructured` lowers in `ir::ast.rs` (read-only, not owned) to a
+  label plus block body per entry, with an explicit `Stmt::Goto` wherever the
+  next lexical block isn't the real successor — an honest goto, not invented
+  structure. This is rule 8 working as designed, confirmed by a new test
+  below rather than only by reading the code.
+
+**Present but NOT reachable from `account()`'s edge kinds — the real gaps:**
+
+- `EdgeKind` has no `Call`, `Return`, `TailCall`, `Exceptional`, or
+  `Unknown`/unresolved-indirect variant. The roadmap explicitly asks for
+  "direct, conditional, switch, indirect, exceptional, call, return,
+  tail-call, and unknown terminal edges" to be represented explicitly; today
+  only the intra-procedural control-flow-graph edges a structurer needs are
+  typed. Call/return edges are implicit (a block simply has no CFG successor
+  after a call, or ends the function), and there is no exceptional-edge
+  representation anywhere in LLIR — `src/ir/mir/query_tests.rs`'s own doc
+  comment says as much for MIR ("Exceptions are not covered: LLIR has no
+  exceptional-edge representation yet"), and nothing in `cfg_edges.rs`
+  contradicts that at the structuring layer either.
+- Skipped bytes, clipped blocks, and per-function lift budgets are DROPPED,
+  not carried. `src/ir/lift_function.rs` (read-only; owned by another lane)
+  clips a block to `clip_block_to_owned_ranges` and silently `continue`s past
+  any block whose bytes can't be located or whose start falls outside every
+  owned range — its own doc comment: "Individual blocks whose bytes cannot be
+  located ... are skipped silently; the function's other blocks still
+  produce LLIR." No `SkippedByte`/`ClippedBlock` fact reaches `LlirFunction`,
+  `CfgHealth`, or any diagnostic. `structure_accounting`'s own module doc is
+  explicit about the resulting blind spot: "A block that never entered the
+  CFG is not 'dropped by the structurer' — it does not exist as far as this
+  module is concerned, and the region covering what remains is reported as
+  faithful." So a clean `CfgHealth` (`uncovered_cfg_edges == 0`) proves the
+  structurer didn't lose anything IT was given; it cannot and does not prove
+  the lifter didn't lose blocks earlier. This is real "incomplete input
+  becomes apparently complete downstream" risk (a roadmap stop condition) —
+  not because the structurer lies, but because nothing upstream of it
+  currently produces the fact that would let it tell the difference. Fixing
+  it is squarely in `lift_function.rs`/`LlirFunction`, outside this session's
+  owned files.
+- Budgets: no cancellation/budget field was found threaded through
+  `LlirFunction`, `Region`, or `CfgHealth`.
+- Region recovery is not yet separated into independent
+  dominance/loop-discovery, region-selection, verification, and
+  HIR-projection stages (roadmap bullet 5): `src/ir/structure.rs` is 4,938
+  lines and owns `Cfg` construction, dominance, the recursive region builder,
+  verification, and the accounting call all in one file; `recover_verified_with_health`
+  is the seam but not a stage boundary with its own artifact type.
+
+### The increment: proving (not assuming) the irreducible-flow fallback is honest
+
+Entry 11's fixture-coverage survey (this session, same diary) had already
+flagged `ir::structure`'s irreducible-flow fallback as the highest-blast-radius
+gap in the corpus: "No hand-written genuinely irreducible C found ... this is
+the pass the roadmap calls 'the current large structuring owner' and flags for
+irreducible/unresolved-edge honesty. A wrong fallback here can invent or drop
+CFG edges, which is silent-wrong-answer territory below any AST pass." No test
+anywhere in the crate constructs a genuinely irreducible CFG (a cycle entered
+from two non-dominating predecessors — the shape a source-level
+`if (c) goto mid;` into the middle of a loop produces) and checks what
+`recover_verified_with_health` does with it.
+
+Built the textbook minimal irreducible graph by hand (a graph-shape question,
+not a behavior claim, so a hand-built LLIR fixture is the right tool per the
+task's own method note — real C compiles this via `goto`, but no compiler was
+run this session to avoid drifting into fixture territory):
+
+```
+0 (entry) -> 1 (fallthrough) | 2 (taken)
+1 -> 2 (jump)
+2 -> 1 (taken) | 3 (fallthrough, exit)
+3 -> return
+```
+
+Block 0 branches DIRECTLY into either 1 or 2 — two non-dominating entries into
+the {1,2} cycle. Neither `1` nor `2` dominates the other (block 0 reaches each
+without passing through the other), so under `cfg_edges::classify`'s
+`back: dominates(to, from)` rule, NEITHER direction of the {1,2} cycle is a
+back edge. No block can serve as a header. Added
+`the_two_entry_cycle_fixture_really_is_irreducible` first, asserting exactly
+that against `Cfg::from`'s own edge classification, so the main claim below
+rests on a checked premise rather than an assumed one.
+
+RED before GREEN: ran the fixture through `recover_verified_with_health`
+first with a throwaway `panic!("region={region:#?}\nhealth={health:?}")`
+probe (not committed) to see the actual output before writing assertions,
+per the task's TDD instruction. Result:
+
+```
+region = Unstructured([0, 1, 2, 3])
+health = CfgHealth { uncovered_cfg_edges: 0, invented_cfg_edges: 0, structure_fallbacks: 1 }
+```
+
+This is the CORRECT verdict, not a defect: the speculative structurer's
+candidate region failed `structure_accounting::account`'s soundness check (as
+it must — no `While`/`DoWhile`/`RawLoop` pattern can honestly claim ownership
+of a headerless cycle), and `recover_verified_with_health` substituted the
+complete labelled CFG over all four blocks, with zero dropped and zero
+invented edges. Turned that observation into three permanent tests in
+`src/ir/structure.rs`:
+
+- `the_two_entry_cycle_fixture_really_is_irreducible` — ground truth: neither
+  `1->2` nor `2->1` is a dominance-based back edge in the built fixture.
+- `two_non_dominating_entries_into_a_cycle_preserve_lossless_fallback` — pins
+  the production result above: `Region::Unstructured` over all 4 blocks,
+  `structure_fallbacks == 1`, `uncovered_cfg_edges == 0`,
+  `invented_cfg_edges == 0`, AND independently re-runs
+  `structure_accounting::account` against the SELECTED region (not trusting
+  `CfgHealth`'s own arithmetic) — asserts it returns an empty `Vec`, i.e. the
+  fallback region accounts for every block and every edge with nothing
+  dropped, duplicated, or invented.
+- `a_single_entry_into_the_same_two_block_cycle_structures_normally` —
+  negative control: the same two-block cycle entered from only ONE place
+  (ordinary reducible flow) must NOT hit the fallback
+  (`structure_fallbacks == 0`), pinning that the fallback is triggered by
+  irreducibility specifically, not merely by "a cycle exists between two
+  blocks."
+
+All three pass. This closes the identified test-coverage gap with a genuine
+positive result: the honest-goto fallback the roadmap and design rule 8 ask
+for already exists and already works correctly for this shape. The value
+delivered is the proof and the permanent regression pin, not a bug fix — no
+defect was found in `recover_verified_with_health` itself.
+
+### Evidence
+
+- `cargo test --lib ir::structure::tests::` — 56 passed, 0 failed (3 new).
+- `cargo test` (full suite, all binaries + lib): `test result: ok. 2161
+  passed; 0 failed; 0 ignored` for the lib target; every other integration
+  suite in the run also reported 0 failed. This total includes tests added by
+  other concurrent lanes this session in files outside this session's
+  ownership — not attributed to this change alone.
+- `rustfmt --edition 2021 src/ir/structure.rs` — applied, no other file
+  touched. No repo-wide `cargo fmt` was run.
+- No DecBench, Joern, `decbench_matrix.py`, `arch_roundtrip.py`, or full
+  fixture-matrix run this session, per the constraint. No `tools/dectest.py`
+  run either — the increment is a pure unit-level graph-shape proof inside
+  `src/ir/structure.rs`'s own test module and needed no compiled fixture.
+
+### What remains open
+
+- Typed `Call`/`Return`/`TailCall`/`Exceptional`/unresolved-indirect edge
+  kinds — `EdgeKind` still only names intra-procedural CFG edges.
+  Exceptional edges have no LLIR representation at all (confirmed via the
+  MIR query-test doc comment; not re-derived here).
+- Skipped bytes and clipped blocks are dropped silently in
+  `lift_function.rs`, upstream of every artifact this session's owned files
+  produce. `structure_accounting`'s clean-accounting result is provably
+  relative to the CFG it is handed, not to the function's real byte range —
+  its own module doc says so. This is the sharpest remaining instance of the
+  stop condition "incomplete input becomes apparently complete downstream,"
+  and fixing it needs a file outside this session's ownership.
+- No budget/cancellation field threads through `LlirFunction` or `CfgHealth`.
+- `src/ir/structure.rs` (4,938 lines) is not yet split along
+  dominance/loop-discovery, region-selection, verification, and
+  HIR-projection boundaries — roadmap bullet 5 is untouched by this entry.
+- The large O2-noinline GED cohort (roadmap item 9's second half) is
+  explicitly out of scope this session (needs DecBench).
+
+## Entry 17 — Canonical SymbolStore
+
+Roadmap ranked item 7, first slice: build the canonical `SymbolStore` and the
+exact operand-reference index it needs, importing only facts a program table
+states verbatim. FLIRT, PDB, and every name-based library heuristic stay out;
+the roadmap gates them behind safeguards that only exist once the store owns
+provenance, and they are a later slice.
+
+### What landed
+
+`src/program/symbols.rs` (model, store, queries), `src/program/symbols/
+object_import.rs` (exact importer), `src/program/symbols/verify.rs`
+(independent verification), `src/program/symbols_tests.rs` (model controls),
+plus real-binary tests in `src/program/session_tests.rs` and a
+`ProgramSession::symbol_store()` accessor behind a `OnceLock`. The shape
+deliberately mirrors `TypeStore`: stable typed identity, provenance-bearing
+evidence, authority ordering, conflict retention, and an independent
+`verify()` that recomputes every index from the arena alone.
+
+- Identity is the exact linkage spelling: one name, one `SymbolId`.
+- `SymbolEvidence { authority, source, module, version }` keeps the roadmap's
+  required name-knowledge provenance. `SymbolSource` distinguishes the object
+  symbol table, dynamic symbol table, import table, export table, static
+  relocation, and dynamic relocation.
+- `SymbolName { text, form, match_kind }` separates the linkage spelling from
+  a `Demangled(scheme)` alias, and separates an `Exact` name read verbatim
+  from a `Resemblance`. `exact_symbols_named` refuses to answer with a
+  resemblance; `symbols_named` returns both. Nothing in this slice ever
+  produces a `Resemblance` — the representation exists so the later catalog
+  slice cannot quietly launder a guess into an exact match.
+- `SymbolIncompleteness` is a monotone set (`note_incomplete` only inserts):
+  no object symbol table, no dynamic symbol table, missing symbol sizes,
+  section-relative addresses in a relocatable object, unresolved relocation
+  targets, unreadable table, unreadable image.
+- Contextual address queries return `AddressSymbol::{Exact, Containing,
+  Unknown}`. `Unknown` carries a reason: `NoSymbolEvidence`, or
+  `AmbiguousRanges(ids)` when several ranges with different starts cover the
+  address. Aliases sharing one start resolve together with an offset; unrelated
+  overlapping ranges are an explicit unknown rather than a pick.
+- `SymbolReference { site, symbol, addend, implicit_addend, width_bits, kind,
+  format_type, evidence }` indexes exact relocation-backed uses by site and by
+  symbol. The generic `ReferenceKind` never discards the format-specific
+  relocation type, which is what carries JUMP_SLOT/GLOB_DAT today (the
+  `object` crate maps both to its generic `Unknown`).
+
+### Conflict policy
+
+A linkage name is not a unique program identity. Two translation units may
+legally define distinct local symbols with the same spelling, and the store
+must not let the last observation win. Agreeing facts merge and accumulate
+evidence; a disagreeing fact records `SymbolConflict::IncompatibleDefinition`
+and is retained as an alternative. Higher authority reorders selection only —
+it never deletes the displaced fact, and both addresses stay resolvable.
+Verified on a real two-unit fixture where GCC emits two LOCAL FUNC `helper`
+symbols at 0x1129 and 0x1182.
+
+### Negative controls
+
+- A real stripped ELF (`cc -O0 -s`): no record for `symbol_target` or `main`,
+  no alias resurrecting either, `resolve_address` at the known entry returns
+  `Unknown(NoSymbolEvidence)`, `NoObjectSymbolTable` is declared, and every
+  surviving record is an undefined dynamic import with no
+  `ObjectSymbolTable` evidence. Absent evidence is not permission to invent a
+  name.
+- Two same-named local symbols are retained as a conflict, not deduplicated.
+- `AmbiguousRanges` proves the range query refuses to choose between unrelated
+  overlapping symbols.
+- An empty linkage name and a reference to an unknown identity are both
+  rejected as typed errors rather than absorbed.
+
+### Evidence
+
+`cargo test` (default features): 23 test binaries, 2,271 passed, 0 failed;
+the lib target is 2,178 of those and includes the 18 new tests (9 model, 9
+real-binary). `cargo clippy --all-targets` reports nothing on the new files.
+`--all-features` was not run: it needs `BITWUZLA_LIB_DIR`, which this host
+does not provide. DecBench, Joern, the fixture matrix, and `arch_roundtrip.py`
+were not run — out of scope for this increment by instruction.
+
+The whole gate ran in a detached worktree at `13f00ef` with a private target
+directory, because a concurrent worker's in-flight edits to
+`src/ir/memory_objects/*` left the shared tree uncompilable. The worktree
+contained exactly the `src/program/` files of this increment on top of that
+commit.
+
+### What is still open before consumers can migrate
+
+- Thunks are not classified. A PLT stub cannot be derived from exact tables
+  alone: `.rela.plt` names the GOT slot, not the stub. That needs analysis
+  evidence and belongs with the reference-interpretation slice.
+- `SymbolStore` is built by a second `parse_object` call in the session,
+  exactly as the DWARF importer already does. Roadmap Phase 1's "exactly one
+  base object parse per reusable session" remains open and now has one more
+  caller to fold in.
+- Per-DLL identity for PE: two DLLs exporting the same name merge into one
+  record with two module evidences. Honest but coarse; a `(module, name)`
+  identity is the follow-up if it ever matters.
+- No consumer has migrated. `src/ir/symbol_env.rs`'s `thread_local ACTIVE` and
+  `src/ir/name_resolve.rs`'s `HashMap<u64, String>` are untouched by design;
+  deleting them requires parity, which requires at least (a) a decision on how
+  address-keyed consumers spell "no name" now that the answer is a typed
+  `Unknown`, and (b) the operand-reference interpretation layer of EPIC 2,
+  since most current consumers want "what does this constant mean here", not
+  "what symbol is at this address".
+- `src/program/symbols.rs` is 686 lines. Under the 1,000-line cap but above
+  the 450-line mean target; splitting model from store is only worth doing if
+  it produces a narrower API, so it is deferred rather than done reflexively.
+
+## Entry 18 — Call arguments lost before recovery
+
+Roadmap item 6, the direct-call half. The starting defect was
+`189_effectful_select:gcc:O2`, where two cells failed while every other lane
+of the same fixture passed:
+
+```
+189_effectful_select:gcc:O2:se189_select_call    fail
+189_effectful_select:gcc:O2:se189_nested_select  fail
+```
+
+The emitted C was a direct call to a symbol the same file declares
+`extern int se189_bump(int *, int);`, invoked with no arguments at all:
+
+```c
+ret = ((int (*)(void))se189_bump)();
+```
+
+The cast is the renderer being honest — `write_call_dec` casts whenever the
+call site's recovered prototype contradicts the declaration — so the arity
+was already gone by the time anything rendered. The recompiled function then
+ran `calls[0] += 1` against whatever `rdi` happened to hold. Only counting
+the side effect catches this: the returned value is unchanged, which is
+exactly the soundness class the fixture was written for.
+
+### First wrong stage
+
+`reconstruct_args` (`src/ir/call_args.rs`), not DCE. The suspicion in the
+task was that dead-code elimination deleted hoisted argument setup before
+the contract could be applied. It did not. `GLAURUNG_DUMP_PASSES=1` shows the
+setup still present at `recover_resolved_tail_calls` and still present after
+`reconstruct_args` — unconsumed, because the pass declined to recover it:
+
+```
+    %rsi#2 = (unsigned long)((unsigned int)(%rdx));
+    call se189_bump@plt();
+```
+
+`src/ir/dce.rs` only prunes flags and never touches argument registers, and
+`eliminate_dead_stores` runs long after. The setup does eventually disappear,
+but as a consequence of the empty argument list, not as its cause.
+
+`gcc -O2` did not hoist the shared setup either. The real shape is simpler
+and more awkward: it left `rdi` **untouched** across the whole diamond,
+because nothing between the entry and either call clobbers it, and set only
+`esi` inside each arm.
+
+```
+    114a:   mov    %rdi,%rbx
+    114d:   movl   $0x0,(%rdi)
+    1155:   jne    1170
+    1157:   mov    %ecx,%esi
+    1159:   call   se189_bump@plt
+    ...
+    1170:   mov    %edx,%esi
+    1172:   call   se189_bump@plt
+```
+
+So slot one always had local setup and slot zero never did — and ABI
+arguments are a contiguous prefix, so `fold_one_call` discards every
+recovered slot once a lower one is missing. Losing slot zero lost slot one
+with it. Three independent reasons produced that missing slot zero:
+
+1. **A returning branch arm counted as a clobber.** For the fall-through
+   call, the backward scan crosses the preceding `Stmt::If`, and
+   `mark_arg_writes_in_stmt` descended into its then-arm — an arm that ends
+   in `return`, and therefore is not on the path into the statement after it.
+   Its `esi`/`rax` writes set `blocked_incoming`, which refuses the slot-zero
+   backfill.
+2. **The live-in spelling was answered from the wrong scope.** For the call
+   *inside* the arm, `incoming_arg_expr` was passed only that arm's statement
+   list. On the value-numbered DecBench path `value_number` leaves the live-in
+   version bare (`rdi`) and versions every later definition (`rsi#2`), so a
+   register the arm never mentions has no witness there at all and the
+   function declined. How a function spells its own live-in argument register
+   is a whole-function fact, not a per-block one.
+3. **A labelled join blocked everything unconditionally.** `se189_nested_select`
+   is structured with explicit `goto`/`Label` targets, so both calls sit
+   directly after a join; the scan's `Stmt::Label` barrier does
+   `blocked_incoming.fill(true)` and stops.
+
+### The fix
+
+Three changes, all in `src/ir/call_args.rs`, each with its own negative
+control:
+
+- `body_falls_through` — a branch arm ending in `Return`/`Throw`/`Goto`/
+  `IndirectGoto` cannot reach the statement after the branch, so
+  `mark_arg_writes_in_stmt` no longer descends into it. `Stmt::Break` is
+  deliberately excluded: inside a `Stmt::Switch` case a break lands exactly
+  on the switch's own successor and proves nothing. This is sound only
+  because the scan already stops dead at `Stmt::Label`, so the absence of a
+  label between the arm and the call means falling through is the only way in.
+- `EnclosingSlots` — the enclosing scope, carried into nested bodies in both
+  directions at once. `live_ins` holds the function-wide spelling of each
+  argument register (computed once, from `f.body`); `blocked` holds what the
+  path into this body already wrote, accumulated from the prefix statements
+  and the same control-flow boundaries the backward scan refuses to cross.
+  The live-in is usable precisely because the clobber mask travels with it.
+  A proven loop-carried override still wins over `blocked`, since the
+  override *is* the reaching value — without that, `call_inside_loop_uses_the_loop_carried_argument_value`
+  and three siblings regressed to empty argument lists.
+- `entry_constant_slots` — the cheapest whole-function proof that answers a
+  slot across a labelled join without a reaching-definition service. Both
+  halves are required: no statement anywhere writes the slot, and every call
+  in the function runs straight into a `Return`, so no call's caller-clobber
+  can precede another call. Anything less exact leaves the slot blocked,
+  which is the previous behavior.
+
+### Evidence
+
+`189_effectful_select` before / after, `tools/dectest.py '189_effectful_select' --full`:
+
+| cell | before | after |
+|---|---|---|
+| `gcc:O2:se189_select_call` | fail | pass |
+| `gcc:O2:se189_nested_select` | fail | pass |
+| the other 18 cells | pass | pass |
+
+The recovered C now matches the source's evaluation structure — one call per
+arm, each with the argument that arm actually passes:
+
+```c
+if (((unsigned long)((unsigned int)(arg1)) != 0)) {
+    ret = se189_bump((int *)(arg0), (unsigned long)((unsigned int)(arg2)));
+    ...
+}
+ret = se189_bump((int *)(arg0), (unsigned long)((unsigned int)(arg3)));
+```
+
+`95_function_pointer_table` — the fixture that caught the reverted late
+table-layout patch (`table-dispatch-arguments-2026-08-12.md`) —
+`tools/dectest.py '95_function_pointer_table' --full`:
+
+```
+95_function_pointer_table:clang:O0:dispatch_operation  pass
+95_function_pointer_table:clang:O0:fold_operations     pass
+95_function_pointer_table:clang:O2:dispatch_operation  pass
+95_function_pointer_table:clang:O2:fold_operations     fail
+95_function_pointer_table:gcc:O0:dispatch_operation    pass
+95_function_pointer_table:gcc:O0:fold_operations       pass
+95_function_pointer_table:gcc:O2:dispatch_operation    fail
+95_function_pointer_table:gcc:O2:fold_operations       fail
+```
+
+**These match `baseline.json` exactly, including the three recorded `fail`
+verdicts** — at `a45c1ae`, where the work was done, and at the current
+`f21e990`, whose baseline records the identical four rows for this fixture.
+The task brief asked that `95_function_pointer_table:gcc:O2:dispatch_operation`
+keep passing; it is recorded as `fail` in the baseline and was already
+failing before this change, so "keep passing" was not achievable and "do not
+regress" is what was verified. `dectest` reports no regression in scope for
+all four lanes.
+
+The work was done in a detached worktree at `a45c1ae` while `master` moved on
+to `f21e990`. `src/ir/call_args.rs` is byte-identical across that range, so
+the copy-back clobbered nothing, and the only intervening changes that touch
+`src/` are a test appended to `src/ir/lift_x86.rs` and the `src/strings/`
+budget-reservation fix — neither of which is on any decompilation path — so
+the fixture numbers above still describe the current tree. The main tree was
+deliberately NOT rebuilt.
+
+Other gates run:
+
+- `cargo test`: 23 suites, 2281 passed, 0 failed, 1 ignored.
+- `tools/dectest.py @calls @smoke @loops @region @switch @polarity @widths
+  @flags @early-exit @structs @aggregates`: 80 lanes, no regressions.
+- `tools/dectest.py @o0`: 356 lanes, no regressions.
+- `tools/dectest.py @o2`: 356 lanes, no regressions, plus four cells that
+  went `fail -> pass` and are not part of this defect —
+  `164_nested_tlv_walker:clang:O2:tlv164_leaf_sum`,
+  `164_nested_tlv_walker:gcc:O2:tlv164_node_count`,
+  `165_bitstream_reader:gcc:O2:bit165_cross_check`, and
+  `56_sieve:gcc:O2:sieve_primes`. `baseline.json` was NOT refreshed: a scoped
+  run cannot write one, and refreshing it is the next session's decision.
+- Four new unit tests in `ir::call_args::tests`, each carrying its negative
+  control: a returning arm that must not clobber, a nested arm that must
+  recover the live-in *and* must decline when the enclosing scope overwrote
+  it, and a labelled call that must decline both when something writes the
+  slot on the other predecessor and when a non-terminal call exists.
+
+DecBench, Joern, `decbench_matrix.py`, `arch_roundtrip.py`, the full fixture
+matrix, and `@o0` were **not** run, per the session constraint. No Python
+source changed, so `ruff`/`ty` were not run.
+
+### What remains open — the indirect half
+
+Item 6 also asks for indirect function-table call may-uses and contracts.
+None of that is implemented here, and the direct fix does **not** generalise
+to it:
+
+- Every proof added here is about *this function's own entry value* — that a
+  live-in argument register still holds what the caller put there. A table
+  call's arguments are ordinary computed values; nothing above says anything
+  about them.
+- `entry_constant_slots` is deliberately narrow to the point of being nearly
+  useless for table dispatch: any function with a call that is followed by
+  more work (which a dispatch loop always has) fails its second condition
+  outright.
+- The indirect half needs what the roadmap actually names: the entry
+  contract recovered *before* liveness/DCE, ABI may-uses preserved in the
+  over-approximating direction, and reaching values queried rather than
+  register names read. That is the EPIC 5 `value_at`/`clobbers_between`
+  surface applied to a real consumer, which no production pass uses yet.
+- The `[r]` marker still stands. Nothing here restores the reverted late
+  table-layout patch, and the reason it was wrong — plausible, well-typed
+  arguments invented from architectural register names — is exactly the
+  failure mode `EnclosingSlots.blocked` and `entry_constant_slots` are built
+  to refuse.
+
+Also still open, and visible in the same fixture: `se189_nested_select`'s
+recovered body renders as a `goto` ladder rather than a nested select. The
+arguments are now right; the structure is not. That is the structuring
+workstream, not this one.
+
+## Entry 19 — Fitness measurement and ratchet
+
+Roadmap item 11, the measurable half: "Code quality, composition, and
+file-size program" opens with four open bullets before any splitting work.
+This entry builds the first bullet in full (reporting + ratchet) and the
+fourth (dependency checks), as measurement only. No file was split and no
+line moved toward a target; the roadmap is explicit that "a file split
+counts only if it creates a narrower API and one reason to change" and
+splitting is separate, later work.
+
+### What landed
+
+- `tools/fitness_report.py` -- measures the seven end-state targets over
+  `src/*.rs`, styled after `tools/pass_health_report.py` and
+  `tools/decbench_score_ledger.py` (typed errors, canonical JSON, an
+  argparse CLI). `--check-ratchet` exits non-zero on any regression;
+  `--write-baseline` regenerates the committed baseline deliberately.
+- `tools/fitness_baseline.json` -- the committed baseline the ratchet
+  compares against, holding today's seven measures plus the 15 largest
+  product files for context.
+- `python/tests/test_fitness_report.py` -- 23 tests: unit tests for the
+  pure functions (test-path detection, generated-marker detection,
+  `#[cfg(test)]`-block stripping including nested modules and braceless
+  items, `check_ratchet`'s regression direction and float/int tolerance),
+  plus the real ratchet test that measures the live `src/` tree and asserts
+  no regression against the baseline, plus a value-pinned test so a silent
+  drift in the *methodology* (not the tree) is also caught.
+- `python/tests/test_src_dependency_boundaries.py` -- 6 tests: the three
+  layering checks plus the environment-variable allowlist, all pure
+  source-text checks in the style of `test_local_gate_fails_closed.py`.
+
+### Methodology
+
+"LOC" is physical line count. A file counts as test-only (excluded
+entirely) if any path component or its own stem is exactly `test`/`tests`
+or ends `_test`/`_tests` -- this crate's own convention
+(`session_tests.rs`, `ast_tests/`, `linux_ioctl/tests.rs`; 28 of 338 `.rs`
+files under `src/` match). Inside an otherwise-product file, every
+`#[cfg(test)]`-attributed item (a `mod tests { ... }` block, a lone
+`#[cfg(test)] fn helper_for_test()`, or a braceless `#[cfg(test)] use ...;`)
+is stripped by brace-counting before the file is measured, so `ir/ast.rs`
+counts as 11,525 product lines, not its 19,208 physical lines. A file is
+exempt as generated only if `@generated` or `DO NOT EDIT` appears in its
+first 20 lines -- per the roadmap, "mixed-responsibility logic is not an
+exemption," so a marker buried mid-file does not count. No file in `src/`
+currently carries such a marker; the exemption path exists but excludes
+nothing today. "Product code" is read as the whole crate under `src/`
+(the doc's own "Product and submission snapshot" section uses "product" for
+the whole crate, not a directory subset), matching the roadmap's aggregate
+targets; `src/ir` is broken out separately as the roadmap also asks.
+
+### Current measurements against every target
+
+Measured today, `fb4ee6b` plus this session's uncommitted `src/` edits
+(310 product files, 159,931 product LOC; `src/ir`: 91 files, 73,322 LOC):
+
+| Measure | Target | Current | Status |
+|---|---:|---:|---|
+| Product-code mean | below 450 LOC | 515.9 | over target |
+| Product-code median | below 250 LOC | 274.0 | over target |
+| Product files above 1,000 LOC | at most 35 | 27 | **meets target** |
+| Product files above 2,000 LOC | at most 5 | 13 | over target |
+| Product LOC in files above 1,000 | below 25% | 44.5% | over target |
+| `src/ir` median | below 500 LOC | 449 | **meets target** |
+| `src/ir` files above 1,000 LOC | at most 5 | 13 | over target |
+
+Two of seven already meet their end-state target (the file-*count* ceiling
+and the `src/ir` median); the other five do not, most sharply the "LOC
+above 1,000" concentration (44.5% vs. a 25% ceiling) and the two
+"files above N" tail measures. The 15 largest product files, largest first:
+`ir/ast.rs` (11,525), `analysis/cfg.rs` (6,076), `ir/lift_x86.rs` (4,883),
+`ir/types_recover.rs` (3,638), `symbolic/solver/axeyum_backend.rs` (3,357),
+`ir/call_args.rs` (3,325), `python_bindings/ir.rs` (3,025),
+`ir/stack_locals.rs` (3,012), `ir/lift_arm32.rs` (2,896),
+`symbolic/explore.rs` (2,742), `analysis/java_class.rs` (2,644),
+`ir/structure.rs` (2,580), `ir/lift_arm64.rs` (2,354),
+`ir/value_number.rs` (1,965), `ir/copy_prop.rs` (1,919). This is a
+snapshot, not a plan -- none of it was touched.
+
+### Dependency checks
+
+The three layering checks run against today's module layout, not the
+roadmap's target layout (only `src/target/` exists as a dedicated
+directory today; the renderer and HIR both live in `src/ir/ast.rs`, and the
+lifters are `src/ir/lift_*.rs`). All three pass today:
+
+- Renderer/HIR (`src/ir/ast.rs`) references no `lift_x86`/`lift_arm32`/
+  `lift_arm64`/`lift_function` module.
+- Renderer/HIR references no `crate::formats::`, `ProgramImage`, or
+  `object::File` -- it does not parse images.
+- `src/target/*.rs` imports nothing from `crate::ir` in code (one rustdoc
+  link, `` [`crate::ir::abi`] ``, in a comment does not count; the check
+  strips whole-line comments before searching).
+
+Each check was verified to actually fire: a synthetic string containing
+`crate::ir::lift_x86::lift_function`, `crate::formats::elf::parse(...)`, or
+`use crate::ir::ast::render;` matches the corresponding regex.
+
+### Environment-variable audit
+
+Grepped all of `src/` for `std::env::var`/`var_os`/`vars()`, with test files
+and `#[cfg(test)]` items stripped first (the same stripping the LOC
+measurement uses). 47 unique `(file, call-site token)` production call
+sites survive, across 15 files. All 47 are now in a reviewed allowlist in
+`test_src_dependency_boundaries.py`, each tagged with one of six categories
+(diagnostic, instrumentation, resource, budget, policy,
+pinned-confirmation) and a one-line reason; the test fails on any call site
+missing from the allowlist *and* on any allowlist entry no longer found in
+`src/` (kept exact, not just a superset).
+
+None of the 47 gate a semantic decision today. Breakdown:
+
+- **34 are `GLAURUNG_DUMP_PASSES`/`GLAURUNG_PASS_HEALTH`/`GLAURUNG_PASS_STATS`/
+  `GLAURUNG_PIPELINE_PROFILE`/`GLAURUNG_ACCOUNT_STRUCTURE`/`GLAURUNG_IOCTL_DEBUG`
+  diagnostics** -- every one gates an `eprintln!`/counter/timer only; the
+  three named as legitimate in the task description are a subset of this
+  group.
+- **1 is instrumentation**: `GLAURUNG_VERIFY_DEFS` (`python_bindings/ir.rs`)
+  gates whether def-before-use violations are spliced into the rendered C
+  as comments. The verification itself (`violations`) always runs
+  unconditionally; the env var only controls whether the finding is echoed
+  into the artifact.
+- **1 is `python_bindings/ir/session.rs`'s `diagnostics_are_disabled()`**,
+  which iterates that exact five-name diagnostic list to decide whether the
+  in-process render cache may be trusted -- it disables *caching*, never
+  changes what a fresh render would produce.
+- **2 are resource-path selection** in decompiler scope:
+  `GLAURUNG_FLIRT_LIB` (which signature file to consult; documented
+  cwd-relative default, `None` no-op fallback) and, in the separate
+  symbolic-execution engine, `GLAURUNG_SMT_SOLVER` (which solver binary to
+  invoke).
+- **The remaining ~30 are entirely inside `src/symbolic/`** (the symbolic
+  execution / SAT-SMT engine backing the LLM vuln-discovery substrate, a
+  distinct subsystem from this roadmap's decompiler pipeline): per-backend
+  timeout/step budgets, solver warm-start/caching tuning knobs, dump/trace
+  directories, ambient-config snapshotting into trace metadata, and one
+  pair (`GLAURUNG_CONCRETIZATION_POLICY` /
+  `GLAURUNG_CANONICAL_MODEL_CHOICE`) that is a deliberately documented,
+  versioned policy choosing among several equally sound concretization
+  witnesses -- the chosen policy id is written into the ordered trace, so
+  the choice is auditable rather than silent. `ordered_replay.rs`'s
+  `validate_runtime_configuration` goes further than "reviewed": it
+  actively *refuses to run* unless a fixed, named set of these tuning
+  variables already carries specific pinned values, which is the opposite
+  of a silent semantic gate.
+
+**The one real hit was found and fixed earlier this session, not by this
+entry's tests.** `PreparedLlir::mir` in `src/python_bindings/ir.rs`
+documents it directly: verified typed MIR used to be built only inside the
+`GLAURUNG_DUMP_PASSES` debug dump, printed, and dropped -- so it was
+available in debug runs only, and "the roadmap's 'migrate a production
+consumer to verified MIR evidence' had nothing to migrate onto." It is now
+built on demand for every decompilation via an ordinary method, independent
+of any environment variable. The remaining `GLAURUNG_DUMP_PASSES`-guarded
+call to `lower_verified_with_image` at `ir.rs:875` (inside the dump block,
+building it a second time purely to print `mir.memory_values()`/
+`mir.objects()`) is diagnostic only -- its result is used for nothing but
+the print.
+
+Two entries are worth a human re-look later, though neither is a semantic
+gate today: `GLAURUNG_FLIRT_LIB` changes which signatures get matched (and
+so which symbol names get attached) depending on what file happens to sit
+at the configured/default path, and the concretization-policy pair changes
+*which* satisfying witness gets reported when several are equally valid.
+Both are flagged `resource`/`policy` rather than left out of the allowlist,
+because today's test is about catching a silent semantic gate, not
+relitigating every configuration surface.
+
+### Evidence
+
+`uv run pytest python/tests/test_fitness_report.py
+python/tests/test_src_dependency_boundaries.py -q`: 29 passed, 0 failed.
+`tools/fitness_report.py --check-ratchet`: exit 0, `fitness ratchet: no
+regressions`. `uvx ruff format`/`uvx ruff check` clean on all three new
+files. `uvx ty check` on the new files surfaces only pre-existing
+`pytest.fixture`/`pytest.approx`/`pytest.raises` stub-resolution
+diagnostics that reproduce identically on already-committed test files
+(e.g. `test_pass_health_report.py`) and on `uvx ty check python/` as a
+whole (1,979 diagnostics) -- an environment condition, not something this
+change introduced. `cargo build`/`maturin develop`/DecBench/Joern/the
+fixture matrix/`arch_roundtrip.py` were not run, per instruction (a
+baseline regeneration was in flight against this tree) and because nothing
+here needed the compiled extension -- both tools are pure Python over
+checked-out `.rs` text.
+
+Only `docs/design/decompiler-roadmap.md`'s first open bullet under item 11
+("Add a reporting and ratchet check for these measurements") was ticked.
+The fourth bullet ("Add dependency checks: ...") is also now fully
+implemented by `test_src_dependency_boundaries.py`, but ticking it was
+outside this entry's edit scope (limited to the reporting/ratchet bullets),
+so it is left for deliberate review rather than checked off here.
+
+### What is still open
+
+- The targets themselves: five of seven are unmet, most sharply the LOC
+  concentration in files above 1,000 lines (44.5% vs. 25%). Closing that
+  is the file-split work the roadmap explicitly separates from this entry.
+- "Reject new production modules over 1,000 LOC without a documented
+  review" (bullet 2) has no enforcement yet -- `fitness_report.py` reports
+  the count but nothing blocks a new large file today beyond the aggregate
+  ratchet noticing the mean/median/percentage move.
+- "Delete compatibility owners promptly after their consumers reach
+  parity" (bullet 5) is unaddressed by this entry.
+- The three layering checks are keyed to today's module layout by file
+  path; they need their file lists (not their intent) updated once
+  `src/render/`, `src/lift/` become real directories.
+
+## Entry 20 — Determinism and parallel equivalence
+
+Roadmap ranked item 12: design rule 12, "Serial and parallel analysis must
+produce identical facts and output," is unambiguous and was previously
+unproven -- no standing test exercised it anywhere in the tree. Worked in an
+isolated worktree at `a45c1ae` with a private `CARGO_TARGET_DIR` while a
+baseline regeneration ran against the shared tree.
+
+### Where parallelism actually happens
+
+Surveyed every `rayon`, `std::thread::spawn`, and `std::thread::scope` use
+reachable from the decompile pipeline (`src/ir/`, `src/python_bindings/ir.rs`,
+`src/program/`, `src/decompile/`):
+
+- **`decompile_all_py`/`decompile_many_py`** (`src/python_bindings/ir.rs`) are
+  plain sequential `for func in funcs` loops. Neither uses `rayon` nor spawns
+  worker threads to decompile several functions concurrently, and the GIL is
+  held across the whole per-function pipeline (the code's own comment says
+  so, to keep `Ctrl-C` responsive via `py.check_signals()`). Phase 8's
+  "deterministic function-parallel scheduling" checkbox in the roadmap is
+  still unchecked, and this confirms why: it does not exist yet. There is
+  currently no intra-process parallel decompilation of one binary's functions
+  to test.
+- **`src/ir/ast.rs::lower`** and **`src/python_bindings/analysis.rs::analyze_
+  interruptible`** each spawn exactly one worker thread (a bigger-stack thread
+  for deep region-tree recursion; a cancellation-watcher thread for
+  `Ctrl-C`). Single-worker, not fan-out parallelism -- nothing to
+  differential-test here.
+- **`rayon` is used in exactly two places**, both in `src/strings/`, neither
+  on the decompile path: `src/strings/detect_fast.rs` (fast language
+  pre-filtering) and `src/strings/mod.rs::process_language_detection_batch`
+  (ensemble language detection for the `strings`/`triage` subsystem, gated by
+  `PAR_THRESHOLD = 128` items). `python_bindings/triage.rs::detect_languages_py`
+  also calls `par_iter()` directly but with no shared mutable state -- safe.
+- **The real "parallel" surface for decompilation is OS-process-level**,
+  exercised only by the Python tooling: `tools/fixture_harness.py::run_matrix`/
+  `run_lanes` wrap `subprocess.run` calls in a `ThreadPoolExecutor` (threads
+  block on `subprocess.run`, which releases the GIL, so this is genuine
+  concurrent OS-process execution, not GIL-serialized threads). `tools/
+  dectest.py` and `tools/decbench_matrix.py` share this exact code path via
+  `--jobs`. This is the shape design rule 12 actually needs to hold for today.
+
+### Finding: a real parallel/repeatability bug in `src/strings/mod.rs`
+
+Investigating the one genuine Rayon fork-join surface first (language
+detection budget), `process_language_detection_batch` spent a shared
+`Arc<AtomicUsize>` budget through a compare-exchange loop *inside* the
+`par_iter` closure. Constructing a config that forces the parallel branch
+(`max_samples: 400` so `>= PAR_THRESHOLD`, `max_lang_detect: 20` so the
+budget is smaller than the eligible-string count) and calling `extract_
+summary` on a real binary (`samples/binaries/platforms/linux/amd64/
+libraries/shared/mathlib.dll`, 240 eligible strings out of 400 scanned)
+30 times back to back in one process: 2 of the 30 runs picked a different
+subset of strings to annotate with a language than the other 28, purely from
+thread-scheduling order winning the race on the atomic. This is a genuine,
+reproducible violation of "identical facts and output" -- not hypothetical.
+
+Fixed by splitting the function: budget reservation now runs strictly
+sequentially, in the batch's original order, before any parallel work starts
+(`reserve_language_detect_budget`); only the actual (expensive, thread-safe)
+`router.detect()` call for items that already won a slot runs through
+`par_iter`. The winning subset is now a pure function of the input and the
+budget, independent of thread count. No public signature changed.
+
+Two regression tests pin this in `src/strings/mod.rs::language_detect_
+determinism_tests`:
+
+- `extract_summary_repeats_are_byte_identical_in_one_process` -- 40
+  back-to-back calls on the same real binary/config, asserting the winning
+  subset and `language_counts` never diverge from the first call.
+- `language_detect_budget_reservation_is_deterministic_across_thread_counts`
+  -- the same property under an explicit 1-thread and an 8-thread
+  `rayon::ThreadPool`, 10 runs each, against the default-pool baseline.
+
+Both pass now (`cargo test --lib strings::` -- 38 passed, 0 failed, 1.20s).
+Before the fix, the first test failed reproducibly within a handful of runs;
+after, 0 divergences observed in any run of either test during this session.
+
+### The decompile-level differential (roadmap's literal ask)
+
+Added `python/tests/test_decompile_determinism.py`, scoped to three real
+binaries chosen for speed and architecture spread: `hello-gcc-O2` (x86-64
+ELF, 7 functions), `hello-arm64-gcc` (AArch64 ELF, 8 functions), and
+`mathlib.dll` (x86-64 PE, a real 232 KiB shared library, limited to 25
+functions). Three properties, each parametrized over all three binaries (9
+tests total):
+
+1. **In-process repeatability**: `glaurung.ir.decompile_all(path, limit=N)`
+   called twice in the same process must return list-equal results (tuple
+   order and content, not set equality).
+2. **Cross-process repeatability**: `glaurung decompile --all --format json`
+   run as two sequential fresh OS processes (`subprocess.run`, mirroring
+   `python/tests/test_cli_decompile.py::_run`) must produce byte-identical
+   stdout.
+3. **Serial vs. parallel**: a serial baseline subprocess run compared against
+   6 concurrent subprocess runs of the same binary, launched through a
+   `ThreadPoolExecutor` -- the exact mechanism `tools/fixture_harness.py::
+   run_matrix` uses for `--jobs`. Every concurrent run's stdout must equal
+   the serial baseline's stdout.
+
+All 9 pass, and were re-run 3 times back to back with no flakes
+(`uv run pytest python/tests/test_decompile_determinism.py -q`, 1.6-1.9s
+test time, ~2.9-3.7s wall including `uv` startup). **No divergence was
+found**: for these three binaries, serial and parallel (OS-process-
+concurrent) decompilation, and repeated runs in one process or across
+processes, are byte-identical today. This is a genuine, if narrower than the
+roadmap's ultimate ambition, positive result -- the pipeline that exists
+today (sequential-per-process, OS-process-parallel-across-invocations) holds
+the property. It says nothing about the function-parallel scheduling Phase 8
+still needs to build, which has no implementation to test yet.
+
+### Stretch: one bounded fuzz-style property test
+
+Added `lift_bytes_never_panics_or_hangs_on_arbitrary_input` to
+`src/ir/lift_x86.rs`'s test module: a seeded splitmix64 PRNG (no new crate
+dependency -- `rand` is not currently linked) generates 4,000 random byte
+buffers (length 1-32), each run through `lift_x86::lift_bytes` at 16-, 32-,
+and 64-bit widths (12,000 calls total) with VAs that exercise high-bit-set
+addresses, asserting no panic. Passes in 0.15s
+(`cargo test --lib lift_x86::tests::lift_bytes_never_panics_or_hangs_on_
+arbitrary_input`); no panic found. This is a property test, not a real
+fuzzer -- no corpus, no coverage guidance, matching the instruction not to
+add a fuzzing framework dependency. `fuzz/` already has two `cargo-fuzz`
+targets (`headers_validate`, `containers_detect`); neither covers a lifter or
+decoder, so this is new coverage, not a duplicate.
+
+### Evidence
+
+- `cargo test --release` in the worktree: 23 test binaries, **2,281 passed,
+  0 failed**, ~44s wall. Includes the 2 new `strings::` tests and the 1 new
+  `lift_x86::` test.
+- `cargo test --lib strings::` -- 38 passed, 0 failed, 1.20s.
+- `cargo test --lib lift_x86::tests::` -- 122 passed, 0 failed, 0.15s.
+- `uv run pytest python/tests/test_decompile_determinism.py -q` -- 9 passed,
+  0 failed, ~1.7s test time; re-run 3x with no flakes.
+- `uv run pytest python/tests/test_string_language_detection.py python/
+  tests/test_strings_wrappers.py python/tests/test_triage_wrappers.py
+  python/tests/test_triage_types.py -q` -- 23 passed, 0 failed (sanity check
+  that the `strings/mod.rs` refactor did not disturb the Python-facing
+  language/triage surface).
+- `rustfmt --edition 2021` applied to `src/strings/mod.rs` and
+  `src/ir/lift_x86.rs` only; no repo-wide `cargo fmt` was run.
+- `cargo clippy --lib -- -D warnings`: the only warnings touching the edited
+  files are both pre-existing, on lines this session did not modify
+  (`src/strings/mod.rs:129`'s `build_detected_strings_batch`, unrelated to
+  the reservation-order fix; `src/ir/lift_x86.rs:3227`, unrelated to the new
+  test appended at the file's end).
+- `uvx ruff format --check` and `uvx ruff check` on the new test file: clean.
+  `uvx ty check` reports the same `unresolved-attribute` noise on `g.ir.
+  decompile_all` and `pytest.mark` that already exists, unignored, on every
+  other file calling these PyO3-bound functions (e.g. `python/tests/
+  test_ir.py` has 56 of the same class of diagnostic) -- pre-existing stub
+  gap, not a regression.
+- DecBench, Joern, `decbench_matrix.py`, `arch_roundtrip.py`, and the full
+  fixture matrix were **not** run this session, per the constraint.
+  `tests/decompiler_fixtures/build/` does not exist on this host (fixtures
+  are not pre-built); real binaries came from `samples/binaries/` instead.
+- Files touched: `src/strings/mod.rs`, `src/ir/lift_x86.rs`, `python/tests/
+  test_decompile_determinism.py` (new). Verified the main tree's copies of
+  the two Rust files were byte-identical to `a45c1ae` before copying the
+  worktree's versions back; removed the worktree afterward.
+
+### What remains open
+
+- No test proves design rule 12 for actual intra-process function-parallel
+  decompilation, because that scheduler does not exist yet (Phase 8). The
+  decompile-level tests added here prove the property for the pipeline shape
+  that exists today (sequential-per-process; OS-process-parallel across
+  invocations); they will need a companion test the day Phase 8 lands a
+  real in-process scheduler, and that future test is where a HashMap-
+  iteration-order class of bug (already fixed once in `src/ir/stack_locals.
+  rs`) is most likely to resurface.
+- The three decompile-determinism binaries are small (7-25 functions
+  rendered). A cohort with heavier optimization (O2, C++ exceptions,
+  switches) was deliberately left out to keep the file fast and within this
+  session's "a few representative binaries" scope; broadening it is
+  straightforward if a future session wants more surface area.
+- Cancellation, resource budgets, crash recovery, and schema migration
+  coverage (the rest of the Phase 8 safety-plan bullet) are untouched by
+  this entry -- explicitly out of scope per the task's priority order.
+- The `strings/mod.rs` fix only pins the language-detection budget race. It
+  does not audit `classify_iocs`, `search::scan_bytes`, or any other
+  `strings`/`triage` code path for similar shared-mutable-state hazards
+  under parallel execution; none were investigated beyond the one Rayon
+  surface reachable from `extract_summary`.
+
+## Entry 21 — What the effectful-select fixture actually bought
+
+Entry 18 recorded the defect that `189_effectful_select` uncovered: call
+arguments dropped before recovery, at `gcc -O2`, whenever an arm of the
+diamond returned, whenever a live-in spelling was only visible from the
+enclosing scope, or whenever an entry-constant slot had to be proved across a
+labelled join. `f72851e` fixed those three. This entry records what the fix
+was worth, which is more than the fixture that found it.
+
+Regenerating `baseline.json` moved exactly six cells, all in the same
+direction:
+
+    164_nested_tlv_walker:clang:O2  tlv164_leaf_sum     fail -> pass
+    164_nested_tlv_walker:gcc:O2    tlv164_node_count   fail -> pass
+    165_bitstream_reader:gcc:O2     bit165_cross_check  fail -> pass
+    56_sieve:gcc:O2                 sieve_primes        fail -> pass
+    189_effectful_select:gcc:O2     se189_select_call   fail -> pass
+    189_effectful_select:gcc:O2     se189_nested_select fail -> pass
+
+Two of those six are the fixture. The other four are a TLV parser, a
+bitstream reader and a sieve that had simply been failing, in the baseline,
+for as long as the baseline has existed — and whose failures nobody had
+connected to argument recovery, because from the outside a dropped argument
+looks like a rendering problem in whatever function happens to contain it.
+
+Two process notes, both learned the expensive way.
+
+**Check the diff cell by cell.** `--write-baseline` rewrites every entry in
+the file, so a regression elsewhere is absorbed silently and shows up only as
+a smaller-than-expected improvement count. The verification here was a script
+that diffs the committed baseline against the new one key by key and prints
+every changed `(cell, function, old, new)` triple — six changes, six
+`fail -> pass`, nothing else moved. "The count went up" is not that check.
+
+**The fixture that finds a bug is rarely the fixture that motivated it.**
+`189` was designed to catch double evaluation of a side-effecting call folded
+into a ternary — the same soundness class as the vector-transport bug in
+`188`, one value with more than one consumer. It never got the chance to test
+that: the arguments were gone before the fold could be evaluated at all. The
+lesson is not that the design was wrong but that a fixture aimed at a deep
+property tends to trip over a shallower one on the way in, and the shallower
+one was worth four unrelated cells. Its intended target remains untested, and
+the control (`se189_select_pure`, which must still fold) is what stops the
+whole fixture from being satisfied by a decompiler that folds nothing.
