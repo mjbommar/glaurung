@@ -2,151 +2,121 @@
 
 import argparse
 import sys
-from typing import List, Optional
+from importlib import import_module
+from typing import TYPE_CHECKING, List, Optional
 
-from .commands.triage import TriageCommand
-from .commands.base import BaseCommand
-from .commands.symbols import SymbolsCommand
-from .commands.disasm import DisasmCommand
-from .commands.cfg import CFGCommand
-from .commands.ask import AskCommand
-from .commands.strings import StringsCommand
-from .commands.decompile import DecompileCommand
-from .commands.explain import ExplainCommand
-from .commands.name_func import NameFuncCommand
-from .commands.repl import ReplCommand
-from .commands.graph import GraphCommand
-from .commands.detect_packer import DetectPackerCommand
-from .commands.binary_diff import BinaryDiffCommand
-from .commands.kickoff import KickoffCommand
-from .commands.patch import PatchCommand
-from .commands.verify_recovery import VerifyRecoveryCommand
-from .commands.export import ExportCommand
-from .commands.undo import UndoCommand, RedoCommand
-from .commands.xrefs import XrefsCommand
-from .commands.frame import FrameCommand
-from .commands.string_xrefs import StringsXrefsCommand
-from .commands.view import ViewCommand
-from .commands.find import FindCommand
-from .commands.bookmark import BookmarkCommand, JournalCommand
-from .commands.classfile import ClassfileCommand
-from .commands.java import JavaCommand
-from .commands.java_recovery_report import JavaRecoveryReportCommand
-from .commands.luac import LuacCommand
-from .commands.pe import PeCommand
-from .commands.windows_risk import WindowsRiskCommand
-from .commands.types import TypesCommand
-from .commands.windows import WindowsCommand
-from .commands.locks import LocksCommand
-from .commands.group import GroupCommand
+if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
+    from .commands.base import BaseCommand
+    from .formatters.base import BaseFormatter
 
-from .formatters import (
-    TriageFormatter,
-    SymbolsFormatter,
-    DisasmFormatter,
-    CFGFormatter,
-)
-from .formatters.base import BaseFormatter
-from .formatters.ask import AskFormatter
-from .formatters.strings import StringsFormatter
-from .formatters.decompile import DecompileFormatter
-from .formatters.name_func import NameFuncFormatter
+# Command and formatter classes are named here rather than imported, and loaded
+# only for the subcommand actually being run.
+#
+# Importing all 35 eagerly meant every invocation paid for the most expensive
+# one. `ask` reaches `glaurung.llm.agents.factory` -> `pydantic_ai` ->
+# `pydantic_ai.mcp` / `pydantic_graph`, which `-X importtime` measured at
+# 1417 ms of a 1467 ms `import glaurung.cli`. `glaurung --help` took 3.10 s
+# while the PyO3 extension itself imports in 0.11 s.
+#
+# That cost is paid thousands of times per fixture-matrix run, because
+# `tools/diff_decompile.py` shells out to `glaurung decompile` once per
+# function. `python/tests/test_cli_startup_is_lazy.py` pins the contract.
+#
+#   name -> (command module, command class, formatter module, formatter class)
+_REGISTRY: dict[str, tuple[str, str, str, str]] = {
+    "triage": ("triage", "TriageCommand", "", "TriageFormatter"),
+    "strings": ("strings", "StringsCommand", "strings", "StringsFormatter"),
+    "symbols": ("symbols", "SymbolsCommand", "", "SymbolsFormatter"),
+    "disasm": ("disasm", "DisasmCommand", "", "DisasmFormatter"),
+    "cfg": ("cfg", "CFGCommand", "", "CFGFormatter"),
+    "ask": ("ask", "AskCommand", "ask", "AskFormatter"),
+    "decompile": ("decompile", "DecompileCommand", "decompile", "DecompileFormatter"),
+    # `explain` emits its rewritten C body via output_plain (with a banner
+    # comment) or a JSON payload it prints directly; the decompile formatter is
+    # a pass-through that accepts both shapes cleanly.
+    "explain": ("explain", "ExplainCommand", "decompile", "DecompileFormatter"),
+    "name-func": ("name_func", "NameFuncCommand", "name_func", "NameFuncFormatter"),
+    # The REPL is interactive and prints directly, so TriageFormatter is a
+    # no-op placeholder that is never actually consulted. Likewise `graph`,
+    # which emits raw DOT text via output_plain.
+    "repl": ("repl", "ReplCommand", "", "TriageFormatter"),
+    "graph": ("graph", "GraphCommand", "", "TriageFormatter"),
+    "detect-packer": ("detect_packer", "DetectPackerCommand", "", "TriageFormatter"),
+    "diff": ("binary_diff", "BinaryDiffCommand", "", "TriageFormatter"),
+    "kickoff": ("kickoff", "KickoffCommand", "", "TriageFormatter"),
+    "patch": ("patch", "PatchCommand", "", "TriageFormatter"),
+    "verify-recovery": (
+        "verify_recovery",
+        "VerifyRecoveryCommand",
+        "",
+        "TriageFormatter",
+    ),
+    "export": ("export", "ExportCommand", "", "TriageFormatter"),
+    "undo": ("undo", "UndoCommand", "", "TriageFormatter"),
+    "redo": ("undo", "RedoCommand", "", "TriageFormatter"),
+    "xrefs": ("xrefs", "XrefsCommand", "", "TriageFormatter"),
+    "frame": ("frame", "FrameCommand", "", "TriageFormatter"),
+    "strings-xrefs": ("string_xrefs", "StringsXrefsCommand", "", "TriageFormatter"),
+    "view": ("view", "ViewCommand", "", "TriageFormatter"),
+    "find": ("find", "FindCommand", "", "TriageFormatter"),
+    "bookmark": ("bookmark", "BookmarkCommand", "", "TriageFormatter"),
+    "journal": ("bookmark", "JournalCommand", "", "TriageFormatter"),
+    "classfile": ("classfile", "ClassfileCommand", "", "TriageFormatter"),
+    "java": ("java", "JavaCommand", "", "TriageFormatter"),
+    "java-recovery-report": (
+        "java_recovery_report",
+        "JavaRecoveryReportCommand",
+        "",
+        "TriageFormatter",
+    ),
+    "luac": ("luac", "LuacCommand", "", "TriageFormatter"),
+    "pe": ("pe", "PeCommand", "", "TriageFormatter"),
+    "windows-risk": ("windows_risk", "WindowsRiskCommand", "", "TriageFormatter"),
+    "types": ("types", "TypesCommand", "", "TriageFormatter"),
+    "windows": ("windows", "WindowsCommand", "", "TriageFormatter"),
+    "locks": ("locks", "LocksCommand", "", "TriageFormatter"),
+    "group": ("group", "GroupCommand", "", "TriageFormatter"),
+}
 
 
 class GlaurungCLI:
     """Main CLI application."""
 
     def __init__(self):
-        """Initialize the CLI with available commands."""
-        self.commands: dict[str, BaseCommand] = {
-            "triage": TriageCommand(),
-            "strings": StringsCommand(),
-            "symbols": SymbolsCommand(),
-            "disasm": DisasmCommand(),
-            "cfg": CFGCommand(),
-            "ask": AskCommand(),
-            "decompile": DecompileCommand(),
-            "explain": ExplainCommand(),
-            "name-func": NameFuncCommand(),
-            "repl": ReplCommand(),
-            "graph": GraphCommand(),
-            "detect-packer": DetectPackerCommand(),
-            "diff": BinaryDiffCommand(),
-            "kickoff": KickoffCommand(),
-            "patch": PatchCommand(),
-            "verify-recovery": VerifyRecoveryCommand(),
-            "export": ExportCommand(),
-            "undo": UndoCommand(),
-            "redo": RedoCommand(),
-            "xrefs": XrefsCommand(),
-            "frame": FrameCommand(),
-            "strings-xrefs": StringsXrefsCommand(),
-            "view": ViewCommand(),
-            "find": FindCommand(),
-            "bookmark": BookmarkCommand(),
-            "journal": JournalCommand(),
-            "classfile": ClassfileCommand(),
-            "java": JavaCommand(),
-            "java-recovery-report": JavaRecoveryReportCommand(),
-            "luac": LuacCommand(),
-            "pe": PeCommand(),
-            "windows-risk": WindowsRiskCommand(),
-            "types": TypesCommand(),
-            "windows": WindowsCommand(),
-            "locks": LocksCommand(),
-            "group": GroupCommand(),
-        }
+        self._commands: dict[str, BaseCommand] = {}
 
-        # Map commands to their formatters. The REPL is interactive and
-        # prints directly, so it reuses TriageFormatter as a no-op
-        # placeholder — the formatter is never actually consulted.
-        self.formatter_map: dict[str, type[BaseFormatter]] = {
-            "triage": TriageFormatter,
-            "strings": StringsFormatter,
-            "symbols": SymbolsFormatter,
-            "disasm": DisasmFormatter,
-            "cfg": CFGFormatter,
-            "ask": AskFormatter,
-            "decompile": DecompileFormatter,
-            # explain emits its rewritten C body via output_plain (with a
-            # banner comment) or a JSON payload it prints directly; the
-            # decompile formatter is a pass-through that accepts both
-            # shapes cleanly.
-            "explain": DecompileFormatter,
-            "name-func": NameFuncFormatter,
-            "repl": TriageFormatter,
-            # graph command emits raw DOT text via output_plain, so its
-            # formatter is a no-op pass-through (TriageFormatter works fine).
-            "graph": TriageFormatter,
-            "detect-packer": TriageFormatter,
-            "diff": TriageFormatter,
-            "kickoff": TriageFormatter,
-            "patch": TriageFormatter,
-            "verify-recovery": TriageFormatter,
-            "export": TriageFormatter,
-            "undo": TriageFormatter,
-            "redo": TriageFormatter,
-            "xrefs": TriageFormatter,
-            "frame": TriageFormatter,
-            "strings-xrefs": TriageFormatter,
-            "view": TriageFormatter,
-            "find": TriageFormatter,
-            "bookmark": TriageFormatter,
-            "journal": TriageFormatter,
-            "classfile": TriageFormatter,
-            "java": TriageFormatter,
-            "java-recovery-report": TriageFormatter,
-            "luac": TriageFormatter,
-            "pe": TriageFormatter,
-            "windows-risk": TriageFormatter,
-            "types": TriageFormatter,
-            "windows": TriageFormatter,
-            "locks": TriageFormatter,
-            "group": TriageFormatter,
-        }
+    @property
+    def command_names(self) -> tuple[str, ...]:
+        """Every registered subcommand, without importing any of them."""
+        return tuple(_REGISTRY)
 
-    def create_parser(self) -> argparse.ArgumentParser:
-        """Create the argument parser."""
+    def command(self, name: str) -> "BaseCommand":
+        """Instantiate one subcommand, importing its module on first use."""
+        cached = self._commands.get(name)
+        if cached is not None:
+            return cached
+        module_name, class_name, _, _ = _REGISTRY[name]
+        module = import_module(f".commands.{module_name}", __package__)
+        instance = getattr(module, class_name)()
+        self._commands[name] = instance
+        return instance
+
+    def formatter_class(self, name: str) -> type["BaseFormatter"]:
+        """Resolve one formatter class, importing its module on first use."""
+        _, _, module_name, class_name = _REGISTRY[name]
+        # An empty module name means the formatter lives in the package root,
+        # which re-exports the four shared ones.
+        target = f".formatters.{module_name}" if module_name else ".formatters"
+        return getattr(import_module(target, __package__), class_name)
+
+    def create_parser(self, only: str | None = None) -> argparse.ArgumentParser:
+        """Create the argument parser.
+
+        `only` restricts the registered subparsers to a single command, which is
+        what keeps an invocation from importing the other thirty-four. Passing
+        `None` registers all of them and therefore imports all of them; that is
+        the correct behavior for `--help`, where the whole list is the output.
+        """
         parser = argparse.ArgumentParser(
             prog="glaurung", description="Glaurung binary analysis CLI"
         )
@@ -159,33 +129,43 @@ class GlaurungCLI:
             dest="cmd", required=True, help="Available commands"
         )
 
-        # Setup each command's parser
-        for cmd_name, cmd in self.commands.items():
-            cmd.setup_parser(subparsers)
+        names = (only,) if only is not None else self.command_names
+        for cmd_name in names:
+            self.command(cmd_name).setup_parser(subparsers)
 
         return parser
 
+    def _requested_command(self, argv: list[str] | None) -> str | None:
+        """The subcommand named in `argv`, if it is one we know.
+
+        The first bare token is the subcommand: the only global options are
+        `--version` and `--help`, neither of which takes a value. Anything
+        unrecognized returns `None` so the full parser is built and argparse can
+        emit its own error listing every valid choice.
+        """
+        tokens = sys.argv[1:] if argv is None else argv
+        for token in tokens:
+            if token.startswith("-"):
+                continue
+            return token if token in _REGISTRY else None
+        return None
+
     def run(self, argv: Optional[List[str]] = None) -> int:
         """Run the CLI application."""
-        parser = self.create_parser()
+        parser = self.create_parser(only=self._requested_command(argv))
         args = parser.parse_args(argv)
 
         # Get the command
-        command = self.commands.get(args.cmd)
-        if not command:
+        if args.cmd not in _REGISTRY:
             print(f"Unknown command: {args.cmd}", file=sys.stderr)
             return 1
+        command = self.command(args.cmd)
 
         # Determine output format
         output_format = command.get_output_format(args)
 
         # Create the appropriate formatter
-        formatter_class = self.formatter_map.get(args.cmd)
-        if not formatter_class:
-            print(f"No formatter for command: {args.cmd}", file=sys.stderr)
-            return 1
-
-        formatter = formatter_class(output_format)
+        formatter = self.formatter_class(args.cmd)(output_format)
 
         # Execute the command
         try:
