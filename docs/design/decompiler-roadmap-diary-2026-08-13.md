@@ -3154,3 +3154,172 @@ Untouched by design, because concurrent work owns them: `src/target/*`,
 scalar/lane spelling unification Entry 22 describes; this entry works around it
 by carrying the observed spelling rather than unifying the model.
 
+
+## Entry 24 — Undefined reads: the real set, and the first wrong stage for each
+
+The brief said ten fixtures render reads of variables that were never defined.
+Ten is right for exactly one slice and wrong for the corpus.
+
+### The count, recomputed
+
+`tests/decompiler_fixtures/structural_baseline.json` records ten violating
+functions. That file is built by `structural.py::_build`, which compiles ONE
+lane — gcc `-O0` — and grades only `manifest.REQUIRED_FUNCTIONS` at the
+`decbench` render. Recomputed against the prebuilt corpus in
+`tests/decompiler_fixtures/build/` (742 shared objects, all six lanes,
+`GLAURUNG_VERIFY_DEFS=1`, `--all`), at HEAD `38d6591`:
+
+| scope | violating functions | violations |
+|---|---|---|
+| gcc:O0, required functions (= the baseline's ten) | 10 | 11 |
+| all six lanes, required functions | 192 | 320 |
+| all six lanes, every emitted function | 3387 | 12743 |
+
+So the corrected number for "functions the corpus's own contract cares about" is
+**192, not 10** — the baselined ten are the gcc:O0 shadow of a defect surface
+nineteen times larger. Per lane, required functions only: gcc:O0 11, clang:O0
+13, gcc:O2 106, clang:O2 130, rustc:O0 37, rustc:O2 23. The O2 lanes dominate,
+and their violations are almost all `never_defined` rather than
+`used_before_definition` — at O2 the emitted body usually contains a `goto`, and
+`verify_defs::check` skips its flow-sensitive rule there, so what survives is
+the stronger claim: no definition anywhere in the function.
+
+### Clusters, by cause rather than by name
+
+Read the disassembly for each of the baselined ten. The fixture titles mislead
+in both directions.
+
+**A. No SSE parameter bank (x86-64).** `abi::argument_slots(SysVAmd64)` lists
+`rdi/rsi/rdx/rcx/r8/r9` and nothing else, so a float parameter is bound to the
+INTEGER register at the same positional index. `GLAURUNG_DUMP_PASSES=1` on
+`174_float_compare_classify:sign_bit_of_binary32` prints the recovered prototype
+as `slot: 0, value: Phys("rdi"), hint: Float { width: 4 }` — for a function
+whose only instruction touching a parameter is `movd eax, xmm0`, and which never
+mentions `rdi`. First wrong stage is therefore prototype/parameter recovery,
+BEFORE the AST pipeline: `parameter evidence` already reads `roles={"rdi": 0}`,
+and `apply_role_names` faithfully renames what it was given.
+
+The symptom then splits on spelling. `abi::return_registers` DOES contain
+`xmm0`, so a live-in read spelled `xmm0` is named `ret` and reported
+`used_before_definition` (`172:accumulate_narrow`, `172:accumulate_wide`,
+`175:scale_series_f32`); a read spelled `xmm0_d0` — the vector-lane view added
+by Entry 22 — matches nothing and becomes an undefined `varN`
+(`174_float_compare_classify`, 19 violations after this entry's fix). Same root,
+two spellings.
+
+NOT FIXED, deliberately. The blocker is that SysV allocates INTEGER and SSE
+parameters from two INDEPENDENT counters, so a flat positional slot table cannot
+express the mapping at all — `argument_slots` would have to become class-aware,
+and every caller that indexes it positionally would have to change with it. The
+adjacent experiment is on the record and it was expensive: `abi.rs` notes that
+adding `xmm0`-`xmm7` to the call-effects may-use set on 2026-08-12 gained nothing
+and cost twelve regressions in functions containing no SSE instruction. This
+needs a design decision, not a patch.
+
+**B. Bit-preserving register views read as bare names.** FIXED — see below.
+
+**C. Phi coalescing materialises a copy from an undefined incoming.**
+`143_dynamic_frames:cleanup_on_every_exit` emits `var12 = var13;` where nothing
+defines `var13`. The dump attributes it exactly: `value_number.rs`'s phi
+coalescing prints `phi-coalesce [rbx#6, rbx#1, ...] -> rbx#1` and inserts
+`0x1456: %rbx#1 = %rbx` — at `mov r12d, 0x1`, an instruction that does not write
+`ebx` at all. The incoming on that edge is version 0, the live-in, which no
+instruction defines. `135_cpp_rtti:cpp_typeid_compare` (`var20 = var21`) is the
+same shape reached differently: `__cxa_bad_typeid` is absent from
+`call_semantics::KNOWN_NORETURN_SYMBOLS`, so an impossible fallthrough edge
+exists and the join needs an incoming for `rdx` on it.
+
+NOT FIXED. Both need a decision this entry is not entitled to make: the current
+output is arguably the MORE faithful one (the machine really does leave the
+callee-saved register holding the caller's value), and eliding the copy trades a
+flagged uninitialised read for a silent one. The `__cxa_*` half is smaller and
+looks tractable — `__cxa_bad_typeid`, `__cxa_bad_cast`, `__cxa_pure_virtual`
+and `_ZSt9terminatev` all have standardized noreturn contracts and would fit the
+existing list's stated criteria — but it changes CFG recovery, so it wants its
+own measurement rather than a ride on a lifter change.
+
+**D. Landing-pad live-ins.** `136_cpp_exception_unwinding:cpp_rethrow_and_nest`
+reads `var8` in `if (var8 == 1)`. That is `rdx` at `0x1583`, an `endbr64` landing
+pad: the Itanium unwinder enters with the exception object in `rax` and the
+SELECTOR in `rdx`, and neither is written by any instruction in the function.
+`exception_recover::mark_landing_pads` marks the pads but seeds no entry
+definitions for them. NOT FIXED — the missing capability is named precisely:
+landing-pad entry definitions for the exception ABI's two live-in registers.
+
+**E. Frame arrays with a runtime index.** `111_self_referential_struct:link_and_sum`
+declares and reads `rbp`. `promote_stack_locals` promoted every constant-offset
+slot (`local_90`, `local_8`, ...) but left `%rdx#6 = (%rdx#5 + %rbp)` /
+`%rdx#7 = (%rdx#6 - 144)` — `nodes[index].value`, a base-plus-scaled-index frame
+address — as raw pointer arithmetic. `recognise_machine_frame` then correctly
+fails closed, because collapsing a prologue whose frame pointer is still read
+would be a lie. First wrong stage is `stack_locals.rs`, and the gap is the EPIC 3
+one: no promotion of a dynamically indexed frame ARRAY. NOT FIXED.
+
+**F. A partial-register merge nobody consumes.** `172:narrow_after_double_math`
+is in the float fixture and its violation has nothing to do with floats. gcc
+emits `setae al; xor eax, 0x1; test al, al`: only `al` is ever read, but the
+`xor` reads the whole `eax`, whose upper 24 bits are genuinely live-in. The
+emitted `(ret & -256) | ...` is a faithful lowering of an architecturally
+undefined read. NOT FIXED; the fix shape is a dead-bits narrowing, not a
+value-tracking repair. Recorded because it is the exact error the brief warned
+about — a cluster assigned by fixture title would have put this with A.
+
+### What was fixed
+
+Cluster B, in `src/ir/lift_x86.rs`. `regview::ssa_parent` declines to merge a
+bit-preserving view (`ax`, `dx`, `al`, `ah`) with its parent, so a bare `%dx`
+read is a read of a name the SSA layer never sees defined. Three sites in the
+lifter already knew this and called `read_view_ops` to extract the view from its
+parent — the memory-destination `mov`, `movzx`/`movsx`, and
+`cmp_operand_as_value`. Three did not:
+
+* `wide_div_ops` at 16 bits snapshots the `dx:ax` dividend pair with bare reads.
+  `mov edx, 0` before `div r/m16` defines `rdx`; the two never meet, so
+  `185_subword_signed_division:divide_unsigned_shorts` rendered an undeclared
+  `var3` as the high half of its dividend and divided by garbage.
+* `wide_mul_ops` at 16 bits, same accumulator, same shape.
+* `Mnemonic::Mov`'s register-destination arm, for a register SOURCE. This is the
+  one with reach: clang's sub-word remainder is `cdq; idiv ecx; mov ax, dx`, and
+  the `dx` read there is how `remainder_signed_shorts` lost its remainder.
+
+New helper `snapshot_accumulator_half` routes the wide-arithmetic halves through
+`read_view_ops`; the `mov` arm extracts a partial source into `Temp(76)` before
+the existing partial-write handling. At 32 and 64 bits `partial_gp_view` returns
+`None`, so nothing changes there — the pre-existing 64-bit assertions still pass
+untouched.
+
+### Measurement
+
+Two full six-lane sweeps of the 742 prebuilt fixture objects, before and after:
+
+* required functions: 192 -> 185 violating cells, 320 -> 312 violations;
+* every emitted function: 3387 -> 3380 cells, 12743 -> 12703 violations;
+* **seven cells cleared, zero newly violating.**
+
+`tools/dectest.py` over **396 distinct lanes (55% of 724), 1915 functions**
+— `@subword-division @widths @smoke @region @loops @calls @flags @structs
+@polarity @coverage @vector-float @aggregates @bias @sentinel @early-exit
+@switch 13* 14* 15* @curriculum-bits @curriculum-crypto @curriculum-strings
+@curriculum-sorting @curriculum-number-theory 16* 17* 18*` — **no regressions**,
+and five EXECUTION improvements (fail -> pass, i.e. the recompiled C now returns
+the right answer):
+
+    185_subword_signed_division:clang:O0:remainder_signed_bytes
+    185_subword_signed_division:clang:O0:remainder_signed_shorts
+    185_subword_signed_division:clang:O2:divide_signed_bytes
+    145_control_flow_flattening:clang:O2:flattened_classify
+    45_string_algorithms:clang:O0:format_decimal
+
+`cargo test`: 2307 passed, 0 failed, 1 ignored. No Python was touched. No
+baseline was regenerated — the five improvements above mean `baseline.json` and
+`structural_baseline.json` are now stale in the good direction and need a
+deliberate refresh.
+
+### What this entry did not do
+
+DecBench, Joern, the full fixture matrix and `arch_roundtrip.py` were not run.
+Clusters A, C, D, E and F are diagnosed and unfixed; each names its blocker
+above. The residual after this fix, required functions only, is 312 violations
+in 185 cells, led by `174_float_compare_classify` (19, cluster A),
+`170_rust_panic_unwind` and `171_rust_overflow` (16 each, not investigated),
+and `153_many_live_locals` (14, not investigated).

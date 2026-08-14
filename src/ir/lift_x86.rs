@@ -3010,6 +3010,31 @@ fn packed_dword_shuffle_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
     ops
 }
 
+/// Snapshot one architectural half of the wide accumulator pair into `temp`.
+///
+/// At 64 and 32 bits the halves are `rdx:rax` / `edx:eax`, whose names either ARE
+/// the canonical parent or zero-extend into it, so a bare register read is a read
+/// of a name the SSA layer versions. At 16 bits they are `dx:ax` — BIT-PRESERVING
+/// views (`regview::ssa_parent` declines to merge them), so a bare `%dx` read is a
+/// read of a name nothing in the function ever defines: `mov edx, 0` before a
+/// `div r/m16` defines `rdx`, and the two never meet.
+///
+/// That is not cosmetic. `185_subword_signed_division:divide_unsigned_shorts`
+/// rendered `var3` — an undeclared, never-assigned local — as the high half of the
+/// dividend, so the emitted C divided by a garbage 32-bit dividend. Reading the
+/// half through [`read_view_ops`] (the same helper `cmp_operand_as_value` already
+/// uses for every other narrow operand) extracts it from the parent, which is the
+/// definition the SSA layer can actually see.
+fn snapshot_accumulator_half(name: &str, temp: VReg, ops: &mut Vec<Op>) {
+    match partial_gp_view(name) {
+        Some(view) => ops.extend(read_view_ops(view, temp)),
+        None => ops.push(Op::Assign {
+            dst: temp,
+            src: Value::Reg(VReg::phys(name)),
+        }),
+    }
+}
+
 /// Exact one-operand x86 multiply: `hi:lo = accumulator * source`.
 ///
 /// Snapshot both inputs before defining either architectural output. Express the
@@ -3030,11 +3055,8 @@ fn wide_mul_ops(instr: &iced_x86::Instruction, signed: bool) -> Option<Vec<Op>> 
     };
     let mut ops = Vec::new();
     let source = cmp_operand_as_value(instr, 0, VReg::Temp(59), &mut ops)?;
+    snapshot_accumulator_half(lo_name, VReg::Temp(60), &mut ops);
     ops.extend([
-        Op::Assign {
-            dst: VReg::Temp(60),
-            src: Value::Reg(VReg::phys(lo_name)),
-        },
         Op::Assign {
             dst: VReg::Temp(61),
             src: source,
@@ -3084,20 +3106,12 @@ fn wide_div_ops(instr: &iced_x86::Instruction, signed: bool) -> Option<Vec<Op>> 
     };
     let mut ops = Vec::new();
     let divisor = cmp_operand_as_value(instr, 0, VReg::Temp(69), &mut ops)?;
-    ops.extend([
-        Op::Assign {
-            dst: VReg::Temp(70),
-            src: Value::Reg(VReg::phys(hi_name)),
-        },
-        Op::Assign {
-            dst: VReg::Temp(71),
-            src: Value::Reg(VReg::phys(lo_name)),
-        },
-        Op::Assign {
-            dst: VReg::Temp(72),
-            src: divisor,
-        },
-    ]);
+    snapshot_accumulator_half(hi_name, VReg::Temp(70), &mut ops);
+    snapshot_accumulator_half(lo_name, VReg::Temp(71), &mut ops);
+    ops.push(Op::Assign {
+        dst: VReg::Temp(72),
+        src: divisor,
+    });
     let kind = if signed { "sdiv" } else { "udiv" };
     let inputs = vec![
         Value::Reg(VReg::Temp(70)),
@@ -3483,28 +3497,49 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         }];
                     };
                     let dst_name = reg_name(instr.op_register(0));
+                    // A partial register SOURCE is a view of its canonical parent,
+                    // exactly as it is for the memory-destination and `movzx`/`movsx`
+                    // forms above. This arm was the one that still read it as an
+                    // independent name, and `regview::ssa_parent` refuses to merge a
+                    // bit-preserving view with its parent — so `cdq; idiv ecx; mov
+                    // ax, dx` (clang's sub-word remainder) read a `dx` that nothing
+                    // in the function defines, and
+                    // `185_subword_signed_division:remainder_signed_shorts` rendered
+                    // the remainder as an undeclared `var10`.
+                    let mut preamble = Vec::new();
+                    let src = match (&src, partial_gp_view(&reg_name(instr.op_register(1)))) {
+                        (Value::Reg(_), Some(view)) if instr.op_kind(1) == OpKind::Register => {
+                            let value = VReg::Temp(76);
+                            preamble = read_view_ops(view, value.clone());
+                            Value::Reg(value)
+                        }
+                        _ => src,
+                    };
                     // A partial (8-/16-bit, low or high-byte) GP write preserves
                     // the parent's other bits; a plain Assign would drop them and
                     // later `eax`/`rax` reads would see a stale value (e.g. gcc's
                     // low-byte-clear `mov $0, %al`).
                     if let Some(v) = partial_gp_view(&dst_name) {
-                        return partial_write_ops(v, src);
+                        preamble.extend(partial_write_ops(v, src));
+                        return preamble;
                     }
                     if zero_extending_gp_view(&dst_name, bits).is_some()
                         && !matches!(src, Value::Const(_))
                     {
-                        return vec![Op::ZExt {
+                        preamble.push(Op::ZExt {
                             dst: VReg::phys(dst_name),
                             src,
                             from: Width::W32,
                             to: Width::W64,
-                        }];
+                        });
+                        return preamble;
                     }
                     let src = const_written_through_view(&dst_name, src, bits);
-                    vec![Op::Assign {
+                    preamble.push(Op::Assign {
                         dst: VReg::phys(dst_name),
                         src,
-                    }]
+                    });
+                    preamble
                 }
                 _ => vec![Op::Unknown {
                     mnemonic: "mov".into(),
@@ -6735,6 +6770,126 @@ mod tests {
                 "got: {op:#?}"
             );
         }
+    }
+
+    /// The 16-bit accumulator pair is `dx:ax`, and both are BIT-PRESERVING views.
+    ///
+    /// `regview::ssa_parent` deliberately refuses to merge such a view with its
+    /// parent, so a bare `%dx` read is a read of a name no `mov edx, 0` ever
+    /// defines. Lifting it that way is exactly how
+    /// `185_subword_signed_division:divide_unsigned_shorts` came to render an
+    /// undeclared `var3` as the high half of its dividend. Each half must be
+    /// extracted from its parent instead.
+    #[test]
+    fn div_at_sixteen_bits_reads_its_accumulator_halves_out_of_their_parents() {
+        // div cx  (66 f7 f1) → unsigned dx:ax / cx.
+        let ops = lift64(&[0x66, 0xf7, 0xf1]);
+        let reads_bare_view = ops.iter().any(|instruction| {
+            matches!(&instruction.op, Op::Assign { src: Value::Reg(source), .. }
+                if *source == VReg::phys("dx") || *source == VReg::phys("ax"))
+        });
+        assert!(
+            !reads_bare_view,
+            "a 16-bit divide must not read `dx`/`ax` as bare names: {ops:#?}"
+        );
+        for (temp, parent) in [(VReg::Temp(70), "rdx"), (VReg::Temp(71), "rax")] {
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Bin {
+                        dst,
+                        op: BinOp::And,
+                        lhs: Value::Reg(source),
+                        rhs: Value::Const(0xffff),
+                    } if *dst == temp && *source == VReg::phys(parent)
+                )),
+                "missing `{temp:?} = {parent} & 0xffff` snapshot: {ops:#?}"
+            );
+        }
+    }
+
+    /// `mov ax, dx` — a register-to-register move whose SOURCE is a bit-preserving
+    /// view.
+    ///
+    /// The memory-destination and `movzx`/`movsx` forms already extracted such a
+    /// source from its parent; this arm did not, so the read named a register the
+    /// SSA layer never sees defined. It is how clang's sub-word remainder
+    /// (`cdq; idiv ecx; mov ax, dx`) rendered `var10` in
+    /// `185_subword_signed_division:remainder_signed_shorts`.
+    #[test]
+    fn a_sixteen_bit_register_move_extracts_its_source_from_the_parent() {
+        // mov ax, dx  (66 89 d0)
+        let ops = lift64(&[0x66, 0x89, 0xd0]);
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign { src: Value::Reg(source), .. } | Op::Bin { rhs: Value::Reg(source), .. }
+                    if *source == VReg::phys("dx")
+            )),
+            "the source view must not survive as a bare `dx` read: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Bin {
+                    dst,
+                    op: BinOp::And,
+                    lhs: Value::Reg(source),
+                    rhs: Value::Const(0xffff),
+                } if *dst == VReg::Temp(76) && *source == VReg::phys("rdx")
+            )),
+            "missing `Temp(76) = rdx & 0xffff` extraction: {ops:#?}"
+        );
+        // The destination is still a read-modify-write of `rax`, not a clobber.
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Bin { dst, op: BinOp::And, rhs: Value::Const(mask), .. }
+                    if *dst == VReg::phys("rax") && *mask as u64 == 0xffff_ffff_ffff_0000
+            )),
+            "the 16-bit destination must preserve the parent's other bits: {ops:#?}"
+        );
+    }
+
+    /// A full-width register move keeps its single `Assign`: the extraction above
+    /// must not fire for names that already ARE their canonical parent.
+    #[test]
+    fn a_full_width_register_move_stays_one_assignment() {
+        // mov rax, rdx  (48 89 d0)
+        let ops = lift64(&[0x48, 0x89, 0xd0]);
+        assert_eq!(ops.len(), 1, "got: {ops:#?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Assign { dst, src: Value::Reg(source) }
+                if *dst == VReg::phys("rax") && *source == VReg::phys("rdx")
+        ));
+    }
+
+    /// The same rule for the one-operand multiply, whose accumulator at 16 bits is
+    /// `ax` — likewise bit-preserving, likewise invisible to the SSA layer.
+    #[test]
+    fn mul_at_sixteen_bits_reads_its_accumulator_out_of_its_parent() {
+        // mul cx  (66 f7 e1) → dx:ax = ax * cx.
+        let ops = lift64(&[0x66, 0xf7, 0xe1]);
+        assert!(
+            !ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign { src: Value::Reg(source), .. } if *source == VReg::phys("ax")
+            )),
+            "a 16-bit multiply must not read `ax` as a bare name: {ops:#?}"
+        );
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Bin {
+                    dst,
+                    op: BinOp::And,
+                    lhs: Value::Reg(source),
+                    rhs: Value::Const(0xffff),
+                } if *dst == VReg::Temp(60) && *source == VReg::phys("rax")
+            )),
+            "missing `Temp(60) = rax & 0xffff` snapshot: {ops:#?}"
+        );
     }
 
     #[test]
