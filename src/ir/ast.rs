@@ -3174,8 +3174,47 @@ fn deduplicate_labels(body: &mut Vec<Stmt>) {
     retain_at_min_depth(body, 0, &minimum, &mut std::collections::HashSet::new());
 }
 
+/// Stack reserved for one function's lowering.
+///
+/// `lower_region` and `lower_region_inner` recurse in lockstep over the region
+/// tree, and `lower_region_inner` is one large `match` whose frame holds the
+/// union of every arm's locals — measured at roughly 18 KB per level. A 256
+/// case switch built for aarch64 at `-O0` by gcc 15 does not become a jump
+/// table; the structurer recovers a comparison ladder 442 levels deep, which is
+/// about 8 MB and therefore exactly the default thread stack. It did not fail
+/// gracefully: the process took SIGSEGV in a function prologue, so there was no
+/// panic message, no stdout, and no stderr, and `tools/arch_roundtrip.py` could
+/// only report `gate-crashed: ` with an empty reason.
+///
+/// This reserves address space, not memory; untouched pages are never
+/// committed. At the measured frame size it admits roughly 14,000 levels, about
+/// thirty times the case that failed.
+const LOWERING_STACK_BYTES: usize = 256 * 1024 * 1024;
+
 /// Lower an entire function given its region tree.
+///
+/// The work runs on a thread with [`LOWERING_STACK_BYTES`] of stack rather than
+/// whatever `ulimit -s` happens to be, so a deep region tree cannot turn into a
+/// silent SIGSEGV. Every pass below recurses over the same deep structure — the
+/// region tree in `lower_region`, then the resulting statement tree in
+/// `collect_goto_targets` and `deduplicate_labels` — so the whole body needs the
+/// headroom, not just the first pass.
 pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Function {
+    let name = name.into();
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("glaurung-lower".to_string())
+            .stack_size(LOWERING_STACK_BYTES)
+            .spawn_scoped(scope, move || lower_on_this_stack(lf, region, name))
+            .expect("spawn the lowering thread")
+            .join()
+            // Preserve panic behavior exactly: a panic inside lowering must
+            // still unwind to the original caller, not become a join error.
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    })
+}
+
+fn lower_on_this_stack(lf: &LlirFunction, region: &Region, name: String) -> Function {
     let lower_scalar_float = scalar_float_semantics_are_closed(lf);
     let mut targets = std::collections::HashSet::new();
     collect_goto_targets(region, lf, &mut targets);
@@ -3194,7 +3233,7 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
     }
     deduplicate_labels(&mut body);
     let mut f = Function {
-        name: name.into(),
+        name,
         entry_va: lf.entry_va,
         body,
     };
@@ -11481,6 +11520,10 @@ mod ilp32_wide_tests;
 #[cfg(test)]
 #[path = "ast_tests/memory_fill.rs"]
 mod memory_fill_tests;
+
+#[cfg(test)]
+#[path = "ast_tests/deep_regions.rs"]
+mod deep_regions_tests;
 
 #[cfg(test)]
 mod tests {
