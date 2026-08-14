@@ -46,10 +46,43 @@ results, the PR branch, and the public leaderboard are separate states.
 - DecBench PR #56 points its default Docker build at the exact evaluated commit.
   The image was built with Python 3.12 and Rust 1.97.1, reports Glaurung 0.1.0,
   and records `fb4ee6ba` in `/opt/glaurung.rev`.
-- PR #56 is open and merge-clean at DecBench branch commit `f4fbd607`.
-- No public result or leaderboard update is implied by the artifact or PR state.
+- **All three submitted DecBench PRs are now MERGED upstream** into
+  `Noelo-Lab/decbench` (verified 2026-08-14 via `gh pr view`):
+
+  | PR | title | merge commit |
+  |---|---|---|
+  | #56 | Add Glaurung deterministic decompiler backend | `08f891581e6b` |
+  | #61 | fix(metrics): honor ARM function encoding in byte_match | `af02672db6dd` |
+  | #62 | build(corpus): make persistent rebuild reproducible | `3db5d557a6ae` |
+
+  This supersedes the earlier "PR #56 is open and merge-clean at branch commit
+  `f4fbd607`" state. Glaurung is now an upstream backend rather than a pending
+  submission, which changes what "obtain a fresh official score" requires.
+- No public result or leaderboard update is implied by the artifact or the
+  merges. Merging a backend is not a published score, and publication still
+  requires explicit authorization.
 - The current package differs from the preceding `60271f2` package in one
   generated C file, so its score must be evaluated rather than copied forward.
+
+### Local product state ahead of the planning baseline
+
+Committed to `master` after `fb4ee6b` (see
+[the 2026-08-13 execution diary](decompiler-roadmap-diary-2026-08-13.md)):
+
+- `4549aee` DWARF type import retains conflicting cross-unit layouts instead of
+  a first-wins dedup that destroyed them, and stops inventing alignment.
+- `c4a6c9d` the local gate runs the fixture lanes by default; DecBench and Joern
+  are opt-in behind `--decbench`.
+- `558a012` the CLI loads only the invoked subcommand, cutting ~2.9 s of
+  `pydantic_ai` import off every `glaurung decompile`.
+- `4caa607` function lowering runs on its own 256 MB stack. A 442-deep region
+  ladder from a 256-case switch built by gcc 15 for aarch64 overflowed the
+  default stack and killed the process with a silent SIGSEGV, which had made
+  `arch_roundtrip.py --write-baseline` unrunnable on this host for any change.
+- `8f661ff`/`d3578ad` fixture `187_constant_bias_index` plus its three
+  regenerated baselines, closing the roadmap's required constant-bias lane.
+- `561e08f` fixture parallelism stays at the harness default; raising it
+  recorded a fake regression in a baseline.
 
 ### Architecture already landed
 
@@ -522,13 +555,19 @@ product architecture or a source of target-specific patches.
 - [x] Rebuild a local DecBench tree with preprocessed sources so GED and
   TypeMatch can be evaluated rather than asserted.
 - [x] Submit the clear empty-disassembly ByteMatch correctness fix as DecBench
-  PR #61.
+  PR #61. **Merged upstream** as `af02672db6dd`.
 - [x] Submit the reproducibility/efficiency follow-up as DecBench PR #62; no
-  further work is planned unless upstream requests it.
+  further work is planned unless upstream requests it. **Merged upstream** as
+  `3db5d557a6ae`.
 - [x] Pin PR #56's deterministic Glaurung backend to the exact evaluated commit
-  and publish the fresh artifact.
+  and publish the fresh artifact. **Merged upstream** as `08f891581e6b`, so the
+  backend is now part of DecBench rather than a pending submission.
 - [ ] Obtain a fresh official/current-evaluator score for the exact `fb4ee6b`
-  artifact; do not infer it from the preceding package.
+  artifact; do not infer it from the preceding package. Now that #56 is merged
+  this is a question of running the current upstream evaluator against the
+  pinned image, not of getting a backend accepted. Note the artifact pins
+  `fb4ee6ba`, and `master` has since moved past it, so decide deliberately
+  whether the next score should describe the pinned commit or a fresh package.
 - [ ] Keep raw outputs, package hashes, evaluator revision, metric schema,
   compiler versions, target triples, and exact function joins in every ledger.
 - [ ] Keep public publication separate from local evaluation and require explicit

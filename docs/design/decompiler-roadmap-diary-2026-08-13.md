@@ -541,3 +541,362 @@ Migrating a *type* consumer additionally requires a mutable session-owned
 an evidence predicate and needs no such mutation, which is part of why it is
 first. `bind_object_type` and `DefinitionOracle` both still have zero
 production callers.
+
+---
+
+## Entry 6 — i386 argument casts
+
+`test_pe32_cdecl_roundtrip.py::test_i386_cdecl_decompile_recompile_execute_round_trip`
+was failing on one assertion. Reproduced first, before touching anything:
+
+```
+assert "helper3((int)(arg0), (int)(arg1), (int)(arg2))" in generated
+E   AssertionError: // glaurung: cdecl_chain @ 0x8049192
+E     int cdecl_chain(int arg0, int arg1, int arg2) {
+E         extern int helper3(int, int, int);
+E         int ret;
+E         ret = helper3(arg0, arg1, arg2);
+E         return ret;
+E     }
+```
+
+The signature assertion on the line above (`cdecl_chain(int arg0, int arg1, int
+arg2)`) passed. Only the call-boundary casts were gone. The failure is
+pre-existing and unrelated to the in-flight `ProgramTypes`/DWARF work.
+
+### Finding the commit
+
+Did not bisect; `git log -S` located it in one step. The casts are written by
+`write_typed_call_arg_dec` in `src/ir/ast.rs`, and the thing that stops writing
+them is `integer_call_arg_cast_is_redundant` (`src/ir/ast.rs:10578`):
+
+```
+$ git log --oneline -S 'integer_call_arg_cast_is_redundant' -- src/ir/ast.rs
+5e24383 feat(decompiler): x86 scalar floating point, GOT folding, and a Rust DWARF reader
+```
+
+`5e24383` is the commit *immediately after* `6768e55 test(decompiler): expect
+explicit i386 argument casts`. So the expectation was pinned one commit before
+the code that changed it landed, and `5e24383` — a 62-file, 6597-insertion port
+off a branch — did not re-run it. It could not have: the test carries
+`@pytest.mark.slow`.
+
+Note that `DEC_PTR_ARGS` (`src/ir/ast.rs:9063`), the int/pointer register-reuse
+reconciliation, is *not* the mechanism here and never was. It maps
+pointer-typed argument names to pointer types; `arg0`-`arg2` are `int` in this
+function's recovered signature, so it does not fire. The casts came from the
+unconditional call-boundary conversion in `write_typed_call_arg_dec`.
+
+### (a) regression or (b) stale pin
+
+(b), a legitimate improvement. Three independent lines of evidence.
+
+**The round trip actually runs.** Ran the test with only the cast assertion
+replaced by a print, everything downstream intact:
+
+```
+3 passed in 1.71s
+```
+
+That path writes the generated text into `rebuilt.c`, compiles it with
+`gcc -m32 -O0 -g -fno-pie -no-pie`, and executes both binaries over
+`(-9,4,7)`, `(0,0,0)`, `(1,2,3)`, `(31,-17,5)`, comparing against the
+`a + 2*b + 3*c` oracle. The uncast C compiles and produces identical output,
+negative arguments included. If the lost casts were a real truncation the
+`(31,-17,5)` and `(-9,4,7)` vectors are exactly where that would show.
+
+**The elision is proof-backed, not heuristic.** The admitting arm is
+`Expr::Reg(register @ VReg::Phys(_)) => declared_reg_ctype(register) ==
+parameter_type`, and `declared_reg_ctype` (`src/ir/ast.rs:10345`) reads
+`DEC_DECLARED_CTYPES` first — documented as "the exact C type actually printed"
+for that name in this render. So the test is: the identifier this render will
+print is declared exactly the type the parameter is declared. `int` to `int`.
+The conversion is the identity by construction, not by inference. The other two
+arms are an integer literal the type represents exactly and a symbolised code
+address already rendered `(long)(name)`; everything else — pointers,
+expressions, unrecognised types — keeps its cast, which is the correct
+direction to be wrong in.
+
+**The repo already holds the opposite position, with a test.**
+`python/tests/test_cli_decompile.py:588` asserts
+`arm_hf_mixed_callee(7, arg0, arg1)` and carries a comment saying this used to
+render `(int)(7), arg0, (int)(arg1)` — "casts that state nothing and that a
+C-signature type_match has to parse around." That assertion was written *after*
+`5e24383`. Two tests pinned contradictory conventions; the PE32 one was the
+stale half.
+
+Cost of the noise is not only readability: identity casts at a call boundary are
+tokens DecBench's C-signature `type_match` has to parse around.
+
+### Fix
+
+Updated the expectation rather than deleting it, and made it strictly stronger
+than the old one — it now pins both the exact call spelling and the absence of
+any identity cast, so a re-regression in either direction fails:
+
+```python
+assert "helper3(arg0, arg1, arg2)" in generated, generated
+assert "(int)(arg" not in generated, generated
+```
+
+with a comment recording that `5e24383` is why the expectation moved and that
+the round trip below is what licenses it.
+
+### Verification
+
+```
+$ uv run pytest python/tests/test_pe32_cdecl_roundtrip.py
+3 passed in 0.72s
+
+$ uv run pytest python/tests/test_cli_decompile.py -q
+37 passed
+```
+
+`uvx ruff check` clean. `ruff format --check` reports one complaint on line 67,
+in a function this change does not touch; confirmed pre-existing by running it
+against `HEAD:python/tests/test_pe32_cdecl_roundtrip.py`, left alone rather
+than mixed into this diff.
+
+Per the session constraints, DecBench, Joern, `decbench_matrix.py`,
+`arch_roundtrip.py` and the full fixture matrix were not run.
+
+### The reusable lesson
+
+The defect was not in `5e24383`'s code, which is right. It was that a
+`@pytest.mark.slow` expectation pinned one commit earlier was invisible to the
+port that invalidated it. A pin written to capture *current* output, one commit
+before a large in-flight change to the code that produces it, is a trap with a
+one-commit fuse. When output is pinned because it happens to be what comes out
+rather than because it is what must come out, the pin should say which it is.
+
+## Entry 7 — ARM32 and vector round-trip triage
+
+Diagnosing five pre-existing `@pytest.mark.slow` failures (all confirmed
+pre-existing at `fb4ee6b`, none caused by anything in this session), per
+design rule 11 ("ARM32 is a conformance architecture, not an optional
+afterthought") and the roadmap's instruction to find the first wrong semantic
+stage rather than stop at the verdict. Cross-compiler check first, since a
+recent aarch64 failure this week turned out to be gcc-15 toolchain drift, not
+a product defect:
+
+```
+$ arm-linux-gnueabihf-gcc --version   # 15.2.0 (Ubuntu 15.2.0-16ubuntu1)
+$ aarch64-linux-gnu-gcc --version     # 15.2.0
+$ clang --version                     # Ubuntu clang 21.1.8
+$ qemu-arm --version                  # 10.2.1
+```
+
+No cross-toolchain version is in question for any of the five — none of them
+touch aarch64 or the region-tree-depth code path from that earlier incident.
+
+### Failures 1-4 — `rb_validate` memset cast, all four ARM32 parametrizations
+
+- `test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution[armv7]`
+- `test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution[armv7_a32]`
+- `test_arm32_o0_rb_validate_round_trips_split_frame_addresses[armv7]`
+- `test_arm32_o0_rb_validate_round_trips_split_frame_addresses[armv7_a32]`
+
+All four fail on the same line shape, one assertion pinning a call-boundary
+cast on `memset`'s second argument:
+
+```
+$ uv run pytest "python/tests/test_decompiler_arm32_semantics.py::test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution[armv7]" -x
+...
+>   assert re.search(r"memset\([^\n]+,\s*\(int\)\(0\),[^\n]+64", decompiled.stdout)
+E   AssertionError: ... var12 = memset((void *)(&local_164[0]), 0, (__SIZE_TYPE__)(64)); ...
+```
+
+The O0 split-frame variant pins the same shape more tightly
+(`test_decompiler_arm32_semantics.py:421-425`):
+`memset\(\(void \*\)\(&local_[0-9a-f]+\[0\]\),\s*\(int\)\(0\),\s*\(__SIZE_TYPE__\)\(64\)\)`,
+and the actual output is `var17 = memset((void *)(&local_14c[0]), 0,
+(__SIZE_TYPE__)(64));` (armv7) / `var7 = memset(...)` (armv7_a32). Every
+assertion *before* the memset line passes in all four cases — the O2 variant's
+disassembly checks (`memset@plt`, `ldmib`/`ldr.w`), the "prototype-resolved"/
+"prepared numbered LLIR" markers, the `local_*[64]` array recovery, and the O0
+variant's full `stack object hints` displacement triple
+`(-332, 64), (-268, 128), (-140, 128)`. Only the cast is missing.
+
+This is the exact defect already root-caused and fixed in Entry 6, for a
+different pinned test (`test_pe32_cdecl_roundtrip.py`, i386). Confirmed same
+mechanism here:
+
+```
+$ git log --oneline -S 'integer_call_arg_cast_is_redundant' -- src/ir/ast.rs
+5e24383 feat(decompiler): x86 scalar floating point, GOT folding, and a Rust DWARF reader
+```
+
+`write_typed_call_arg_dec` (`src/ir/ast.rs:10510`) stopped writing an
+identity cast at a call boundary when `integer_call_arg_cast_is_redundant`
+(`src/ir/ast.rs:10578`, added by `5e24383`) proves it converts nothing —
+here, the literal `0` argument to `memset`'s `int` parameter, which `0`
+represents exactly. All four ARM32 assertions were written by
+`b81e7991 Fix ARM32 stack aggregate and addressing semantics` (2026-08-08),
+four days before `5e24383` (2026-08-12) landed the elision and never touched
+`test_decompiler_arm32_semantics.py`. Same one-commit-fuse pattern as Entry 6,
+just a different pinned test the same port missed.
+
+**First wrong stage: rendering.** Lifting, SSA, structuring, and type
+recovery are all untouched — the call is still `memset(dst, 0, 64)` at every
+earlier stage; the only difference is the C pretty-printer's call-argument
+cast rule, which now elides a provably-redundant cast.
+
+**Verified the execution semantics are unaffected**, not just assumed:
+rebuilt `16_red_black_tree.c` for `armv7:O2` and `armv7:O0` with the exact
+`arch_roundtrip._build_argv` flags (`-shared -fPIC -g -O{opt} -w
+-march=armv7-a -mfpu=vfpv3-d16 -mthumb`, matching stack-protector default —
+no `-fno-stack-protector`), and drove `diff_decompile.run` directly against
+`rb_validate` for both lanes, bypassing the failing regex assertion entirely:
+
+```python
+results = D.run(target, source, "16_red_black_tree", seed=1234, fuzz=M.FIXTURE_FUZZ,
+                 reference_so=reference, lane="armv7:O2", native_cc=A.native_cc("armv7"),
+                 native_runner=A.native_runner("armv7"), only={"rb_validate"})
+# -> {'rb_validate': {'status': 'pass', 'detail': '23 cases (native target ABI)'}}
+```
+
+Same result for the O0 lane. QEMU execution agrees with the host reference
+on all 23 fuzz cases in both lanes; the missing cast is pure noise the render
+now correctly omits.
+
+**Classification: stale test expectation**, not a regression and not
+toolchain drift. Confidence: high — same mechanism Entry 6 independently
+verified with three lines of evidence (round-trip execution, proof-backed
+elision condition, and a contradictory-but-newer test already asserting the
+uncast form), applied here to four more pinned assertions the `5e24383` port
+missed for the same reason.
+
+**Suggested next action**: apply Entry 6's fix pattern to
+`test_decompiler_arm32_semantics.py` — replace the four
+`(int)(0)`-pinning regexes with the uncast form plus a negative assertion
+(`"(int)(0)" not in decompiled.stdout` or similar), matching the
+`helper3(arg0, arg1, arg2)` / `"(int)(arg" not in generated` shape from the
+i386 fix, with a comment citing `5e24383` and this diary entry.
+
+### Failure 5 — vectorized `mem_copy` loses its `__builtin_memmove` fold
+
+`test_decompiler_vector_memory.py::test_vectorized_mem_copy_round_trips_clang_o2`
+builds `09_memory_effects.c`'s `mem_copy` with `clang -O2` (SSE `movups`
+auto-vectorization) and asserts the decompiled C folds the vector copy back
+into a single call:
+
+```
+$ uv run pytest python/tests/test_decompiler_vector_memory.py::test_vectorized_mem_copy_round_trips_clang_o2 -x
+...
+    assert "__builtin_memmove(" in code
+E   AssertionError: ... 'void mem_copy(int * arg0, const int * arg1, int arg2) {\n ...
+    var30 = *(int *)(((long)arg1 + var28 * 4 + 0x4));
+    ...
+    *(int *)(((long)arg0 + var28 * 4)) = *(int *)(((long)arg1 + var28 * 4));
+    *(int *)(((long)arg0 + var28 * 4 + 0x4)) = var30;
+    ...  (16 scalar loads + 16 scalar stores per 32-byte unrolled block)
+```
+
+`H.run_lanes(...)["09_memory_effects:clang:O2"] == {"mem_copy": "pass"}`
+*passes* first (the earlier assertion in the same test) — execution is
+correct, only the pattern-fold assertion at line 36 fails. So the defect is
+not a wrong-value bug; it is a lost decompiler-quality recovery that the test
+is specifically there to guard (added by `f1c3295 decompiler: preserve
+128-bit memory moves`, 2026-07-31).
+
+Traced with `GLAURUNG_DUMP_PASSES=1` against a locally-rebuilt copy of the
+same `.so` (`arm-linux-gnueabihf-gcc` not involved; this is a pure x86-64
+build, host `clang` 21.1.8). Even the *first* dump, `prototype-resolved
+LLIR` — the closest view to raw lifted output — already shows the defect,
+so nothing downstream (SSA, structuring, type recovery) introduced it:
+
+```
+0x1260: %xmm0_d0 = load[4 bytes] MemOp{ base: rsi, index: rax, scale: 4, disp: 0,  size: 4 }
+0x1260: %xmm0_d1 = load[4 bytes] MemOp{ ..., disp: 4,  size: 4 }
+0x1260: %xmm0_d2 = load[4 bytes] MemOp{ ..., disp: 8,  size: 4 }
+0x1260: %xmm0_d3 = load[4 bytes] MemOp{ ..., disp: 12, size: 4 }
+0x1260: %xmm0 = concat %xmm0_d1:%xmm0_d0        <- spurious, only two of four lanes
+0x1264: %xmm1_d0..d3 = load[4 bytes] ...
+0x1264: %xmm1 = concat %xmm1_d1:%xmm1_d0        <- same
+0x1269: store ... <- %xmm0_d0                   (store batch starts here)
+0x1269: store ... <- %xmm0_d1
+...
+```
+
+`vector_copy::recover_wide_copies` (`src/ir/vector_copy.rs`) exists
+precisely to rejoin a four-lane load batch immediately followed by a
+four-lane store batch into one 16-byte `Deref`/`Store`, which is what later
+lets the renderer fold it into `__builtin_memmove`. Its matchers
+(`load_batch_at`/`store_batch_at`, `vector_copy.rs:62-133`) require the store
+batch at `index+4` (or `index+8` with exactly one differently-named 4-lane
+batch in between) — `body.get(start..start+4)`, an exact-adjacency check. The
+injected `concat` statement sits at `index+4`, one slot into where the store
+batch needs to start, so neither branch matches and the pass silently
+declines for every occurrence. Confirmed by diffing "after
+`recover_wide_copies`" against the pre-pass dump: identical, `concat` and all
+sixteen scalar accesses still present, nothing rejoined.
+
+```
+$ git log --oneline -S 'synchronise_xmm_views' -- src/ir/lift_x86.rs
+5e24383 feat(decompiler): x86 scalar floating point, GOT folding, and a Rust DWARF reader
+```
+
+Same commit as failures 1-4. `synchronise_xmm_views` (`src/ir/lift_x86.rs:3212`,
+called unconditionally from `lift_one` at line 3298) was added to fix a real,
+different bug — GCC `-O0`'s scalar float return crossing the lane/scalar view
+split (`movsd -8(%rbp),%xmm0; movq %xmm0,%rax; movq %rax,%xmm0` returning a
+zero reconstructed from lanes no scalar store had written). Its rule: after
+any instruction that writes dword lanes 0 or 1 of an xmm register, if the
+whole-register name is not already defined and the write is not a pure
+lane-for-lane register copy (`single_source_of_lane_copy`), synthesize
+`whole = concat(lane1, lane0)`. A plain `movups`/`movdqu` **memory load**
+lowers to exactly four independent `Op::Load`s (`packed_dword_move_ops`,
+`lift_x86.rs:2280`) — not a register-to-register copy — so
+`single_source_of_lane_copy` returns `None` and the concat fires every time,
+whether or not anything ever reads the whole-register view. For a pure
+128-bit memory-to-memory transport (the vectorized-memcpy case this test
+covers) nothing does — the fix for one bug pollutes the statement stream for
+an unrelated, correctness-orthogonal case, and that pollution is what defeats
+`recover_wide_copies`.
+
+**First wrong stage: lifting.** Specifically `synchronise_xmm_views` in
+`src/ir/lift_x86.rs`, applied indiscriminately after every lift rather than
+being scoped to cases where a later scalar read of the whole-register view
+could plausibly occur. This is upstream of `recover_wide_copies`,
+`reconstruct`, all type recovery, and rendering; all of those still receive
+and correctly propagate the polluted IR, they just never get the chance to
+see the clean 16-byte load/store shape they are built to fold.
+
+**Classification: real semantic/quality defect**, not toolchain drift (pure
+x86-64 host build, no cross-compiler involved) and not a stale expectation
+(unlike failures 1-4, the pinned property — `__builtin_memmove(` — is still
+exactly the desired output; `5e24383` regressed it as a side effect of an
+unrelated, legitimate fix, rather than superseding it by design). Confidence:
+high on the mechanism (traced from the very first pass dump, root commit
+identified by `git log -S`, execution correctness independently confirmed via
+the test's own earlier `H.run_lanes` assertion), medium on the blast radius —
+`packed_dword_move_ops` backs `Movdqa`, `Movdqu`, `Movaps`, `Movups`,
+`Movapd`, and `Movupd`, so any register-to-memory or memory-to-register
+128-bit packed move (not just this one fixture's shape) likely loses the same
+recovery whenever nothing else in the function reads the destination's
+whole-register scalar view.
+
+**Suggested next action**: scope `synchronise_xmm_views`'s concat synthesis
+so it does not fire for a plain four-lane `Op::Load`/`Op::Store` batch with
+no intervening use of the whole-register name in this same lift — e.g. only
+emit the concat when a later instruction in the function actually reads the
+scalar view (deferring the sync to a proper liveness-driven pass rather than
+per-instruction), or teach `recover_wide_copies` to tolerate/discard a
+provably-dead intervening `concat` before matching the store batch. Either
+requires touching `src/ir/lift_x86.rs` or `src/ir/vector_copy.rs`, both
+outside this session's diagnostic scope; not attempted here.
+
+### Summary table
+
+| failure | first wrong stage | classification | confidence | suggested next action |
+|---|---|---|---|---|
+| `test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution[armv7]` | rendering (`write_typed_call_arg_dec` / `integer_call_arg_cast_is_redundant`, `src/ir/ast.rs`) | stale test expectation | high | update regex to the uncast form, per Entry 6's fix to `test_pe32_cdecl_roundtrip.py` |
+| `test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution[armv7_a32]` | rendering (same) | stale test expectation | high | same |
+| `test_arm32_o0_rb_validate_round_trips_split_frame_addresses[armv7]` | rendering (same) | stale test expectation | high | same |
+| `test_arm32_o0_rb_validate_round_trips_split_frame_addresses[armv7_a32]` | rendering (same) | stale test expectation | high | same |
+| `test_vectorized_mem_copy_round_trips_clang_o2` | lifting (`synchronise_xmm_views`, `src/ir/lift_x86.rs`) | real semantic/quality defect | high (mechanism) / medium (blast radius) | scope the concat synthesis to actual whole-register reads, or make `recover_wide_copies` tolerate a dead intervening `concat` |
+
+Per the session constraints, DecBench, Joern, `decbench_matrix.py`, the full
+fixture matrix, and `scripts/decbench-local-gate.sh --decbench` were not run.
+Only scoped single-fixture builds and direct `diff_decompile.run`/
+`GLAURUNG_DUMP_PASSES=1` invocations were used. No product code was changed.
