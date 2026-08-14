@@ -591,7 +591,20 @@ pub fn reconstruct_args_with_params_and_callee_layouts(
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
 ) {
-    fold_body(&mut f.body, arch, param_slots, callee_layouts);
+    // The spelling this function uses for each live-in argument register is a
+    // WHOLE-FUNCTION fact. Answering it from the statement list that happens to
+    // contain the call makes an untouched incoming parameter invisible to every
+    // call nested in a branch arm — see `EnclosingSlots`.
+    let function_live_ins = (0..arg_slots(arch).len())
+        .map(|slot| incoming_arg_expr(arch, slot, &f.body))
+        .collect::<Vec<_>>();
+    fold_body(
+        &mut f.body,
+        arch,
+        param_slots,
+        callee_layouts,
+        &function_live_ins,
+    );
     attribute_call_results(&mut f.body, arch);
 }
 
@@ -847,14 +860,269 @@ fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
     }
 }
 
+/// What the statements OUTSIDE the body being folded already prove about each
+/// ABI argument slot.
+///
+/// The backward call scan is deliberately local: it walks one structured
+/// statement list and stops at every join. That is sound for what it deletes,
+/// but it also made the enclosing scope invisible, in both directions:
+///
+/// * an untouched incoming parameter used by a call inside a branch arm had no
+///   witness in that arm, so `incoming_arg_expr` declined and the whole
+///   argument list was dropped — the ABI prefix rule discards every recovered
+///   slot once a lower one is missing; and
+/// * conversely nothing carried an enclosing CLOBBER inward, so authorizing the
+///   live-in from the whole function would have been a guess.
+///
+/// Carrying both together is what makes the live-in usable: `live_ins` supplies
+/// the function's spelling, `blocked` proves it still reaches.
+#[derive(Clone)]
+struct EnclosingSlots {
+    /// A proven value entering a slot at the top of this body (loop-carried).
+    overrides: Vec<Option<Expr>>,
+    /// The slot was written, clobbered, or joined on the way into this body, so
+    /// the function-entry value no longer reaches it.
+    blocked: Vec<bool>,
+    /// How this function spells each of its own live-in argument registers.
+    live_ins: Vec<Option<Expr>>,
+    /// The slot's function-entry value occupies its argument register at EVERY
+    /// point in the function. See `entry_constant_slots`.
+    entry_constant: Vec<bool>,
+}
+
+impl EnclosingSlots {
+    fn entry(arch: CallConv, live_ins: &[Option<Expr>], entry_constant: Vec<bool>) -> Self {
+        let slots = arg_slots(arch).len();
+        Self {
+            overrides: vec![None; slots],
+            blocked: vec![false; slots],
+            live_ins: live_ins.to_vec(),
+            entry_constant,
+        }
+    }
+
+    /// Is `slot` provably still its function-entry value at any point at all?
+    fn is_entry_constant(&self, slot: usize) -> bool {
+        self.entry_constant.get(slot).copied().unwrap_or(false)
+    }
+
+    /// The context for a body nested inside a statement whose enclosing clobber
+    /// mask is `blocked`.
+    fn with_blocked(&self, blocked: Vec<bool>) -> Self {
+        Self {
+            overrides: self.overrides.clone(),
+            blocked,
+            live_ins: self.live_ins.clone(),
+            entry_constant: self.entry_constant.clone(),
+        }
+    }
+
+    /// Fold one statement of the enclosing prefix into a running clobber mask.
+    ///
+    /// The boundaries are the ones the backward scan itself refuses to cross:
+    /// reaching a labelled join or crossing an explicit transfer means nothing
+    /// about the value entering the following statement can be proved from
+    /// what came before it.
+    fn advance(blocked: &mut [bool], statement: &Stmt, arch: CallConv) {
+        if matches!(
+            statement,
+            Stmt::Label(_)
+                | Stmt::Goto { .. }
+                | Stmt::IndirectGoto { .. }
+                | Stmt::Return { .. }
+                | Stmt::Break
+        ) {
+            blocked.fill(true);
+            return;
+        }
+        mark_arg_writes_in_stmt(statement, arch, blocked);
+    }
+
+    /// Does this function's ENTRY value for `slot` still reach a call in the
+    /// body being folded?
+    ///
+    /// A proven loop-carried override answers the question outright: it names
+    /// the value that reaches, so what the path in wrote is already accounted
+    /// for. Otherwise the enclosing clobber mask decides.
+    fn entry_value_reaches(&self, slot: usize) -> bool {
+        self.overrides.get(slot).is_some_and(Option::is_some)
+            || !self.blocked.get(slot).copied().unwrap_or(false)
+    }
+
+    fn with_overrides(&self, overrides: Vec<Option<Expr>>) -> Self {
+        Self {
+            overrides,
+            blocked: self.blocked.clone(),
+            live_ins: self.live_ins.clone(),
+            entry_constant: self.entry_constant.clone(),
+        }
+    }
+}
+
+/// The ABI argument slots whose FUNCTION-ENTRY value still occupies their
+/// argument register at every point in the function.
+///
+/// The backward scan fails closed at `Stmt::Label`, because a label is a join
+/// and a predecessor it cannot see may arrive with a different value. That is
+/// the right default and it is why a `-O2` diamond whose arms were structured
+/// as labelled goto targets rendered `se189_bump()` for a callee declared
+/// `(int *, int)`: the arm's own `esi` setup WAS recovered, and then discarded
+/// with the missing slot zero, because ABI arguments are a contiguous prefix.
+///
+/// This is the cheapest whole-function proof that makes such a slot answerable
+/// without a real reaching-definition service. Both conditions are required:
+///
+/// 1. no statement anywhere writes the slot — so no assignment can have changed
+///    it on any path, labelled or not; and
+/// 2. every call in the function runs straight into a `Return` — so no call's
+///    caller-clobber of the argument registers can precede any other call.
+///
+/// Together they mean the architectural register still holds what the caller
+/// put there, whatever path was taken. Anything less exact than this leaves the
+/// slot blocked, which is the existing behavior.
+///
+/// This is deliberately NOT the general answer. Reaching definitions across
+/// arbitrary joins belong to the verified MIR query surface; this proof only
+/// removes the cases where there is provably nothing to reason about.
+fn entry_constant_slots(body: &[Stmt], arch: CallConv) -> Vec<bool> {
+    let slots = arg_slots(arch).len();
+    if !every_call_returns_immediately(body) {
+        return vec![false; slots];
+    }
+    let mut written = vec![false; slots];
+    for statement in body {
+        mark_slot_writes_everywhere(statement, arch, &mut written);
+    }
+    written.into_iter().map(|write| !write).collect()
+}
+
+/// Does every `Stmt::Call` in `body` run straight into a `Return`?
+///
+/// "Straight into" means the statements after it in its own list reach a
+/// `Return` without another call, a label, or any explicit transfer — so
+/// nothing else in the function can execute after it, and in particular no
+/// other call site is reachable from it.
+fn every_call_returns_immediately(body: &[Stmt]) -> bool {
+    fn nested_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => std::iter::once(then_body.as_slice())
+                .chain(else_body.as_deref().map(|body: &[Stmt]| body))
+                .collect(),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                vec![body.as_slice()]
+            }
+            Stmt::Switch { cases, default, .. } => cases
+                .iter()
+                .map(|(_, case)| case.as_slice())
+                .chain(default.as_deref().map(|body: &[Stmt]| body))
+                .collect(),
+            Stmt::TryCatch { try_body, catches } => std::iter::once(try_body.as_slice())
+                .chain(catches.iter().map(|catch| catch.body.as_slice()))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+    for (index, statement) in body.iter().enumerate() {
+        if matches!(statement, Stmt::Call { .. }) {
+            let mut returns = false;
+            for following in &body[index + 1..] {
+                match following {
+                    Stmt::Return { .. } => {
+                        returns = true;
+                        break;
+                    }
+                    Stmt::Call { .. }
+                    | Stmt::Label(_)
+                    | Stmt::Goto { .. }
+                    | Stmt::IndirectGoto { .. }
+                    | Stmt::Break
+                    | Stmt::Throw { .. } => break,
+                    // A nested body after the call can reach anything.
+                    other if !nested_bodies(other).is_empty() => break,
+                    _ => {}
+                }
+            }
+            if !returns {
+                return false;
+            }
+        }
+        if !nested_bodies(statement)
+            .into_iter()
+            .all(every_call_returns_immediately)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Note every argument-slot write in `statement`, at any nesting depth.
+///
+/// Unlike `mark_arg_writes_in_stmt` this deliberately ignores control flow: the
+/// question is whether the slot is written ANYWHERE, so branch arms that cannot
+/// fall through still count.
+fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [bool]) {
+    match statement {
+        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => mark_slot_write(dst, arch, written),
+        Stmt::Call { dst: Some(dst), .. } => mark_slot_write(dst, arch, written),
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for nested in then_body.iter().chain(else_body.iter().flatten()) {
+                mark_slot_writes_everywhere(nested, arch, written);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            for nested in body {
+                mark_slot_writes_everywhere(nested, arch, written);
+            }
+        }
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            mark_slot_writes_everywhere(init, arch, written);
+            mark_slot_writes_everywhere(step, arch, written);
+            for nested in body {
+                mark_slot_writes_everywhere(nested, arch, written);
+            }
+        }
+        Stmt::Switch { cases, default, .. } => {
+            for nested in cases
+                .iter()
+                .flat_map(|(_, case)| case)
+                .chain(default.iter().flatten())
+            {
+                mark_slot_writes_everywhere(nested, arch, written);
+            }
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            for nested in try_body
+                .iter()
+                .chain(catches.iter().flat_map(|catch| &catch.body))
+            {
+                mark_slot_writes_everywhere(nested, arch, written);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn fold_body(
     body: &mut Vec<Stmt>,
     arch: CallConv,
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    function_live_ins: &[Option<Expr>],
 ) {
-    let incoming_overrides = vec![None; arg_slots(arch).len()];
-    fold_body_with_context(body, arch, param_slots, callee_layouts, &incoming_overrides);
+    let entry_constant = entry_constant_slots(body, arch);
+    let entry = EnclosingSlots::entry(arch, function_live_ins, entry_constant);
+    fold_body_with_context(body, arch, param_slots, callee_layouts, &entry);
 }
 
 fn fold_body_with_context(
@@ -862,64 +1130,49 @@ fn fold_body_with_context(
     arch: CallConv,
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
-    incoming_overrides: &[Option<Expr>],
+    enclosing: &EnclosingSlots,
 ) {
     // Recurse into nested bodies first so we don't miss calls inside arms.
+    // `running` is the enclosing clobber mask at each position, accumulated in
+    // one forward walk rather than rescanned per statement.
+    let mut running = enclosing.blocked.clone();
+    running.resize(arg_slots(arch).len(), false);
     for index in 0..body.len() {
         let (prefix, suffix) = body.split_at_mut(index);
         let s = &mut suffix[0];
+        let nested = enclosing.with_blocked(running.clone());
         match s {
             Stmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                fold_body_with_context(
-                    then_body,
-                    arch,
-                    param_slots,
-                    callee_layouts,
-                    incoming_overrides,
-                );
+                fold_body_with_context(then_body, arch, param_slots, callee_layouts, &nested);
                 if let Some(eb) = else_body {
-                    fold_body_with_context(
-                        eb,
-                        arch,
-                        param_slots,
-                        callee_layouts,
-                        incoming_overrides,
-                    );
+                    fold_body_with_context(eb, arch, param_slots, callee_layouts, &nested);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                let loop_inputs = loop_carried_arg_inputs(prefix, body, arch, incoming_overrides);
-                fold_body_with_context(body, arch, param_slots, callee_layouts, &loop_inputs)
+                // A loop's own carried inputs are `loop_carried_arg_inputs`'
+                // business; only the path INTO the loop is inherited here.
+                let loop_inputs = loop_carried_arg_inputs(prefix, body, arch, &enclosing.overrides);
+                let nested = nested.with_overrides(loop_inputs);
+                fold_body_with_context(body, arch, param_slots, callee_layouts, &nested)
             }
             Stmt::For { body, .. } => {
-                fold_body_with_context(body, arch, param_slots, callee_layouts, incoming_overrides)
+                fold_body_with_context(body, arch, param_slots, callee_layouts, &nested)
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    fold_body_with_context(
-                        case,
-                        arch,
-                        param_slots,
-                        callee_layouts,
-                        incoming_overrides,
-                    );
+                    fold_body_with_context(case, arch, param_slots, callee_layouts, &nested);
                 }
                 if let Some(default) = default {
-                    fold_body_with_context(
-                        default,
-                        arch,
-                        param_slots,
-                        callee_layouts,
-                        incoming_overrides,
-                    );
+                    fold_body_with_context(default, arch, param_slots, callee_layouts, &nested);
                 }
             }
             _ => {}
         }
+        EnclosingSlots::advance(&mut running, &suffix[0], arch);
     }
 
     // Find calls and walk backward from each to collect args.
@@ -939,14 +1192,7 @@ fn fold_body_with_context(
     // preceding arg assignments for a later call first.
     call_positions.reverse();
     for call_idx in call_positions {
-        fold_one_call(
-            body,
-            call_idx,
-            arch,
-            param_slots,
-            callee_layouts,
-            incoming_overrides,
-        );
+        fold_one_call(body, call_idx, arch, param_slots, callee_layouts, enclosing);
     }
 }
 
@@ -1407,8 +1653,9 @@ fn fold_one_call(
     arch: CallConv,
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
-    incoming_overrides: &[Option<Expr>],
+    enclosing: &EnclosingSlots,
 ) {
+    let incoming_overrides = enclosing.overrides.as_slice();
     if arch == CallConv::Cdecl32 {
         fold_one_cdecl32_call(body, call_idx);
         return;
@@ -1457,7 +1704,10 @@ fn fold_one_call(
                     return None;
                 };
                 let slot = crate::ir::abi::argument_slot_of(arch, name)?;
-                (param_slots.contains(&slot) && !blocked_live_ins[slot]).then(|| {
+                (param_slots.contains(&slot)
+                    && !blocked_live_ins[slot]
+                    && enclosing.entry_value_reaches(slot))
+                .then(|| {
                     incoming_overrides
                         .get(slot)
                         .and_then(Clone::clone)
@@ -1550,8 +1800,12 @@ fn fold_one_call(
         ) {
             // The local scan cannot prove what reaches the call across this
             // control-flow boundary. In particular, do not interpret an
-            // unwritten leading ABI slot as the function-entry value.
-            blocked_incoming.fill(true);
+            // unwritten leading ABI slot as the function-entry value — unless
+            // the whole function proves the slot never stops being that value
+            // on ANY path. See `entry_constant_slots`.
+            for (slot, blocked) in blocked_incoming.iter_mut().enumerate() {
+                *blocked = *blocked || !enclosing.is_entry_constant(slot);
+            }
             break;
         }
         if arch == CallConv::SysVAmd64 && preallocated_stack.is_none() {
@@ -1919,6 +2173,7 @@ fn fold_one_call(
         ) && contiguous_leading_parameter
             && !read_between[0]
             && !blocked_incoming[0]
+            && enclosing.entry_value_reaches(0)
             && !body[..call_idx]
                 .iter()
                 .any(|statement| matches!(statement, Stmt::Call { .. }))
@@ -1947,6 +2202,7 @@ fn fold_one_call(
                 .first()
                 .and_then(Clone::clone)
                 .or_else(|| incoming_arg_expr(arch, 0, body))
+                .or_else(|| enclosing.live_ins.first().and_then(Clone::clone))
                 .unwrap_or_else(|| {
                     Expr::Reg(VReg::phys(
                         arg_slots(arch)
@@ -1977,12 +2233,18 @@ fn fold_one_call(
             // (`__stack_chk_fail(var24)`).
             None if args_out.is_empty()
                 && !blocked_incoming[slot_idx]
+                && enclosing.entry_value_reaches(slot_idx)
                 && param_slots.contains(&slot_idx) =>
             {
                 let Some(expr) = incoming_overrides
                     .get(slot_idx)
                     .and_then(Clone::clone)
                     .or_else(|| incoming_arg_expr(arch, slot_idx, body))
+                    // A call nested in a branch arm sees only that arm. The
+                    // function-wide spelling is the same live-in value, and
+                    // `blocked_incoming` — seeded from the enclosing scope —
+                    // is what proves it still reaches this call.
+                    .or_else(|| enclosing.live_ins.get(slot_idx).and_then(Clone::clone))
                 else {
                     break;
                 };
@@ -3123,6 +3385,37 @@ fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
     }
 }
 
+/// Can control reach the statement *after* `body` by running off its end?
+///
+/// A branch arm that always returns, throws, or transfers away is not on the
+/// path into the statement that follows it, so the argument registers it writes
+/// cannot reach a later call. The backward call scan already stops dead at
+/// `Stmt::Label` — a potential join — so the absence of a label between such an
+/// arm and the call means falling through is the ONLY way in. That is what
+/// makes this lexical test a reaching-definition argument rather than a guess.
+///
+/// `Stmt::Break` is deliberately excluded even though it also leaves the arm:
+/// inside a `Stmt::Switch` case, a break lands exactly on the switch's own
+/// successor, so it does not prove the following statement is skipped.
+///
+/// Fail-closed: anything not proven to leave counts as falling through.
+fn body_falls_through(body: &[Stmt]) -> bool {
+    match body.last() {
+        Some(
+            Stmt::Return { .. }
+            | Stmt::Throw { .. }
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. },
+        ) => false,
+        Some(Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        }) => body_falls_through(then_body) || body_falls_through(else_body),
+        _ => true,
+    }
+}
+
 fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [bool]) {
     match s {
         // A computed transfer writes no argument slot.
@@ -3134,17 +3427,23 @@ fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [boo
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
             mark_slot_write(dst, arch, blocked_incoming);
         }
+        // Only the arms that can fall through are on the path into whatever
+        // follows this branch. See `body_falls_through`.
         Stmt::If {
             then_body,
             else_body,
             ..
         } => {
-            for stmt in then_body {
-                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+            if body_falls_through(then_body) {
+                for stmt in then_body {
+                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                }
             }
             if let Some(else_body) = else_body {
-                for stmt in else_body {
-                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                if body_falls_through(else_body) {
+                    for stmt in else_body {
+                        mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                    }
                 }
             }
         }
@@ -3768,6 +4067,307 @@ mod tests {
             f.body.last(),
             Some(Stmt::Call { args, .. }) if args.is_empty()
         ));
+    }
+
+    /// A branch arm that always transfers control away is not on the path into
+    /// the statement after it, so the argument registers it clobbers cannot
+    /// reach a following call.
+    ///
+    /// This is the shape `gcc -O2` gives `189_effectful_select:se189_select_call`:
+    /// one call per arm of a diamond, the taken arm returning directly, and the
+    /// fall-through call reusing the untouched incoming `rdi`. Treating the
+    /// returning arm's `esi`/`rdi` clobbers as reaching the second call blocked
+    /// its slot-zero backfill, and because ABI arguments are a contiguous
+    /// prefix the recovered `esi` argument was dropped with it — emitting
+    /// `se189_bump()` for a callee declared `(int *, int)`, which then
+    /// incremented whatever the argument register happened to hold.
+    #[test]
+    fn a_returning_branch_arm_does_not_clobber_the_next_calls_incoming_arguments() {
+        let arm_call = |setup: &str| {
+            vec![
+                Stmt::Assign {
+                    dst: reg("esi"),
+                    src: Expr::Reg(reg(setup)),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1050,
+                        name: "se189_bump".into(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax"))),
+                },
+            ]
+        };
+        let mut f = Function {
+            name: "se189_select_call".into(),
+            entry_va: 0x1140,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rbx"),
+                    src: Expr::Reg(reg("rdi")),
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Ne,
+                        lhs: Box::new(Expr::Reg(reg("esi"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    then_body: arm_call("edx"),
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: reg("esi"),
+                    src: Expr::Reg(reg("ecx")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1050,
+                        name: "se189_bump".into(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax"))),
+                },
+            ],
+        };
+
+        reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0, 1].into_iter().collect());
+
+        let Stmt::If { then_body, .. } = &f.body[1] else {
+            panic!("the branch was rewritten: {f:#?}");
+        };
+        assert!(
+            matches!(&then_body[0], Stmt::Call { args, .. } if args.len() == 2),
+            "the returning arm's own call lost its arguments: {f:#?}"
+        );
+        let fallthrough = f
+            .body
+            .iter()
+            .skip(2)
+            .find_map(|statement| match statement {
+                Stmt::Call { args, .. } => Some(args.clone()),
+                _ => None,
+            })
+            .expect("the fall-through call disappeared");
+        assert_eq!(
+            fallthrough,
+            vec![Expr::Reg(reg("rdi")), Expr::Reg(reg("ecx"))],
+            "the fall-through call did not recover its reaching arguments: {f:#?}"
+        );
+    }
+
+    /// The value-numbered shape of the same defect, which is what the DecBench
+    /// render path actually sees.
+    ///
+    /// `value_number` leaves the live-in version bare (`rdi`) and versions every
+    /// later definition (`rsi#2`). Inside a branch arm the untouched `rdi` has no
+    /// mention at all, so the arm-local `incoming_arg_expr` declined, slot zero
+    /// stayed empty, and the ABI contiguous-prefix rule then discarded the `rsi`
+    /// argument the same scan HAD recovered — `se189_bump()` for a callee
+    /// declared `(int *, int)`.
+    ///
+    /// The negative control is the second arm: an enclosing write to `rdi` on
+    /// the path in must still refuse the backfill.
+    #[test]
+    fn a_call_in_a_branch_arm_recovers_the_functions_own_live_in_parameter() {
+        let arm = |setup: &str| {
+            vec![
+                Stmt::Assign {
+                    dst: reg(setup),
+                    src: Expr::Reg(reg("rdx")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1050,
+                        name: "se189_bump".into(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(reg("rax#2")),
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax#2"))),
+                },
+            ]
+        };
+        let function = |prefix: Vec<Stmt>| Function {
+            name: "se189_select_call".into(),
+            entry_va: 0x1140,
+            body: [
+                prefix,
+                vec![
+                    Stmt::Store {
+                        addr: Expr::Reg(reg("rdi")),
+                        src: Expr::Const(0),
+                        size: 4,
+                    },
+                    Stmt::If {
+                        cond: Expr::Cmp {
+                            op: crate::ir::types::CmpOp::Ne,
+                            lhs: Box::new(Expr::Reg(reg("rsi"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        },
+                        then_body: arm("rsi#2"),
+                        else_body: None,
+                    },
+                    Stmt::Return { value: None },
+                ],
+            ]
+            .concat(),
+        };
+        let arm_args = |f: &Function| match &f.body[f.body.len() - 2] {
+            Stmt::If { then_body, .. } => then_body
+                .iter()
+                .find_map(|statement| match statement {
+                    Stmt::Call { args, .. } => Some(args.clone()),
+                    _ => None,
+                })
+                .expect("the arm's call disappeared"),
+            other => panic!("the branch was rewritten: {other:#?}"),
+        };
+
+        let mut recovered = function(vec![Stmt::Assign {
+            dst: reg("rbx#1"),
+            src: Expr::Reg(reg("rdi")),
+        }]);
+        reconstruct_args_with_params(
+            &mut recovered,
+            CallConv::SysVAmd64,
+            &[0, 1].into_iter().collect(),
+        );
+        assert_eq!(
+            arm_args(&recovered),
+            vec![Expr::Reg(reg("rdi")), Expr::Reg(reg("rdx"))],
+            "the branch arm did not recover the live-in first parameter: {recovered:#?}"
+        );
+
+        // Negative control: the enclosing scope overwrote slot zero, so the
+        // function-entry value no longer reaches the nested call.
+        let mut clobbered = function(vec![Stmt::Assign {
+            dst: reg("rdi"),
+            src: Expr::Const(7),
+        }]);
+        reconstruct_args_with_params(
+            &mut clobbered,
+            CallConv::SysVAmd64,
+            &[0, 1].into_iter().collect(),
+        );
+        assert!(
+            arm_args(&clobbered).is_empty(),
+            "a clobbered slot zero was still backfilled from function entry: {clobbered:#?}"
+        );
+    }
+
+    /// `gcc -O2` structures a nested diamond as labelled goto targets, so the
+    /// call sits directly after a `Stmt::Label` join and the backward scan stops
+    /// dead. `189_effectful_select:gcc:O2:se189_nested_select` is that shape.
+    ///
+    /// A whole-function proof answers slot zero anyway when nothing writes it
+    /// and every call runs straight into a return, so no call's ABI clobber can
+    /// precede another. The controls check both halves of that proof.
+    #[test]
+    fn a_labelled_call_uses_a_slot_the_whole_function_never_redefines() {
+        // `extra` lands on the OTHER predecessor of the join, which is exactly
+        // where the local backward scan cannot see it.
+        let labelled = |extra: Vec<Stmt>| {
+            let mut body = vec![Stmt::Store {
+                addr: Expr::Reg(reg("rdi")),
+                src: Expr::Const(0),
+                size: 4,
+            }];
+            body.extend(extra);
+            body.extend([
+                Stmt::Goto { target: 0x1220 },
+                Stmt::Label(0x1220),
+                Stmt::Assign {
+                    dst: reg("rsi#4"),
+                    src: Expr::Reg(reg("r8d")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x1050,
+                        name: "se189_bump".into(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(reg("rax#1")),
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("rax#1"))),
+                },
+            ]);
+            Function {
+                name: "se189_nested_select".into(),
+                entry_va: 0x11d0,
+                body,
+            }
+        };
+        let call_args = |f: &Function| {
+            f.body
+                .iter()
+                .find_map(|statement| match statement {
+                    Stmt::Call { args, .. } => Some(args.clone()),
+                    _ => None,
+                })
+                .expect("the call disappeared")
+        };
+
+        let mut recovered = labelled(Vec::new());
+        reconstruct_args_with_params(
+            &mut recovered,
+            CallConv::SysVAmd64,
+            &[0, 1].into_iter().collect(),
+        );
+        assert_eq!(
+            call_args(&recovered),
+            vec![Expr::Reg(reg("rdi")), Expr::Reg(reg("r8d"))],
+            "a never-redefined slot zero was not recovered across the join: {recovered:#?}"
+        );
+
+        // Control one: something in the function writes the slot, so no path
+        // argument can be made from the register name.
+        let mut written = labelled(vec![Stmt::Assign {
+            dst: reg("rdi#1"),
+            src: Expr::Const(3),
+        }]);
+        reconstruct_args_with_params(
+            &mut written,
+            CallConv::SysVAmd64,
+            &[0, 1].into_iter().collect(),
+        );
+        assert!(
+            call_args(&written).is_empty(),
+            "a redefined slot zero was recovered across the join: {written:#?}"
+        );
+
+        // Control two: another call exists that does NOT run straight into a
+        // return, so its ABI clobber may precede this one.
+        let mut clobbered = labelled(vec![Stmt::Call {
+            target: Expr::Named {
+                va: 0x1060,
+                name: "other".into(),
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        }]);
+        reconstruct_args_with_params(
+            &mut clobbered,
+            CallConv::SysVAmd64,
+            &[0, 1].into_iter().collect(),
+        );
+        assert!(
+            call_args(&clobbered).is_empty(),
+            "a slot a preceding call clobbers was recovered: {clobbered:#?}"
+        );
     }
 
     #[test]
