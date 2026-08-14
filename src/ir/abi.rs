@@ -325,6 +325,26 @@ pub fn arm_hard_float_argument_slots() -> &'static [&'static [&'static str]] {
     ]
 }
 
+/// Whether value-numbered register `base` is a spelling of whole-register
+/// `candidate` — either the same name, or one of its 32-bit XMM dword lanes.
+///
+/// A scalar 32-bit XMM transfer (`movd`/`movss`) lifts as a read or write of
+/// exactly one lane, spelled `xmm0_d0`..`xmm0_d3` in this IR's register model
+/// (see `vector_copy`) — a name distinct from the whole-register `xmm0` that
+/// `def_uses` reports on a call's synthetic result. Without this, a `call`
+/// immediately followed by `movd eax, xmm0` (as in `dot_product_f32`, which
+/// calls a float-returning function and reads its result that way) never
+/// matched the `"xmm0"` candidate: the read was invisible, the caller fell
+/// through to the integer `rax` fallback, and the call's real float result
+/// went unread while a DIFFERENT, never-defined value reached the `return`.
+fn touches_result_candidate(base: &str, candidate: &str) -> bool {
+    base == candidate
+        || base
+            .strip_prefix(candidate)
+            .and_then(|suffix| suffix.strip_prefix("_d"))
+            .is_some_and(|lane| matches!(lane.as_bytes(), [digit] if digit.is_ascii_digit()))
+}
+
 /// Which of `candidates` a call's result actually lands in, decided by what the
 /// code AFTER the call reads first.
 ///
@@ -339,6 +359,12 @@ pub fn arm_hard_float_argument_slots() -> &'static [&'static [&'static str]] {
 /// `candidates` is ordered float-first: on both x86-64 and AAPCS-VFP the
 /// integer register is the one that is also used for other purposes, so it must
 /// not win a tie.
+///
+/// The returned register is the EXACT name consumed, not the abstract
+/// candidate: SSA versioning tracks `xmm0` and its dword lane `xmm0_d0` as
+/// unrelated identities (see [`touches_result_candidate`]), so a call's
+/// synthetic definition has to land on the precise spelling the next
+/// instruction reads, or that read still resolves to an undefined live-in.
 fn result_register_consumed_after(
     block: &crate::ir::types::LlirBlock,
     call_idx: usize,
@@ -353,13 +379,16 @@ fn result_register_consumed_after(
                 continue;
             };
             let base = ssa_base(&name);
-            if candidates.contains(&base) {
-                return VReg::phys(base);
+            if candidates
+                .iter()
+                .any(|candidate| touches_result_candidate(base, candidate))
+            {
+                return VReg::phys(base.to_string());
             }
         }
         if let Some(VReg::Phys(name)) = definition {
             let base = ssa_base(&name);
-            candidates.retain(|candidate| *candidate != base);
+            candidates.retain(|candidate| !touches_result_candidate(base, candidate));
             if candidates.is_empty() {
                 break;
             }
@@ -491,6 +520,47 @@ mod tests {
         assert!(effects.args.contains(&VReg::phys("r0")));
         assert!(effects.args.contains(&VReg::phys("s0")));
         assert!(effects.args.contains(&VReg::phys("s15")));
+    }
+
+    /// `dot_product_f32` (`175_float_matrix_kernel`, `gcc -O0`): calls a
+    /// float-returning function, then reads the result with `movd eax, xmm0`
+    /// — a scalar 32-bit XMM transfer that touches only the `xmm0_d0` dword
+    /// lane, not the whole `xmm0` register `def_uses` reports as the call's
+    /// synthetic result. Before `touches_result_candidate` recognised the
+    /// lane spelling, this call was annotated as returning in `rax` (the
+    /// fallback), the real result in `xmm0_d0` was left completely
+    /// undefined, and a different, never-assigned value reached `return`.
+    #[test]
+    fn sysv_call_result_recognises_scalar_xmm_dword_lane_consumption() {
+        let mut lf = func(vec![
+            call_at(0x11e4),
+            LlirInstr {
+                va: 0x11e9,
+                op: Op::ZExt {
+                    dst: VReg::phys("eax"),
+                    src: crate::ir::types::Value::Reg(VReg::phys("xmm0_d0")),
+                    from: crate::ir::types::Width::W32,
+                    to: crate::ir::types::Width::W64,
+                },
+            },
+        ]);
+        annotate_calls(&mut lf, CallConv::SysVAmd64);
+
+        let Op::Call {
+            effects: Some(effects),
+            ..
+        } = &lf.blocks[0].instrs[0].op
+        else {
+            panic!("call was not annotated: {lf:#?}");
+        };
+        assert_eq!(
+            effects.result,
+            Some(VReg::phys("xmm0_d0")),
+            "a post-call `movd eax, xmm0` must be recognised as consuming the \
+             float result, not fall through to the integer `rax` fallback — and \
+             the definition must land on the EXACT lane the read consumes \
+             (`xmm0_d0`), since SSA versioning does not alias it to `xmm0`"
+        );
     }
 
     #[test]

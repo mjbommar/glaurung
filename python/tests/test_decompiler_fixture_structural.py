@@ -177,6 +177,54 @@ def test_do_while_latch_condition_is_defined(tmp_path):
     assert "glaurung-verify" not in result.stdout, result.stdout
 
 
+def test_float_call_result_return_is_defined(tmp_path: Path) -> None:
+    """A float-returning call's result must reach the union-pun `return`.
+
+    Pinned GCC O0's ``dot_product_f32`` returns the value it gets from calling
+    another float-returning function, ``fp175_dot_f32``. The real instruction
+    sequence is a `call`, then `movd eax, xmm0` (reading the call's float
+    result out of xmm0's low dword lane), then `movd xmm0, eax` right before
+    `ret`.  Call-result recovery only recognised a post-call read of the whole
+    `xmm0` register as "the caller consumed the float result" — not the dword
+    sub-register `xmm0_d0` a scalar `movd`/`movss` transfer actually touches —
+    so the call's SSA result never reached that read.  The renderer then had a
+    variable (`var9`) holding the real call result that nothing read, and a
+    *different*, never-defined variable (`var11`) in the `return` statement's
+    union-pun: `long var11; ... return (union {...}){.bits = var11}.value;`.
+    """
+    import subprocess
+
+    source = (
+        ROOT / "tests" / "decompiler_fixtures" / "src" / "175_float_matrix_kernel.c"
+    )
+    binary = tmp_path / "175_float_matrix_kernel-gcc-O0.so"
+    compiled = S.TC.run(
+        ["gcc", "-shared", "-fPIC", "-g", "-O0", "-w", "-o", str(binary), str(source)],
+        timeout=60,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [
+            "glaurung",
+            "decompile",
+            str(binary),
+            "--func",
+            "dot_product_f32",
+            "--style",
+            "decbench",
+            "--no-color",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+        env={**os.environ, "GLAURUNG_VERIFY_DEFS": "1"},
+    )
+
+    assert "fp175_dot_f32" in result.stdout, result.stdout
+    assert "glaurung-verify" not in result.stdout, result.stdout
+
+
 def test_all_and_vas_agree():
     """`decompile --all` and `decompile --vas <list>` must produce the same functions.
 
