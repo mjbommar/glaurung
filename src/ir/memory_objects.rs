@@ -18,8 +18,13 @@ use crate::ir::use_def::InstrAddr;
 mod ast;
 pub(crate) mod llir;
 pub(crate) mod mir;
+mod partition;
 
 pub(crate) use ast::infer_from_ast;
+pub use partition::{
+    BoundaryEvidence, ExtentBounds, ObjectPartition, PartitionBoundary, PartitionConflict,
+    PartitionExtent,
+};
 
 /// Stable identity within one inferred object model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -137,6 +142,8 @@ pub struct MemoryObject {
 pub struct MemoryObjectModel {
     objects: Vec<MemoryObject>,
     by_identity: BTreeMap<ObjectIdentity, ObjectId>,
+    /// One partition per object, in `ObjectId` order.
+    partitions: Vec<ObjectPartition>,
 }
 
 #[derive(Debug, Clone)]
@@ -158,6 +165,7 @@ struct ObjectObservations {
     aliases: BTreeSet<ObjectIdentity>,
     strides: Vec<i64>,
     conflicts: BTreeSet<LayoutConflict>,
+    partition_conflicts: BTreeSet<PartitionConflict>,
 }
 
 /// Shared deterministic reducer from adapter observations to object layouts.
@@ -210,9 +218,24 @@ impl MemoryObjectBuilder {
             .insert(conflict);
     }
 
+    /// Report an access this adapter could not model in the object's own
+    /// coordinate. The partition must not bound any variable once one exists.
+    pub(super) fn partition_conflict(
+        &mut self,
+        base: impl Into<ObjectIdentity>,
+        conflict: PartitionConflict,
+    ) {
+        self.observations
+            .entry(base.into())
+            .or_default()
+            .partition_conflicts
+            .insert(conflict);
+    }
+
     pub(super) fn finish(self) -> MemoryObjectModel {
         let mut objects = Vec::new();
         let mut by_identity = BTreeMap::new();
+        let mut partition_conflicts = Vec::new();
         for (identity, observation) in self.observations {
             if observation.accesses.is_empty() {
                 continue;
@@ -289,6 +312,7 @@ impl MemoryObjectBuilder {
             for alias in observation.aliases {
                 by_identity.insert(alias, id);
             }
+            partition_conflicts.push(observation.partition_conflicts);
             objects.push(MemoryObject {
                 id,
                 identity,
@@ -299,9 +323,15 @@ impl MemoryObjectBuilder {
                 conflicts,
             });
         }
+        let partitions = objects
+            .iter()
+            .zip(&partition_conflicts)
+            .map(|(object, conflicts)| partition::partition_object(object, conflicts))
+            .collect();
         MemoryObjectModel {
             objects,
             by_identity,
+            partitions,
         }
     }
 }
@@ -348,6 +378,11 @@ impl MemoryObjectModel {
         self.object_for_identity(&ObjectIdentity::MirValue(value))
     }
 
+    /// The per-variable byte partition of one object's observed accesses.
+    pub fn partition(&self, id: ObjectId) -> Option<&ObjectPartition> {
+        self.partitions.get(id.0)
+    }
+
     pub(crate) fn object_for_base(&self, base: &VReg) -> Option<&MemoryObject> {
         self.object_for_identity(&ObjectIdentity::LegacyRegister(base.clone()))
     }
@@ -364,3 +399,7 @@ impl MemoryObjectModel {
 #[cfg(test)]
 #[path = "memory_objects_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "memory_objects/partition_tests.rs"]
+mod partition_tests;

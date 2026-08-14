@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::memory_objects::{
     AccessRole, AccessSource, LayoutConflict, MemoryObjectBuilder, MemoryStateIdentity,
-    ObjectIdentity, ObjectOrigin, RawAccess,
+    ObjectIdentity, ObjectOrigin, PartitionConflict, RawAccess,
 };
 use crate::ir::memory_ssa::primary_region_for_memop;
-use crate::ir::mir::{Definition, InstructionId, MirFunction, ValueId};
+use crate::ir::mir::{Definition, InstructionId, MirFunction, MirUse, UseId, ValueId};
 use crate::ir::types::{BinOp, LlirFunction, MemOp, Op, Value};
 use crate::program::image::ProgramImage;
 
@@ -43,11 +43,36 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
         }
     }
 
+    // Every use of an object pointer this adapter actually interprets. Whatever
+    // remains reaches an operand position the object model cannot account for,
+    // so bytes it never observed may be read or written there.
+    let mut interpreted = affine_source_uses(function, &operations, &resolved);
+
     for (instruction_index, operation) in operations.iter().enumerate() {
         let instruction = InstructionId(instruction_index);
-        let Some((memop, role, base_use_index)) = direct_memop(operation) else {
+        let Some((memop, role, base_use_index)) = address_memop(operation) else {
             continue;
         };
+
+        // Resolve the address root once. This adapter interprets that use, and
+        // every refusal below is an access it saw and could not place, which
+        // the partition must hear about.
+        let base = base_use_index.and_then(|index| use_at(function, instruction, index));
+        if let Some(base) = base {
+            interpreted.insert(base.id);
+        }
+        let address_root = base.map(|base| {
+            resolved
+                .facts
+                .get(&base.value)
+                .map_or(base.value, |fact| fact.root)
+        });
+
+        if memop.index.is_some() {
+            // A scaled index reaches bytes this adapter cannot place.
+            refuse(&mut builder, address_root);
+            continue;
+        }
         let region = primary_region_for_memop(memop, image);
         let Some(memory_access) = function.instructions()[instruction_index]
             .memory_effects
@@ -55,6 +80,7 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
             .copied()
             .find(|access| function.memory_accesses()[access.0].region == region)
         else {
+            refuse(&mut builder, address_root);
             continue;
         };
         let access = &function.memory_accesses()[memory_access.0];
@@ -62,14 +88,15 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
             AccessRole::Read => access.input,
             AccessRole::Write => match access.output {
                 Some(output) => output,
-                None => continue,
+                None => {
+                    refuse(&mut builder, address_root);
+                    continue;
+                }
             },
         };
 
-        let (object, cursor, offset, origin) = if let Some(use_index) = base_use_index {
-            let Some(cursor) = use_value(function, instruction, use_index) else {
-                continue;
-            };
+        let (object, cursor, offset, origin) = if let Some(base) = base {
+            let cursor = base.value;
             let fact = resolved.facts.get(&cursor);
             let root = fact.map_or(cursor, |fact| fact.root);
             let Some(offset) = fact
@@ -77,6 +104,7 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
                 .and_then(|base| base.checked_add(memop.disp))
             else {
                 builder.conflict(root, LayoutConflict::UnclassifiedDefinition);
+                refuse(&mut builder, address_root);
                 continue;
             };
             (
@@ -101,6 +129,7 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
             )
         } else {
             let Ok(address) = u64::try_from(memop.disp) else {
+                refuse(&mut builder, address_root);
                 continue;
             };
             let identity = ObjectIdentity::AbsoluteAddress(address);
@@ -131,6 +160,25 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
         );
     }
 
+    // Rule 5 and rule 8: a pointer that reaches an operand this adapter does
+    // not interpret may be dereferenced by a callee or by an operation the
+    // object model never sees, so its object cannot bound any variable.
+    for use_ in function.uses() {
+        if interpreted.contains(&use_.id) {
+            continue;
+        }
+        if operations
+            .get(use_.instruction.0)
+            .is_some_and(|operation| consumes_pointer(operation))
+        {
+            continue;
+        }
+        let Some(fact) = resolved.facts.get(&use_.value) else {
+            continue;
+        };
+        builder.partition_conflict(fact.root, PartitionConflict::EscapedRoot);
+    }
+
     let model = builder.finish();
     let links = model
         .objects()
@@ -148,6 +196,58 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
         }
     }
     function.object_model = model;
+}
+
+/// Report an access this adapter observed but could not place in `root`'s
+/// coordinate. Nothing rooted there can be bounded afterwards.
+fn refuse(builder: &mut MemoryObjectBuilder, root: Option<ValueId>) {
+    if let Some(root) = root {
+        builder.partition_conflict(root, PartitionConflict::UnmodeledAccess);
+    }
+}
+
+/// Whether an operation provably cannot carry a pointer operand to a memory
+/// access. A comparison reduces its operands to a boolean, so the address can
+/// go no further; every other unmodelled operand position can.
+///
+/// x86 stack adjustment is the reason this exists: `sub rsp, N` lifts to the
+/// subtraction plus four flag comparisons that read the frame root, and
+/// treating those as escapes would refuse every frame on the architecture.
+fn consumes_pointer(operation: &Op) -> bool {
+    matches!(operation, Op::Cmp { .. })
+}
+
+/// The operand uses affine resolution consumed to derive a pointer fact.
+fn affine_source_uses(
+    function: &MirFunction,
+    operations: &[&Op],
+    resolved: &ResolvedAffine,
+) -> BTreeSet<UseId> {
+    let mut uses = BTreeSet::new();
+    for value in function.values() {
+        let Definition::InstructionOutput { instruction, .. } = &value.definition else {
+            continue;
+        };
+        if !resolved.facts.contains_key(&value.id) {
+            continue;
+        }
+        let Some(operation) = operations.get(instruction.0) else {
+            continue;
+        };
+        if !matches!(
+            operation,
+            Op::Assign {
+                src: Value::Reg(_),
+                ..
+            } | Op::Bin { .. }
+        ) {
+            continue;
+        }
+        if let Some(use_) = use_at(function, *instruction, 0) {
+            uses.insert(use_.id);
+        }
+    }
+    uses
 }
 
 fn resolve_affine_values(function: &MirFunction, operations: &[&Op]) -> ResolvedAffine {
@@ -335,7 +435,7 @@ fn instruction_fact(
     }
 }
 
-fn use_value(function: &MirFunction, instruction: InstructionId, index: usize) -> Option<ValueId> {
+fn use_at(function: &MirFunction, instruction: InstructionId, index: usize) -> Option<&MirUse> {
     function
         .instructions()
         .get(instruction.0)?
@@ -343,10 +443,16 @@ fn use_value(function: &MirFunction, instruction: InstructionId, index: usize) -
         .iter()
         .filter_map(|use_| function.uses().get(use_.0))
         .find(|use_| use_.index == index)
-        .map(|use_| use_.value)
 }
 
-fn direct_memop(operation: &Op) -> Option<(&MemOp, AccessRole, Option<usize>)> {
+fn use_value(function: &MirFunction, instruction: InstructionId, index: usize) -> Option<ValueId> {
+    use_at(function, instruction, index).map(|use_| use_.value)
+}
+
+/// One memory operand, its role, and the operand index of its base register.
+/// A scaled index is *not* filtered out here: an access this adapter cannot
+/// place must still be reported against the pointer it came from.
+fn address_memop(operation: &Op) -> Option<(&MemOp, AccessRole, Option<usize>)> {
     let (memop, role, first_address_use) = match operation {
         Op::Load { addr, .. } => (addr, AccessRole::Read, 0),
         Op::CondLoad { addr, .. } => (addr, AccessRole::Read, 1),
@@ -354,8 +460,5 @@ fn direct_memop(operation: &Op) -> Option<(&MemOp, AccessRole, Option<usize>)> {
         Op::CondStore { addr, .. } => (addr, AccessRole::Write, 1),
         _ => return None,
     };
-    if memop.index.is_some() {
-        return None;
-    }
     Some((memop, role, memop.base.as_ref().map(|_| first_address_use)))
 }

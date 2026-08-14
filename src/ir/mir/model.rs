@@ -1,6 +1,6 @@
 //! Stable, arena-backed MIR identities and records.
 
-use crate::ir::memory_objects::{MemoryObject, MemoryObjectModel, ObjectId};
+use crate::ir::memory_objects::{MemoryObject, MemoryObjectModel, ObjectId, ObjectPartition};
 use crate::ir::types::{VReg, Width};
 use crate::target::TargetSpec;
 
@@ -205,6 +205,11 @@ impl MirFunction {
 
     pub fn object_for_value(&self, value: ValueId) -> Option<&MemoryObject> {
         self.object_model.object_for_value(value)
+    }
+
+    /// The per-variable byte partition of one object's observed accesses.
+    pub fn object_partition(&self, object: ObjectId) -> Option<&ObjectPartition> {
+        self.object_model.partition(object)
     }
 
     pub fn value(&self, id: ValueId) -> &MirValue {
