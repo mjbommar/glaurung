@@ -17,6 +17,10 @@ mod verify_objects;
 #[path = "memory_tests.rs"]
 mod memory_tests;
 
+#[cfg(test)]
+#[path = "query_tests.rs"]
+mod query_tests;
+
 pub use crate::ir::memory_objects::{
     AccessPath, AccessRole, AccessSource, LayoutConflict, MemoryObject, MemoryStateIdentity,
     ObjectId, ObjectIdentity, ObjectOrigin,
@@ -24,11 +28,14 @@ pub use crate::ir::memory_objects::{
 pub use builder::lower_verified;
 pub use memory::lower_verified_with_image;
 pub use model::{
-    BlockId, Definition, InstructionId, MemoryAccessId, MemoryAccessKind, MemoryDefinition,
-    MemoryRegion, MemoryValueId, MirBlock, MirFunction, MirInstruction, MirMemoryAccess,
-    MirMemoryValue, MirStorage, MirUse, MirValue, StorageId, UseId, ValueId,
+    BlockId, Definition, EffectCompleteness, InstructionId, MemoryAccessId, MemoryAccessKind,
+    MemoryDefinition, MemoryRegion, MemoryValueId, MirBlock, MirFunction, MirInstruction,
+    MirMemoryAccess, MirMemoryValue, MirStorage, MirUse, MirValue, StorageId, UseId, ValueId,
 };
-pub use query::DefinitionOracle;
+pub use query::{
+    ClobberAnswer, ClobberKind, DefinitionOracle, DefinitionState, MemoryState, ProgramPoint,
+    ReachingSet, StorageState, UnknownReason,
+};
 pub use verify::verify;
 
 #[cfg(test)]

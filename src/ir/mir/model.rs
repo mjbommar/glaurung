@@ -109,6 +109,29 @@ pub struct MirUse {
     pub width: Option<Width>,
 }
 
+/// How completely MIR enumerates one instruction's *register* effects.
+///
+/// Non-negotiable rule 5: unknown calls and instructions clobber
+/// conservatively, and unknown never means "no effect". An unannotated call
+/// contributes no register definition at all, so the raw SSA use edge after it
+/// still names the pre-call value. Marking the instruction [`Opaque`] is what
+/// lets the definedness queries refuse to repeat that claim instead of
+/// silently carrying a stale value across the callee.
+///
+/// This is about the *footprint*, not the values. A multi-output intrinsic
+/// declares exactly which storages it writes, so it is [`Complete`] even though
+/// each declared output is a [`Definition::UnknownEffect`] value.
+///
+/// [`Opaque`]: EffectCompleteness::Opaque
+/// [`Complete`]: EffectCompleteness::Complete
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum EffectCompleteness {
+    /// Every storage this instruction may write has a MIR output value.
+    Complete,
+    /// The instruction may write machine storages MIR cannot name.
+    Opaque,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MirInstruction {
     pub id: InstructionId,
@@ -118,6 +141,8 @@ pub struct MirInstruction {
     pub uses: Vec<UseId>,
     pub outputs: Vec<ValueId>,
     pub memory_effects: Vec<MemoryAccessId>,
+    /// Whether [`Self::outputs`] is the complete register write set.
+    pub register_effects: EffectCompleteness,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

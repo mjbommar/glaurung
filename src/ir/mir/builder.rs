@@ -8,8 +8,8 @@ use crate::ir::use_def::{defs_uses, InstrAddr};
 use crate::target::TargetSpec;
 
 use super::model::{
-    BlockId, Definition, InstructionId, MirBlock, MirFunction, MirInstruction, MirStorage, MirUse,
-    MirValue, StorageId, UseId, ValueId,
+    BlockId, Definition, EffectCompleteness, InstructionId, MirBlock, MirFunction, MirInstruction,
+    MirStorage, MirUse, MirValue, StorageId, UseId, ValueId,
 };
 use super::verify::verify;
 
@@ -91,6 +91,16 @@ pub(super) fn lower(llir: &LlirFunction, target: TargetSpec) -> MirFunction {
                 uses: Vec::new(),
                 outputs: Vec::new(),
                 memory_effects: Vec::new(),
+                register_effects: register_effects(
+                    llir,
+                    &ssa,
+                    target,
+                    InstrAddr {
+                        block_idx: block_index,
+                        instr_idx: index,
+                    },
+                    &instruction.op,
+                ),
             });
         }
     }
@@ -311,6 +321,72 @@ pub(super) fn lower(llir: &LlirFunction, target: TargetSpec) -> MirFunction {
         memory_values: Vec::new(),
         memory_accesses: Vec::new(),
         object_model: Default::default(),
+    }
+}
+
+/// Decide whether an instruction's MIR outputs are its complete register write
+/// set (see [`EffectCompleteness`]).
+///
+/// The three ways MIR can lose a write, all of which must fail closed:
+///
+/// 1. A call or an undecoded instruction: `defs_uses` reports no definition at
+///    all for an unannotated call, and an annotated one still declares only its
+///    ABI result rather than the convention's clobber set. Target-owned call
+///    and intrinsic clobber contracts are EPIC 4 work; until they exist the
+///    only sound answer for an unnamed storage is "unknown".
+/// 2. A definition SSA declines to version — `write_regs` keeps only
+///    `Phys`/`Temp`/`Flag`, so a `FlagValue` destination writes a storage that
+///    has no MIR value.
+/// 3. A bit-preserving sub-register write. `al` deliberately is *not* merged
+///    into `rax` by the SSA parent rule, so a write through the narrow view
+///    leaves the wide storage's MIR value unchanged while the machine bits move.
+fn register_effects(
+    llir: &LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    target: TargetSpec,
+    address: InstrAddr,
+    op: &Op,
+) -> EffectCompleteness {
+    if matches!(op, Op::Call { .. } | Op::Unknown { .. }) {
+        return EffectCompleteness::Opaque;
+    }
+    let written = defs_uses(op).0;
+    let canonical = written
+        .iter()
+        .map(|register| canon_gpr_for_target(target, register))
+        .collect::<BTreeSet<_>>();
+    if canonical.len() != ssa.def_values(llir, address).len() {
+        return EffectCompleteness::Opaque;
+    }
+    if written
+        .iter()
+        .any(|register| is_partial_register_write(target, register))
+    {
+        return EffectCompleteness::Opaque;
+    }
+    EffectCompleteness::Complete
+}
+
+/// Is this destination a bit-preserving view of a wider register family?
+fn is_partial_register_write(target: TargetSpec, register: &VReg) -> bool {
+    let VReg::Phys(name) = register else {
+        return false;
+    };
+    let Some(arch) = regview_arch(target) else {
+        return false;
+    };
+    crate::ir::regview::ssa_parent(arch, name).is_none()
+        && crate::ir::regview::parent_of(arch, name).is_some_and(|parent| parent != name)
+}
+
+/// The register-view namespace of a target, for targets that have sub-register
+/// views at all. ARM32 has none, so it is deliberately absent rather than
+/// borrowing the AArch64 table.
+fn regview_arch(target: TargetSpec) -> Option<crate::ir::regview::Arch> {
+    match target.id() {
+        crate::target::TargetId::X86_64 => Some(crate::ir::regview::Arch::X86_64),
+        crate::target::TargetId::AArch64 => Some(crate::ir::regview::Arch::AArch64),
+        _ => None,
     }
 }
 
