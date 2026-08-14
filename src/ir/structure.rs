@@ -4935,4 +4935,143 @@ mod tests {
             "relocated linear edge to B3 was dropped: {region:#?}"
         );
     }
+
+    /// Textbook irreducible CFG: entry branches directly into EITHER of two
+    /// blocks that form a 2-cycle between themselves, so neither block
+    /// dominates the other (the entry can reach each one without passing
+    /// through the other). This is exactly "two gotos into one loop body from
+    /// non-dominating branches" — the shape a source-level `if (c) goto mid;`
+    /// jumping into the middle of a `while` produces.
+    ///
+    ///   0 (entry) -> 1 (fallthrough) | 2 (taken)
+    ///   1 -> 2 (jump)
+    ///   2 -> 1 (taken) | 3 (fallthrough exit)
+    ///   3 -> return
+    ///
+    /// No edge in the {1,2} cycle is a dominance-based back edge (`to`
+    /// dominates `from`): `1` does not dominate `2` (0->2 reaches it without
+    /// passing through 1) and `2` does not dominate `1` (0->1 reaches it
+    /// without passing through 2). No single block can serve as the loop's
+    /// header, which is the defining property of irreducibility.
+    fn irreducible_two_entry_cycle() -> LlirFunction {
+        use crate::ir::types::Flag;
+        let cj = |target: u64| Op::CondJump {
+            cond: VReg::Flag(Flag::Z),
+            target,
+            inverted: false,
+        };
+        mk_cfg(vec![
+            (0x1000, vec![cj(0x1200)], vec![0x1100, 0x1200]), // B0 entry
+            (0x1100, vec![Op::Jump { target: 0x1200 }], vec![0x1200]), // B1
+            (0x1200, vec![cj(0x1100)], vec![0x1300, 0x1100]), // B2
+            (0x1300, vec![Op::Return], vec![]),               // B3 exit
+        ])
+    }
+
+    /// Ground truth: confirm the fixture is genuinely irreducible before
+    /// trusting any claim about how the structurer handles it. Neither
+    /// direction of the {1,2} cycle is a dominance-based back edge.
+    #[test]
+    fn the_two_entry_cycle_fixture_really_is_irreducible() {
+        let lf = irreducible_two_entry_cycle();
+        let ssa = compute_ssa(&lf);
+        let cfg = Cfg::from(&lf, &ssa);
+        let one_to_two_is_back = cfg.edges[1].iter().any(|e| e.to == 2 && e.back);
+        let two_to_one_is_back = cfg.edges[2].iter().any(|e| e.to == 1 && e.back);
+        assert!(
+            !one_to_two_is_back && !two_to_one_is_back,
+            "the {{1,2}} cycle must have no dominance-based back edge, or this \
+             fixture is not actually irreducible: edges[1]={:?} edges[2]={:?}",
+            cfg.edges[1],
+            cfg.edges[2]
+        );
+    }
+
+    /// RED->GREEN target for the roadmap item "Preserve irreducible and
+    /// unresolved flow with explicit goto/indirect fallback rather than
+    /// inventing structure" (`docs/design/decompiler-roadmap.md`, "Complete
+    /// CFG and semantic structuring") and design rule 8 ("A failed proof
+    /// keeps a lower-level expression, explicit unknown, or honest goto. It
+    /// does not guess.").
+    ///
+    /// `recover_verified_with_health` is the single production entry point
+    /// (its own doc comment says so). On a graph no `While`/`DoWhile`/`RawLoop`
+    /// pattern can honestly own, it must fall back to the complete labelled
+    /// CFG rather than silently pick a header and drop or invent an edge to
+    /// make one arm's cycle look ordinary.
+    #[test]
+    fn two_non_dominating_entries_into_a_cycle_preserve_lossless_fallback() {
+        let lf = irreducible_two_entry_cycle();
+        let ssa = compute_ssa(&lf);
+        let (region, health) = recover_verified_with_health(&lf, &ssa);
+
+        // The region must be the complete labelled-CFG fallback, not a
+        // speculative loop shape that happened to pass verification by
+        // dropping or inventing an edge.
+        assert!(
+            matches!(&region, Region::Unstructured(blocks) if blocks.len() == 4),
+            "expected the lossless labelled-CFG fallback over all 4 blocks, \
+             got {region:#?}"
+        );
+        assert_eq!(
+            health.structure_fallbacks, 1,
+            "the verified-recovery fallback must be recorded, not silent: {health:?}"
+        );
+        assert_eq!(
+            health.uncovered_cfg_edges, 0,
+            "the fallback region must not drop a real edge: {health:?}"
+        );
+        assert_eq!(
+            health.invented_cfg_edges, 0,
+            "the fallback region must not invent an edge: {health:?}"
+        );
+
+        // Re-derive edge accounting independently of the immutable counters
+        // above, against the SELECTED region actually returned — this is the
+        // module `recover_verified_with_health` itself uses to decide whether
+        // to fall back, run again here so the test does not merely trust the
+        // health struct's own arithmetic.
+        let cfg = Cfg::from(&lf, &ssa);
+        let acct = crate::ir::structure_accounting::account(&cfg.edges, &cfg.preds, 0, &region);
+        assert_eq!(
+            acct,
+            Vec::new(),
+            "the selected fallback region must account for every block and \
+             every edge with nothing dropped, duplicated, or invented: {acct:?}"
+        );
+    }
+
+    /// Negative control: the SAME two-block cycle, entered from only ONE
+    /// place, is ordinary reducible flow and must NOT hit the labelled-CFG
+    /// fallback. This pins that the fallback above is triggered by
+    /// irreducibility specifically — a non-dominating second entry into the
+    /// cycle — and not merely by "a cycle exists between two blocks".
+    #[test]
+    fn a_single_entry_into_the_same_two_block_cycle_structures_normally() {
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Jump { target: 0x1100 }], vec![0x1100]), // B0 entry
+            (0x1100, vec![Op::Jump { target: 0x1200 }], vec![0x1200]), // B1
+            (
+                0x1200,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(crate::ir::types::Flag::Z),
+                    target: 0x1100,
+                    inverted: false,
+                }],
+                vec![0x1300, 0x1100],
+            ), // B2
+            (0x1300, vec![Op::Return], vec![]),                        // B3 exit
+        ]);
+        let ssa = compute_ssa(&lf);
+        let (region, health) = recover_verified_with_health(&lf, &ssa);
+        assert!(
+            !matches!(&region, Region::Unstructured(blocks) if blocks.len() == lf.blocks.len()),
+            "a single, dominating entry into the loop must not need the total \
+             labelled-CFG fallback: {region:#?}"
+        );
+        assert_eq!(
+            health.structure_fallbacks, 0,
+            "reducible flow must not report a structure fallback: {health:?}"
+        );
+    }
 }
