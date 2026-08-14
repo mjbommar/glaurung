@@ -115,6 +115,23 @@ pub struct StackLocalFacts {
     pub sizes: HashMap<String, u8>,
     pub source_types: HashMap<String, String>,
     pub source_names: HashMap<String, String>,
+    /// Frame coordinate `(base, disp)` each promoted name was minted from.
+    ///
+    /// This is the join MIR evidence needs. MIR memory objects are keyed by
+    /// `ObjectIdentity::MirValue(ValueId)` over numbered LLIR, while the AST
+    /// consumers are keyed by the promoted-local NAME, and the name cannot be
+    /// parsed back into a coordinate: `local_{disp:x}` keeps only
+    /// `disp.unsigned_abs()`, losing the base and the sign, and the mint
+    /// deliberately falls back to an appearance-order `stack_N` when that hex
+    /// name is taken — exactly because `rbp-0x18` and `entry_rsp-0x18` are
+    /// different storage. Only this pass knows the answer, so it publishes it.
+    ///
+    /// A name reachable from two different coordinates is WITHHELD rather than
+    /// resolved to whichever slot was iterated last. Several machine keys
+    /// intentionally collapse to one source role (`entry_rsp+0` and `esp+0`
+    /// both render as `stack_top`), and binding object evidence through an
+    /// ambiguous name would attach a proven fact to the wrong variable.
+    pub frame_coordinates: HashMap<String, (String, i64)>,
 }
 
 fn merge_source_type(current: &mut Option<String>, incoming: Option<&str>) {
@@ -337,8 +354,26 @@ pub fn promote_stack_locals_with_facts(
     // iteration order choose the declaration width, so identical inputs could
     // alternate between `char` and `long` across processes.
     let mut facts = StackLocalFacts::default();
-    for slot in map.into_values() {
+    // Names withheld from `frame_coordinates` because two machine slot keys
+    // reached them; see the field's documentation.
+    let mut ambiguous_coordinates: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for (key, slot) in map {
         let name = slot.name;
+        match facts.frame_coordinates.entry(name.clone()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                if !ambiguous_coordinates.contains(&name) {
+                    entry.insert((key.base.clone(), key.disp));
+                }
+            }
+            std::collections::hash_map::Entry::Occupied(entry)
+                if entry.get() != &(key.base.clone(), key.disp) =>
+            {
+                entry.remove();
+                ambiguous_coordinates.insert(name.clone());
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {}
+        }
         facts
             .sizes
             .entry(name.clone())
@@ -677,7 +712,9 @@ fn seed_indexed_stack_objects(
                 collect_expr(if_false, sp_delta, ctx, address_defs, starts);
             }
             Expr::Un { src, .. } => collect_expr(src, sp_delta, ctx, address_defs, starts),
-            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => collect_expr(expr, sp_delta, ctx, address_defs, starts),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+                collect_expr(expr, sp_delta, ctx, address_defs, starts)
+            }
             Expr::FunctionTableEntry { index, .. } => {
                 collect_expr(index, sp_delta, ctx, address_defs, starts)
             }
@@ -1392,7 +1429,9 @@ fn rewrite_expr(
             rewrite_expr(if_false, map, names, ctx, sp_delta, address_defs);
         }
         Expr::Un { src, .. } => rewrite_expr(src, map, names, ctx, sp_delta, address_defs),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => rewrite_expr(expr, map, names, ctx, sp_delta, address_defs),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            rewrite_expr(expr, map, names, ctx, sp_delta, address_defs)
+        }
         Expr::FunctionTableEntry { index, .. } => {
             rewrite_expr(index, map, names, ctx, sp_delta, address_defs)
         }
@@ -1527,7 +1566,9 @@ fn reconcile_late_address_taken_objects(body: &mut [Stmt], map: &HashMap<SlotKey
                 rewrite_value(if_false, objects);
             }
             Expr::Un { src, .. } => rewrite_value(src, objects),
-            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => rewrite_value(expr, objects),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+                rewrite_value(expr, objects)
+            }
             Expr::FunctionTableEntry { index, .. } => rewrite_value(index, objects),
             Expr::WideArithmetic { args, .. } => {
                 for arg in args {
@@ -2838,6 +2879,110 @@ mod overlap_tests;
 mod tests {
     use super::*;
     use crate::ir::ast::{Function, Stmt};
+
+    /// EPIC 3 prerequisite: the promoted-local name must be joinable back to the
+    /// frame coordinate it was minted from.
+    ///
+    /// MIR memory objects are keyed by `ObjectIdentity::MirValue(ValueId)` over
+    /// numbered LLIR; `high_variables` is keyed by the promoted-local NAME.
+    /// Nothing maps between them, which is the blocker on migrating the first
+    /// production aggregate consumer to verified MIR evidence.
+    ///
+    /// The name cannot be parsed back into a coordinate. `local_{disp:x}` keeps
+    /// only `disp.unsigned_abs()`, so it loses the base and the sign, and the
+    /// mint deliberately falls back to an appearance-order `stack_N` when the
+    /// hex name is already taken — precisely because `rbp-0x18` and
+    /// `entry_rsp-0x18` are different storage. So the mapping has to be exported
+    /// by the pass that owns it.
+    #[test]
+    fn promotion_exports_the_frame_coordinate_behind_each_promoted_name() {
+        let mut f = Function {
+            name: "coords".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: deref_of("rbp", -8, 4),
+                },
+                Stmt::Assign {
+                    dst: reg("rdx"),
+                    src: deref_of("rbp", -16, 8),
+                },
+            ],
+        };
+
+        let facts = promote_stack_locals_with_facts(&mut f, Some(CallConv::SysVAmd64), None, &[]);
+
+        let named = |source: &Stmt| match source {
+            Stmt::Assign {
+                src: Expr::Reg(VReg::Phys(name)),
+                ..
+            } => name.clone(),
+            other => panic!("expected a promoted read, got {other:?}"),
+        };
+        let first = named(&f.body[0]);
+        let second = named(&f.body[1]);
+        assert_ne!(first, second, "distinct slots must get distinct names");
+
+        assert_eq!(
+            facts.frame_coordinates.get(first.as_str()),
+            Some(&("rbp".to_string(), -8)),
+            "the -8 slot must publish its exact (base, disp); got {:?}",
+            facts.frame_coordinates
+        );
+        assert_eq!(
+            facts.frame_coordinates.get(second.as_str()),
+            Some(&("rbp".to_string(), -16)),
+            "the -16 slot must publish its exact (base, disp); got {:?}",
+            facts.frame_coordinates
+        );
+    }
+
+    /// The negative control that makes the export safe to join against.
+    ///
+    /// Several machine slot keys intentionally collapse to one source-level role
+    /// (`entry_rsp+0` and `esp+0` both render as `stack_top`). A name reached
+    /// from two different coordinates cannot identify storage, so it must be
+    /// ABSENT rather than resolve to whichever key happened to be iterated last
+    /// — attaching MIR object evidence through an ambiguous name would bind a
+    /// fact to the wrong variable.
+    #[test]
+    fn a_name_reached_from_two_coordinates_is_withheld_rather_than_guessed() {
+        let mut f = Function {
+            name: "collapsed".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: deref_of("entry_rsp", 0, 8),
+                },
+                Stmt::Assign {
+                    dst: reg("rdx"),
+                    src: deref_of("rsp", 0, 8),
+                },
+            ],
+        };
+
+        let facts = promote_stack_locals_with_facts(&mut f, Some(CallConv::SysVAmd64), None, &[]);
+
+        for (name, coordinate) in &facts.frame_coordinates {
+            assert!(
+                facts.sizes.contains_key(name),
+                "every exported coordinate must belong to a promoted name: \
+                 {name} -> {coordinate:?}"
+            );
+        }
+        // Whatever collapses, no exported name may disagree with itself: the
+        // map is a function, and ambiguity is dropped on the floor.
+        assert_eq!(
+            facts.frame_coordinates.len(),
+            facts
+                .frame_coordinates
+                .keys()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        );
+    }
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
