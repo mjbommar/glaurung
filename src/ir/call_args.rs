@@ -591,6 +591,31 @@ pub fn reconstruct_args_with_params_and_callee_layouts(
     param_slots: &mut std::collections::HashSet<usize>,
     callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
 ) {
+    reconstruct_args_with_layouts(
+        f,
+        arch,
+        param_slots,
+        callee_layouts,
+        &std::collections::HashMap::new(),
+    );
+}
+
+/// As [`reconstruct_args_with_params_and_callee_layouts`], but also told the
+/// recovered parameter storage of every entry of the relocation-proven
+/// function-pointer tables this function calls through.
+///
+/// A call through such a table has no single callee to ask for a parameter
+/// layout, which is why the direct-call recovery does not generalise to it. It
+/// does have a proven, finite, complete SET of callees, and the registers the
+/// machine call may read is the union over that set. See
+/// [`table_call_may_use_layout`].
+pub fn reconstruct_args_with_layouts(
+    f: &mut Function,
+    arch: CallConv,
+    param_slots: &mut std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+) {
     // The spelling this function uses for each live-in argument register is a
     // WHOLE-FUNCTION fact. Answering it from the statement list that happens to
     // contain the call makes an untouched incoming parameter invisible to every
@@ -602,7 +627,10 @@ pub fn reconstruct_args_with_params_and_callee_layouts(
         &mut f.body,
         arch,
         param_slots,
-        callee_layouts,
+        CalleeLayouts {
+            direct: callee_layouts,
+            table_entry: table_entry_layouts,
+        },
         &function_live_ins,
     );
     attribute_call_results(&mut f.body, arch);
@@ -888,6 +916,9 @@ struct EnclosingSlots {
     /// The slot's function-entry value occupies its argument register at EVERY
     /// point in the function. See `entry_constant_slots`.
     entry_constant: Vec<bool>,
+    /// The exact value-numbered definition that reaches this body's entry for
+    /// each slot, when the enclosing prefix proves one. See `advance_reaching`.
+    reaching: Vec<Option<Expr>>,
 }
 
 impl EnclosingSlots {
@@ -898,6 +929,7 @@ impl EnclosingSlots {
             blocked: vec![false; slots],
             live_ins: live_ins.to_vec(),
             entry_constant,
+            reaching: vec![None; slots],
         }
     }
 
@@ -907,13 +939,14 @@ impl EnclosingSlots {
     }
 
     /// The context for a body nested inside a statement whose enclosing clobber
-    /// mask is `blocked`.
-    fn with_blocked(&self, blocked: Vec<bool>) -> Self {
+    /// mask is `blocked` and whose proven reaching definitions are `reaching`.
+    fn with_blocked(&self, blocked: Vec<bool>, reaching: Vec<Option<Expr>>) -> Self {
         Self {
             overrides: self.overrides.clone(),
             blocked,
             live_ins: self.live_ins.clone(),
             entry_constant: self.entry_constant.clone(),
+            reaching,
         }
     }
 
@@ -938,6 +971,89 @@ impl EnclosingSlots {
         mark_arg_writes_in_stmt(statement, arch, blocked);
     }
 
+    /// Fold one statement of the enclosing prefix into the per-slot reaching
+    /// definition.
+    ///
+    /// `blocked` answers "does the FUNCTION-ENTRY value still reach"; this
+    /// answers the strictly harder question "what value reaches", and it is the
+    /// only thing that can name the argument of a call whose setup happens in an
+    /// enclosing scope. A value-numbered `%rdi#1 = ...` before a branch is the
+    /// reaching definition of the `rdi` slot inside that branch's arms.
+    ///
+    /// Everything about it is fail-closed:
+    ///
+    /// * only a TOP-LEVEL, unconditional `Stmt::Assign` records a definition, so
+    ///   nothing written on one path of a nested branch is ever claimed;
+    /// * only a VERSIONED destination (`rdi#1`) is recorded. An unversioned
+    ///   architectural name is one storage with many definitions, and naming it
+    ///   at a later call is exactly the reverted table-dispatch patch's bug —
+    ///   the name no longer denotes the value it held here;
+    /// * every other write of the slot, every call (all argument registers are
+    ///   caller-clobbered), and every control-flow boundary the backward scan
+    ///   refuses to cross clears the slot back to "unknown".
+    fn advance_reaching(reaching: &mut [Option<Expr>], statement: &Stmt, arch: CallConv) {
+        if matches!(
+            statement,
+            Stmt::Label(_)
+                | Stmt::Goto { .. }
+                | Stmt::IndirectGoto { .. }
+                | Stmt::Return { .. }
+                | Stmt::Break
+        ) {
+            reaching.iter_mut().for_each(|slot| *slot = None);
+            return;
+        }
+        if let Stmt::Assign {
+            dst: dst @ VReg::Phys(name),
+            ..
+        } = statement
+        {
+            if let Some(slot) = slot_of(arch, name.as_str()) {
+                reaching[slot] = name.contains('#').then(|| Expr::Reg(dst.clone()));
+                return;
+            }
+        }
+        let mut written = vec![false; reaching.len()];
+        mark_arg_writes_in_stmt(statement, arch, &mut written);
+        for (slot, written) in written.into_iter().enumerate() {
+            if written {
+                reaching[slot] = None;
+            }
+        }
+    }
+
+    /// The exact value that reaches a call in this body for `slot`, or `None`
+    /// when nothing proves one.
+    ///
+    /// `blocked_here` is what the statements of THIS body before the call
+    /// already wrote: a local write means the reaching definition is local, and
+    /// recovering it is the ordinary backward scan's job, not this one.
+    ///
+    /// The last resort — this function's own untouched live-in register —
+    /// additionally requires that the slot really carries a parameter.
+    /// `param_slots` is the same guard the direct-callee fallback uses, and for
+    /// the same reason: without it the recovery names an incoming register that
+    /// nothing ever defines.
+    fn reaching_value(
+        &self,
+        slot: usize,
+        blocked_here: &[bool],
+        param_slots: &std::collections::HashSet<usize>,
+    ) -> Option<Expr> {
+        if blocked_here.get(slot).copied().unwrap_or(true) {
+            return None;
+        }
+        if let Some(override_value) = self.overrides.get(slot).and_then(Clone::clone) {
+            return Some(override_value);
+        }
+        if let Some(reaching) = self.reaching.get(slot).and_then(Clone::clone) {
+            return Some(reaching);
+        }
+        (param_slots.contains(&slot) && self.entry_value_reaches(slot))
+            .then(|| self.live_ins.get(slot).and_then(Clone::clone))
+            .flatten()
+    }
+
     /// Does this function's ENTRY value for `slot` still reach a call in the
     /// body being folded?
     ///
@@ -955,6 +1071,7 @@ impl EnclosingSlots {
             blocked: self.blocked.clone(),
             live_ins: self.live_ins.clone(),
             entry_constant: self.entry_constant.clone(),
+            reaching: self.reaching.clone(),
         }
     }
 }
@@ -1113,11 +1230,24 @@ fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [
     }
 }
 
+/// The callee storage facts argument reconstruction may consult.
+///
+/// `direct` is keyed by a direct call target VA. `table_entry` is keyed by the
+/// VA of an entry of a relocation-proven function-pointer table, and is
+/// deliberately a SEPARATE map: a table entry is not a direct call target of
+/// this caller, so nothing that resolves a direct target can accidentally read
+/// it, and populating it cannot change any existing recovery.
+#[derive(Clone, Copy)]
+pub struct CalleeLayouts<'facts> {
+    direct: &'facts std::collections::HashMap<u64, Vec<VReg>>,
+    table_entry: &'facts std::collections::HashMap<u64, Vec<VReg>>,
+}
+
 fn fold_body(
     body: &mut Vec<Stmt>,
     arch: CallConv,
     param_slots: &mut std::collections::HashSet<usize>,
-    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    callee_layouts: CalleeLayouts<'_>,
     function_live_ins: &[Option<Expr>],
 ) {
     let entry_constant = entry_constant_slots(body, arch);
@@ -1129,18 +1259,21 @@ fn fold_body_with_context(
     body: &mut Vec<Stmt>,
     arch: CallConv,
     param_slots: &mut std::collections::HashSet<usize>,
-    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    callee_layouts: CalleeLayouts<'_>,
     enclosing: &EnclosingSlots,
 ) {
     // Recurse into nested bodies first so we don't miss calls inside arms.
     // `running` is the enclosing clobber mask at each position, accumulated in
-    // one forward walk rather than rescanned per statement.
+    // one forward walk rather than rescanned per statement. `reaching` is the
+    // matching per-slot definition, accumulated by the same walk.
     let mut running = enclosing.blocked.clone();
     running.resize(arg_slots(arch).len(), false);
+    let mut reaching = enclosing.reaching.clone();
+    reaching.resize(arg_slots(arch).len(), None);
     for index in 0..body.len() {
         let (prefix, suffix) = body.split_at_mut(index);
         let s = &mut suffix[0];
-        let nested = enclosing.with_blocked(running.clone());
+        let nested = enclosing.with_blocked(running.clone(), reaching.clone());
         match s {
             Stmt::If {
                 then_body,
@@ -1156,10 +1289,14 @@ fn fold_body_with_context(
                 // A loop's own carried inputs are `loop_carried_arg_inputs`'
                 // business; only the path INTO the loop is inherited here.
                 let loop_inputs = loop_carried_arg_inputs(prefix, body, arch, &enclosing.overrides);
-                let nested = nested.with_overrides(loop_inputs);
+                let nested = enclosing
+                    .with_blocked(running.clone(), loop_body_reaching(&reaching, body, arch))
+                    .with_overrides(loop_inputs);
                 fold_body_with_context(body, arch, param_slots, callee_layouts, &nested)
             }
             Stmt::For { body, .. } => {
+                let nested = enclosing
+                    .with_blocked(running.clone(), loop_body_reaching(&reaching, body, arch));
                 fold_body_with_context(body, arch, param_slots, callee_layouts, &nested)
             }
             Stmt::Switch { cases, default, .. } => {
@@ -1173,6 +1310,7 @@ fn fold_body_with_context(
             _ => {}
         }
         EnclosingSlots::advance(&mut running, &suffix[0], arch);
+        EnclosingSlots::advance_reaching(&mut reaching, &suffix[0], arch);
     }
 
     // Find calls and walk backward from each to collect args.
@@ -1194,6 +1332,29 @@ fn fold_body_with_context(
     for call_idx in call_positions {
         fold_one_call(body, call_idx, arch, param_slots, callee_layouts, enclosing);
     }
+}
+
+/// The reaching definitions of the path into a loop that survive INSIDE it.
+///
+/// A definition made before the loop still reaches every point of the body only
+/// when the body itself never writes that slot: otherwise the back edge carries
+/// a different value round and the pre-loop name is stale. `mark_slot_writes_everywhere`
+/// ignores control flow deliberately, so a write on any path at any depth
+/// clears the slot.
+fn loop_body_reaching(
+    incoming: &[Option<Expr>],
+    loop_body: &[Stmt],
+    arch: CallConv,
+) -> Vec<Option<Expr>> {
+    let mut written = vec![false; incoming.len()];
+    for statement in loop_body {
+        mark_slot_writes_everywhere(statement, arch, &mut written);
+    }
+    incoming
+        .iter()
+        .zip(written)
+        .map(|(reaching, written)| if written { None } else { reaching.clone() })
+        .collect()
 }
 
 /// Recover the value entering an ABI slot at the top of a structured loop.
@@ -1247,6 +1408,128 @@ fn direct_call_target_va(statement: &Stmt) -> Option<u64> {
         } => Some(*va),
         _ => None,
     }
+}
+
+/// The entry VAs of the relocation-proven function-pointer table this call
+/// dispatches through, if it dispatches through one.
+///
+/// `function_tables::resolve_function_table_entries` has already replaced the
+/// pointer-sized load with an [`Expr::FunctionTableEntry`] carrying the complete
+/// target list, and it only does so when a real defined data symbol has an exact
+/// relocation for EVERY slot resolving to an exact defined function symbol. The
+/// completeness of that list is what makes a union over it sound; a partially
+/// recovered table would not be a proof about the call at all.
+fn table_call_target_vas(statement: &Stmt) -> Option<Vec<u64>> {
+    fn entry_targets(expression: &Expr) -> Option<Vec<u64>> {
+        match expression {
+            Expr::FunctionTableEntry { targets, .. } => {
+                Some(targets.iter().map(|target| target.va).collect())
+            }
+            // The lowered target may be wrapped in a width cast or a pointer
+            // conversion; neither changes which entry is selected.
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => entry_targets(expr),
+            _ => None,
+        }
+    }
+    match statement {
+        Stmt::Call { target, .. } => entry_targets(target),
+        _ => None,
+    }
+}
+
+/// The ABI argument registers a call through a proven function-pointer table
+/// MAY read: the union over every entry's recovered parameter storage.
+///
+/// This is the whole reason the direct-call recovery does not generalise. A
+/// direct call has one callee, so its recovered layout is an exact read set. An
+/// indirect call has no callee to ask — but a call through a proven table has a
+/// complete set of them, and the machine may transfer to any one. Passing the
+/// registers of the widest entry is therefore the safe direction: an entry that
+/// reads fewer of them is unaffected by the extra ones being live, while
+/// passing fewer than some entry reads deletes an argument that entry consumes,
+/// which is a silent wrong-code bug of exactly the kind
+/// `docs/design/table-dispatch-arguments-2026-08-12.md` records.
+///
+/// It fails closed on everything it cannot prove:
+///
+/// * an entry whose parameter storage was not recovered leaves the union
+///   unknown — one unanalysed entry could read anything;
+/// * the layouts must nest: each must be a prefix of the widest one under the
+///   convention's own allocation order. Two entries that disagree about which
+///   register holds parameter *n* have no common reading, and inventing one
+///   would name storage some entry never reads; and
+/// * the union must itself be a valid ABI allocation prefix.
+fn table_call_may_use_layout(
+    statement: &Stmt,
+    arch: CallConv,
+    table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+) -> Option<Vec<VReg>> {
+    let targets = table_call_target_vas(statement)?;
+    if targets.is_empty() {
+        return None;
+    }
+    let layouts = targets
+        .iter()
+        .map(|target| table_entry_layouts.get(target))
+        .collect::<Option<Vec<_>>>()?;
+    let widest = layouts.iter().copied().max_by_key(|layout| layout.len())?;
+    if widest.is_empty() || !layout_matches_abi_allocation_order(arch, widest) {
+        return None;
+    }
+    layouts
+        .iter()
+        .all(|layout| widest.starts_with(layout))
+        .then(|| widest.clone())
+}
+
+/// Apply a proven table call's may-use set as the call's arguments.
+///
+/// Two ways to reach the values, in decreasing order of locality:
+///
+/// 1. the adjacent setup assignments, folded by `fold_one_recovered_layout_call`
+///    exactly as for a locked direct callee; or
+/// 2. the proven reaching definition of each slot, which is what an optimized
+///    dispatcher needs — `-O2` shuffles the caller's own incoming registers into
+///    place before a bounds check and calls from inside the guarded arm, so the
+///    setup is in an enclosing scope and there is nothing adjacent to fold.
+///
+/// It is all-or-nothing. ABI arguments are a contiguous prefix, so a partially
+/// proven union would silently drop the slots it could not name. Declining
+/// leaves the ordinary backward scan's result untouched, which is the previous
+/// behavior.
+fn fold_one_table_call(
+    body: &mut Vec<Stmt>,
+    call_idx: usize,
+    arch: CallConv,
+    layout: &[VReg],
+    param_slots: &std::collections::HashSet<usize>,
+    enclosing: &EnclosingSlots,
+) -> bool {
+    if fold_one_recovered_layout_call(body, call_idx, layout) {
+        return true;
+    }
+    let mut blocked_here = vec![false; arg_slots(arch).len()];
+    for statement in &body[..call_idx] {
+        mark_arg_writes_in_stmt(statement, arch, &mut blocked_here);
+    }
+    let Some(arguments) = layout
+        .iter()
+        .map(|storage| {
+            let VReg::Phys(name) = storage else {
+                return None;
+            };
+            let slot = crate::ir::abi::argument_slot_of(arch, name)?;
+            enclosing.reaching_value(slot, &blocked_here, param_slots)
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+        *args = arguments;
+        return true;
+    }
+    false
 }
 
 /// Exact core-register arity of a fixed AAPCS32 library call.
@@ -1652,13 +1935,26 @@ fn fold_one_call(
     call_idx: usize,
     arch: CallConv,
     param_slots: &mut std::collections::HashSet<usize>,
-    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    callee_layouts: CalleeLayouts<'_>,
     enclosing: &EnclosingSlots,
 ) {
     let incoming_overrides = enclosing.overrides.as_slice();
     if arch == CallConv::Cdecl32 {
         fold_one_cdecl32_call(body, call_idx);
         return;
+    }
+    // Before any register-liveness recovery: a call through a proven
+    // function-pointer table has a complete callee set, so its ABI may-use
+    // registers are known even though its target is not. Recovering them here
+    // means the setup is READ, and therefore survives every later dead-store
+    // and dead-copy pass on its own — rather than being reintroduced afterwards
+    // as register names that no longer denote the values they held.
+    if let Some(layout) =
+        table_call_may_use_layout(&body[call_idx], arch, callee_layouts.table_entry)
+    {
+        if fold_one_table_call(body, call_idx, arch, &layout, param_slots, enclosing) {
+            return;
+        }
     }
     let known_arm_hard_float_layout = (arch == CallConv::ArmHardFloat)
         .then(|| known_arm_hard_float_layout(&body[call_idx]))
@@ -1674,7 +1970,7 @@ fn fold_one_call(
         return;
     }
     let recovered_layout = direct_call_target_va(&body[call_idx])
-        .and_then(|target| callee_layouts.get(&target))
+        .and_then(|target| callee_layouts.direct.get(&target))
         .filter(|layout| layout_matches_abi_allocation_order(arch, layout));
     let aapcs_stack = matches!(arch, CallConv::Arm | CallConv::ArmHardFloat)
         .then(|| {
@@ -7830,5 +8126,313 @@ mod tests {
                 .any(|a| matches!(a, Expr::Reg(VReg::Phys(n)) if ssa_base(n) == "rcx")),
             "the backfill must not fire on a value-numbered body: {args:?}"
         );
+    }
+
+    // --- proven function-pointer-table may-uses ------------------------------
+
+    /// The five entries of `95_function_pointer_table`'s `OPERATIONS`, all with
+    /// the same two-integer layout, and one caller-side deviation per test.
+    fn table_call(entry_vas: &[u64]) -> Stmt {
+        Stmt::Call {
+            target: Expr::FunctionTableEntry {
+                table_va: 0x3e60,
+                table_name: "OPERATIONS".into(),
+                pointer_size: 8,
+                index: Box::new(Expr::Reg(reg("rax#1"))),
+                targets: entry_vas
+                    .iter()
+                    .map(|va| crate::ir::ast::FunctionTableTarget {
+                        va: *va,
+                        name: format!("op_{va:x}"),
+                    })
+                    .collect(),
+            },
+            args: vec![],
+            dst: None,
+            call_spec: None,
+        }
+    }
+
+    fn layouts(entries: &[(u64, &[&str])]) -> std::collections::HashMap<u64, Vec<VReg>> {
+        entries
+            .iter()
+            .map(|(va, storage)| (*va, storage.iter().map(|name| reg(name)).collect()))
+            .collect()
+    }
+
+    /// The exact `dispatch_operation:gcc:O2` shape: the incoming arguments are
+    /// shuffled into place BEFORE the bounds check, and the call happens inside
+    /// the guarded arm. Nothing adjacent to the call sets anything up, so the
+    /// answer has to come from the enclosing scope's reaching definitions.
+    fn guarded_table_dispatch(entry_vas: &[u64]) -> Function {
+        Function {
+            name: "dispatch_operation".into(),
+            entry_va: 0x1150,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax#1"),
+                    src: Expr::Reg(reg("rdi")),
+                },
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Reg(reg("rsi")),
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Reg(reg("rdx")),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("t0")),
+                    then_body: vec![
+                        table_call(entry_vas),
+                        Stmt::Return {
+                            value: Some(Expr::Reg(reg("rax"))),
+                        },
+                    ],
+                    else_body: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(-1)),
+                },
+            ],
+        }
+    }
+
+    fn recovered_table_args(f: &Function) -> Vec<Expr> {
+        fn find(body: &[Stmt]) -> Option<Vec<Expr>> {
+            for statement in body {
+                match statement {
+                    Stmt::Call {
+                        target: Expr::FunctionTableEntry { .. },
+                        args,
+                        ..
+                    } => return Some(args.clone()),
+                    Stmt::If {
+                        then_body,
+                        else_body,
+                        ..
+                    } => {
+                        if let Some(found) =
+                            find(then_body).or_else(|| else_body.as_deref().and_then(find))
+                        {
+                            return Some(found);
+                        }
+                    }
+                    Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                        if let Some(found) = find(body) {
+                            return Some(found);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        find(&f.body).expect("the table call must survive")
+    }
+
+    fn reconstruct_with_table(
+        f: &mut Function,
+        table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    ) {
+        reconstruct_args_with_layouts(
+            f,
+            CallConv::SysVAmd64,
+            &mut [0usize, 1, 2].into_iter().collect(),
+            &std::collections::HashMap::new(),
+            table_entry_layouts,
+        );
+    }
+
+    /// A call through a proven table has no callee to ask for a layout, which is
+    /// why the direct-call recovery does not generalise to it. It does have a
+    /// complete callee SET, and every member here reads `rdi`/`rsi` — so the
+    /// call reads the values those registers hold at the call, which are the
+    /// enclosing scope's `rdi#1` and `rsi#1`, NOT this function's own `arg0`.
+    #[test]
+    fn a_proven_table_call_reads_the_enclosing_reaching_definitions() {
+        let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        reconstruct_with_table(
+            &mut f,
+            &layouts(&[(0x1100, &["rdi", "rsi"]), (0x1110, &["rdi", "rsi"])]),
+        );
+        assert_eq!(
+            recovered_table_args(&f),
+            vec![Expr::Reg(reg("rdi#1")), Expr::Reg(reg("rsi#1"))],
+            "the shuffled values, not the function's own entry registers"
+        );
+    }
+
+    /// The may-use direction. One entry reads two registers and the other reads
+    /// one; the machine may transfer to either, so the union is the WIDER set.
+    /// Taking the narrower one would delete the setup of a register an entry
+    /// really reads, which is the silent wrong-code direction.
+    #[test]
+    fn the_table_may_use_set_is_the_widest_entry_not_the_narrowest() {
+        let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        reconstruct_with_table(
+            &mut f,
+            &layouts(&[(0x1100, &["rdi"]), (0x1110, &["rdi", "rsi"])]),
+        );
+        assert_eq!(
+            recovered_table_args(&f),
+            vec![Expr::Reg(reg("rdi#1")), Expr::Reg(reg("rsi#1"))],
+        );
+    }
+
+    /// NEGATIVE CONTROL. One unanalysed entry could read anything, so the union
+    /// over the set is unknown and the call keeps whatever the ordinary backward
+    /// scan found — here, nothing.
+    #[test]
+    fn a_table_entry_with_no_recovered_layout_leaves_the_call_alone() {
+        let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        reconstruct_with_table(&mut f, &layouts(&[(0x1100, &["rdi", "rsi"])]));
+        assert!(
+            recovered_table_args(&f).is_empty(),
+            "an incomplete callee set is not a proof about the call"
+        );
+    }
+
+    /// NEGATIVE CONTROL. Two entries that disagree about which register holds a
+    /// parameter have no common reading. Passing `rdi, rsi` would name storage
+    /// the second entry never reads as its first parameter.
+    #[test]
+    fn disagreeing_table_entry_layouts_are_not_unioned() {
+        let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        reconstruct_with_table(
+            &mut f,
+            &layouts(&[(0x1100, &["rdi", "rsi"]), (0x1110, &["rsi"])]),
+        );
+        assert!(recovered_table_args(&f).is_empty());
+    }
+
+    /// NEGATIVE CONTROL, and the exact bug that got the 2026-08-12 table-layout
+    /// patch reverted: an UNVERSIONED architectural name is one storage with many
+    /// definitions. Naming `rdi` at the call would render as this function's own
+    /// `arg0` while the register actually holds the shuffled second parameter.
+    #[test]
+    fn an_unversioned_enclosing_definition_is_never_named_at_a_table_call() {
+        let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        for statement in &mut f.body {
+            if let Stmt::Assign { dst, .. } = statement {
+                if let VReg::Phys(name) = dst {
+                    *name = ssa_base(name).to_string();
+                }
+            }
+        }
+        reconstruct_with_table(
+            &mut f,
+            &layouts(&[(0x1100, &["rdi", "rsi"]), (0x1110, &["rdi", "rsi"])]),
+        );
+        assert!(recovered_table_args(&f).is_empty());
+    }
+
+    /// NEGATIVE CONTROL. Every ABI argument register is caller-clobbered, so an
+    /// intervening call destroys the reaching definition even though the
+    /// statement that produced it is still visible above it.
+    #[test]
+    fn a_call_between_the_setup_and_a_table_call_clobbers_the_slot() {
+        let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        f.body.insert(3, call_to("side_effect"));
+        reconstruct_with_table(
+            &mut f,
+            &layouts(&[(0x1100, &["rdi", "rsi"]), (0x1110, &["rdi", "rsi"])]),
+        );
+        assert!(recovered_table_args(&f).is_empty());
+    }
+
+    /// A dispatch loop whose accumulator lives in an argument register. The
+    /// back edge writes the SAME value-numbered name the pre-loop initializer
+    /// wrote, so that name is exactly what reaches the call on every iteration —
+    /// this is `loop_carried_arg_inputs`' existing proof, and the may-use path
+    /// must defer to it rather than to the stale pre-loop definition.
+    fn table_dispatch_loop(update: &str) -> Function {
+        Function {
+            name: "fold_operations".into(),
+            entry_va: 0x1120,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Reg(reg("rsi")),
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Reg(reg("rdx")),
+                },
+                Stmt::While {
+                    cond: Expr::Reg(reg("t0")),
+                    body: vec![
+                        table_call(&[0x1100, 0x1110]),
+                        Stmt::Assign {
+                            dst: reg(update),
+                            src: Expr::Reg(reg("rax")),
+                        },
+                    ],
+                },
+                Stmt::Return { value: None },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_table_call_in_a_loop_reads_the_loop_carried_definition() {
+        let mut f = table_dispatch_loop("rsi#1");
+        reconstruct_with_table(
+            &mut f,
+            &layouts(&[(0x1100, &["rdi", "rsi"]), (0x1110, &["rdi", "rsi"])]),
+        );
+        assert_eq!(
+            recovered_table_args(&f),
+            vec![Expr::Reg(reg("rdi#1")), Expr::Reg(reg("rsi#1"))],
+        );
+    }
+
+    /// NEGATIVE CONTROL. Same loop, but the back edge writes a DIFFERENT name.
+    /// Nothing then proves what the second iteration finds in `rsi`, so the
+    /// pre-loop definition is stale and the whole argument list is refused
+    /// rather than half of it being invented.
+    #[test]
+    fn a_loop_that_rewrites_the_slot_under_a_new_name_declines() {
+        let mut f = table_dispatch_loop("rsi#2");
+        reconstruct_with_table(
+            &mut f,
+            &layouts(&[(0x1100, &["rdi", "rsi"]), (0x1110, &["rdi", "rsi"])]),
+        );
+        assert!(
+            recovered_table_args(&f).is_empty(),
+            "the loop rewrites the slot and nothing proves the carried value"
+        );
+    }
+
+    /// NEGATIVE CONTROL. An indirect call that is NOT through a proven table has
+    /// no callee set at all, so nothing here fires and the ordinary recovery is
+    /// untouched.
+    #[test]
+    fn an_indirect_call_that_is_not_a_proven_table_gains_nothing() {
+        let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        if let Some(Stmt::If { then_body, .. }) = f.body.get_mut(3) {
+            then_body[0] = Stmt::Call {
+                target: Expr::Reg(reg("rax#2")),
+                args: vec![],
+                dst: None,
+                call_spec: None,
+            };
+        }
+        reconstruct_with_table(
+            &mut f,
+            &layouts(&[(0x1100, &["rdi", "rsi"]), (0x1110, &["rdi", "rsi"])]),
+        );
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::If { then_body, .. } => match &then_body[0] {
+                    Stmt::Call { args, .. } => Some(args.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert!(args.is_empty());
     }
 }

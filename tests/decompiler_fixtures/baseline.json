@@ -1640,7 +1640,7 @@
   },
   "145_control_flow_flattening:clang:O2": {
     "flattened_accumulate": "pass",
-    "flattened_classify": "fail",
+    "flattened_classify": "pass",
     "flattened_gcd": "pass",
     "flattened_search": "pass"
   },
@@ -2499,7 +2499,7 @@
     "dot_product_f64": "pass",
     "matrix2_determinant": "fail",
     "matrix2_multiply": "fail",
-    "scale_series_f32": "fail",
+    "scale_series_f32": "pass",
     "sum_of_squares_f32": "pass"
   },
   "175_float_matrix_kernel:clang:O2": {
@@ -2515,7 +2515,7 @@
     "dot_product_f64": "pass",
     "matrix2_determinant": "pass",
     "matrix2_multiply": "fail",
-    "scale_series_f32": "fail",
+    "scale_series_f32": "pass",
     "sum_of_squares_f32": "pass"
   },
   "175_float_matrix_kernel:gcc:O2": {
@@ -2656,12 +2656,12 @@
     "divide_signed_shorts": "pass",
     "divide_unsigned_bytes": "pass",
     "divide_unsigned_shorts": "pass",
-    "remainder_signed_bytes": "fail",
-    "remainder_signed_shorts": "fail"
+    "remainder_signed_bytes": "pass",
+    "remainder_signed_shorts": "pass"
   },
   "185_subword_signed_division:clang:O2": {
     "divide_short_by_seven": "pass",
-    "divide_signed_bytes": "fail",
+    "divide_signed_bytes": "pass",
     "divide_signed_shorts": "pass",
     "divide_unsigned_bytes": "fail",
     "divide_unsigned_shorts": "fail",
@@ -2809,6 +2809,58 @@
   "18_binary_heap:gcc:O2": {
     "heap_pop": "pass",
     "heap_push": "pass"
+  },
+  "190_dual_role_products:clang:O0": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:clang:O2": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "fail",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:gcc:O0": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:gcc:O2": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "fail",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "191_indirect_table_args:clang:O0": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
+  },
+  "191_indirect_table_args:clang:O2": {
+    "t191_computed_args": "fail",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "fail",
+    "t191_fold": "fail"
+  },
+  "191_indirect_table_args:gcc:O0": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
+  },
+  "191_indirect_table_args:gcc:O2": {
+    "t191_computed_args": "fail",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "fail",
+    "t191_fold": "fail"
   },
   "19_disjoint_set:clang:O0": {
     "dsu_find": "pass",
@@ -3167,7 +3219,7 @@
     "rle_encode": "pass"
   },
   "45_string_algorithms:clang:O0": {
-    "format_decimal": "fail",
+    "format_decimal": "pass",
     "is_palindrome": "pass",
     "parse_decimal": "pass"
   },
@@ -4067,7 +4119,7 @@
     "fold_operations": "pass"
   },
   "95_function_pointer_table:gcc:O2": {
-    "dispatch_operation": "fail",
+    "dispatch_operation": "pass",
     "fold_operations": "fail"
   },
   "96_integer_promotion:clang:O0": {

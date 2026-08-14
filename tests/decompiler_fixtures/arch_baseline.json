@@ -5097,7 +5097,7 @@
   "148_dispatch_obfuscation:x86_64_gcc15:O2": {
     "chained_table_walk": "fail",
     "computed_index_dispatch": "pass",
-    "obfuscated_dispatch": "fail",
+    "obfuscated_dispatch": "pass",
     "permuted_switch": "fail"
   },
   "149_mba_expressions:aarch64:O0": {
@@ -6981,7 +6981,7 @@
     "dot_product_f64": "pass",
     "matrix2_determinant": "pass",
     "matrix2_multiply": "fail",
-    "scale_series_f32": "fail",
+    "scale_series_f32": "pass",
     "sum_of_squares_f32": "pass"
   },
   "175_float_matrix_kernel:x86_64:O2": {
@@ -6997,7 +6997,7 @@
     "dot_product_f64": "pass",
     "matrix2_determinant": "pass",
     "matrix2_multiply": "fail",
-    "scale_series_f32": "fail",
+    "scale_series_f32": "pass",
     "sum_of_squares_f32": "pass"
   },
   "175_float_matrix_kernel:x86_64_gcc15:O2": {
@@ -7859,6 +7859,162 @@
   "18_binary_heap:x86_64_gcc15:O2": {
     "heap_pop": "pass",
     "heap_push": "pass"
+  },
+  "190_dual_role_products:aarch64:O0": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:aarch64:O2": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "fail",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:armv7:O0": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "fail"
+  },
+  "190_dual_role_products:armv7:O2": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "fail"
+  },
+  "190_dual_role_products:armv7_a32:O0": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "fail"
+  },
+  "190_dual_role_products:armv7_a32:O2": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "fail"
+  },
+  "190_dual_role_products:i386:O0": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:i386:O2": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:x86_64:O0": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:x86_64:O2": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "fail",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:x86_64_gcc15:O0": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "pass",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "190_dual_role_products:x86_64_gcc15:O2": {
+    "dp190_div_and_rem": "pass",
+    "dp190_mul_both_halves": "fail",
+    "dp190_pair_across_join": "pass",
+    "dp190_quotient_only": "pass",
+    "dp190_sdiv_and_rem": "pass"
+  },
+  "191_indirect_table_args:aarch64:O0": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
+  },
+  "191_indirect_table_args:aarch64:O2": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "fail",
+    "t191_fold": "fail"
+  },
+  "191_indirect_table_args:armv7:O0": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "pass",
+    "t191_fold": "fail"
+  },
+  "191_indirect_table_args:armv7:O2": {
+    "t191_computed_args": "fail",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "fail",
+    "t191_fold": "fail"
+  },
+  "191_indirect_table_args:armv7_a32:O0": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
+  },
+  "191_indirect_table_args:armv7_a32:O2": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "fail",
+    "t191_fold": "fail"
+  },
+  "191_indirect_table_args:i386:O0": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
+  },
+  "191_indirect_table_args:i386:O2": {
+    "t191_computed_args": "fail",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "fail",
+    "t191_fold": "fail"
+  },
+  "191_indirect_table_args:x86_64:O0": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
+  },
+  "191_indirect_table_args:x86_64:O2": {
+    "t191_computed_args": "fail",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "fail",
+    "t191_fold": "fail"
+  },
+  "191_indirect_table_args:x86_64_gcc15:O0": {
+    "t191_computed_args": "pass",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
+  },
+  "191_indirect_table_args:x86_64_gcc15:O2": {
+    "t191_computed_args": "fail",
+    "t191_direct_control": "pass",
+    "t191_dispatch": "fail",
+    "t191_fold": "fail"
   },
   "19_disjoint_set:aarch64:O0": {
     "dsu_find": "pass",
@@ -11629,7 +11785,7 @@
     "fold_operations": "pass"
   },
   "95_function_pointer_table:x86_64:O2": {
-    "dispatch_operation": "fail",
+    "dispatch_operation": "pass",
     "fold_operations": "fail"
   },
   "95_function_pointer_table:x86_64_gcc15:O0": {

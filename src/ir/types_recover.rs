@@ -19,7 +19,7 @@
 //! keeps it cheap and composable. Passes that need SSA precision can
 //! consume [`crate::ir::ssa::SsaInfo`] and re-run on a per-version basis.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::ir::ssa::{SsaInfo, SsaValue};
 use crate::ir::types::{BinOp, LlirFunction, MemOp, Op, VReg, Value};
@@ -518,6 +518,17 @@ pub struct RecoveredPrototype {
     result: Option<RecoveredResult>,
     output_kind: RecoveredOutputKind,
     output_locked: bool,
+    /// Float-bank slot -> the EXACT register spelling this function's machine
+    /// code reads that storage under.
+    ///
+    /// Evidence, not a parameter list: a mixed integer/float signature whose
+    /// source order cannot be proven keeps only its integer parameters (see
+    /// `recover_prototype_with_arm_vfp_args`), and dropping the float bank's
+    /// observed spelling with it is what left a declared `float` bound to a
+    /// name the body never mentions. A declaration says WHICH ABI register a
+    /// parameter occupies; only the body says which of that register's SSA
+    /// identities (`xmm0` or its dword lane `xmm0_d0`) actually carries it.
+    observed_float_storage: BTreeMap<usize, VReg>,
 }
 
 /// Source-ordered storage for a locked scalar AAPCS declaration.
@@ -581,6 +592,107 @@ fn locked_aapcs_parameter_storage(
             }
         })
         .collect()
+}
+
+/// Source-ordered storage for a locked scalar System V AMD64 declaration, or
+/// `None` when this model cannot represent the signature exactly.
+///
+/// SysV allocates the INTEGER and SSE classes from two INDEPENDENT counters, so
+/// `f(int a, float b, int c, float d)` puts `a` in `rdi`, `c` in `rsi`, `b` in
+/// `xmm0` and `d` in `xmm1`. Source position is not the register index in
+/// either bank. Without this projection, `apply_locked_parameters` falls back to
+/// `abi::argument_registers(cc)[source_slot]` — a flat positional table that has
+/// only the integer bank in it — and every `float` parameter is bound to the
+/// integer register at its source position. `174_float_compare_classify::
+/// sign_bit_of_binary32` recovered `Phys("rdi")` with `hint: Float { width: 4 }`
+/// for a function whose whole body is `movd eax, xmm0; shr eax, 31`.
+///
+/// AGGREGATES FAIL CLOSED, and that is a decision rather than an omission. SysV
+/// classifies each EIGHTBYTE of a struct independently, so
+/// `struct { long a; double b; }` occupies `rdi` AND `xmm0` — one source
+/// parameter drawing one slot from each bank. Two scalar counters cannot
+/// express that. Every aggregate, `long double`, and vector type arrives here as
+/// `None`, because `dwarf_return_hint_with_env` translates only the scalar
+/// spellings the renderer can write exactly, and ONE `None` declines the WHOLE
+/// signature: each parameter's bank index depends on the class of every
+/// parameter before it, so a single unclassifiable one makes the rest guesses.
+/// Declining returns the caller to its pre-existing positional behaviour, which
+/// is wrong for floats but no more wrong than it already was — and never
+/// silently splits an aggregate across the wrong two registers.
+fn locked_sysv_amd64_parameter_storage(
+    cc: crate::ir::call_args::CallConv,
+    declared: &[Option<TypeHint>],
+) -> Option<Vec<VReg>> {
+    let integer_bank = crate::ir::abi::argument_registers(cc);
+    let sse_bank = crate::ir::abi::sse_argument_registers(cc);
+    let mut integer_slot = 0usize;
+    let mut sse_slot = 0usize;
+    declared
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(source_slot, hint)| {
+            // A parameter beyond its bank is passed in memory. Keep the
+            // canonical `argN` role so stack recovery can attach the concrete
+            // value later, and — this is the part that matters — do NOT let it
+            // consume a register from the other bank.
+            let spill = || VReg::phys(format!("arg{source_slot}"));
+            match hint? {
+                // Both `float` and `double` occupy one whole SSE register.
+                TypeHint::Float { width: 4 | 8 } => {
+                    let storage = sse_bank
+                        .get(sse_slot)
+                        .map_or_else(spill, |register| VReg::phys(*register));
+                    sse_slot += 1;
+                    Some(storage)
+                }
+                // `long double` is x87 and MEMORY-class under SysV; a wider
+                // "float" is a vector type that starts a different sequence.
+                // Neither is this model's to place.
+                TypeHint::Float { .. } => None,
+                // An integer wider than one eightbyte is itself a two-register
+                // allocation, the same shape as an aggregate.
+                TypeHint::Int { width, .. } if width > 8 => None,
+                TypeHint::Int { .. }
+                | TypeHint::BoolLike
+                | TypeHint::Pointer { .. }
+                | TypeHint::CodePointer => {
+                    let storage = integer_bank
+                        .get(integer_slot)
+                        .map_or_else(spill, |register| VReg::phys(*register));
+                    integer_slot += 1;
+                    Some(storage)
+                }
+            }
+        })
+        .collect()
+}
+
+/// Whether recovered storage denotes the ABI location a declaration asks for.
+///
+/// With no declared storage this is unconditionally true: conventions without a
+/// class-aware projection keep their machine-recovered parameter exactly as
+/// before. With one, a dword LANE counts as its parent. A scalar 32-bit
+/// transfer (`movd eax, xmm0`) reads `xmm0_d0`, `regview::ssa_parent`
+/// deliberately declines to merge that name with `xmm0`, and yet they are the
+/// same bits of the same ABI register. Rejecting the lane would replace the
+/// recovered parameter with a canonical `xmm0` the body never reads — trading
+/// one undefined value for another, which is the AArch64 `d0`-versus-`s0`
+/// problem wearing x86-64 spelling.
+fn storage_denotes_declared_location(
+    cc: crate::ir::call_args::CallConv,
+    actual: &VReg,
+    expected: Option<&VReg>,
+) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    match (actual, expected) {
+        (VReg::Phys(actual), VReg::Phys(expected)) => {
+            crate::ir::abi::touches_storage(cc, actual, expected)
+        }
+        _ => actual == expected,
+    }
 }
 
 impl RecoveredPrototype {
@@ -709,10 +821,14 @@ impl RecoveredPrototype {
         cc: crate::ir::call_args::CallConv,
         declared: &[Option<TypeHint>],
     ) {
+        // BTreeMap rather than HashMap: the recovered-spelling search below
+        // scans every prior parameter, and a HashMap's iteration order is not
+        // reproducible between runs. A prototype that differs run to run is the
+        // determinism failure Entry 20 exists to prevent.
         let prior = std::mem::take(&mut self.parameters)
             .into_iter()
             .map(|parameter| (parameter.slot, parameter))
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
         let abi_registers = crate::ir::abi::argument_registers(cc);
         // AAPCS-VFP has independent core and VFP allocation banks. A heuristic
         // live-in `sN` is useful while the source type is unknown, but it
@@ -725,6 +841,16 @@ impl RecoveredPrototype {
             crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat
         )
         .then(|| locked_aapcs_parameter_storage(cc, declared));
+        // x86-64 SysV has the same two-independent-banks shape, with the same
+        // consequence when it is missing: the positional fallback below reaches
+        // into `argument_registers`, which holds only the INTEGER bank, and
+        // hands a `float` parameter the integer register at its source
+        // position. Unlike the AAPCS projection this one may DECLINE (see
+        // `locked_sysv_amd64_parameter_storage`); declining leaves the
+        // pre-existing positional behaviour exactly as it was.
+        let sysv_storage = (cc == crate::ir::call_args::CallConv::SysVAmd64)
+            .then(|| locked_sysv_amd64_parameter_storage(cc, declared))
+            .flatten();
         self.parameters = declared
             .iter()
             .copied()
@@ -732,23 +858,59 @@ impl RecoveredPrototype {
             .map(|(slot, declared_hint)| {
                 let declared_storage = aapcs_storage
                     .as_ref()
+                    .or(sysv_storage.as_ref())
                     .and_then(|storage| storage.get(slot))
                     .cloned();
                 if let Some(mut parameter) = prior.get(&slot).cloned() {
-                    let storage_matches = declared_storage.as_ref().is_none_or(|expected| {
-                        match (&parameter.value.base, expected) {
-                            (VReg::Phys(actual), VReg::Phys(expected)) => {
-                                crate::ir::abi::ssa_base(actual)
-                                    == crate::ir::abi::ssa_base(expected)
-                            }
-                            _ => parameter.value.base == *expected,
-                        }
-                    });
-                    if storage_matches {
+                    if storage_denotes_declared_location(
+                        cc,
+                        &parameter.value.base,
+                        declared_storage.as_ref(),
+                    ) {
                         if declared_hint.is_some() {
                             parameter.hint = declared_hint;
                         }
                         return parameter;
+                    }
+                }
+                // The declaration named an ABI register; the machine code may
+                // have been recovered as reading it under a different SSA
+                // identity, and filed at a different heuristic slot. Prefer the
+                // observed identity over the canonical name — a parameter bound
+                // to `xmm0` in a body that only ever reads `xmm0_d0` is an
+                // undefined value with a tidier name.
+                if let Some(expected) = declared_storage.as_ref() {
+                    // A parameter recovered at some other heuristic slot first:
+                    // it carries a real SSA version as well as a spelling.
+                    let recovered = prior
+                        .values()
+                        .find(|parameter| {
+                            storage_denotes_declared_location(
+                                cc,
+                                &parameter.value.base,
+                                Some(expected),
+                            )
+                        })
+                        .map(|parameter| parameter.value.clone())
+                        // Otherwise the float-bank live-in scan's evidence,
+                        // which survives even when a mixed signature's source
+                        // order could not be proven and its float parameters
+                        // were dropped. Entry storage is version zero.
+                        .or_else(|| {
+                            self.observed_float_storage
+                                .values()
+                                .find(|storage| {
+                                    storage_denotes_declared_location(cc, storage, Some(expected))
+                                })
+                                .cloned()
+                                .map(|base| SsaValue { base, version: 0 })
+                        });
+                    if let Some(value) = recovered {
+                        return RecoveredParameter {
+                            slot,
+                            value,
+                            hint: declared_hint,
+                        };
                     }
                 }
                 let storage = declared_storage
@@ -1003,9 +1165,23 @@ fn float_argument_bank_slot(cc: crate::ir::call_args::CallConv, register: &VReg)
             .and_then(|index| index.parse::<usize>().ok())
             .filter(|index| *index < 16),
         // Eight SSE argument registers; `xmm8` and above are never parameters,
-        // so a scratch use of one must not be read as a ninth.
+        // so a scratch use of one must not be read as a ninth. The bound is
+        // SysV's for both conventions on purpose: Win64 really passes only
+        // four, but over-accepting a bank INDEX costs nothing here — the
+        // contiguous-prefix rule in `float_live_in_slots` is what decides which
+        // live-ins become parameters, and `abi::sse_argument_registers` holds
+        // the exact per-convention counts for the consumers that place storage.
+        //
+        // A scalar 32-bit transfer (`movd eax, xmm0`, `movss`) lifts as a read
+        // of ONE dword LANE, spelled `xmm0_d0`, and `regview::ssa_parent`
+        // deliberately declines to merge a lane with its parent. Both spellings
+        // name the same ABI register, so both denote the same bank slot; until
+        // this accepted the lane, `174_float_compare_classify` at `-O2` — whose
+        // entire body is `movd eax, xmm0; shr eax, 31` — reported NO float
+        // live-in, and the locked-parameter fallback bound its `float` to `rdi`.
         CallConv::SysVAmd64 | CallConv::Win64 => base
             .strip_prefix("xmm")
+            .map(|index| index.split_once("_d").map_or(index, |(whole, _)| whole))
             .and_then(|index| index.parse::<usize>().ok())
             .filter(|index| *index < 8),
         // AAPCS64 passes the first eight floating-point arguments in `v0`-`v7`,
@@ -1021,6 +1197,23 @@ fn float_argument_bank_slot(cc: crate::ir::call_args::CallConv, register: &VReg)
             .filter(|index| *index < 8),
         CallConv::Cdecl32 => None,
     }
+}
+
+/// Whether `name` is a scalarised dword lane rather than a whole register.
+///
+/// The lifters split a packed operation into four independent 32-bit lanes so
+/// ordinary SSA can process it, and `regview` records each lane as a non-parent
+/// view of its register. Asked here rather than pattern-matched on the spelling
+/// so the naming convention stays owned by one module.
+fn is_scalarised_vector_lane(cc: crate::ir::call_args::CallConv, name: &str) -> bool {
+    use crate::ir::call_args::CallConv;
+    let arch = match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 => crate::ir::regview::Arch::X86_64,
+        CallConv::Aarch64 => crate::ir::regview::Arch::AArch64,
+        CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => return false,
+    };
+    crate::ir::regview::view(arch, crate::ir::abi::ssa_base(name))
+        .is_some_and(|view| !view.is_parent())
 }
 
 /// Whether `cc` passes floating-point arguments in a register bank of its own.
@@ -1048,12 +1241,29 @@ fn has_float_argument_bank(cc: crate::ir::call_args::CallConv) -> bool {
 /// identities. Naming the parameter `s0` when the body only ever reads `d0`
 /// would leave every use of it undefined, so the observed name is carried out
 /// rather than reconstructed from the slot index.
+///
+/// x86-64 needs one more rule than AAPCS64 does, and it is not symmetric.
+/// `s0`/`d0` are two scalar views of one AArch64 register and a body reads one
+/// or the other; `xmm1` and its dword lane `xmm1_d0` are a WHOLE register and a
+/// PIECE of it, and an x86-64 body routinely reads both. A 128-bit `movapd`
+/// lifts to four lane copies, so the first touch of an `xmm` argument can be
+/// `xmm1_d0` while every instruction that consumes the VALUE — `mulsd`,
+/// `addsd` — reads `xmm1` whole. First-touch-wins therefore picks the transport
+/// over the value, which is how binding the lane broke
+/// `172_float_double_widths::double_precision_horner`, a function that had been
+/// correct. A whole-register live-in read UPGRADES a lane spelling; a lane never
+/// downgrades a whole register. The lane survives only when it is all there is —
+/// `movd eax, xmm0` and nothing else, which is exactly fixture 174.
 fn float_live_in_slots(
     lf: &LlirFunction,
     cc: crate::ir::call_args::CallConv,
 ) -> Vec<(usize, String)> {
     let mut first_touch: HashMap<usize, bool> = HashMap::new();
     let mut spelling: HashMap<usize, String> = HashMap::new();
+    // Slots whose storage has been defined. After a definition, a read is no
+    // longer evidence about the ENTRY value, so it must not revise the entry
+    // spelling either.
+    let mut defined: HashSet<usize> = HashSet::new();
     // `LlirFunction::blocks` is a CFG collection, not a guaranteed address or
     // dominance order. A join/return block can therefore precede the entry
     // block in the vector and make the function's final `s0` result definition
@@ -1087,19 +1297,36 @@ fn float_live_in_slots(
                     continue;
                 }
                 if let Some(slot) = float_argument_bank_slot(cc, &used) {
-                    if let std::collections::hash_map::Entry::Vacant(entry) =
-                        first_touch.entry(slot)
-                    {
-                        entry.insert(true);
-                        if let VReg::Phys(name) = &used {
-                            spelling.insert(slot, crate::ir::abi::ssa_base(name).to_string());
+                    let VReg::Phys(name) = &used else {
+                        continue;
+                    };
+                    let name = crate::ir::abi::ssa_base(name);
+                    match first_touch.entry(slot) {
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(true);
+                            spelling.insert(slot, name.to_string());
                         }
+                        // Already known live-in, still undefined: a read of the
+                        // WHOLE register replaces a lane spelling recorded from
+                        // a transport copy. Nothing replaces a whole register.
+                        std::collections::hash_map::Entry::Occupied(entry)
+                            if *entry.get()
+                                && !defined.contains(&slot)
+                                && !is_scalarised_vector_lane(cc, name)
+                                && spelling.get(&slot).is_some_and(|current| {
+                                    is_scalarised_vector_lane(cc, current)
+                                }) =>
+                        {
+                            spelling.insert(slot, name.to_string());
+                        }
+                        std::collections::hash_map::Entry::Occupied(_) => {}
                     }
                 }
             }
             if let Some(definition) = definition {
                 if let Some(slot) = float_argument_bank_slot(cc, &definition) {
                     first_touch.entry(slot).or_insert(false);
+                    defined.insert(slot);
                 }
             }
         }
@@ -2000,6 +2227,7 @@ pub fn recover_prototype_with_arm_vfp_args(
             Some(RecoveredParameter { slot, value, hint })
         })
         .collect();
+    let mut observed_float_storage: BTreeMap<usize, VReg> = BTreeMap::new();
     // AAPCS-VFP has to be asked for (`arm_vfp_args`) because the same ARM
     // convention enum covers soft-float builds, where `s0` is not a parameter
     // at all. The x86-64 conventions have no such variant: SSE arguments are
@@ -2019,13 +2247,22 @@ pub fn recover_prototype_with_arm_vfp_args(
             ));
     if float_bank_applies {
         let float_register = |slot: usize, observed: String| match cc {
+            // `d0` and `s0` are different SSA identities for the same AAPCS64
+            // register, so the parameter must carry the spelling the body
+            // actually reads or every use of it stays undefined. x86-64 has the
+            // same problem in its own spelling: `xmm0` and its dword lane
+            // `xmm0_d0` are unrelated SSA identities, and a function whose only
+            // parameter instruction is `movd eax, xmm0` reads ONLY the lane.
+            crate::ir::call_args::CallConv::SysVAmd64
+            | crate::ir::call_args::CallConv::Win64
+            | crate::ir::call_args::CallConv::Aarch64
+                if !observed.is_empty() =>
+            {
+                observed
+            }
             crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64 => {
                 format!("xmm{slot}")
             }
-            // `d0` and `s0` are different SSA identities for the same AAPCS64
-            // register, so the parameter must carry the spelling the body
-            // actually reads or every use of it stays undefined.
-            crate::ir::call_args::CallConv::Aarch64 if !observed.is_empty() => observed,
             _ => format!("s{slot}"),
         };
         // Width four is a floor, not a claim: `s0` IS binary32 under AAPCS, and
@@ -2047,6 +2284,15 @@ pub fn recover_prototype_with_arm_vfp_args(
                     hint: Some(TypeHint::Float { width }),
                 }
             })
+            .collect();
+        // Record the observed storage BEFORE the source-order decision below
+        // can discard it. Which ABI register a declared parameter occupies is
+        // the declaration's to say; which SSA identity of that register the
+        // body reads is only knowable here, and a mixed signature whose order
+        // cannot be proven throws the float parameters away.
+        observed_float_storage = vfp_parameters
+            .iter()
+            .map(|parameter| (parameter.slot, parameter.value.base.clone()))
             .collect();
 
         if parameters.is_empty() {
@@ -2089,6 +2335,7 @@ pub fn recover_prototype_with_arm_vfp_args(
         result,
         output_kind,
         output_locked: false,
+        observed_float_storage,
     }
 }
 
@@ -4133,6 +4380,174 @@ mod tests {
             prototype.parameter(1).and_then(|parameter| parameter.hint),
             Some(TypeHint::Pointer { pointee_width: 1 })
         );
+    }
+
+    /// The independent-counter rule, stated as the one signature that
+    /// distinguishes it from a positional table: source positions 0/1/2/3 map to
+    /// `rdi`/`xmm0`/`rsi`/`xmm1`, NOT `rdi`/`rsi`/`rdx`/`rcx`.
+    #[test]
+    fn locked_sysv_parameters_allocate_integer_and_sse_banks_independently() {
+        let integer = Some(TypeHint::Int {
+            signed: true,
+            width: 4,
+        });
+        let float = Some(TypeHint::Float { width: 4 });
+        let mut prototype = RecoveredPrototype::default();
+
+        prototype.apply_locked_parameters(
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &[integer, float, integer, float],
+        );
+
+        let storage: Vec<_> = prototype
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.value.base.clone())
+            .collect();
+        assert_eq!(
+            storage,
+            vec![
+                VReg::phys("rdi"),
+                VReg::phys("xmm0"),
+                VReg::phys("rsi"),
+                VReg::phys("xmm1"),
+            ],
+            "SysV allocates INTEGER and SSE arguments from two independent \
+             counters; a float's source position is not its integer-bank index"
+        );
+    }
+
+    /// A signature with no floats must be byte-identical to the positional
+    /// behaviour that preceded the class-aware map. This is the blast-radius
+    /// argument made executable: the only signatures the change can move are the
+    /// ones containing an SSE-class parameter.
+    #[test]
+    fn locked_sysv_integer_only_parameters_are_unchanged_by_the_class_map() {
+        let integer = Some(TypeHint::Int {
+            signed: true,
+            width: 8,
+        });
+        let pointer = Some(TypeHint::Pointer { pointee_width: 1 });
+        let declared = [
+            integer, pointer, integer, pointer, integer, pointer, integer,
+        ];
+        let mut prototype = RecoveredPrototype::default();
+
+        prototype.apply_locked_parameters(crate::ir::call_args::CallConv::SysVAmd64, &declared);
+
+        let storage: Vec<_> = prototype
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.value.base.clone())
+            .collect();
+        assert_eq!(
+            storage,
+            vec![
+                VReg::phys("rdi"),
+                VReg::phys("rsi"),
+                VReg::phys("rdx"),
+                VReg::phys("rcx"),
+                VReg::phys("r8"),
+                VReg::phys("r9"),
+                VReg::phys("arg6"),
+            ]
+        );
+    }
+
+    /// Aggregates fail CLOSED, and the whole signature declines with them.
+    ///
+    /// SysV classifies each eightbyte of a struct independently, so
+    /// `struct { long; double; }` occupies `rdi` AND `xmm0` — one source
+    /// parameter drawing from both banks, which two scalar counters cannot
+    /// express. Such a type reaches prototype recovery as `None`, and because
+    /// every later parameter's bank index depends on it, the projection must
+    /// decline for the entire signature rather than guess past it.
+    #[test]
+    fn locked_sysv_parameters_decline_the_whole_signature_on_an_aggregate() {
+        let float = Some(TypeHint::Float { width: 8 });
+        // `None` is what an aggregate, a `long double`, or any other type the
+        // renderer cannot spell exactly arrives as.
+        let aggregate = None;
+
+        assert_eq!(
+            locked_sysv_amd64_parameter_storage(
+                crate::ir::call_args::CallConv::SysVAmd64,
+                &[aggregate, float],
+            ),
+            None,
+            "an unclassifiable parameter poisons every bank index after it"
+        );
+
+        let mut prototype = RecoveredPrototype::default();
+        prototype.apply_locked_parameters(
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &[aggregate, float],
+        );
+        assert_eq!(
+            prototype
+                .parameter(1)
+                .map(|parameter| parameter.value.base.clone()),
+            Some(VReg::phys("rsi")),
+            "declining returns the pre-existing positional behaviour untouched"
+        );
+    }
+
+    /// A declaration names the ABI REGISTER; only the body names the SSA
+    /// identity. `movd eax, xmm0` reads the dword lane `xmm0_d0`, which
+    /// `regview::ssa_parent` refuses to merge with `xmm0`, so binding the
+    /// parameter to the canonical name would leave every use of it undefined.
+    #[test]
+    fn locked_sysv_float_parameter_keeps_the_dword_lane_the_body_reads() {
+        let mut prototype = RecoveredPrototype {
+            // What the integer live-in scan produced: a spurious `rdi` at source
+            // position zero, which is what a positional map would have kept.
+            parameters: vec![RecoveredParameter {
+                slot: 0,
+                value: SsaValue {
+                    base: VReg::phys("rdi"),
+                    version: 0,
+                },
+                hint: None,
+            }],
+            observed_float_storage: [(0, VReg::phys("xmm0_d0"))].into_iter().collect(),
+            ..RecoveredPrototype::default()
+        };
+
+        prototype.apply_locked_parameters(
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &[Some(TypeHint::Float { width: 4 })],
+        );
+
+        assert_eq!(
+            prototype
+                .parameter(0)
+                .map(|parameter| parameter.value.base.clone()),
+            Some(VReg::phys("xmm0_d0")),
+            "the declared SSE register resolves to the exact spelling the \
+             machine code reads, not the canonical whole-register name"
+        );
+    }
+
+    /// Both spellings of the same SSE argument register name one bank slot.
+    #[test]
+    fn a_scalar_dword_lane_is_the_same_float_argument_bank_slot() {
+        use crate::ir::call_args::CallConv;
+        for (name, expected) in [
+            ("xmm0", Some(0)),
+            ("xmm0_d0", Some(0)),
+            ("xmm1_d0", Some(1)),
+            ("xmm7_d3", Some(7)),
+            ("xmm0_d0#4", Some(0)),
+            // `xmm8` and above are never parameters under either convention.
+            ("xmm8_d0", None),
+            ("rdi", None),
+        ] {
+            assert_eq!(
+                float_argument_bank_slot(CallConv::SysVAmd64, &VReg::phys(name)),
+                expected,
+                "{name}"
+            );
+        }
     }
 
     #[test]

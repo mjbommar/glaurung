@@ -105,6 +105,34 @@ pub fn argument_registers(cc: CallConv) -> &'static [&'static str] {
     }
 }
 
+/// The SSE argument registers, in ABI order — whole-register names only.
+///
+/// This is a SECOND argument bank, not more entries in the first one, and the
+/// distinction is the whole reason it exists. Under System V AMD64 the INTEGER
+/// and SSE classes are allocated from two INDEPENDENT counters:
+/// `f(int a, float b, int c, float d)` puts `a` in `rdi`, `c` in `rsi`, `b` in
+/// `xmm0` and `d` in `xmm1`. A source parameter's POSITION is therefore not its
+/// index in either bank, which is exactly what [`argument_slots`] — one flat
+/// positional table — cannot express. Consumers that need a mixed signature's
+/// storage must walk both banks with their own counters
+/// (`types_recover::locked_sysv_amd64_parameter_storage`); consumers that only
+/// need "is this register an argument register" may use either table directly.
+///
+/// Windows x64 differs and the difference is recorded rather than smoothed
+/// over: it passes at most four SSE arguments, and from an index SHARED with
+/// the integer bank, so `f(int, float)` puts the float in `xmm1`. Class-aware
+/// mapping is deliberately not wired for it — there are no Windows fixtures in
+/// `tests/decompiler_fixtures/` to measure such a change against.
+pub fn sse_argument_registers(cc: CallConv) -> &'static [&'static str] {
+    match cc {
+        CallConv::SysVAmd64 => &[
+            "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+        ],
+        CallConv::Win64 => &["xmm0", "xmm1", "xmm2", "xmm3"],
+        CallConv::Cdecl32 | CallConv::Aarch64 | CallConv::Arm | CallConv::ArmHardFloat => &[],
+    }
+}
+
 /// General-purpose registers an ordinary call may overwrite.
 ///
 /// These are canonical storage names, not every sub-register spelling.  The
@@ -368,6 +396,21 @@ fn result_view_arch(cc: CallConv) -> Option<regview::Arch> {
 /// for no gain.
 fn touches_result_candidate(arch: Option<regview::Arch>, base: &str, candidate: &str) -> bool {
     base == candidate || arch.is_some_and(|arch| regview::is_lane_of(arch, base, candidate))
+}
+
+/// Whether `base` names storage that a definition of whole-register `candidate`
+/// would land on under `cc` — the same register, or one of its dword lanes.
+/// SSA versions are tolerated on both sides.
+///
+/// The ARGUMENT-side counterpart of [`touches_result_candidate`], and it exists
+/// for the same reason. A declaration says which ABI register holds a `float`
+/// parameter; only the body says which of that register's SSA identities
+/// carries it, because a function whose only parameter instruction is
+/// `movd eax, xmm0` reads the lane `xmm0_d0` and never the name `xmm0`. Binding
+/// the parameter to the canonical name there would leave every use of it
+/// reading a value nothing defines.
+pub fn touches_storage(cc: CallConv, base: &str, candidate: &str) -> bool {
+    touches_result_candidate(result_view_arch(cc), ssa_base(base), ssa_base(candidate))
 }
 
 /// Which of `candidates` a call's result actually lands in, decided by what the

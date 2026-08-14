@@ -1494,6 +1494,52 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # scratch[0] is the effect counter, scratch[1] the selected value,
     # scratch[2] the witnessed count; flags are pinned to both polarities so
     # each arm of every diamond is actually taken.
+    # A call through a proven function-pointer table. Every entry records the
+    # arguments it received in the caller's buffer (slots 0-2), so an argument
+    # list that is wrong but plausible is caught by the witness rather than by
+    # luck. `which` is pinned to the table's own domain plus both out-of-range
+    # neighbours; `t191_computed_args` deliberately passes values this function
+    # computed rather than its own parameters.
+    ("191_indirect_table_args", "t191_dispatch"): {
+        "ptr_len": 8,
+        "arg_values": {1: [-1, 0, 1, 2, 3, 4]},
+    },
+    ("191_indirect_table_args", "t191_computed_args"): {
+        "ptr_len": 8,
+        "arg_values": {1: [-1, 0, 1, 2, 3, 4]},
+    },
+    ("191_indirect_table_args", "t191_fold"): {
+        "ptr_len": 8,
+        "len_args": [2],
+    },
+    ("191_indirect_table_args", "t191_direct_control"): {"ptr_len": 8},
+    # Two logically distinct values from ONE machine operation. `b` is pinned
+    # away from zero on most vectors (the guard returns early otherwise, which
+    # tests nothing) and includes values where quotient and remainder differ in
+    # magnitude, so substituting one for the other is visible.
+    ("190_dual_role_products", "dp190_div_and_rem"): {
+        "ptr_len": 12,
+        "arg_values": {2: [1, 3, 7, 256, 4294967295]},
+    },
+    ("190_dual_role_products", "dp190_sdiv_and_rem"): {
+        "ptr_len": 12,
+        "arg_values": {2: [1, -1, 3, -7, 256]},
+    },
+    ("190_dual_role_products", "dp190_mul_both_halves"): {
+        "ptr_len": 12,
+        "arg_values": {
+            1: [0, 1, 65535, 65536, 4294967295],
+            2: [1, 3, 65536, 4294967295],
+        },
+    },
+    ("190_dual_role_products", "dp190_pair_across_join"): {
+        "ptr_len": 12,
+        "arg_values": {2: [1, 3, 7, 256], 3: [0, 1]},
+    },
+    ("190_dual_role_products", "dp190_quotient_only"): {
+        "ptr_len": 12,
+        "arg_values": {2: [1, 3, 7, 256]},
+    },
     ("189_effectful_select", "se189_bump"): {"ptr_len": 4},
     ("189_effectful_select", "se189_select_call"): {
         "ptr_len": 8,
@@ -2580,6 +2626,42 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     # se189_select_pure is the control: no call in either arm, so folding is
     # correct there and must still happen, or the fixture would be satisfied by
     # a decompiler that never folds.
+    # An indirect call through a relocation-proven function-pointer table. The
+    # registers such a call may read are not knowable from the call site, but
+    # the table's entries ARE a complete callee set, so they are the union over
+    # it. Each entry writes the arguments it received into the caller's buffer:
+    # `95_function_pointer_table` already covers the value the dispatch returns,
+    # and a witness is what catches an argument list that is wrong in a way the
+    # returned value hides — the reverted 2026-08-12 patch emitted exactly that.
+    # `t191_computed_args` is the near-miss control (a recovery that names
+    # architectural argument registers gets plausible, wrong values), and
+    # `t191_direct_control` is the degeneracy control (the same protocol through
+    # a direct call, which must keep passing).
+    "191_indirect_table_args": [
+        "t191_computed_args",
+        "t191_direct_control",
+        "t191_dispatch",
+        "t191_fold",
+    ],
+    # ONE machine operation, TWO logically distinct outputs. x86-64 `div` writes
+    # the quotient to rax and the remainder to rdx; AArch64 spells the same
+    # dependency as `udiv` + `msub`. If value_split/call_result_split alias the
+    # pair, the recovered C still compiles and still looks reasonable — it just
+    # uses one value where the machine used two — so each function keeps both in
+    # a caller-owned buffer and combines them with DISTINCT coefficients, where
+    # a plain sum would hide a swap. Division rather than __int128 keeps i386
+    # and armv7 in play; the __int128 functions in 02_integer_widths force those
+    # lanes to declare the whole fixture unsupported.
+    # dp190_quotient_only is the control: there the remainder IS dead and must
+    # still be eliminated, so keeping every architectural output alive is not a
+    # way to pass this fixture.
+    "190_dual_role_products": [
+        "dp190_div_and_rem",
+        "dp190_mul_both_halves",
+        "dp190_pair_across_join",
+        "dp190_quotient_only",
+        "dp190_sdiv_and_rem",
+    ],
     "189_effectful_select": [
         "se189_bump",
         "se189_nested_select",

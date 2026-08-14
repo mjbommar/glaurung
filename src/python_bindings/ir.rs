@@ -525,11 +525,12 @@ fn run_ast_passes(
         crate::ir::call_args::recover_resolved_tail_calls(f, cc);
     });
     pass!("reconstruct_args", {
-        crate::ir::call_args::reconstruct_args_with_params_and_callee_layouts(
+        crate::ir::call_args::reconstruct_args_with_layouts(
             f,
             cc,
             param_slots,
             &reconstruction_layouts,
+            &callee_facts.table_entry_layouts,
         );
     });
     // ABI liveness supplies candidate call inputs/outputs; an authoritative
@@ -1019,6 +1020,10 @@ pub(super) fn decompile_at_session(
     let mut lf_raw = lf_raw;
     inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
     annotate_calls_in(&mut lf_raw, cc, &addr_map);
+    // Recovered here rather than with the other AST-pass inputs below: a call
+    // through one of these tables needs its entries' parameter storage, and
+    // that is the same demand-driven callee analysis.
+    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     let mut callee_layout_cache = std::collections::HashMap::new();
     let callee_facts = recover_direct_callee_layouts(
         &image,
@@ -1030,6 +1035,7 @@ pub(super) fn decompile_at_session(
         dwarf_outputs.as_ref(),
         dwarf_type_env.as_ref(),
         &mut addr_map,
+        &function_tables,
         &mut callee_layout_cache,
     );
     apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
@@ -1097,7 +1103,6 @@ pub(super) fn decompile_at_session(
     dp!("lower");
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
     let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
     // of a locally-defined global folds to that global instead of dereferencing
     // an unrelocated linkage word. See `ir::got_fold`.
@@ -2574,6 +2579,7 @@ fn decompile_all_py(
             dwarf_outputs.as_ref(),
             dwarf_type_env.as_ref(),
             &mut addr_map,
+            &function_tables,
             &mut callee_layout_cache,
         );
         apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
@@ -2859,6 +2865,7 @@ fn decompile_many_py(
             dwarf_outputs.as_ref(),
             dwarf_type_env.as_ref(),
             &mut addr_map,
+            &function_tables,
             &mut callee_layout_cache,
         );
         apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);

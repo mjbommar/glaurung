@@ -3323,3 +3323,369 @@ above. The residual after this fix, required functions only, is 312 violations
 in 185 cells, led by `174_float_compare_classify` (19, cluster A),
 `170_rust_panic_unwind` and `171_rust_overflow` (16 each, not investigated),
 and `153_many_live_locals` (14, not investigated).
+
+## Entry 25 — Indirect table-call may-uses
+
+Roadmap item 6, the indirect half. Entry 18 closed the direct half and recorded
+why its proofs do not generalise: every one of them is about *this function's
+own entry value*, and a table call's arguments are ordinary computed values.
+That note is right. What it did not say is what DOES generalise, and that turns
+out to be the whole fix.
+
+### The defect, and the first wrong stage
+
+`95_function_pointer_table:gcc:O2:dispatch_operation` is recorded `fail` in the
+committed `baseline.json` — checked, not assumed — and its recovered C was
+
+```c
+ret = ((int (*)(void))(OPERATIONS[var0]))();
+```
+
+for a callee that reads two integers. The task framing was that dead-code
+elimination deletes the argument setup before the contract can be applied. It
+does delete it, but that is not the first wrong stage and not the cause.
+`GLAURUNG_DUMP_PASSES=1` puts the boundary exactly:
+
+```
+===== after reconstruct_args =====
+    %rdi#1 = (unsigned long)((unsigned int)(%rsi));
+    %rsi#1 = (unsigned long)((unsigned int)(%rdx));
+    ...
+    if (((%cf#1 | %zf#1) != 0)) {
+        call OPERATIONS[%rax#1]();
+```
+
+The setup is still there. It is still there after `eliminate_dead_stores`, after
+`stack_idiom+label_prune`, and after `apply_role_names` renames it to
+`%var1`/`%var2`. It is deleted by `copy_prop::remove_dead`, inside
+`prepare_for_decbench`, which drops a scratch assignment whose destination is
+read nowhere in the body — and the destination is read nowhere *because the call
+has no arguments*. The deletion is the consequence, not the cause, exactly as
+entry 18 found for the direct half.
+
+That distinction matters for what a "may-use set" can even buy. At the AST/C
+boundary, keeping `var1 = arg1` alive changes nothing semantically: the emitted
+C is recompiled, and its indirect call passes literally nothing regardless of
+which local assignments survive above it. **A may-use set that is not
+materialised as arguments is cosmetic.** So the sound and useful form of "keep
+the may-use registers alive" is to make them real call arguments, early enough
+that the register names still denote the values they hold.
+
+### What generalises: a complete callee SET
+
+A direct call has one callee to ask for a parameter layout. An indirect call has
+none — that is the whole difficulty. A call through a *relocation-proven*
+function-pointer table has neither: it has a complete, finite, proven SET of
+them. `function_tables::collect_function_pointer_tables` only builds a table when
+a real defined data symbol has pointer-sized storage, EVERY slot has an exact
+dynamic relocation, and EVERY relocation resolves to an exact defined function
+symbol. The machine may transfer to any entry, so the registers the call may read
+are the **union over the entries**.
+
+The union is the safe direction and refusing it is the unsafe one. An entry that
+reads fewer registers is unaffected by the extra ones being live; passing fewer
+than some entry reads deletes an argument that entry consumes, which is the
+silent wrong-code bug `table-dispatch-arguments-2026-08-12.md` records.
+
+Implemented as:
+
+- `callee_contracts::recover_table_entry_layouts` recovers each entry's parameter
+  storage through the same demand-driven, cached callee analysis the direct path
+  uses, bounded by `function_tables::tables_referenced_by` (a fail-closed scan of
+  the caller's LLIR for the table's base address — an operand shape it does not
+  enumerate simply yields nothing, which costs recovery rather than soundness).
+  The results land in a SEPARATE `DirectCalleeFacts::table_entry_layouts`, never
+  in `layouts`/`prototypes`/`env`: a table entry is not a direct call target of
+  this caller, so no existing consumer can reach it and the declarations and
+  types this caller emits are unchanged. `address_names` is passed immutably, so
+  no name changes either.
+- `call_args::table_call_may_use_layout` unions the set. It requires every entry
+  to have a recovered layout, the layouts to NEST (each a prefix of the widest
+  under the convention's own allocation order), and the union to be a valid ABI
+  allocation prefix. Anything else fails closed.
+- `call_args::fold_one_table_call` applies it, running BEFORE any
+  register-liveness recovery in `fold_one_call` and before naming. It tries the
+  adjacent setup first (`fold_one_recovered_layout_call`, unchanged), then the
+  proven reaching definition of each slot. It is all-or-nothing: ABI arguments
+  are a contiguous prefix, so a partially proven union would silently drop the
+  slots it could not name.
+- `EnclosingSlots` gains `reaching`: the exact value-numbered definition that
+  reaches this body's entry per slot. `blocked` answers "does the function-entry
+  value still reach"; `reaching` answers the strictly harder "what value
+  reaches", which is the only thing that can name an argument whose setup
+  happened in an enclosing scope. Only a top-level unconditional `Stmt::Assign`
+  records one, only a VERSIONED destination is recorded, and every other write,
+  every call, and every control-flow boundary the backward scan refuses to cross
+  clears it. A loop body that writes the slot anywhere clears the pre-loop
+  definition (`loop_body_reaching`), leaving `loop_carried_arg_inputs`' existing
+  override as the only answer there.
+
+Requiring a versioned destination is the load-bearing difference from the
+reverted 2026-08-12 patch. That patch applied the entry layout LATE, after
+naming, so it emitted architectural `rdi`/`rsi`, which the naming pass rendered
+as this function's own `arg0, arg1` — while the registers actually held the
+shuffled `a, b`. Plausible, well-typed, wrong. Applying the same union before
+naming, through `%rdi#1`, makes naming rewrite the argument and the definition
+together.
+
+### Evidence
+
+`tools/dectest.py '95_function_pointer_table' --full`:
+
+| cell | before | after |
+|---|---|---|
+| `gcc:O2:dispatch_operation` | fail | **pass** |
+| the other 7 cells | unchanged | unchanged |
+
+The recovered C is now
+
+```c
+var1 = (unsigned long)((unsigned int)(arg1));
+var2 = (unsigned long)((unsigned int)(arg2));
+if (((unsigned long)((unsigned long)((unsigned int)(arg0))) <= (unsigned long)(4))) {
+    ret = ((int (*)(long, long))(OPERATIONS[var0]))(var1, var2);
+```
+
+— the arity from the union, the values from the reaching definitions.
+
+Eight unit tests in `ir::call_args::tests`, six of them negative controls: an
+entry with no recovered layout, disagreeing entry layouts, an unversioned
+enclosing definition (the reverted patch's exact bug), a call between the setup
+and the table call, a loop that rewrites the slot under a new name, and an
+indirect call that is not a proven table. Two positive: the union is the WIDEST
+entry rather than the narrowest, and a table call in a loop reads the
+loop-carried definition rather than the stale pre-loop one.
+
+### New fixture 191_indirect_table_args, and what it actually found
+
+`95` proves the value the dispatch RETURNS. It cannot distinguish a wrong
+argument list whose result happens to agree, which is precisely the reverted
+patch's failure mode. `191` gives every table entry a witness protocol: each one
+writes the arguments it received into the caller's own scratch buffer, in the
+same style `189_effectful_select` counts its side effect.
+`t191_computed_args` is the near-miss control — its table call passes values the
+function computed, so a recovery that names architectural argument registers
+gets plausible, wrong values. `t191_direct_control` is the degeneracy control:
+the same protocol through a direct call, which must keep passing.
+
+Verdicts on the current build (NO baseline written):
+
+```
+191_indirect_table_args:{gcc,clang}:O0:{all four}   pass
+191_indirect_table_args:{gcc,clang}:O2:t191_direct_control   pass
+191_indirect_table_args:{gcc,clang}:O2:{dispatch,computed_args,fold}  fail
+```
+
+The O2 failures are NOT this change. They are a separate, upstream, and worse
+defect that the fixture exposed: **`lift_x86` drops the memory operand of a
+memory-indirect call.**
+
+```
+11ae:  ff 14 c1     call   *(%rcx,%rax,8)
+```
+
+lifts to
+
+```
+0x11ae: call @0x0
+```
+
+— a direct call to address zero. The table identity is gone before any AST pass
+runs, so `resolve_function_table_entries` has nothing to annotate,
+`table_call_may_use_layout` correctly declines, and the emitted C is
+`((long (*)(...))(0x0))(...)`. This is the same defect behind
+`95_function_pointer_table:{gcc,clang}:O2:fold_operations`, which are also
+recorded `fail`. `95:gcc:O2:dispatch_operation` recovers only because gcc emits
+it as `jmp *(%rdx,%rax,8)` — a tail dispatch, which lifts correctly and which
+`recover_resolved_tail_calls` turns back into a call.
+
+I did not fix that. It is a `lift_x86.rs` change, and a parallel agent held
+uncommitted work in that file this session; a conflicting edit there was
+explicitly ruled out. It is the obvious next item, and it is larger than it
+looks: `Op::Call` already has `CallTarget::Indirect(Value)`, so the repair is to
+lift the SIB load rather than to invent a representation.
+
+### Gates run
+
+- `cargo test`: 23 suites, **2312 passed, 0 failed, 1 ignored**.
+- `tools/dectest.py @o2`: **358 lanes, no regressions, 1 improvement**
+  (`95_function_pointer_table:gcc:O2:dispatch_operation` fail -> pass).
+- `tools/dectest.py @o0`: **358 lanes, no regressions, no improvements.**
+  Together that is 716 of the 728 lanes in the matrix (98%); the twelve not run
+  are the `rustc` lanes, which are off by default. Sizing the sweep to the whole
+  corpus rather than to the defect is the right call for anything near DCE, even
+  though this change fires only on calls whose target is an
+  `Expr::FunctionTableEntry` and leaves the non-table path behaviourally
+  identical.
+- `tools/dectest.py '95_function_pointer_table' --full`, `'08_indirect_dispatch'
+  --full`, `'191_indirect_table_args' --full`.
+- `rustfmt --edition 2021` on the four touched Rust files only; `uvx ruff
+  format --check` and `uvx ruff check` on `manifest.py`.
+- NOT run, deliberately: DecBench, Joern, `decbench_matrix.py`,
+  `arch_roundtrip.py`, the full fixture matrix, and any baseline refresh.
+  `baseline.json`, `structural_baseline.json` and `arch_baseline.json` all need
+  one: `95:gcc:O2:dispatch_operation` moved fail -> pass and `191` has sixteen
+  lanes with no baseline row at all.
+- `python/tests/test_dectest_selection.py` and
+  `python/tests/test_decompiler_fixture_harness.py`: 106 passed.
+- `python/tests/test_fitness_report.py`: **2 failed**, and honestly so.
+  `tools/fitness_baseline.json` ratchets `product_mean_loc` 518.66 -> 520.44 and
+  `product_pct_loc_above_1000` 44.62 -> 44.66. `call_args.rs` is already over
+  1,000 LOC and this adds to it. That is a real cost of the change and it needs
+  a deliberate baseline refresh (precedent: `b6be1e6`), not a quiet one — so it
+  was left failing rather than rewritten here.
+
+## Entry 26 — x86-64 SysV: the second argument bank
+
+Branched from `e3169c5` in a worktree; `src/ir/abi.rs` and
+`src/ir/types_recover.rs` only.
+
+### What was actually wrong, which is not quite what the brief said
+
+The brief's diagnosis was that `abi::argument_slots(SysVAmd64)` lists only
+`rdi/rsi/rdx/rcx/r8/r9` and that x86-64 therefore has NO SSE parameter bank.
+That was true when Entry 24 was written, at `38d6591`. It is not true at
+`e3169c5`: commit `039c7d6` — the AArch64 one Entry 24 named as "the analogous
+solved problem" — had already generalised `types_recover::float_argument_bank_slot`
+and `float_bank_applies` to `SysVAmd64`. The bank existed. Trusting the write-up
+would have meant rebuilding something that was already there.
+
+What survived is narrower, and only running the fixture separates it:
+
+    $ GLAURUNG_DUMP_PASSES=1 glaurung decompile 174…-gcc-O0.so \
+        --func sign_bit_of_binary32
+    slot: 0, value: Phys("xmm0"), hint: Float { width: 4 }      # CORRECT
+    $ …                          174…-gcc-O2.so --func sign_bit_of_binary32
+    slot: 0, value: Phys("rdi"),  hint: Float { width: 4 }      # the defect
+
+Same fixture, same function, same source. The lanes differ only in how gcc moves
+the parameter:
+
+    -O0   movss %xmm0,-0x4(%rbp)     reads the WHOLE register  -> bank matched
+    -O2   movd  %xmm0,%eax           reads the dword LANE      -> no match
+
+`movd`/`movss` lift as a read of one scalarised dword lane, spelled `xmm0_d0`
+(Entry 22's register views). `float_argument_bank_slot` did
+`"xmm0_d0".strip_prefix("xmm").parse::<usize>()`, got nothing, and reported no
+float live-in at all. With no float evidence, `RecoveredPrototype::apply_locked_parameters`
+fell through to its positional fallback — `abi::argument_registers(cc)[source_slot]`,
+a table containing only the INTEGER bank — and gave the declared `float` the
+integer register at source position zero.
+
+So the first wrong stage is prototype recovery, as stated, but the mechanism is a
+SPELLING gap feeding a POSITIONAL gap. Both had to close; either alone fixes
+nothing.
+
+### The design problem
+
+SysV allocates INTEGER and SSE arguments from two INDEPENDENT counters:
+`f(int a, float b, int c, float d)` is `rdi, xmm0, rsi, xmm1`. Source position is
+not the register index in either bank. New `locked_sysv_amd64_parameter_storage`
+walks the declaration with one counter per bank — structurally the same as
+`locked_aapcs_parameter_storage`, which had solved this for AAPCS-VFP, so this
+extends an existing model rather than inventing one. `abi::sse_argument_registers`
+now owns the SSE table, and its doc records that Win64's SSE bank shares an INDEX
+with the integer bank (`f(int, float)` -> `xmm1`, not `xmm0`); class-aware mapping
+is deliberately NOT wired for Win64, because there are no Windows fixtures to
+measure it against.
+
+**AGGREGATES FAIL CLOSED, explicitly.** SysV classifies each EIGHTBYTE
+independently, so `struct { long; double; }` occupies `rdi` AND `xmm0` — one
+source parameter drawing from both banks, which two scalar counters cannot
+express. Such a type reaches recovery as `None`, because `dwarf_return_hint_with_env`
+translates only scalar spellings the renderer can write exactly. ONE `None`
+declines the WHOLE signature, not just that parameter: every later parameter's
+bank index depends on the class of every earlier one. Declining restores the
+previous positional behaviour byte for byte. The same rule covers `long double`
+(memory class under SysV) and vector types.
+
+The blast-radius claim is executable rather than asserted:
+`locked_sysv_integer_only_parameters_are_unchanged_by_the_class_map` proves a
+float-free signature produces exactly the storage the positional table produced.
+Only a signature containing an SSE-class parameter can move.
+
+### The regression that showed the AArch64 analogy is not exact
+
+Carrying the observed spelling through — Entry 23's `d0`-vs-`s0` fix — regressed
+three PASSING lanes on the first attempt:
+
+    172_float_double_widths:clang:O2:double_precision_horner   pass -> fail
+    172_float_double_widths:clang:O2:single_precision_horner   pass -> fail
+    181_compensated_summation:gcc:O2:compensation_of_step      pass -> fail
+
+`d0` and `s0` are two scalar VIEWS of one AArch64 register and a body reads one
+or the other. `xmm1` and `xmm1_d0` are a WHOLE register and a PIECE of it, and an
+x86-64 body routinely reads both. `double_precision_horner` opens with
+`movapd %xmm1,%xmm3`, which lifts to four lane copies, so the FIRST touch of
+argument 1 is `xmm1_d0` while every instruction that consumes the VALUE (`mulsd`,
+`addsd`) reads `xmm1` whole. First-touch-wins picked the transport over the value
+and rendered `var8` undefined in a function that had been correct.
+
+The rule that holds: a whole-register live-in read UPGRADES a lane spelling; a
+lane never downgrades a whole register; a definition of the slot seals it. The
+lane survives only when it is all there is — `movd eax, xmm0` and nothing else,
+which is exactly fixture 174. The asymmetry is x86-64's alone:
+`is_scalarised_vector_lane` is false for every AAPCS and AAPCS64 scalar spelling,
+so those paths are provably untouched.
+
+### Measurement
+
+Two full six-lane sweeps of the 742 prebuilt fixture objects (`GLAURUNG_VERIFY_DEFS=1`,
+`--all`, `decbench` render), before and after, required functions only:
+
+| lane | before (funcs/violations) | after |
+|---|---|---|
+| gcc:O0 | 9 / 10 | 6 / 7 |
+| clang:O0 | 10 / 11 | 7 / 8 |
+| gcc:O2 | 54 / 106 | 49 / 100 |
+| clang:O2 | 63 / 125 | 62 / 121 |
+| rustc:O0 | 32 / 37 | 32 / 37 |
+| rustc:O2 | 17 / 23 | 17 / 23 |
+| **total** | **185 / 312** | **173 / 296** |
+
+Every emitted function: 3380 -> 3368 cells, 12703 -> 12687 violations.
+(The 185/312 baseline reproduces Entry 24's post-fix total exactly. The per-lane
+numbers the brief quoted — gcc:O0 11, clang:O0 13, … summing to 320 — are the
+PRE-`e3169c5` figures.)
+
+Cell by cell: **12 cells cleared, 4 reduced, ZERO newly violating, ZERO worse.**
+Cleared: `172:accumulate_narrow`/`accumulate_wide` at gcc:O0, clang:O0 and
+gcc:O2; `174:sign_bit_of_binary32`, `absolute_binary32`, `classify_binary32` at
+gcc:O2 and `classify_binary32` at clang:O2; `175:scale_series_f32` at gcc:O0 and
+clang:O0. Reduced: four more in 174 at O2.
+
+`175:scale_series_f32(float *series, int32_t count, float factor)` is the mixed
+signature the whole design exists for — pointer, int, float, which the positional
+table mapped to `rdi, rsi, rdx` and which is really `rdi, rsi, xmm0`.
+
+`tools/dectest.py` over **400 distinct lanes (55% of 724)** — `@vector-float
+@smoke @region @loops @calls @flags @structs @polarity @coverage @aggregates
+@widths @bias @sentinel @early-exit @switch @subword-division` plus every
+`@curriculum-*` set and `17* 18* 19*` — **no regressions**, 6 execution
+improvements. Two are this entry's:
+
+    175_float_matrix_kernel:clang:O0:scale_series_f32   fail -> pass
+    175_float_matrix_kernel:gcc:O0:scale_series_f32     fail -> pass
+
+The other four (`185…remainder_signed_bytes`, `185…remainder_signed_shorts`,
+`185…divide_signed_bytes`, `45…format_decimal`) are Entry 24's improvements,
+which were never baselined and show up in any sweep since.
+
+`cargo test`: **2312 passed, 0 failed, 1 ignored** (2307 at `e3169c5` plus five
+new tests). Output verified byte-identical across three repeated runs; `prior`
+became a `BTreeMap` because the new recovered-spelling search scans every prior
+parameter and `HashMap` order is not reproducible.
+
+### What this entry did not do
+
+DecBench, Joern, the full fixture matrix and `arch_roundtrip.py` were not run. No
+baseline was regenerated: `baseline.json` and `structural_baseline.json` are now
+stale in the good direction by 2 execution lanes and 12 verify cells respectively
+(on top of Entry 24's, still unrefreshed). No Python was touched.
+
+Clusters C, D, E and F of Entry 24 are untouched. Cluster A is not finished: 174
+still carries 3 violations at gcc:O2 and 7 at clang:O2. Those remaining ones are
+NOT the parameter binding — the prototype is now `xmm0_d0` and correct — they are
+functions where the body reads BOTH `xmm0` and one of its lanes as live-ins, which
+no choice of parameter spelling can satisfy. That needs the lane/parent merge
+`regview::ssa_parent` deliberately declines to do, and is a separate decision.

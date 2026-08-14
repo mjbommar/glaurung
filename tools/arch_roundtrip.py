@@ -368,6 +368,21 @@ def _cxx_runtime_ok(arch: str) -> bool:
         return ok
 
 
+_C_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+
+def _without_comments(source: str) -> str:
+    """`source` with C comments removed, for probes that mean "uses", not "mentions".
+
+    `190_dual_role_products` explains in a comment that it deliberately avoids
+    `__int128` so that i386 and armv7 stay in play. A plain substring test read
+    that sentence as use of the type and exempted the fixture from exactly the
+    lanes it was written to cover. The lane then built successfully and the
+    stale-exemption assertion in `_run_lane` caught it — which is the harness
+    working, but the probe should not have needed catching."""
+    return _C_COMMENT.sub(" ", source)
+
+
 def detect_unsupported(arches) -> dict[tuple[str, str], str]:
     """`(arch, fixture) -> reason` for sources that CANNOT exist on a target.
 
@@ -401,7 +416,7 @@ def detect_unsupported(arches) -> dict[tuple[str, str], str]:
             continue  # a missing compiler is a FAILURE, decided in `_run_lane`
         if not _supports_int128(arch):
             for src in srcs:
-                if "__int128" in src.read_text():
+                if "__int128" in _without_comments(src.read_text()):
                     out[(arch, src.stem)] = f"__int128 is not a type on {arch}"
         cpp = [s for s in srcs if s.suffix == ".cpp"]
         if cpp and not _cxx_runtime_ok(arch):

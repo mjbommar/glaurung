@@ -119,6 +119,104 @@ pub fn collect_function_pointer_tables(data: &[u8]) -> Vec<FunctionPointerTable>
     tables
 }
 
+/// The tables in `tables` whose base address `caller` materialises.
+///
+/// Used to bound the cost of recovering an entry contract per table entry:
+/// a table this function never mentions cannot be the one it dispatches
+/// through, and lifting every entry of every table in the image would multiply
+/// the dominant cost of decompilation.
+///
+/// The scan is deliberately **fail-closed in the cheap direction**: it reports a
+/// table only when it can see the address, and an operand shape it does not
+/// enumerate simply yields nothing. Missing a reference costs the recovery that
+/// would have followed — the behavior before this existed — while a false
+/// positive would only recover contracts nobody asks about.
+pub fn tables_referenced_by<'tables>(
+    caller: &crate::ir::types::LlirFunction,
+    tables: &'tables [FunctionPointerTable],
+) -> Vec<&'tables FunctionPointerTable> {
+    use crate::ir::types::{MemOp, Op, Value};
+
+    if tables.is_empty() {
+        return Vec::new();
+    }
+    let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let note_value = |value: &Value, seen: &mut std::collections::HashSet<u64>| match value {
+        Value::Addr(address) => {
+            seen.insert(*address);
+        }
+        Value::Const(constant) => {
+            if let Ok(address) = u64::try_from(*constant) {
+                seen.insert(address);
+            }
+        }
+        _ => {}
+    };
+    let note_mem = |address: &MemOp, seen: &mut std::collections::HashSet<u64>| {
+        if let Ok(displacement) = u64::try_from(address.disp) {
+            seen.insert(displacement);
+        }
+    };
+    for instruction in caller
+        .blocks
+        .iter()
+        .flat_map(|block| block.instrs.iter())
+        .map(|instruction| &instruction.op)
+    {
+        match instruction {
+            Op::Assign { src, .. }
+            | Op::Un { src, .. }
+            | Op::ZExt { src, .. }
+            | Op::SExt { src, .. }
+            | Op::Trunc { src, .. }
+            | Op::Extract { src, .. }
+            | Op::ReturnValue { value: src } => note_value(src, &mut seen),
+            Op::Bin { lhs, rhs, .. }
+            | Op::Cmp { lhs, rhs, .. }
+            | Op::Concat {
+                hi: lhs, lo: rhs, ..
+            } => {
+                note_value(lhs, &mut seen);
+                note_value(rhs, &mut seen);
+            }
+            Op::Load { addr, .. } => note_mem(addr, &mut seen),
+            Op::CondLoad { addr, fallback, .. } => {
+                note_mem(addr, &mut seen);
+                note_value(fallback, &mut seen);
+            }
+            Op::Store { addr, src } | Op::CondStore { addr, src, .. } => {
+                note_mem(addr, &mut seen);
+                note_value(src, &mut seen);
+            }
+            Op::IndirectJump { target, index } => {
+                note_value(target, &mut seen);
+                if let Some(index) = index {
+                    note_value(index, &mut seen);
+                }
+            }
+            Op::Ite { t, e, .. } => {
+                note_value(t, &mut seen);
+                note_value(e, &mut seen);
+            }
+            Op::Intrinsic { ins, .. } => {
+                for input in ins {
+                    note_value(input, &mut seen);
+                }
+            }
+            Op::Call {
+                target: crate::ir::types::CallTarget::Indirect(target),
+                ..
+            } => note_value(target, &mut seen),
+            Op::CondReturnValue { value, .. } => note_value(value, &mut seen),
+            _ => {}
+        }
+    }
+    tables
+        .iter()
+        .filter(|table| seen.contains(&table.va))
+        .collect()
+}
+
 /// `relocated place VA -> target VA` for every dynamic relocation whose target
 /// this pass can prove.
 fn relocation_targets(object: &object::read::File<'_>, pointer_size: u8) -> HashMap<u64, u64> {

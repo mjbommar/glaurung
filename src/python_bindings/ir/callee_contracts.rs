@@ -16,6 +16,16 @@ pub(super) struct DirectCalleeFacts {
     pub(super) prototypes: std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
     /// Program-level records keyed by the identifier emitted for each callee.
     pub(super) env: crate::ir::symbol_env::SymbolEnv,
+    /// Recovered parameter storage for the entries of the relocation-proven
+    /// function-pointer tables this caller references.
+    ///
+    /// Kept apart from `layouts` on purpose. `layouts` is keyed by a DIRECT call
+    /// target and is consulted by call-effect annotation, prototype application,
+    /// and direct argument folding; a table entry is none of those things for
+    /// this caller, and merging the two would make an entry's contract reachable
+    /// from code that proved only a direct target. See
+    /// `call_args::table_call_may_use_layout` for the one consumer.
+    pub(super) table_entry_layouts: std::collections::HashMap<u64, Vec<crate::ir::types::VReg>>,
 }
 
 fn imported_symbol_base(name: &str) -> &str {
@@ -555,6 +565,7 @@ pub(super) fn recover_direct_callee_layouts(
     dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     address_names: &mut std::collections::HashMap<u64, String>,
+    function_tables: &[crate::ir::function_tables::FunctionPointerTable],
     cache: &mut std::collections::HashMap<
         u64,
         Option<(
@@ -663,5 +674,101 @@ pub(super) fn recover_direct_callee_layouts(
             eprintln!("callee 0x{callee_va:x}: no recovered layout");
         }
     }
+    recover_table_entry_layouts(
+        &mut facts,
+        image,
+        functions,
+        caller,
+        cc,
+        arm_vfp_args,
+        budgets,
+        dwarf_outputs,
+        type_env,
+        address_names,
+        function_tables,
+        cache,
+        dump,
+    );
     facts
+}
+
+/// Recover the parameter storage of every entry of every relocation-proven
+/// function-pointer table this caller references.
+///
+/// A call through such a table has no single callee to ask for a contract —
+/// that is exactly why the direct-call recovery does not generalise to it — but
+/// it does have a complete, proven set of them.
+/// `call_args::table_call_may_use_layout` unions that set into the ABI registers
+/// the call MAY read, so the setup is recovered as real arguments before any
+/// dead-store or dead-copy pass can observe it as unread.
+///
+/// Nothing here writes `facts.layouts`, `facts.prototypes`, or `facts.env`: an
+/// entry is not a direct call target of this caller, and every existing consumer
+/// of those maps is keyed by one. The declarations and types this caller emits
+/// are therefore unchanged.
+///
+/// Cost is bounded by `tables_referenced_by` plus the shared `cache`, which is
+/// the same demand-driven discipline the direct path already uses.
+#[allow(clippy::too_many_arguments)]
+fn recover_table_entry_layouts(
+    facts: &mut DirectCalleeFacts,
+    image: &crate::program::image::ProgramImage,
+    functions: &[crate::core::function::Function],
+    caller: &crate::ir::types::LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+    arm_vfp_args: bool,
+    budgets: &crate::analysis::cfg::Budgets,
+    dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
+    address_names: &mut std::collections::HashMap<u64, String>,
+    function_tables: &[crate::ir::function_tables::FunctionPointerTable],
+    cache: &mut std::collections::HashMap<
+        u64,
+        Option<(
+            Vec<crate::ir::types::VReg>,
+            crate::ir::call_contracts::CallPrototype,
+            String,
+        )>,
+    >,
+    dump: bool,
+) {
+    let referenced = crate::ir::function_tables::tables_referenced_by(caller, function_tables);
+    if dump && !referenced.is_empty() {
+        eprintln!(
+            "\n===== referenced function-pointer tables =====\n{:#x?}",
+            referenced
+                .iter()
+                .map(|table| (table.va, table.name.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+    let entries: std::collections::BTreeSet<u64> = referenced
+        .iter()
+        .flat_map(|table| table.targets.iter().map(|target| target.va))
+        .collect();
+    for entry_va in entries {
+        if !cache.contains_key(&entry_va) {
+            let recovered = recover_direct_callee_definition(
+                image,
+                functions,
+                entry_va,
+                cc,
+                arm_vfp_args,
+                budgets,
+                dwarf_outputs,
+                type_env,
+                address_names,
+                true,
+            );
+            cache.insert(entry_va, recovered);
+        }
+        if let Some((layout, _, _)) = cache.get(&entry_va).cloned().flatten() {
+            if dump {
+                eprintln!("table entry 0x{entry_va:x}: recovered layout {layout:?}");
+            }
+            facts.table_entry_layouts.insert(entry_va, layout);
+        } else if dump {
+            eprintln!("table entry 0x{entry_va:x}: no recovered layout");
+        }
+    }
 }

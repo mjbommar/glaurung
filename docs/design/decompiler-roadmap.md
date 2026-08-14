@@ -212,7 +212,7 @@ lossy `HashMap<u64, String>` or C type strings.
 - [x] Bind stable MIR objects to type facts.
 - [~] Import DWARF once per session into the canonical store; finish, commit, and
   verify the current working slice.
-- [ ] Implement a canonical `SymbolStore`: aliases, ranges, imports, exports,
+- [x] Implement a canonical `SymbolStore`: aliases, ranges, imports, exports,
   thunks, bindings, demangled names, and contextual address queries.
 - [ ] Import PDB facts into `TypeStore` and `ObjectStore`; remove the separate
   PDB-only field-map authority.
@@ -788,10 +788,35 @@ This is the practical next-work queue as of the planning baseline.
    register-keyed alias map cannot represent — that needs value numbering on
    that path, not a wider coordinate model.
 5. Add the `-marm` A32 fixture lane and rebuild the x86-64 GCC 15 control.
-6. Implement indirect function-table call may-uses/contracts before DCE and
-   reconstruct actual reaching call arguments.
-7. Build the canonical `SymbolStore` and contextual operand-reference index;
-   migrate exact symbols/relocations first, then bounded library-name knowledge.
+6. **[done]** Implement indirect function-table call may-uses/contracts before
+   DCE and reconstruct actual reaching call arguments.
+
+   Both halves landed. The DIRECT half (`f72851e`) taught argument recovery to
+   see past returning branch arms, answer live-in spellings from the enclosing
+   scope, and prove entry-constant slots across a labelled join; it repaired six
+   cells, four of them in fixtures unrelated to the one that found it.
+
+   The INDIRECT half (`191_indirect_table_args`) rests on the observation that a
+   call through a RELOCATION-PROVEN table has no single callee but a complete,
+   proven callee SET, so the may-use set is the union over its entries. Union is
+   the safe direction; refusing is the silent-wrong-code one.
+
+   In both halves DCE turned out NOT to be the first wrong stage. The setup is
+   alive after `reconstruct_args`, `eliminate_dead_stores` and `apply_role_names`,
+   and is removed by `copy_prop::remove_dead` BECAUSE the call carries no
+   arguments — consequence, not cause. The sharp form: a may-use set that is not
+   MATERIALISED AS ARGUMENTS is cosmetic, since at the C boundary the recompiled
+   indirect call passes nothing either way.
+
+   Still open, and worse than what this item fixed: `lift_x86` lifts
+   `call *(%rcx,%rax,8)` to `call @0x0`, destroying table identity before any AST
+   pass runs. That is why the `95_function_pointer_table` O2 `fold_operations`
+   cells and most `191` O2 lanes still fail, and why `dispatch_operation`
+   improves at all — gcc happens to emit that one as `jmp *(...)`.
+7. **[done]** Build the canonical `SymbolStore` and contextual
+   operand-reference index; migrate exact symbols/relocations first, then bounded
+   library-name knowledge. Landed in `9d4d0e0`/`16b`-era work: `src/program/symbols.rs`,
+   `symbols/object_import.rs`, `symbols/verify.rs`.
 8. **[restated — no DecBench required]** Investigate the linked-list correctness
    defect and the architecture-only failures with pass-attributed traces.
 
@@ -816,6 +841,33 @@ This is the practical next-work queue as of the planning baseline.
    `141_atomics` (7), `173_float_int_conversions` (6), `175_float_matrix_kernel`
    (5), `181_compensated_summation` (5) — a float and atomics cluster. Note ARM32
    is worse than AArch64 and was never the item's subject.
+
+   **Resolved for the float cluster (`039c7d6`), and the clustering above is
+   partly wrong.** Root cause: `lift_arm64.rs` had NO SCALAR FLOAT LIFTING AT
+   ALL — grepping `src/ir/` for `fadd|fsub|fmul|fdiv|scvtf|fcvtz|fcmp|fneg|fsqrt`
+   returned nothing outside `lift_arm32.rs` and `lift_x86.rs`. `return (float)value;`
+   decompiled to `*(float*)&value`, and the first pass dump already read
+   `[] = intrinsic scvtf()` with no output, no input and no footprint, so every
+   later pass was faithfully processing garbage. Two ABI holes sat behind it:
+   `return_registers(Aarch64)` was `["x0","w0"]` with no `v0`/`d0`/`s0`, and
+   `float_argument_bank_slot` returned `None`. 12 functions fail → pass, 0
+   regressions.
+
+   The correction worth keeping: clustering by DISASSEMBLY rather than by fixture
+   name shows `71_compound_interest`, `72_loan_amortization` and `64_root_finding`
+   are FIXED-POINT INTEGER fixtures containing no float instruction whatsoever.
+   The attributable float cluster is 20 of the 94, not the ~38 a name-based
+   reading suggests; 7 more are `141_atomics`, whose cause is entirely different
+   (`ldar`/`stlrb` are simply not decoded, and these are plain acquire/release
+   accessors, not exclusive-monitor loops). The remaining 65 have no float
+   instruction and no single identified cause. Also worth keeping: 19 functions
+   PASS on aarch64 and FAIL on x86-64, so this is a genuine two-way differential,
+   not a one-sided deficit.
+
+   Remaining in the cluster, each with its blocker named rather than left as a
+   count: `fcmp`/`fcmpe` 5 cells (needs a real float NZCV model), `fcvtzu`/`ucvtf`
+   2 (needs an unsigned `ScalarType`), `fmadd`/`fnmsub` 3 (a rendering decision),
+   `movi v31.2d,#0` in 7, and `141_atomics` 7.
 
    The linked-list half is already a recorded correctness defect rather than a
    metric movement: `111_self_referential_struct:link_and_sum` declares `rbp` as
