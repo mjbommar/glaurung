@@ -4311,7 +4311,7 @@
   },
   "139_cpp_object_lifetime:armv7_a32:O2": {
     "cpp_array_destruction": "fail",
-    "cpp_destruction_order": "fail",
+    "cpp_destruction_order": "pass",
     "cpp_live_object_count": "pass"
   },
   "139_cpp_object_lifetime:i386:O0": {
@@ -5420,7 +5420,7 @@
   "152_deep_nesting:aarch64:O2": {
     "deep152_conditional_tower": "pass",
     "deep152_nested_loops": "pass",
-    "deep152_while_tower": "fail"
+    "deep152_while_tower": "pass"
   },
   "152_deep_nesting:armv7:O0": {
     "deep152_conditional_tower": "pass",
@@ -6405,7 +6405,7 @@
   },
   "164_nested_tlv_walker:aarch64:O2": {
     "tlv164_encode_nested": "fail",
-    "tlv164_find_type": "fail",
+    "tlv164_find_type": "pass",
     "tlv164_leaf_sum": "fail",
     "tlv164_max_depth": "fail",
     "tlv164_node_count": "fail"
@@ -6464,7 +6464,7 @@
     "tlv164_find_type": "pass",
     "tlv164_leaf_sum": "fail",
     "tlv164_max_depth": "fail",
-    "tlv164_node_count": "fail"
+    "tlv164_node_count": "pass"
   },
   "164_nested_tlv_walker:x86_64_gcc15:O0": {
     "tlv164_encode_nested": "pass",
@@ -6544,7 +6544,7 @@
     "bit165_write_frame": "pass"
   },
   "165_bitstream_reader:x86_64:O2": {
-    "bit165_cross_check": "fail",
+    "bit165_cross_check": "pass",
     "bit165_read_bits": "fail",
     "bit165_read_sequence": "pass",
     "bit165_roundtrip": "fail",
@@ -6559,7 +6559,7 @@
   },
   "165_bitstream_reader:x86_64_gcc15:O2": {
     "bit165_cross_check": "fail",
-    "bit165_read_bits": "fail",
+    "bit165_read_bits": "pass",
     "bit165_read_sequence": "pass",
     "bit165_roundtrip": "fail",
     "bit165_write_frame": "pass"
@@ -6603,7 +6603,7 @@
   "172_float_double_widths:aarch64:O0": {
     "accumulate_narrow": "fail",
     "accumulate_wide": "fail",
-    "double_precision_horner": "fail",
+    "double_precision_horner": "pass",
     "narrow_after_double_math": "fail",
     "single_precision_horner": "fail",
     "width_disagreement": "fail"
@@ -6702,8 +6702,8 @@
     "truncate_double_to_i64": "fail",
     "truncate_to_unsigned": "fail",
     "truncate_toward_zero": "fail",
-    "widen_int_to_float": "fail",
-    "widen_long_to_double": "fail"
+    "widen_int_to_float": "pass",
+    "widen_long_to_double": "pass"
   },
   "173_float_int_conversions:aarch64:O2": {
     "int32_round_trip_delta": "pass",
@@ -6807,7 +6807,7 @@
   "174_float_compare_classify:aarch64:O0": {
     "absolute_binary32": "fail",
     "classify_binary32": "fail",
-    "negate_binary32": "fail",
+    "negate_binary32": "pass",
     "ordered_compare_binary32": "fail",
     "sign_bit_of_binary32": "fail",
     "unordered_compare_flags": "fail",
@@ -6816,7 +6816,7 @@
   "174_float_compare_classify:aarch64:O2": {
     "absolute_binary32": "fail",
     "classify_binary32": "fail",
-    "negate_binary32": "fail",
+    "negate_binary32": "pass",
     "ordered_compare_binary32": "fail",
     "sign_bit_of_binary32": "fail",
     "unordered_compare_flags": "fail",
@@ -6913,9 +6913,9 @@
     "zero_sign_from_product": "fail"
   },
   "175_float_matrix_kernel:aarch64:O0": {
-    "dot_product_f32": "fail",
+    "dot_product_f32": "pass",
     "dot_product_f64": "fail",
-    "matrix2_determinant": "fail",
+    "matrix2_determinant": "pass",
     "matrix2_multiply": "fail",
     "scale_series_f32": "fail",
     "sum_of_squares_f32": "fail"
@@ -7057,14 +7057,14 @@
     "hash_lookup": "pass"
   },
   "181_compensated_summation:aarch64:O0": {
-    "compensation_of_step": "fail",
-    "difference_of_products": "fail",
-    "kahan_sum_f64": "fail",
-    "naive_sum_f64": "fail",
+    "compensation_of_step": "pass",
+    "difference_of_products": "pass",
+    "kahan_sum_f64": "pass",
+    "naive_sum_f64": "pass",
     "summation_disagrees": "fail"
   },
   "181_compensated_summation:aarch64:O2": {
-    "compensation_of_step": "fail",
+    "compensation_of_step": "pass",
     "difference_of_products": "fail",
     "kahan_sum_f64": "fail",
     "naive_sum_f64": "fail",
@@ -7727,6 +7727,90 @@
     "vt188_copy_forward": "pass",
     "vt188_copy_two_streams": "pass",
     "vt188_lane_math": "pass"
+  },
+  "189_effectful_select:aarch64:O0": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:aarch64:O2": {
+    "se189_bump": "pass",
+    "se189_nested_select": "fail",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:armv7:O0": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:armv7:O2": {
+    "se189_bump": "pass",
+    "se189_nested_select": "fail",
+    "se189_select_call": "fail",
+    "se189_select_one_arm": "fail",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:armv7_a32:O0": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:armv7_a32:O2": {
+    "se189_bump": "pass",
+    "se189_nested_select": "fail",
+    "se189_select_call": "fail",
+    "se189_select_one_arm": "fail",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:i386:O0": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:i386:O2": {
+    "se189_bump": "pass",
+    "se189_nested_select": "fail",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:x86_64:O0": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:x86_64:O2": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:x86_64_gcc15:O0": {
+    "se189_bump": "pass",
+    "se189_nested_select": "pass",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
+  },
+  "189_effectful_select:x86_64_gcc15:O2": {
+    "se189_bump": "pass",
+    "se189_nested_select": "fail",
+    "se189_select_call": "pass",
+    "se189_select_one_arm": "pass",
+    "se189_select_pure": "pass"
   },
   "18_binary_heap:aarch64:O0": {
     "heap_pop": "pass",
@@ -8494,7 +8578,7 @@
     "quicksort_i32": "pass"
   },
   "36_quicksort:x86_64_gcc15:O2": {
-    "quicksort_i32": "fail"
+    "quicksort_i32": "pass"
   },
   "37_heapsort:aarch64:O0": {
     "heapsort_i32": "pass"
@@ -9506,7 +9590,7 @@
   },
   "56_sieve:x86_64:O2": {
     "factorize": "pass",
-    "sieve_primes": "fail"
+    "sieve_primes": "pass"
   },
   "56_sieve:x86_64_gcc15:O0": {
     "factorize": "pass",
