@@ -235,6 +235,7 @@ pub fn recover_head_tested_whiles(f: &mut Function) {
 /// effect, different value, casted sentinel, or additional continuation makes
 /// the pass fail closed.
 pub fn recover_sentinel_search_loops(f: &mut Function) {
+    crate::ir::pass_stats::attempt("recover_sentinel_search_loops");
     recover_sentinel_search_body(&mut f.body);
 }
 
@@ -247,6 +248,7 @@ pub fn recover_sentinel_search_loops(f: &mut Function) {
 /// copy must be the final loop statement, so the rewrite neither changes the
 /// zero-iteration result nor evaluates the body for a sentinel input.
 pub fn recover_guarded_do_whiles(f: &mut Function) {
+    crate::ir::pass_stats::attempt("recover_guarded_do_whiles");
     recover_guarded_do_while_body(&mut f.body);
 }
 
@@ -303,6 +305,7 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
                 body: loop_body,
             },
         );
+        crate::ir::pass_stats::fire("recover_guarded_do_whiles");
         start = do_index;
     }
 }
@@ -572,6 +575,7 @@ fn recover_sentinel_search_body(body: &mut Vec<Stmt>) {
                 value: Some(candidate.sentinel),
             },
         ];
+        crate::ir::pass_stats::fire("recover_sentinel_search_loops");
         body.splice(index..=candidate.end, replacement);
         index += 3;
     }
