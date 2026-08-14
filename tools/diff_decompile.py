@@ -2146,36 +2146,39 @@ def run_function(
     }
     spec_path = workdir / f"spec_{name}.json"
     spec_path.write_text(json.dumps(spec))
-    try:
-        r = subprocess.run(
-            [
-                *BG.worker_launch_prefix(),
-                sys.executable,
-                __file__,
-                "--worker",
-                # Relative, from `cwd` below. argv lands on the initial stack
-                # next to the environment, so an ABSOLUTE spec path made the
-                # frame offset depend on how long the scratch directory's name
-                # happened to be — `GLAURUNG_FIXTURE_TMPDIR` alone was enough to
-                # flip `04_switch_shapes:armv7:O0:dense_compute`. Relative keeps
-                # argv a constant for a given function.
-                spec_path.name,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=WORKER_TIMEOUT_S,
-            check=False,
-            cwd=str(workdir),
-            # Fixed environment + no address randomization: see
-            # `build_guard.worker_env`. Without all three, a recovery that reads
-            # an uninitialised local gives a different verdict per shell, per
-            # scratch directory, and per run.
-            env=BG.worker_env(),
-        )
-    except subprocess.TimeoutExpired:
-        # NOT `fail`: exceeding a wall clock is not evidence that the
-        # decompilation is wrong, and recording it as a semantic verdict bakes
-        # machine speed into the baseline (see `timeout` in the fixture README).
+
+    def invoke_worker() -> subprocess.CompletedProcess | None:
+        """Run the differential worker once. `None` means it blew the wall clock."""
+        try:
+            return _spawn_worker(spec_path, workdir)
+        except subprocess.TimeoutExpired:
+            return None
+
+    r = invoke_worker()
+    if r is not None and r.returncode == -signal.SIGALRM:
+        # The per-call budget fired. That is NOT yet evidence of a defect: this
+        # file already says so for the outer wall clock a few lines below —
+        # "exceeding a wall clock is not evidence that the decompilation is
+        # wrong, and recording it as a semantic verdict bakes machine speed into
+        # the baseline" — and the inner budget deserves the same reading.
+        #
+        # `DECOMPILED_CALL_BUDGET_S` is 5s against a slowest-correct-call
+        # measurement of ~0.9s. That margin is thin enough that a loaded machine
+        # can push a correct-but-slow call past it, which is how a lane comes
+        # back `fail` under a parallel sweep and `pass` three times in isolation.
+        # It is why `default_jobs` is capped well under `cpu_count`.
+        #
+        # Retrying once keeps BOTH properties the budget exists for. A genuinely
+        # non-terminating recovery alarms again and still earns a determinate
+        # `fail`, so `--write-baseline` is not blocked (see the note on
+        # `WORKER_TIMEOUT_S` and `18_binary_heap:aarch64:O0:heap_pop`). Only the
+        # load-sensitive case changes, and the retry costs nothing on the
+        # overwhelming majority of functions that never alarm at all.
+        retry = invoke_worker()
+        if retry is not None:
+            r = retry
+    if r is None:
+        # NOT `fail`: see above.
         return {"status": "timeout", "detail": f"worker exceeded {WORKER_TIMEOUT_S}s"}
     try:
         last_input = json.loads(progress_path.read_text())
@@ -2183,12 +2186,13 @@ def run_function(
     except (OSError, json.JSONDecodeError):
         input_detail = ""
     if r.returncode == -signal.SIGALRM:
-        # See DECOMPILED_CALL_BUDGET_S: the original returned, ours did not.
+        # Alarmed twice, on a loaded machine and again on retry: the original
+        # returned and ours did not. See DECOMPILED_CALL_BUDGET_S.
         return {
             "status": "fail",
             "detail": f"decompiled function did not terminate within "
             f"{DECOMPILED_CALL_BUDGET_S}s on an input the original returned on"
-            f"{input_detail}",
+            f"{input_detail} (retried once)",
             "width_sensitive": width_dependent,
         }
     if r.returncode != 0:
@@ -2214,6 +2218,35 @@ def run_function(
         # artifact of rebuilding at the host's width.
         "width_sensitive": width_dependent,
     }
+
+
+def _spawn_worker(spec_path: Path, workdir: Path) -> subprocess.CompletedProcess:
+    """One differential worker invocation. Raises `TimeoutExpired` on the wall clock."""
+    return subprocess.run(
+        [
+            *BG.worker_launch_prefix(),
+            sys.executable,
+            __file__,
+            "--worker",
+            # Relative, from `cwd` below. argv lands on the initial stack
+            # next to the environment, so an ABSOLUTE spec path made the
+            # frame offset depend on how long the scratch directory's name
+            # happened to be — `GLAURUNG_FIXTURE_TMPDIR` alone was enough to
+            # flip `04_switch_shapes:armv7:O0:dense_compute`. Relative keeps
+            # argv a constant for a given function.
+            spec_path.name,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=WORKER_TIMEOUT_S,
+        check=False,
+        cwd=str(workdir),
+        # Fixed environment + no address randomization: see
+        # `build_guard.worker_env`. Without all three, a recovery that reads
+        # an uninitialised local gives a different verdict per shell, per
+        # scratch directory, and per run.
+        env=BG.worker_env(),
+    )
 
 
 INFRA_STATUSES = {"missing", "nocases", "timeout"}
