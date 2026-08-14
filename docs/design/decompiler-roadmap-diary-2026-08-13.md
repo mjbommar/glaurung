@@ -1504,3 +1504,157 @@ never landed, and one reported `cargo test` totals alongside a type error that
 rust-analyzer was still showing. The second turned out to be analyzer lag —
 `cargo check` exited 0 and 2246 tests passed — but both were worth verifying
 directly rather than relaying. An agent's conclusion is evidence, not a result.
+
+---
+
+## Entry 13 — ARM32 entry-stack coordinates
+
+Roadmap ranked item 4: "extend the dual current-SP/CFA entry-stack coordinate
+model to ARM32 and prove it in both Thumb and A32 modes."
+
+### What the AArch64 gate actually was
+
+Not what the roadmap text implies. The gate on the *coordinate re-expression*
+was lifted at `401ac4f` (2026-08-06): `aapcs_entry_stack_coordinate`,
+`normalized_stack_slot`, `entry_stack_base`, `alloc_name`'s stacked-argument
+rule, and `dwarf_stack_object_hints`' `DW_OP_call_frame_cfa -> entry_sp` mapping
+all already accept `CallConv::Arm | ArmHardFloat` beside `Aarch64`. The
+still-open acceptance item was describing a state that had partly moved.
+
+The gate that was actually left is one line up the stack, and it is an
+ARM32-internal A32-versus-Thumb split:
+
+```rust
+const STACK_BASES: &[&str] = &["rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp"];
+```
+
+AArch64's frame register is `x29` and A32's is `fp` (r11), and both are in that
+list. **Thumb-2's is `r7`, and it is not.** GCC anchors Thumb frames on `r7`
+because most sixteen-bit encodings cannot reach the high registers. So
+`is_active_stack_base("r7")` was false, and the `is_arm_frame_pointer` guard —
+which already listed `"fp" | "r7" | "r11"` — was nested *inside* the
+`is_active_stack_base` branch of `collect_stack_address_defs` and therefore
+unreachable for `r7`. Its `"r7"` arm was dead code.
+
+Consequence, measured on `arm-linux-gnueabihf-gcc -mthumb -O0` binaries: the
+`pop {r7, pc}` epilogue redefines `r7`, `record_definition` saw a second
+definition with no resolvable address, marked the register ambiguous, and threw
+away the entry-SP coordinate for the whole function. Thumb frames promoted
+**nothing**. The same source compiled `-marm` promoted normally.
+
+### What was widened
+
+All in `src/ir/stack_locals.rs`.
+
+1. `StackContext` carries `arm_frame_register: Option<&'static str>`, proved by
+   `arm_frame_register()` from a top-level prologue that derives `fp`/`r7`/`r11`
+   from `sp`. Evidence-gated on purpose: `r7` is an ordinary callee-saved
+   register in `-O2` code, and `[r7+8]` without that proof is a pointer
+   dereference, not an argument home. `fp`/`r11` keep their unconditional
+   recognition, so A32, AArch64, and x86 behaviour is unchanged.
+2. The ARM frame-anchor branch in `collect_stack_address_defs` now runs *before*
+   the `is_active_stack_base` branch rather than inside it, so `r7` reaches it.
+3. `terminal_dead_overwrite` became `frame_coordinate_is_dead_after`. A32 tears
+   its frame down with `sub sp, fp, #4` — the frame register is never
+   redefined — so "no later read at all" sufficed. Thumb tears down with
+   `adds r7, #32; mov sp, r7`, and GCC lowers that add through register
+   temporaries, so it is neither foldable nor unread. The new predicate allows
+   reads that cannot inherit the coordinate (the SP restore itself, and the flag
+   and width temporaries hung off the same add) and still rejects any memory
+   access, copy, call escape, or returned address, via `expression_roots_at`,
+   which mirrors exactly the shapes `resolve_stack_address` resolves.
+4. A bare frame-anchor escape mints at most a pointer-sized slot.
+   `push {r7, lr}` saves the *caller's* frame register; the alias map is keyed by
+   register rather than by program point, so that store's source resolves to this
+   frame's anchor coordinate. The anchor is by construction the base of the whole
+   frame, so the "grow conservatively to the frame base" extent measures the
+   frame. A32's `fp` sits one word below the CFA and produced a harmless
+   four-byte slot; Thumb's `r7` sits at the bottom and produced a forty-byte
+   array that swallowed `seed`'s argument home. Every path that joins an already
+   proven object runs first, so a real escape into a DWARF aggregate still
+   resolves at its real extent.
+5. `record_definition`'s `(None, None)` arm now poisons the register. A
+   definition carrying no stack address must make the register ambiguous even
+   when seen *first*, because the map is keyed by register: one later address
+   definition otherwise claimed the whole body, including the region where the
+   register held something else. GCC's pre-value-folding Thumb lowering reuses
+   one temporary for both a loaded integer and the epilogue's frame address, and
+   that backdated coordinate made four ordinary `t0 + t1` adds look like
+   *subscripted* frame accesses, which seeded a byte object spanning the frame.
+   Value-numbered bodies define each name once and are unaffected.
+
+`src/python_bindings/ir/dwarf_contracts.rs` needed no change. Its ARM
+`DwarfStackBase::CallFrameCfa -> ("entry_sp", 0)` mapping is already correct and
+is the only one GCC exercises: across 28 ARM builds (7 fixtures x {A32, Thumb} x
+{O0, O2}), every `DW_AT_frame_base` was `DW_OP_call_frame_cfa`, never a
+register. The `Register(11 | 7) -> ("fp", 0)` arm beside it is currently dead for
+GCC and is left alone; see "not finished" below.
+
+### Real A32 and Thumb evidence
+
+RED first. `thumb_frame_register_shares_the_a32_entry_stack_coordinates` builds
+the recovered body of `pass_large_by_value` from
+`tests/decompiler_fixtures/src/129_struct_by_value.c` in both encodings' real
+shapes — A32 establishes `fp = sp + 4` before allocating (CFA-4), Thumb
+establishes `r7 = sp + 8` after it (CFA-40) — and asserts they recover one source
+frame. On master the A32 half passed and the Thumb half failed with
+`frame_coordinates["local_24"] == None`. Two more tests: a negative control
+(scratch `r7` with no prologue proof stays a pointer dereference) and the reused
+temporary above.
+
+Whole-binary control, `--style c`, `-O0`, both encodings of eight fixtures,
+counting raw unpromoted frame memory (`&[`) and distinct promoted `local_` names:
+
+| fixture | A32 | Thumb before | Thumb after |
+|---|---|---|---|
+| `07_packet_parser` | 34 / 25 | 141 / 1 | 34 / 25 |
+| `100_struct_layout` | 17 / 9 | 33 / 1 | 17 / 9 |
+| `108_multidimensional_arrays` | 15 / 9 | 72 / 1 | 15 / 10 |
+| `111_self_referential_struct` | 20 / 9 | 55 / 1 | 20 / 2 |
+| `129_struct_by_value` | 19 / 9 | 58 / 3 | 23 / 11 |
+| `153_many_live_locals` | 15 / 138 | 2792 / 1 | 2792 / 1 |
+| `15_binary_search_tree` | 24 / 15 | 99 / 1 | 24 / 9 |
+| `163_wire_header_parser` | 52 / 12 | 198 / 1 | 52 / 12 |
+
+Seven of eight Thumb lanes now match their A32 control's raw-memory count
+exactly. The "before" column is the same tree with only the three owned files
+stashed, so it is a controlled comparison, not a comparison against a different
+revision. Every A32 number is identical before and after.
+
+Concretely, `pass_large_by_value` Thumb went from every access spelled
+`&[var0+0xc]` to `local_24` (the `seed` argument home at CFA-36) and `local_1c`
+(the twenty-byte `struct Large value` at CFA-28) — the same two names the A32
+build recovers. The `--style decbench` output for both encodings is byte-identical
+to master.
+
+Ratchet: `tools/arch_roundtrip.py --arch armv7 --arch armv7_a32 --opt O0 --opt O2`
+over 32 fixtures, 192 lanes including the `x86_64` control lane, **zero** diffs
+against `tests/decompiler_fixtures/arch_baseline.json`.
+
+`cargo test`: 2250 passed, 0 failed, across 23 suites (2157 in the lib). Three
+new tests. No new clippy findings — the two `src/ir/stack_locals.rs` warnings are
+identical with the change stashed. Python: 11 decompiler suites plus
+`test_decompiler_arch_roundtrip.py`, `test_decompiler_curriculum_corpus.py`, and
+`test_decompiler_metamorphic.py` all pass.
+
+### Not finished
+
+- `153_many_live_locals:armv7` is unchanged and still recovers one local against
+  A32's 138. Its Thumb body reuses `r3` as a chained address cursor
+  (`r3 = r7 + 552; r3 = r3 - 540; store [r3]`) *and* as a constant register, so
+  the register-keyed alias map cannot hold both. This is the same
+  program-point-insensitivity the `(None, None)` fix makes safe rather than
+  wrong; making it *precise* needs value numbering on that path, not a wider
+  coordinate model. A32 escapes it only because its lowering folds the same
+  address into one instruction.
+- The ARM `DwarfStackBase::Register(11 | 7)` hint arm seeds a slot keyed on the
+  frame register's own name, which ARM32 accesses can never match now that they
+  all resolve to `entry_sp`. GCC never emits it, so this is latent, not live;
+  fixing it needs the anchor's entry-SP offset, which only the pass knows.
+- The A32 machine frame still survives into the output as
+  `local_8 = &local_4[0]` because `arm32_prologue::match_epilogue` only accepts
+  `sp += N` teardowns, not A32's absolute `sp = fp - 4`. Unchanged by this work
+  and outside the owned files.
+- VFP s/d/q overlap, hard-float versus soft-float selection, PC bias, literal
+  pools, and condition execution — the rest of EPIC 4's ARM32 list — are
+  untouched.

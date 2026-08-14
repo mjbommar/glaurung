@@ -334,8 +334,18 @@ ARM32 acceptance work:
 
 - [x] Preserve the real armv7 fixes recovered during branch integration.
 - [x] Reject ARM alignment saves as parameter evidence when balanced and unused.
-- [ ] Widen the dual current-SP/CFA entry-stack coordinate machinery from its
-  AArch64 gate to ARM32, with real A32/Thumb controls.
+- [x] Widen the dual current-SP/CFA entry-stack coordinate machinery from its
+  AArch64 gate to ARM32, with real A32/Thumb controls. **The gate was not what
+  this item described.** The coordinate re-expression machinery was already
+  widened to ARM32 at `401ac4f`; the gate actually remaining was an
+  A32-versus-Thumb split *inside* ARM32. `STACK_BASES` carried AArch64's `x29`
+  and A32's `fp`, but not Thumb-2's `r7` — which GCC anchors Thumb frames on
+  because 16-bit encodings cannot reach high registers — and the
+  `is_arm_frame_pointer` guard that already listed `"r7"` was nested inside the
+  `is_active_stack_base` branch, so that arm was unreachable. Thumb frames
+  therefore promoted NOTHING: `07_packet_parser` recovered 1 distinct local
+  against A32's 25, `163_wire_header_parser` 1 against 12. Seven of eight Thumb
+  lanes now match their A32 control exactly, with every A32 number unchanged.
 - [ ] Cover A32 versus Thumb, PC bias, literal pools, condition execution,
   r0-r15/CPSR, instruction alignment, and endian behavior.
 - [ ] Cover VFP s/d/q overlap and hard-float versus soft-float ABI selection.
@@ -742,13 +752,35 @@ This is the practical next-work queue as of the planning baseline.
 1. Finish the current session-owned DWARF/`TypeStore` slice: make the existing
    RED alignment expectation pass conservatively, run focused Rust tests, then
    full Rust/Python/lint/type gates before commit.
-2. Migrate one real aggregate/type consumer from the AST compatibility adapter
-   to verified MIR object, memory, and type evidence. Use a real stripped and a
-   real debug fixture plus a conflict/near-miss control.
+2. **[BLOCKED — this ordering is wrong; see below]** Migrate one real
+   aggregate/type consumer from the AST compatibility adapter to verified MIR
+   object, memory, and type evidence. Use a real stripped and a real debug
+   fixture plus a conflict/near-miss control.
+
+   The two models **partition memory differently**, so there is no join to
+   write. `src/ir/memory_objects/mir.rs` keys every stack access by
+   `ObjectIdentity::MirValue(root)` where `root` is the SP/FP `Input` value, and
+   folds the displacement into each access's `offset` — one object per ROOT
+   POINTER. Verified on a real two-array function: a single stack object
+   carrying offsets -8, -16, -28, -40, -44, -56, -60, -76. The AST adapter
+   instead builds one object per PROMOTED LOCAL, which is what
+   `high_variables::refine_object_cursor_values` asks about.
+
+   Migrating any aggregate consumer therefore requires first partitioning the
+   MIR frame object into per-variable extents — which is item 10. **Item 10 is a
+   prerequisite of item 2, not a follow-on.** Prerequisites already landed:
+   `StackLocalFacts.frame_coordinates` (`d1ffbec`), MIR reachable outside the
+   debug dump (`5ab8e7d`), and the EPIC 5 query surface (`a2fcd6f`).
 3. Complete the MIR queries that consumer needs (`value_at`, clobbers, reaching
    sets) instead of adding local scans.
-4. Extend the dual current-SP/CFA entry-stack coordinate model to ARM32 and prove
-   it in both Thumb and A32 modes.
+4. **[done]** Extend the dual current-SP/CFA entry-stack coordinate model to
+   ARM32 and prove it in both Thumb and A32 modes. Thumb-2's `r7` anchor was the
+   missing piece; Thumb had been promoting no frame storage at all. Still open in
+   EPIC 4: VFP s/d/q overlap, hard/soft-float ABI selection, PC bias, literal
+   pools, condition execution. Also unfixed: `153_many_live_locals` on Thumb
+   reuses `r3` as both an address cursor and a constant register, which the
+   register-keyed alias map cannot represent — that needs value numbering on
+   that path, not a wider coordinate model.
 5. Add the `-marm` A32 fixture lane and rebuild the x86-64 GCC 15 control.
 6. Implement indirect function-table call may-uses/contracts before DCE and
    reconstruct actual reaching call arguments.
@@ -759,6 +791,9 @@ This is the practical next-work queue as of the planning baseline.
 9. Finish CFG completeness and verified region ownership, then target the large
    O2-noinline GED cohort.
 10. Complete aggregate constraints and ABI handling, then project them to HIR.
+    **Promote ahead of item 2**: partitioning the MIR frame object into
+    per-variable extents is what makes any aggregate consumer migration
+    expressible at all.
 11. Finish semantic HIR and pure renderers, splitting the large legacy owners as
     each responsibility migrates.
 12. Add dependency-aware persistence, deterministic parallelism, cancellation,
