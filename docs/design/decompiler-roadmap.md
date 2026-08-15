@@ -34,6 +34,40 @@ When an old score or revision appears in an evidence document, treat it as
 historical unless this file calls it current. Product correctness, local metric
 results, the PR branch, and the public leaderboard are separate states.
 
+
+### The plan double-counts itself — read the Phases as views, not as work
+
+Audited 2026-08-15. The document has 193 checkboxes, of which 118 were open. That
+is NOT 118 distinct pieces of work: **the Phase blocks are largely a second view
+of the EPIC and topic blocks**, sequenced by delivery order rather than by
+subject. The same item is routinely open in two or three places:
+
+| item | appears as |
+|---|---|
+| `FunctionFacts`/`CallFactStore` + SCC propagation | EPIC 1, Phase 4, Phase 5 |
+| Aggregate classification (arrays/structs/unions/bitfields) | EPIC 3, Phase 6 |
+| Semantic HIR + pure renderers | HIR block, Phase 7, Foundations |
+| ARM32 A32/Thumb/PC/VFP/ABI completeness | EPIC 4 (twice), Phase 2, Foundations |
+| One object parse per session | Performance plan, Phase 1 |
+| Terminal/indirect/switch/exception edges | CFG block, Phase 4 |
+| PDB import into the canonical store | EPIC 1, EPIC 3, Phase 5, Foundations |
+| Delete legacy recognizers after parity | EPIC 2, Phase 5, Phase 7 |
+| Performance targets | Performance plan, Phase 8 |
+
+Roughly 70 distinct items, not 118. Two consequences worth stating, because both
+have already caused mistakes here:
+
+**Progress must be recorded in every view.** Landing a thing and ticking one box
+leaves the plan claiming it is undone, and a reader who trusts the count
+concludes less has happened than has. Several boxes were found already satisfied
+by work committed days earlier and never ticked.
+
+**A percentage-complete figure over these boxes is not a measure of progress.**
+Closing one real item can move zero, one, two or three boxes depending only on
+how many views happen to mention it. Cite what was closed and what it was
+measured against; the ratio is bookkeeping, not evidence.
+
+
 ## Current state
 
 ### Product and submission snapshot
