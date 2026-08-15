@@ -5557,10 +5557,11 @@ The brief: *"11% of all terminal control-flow edges are unresolved indirect
 transfers. Reduce that, honestly."* It also said to classify before fixing, and
 predicted the classification would be the more valuable half. It was.
 
-Entry 33's census recorded 2706 `unresolved_indirect_edges` against 24046
-`terminal_edges` over 60 gcc-O2 fixture objects, and the roadmap now reads that
-as "2706 places where the decompiler genuinely does not know where control
-goes". Re-derived over all 182 gcc-O2 fixture objects — 94809 health events,
+The roadmap's edge-accounting census (`266e371`) recorded 2706
+`unresolved_indirect_edges` against 24046 `terminal_edges` over 60 gcc-O2
+fixture objects, and the roadmap now reads that as "2706 places where the
+decompiler genuinely does not know where control goes". Re-derived over all 182
+gcc-O2 fixture objects — 94809 health events,
 2431 distinct functions — the count is 32838 of 141765 terminals, 23.2%. The
 ratio is higher than 11% because the object set is different, not because
 anything regressed; the shape of the answer is what matters and it is the same.
@@ -5584,9 +5585,11 @@ itself the thing being fixed:
 | table dispatch, `jmp *(%rdx,%rax,8)` and friends | 9 sites | 390 | 1.2% |
 | **total** | **842** | **32838** | |
 
-The first two are *proven*. A PLT stub reads a slot that `.rela.plt` binds to a
-named import. `deregister_tm_clones` and `register_tm_clones` — one pair in
-every single shared object gcc emits — do
+The first two are *proven*. A PLT stub reads a slot a dynamic relocation binds
+to a named import — `.rela.plt` `R_X86_64_JUMP_SLOT` for a lazy `.plt.sec` stub,
+`.rela.dyn` `R_X86_64_GLOB_DAT` for the `.plt.got` form the fixture corpus is
+built with. `deregister_tm_clones` and `register_tm_clones` — one pair in every
+single shared object gcc emits — do
 
 ```
 mov  rax, [GOT[_ITM_deregisterTMCloneTable]]
@@ -5690,7 +5693,7 @@ if (arg0 <= 4) { ret = ops[var0](var1, var2); return ret; }
 `cfg_health` is computed once in `recover_verified_with_health`, at LLIR
 structure time — before `ir::function_tables::resolve_function_table_entries`
 and the rest of the AST pipeline run. It is then re-emitted unchanged at ~39
-pipeline boundaries per function, which is where Entry 33's double-counting
+pipeline boundaries per function, which is where `266e371`'s double-counting
 caveat comes from. The effect is worse than double counting: a frozen early
 snapshot re-stamped at every later boundary *looks* like a pipeline-wide
 measurement, and reports as unresolved a dispatch three passes later fully
