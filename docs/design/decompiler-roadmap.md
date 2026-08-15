@@ -110,7 +110,17 @@ Committed to `master` after `fb4ee6b` (see
 ### Foundations still incomplete
 
 - [ ] Typed completeness and diagnostics do not yet travel through every stage.
-- [ ] `ProgramSession` is not yet the sole owner of every parse and cache.
+- [~] `ProgramSession` is not yet the sole owner of every parse and cache.
+  Substantially closed 2026-08-15: object parses per session went from
+  `O(functions + branches + callees)` — 58 on a small C binary, 40,865 on
+  `hello-rust-musl` at the default limit, and varying run to run on the SAME
+  binary — to a constant 19. `ProgramImage` now indexes PLT stub ranges in its
+  existing single parse and lazily owns `noreturn_import_targets`,
+  `exception_call_sites` and `dwarf_functions`. The residue is 19 distinct
+  one-shot analyses; reaching exactly one needs a relocation/symbol index on
+  `ProgramImage`. Note two production sites had been bypassing the
+  `profile::parse_object` adapter entirely, so the instrument was under-reporting
+  its own subject.
 - [ ] The canonical target and ABI model is not ARM32-complete.
 - [ ] The verified MIR/MemorySSA boundary is not yet the production authority
   for all definition-sensitive transformations.
