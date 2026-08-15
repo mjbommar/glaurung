@@ -1537,6 +1537,15 @@ the detail kept there and only the delta recorded here.
 
 - [x] Land the common object/access model and MIR identities.
 - [ ] Port the safe affine-index slice with real end-to-end coverage.
+  **An implementation of this exists, unlanded, on the branch `agent/stack-bias`**
+  (commit `4ac7657`, 2026-08-12, +640/-80 in `src/ir/stack_locals.rs`). It was a
+  snapshot taken to let a worktree be deleted, explicitly "not a reviewed
+  change", and it is 236 commits behind master. It carries `affine_of_expr`,
+  `collect_affine_index_defs` and `is_version_stable` — the exact three symbols
+  the 2026-08-15 audit searched for and found absent from `src/`. Whoever takes
+  this box should read that branch before rewriting it from scratch, and it must
+  NOT be deleted in a branch cleanup until it is either landed or judged
+  worthless on its merits.
   Step 3 of the four-step plan under EPIC 3's "Near-term retained work" landed
   and nothing else did. The fixture exists —
   `tests/decompiler_fixtures/src/187_constant_bias_index.c` (`8f661ff`), five
