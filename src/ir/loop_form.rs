@@ -322,6 +322,7 @@ fn recover_owned_pretested_do_while(
     then_body: &mut [Stmt],
     else_body: Option<&[Stmt]>,
 ) {
+    crate::ir::pass_stats::attempt("recover_owned_pretested_do_while");
     if else_body.is_some() {
         return;
     }
@@ -351,6 +352,7 @@ fn recover_owned_pretested_do_while(
     if resolve_entry_aliases(latch_guard, &aliases, 0) != *entry_guard {
         return;
     }
+    crate::ir::pass_stats::fire("recover_owned_pretested_do_while");
     *last = Stmt::While {
         cond: latch_guard.clone(),
         body: std::mem::take(loop_body),
