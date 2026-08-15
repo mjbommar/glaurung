@@ -683,10 +683,18 @@ pub fn recover_verified_with_health(
     } else {
         acct
     };
+    // The region accounting above says what the tree failed to express about this
+    // graph. The census below says what the graph failed to prove about the
+    // program: an unresolved dispatch, a transfer no terminator explains, a block
+    // that leaves the function by no route we can name. A region can account
+    // perfectly for a graph that is missing half the control flow, so both counts
+    // travel together or neither is worth reading.
+    let terminals = crate::ir::cfg_edges::classify_terminals(lf, &cfg.succs);
     let health = crate::ir::health::cfg_health_from_accounting(
         &selected_accounting,
         region_is_fallback || is_unsound,
-    );
+    )
+    .with_edge_census(&cfg.edges, &terminals);
     (selected, health)
 }
 

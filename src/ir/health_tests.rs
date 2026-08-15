@@ -54,6 +54,10 @@ fn health_counts_nested_output_risks_without_parsing_rendered_c() {
             uncovered_cfg_edges: 0,
             invented_cfg_edges: 0,
             structure_fallbacks: 0,
+            unknown_cfg_edges: 0,
+            terminal_edges: 0,
+            unknown_terminal_edges: 0,
+            unresolved_indirect_edges: 0,
             unresolved_transfers: 2,
             statements: 8,
         }
@@ -83,6 +87,7 @@ fn cfg_health_distinguishes_output_edge_defects_from_safety_fallbacks() {
             uncovered_cfg_edges: 1,
             invented_cfg_edges: 1,
             structure_fallbacks: 0,
+            ..CfgHealth::default()
         }
     );
     assert_eq!(
@@ -91,6 +96,7 @@ fn cfg_health_distinguishes_output_edge_defects_from_safety_fallbacks() {
             uncovered_cfg_edges: 0,
             invented_cfg_edges: 0,
             structure_fallbacks: 1,
+            ..CfgHealth::default()
         }
     );
 }

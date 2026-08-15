@@ -4356,3 +4356,187 @@ move a decompilation, and it did not.
 DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
 fixture matrix, a full `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. No
 baseline refreshed, nothing committed.
+
+## Entry 31 — Every way out of a block, named
+
+Task: the first two bullets of the roadmap's "Complete CFG and semantic
+structuring" block — carry edge completeness through every artifact, and
+represent direct, conditional, switch, indirect, exceptional, call, return,
+tail-call and unknown terminal edges explicitly. Worked from `21b0fde` in a
+detached worktree with a private target directory. Owned files:
+`src/ir/cfg_edges.rs`, `src/ir/health.rs`, `src/ir/health_tests.rs`,
+`src/ir/structure.rs`, `src/analysis/exception.rs`, `tools/pass_health_report.py`.
+
+### What was already there, and what the brief got wrong
+
+The brief said "LLIR has no exceptional-edge representation at all". That is
+half true in a way that matters. `analysis::exception` recovers LSDA call sites
+and `with_exceptional_successors` (landed well before this work) clones the
+LLIR graph and appends each landing pad to its protected call block. So the
+exceptional edge is recovered, and it is real.
+
+What it is not is *typed*, and it never reaches the structurer. The augmented
+graph is built inside `normalize_definedness_and_compute_ssa`, consumed by
+`compute_ssa` and the bit-demand oracle, and dropped. `prepare_llir_for_lowering`
+hands region recovery the **un-augmented** function. So the landing pad has no
+predecessor in the graph the structurer sees — which is the real reason the
+EPIC 5 query surface has nothing to ask about exceptions, and a more specific
+finding than "there is no representation".
+
+This is the sixth brief in three days whose premise was already implemented.
+
+### The lie the classifier was telling
+
+`cfg_edges::classify` derives an edge's kind from the terminator, and hands out
+an order-derived label when the terminator does not name a target. It had no
+bound on how many times it would do that. A `CondJump` explains two successors;
+a third got `Fallthrough` — a second one, out of the same block. A block with no
+transfer instruction explains one successor; a second got `Linear`. Both
+statements are impossible about any block, and both read downstream as ordinary
+facts.
+
+That is not hypothetical, and the exceptional edge is where it bites. On
+`samples/containers/hello-cpp-g++-O0` the LSDA proves **15** transfers to a
+landing pad. Classify the augmented graph the way the old code did and **13** of
+them come back `Linear` — a second "this block runs off its end" on a block that
+already had a real fallthrough. The claim that produces is that control reaches
+a `catch` handler by falling into it.
+
+The remaining two are more interesting: their landing pad starts exactly at
+`block.end_va`, so the handler abuts the protected range and *position cannot
+tell them apart from sequential flow at all*. Only the LSDA separates those. It
+is the cleanest available argument for why the proof has to be carried rather
+than re-derived.
+
+### What landed
+
+**`EdgeKind` gained two variants.** `Exceptional` — a transfer proven by the
+LSDA rather than by any instruction. `Unknown` — an edge the terminator does not
+explain. The classification rule is now bounded: **exactly one successor may
+carry an order-derived label** (the abutting block for a fallthrough or a linear
+run, the named target for a jump), and every further one is `Unknown`. This only
+changes edges whose old label was provably a duplicate; a single successor keeps
+the label it always had.
+
+`classify_with_exceptions` takes the `(source VA, landing pad VA)` set, and
+`analysis::exception::exceptional_edges` produces it from the same predicate
+`with_exceptional_successors` uses, so the augmentation and the labelling cannot
+disagree. Exceptional successors are also excluded from the `succ_count > 2`
+dispatch fallback — two handlers plus a fallthrough is three successors, and
+that fallback would have started reading a protected call block as a jump table.
+The augmentation loop still iterates `sites` rather than the set, because
+successor order feeds phi operand order.
+
+**`TerminalKind` is new, and is where the roadmap's list actually lives.** A
+block with no successors used to produce no edge of any kind, so a return, a
+`noreturn` call, a tail call, an unresolved `jmp *%rax` and a block whose
+successors were simply lost were the same observation: nothing.
+`classify_terminals` names them — `Return`, `ConditionalReturn`, `TailCall`,
+`Call`, `Direct`, `Indirect`, `Unknown` — with one invariant worth stating:
+**no block has zero ways out.** Anything unclassifiable is `Unknown`, counted,
+never absent.
+
+Two details are load-bearing. A recovered tail call is
+`Call { is_tail_call } ; Return`, so reading only the terminator reports every
+one of them as an ordinary return — the frame-replacing fact is one instruction
+back. And a conditional return emits `ConditionalReturn` *in addition to* its
+successor edges, because the block genuinely does both; if it has no successor
+at all, the side that continued is reported `Unknown` rather than assumed away.
+
+**`CfgHealth` and `AstHealth` gained four counters** —
+`unknown_cfg_edges`, `terminal_edges`, `unknown_terminal_edges`,
+`unresolved_indirect_edges` — computed in `recover_verified_with_health` from
+the same `Cfg` the region was built over. They answer a different question from
+the accounting counters already there: accounting says what the region tree
+failed to express about the graph, and the census says what the graph failed to
+prove about the program. A region can account perfectly for a graph that is
+missing half the control flow, which is exactly what this module's own header
+warns about.
+
+### Measured, because a new counter that fires everywhere means something else
+
+Across every sample binary the corpus test can find (203 functions):
+
+| terminal kind | count |
+|---|---|
+| Return | 143 |
+| Call (callee does not return here) | 37 |
+| Indirect (destinations never recovered) | 37 |
+| TailCall | 28 |
+| Direct | 4 |
+| Unknown | 3 |
+
+Zero unexplained successor edges, and zero blocks accounting for no outgoing
+control. Read the `Indirect` count honestly: the debug census shows most of
+those 37 are single-block PLT thunks (`jmp *GOT(%rip)`), not failed switch
+recovery. Six come from four-block functions — the `deregister_tm_clones`
+shape — and those are genuine unresolved computed transfers. The number is a
+census, not a defect count; what changed is that it exists at all.
+
+### Compatibility break found on the way out
+
+`tools/pass_health_report.py` validated health events with
+`set(health) != set(COUNTERS)` — an EXACT key set. That makes every new counter
+a breaking change to recorded evidence: adding these four would have rejected
+`tests/decbench_scoreboard/fixtures/hello-main-pass-health.jsonl` and every
+trace captured before today. Relaxed to "required counters must be present,
+recognised optional counters are summarized when they are there". The fixture
+stays valid unchanged and the new counters are reported when the emitting build
+has them.
+
+### What this does NOT do
+
+* **Exceptional edges still do not reach the structurer.** `Cfg::from` calls
+  `classify` with an empty proof set over the un-augmented graph, so
+  `EdgeKind::Exceptional` cannot fire in production today. Wiring the augmented
+  graph into region recovery is a behaviour change the region algebra is not
+  ready for — a landing pad is a second entry into the middle of a region — and
+  it belongs with the roadmap's "graph-complete region recovery" bullet, not
+  here. All twelve `136_cpp_exception_unwinding` cells still fail; nothing in
+  this entry was expected to move them.
+* **The region tree does not own terminal edges.** There is no `Return` region
+  node, so `structure_accounting` still accounts for successor edges only. The
+  census is attached to the same `CfgHealth`, but total accounting in the strong
+  sense — the tree explains every way out — is not done.
+* **`is_dispatch`'s `_ => succ_count > 2` structural fallback is untouched.** A
+  non-branch terminator with three or more successors is still read as a jump
+  table rather than reported unknown. It is reachable for synthetic and imported
+  CFGs and changing it is a separate measurement.
+* **Budgets and skipped bytes are not carried.** Bullet 1 also names budgets and
+  discovery-side coverage; this entry covers unresolved transfers, clipped
+  targets (as `TerminalKind::Direct`) and edge completeness only.
+
+### Verification
+
+* `cargo test --features python-ext` — **2459 passed, 0 failed** (2441 at
+  `21b0fde` plus the 18 tests added here). `cargo build --features python-ext`
+  reports **0** never-used items; the 19 remaining warnings are all pre-existing
+  and in files this work did not touch.
+* Unit coverage: one test per new `TerminalKind`, one per new `EdgeKind`, the
+  "every kind is produced by some shape" pair, the no-zero-exits invariant, and
+  a corpus census asserting no unexplained edge and no silent block.
+* Fixture-backed: `a_real_landing_pad_edge_is_exceptional_and_was_previously_a_
+  second_fallthrough` runs the whole pipeline over
+  `samples/containers/hello-cpp-g++-O0` and checks all 15 real LSDA edges, with
+  the 13/2 split above asserted rather than described.
+* `tools/dectest.py @o0` — 362 lanes, **no regressions and no improvements**.
+  `tools/dectest.py @o2` — 362 lanes, **no regressions and no improvements**.
+  724 of 736 lanes (98%) swept against `21b0fde`'s `baseline.json`. Neutral is
+  the correct result for this change and was the prediction: the corpus census
+  says zero unexplained edges exist today, so the only classification that could
+  have moved is one that never fires.
+* End to end: a real `GLAURUNG_PASS_HEALTH=1` trace carries the four new
+  counters, and `tools/pass_health_report.py` still reads the pre-existing
+  `hello-main-pass-health.jsonl` fixture that does not have them.
+* `python/tests/test_pass_health_report.py` and
+  `python/tests/test_decompiler_output_canaries.py` — 9 passed.
+
+### Baselines this needs
+
+None. No fixture was added, no baseline regenerated.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, a full `arch_roundtrip.py` sweep, repo-wide `cargo fmt`.
+Nothing committed.

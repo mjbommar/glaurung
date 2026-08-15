@@ -37,6 +37,19 @@ COUNTERS = (
     "unresolved_transfers",
     "statements",
 )
+# Counters the emitter may add without invalidating an older trace.
+#
+# The validator used to demand an EXACT key set, which makes every new counter a
+# breaking change to recorded evidence: adding the edge-completeness counters
+# would have rejected every trace captured before them, including the one this
+# tool is tested against. Required counters must be present; anything else the
+# emitter knows about is summarized when it is there and ignored when it is not.
+OPTIONAL_COUNTERS = (
+    "unknown_cfg_edges",
+    "terminal_edges",
+    "unknown_terminal_edges",
+    "unresolved_indirect_edges",
+)
 JsonObject = dict[str, Any]
 
 
@@ -55,11 +68,16 @@ def _validated_event(value: Any, line_number: int) -> JsonObject:
         if not isinstance(value.get(field), str) or not value[field]:
             raise HealthReportError(f"line {line_number}: invalid {field}")
     health = value.get("health")
-    if not isinstance(health, dict) or set(health) != set(COUNTERS):
+    if not isinstance(health, dict) or not set(COUNTERS) <= set(health):
         raise HealthReportError(
-            f"line {line_number}: health counters must be exactly {COUNTERS!r}"
+            f"line {line_number}: health counters must include {COUNTERS!r}"
         )
-    for counter in COUNTERS:
+    unknown = set(health) - set(COUNTERS) - set(OPTIONAL_COUNTERS)
+    if unknown:
+        raise HealthReportError(
+            f"line {line_number}: unrecognised health counters {sorted(unknown)!r}"
+        )
+    for counter in health:
         measured = health[counter]
         if not isinstance(measured, int) or isinstance(measured, bool) or measured < 0:
             raise HealthReportError(
@@ -115,10 +133,12 @@ def _function_report(
     baseline = events[0]["health"]
     final = events[-1]["health"]
     first_changes: JsonObject = {}
-    for counter in COUNTERS:
+    for counter in (*COUNTERS, *OPTIONAL_COUNTERS):
+        if counter not in baseline:
+            continue
         before = baseline[counter]
         for event in events[1:]:
-            after = event["health"][counter]
+            after = event["health"].get(counter, before)
             if after != before:
                 first_changes[counter] = {
                     "pass": event["pass"],

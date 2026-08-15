@@ -334,20 +334,18 @@ pub fn with_exceptional_successors(
     sites: &[ExceptionCallSite],
 ) -> crate::ir::types::LlirFunction {
     let mut augmented = function.clone();
-    let starts: std::collections::HashSet<u64> = augmented
-        .blocks
-        .iter()
-        .map(|block| block.start_va)
-        .collect();
-    for site in sites.iter().filter(|site| {
-        site.function_start == augmented.entry_va || starts.contains(&site.function_start)
-    }) {
-        if !starts.contains(&site.landing_pad) {
+    // Site order, not set order: a block protected by two call sites gets its
+    // landing pads in LSDA table order, and successor order feeds phi operand
+    // order. `exceptional_edges` shares the predicate below but not this loop.
+    for site in sites {
+        let Some(source_va) = exceptional_source(function, site) else {
             continue;
-        }
-        let Some(source) = augmented.blocks.iter_mut().find(|block| {
-            site.protected_start >= block.start_va && site.protected_end == block.end_va
-        }) else {
+        };
+        let Some(source) = augmented
+            .blocks
+            .iter_mut()
+            .find(|block| block.start_va == source_va)
+        else {
             continue;
         };
         if !source.succs.contains(&site.landing_pad) {
@@ -355,6 +353,45 @@ pub fn with_exceptional_successors(
         }
     }
     augmented
+}
+
+/// The block whose exceptional successor `site` proves, if this function has one.
+fn exceptional_source(
+    function: &crate::ir::types::LlirFunction,
+    site: &ExceptionCallSite,
+) -> Option<u64> {
+    let owned = |va: u64| function.blocks.iter().any(|block| block.start_va == va);
+    if site.function_start != function.entry_va && !owned(site.function_start) {
+        return None;
+    }
+    if !owned(site.landing_pad) {
+        return None;
+    }
+    function
+        .blocks
+        .iter()
+        .find(|block| site.protected_start >= block.start_va && site.protected_end == block.end_va)
+        .map(|block| block.start_va)
+}
+
+/// The `(source block start VA, landing pad VA)` pairs [`with_exceptional_successors`]
+/// would add.
+///
+/// Separated from the augmentation so the same proof can be used to *label* the
+/// edges as well as create them. An augmented successor with no branch behind it
+/// is otherwise indistinguishable from a fallthrough, and
+/// [`crate::ir::cfg_edges::classify`] was labelling it as one — a handler
+/// entered by unwinding presented as the block running off its own end.
+///
+/// Ordered so iteration never depends on FDE order.
+pub fn exceptional_edges(
+    function: &crate::ir::types::LlirFunction,
+    sites: &[ExceptionCallSite],
+) -> std::collections::BTreeSet<(u64, u64)> {
+    sites
+        .iter()
+        .filter_map(|site| Some((exceptional_source(function, site)?, site.landing_pad)))
+        .collect()
 }
 
 fn direct_pointer(pointer: Pointer) -> Option<u64> {
@@ -849,6 +886,159 @@ mod tests {
         assert!(
             augmented.blocks[1].succs.contains(&sites[0].landing_pad),
             "an LSDA FDE rooted at an owned cold chunk belongs to the merged function"
+        );
+    }
+
+    /// The exceptional edge exists in a real binary, and until now nothing named
+    /// it as one.
+    ///
+    /// `with_exceptional_successors` appends the landing pad to a protected call
+    /// block's successor list, and that augmented graph is used only for SSA. The
+    /// appended successor has no branch behind it, so the edge classifier — which
+    /// reads the terminator — labelled it from position: a second `Linear` out of a
+    /// block that already runs off its end somewhere else. Two "runs off its end"
+    /// edges out of one block cannot both be true, and the false one said control
+    /// reaches a catch handler by falling into it.
+    ///
+    /// Checked on a real g++ C++ binary rather than a synthetic graph, because the
+    /// point is that the shape occurs.
+    #[test]
+    fn a_real_landing_pad_edge_is_exceptional_and_was_previously_a_second_fallthrough() {
+        use crate::ir::cfg_edges::{classify, classify_with_exceptions, EdgeKind};
+        use std::path::Path;
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples")
+            .join("containers")
+            .join("hello-cpp-g++-O0");
+        if !path.exists() {
+            eprintln!("skipping: {} absent", path.display());
+            return;
+        }
+        let data = std::fs::read(&path).expect("read fixture");
+        let sites = super::extract_exception_call_sites(&data);
+        assert!(
+            !sites.is_empty(),
+            "a g++ C++ binary must carry LSDA call sites"
+        );
+
+        let budgets = crate::analysis::cfg::Budgets {
+            max_functions: 256,
+            max_blocks: 512,
+            max_instructions: 80_000,
+            timeout_ms: 8000,
+            total_timeout_ms: 0,
+        };
+        let (funcs, _cg) = crate::analysis::cfg::analyze_functions_bytes(&data, &budgets);
+
+        let (mut checked, mut abutting, mut unexplained) = (0usize, 0usize, 0usize);
+        for function in &funcs {
+            let Some(lf) = crate::ir::lift_function::lift_function_from_bytes(
+                &data,
+                function,
+                crate::core::binary::Arch::X86_64,
+            ) else {
+                continue;
+            };
+            let proven = super::exceptional_edges(&lf, &sites);
+            if proven.is_empty() {
+                continue;
+            }
+            let augmented = with_exceptional_successors(&lf, &sites);
+            let index: std::collections::HashMap<u64, usize> = augmented
+                .blocks
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (b.start_va, i))
+                .collect();
+            let succs: Vec<Vec<usize>> = augmented
+                .blocks
+                .iter()
+                .map(|b| {
+                    b.succs
+                        .iter()
+                        .filter_map(|va| index.get(va).copied())
+                        .collect()
+                })
+                .collect();
+
+            let typed = classify_with_exceptions(&augmented, &succs, |_, _| false, &proven);
+            let untyped = classify(&augmented, &succs, |_, _| false);
+            for &(source_va, pad_va) in &proven {
+                let (Some(&from), Some(&to)) = (index.get(&source_va), index.get(&pad_va)) else {
+                    continue;
+                };
+                let typed_kind = typed[from]
+                    .iter()
+                    .find(|edge| edge.to == to)
+                    .map(|edge| edge.kind);
+                assert_eq!(
+                    typed_kind,
+                    Some(EdgeKind::Exceptional),
+                    "{source_va:#x} -> {pad_va:#x} is proven by the LSDA"
+                );
+                let untyped_kind = untyped[from]
+                    .iter()
+                    .find(|edge| edge.to == to)
+                    .map(|edge| edge.kind);
+                match untyped_kind {
+                    // Adjacency cannot tell these apart: the landing pad starts
+                    // exactly where the protected block ends, so "runs off its
+                    // end into the handler" is indistinguishable from the truth
+                    // by position. Only the LSDA separates them.
+                    Some(EdgeKind::Linear) | Some(EdgeKind::Fallthrough) => {
+                        assert_eq!(
+                            augmented.blocks[from].end_va, pad_va,
+                            "{source_va:#x} -> {pad_va:#x} was read as sequential flow \
+                             without abutting the handler"
+                        );
+                        abutting += 1;
+                    }
+                    // The rest are the shape this work exists for: a protected
+                    // call block that already has a real fallthrough. Both edges
+                    // used to be `Linear` — one block running off its end into
+                    // two different places.
+                    Some(EdgeKind::Unknown) => {
+                        let sequential_siblings = untyped[from]
+                            .iter()
+                            .filter(|edge| {
+                                matches!(edge.kind, EdgeKind::Linear | EdgeKind::Fallthrough)
+                            })
+                            .count();
+                        assert_eq!(
+                            sequential_siblings, 1,
+                            "{source_va:#x} keeps exactly one order-derived edge; the \
+                             handler edge is the one that used to duplicate it"
+                        );
+                        unexplained += 1;
+                    }
+                    other => panic!(
+                        "{source_va:#x} -> {pad_va:#x} classified {other:?} without the LSDA"
+                    ),
+                }
+                // And the un-augmented graph — the one region structuring is
+                // actually built over — does not contain the edge at all. That is
+                // why exceptional control flow has never been structurable.
+                assert!(
+                    !lf.blocks[from].succs.contains(&pad_va),
+                    "the structuring graph unexpectedly already carries {pad_va:#x}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "no protected call block was found in {} — the sample or the recovery changed",
+            path.display()
+        );
+        assert!(
+            unexplained > 0,
+            "no protected call block with a real fallthrough was found: the shape this \
+             classification exists for is absent from the sample"
+        );
+        eprintln!(
+            "[exceptional-edges] {checked} LSDA-proven edge(s): {unexplained} would have been \
+             a second sequential edge out of the same block, {abutting} abut the handler"
         );
     }
 

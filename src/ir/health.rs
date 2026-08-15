@@ -18,6 +18,61 @@ pub struct CfgHealth {
     pub invented_cfg_edges: usize,
     /// Whether verified recovery rejected an unsound candidate and used labelled CFG.
     pub structure_fallbacks: usize,
+    /// Successor edges whose kind the block's terminator does not explain.
+    ///
+    /// Zero is the expected reading. A non-zero count means the graph handed to
+    /// structuring contains a transfer nothing in the instruction stream accounts
+    /// for — read the function before relaxing anything, because the previous
+    /// behaviour was to give that edge a plausible label instead of a count.
+    pub unknown_cfg_edges: usize,
+    /// Ways control leaves the function, summed over the blocks of this region.
+    ///
+    /// The denominator for the two counters below: "three unknown exits" means
+    /// nothing without knowing whether the function has four exits or four hundred.
+    pub terminal_edges: usize,
+    /// Terminal transfers whose destination class could not be proven at all.
+    pub unknown_terminal_edges: usize,
+    /// Computed transfers (`jmp *%rax`) whose destinations were never recovered.
+    ///
+    /// Not a defect on its own — an unresolved dispatch is a fact about the binary.
+    /// It is here because the alternative was an empty successor list, which reads
+    /// downstream exactly like a function that ended.
+    pub unresolved_indirect_edges: usize,
+}
+
+impl CfgHealth {
+    /// Fold in the edge census for the graph this region was built over.
+    ///
+    /// Kept separate from [`cfg_health_from_accounting`] because the two answer
+    /// different questions: accounting asks what the region tree failed to express
+    /// about the CFG, and this asks what the CFG itself failed to prove about the
+    /// program. A region can account for every edge of a graph that is missing half
+    /// the program's control flow.
+    pub(crate) fn with_edge_census(
+        mut self,
+        edges: &[Vec<crate::ir::cfg_edges::Edge>],
+        terminals: &[Vec<crate::ir::cfg_edges::TerminalEdge>],
+    ) -> Self {
+        use crate::ir::cfg_edges::{EdgeKind, TerminalKind};
+
+        self.unknown_cfg_edges = edges
+            .iter()
+            .flatten()
+            .filter(|edge| edge.kind == EdgeKind::Unknown)
+            .count();
+        self.terminal_edges = terminals.iter().map(Vec::len).sum();
+        self.unknown_terminal_edges = terminals
+            .iter()
+            .flatten()
+            .filter(|edge| edge.kind == TerminalKind::Unknown)
+            .count();
+        self.unresolved_indirect_edges = terminals
+            .iter()
+            .flatten()
+            .filter(|edge| edge.kind == TerminalKind::Indirect)
+            .count();
+        self
+    }
 }
 
 /// Output-risk counters at one point in the decompiler pipeline.
@@ -41,6 +96,14 @@ pub struct AstHealth {
     pub invented_cfg_edges: usize,
     /// Number of verified-structuring safety fallbacks used for this function.
     pub structure_fallbacks: usize,
+    /// Successor edges the block terminator does not explain.
+    pub unknown_cfg_edges: usize,
+    /// Ways control leaves the function, summed over this function's blocks.
+    pub terminal_edges: usize,
+    /// Terminal transfers whose destination class could not be proven.
+    pub unknown_terminal_edges: usize,
+    /// Computed transfers whose destinations were never recovered.
+    pub unresolved_indirect_edges: usize,
     /// Number of indirect transfers or unsupported instructions.
     pub unresolved_transfers: usize,
     /// Recursive AST statement count.
@@ -99,6 +162,10 @@ fn measure_with_undefined_count(
         uncovered_cfg_edges: cfg.uncovered_cfg_edges,
         invented_cfg_edges: cfg.invented_cfg_edges,
         structure_fallbacks: cfg.structure_fallbacks,
+        unknown_cfg_edges: cfg.unknown_cfg_edges,
+        terminal_edges: cfg.terminal_edges,
+        unknown_terminal_edges: cfg.unknown_terminal_edges,
+        unresolved_indirect_edges: cfg.unresolved_indirect_edges,
         unresolved_transfers: identifiers.unresolved_transfers,
         statements: identifiers.statements,
     }
@@ -171,6 +238,7 @@ pub(crate) fn cfg_health_from_accounting(
             .filter(|finding| matches!(finding, AccountError::ImpliedEdgeAbsent { .. }))
             .count(),
         structure_fallbacks: usize::from(used_fallback),
+        ..CfgHealth::default()
     }
 }
 
