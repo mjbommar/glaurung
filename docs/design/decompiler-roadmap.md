@@ -758,10 +758,26 @@ This is the practical next-work queue as of the planning baseline.
 1. Finish the current session-owned DWARF/`TypeStore` slice: make the existing
    RED alignment expectation pass conservatively, run focused Rust tests, then
    full Rust/Python/lint/type gates before commit.
-2. **[BLOCKED — this ordering is wrong; see below]** Migrate one real
-   aggregate/type consumer from the AST compatibility adapter to verified MIR
-   object, memory, and type evidence. Use a real stripped and a real debug
+2. **[UNBLOCKED — the prerequisite landed; the note below is kept for the
+   reasoning, but its "see below" ordering claim is now history]** Migrate one
+   real aggregate/type consumer from the AST compatibility adapter to verified
+   MIR object, memory, and type evidence. Use a real stripped and a real debug
    fixture plus a conflict/near-miss control.
+
+   The frame partition landed in `a45c1ae` and the join was completed in the
+   `MergedPointer`/`base_offsets` work: on real gcc `-O0` `ua162_store_be32`,
+   MIR — which never saw a promoted local — bounds all seven `frame_coordinates`
+   entries at exactly their source widths, and both base spellings agree.
+
+   **The roadmap names the wrong consumer.** `high_variables::refine_object_cursor_values`
+   asks `has_conflict_free_extent`, which is a STRIDE question, not an extent
+   question; its MIR analogue needs no partition at all, and the partition
+   explicitly REFUSES stride-walked objects via `UnboundedCursor`. What actually
+   blocks a migration is a name-to-value correspondence across pipeline stages:
+   the AST adapter receives a frame that `stack_locals` has ALREADY SPLIT — a
+   store to a promoted local is a definition there, not an access — so the AST
+   model contains no frame object to migrate. Pick a different consumer, or
+   state the correspondence first.
 
    The two models **partition memory differently**, so there is no join to
    write. `src/ir/memory_objects/mir.rs` keys every stack access by
@@ -879,9 +895,21 @@ This is the practical next-work queue as of the planning baseline.
 9. Finish CFG completeness and verified region ownership, then target the large
    O2-noinline GED cohort.
 10. Complete aggregate constraints and ABI handling, then project them to HIR.
-    **Promote ahead of item 2**: partitioning the MIR frame object into
-    per-variable extents is what makes any aggregate consumer migration
-    expressible at all.
+    ~~**Promote ahead of item 2**~~ — **done**: partitioning the MIR frame
+    object into per-variable extents landed in `a45c1ae` with covered runs,
+    `Spanned`/`Abutting` evidence, `bounds_at` bounds and typed refusals, and the
+    coordinate join was completed afterwards. What remains of item 10 is the
+    classification and ABI work, not the partition.
+
+    One soundness hole found and closed along the way, worth recording because
+    it failed OPEN rather than closed: a phi's incoming edges are `ValueId`s
+    inside `Definition::Phi`, not `MirUse`s, so the escape scan over
+    `function.uses()` could not see them. Accesses through an unplaceable merged
+    pointer rooted at the phi value instead, leaving the frame object reporting
+    an empty conflict set while bounding variables in a frame written behind its
+    back — `143_dynamic_frames:alloca_in_loop` reported `{}` with a runtime-sized
+    alloca sitting in the middle of its frame. Census of falsely-bounded frames
+    before the fix: gcc-O0 1 of 1363, gcc-O2 5 of 609, clang-O2 4 of 639.
 11. Finish semantic HIR and pure renderers, splitting the large legacy owners as
     each responsibility migrates.
 12. Add dependency-aware persistence, deterministic parallelism, cancellation,

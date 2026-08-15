@@ -4110,3 +4110,249 @@ struct is 12 bytes there against the host reference's 16, so
 DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
 fixture matrix, a full `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. No
 baseline refreshed, nothing committed.
+
+## Entry 30 — Item 10 was already done; what was actually broken underneath it
+
+Task: "partition the MIR frame object into per-variable extents", the piece the
+roadmap calls a prerequisite of item 2. Worked from `34b17c2` in a detached
+worktree with a private target directory. Owned files only:
+`src/ir/memory_objects.rs`, `src/ir/memory_objects/*`, `src/ir/mir/*`.
+
+### The premise was wrong: the partition landed 18 commits ago
+
+`src/ir/memory_objects/partition.rs` already exists. It landed in `a45c1ae`
+("ir: partition the MIR frame object into evidence-backed extents") on
+2026-08-14 and is written up as Entry 15 of this diary. It computes covered
+runs, `Spanned`/`Abutting` boundary evidence and `bounds_at` -> `at_least` /
+`at_most`, refuses on four typed `PartitionConflict`s, is computed for every
+object in `MemoryObjectBuilder::finish`, and is reachable as
+`MirFunction::object_partition`. Five real GCC fixtures assert its behaviour.
+
+What was not updated is `docs/design/decompiler-roadmap.md`. Item 2 still reads
+**[BLOCKED — this ordering is wrong]** and item 10 still says "**Promote ahead
+of item 2**". Both sentences describe the world before `a45c1ae`. **That text
+should be corrected**; a brief written from it sends the next agent to rebuild a
+module that exists.
+
+This is the fifth such correction in two days. The pattern is specific enough to
+name: a roadmap item's status lives in the roadmap, the work lands in a diary
+entry, and nothing makes the two agree.
+
+### So the frame partition itself was not the blocker. Two other things were.
+
+#### 1. A pointer merged at a control-flow join was invisible to the model
+
+`memory_objects/mir.rs` refuses a frame whose root reaches an operand position
+it does not interpret, by scanning `function.uses()`. **A phi's incoming edges
+are not `MirUse`s.** They are plain `ValueId`s inside
+`Definition::Phi { incoming }`, so the scan cannot see them at all.
+
+The consequence is a wrong-code-class hole in the fail-closed direction that
+matters. When `resolve_affine_values` cannot place a phi — the incoming
+coordinates disagree, or one of them is not affine at all — an access through
+that merged pointer is rooted at the PHI VALUE, creating a separate object. The
+frame object never hears about it, reports an empty conflict set, and bounds
+every variable in a frame whose bytes were written behind its back.
+
+Measured, not hypothesised. `143_dynamic_frames.c:alloca_in_loop`, gcc `-O0`,
+x86-64: GCC emits the stack-probe loop (`sub $0x1000,%rsp` around a back edge)
+and then `sub %rdx,%rsp` by a RUNTIME amount. Before this increment that frame's
+partition reported `{}` — no conflict, every extent bounded — with a
+runtime-sized allocation sitting in the middle of it.
+
+The new rule is `PartitionConflict::MergedPointer`: for a phi the resolver did
+not place, every incoming edge that DID resolve reports a conflict on its root.
+A phi the resolver did place needs no report — `propagate_acyclic` places one
+only when every edge carries the same root and offset, and the recurrence path
+records a stride that `UnboundedCursor` already refuses.
+
+One refinement was needed and is load-bearing. Unpruned SSA gives a join a phi
+for every register live on any edge, including ones whose merged value is
+immediately overwritten. Reporting those blamed the frame for dead definitions:
+across the corpus it raised 33 conflicts on clang `-O2` where 15 are real, and
+cost 5 frames of boundedness that nothing could ever have read. Restricting the
+rule to phis some use or some other phi actually reads removes exactly that
+noise and changes no real verdict.
+
+#### 2. The join to the AST model had only one half
+
+`StackLocalFacts::frame_coordinates` (landed `d1ffbec`) publishes `(base, disp)`
+per promoted-local NAME, and its own doc says "This is the join MIR evidence
+needs". There was no other half. MIR keys the frame by the root pointer VALUE
+and folds displacements into each access, so `("rbp", -0xc)` names nothing in
+that coordinate: the rebase constant — how far `rbp` sits from the root — was
+computed inside `resolve_affine_values` and thrown away.
+
+`MemoryObject::base_offsets` now publishes it: the offsets, in the object's own
+coordinate, of every machine register used as an address cursor into it. A
+register observed at two different offsets keeps BOTH — rule 3, the conflict is
+retained and the evidence that produced it is not destroyed. The first cut
+dropped such a register instead, which made the query answer `UnknownBase`, and
+that is a false statement: the frame IS addressed through it, just not at one
+offset. The refusal is computed at query time so it can say which failure it is.
+
+`MemoryObjectModel::resolve_frame_coordinate(base, disp)` is the translation,
+returning a typed `FrameCoordinate` (`Resolved` / `UnknownBase` /
+`AmbiguousBase` / `OffsetOverflow`) rather than an `Option`, so a refusal is
+distinguishable from an answer. Two base spellings exist and mean different
+things: `entry_rsp` / `entry_sp` is the architectural entry stack pointer, which
+IS the object's root — offset zero, no register lookup, true on every target;
+every other spelling names a machine register and resolves through
+`base_offsets`.
+
+### Evidence
+
+`162_unaligned_memcpy_access.c:ua162_store_be32`, gcc `-O0`, x86-64. A real
+decompilation of that function promotes seven frame locals; the coordinates
+below are the ones `frame_coordinates` mints for them. MIR, which never saw a
+promoted local, bounds each one at exactly its source width:
+
+| promoted name | `frame_coordinates` | MIR offset | `at_least` | width |
+|---|---|---:|---|---:|
+| `local_24` | `("rbp", -0x24)` | -44 | `[-44, -40)` | 4 |
+| `local_20` | `("rbp", -0x20)` | -40 | `[-40, -36)` | 4 |
+| `local_1c` | `("rbp", -0x1c)` | -36 | `[-36, -32)` | 4 |
+| `local_18` | `("rbp", -0x18)` | -32 | `[-32, -24)` | 8 (`uint8_t *buf`) |
+| `local_10` | `("rbp", -0x10)` | -24 | `[-24, -20)` | 4 |
+| `local_c`  | `("rbp", -0xc)`  | -20 | `[-20, -16)` | 4 (`uint8_t staging[4]`) |
+| `local_8`  | `("rbp", -0x8)`  | -16 | `[-16, -8)`  | 8 (stack canary) |
+
+A register that addressed the same frame at both -16 and -32 keeps both offsets
+on the object and answers `AmbiguousBase`, while `entry_rsp` still resolves over
+that same frame — the ambiguity of one base does not poison the others.
+
+The two spellings are asserted to agree: `rbp` resolves through `base_offsets`,
+which had to prove the register held root-8, and `entry_rsp` resolves through
+the root at offset zero. Landing on the same byte is the join's own consistency
+check. `r12` answers `UnknownBase`, not offset zero.
+
+Refusal census over `tests/decompiler_fixtures/build` (x86-64, one partition per
+stack-rooted object, throwaway harness not committed, same method as Entry 15):
+
+| corpus | frames | bounded before | bounded after | `MergedPointer` | frames it alone unbounded |
+|---|---:|---:|---:|---:|---:|
+| `gcc-O0` | 1,363 | 1,277 | 1,276 | 23 | 1 |
+| `gcc-O2` | 609 | 559 | 554 | 36 | 5 |
+| `clang-O2` | 639 | 594 | 590 | 15 | 4 |
+
+Ten frames across 2,611 stopped being reported as bounded, and every one of the
+ten was a false verdict. The ten cluster: `143_dynamic_frames` (alloca), and C++
+dispatch — `132_cpp_vtable_layout`, `134_cpp_virtual_inheritance`, `135_cpp_rtti`,
+`10_cpp_runtime_shapes`.
+
+New tests, each written failing first: one real fixture for the defect
+(`alloca_in_loop`), one real fixture for the whole join (the table above), and
+three synthetic LLIR controls — a join of two DIFFERENT frame addresses refuses,
+a join of two EQUAL ones still partitions, and an ambiguous base refuses with a
+reason. The real no-merge control is
+`ua162_store_be32` itself, whose conflict set stays empty over a branching frame.
+
+### What justifies each boundary, and what happens when evidence is absent
+
+Restated with the new rule, because the whole model is only as good as this list:
+
+- A covered run's OUTER edge is justified by bytes no access reaches. It is the
+  only place the model splits.
+- An interior `Spanned` position is justified by one access covering both sides.
+  It is machine evidence that they are one storage unit, not proof that they are
+  one source variable.
+- An interior `Abutting` position is justified by accesses meeting and none
+  spanning. It neither joins nor separates.
+- `at_least` is the interval between adjacent abutting positions. Its bytes are
+  joined by a CHAIN of overlapping accesses, which is weaker than one access
+  covering all of them — an inlined `memcpy` with overlapping wide loads can
+  chain across a real source boundary. The doc previously claimed the stronger
+  property; it now states the actual one. The error direction is merging, which
+  is the closed one: merging loses a boundary, narrowing would invent one.
+- `at_most` is the covered run.
+- Absent or contradictory evidence produces a typed conflict, and `bounds_at`
+  then returns `None` while `extents` keeps everything observed (rule 3):
+  `UnmodeledAccess`, `EscapedRoot`, `UnboundedCursor`, `UnresolvedCoordinate`,
+  and now `MergedPointer`.
+- A frame coordinate that cannot be translated answers with a REASON, not an
+  absent fact (rule 8).
+
+### Is item 2 expressible now? Yes — and the roadmap names the wrong consumer
+
+Expressible: the table above is the join, executed end to end on a real binary,
+agreeing with the AST model on all seven locals.
+
+But `high_variables::refine_object_cursor_values`, the consumer the roadmap
+names, does not ask a per-variable extent question. It asks
+`object_model.has_conflict_free_extent(name)`, which is
+`extent.is_some() && conflicts.is_empty()` — a question about a cursor walking
+an array of STRIDE-sized elements. Three consequences:
+
+1. The MIR analogue of that exact question needs no partition at all. `stride`,
+   `extent` and `conflicts` are computed by the SHARED
+   `MemoryObjectBuilder::finish`, so `mir.object_for_value(v)` already answers
+   it today.
+2. The partition explicitly REFUSES stride-walked objects
+   (`UnboundedCursor`) — the very class `has_conflict_free_extent` accepts. The
+   partition is not that consumer's join.
+3. What actually blocks that consumer is a NAME-to-VALUE correspondence across
+   pipeline stages, not a memory partition. It runs on the prepared AST, keyed
+   by promoted-local name; MIR is lowered from `PreparedLlir::numbered`, keyed
+   by `ValueId`, an earlier representation. `frame_coordinates` +
+   `base_offsets` closes that gap for frame-resident locals and for nothing
+   else — a cursor into a heap or parameter object has no frame coordinate to
+   join through.
+
+A sharper statement of "the two models partition memory differently": it is not
+that one is per-root and the other per-variable. It is that the AST adapter
+receives a frame **another pass already split** — `stack_locals` promotes each
+slot to a named local and `memory_objects/ast.rs` treats a store to a promoted
+local as a DEFINITION, not an access — while the MIR adapter receives the raw
+frame. The AST model contains no frame object at all.
+
+So the migration to write first is a frame-resident aggregate consumer, joined
+by `frame_coordinates` -> `resolve_frame_coordinate` -> `bounds_at`, with the
+refusal wired to a real refusal and not to a default. Migrating
+`refine_object_cursor_values` specifically would be migrating a stride question
+onto extent machinery.
+
+### Considered and not done
+
+- **DWARF as partition evidence.** `DwarfStackObject { base, offset, byte_size }`
+  is authoritative and would narrow `at_most` toward the truth, and a declared
+  boundary an access spans would be a contradiction worth retaining. It is not
+  wired in because `ProgramImage` carries no DWARF — it is parsed in
+  `python_bindings/ir/dwarf_contracts.rs` and reaches the AST pass as
+  `StackObjectHint`. Threading it into `lower_verified_with_image` is a
+  cross-cutting plumbing change, and it would put a source-level authority
+  inside a model whose whole claim is that it answers from machine evidence
+  alone. The right shape is a consumer that intersects `bounds_at` with DWARF,
+  not a partition that consumes DWARF.
+- **A new fixture (193).** None is needed and one would be misleading. The MIR
+  object model has no production consumer — `lower_verified_with_image` is
+  called from `PreparedLlir::mir()` (`#[allow(dead_code)]`, one test caller) and
+  from inside a `GLAURUNG_DUMP_PASSES` block — so a decompiler-output lane
+  cannot observe any of this. The shapes are already covered by
+  `143_dynamic_frames`, `132_cpp_vtable_layout` and `162_unaligned_memcpy_access`,
+  driven directly through real GCC builds in `partition_tests.rs`. **No baseline
+  needs regenerating.**
+- **Narrowing escape granularity**, the indexed-access hole, and shape
+  classification (struct/array/union) are unchanged from Entry 15's list.
+
+### Gates
+
+```
+cargo test --features python-ext    2446 passed, 0 failed, 1 ignored (pre-existing)
+cargo build --features python-ext   0 "never used"; the one remaining dead-code
+                                    warning is the pre-existing never-read field
+                                    at src/analysis/ioctl_taint.rs:409
+cargo clippy --all-targets --features python-ext   nothing on the touched files
+tools/dectest.py @o0                362 lanes, no regressions in scope
+tools/dectest.py @o2                362 lanes, no regressions in scope
+rustfmt --edition 2021              on the six touched files
+```
+
+The corpus result is the predicted one and was run to falsify the prediction,
+not to confirm it: with no production consumer, a memory-model change cannot
+move a decompilation, and it did not.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, a full `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. No
+baseline refreshed, nothing committed.

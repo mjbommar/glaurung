@@ -145,6 +145,20 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
         if let Some(origin) = origin {
             builder.observe_origin(object.clone(), origin);
         }
+        // The MIR half of the join to the AST's promoted frame coordinates: the
+        // offset this cursor's REGISTER held in the object's own coordinate.
+        if let Some(base) = base {
+            let register = &function.storages()[function.value(base.value).storage.0].register;
+            if let (Some(fact), crate::ir::types::VReg::Phys(name)) =
+                (resolved.facts.get(&base.value), register)
+            {
+                builder.observe_base_offset(
+                    object.clone(),
+                    crate::ir::abi::ssa_base(name),
+                    fact.offset,
+                );
+            }
+        }
         builder.observe_access(
             object,
             RawAccess {
@@ -159,6 +173,8 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
             },
         );
     }
+
+    report_merged_pointers(function, &resolved, &mut builder);
 
     // Rule 5 and rule 8: a pointer that reaches an operand this adapter does
     // not interpret may be dereferenced by a callee or by an operation the
@@ -196,6 +212,54 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
         }
     }
     function.object_model = model;
+}
+
+/// Rule 8: a pointer merged at a control-flow join with a coordinate the
+/// resolver could not equate to it is an explicit unknown, not an absent fact.
+///
+/// A phi's incoming edges are plain [`ValueId`]s held in the definition, NOT
+/// [`MirUse`] edges, so the escape scan over `function.uses()` cannot reach
+/// them. Without this rule `int *p = c ? &a : &b; *p = v;` leaves the frame
+/// partition reporting no conflict at all while that store lands in the frame
+/// at an offset no observed access names — every extent then looks bounded and
+/// two source variables can be silently aliased into one.
+///
+/// A phi the resolver DID place needs no report: `propagate_acyclic` places one
+/// only when every incoming edge carries the same root and offset, and the
+/// recurrence path records a stride that [`PartitionConflict::UnboundedCursor`]
+/// already refuses.
+fn report_merged_pointers(
+    function: &MirFunction,
+    resolved: &ResolvedAffine,
+    builder: &mut MemoryObjectBuilder,
+) {
+    // Unpruned SSA gives a join a phi for every register live on any edge,
+    // including registers the merged value is immediately overwritten in. A
+    // phi nothing reads cannot carry a frame address anywhere, and blaming the
+    // frame for it would refuse real evidence over a dead definition.
+    let mut read = BTreeSet::new();
+    for use_ in function.uses() {
+        read.insert(use_.value);
+    }
+    for value in function.values() {
+        if let Definition::Phi { incoming, .. } = &value.definition {
+            read.extend(incoming.iter().map(|(_, incoming)| *incoming));
+        }
+    }
+
+    for value in function.values() {
+        let Definition::Phi { incoming, .. } = &value.definition else {
+            continue;
+        };
+        if resolved.facts.contains_key(&value.id) || !read.contains(&value.id) {
+            continue;
+        }
+        for (_, incoming) in incoming {
+            if let Some(fact) = resolved.facts.get(incoming) {
+                builder.partition_conflict(fact.root, PartitionConflict::MergedPointer);
+            }
+        }
+    }
 }
 
 /// Report an access this adapter observed but could not place in `root`'s

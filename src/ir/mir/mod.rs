@@ -22,9 +22,9 @@ mod memory_tests;
 mod query_tests;
 
 pub use crate::ir::memory_objects::{
-    AccessPath, AccessRole, AccessSource, BoundaryEvidence, ExtentBounds, LayoutConflict,
-    MemoryObject, MemoryStateIdentity, ObjectId, ObjectIdentity, ObjectOrigin, ObjectPartition,
-    PartitionBoundary, PartitionConflict, PartitionExtent,
+    AccessPath, AccessRole, AccessSource, BoundaryEvidence, ExtentBounds, FrameCoordinate,
+    LayoutConflict, MemoryObject, MemoryStateIdentity, ObjectId, ObjectIdentity, ObjectOrigin,
+    ObjectPartition, PartitionBoundary, PartitionConflict, PartitionExtent,
 };
 pub use builder::lower_verified;
 pub use memory::lower_verified_with_image;

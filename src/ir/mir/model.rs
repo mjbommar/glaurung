@@ -1,6 +1,8 @@
 //! Stable, arena-backed MIR identities and records.
 
-use crate::ir::memory_objects::{MemoryObject, MemoryObjectModel, ObjectId, ObjectPartition};
+use crate::ir::memory_objects::{
+    FrameCoordinate, MemoryObject, MemoryObjectModel, ObjectId, ObjectPartition,
+};
 use crate::ir::types::{VReg, Width};
 use crate::target::TargetSpec;
 
@@ -210,6 +212,13 @@ impl MirFunction {
     /// The per-variable byte partition of one object's observed accesses.
     pub fn object_partition(&self, object: ObjectId) -> Option<&ObjectPartition> {
         self.object_model.partition(object)
+    }
+
+    /// Translate one AST frame coordinate `(base, disp)` — the pair
+    /// `StackLocalFacts::frame_coordinates` publishes for a promoted local —
+    /// into this function's object model, or say why it cannot be translated.
+    pub fn resolve_frame_coordinate(&self, base: &str, disp: i64) -> FrameCoordinate {
+        self.object_model.resolve_frame_coordinate(base, disp)
     }
 
     pub fn value(&self, id: ValueId) -> &MirValue {

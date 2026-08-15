@@ -10,7 +10,10 @@ use std::process::Command;
 
 use object::{Object, ObjectSymbol};
 
-use super::{BoundaryEvidence, MemoryObject, ObjectOrigin, ObjectPartition, PartitionConflict};
+use super::{
+    BoundaryEvidence, FrameCoordinate, MemoryObject, ObjectOrigin, ObjectPartition,
+    PartitionConflict,
+};
 use crate::ir::mir::{lower_verified_with_image, MirFunction};
 use crate::program::image::ProgramImage;
 
@@ -145,6 +148,10 @@ fn a_dword_copy_of_a_byte_staging_array_proves_it_is_one_storage_unit() {
     };
     let partition = frame_partition(&real.mir);
 
+    // Also the real control for `PartitionConflict::MergedPointer`: this frame
+    // branches, so it has control-flow joins, and none of them merges a frame
+    // coordinate the resolver could not place. An EMPTY conflict set is the
+    // assertion that the merge rule does not fire on an ordinary frame.
     assert!(
         partition.conflicts.is_empty(),
         "no unmodelled frame access exists here: {:#?}",
@@ -168,6 +175,91 @@ fn a_dword_copy_of_a_byte_staging_array_proves_it_is_one_storage_unit() {
             .expect("bounds for the neighbour")
             .at_least,
         (-24, -20)
+    );
+}
+
+/// The whole join, executed: a promoted-local frame coordinate in, an
+/// evidence-backed byte extent out.
+///
+/// `ua162_store_be32` promotes seven frame locals, and the pass publishes each
+/// one's coordinate in `StackLocalFacts::frame_coordinates` as `("rbp", disp)`.
+/// The names below are the ones a real `-O0` decompilation of this function
+/// mints (`local_18` ... `local_8`, i.e. `local_{disp:x}`); the assertion is
+/// that MIR, which never saw a promoted local and keys the entire frame by one
+/// root pointer, independently bounds each of those coordinates at exactly its
+/// source width.
+///
+/// The two spellings are asserted to agree. `rbp` resolves through
+/// `MemoryObject::base_offsets`, which had to prove the register held root-8;
+/// `entry_rsp` resolves through the root itself at offset zero. That they land
+/// on the same byte is the join's own consistency check.
+#[test]
+fn every_promoted_frame_coordinate_resolves_to_its_own_extent() {
+    let Some(real) = real_x86_function(
+        "ua162_store_be32",
+        "162_unaligned_memcpy_access.c",
+        include_bytes!("../../../tests/decompiler_fixtures/src/162_unaligned_memcpy_access.c"),
+        "-O0",
+    ) else {
+        return;
+    };
+    let frame = frame_object(&real.mir).id;
+    let partition = frame_partition(&real.mir);
+
+    // `mov %rsp,%rbp` after `push %rbp`: the frame register holds root-8, and
+    // the entry stack pointer IS the root.
+    assert_eq!(
+        real.mir.resolve_frame_coordinate("rbp", 0),
+        FrameCoordinate::Resolved {
+            object: frame,
+            offset: -8
+        }
+    );
+    assert_eq!(
+        real.mir.resolve_frame_coordinate("entry_rsp", 0),
+        FrameCoordinate::Resolved {
+            object: frame,
+            offset: 0
+        }
+    );
+
+    // (promoted name, its `frame_coordinates` displacement, its source width)
+    let promoted = [
+        ("local_24", -0x24, 4),
+        ("local_20", -0x20, 4),
+        ("local_1c", -0x1c, 4),
+        ("local_18", -0x18, 8),
+        ("local_10", -0x10, 4),
+        ("local_c", -0xc, 4),
+        ("local_8", -0x8, 8),
+    ];
+    for (name, disp, width) in promoted {
+        let FrameCoordinate::Resolved { object, offset } =
+            real.mir.resolve_frame_coordinate("rbp", disp)
+        else {
+            panic!("{name} did not resolve");
+        };
+        assert_eq!(object, frame, "{name}");
+        assert_eq!(
+            real.mir.resolve_frame_coordinate("entry_rsp", disp - 8),
+            FrameCoordinate::Resolved { object, offset },
+            "{name}: the two base spellings must name the same byte"
+        );
+        let bounds = partition
+            .bounds_at(offset)
+            .unwrap_or_else(|| panic!("{name} is not bounded"));
+        assert_eq!(
+            bounds.at_least,
+            (offset, offset + width),
+            "{name} at MIR offset {offset}"
+        );
+    }
+
+    // Rule 8: a base this model never saw addressing anything is an explicit
+    // unknown, not an offset of zero.
+    assert_eq!(
+        real.mir.resolve_frame_coordinate("r12", 0),
+        FrameCoordinate::UnknownBase
     );
 }
 
@@ -267,6 +359,47 @@ fn an_unmodelled_indexed_frame_access_refuses_to_bound_any_variable() {
             assert!(
                 partition.bounds_at(offset).is_none(),
                 "offset {offset} was bounded despite unmodelled indexed accesses"
+            );
+        }
+    }
+}
+
+/// `alloca_in_loop` calls `alloca` inside a loop, so GCC emits a stack-probe
+/// loop whose stack pointer is a phi, then `sub %rdx,%rsp` by a RUNTIME amount.
+/// Bytes of this frame are written through a pointer with no constant relation
+/// to the root, so nothing here can be bounded.
+///
+/// This is the case that proves the rule is not academic. A phi's incoming
+/// edges are values held in the definition, not `MirUse` edges, so the escape
+/// scan cannot reach them: before [`PartitionConflict::MergedPointer`] existed
+/// this frame reported NO conflict at all and every extent in it looked bounded
+/// while a runtime-sized allocation sat in the middle of it.
+#[test]
+fn a_runtime_sized_frame_adjustment_merged_at_a_loop_header_bounds_nothing() {
+    let Some(real) = real_x86_function(
+        "alloca_in_loop",
+        "143_dynamic_frames.c",
+        include_bytes!("../../../tests/decompiler_fixtures/src/143_dynamic_frames.c"),
+        "-O0",
+    ) else {
+        return;
+    };
+    let partition = frame_partition(&real.mir);
+
+    assert!(
+        partition
+            .conflicts
+            .contains(&PartitionConflict::MergedPointer),
+        "{:#?}",
+        partition.conflicts
+    );
+    // Rule 3: the conflict is added, the observed evidence is not destroyed.
+    assert!(!partition.extents.is_empty());
+    for extent in &partition.extents {
+        for offset in extent.start..extent.end {
+            assert!(
+                partition.bounds_at(offset).is_none(),
+                "offset {offset} was bounded despite a runtime-sized frame adjustment"
             );
         }
     }
@@ -397,6 +530,79 @@ mod synthetic {
         assert!(frame_partition_conflicts(&llir).contains(&PartitionConflict::EscapedRoot));
     }
 
+    /// A register that addressed the frame at two different offsets names no
+    /// fixed bytes, so the join must refuse it with a REASON. The evidence is
+    /// retained on the object (rule 3), and `resolve_frame_coordinate` reports
+    /// `AmbiguousBase` rather than dropping the register and answering
+    /// `UnknownBase`, which would say the frame is not addressed through it.
+    #[test]
+    fn a_register_that_addressed_the_frame_twice_refuses_with_a_reason() {
+        let llir = function(vec![(
+            0x1000,
+            vec![
+                Op::Store {
+                    addr: MemOp::plain(Some(VReg::phys("rsp")), None, 0, -8, 4),
+                    src: Value::Const(1),
+                },
+                Op::Bin {
+                    dst: VReg::phys("rax"),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("rsp")),
+                    rhs: Value::Const(-16),
+                },
+                Op::Store {
+                    addr: MemOp::plain(Some(VReg::phys("rax")), None, 0, 0, 4),
+                    src: Value::Const(2),
+                },
+                Op::Bin {
+                    dst: VReg::phys("rax"),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("rsp")),
+                    rhs: Value::Const(-32),
+                },
+                Op::Store {
+                    addr: MemOp::plain(Some(VReg::phys("rax")), None, 0, 0, 4),
+                    src: Value::Const(3),
+                },
+                Op::Return,
+            ],
+            vec![],
+        )]);
+        let image = x86_image();
+        let mir = lower_verified_with_image(&llir, &image).expect("verified MIR");
+        let object = mir
+            .objects()
+            .iter()
+            .find(|object| {
+                object
+                    .origins
+                    .iter()
+                    .any(|origin| matches!(origin, ObjectOrigin::StackValue(_)))
+            })
+            .expect("stack-rooted object");
+
+        // Rule 3: both observations are kept.
+        assert_eq!(
+            object
+                .base_offsets
+                .get("rax")
+                .map(|offsets| offsets.iter().copied().collect::<Vec<_>>()),
+            Some(vec![-32, -16])
+        );
+        assert_eq!(
+            mir.resolve_frame_coordinate("rax", 0),
+            crate::ir::memory_objects::FrameCoordinate::AmbiguousBase
+        );
+        // The unambiguous root spelling still resolves over the same frame.
+        assert_eq!(
+            mir.resolve_frame_coordinate("entry_rsp", -16),
+            crate::ir::memory_objects::FrameCoordinate::Resolved {
+                object: object.id,
+                offset: -16
+            }
+        );
+    }
+
     /// A cursor that walks the frame by a stride revisits every offset, so a
     /// constant-offset access no longer identifies fixed bytes.
     #[test]
@@ -423,5 +629,131 @@ mod synthetic {
         ]);
 
         assert!(frame_partition_conflicts(&llir).contains(&PartitionConflict::UnboundedCursor));
+    }
+
+    /// Two frame addresses merged at a control-flow join produce a pointer with
+    /// no single coordinate. Every store through it lands in the frame, at an
+    /// offset this adapter cannot name, so the frame's own extents no longer
+    /// account for every byte written to it.
+    ///
+    /// A phi's incoming edges are NOT `MirUse`s, so the escape scan over
+    /// `function.uses()` cannot see this: without an explicit rule the frame
+    /// partition reports no conflict and confidently bounds variables whose
+    /// bytes were overwritten behind its back.
+    #[test]
+    fn two_frame_addresses_merged_at_a_join_refuse_to_partition() {
+        let llir = function(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Store {
+                        addr: MemOp::plain(Some(VReg::phys("rsp")), None, 0, -8, 4),
+                        src: Value::Const(1),
+                    },
+                    Op::Cmp {
+                        dst: VReg::phys("zf"),
+                        op: crate::ir::types::CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("rdi")),
+                        rhs: Value::Const(0),
+                    },
+                ],
+                vec![0x1010, 0x1020],
+            ),
+            (
+                0x1010,
+                vec![Op::Bin {
+                    dst: VReg::phys("rax"),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("rsp")),
+                    rhs: Value::Const(-16),
+                }],
+                vec![0x1030],
+            ),
+            (
+                0x1020,
+                vec![Op::Bin {
+                    dst: VReg::phys("rax"),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("rsp")),
+                    rhs: Value::Const(-32),
+                }],
+                vec![0x1030],
+            ),
+            (
+                0x1030,
+                vec![
+                    Op::Store {
+                        addr: MemOp::plain(Some(VReg::phys("rax")), None, 0, 0, 4),
+                        src: Value::Const(7),
+                    },
+                    Op::Return,
+                ],
+                vec![],
+            ),
+        ]);
+
+        assert!(
+            frame_partition_conflicts(&llir).contains(&PartitionConflict::MergedPointer),
+            "{:#?}",
+            frame_partition_conflicts(&llir)
+        );
+    }
+
+    /// The control for the rule above: when both incoming edges carry the SAME
+    /// coordinate the merged pointer still names fixed bytes, the adapter
+    /// places the access in the frame's own coordinate, and nothing is refused.
+    #[test]
+    fn a_join_of_two_equal_frame_addresses_still_partitions() {
+        let llir = function(vec![
+            (
+                0x1000,
+                vec![
+                    Op::Store {
+                        addr: MemOp::plain(Some(VReg::phys("rsp")), None, 0, -8, 4),
+                        src: Value::Const(1),
+                    },
+                    Op::Cmp {
+                        dst: VReg::phys("zf"),
+                        op: crate::ir::types::CmpOp::Eq,
+                        lhs: Value::Reg(VReg::phys("rdi")),
+                        rhs: Value::Const(0),
+                    },
+                ],
+                vec![0x1010, 0x1020],
+            ),
+            (
+                0x1010,
+                vec![Op::Bin {
+                    dst: VReg::phys("rax"),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("rsp")),
+                    rhs: Value::Const(-16),
+                }],
+                vec![0x1030],
+            ),
+            (
+                0x1020,
+                vec![Op::Bin {
+                    dst: VReg::phys("rax"),
+                    op: BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("rsp")),
+                    rhs: Value::Const(-16),
+                }],
+                vec![0x1030],
+            ),
+            (
+                0x1030,
+                vec![
+                    Op::Store {
+                        addr: MemOp::plain(Some(VReg::phys("rax")), None, 0, 0, 4),
+                        src: Value::Const(7),
+                    },
+                    Op::Return,
+                ],
+                vec![],
+            ),
+        ]);
+
+        assert!(frame_partition_conflicts(&llir).is_empty());
     }
 }

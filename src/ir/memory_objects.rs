@@ -130,6 +130,41 @@ pub struct MemoryObject {
     pub stride: Option<u64>,
     pub extent: Option<u64>,
     pub conflicts: BTreeSet<LayoutConflict>,
+    /// Offset, in this object's byte coordinate, of each machine register whose
+    /// value was used as an address cursor into it.
+    ///
+    /// This is the MIR half of the join to
+    /// [`crate::ir::stack_locals::StackLocalFacts::frame_coordinates`], which
+    /// publishes `(base, disp)` per promoted local NAME. The two models place
+    /// their zero differently — the AST anchors on a named base register, MIR
+    /// on the root pointer value — and this map is the only evidence that
+    /// relates them.
+    ///
+    /// A register observed at two different offsets keeps BOTH (rule 3: a
+    /// conflict is retained, the evidence that produced it is not destroyed).
+    /// `resolve_frame_coordinate` turns that into an explicit
+    /// [`FrameCoordinate::AmbiguousBase`] instead of picking a winner —
+    /// binding a proven extent through an ambiguous base would attach it to the
+    /// wrong bytes, and dropping the register would misreport it as a base this
+    /// object is not addressed through at all.
+    pub base_offsets: BTreeMap<String, BTreeSet<i64>>,
+}
+
+/// Where one AST frame coordinate lands in the object model, or why it does not.
+///
+/// Rule 8: a failed proof is an explicit, distinguishable unknown, never an
+/// absent fact that a caller could read as "no evidence against".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameCoordinate {
+    /// The coordinate resolved to exactly one object and byte offset.
+    Resolved { object: ObjectId, offset: i64 },
+    /// No object in this model is addressed through that base.
+    UnknownBase,
+    /// The base addresses more than one object, or the same object at more
+    /// than one offset, so it names no fixed bytes.
+    AmbiguousBase,
+    /// The displacement does not fit the object's coordinate.
+    OffsetOverflow,
 }
 
 /// Deterministic function-local object model.
@@ -161,6 +196,7 @@ struct ObjectObservations {
     strides: Vec<i64>,
     conflicts: BTreeSet<LayoutConflict>,
     partition_conflicts: BTreeSet<PartitionConflict>,
+    base_offsets: BTreeMap<String, BTreeSet<i64>>,
 }
 
 /// Shared deterministic reducer from adapter observations to object layouts.
@@ -211,6 +247,24 @@ impl MemoryObjectBuilder {
             .or_default()
             .conflicts
             .insert(conflict);
+    }
+
+    /// Record that `register` held this object's address at `offset` in its own
+    /// coordinate. Only an adapter that resolved the cursor affinely may say
+    /// this; the reduction below withholds a register seen at two offsets.
+    pub(super) fn observe_base_offset(
+        &mut self,
+        base: impl Into<ObjectIdentity>,
+        register: &str,
+        offset: i64,
+    ) {
+        self.observations
+            .entry(base.into())
+            .or_default()
+            .base_offsets
+            .entry(register.to_string())
+            .or_default()
+            .insert(offset);
     }
 
     /// Report an access this adapter could not model in the object's own
@@ -308,6 +362,7 @@ impl MemoryObjectBuilder {
                 by_identity.insert(alias, id);
             }
             partition_conflicts.push(observation.partition_conflicts);
+            let base_offsets = observation.base_offsets;
             objects.push(MemoryObject {
                 id,
                 identity,
@@ -316,6 +371,7 @@ impl MemoryObjectBuilder {
                 stride,
                 extent,
                 conflicts,
+                base_offsets,
             });
         }
         let partitions = objects
@@ -376,6 +432,57 @@ impl MemoryObjectModel {
     /// The per-variable byte partition of one object's observed accesses.
     pub fn partition(&self, id: ObjectId) -> Option<&ObjectPartition> {
         self.partitions.get(id.0)
+    }
+
+    /// Translate one AST frame coordinate into this model's byte coordinate.
+    ///
+    /// `base`/`disp` is exactly the pair
+    /// [`crate::ir::stack_locals::StackLocalFacts::frame_coordinates`] publishes
+    /// for a promoted local. Composing this with [`Self::partition`] and
+    /// [`ObjectPartition::bounds_at`] is the whole join from a promoted-local
+    /// NAME to evidence-backed byte bounds:
+    ///
+    /// ```text
+    /// name --frame_coordinates--> (base, disp)
+    ///      --resolve_frame_coordinate--> (object, offset)
+    ///      --partition(object).bounds_at(offset)--> at_least / at_most, or a refusal
+    /// ```
+    ///
+    /// Two base spellings exist and they mean different things. The pass mints
+    /// `entry_rsp`/`entry_sp` for the architectural entry stack pointer, which
+    /// is the object's own root — offset zero, no register lookup, and true on
+    /// every target regardless of what the machine calls that register. Every
+    /// other spelling names a machine register, and only
+    /// [`MemoryObject::base_offsets`] can say where that register pointed.
+    pub fn resolve_frame_coordinate(&self, base: &str, disp: i64) -> FrameCoordinate {
+        let base = crate::ir::abi::ssa_base(base);
+        let mut claims = self.objects.iter().filter_map(|object| {
+            if matches!(base, "entry_rsp" | "entry_sp") {
+                return object
+                    .origins
+                    .iter()
+                    .any(|origin| matches!(origin, ObjectOrigin::StackValue(_)))
+                    .then_some((object.id, Some(0)));
+            }
+            let offsets = object.base_offsets.get(base)?;
+            let mut offsets = offsets.iter().copied();
+            let first = offsets.next();
+            Some((object.id, offsets.next().is_none().then_some(first?)))
+        });
+        let Some((object, offset)) = claims.next() else {
+            return FrameCoordinate::UnknownBase;
+        };
+        if claims.next().is_some() {
+            return FrameCoordinate::AmbiguousBase;
+        }
+        // One object, but the register pointed at more than one of its offsets.
+        let Some(offset) = offset else {
+            return FrameCoordinate::AmbiguousBase;
+        };
+        match offset.checked_add(disp) {
+            Some(offset) => FrameCoordinate::Resolved { object, offset },
+            None => FrameCoordinate::OffsetOverflow,
+        }
     }
 
     pub(crate) fn object_for_base(&self, base: &VReg) -> Option<&MemoryObject> {

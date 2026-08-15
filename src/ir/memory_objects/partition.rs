@@ -40,6 +40,10 @@ pub enum PartitionConflict {
     /// The object is walked by a cursor with a stride, so a constant offset no
     /// longer names fixed bytes.
     UnboundedCursor,
+    /// A pointer into this object was merged at a control-flow join with a
+    /// coordinate the adapter could not equate to it, so the merged value
+    /// reaches bytes of this object that no observed access names.
+    MergedPointer,
     /// The object carries a retained layout conflict that invalidates its
     /// offset coordinate.
     UnresolvedCoordinate,
@@ -78,7 +82,17 @@ pub struct PartitionExtent {
 /// Bounds on the extent of the variable that owns one byte offset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExtentBounds {
-    /// Bytes an access joins to this offset: the variable is at least this wide.
+    /// Bytes joined to this offset by a CHAIN of overlapping accesses: the
+    /// variable is at least this wide.
+    ///
+    /// The interval between two adjacent [`BoundaryEvidence::Abutting`]
+    /// positions contains only spanned positions, and the accesses that span
+    /// them necessarily overlap pairwise, so every byte in it is transitively
+    /// joined. That is weaker than "one access covers all of it": an inlined
+    /// `memcpy` emitting overlapping wide loads can chain across a real source
+    /// boundary and widen this bound past the true variable. It is still a
+    /// bound on machine evidence, and it is the direction that fails closed —
+    /// merging two variables loses a boundary, where narrowing would invent one.
     pub at_least: (i64, i64),
     /// The covered run: no observed access joins this offset to anything outside.
     pub at_most: (i64, i64),
