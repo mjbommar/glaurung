@@ -818,3 +818,125 @@ fn real_mangled_symbols_carry_a_demangled_alias_with_its_scheme() {
         "a demangled spelling is an alias, never the linkage identity"
     );
 }
+
+/// A real, checked-in binary with a PLT, DWARF, `.eh_frame`, and enough
+/// functions that a per-function parse would show up as an obvious multiple.
+fn parse_budget_sample() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2")
+}
+
+fn parse_budget_budgets(max_functions: usize) -> Budgets {
+    Budgets {
+        max_functions,
+        max_blocks: 4_096,
+        max_instructions: 200_000,
+        timeout_ms: 10_000,
+        total_timeout_ms: 0,
+    }
+}
+
+/// Indexing an image is EXACTLY one parse.
+///
+/// `.eh_frame` function extents used to be recovered by reopening the file the
+/// constructor had already opened, so the single-owner claim in this module's
+/// documentation cost two parses to make.
+#[test]
+fn indexing_one_image_parses_the_object_exactly_once() {
+    let bytes = std::fs::read(parse_budget_sample()).expect("read the checked-in sample");
+    let (image, parses) = crate::decompile::profile::count_object_parses(|| {
+        crate::program::image::ProgramImage::from_bytes(bytes).expect("index a real ELF")
+    });
+
+    assert_eq!(
+        parses, 1,
+        "ProgramImage must own the only parse of its bytes"
+    );
+    assert!(!image.plt_stub_ranges().is_empty(), "sample has a PLT");
+    assert!(
+        !image.eh_frame_functions().is_empty(),
+        "sample has .eh_frame FDEs"
+    );
+}
+
+/// Whole-binary discovery must not parse the object once per function.
+///
+/// This is the invariant, not the absolute number: PLT-stub membership,
+/// no-return import contracts, exception sites, and DWARF overrides were each
+/// answered by reopening the object at a per-function or per-branch site, so a
+/// 49-function binary cost 58 parses and a 1146-function one cost 40865. If any
+/// of those regresses to a per-function parse, the two counts below diverge.
+#[test]
+fn discovery_parse_count_does_not_scale_with_the_number_of_functions() {
+    let session = ProgramSession::from_path(&parse_budget_sample()).expect("index a real ELF");
+    // Warm the image's lazily recovered program-level indices so the comparison
+    // measures the discovery walk rather than one-off session setup.
+    let _ = crate::decompile::profile::count_object_parses(|| {
+        session.discover_functions(&parse_budget_budgets(1), &[])
+    });
+
+    let (few, few_parses) = crate::decompile::profile::count_object_parses(|| {
+        session.discover_functions(&parse_budget_budgets(4), &[])
+    });
+    let (many, many_parses) = crate::decompile::profile::count_object_parses(|| {
+        session.discover_functions(&parse_budget_budgets(4_096), &[])
+    });
+
+    assert!(
+        many.len() >= few.len().saturating_mul(4),
+        "the wide run must do materially more work: {} vs {}",
+        many.len(),
+        few.len()
+    );
+    assert_eq!(
+        few_parses,
+        many_parses,
+        "object parses scaled with function count: {} functions cost {} parses, \
+         {} functions cost {}",
+        few.len(),
+        few_parses,
+        many.len(),
+        many_parses
+    );
+    assert!(
+        many_parses <= 8,
+        "one whole-binary discovery took {many_parses} object parses"
+    );
+}
+
+/// Address-scoped discovery reuses the session image and parses nothing.
+///
+/// Recovering one direct callee's contract used to cost four parses — the
+/// no-return import tables, the PLT section table, and the jump-table decoder —
+/// and a single `decompile_all` runs this path hundreds of times.
+#[test]
+fn address_scoped_discovery_reuses_the_session_image() {
+    let session = ProgramSession::from_path(&parse_budget_sample()).expect("index a real ELF");
+    let functions = session.discover_functions(&parse_budget_budgets(4_096), &[]);
+    let entries: Vec<u64> = functions
+        .iter()
+        .take(8)
+        .map(|function| function.entry_point.value)
+        .collect();
+    assert!(entries.len() >= 4, "sample yields several functions");
+
+    let (recovered, parses) = crate::decompile::profile::count_object_parses(|| {
+        entries
+            .iter()
+            .filter(|entry| {
+                crate::analysis::cfg::discover_function_image_at(
+                    session.image(),
+                    &parse_budget_budgets(1),
+                    **entry,
+                )
+                .is_some()
+            })
+            .count()
+    });
+
+    assert!(recovered > 0, "at least one entry re-discovers");
+    assert_eq!(
+        parses, 0,
+        "{recovered} address-scoped discoveries reopened the object {parses} times"
+    );
+}

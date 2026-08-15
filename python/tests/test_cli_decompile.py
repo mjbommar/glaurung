@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -47,7 +48,16 @@ def test_decompile_entry_prints_pseudocode():
     # entry stub passes `main` as the first argument to __libc_start_main. (Arg
     # reconstruction also recovers the trailing boot args, so match the prefix
     # rather than pinning an exact arity.)
-    assert "call __libc_start_main(main" in result.stdout
+    #
+    # The dereference is deliberate and must NOT be asserted away. `_start` calls
+    # through the GOT slot, and until `874fe33` the lifter fabricated a direct
+    # target for `call *[rip+disp]`, so this rendered as a plain `call name(...)`
+    # — a confident claim that the call goes straight to the function. It does
+    # not. Matching name-then-args, rather than the exact spelling between them,
+    # keeps this test on the two properties it is actually about while leaving
+    # the lifter free to be honest about the indirection.
+    call = re.search(r"call [^\n]*__libc_start_main[^\n]*\(main\b", result.stdout)
+    assert call, result.stdout
 
 
 @pytest.mark.skipif(not SAMPLE.exists(), reason="sample missing")

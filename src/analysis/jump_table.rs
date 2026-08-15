@@ -42,7 +42,14 @@ pub struct JumpTable {
 /// from the next table can still land in executable memory when interpreted
 /// relative to the previous table's base.  A guarded dispatch supplies the
 /// missing extent, so this path uses that proof instead of guessing an end.
+///
+/// `image` is the session's already indexed view of `data`. A dispatching
+/// function is resolved once per indirect branch, so reopening the object here
+/// cost one parse per switch statement; when an image is supplied the same
+/// section table is read from it instead. `data` remains the fallback for the
+/// byte-only compatibility entry points.
 pub fn decode_bounded_relative_jump_table<F>(
+    image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
     table_va: u64,
     entry_count: usize,
@@ -55,25 +62,37 @@ where
     if entry_count == 0 || entry_count > MAX_ENTRIES {
         return None;
     }
+    let byte_count = entry_count.checked_mul(4)?;
+
+    if let Some(image) = image {
+        let little_endian = image.endianness() == crate::core::binary::Endianness::Little;
+        for section in image.sections() {
+            let Some(entries) =
+                section_entries(section.address(), section.data(), table_va, byte_count)
+            else {
+                continue;
+            };
+            let Some(targets) = decode_relative_entries(
+                entries,
+                table_va,
+                entry_count,
+                little_endian,
+                &is_executable_va,
+            ) else {
+                continue;
+            };
+            return Some(JumpTable { table_va, targets });
+        }
+        return None;
+    }
 
     let object = crate::decompile::profile::parse_object(data).ok()?;
     let little_endian = object.is_little_endian();
-    let byte_count = entry_count.checked_mul(4)?;
     for section in object.sections() {
-        let section_va = section.address();
-        let Some(section_offset) = table_va.checked_sub(section_va) else {
-            continue;
-        };
-        let Ok(offset) = usize::try_from(section_offset) else {
-            continue;
-        };
         let Ok(bytes) = section.data() else {
             continue;
         };
-        let Some(end) = offset.checked_add(byte_count) else {
-            continue;
-        };
-        let Some(entries) = bytes.get(offset..end) else {
+        let Some(entries) = section_entries(section.address(), bytes, table_va, byte_count) else {
             continue;
         };
         let Some(targets) = decode_relative_entries(
@@ -88,6 +107,17 @@ where
         return Some(JumpTable { table_va, targets });
     }
     None
+}
+
+/// Exactly `byte_count` bytes at `table_va` inside one section, when they fit.
+fn section_entries(
+    section_va: u64,
+    bytes: &[u8],
+    table_va: u64,
+    byte_count: usize,
+) -> Option<&[u8]> {
+    let offset = usize::try_from(table_va.checked_sub(section_va)?).ok()?;
+    bytes.get(offset..offset.checked_add(byte_count)?)
 }
 
 /// Decode the inline table of a Thumb-2 `tbb`/`tbh` table branch.
@@ -123,7 +153,12 @@ where
 /// entry is an instruction byte from the arm that follows the table, which is a
 /// small number and resolves back into the table. Requiring every target to be
 /// at or past the table's end is what makes an over-long bound fail closed.
+///
+/// `image` is the session's indexed view of `data`; see
+/// [`decode_bounded_relative_jump_table`] for why it is preferred over
+/// reopening the object.
 pub fn decode_thumb_table_branch<F>(
+    image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
     table_va: u64,
     entry_size: u8,
@@ -139,22 +174,33 @@ where
     }
     let byte_count = entry_count.checked_mul(usize::from(entry_size))?;
 
+    if let Some(image) = image {
+        let little_endian = image.endianness() == crate::core::binary::Endianness::Little;
+        for section in image.sections() {
+            let Some(entries) =
+                section_entries(section.address(), section.data(), table_va, byte_count)
+            else {
+                continue;
+            };
+            let targets = decode_thumb_table_entries(
+                entries,
+                table_va,
+                entry_size,
+                little_endian,
+                &is_executable_va,
+            )?;
+            return Some(JumpTable { table_va, targets });
+        }
+        return None;
+    }
+
     let object = crate::decompile::profile::parse_object(data).ok()?;
     let little_endian = object.is_little_endian();
     for section in object.sections() {
-        let Some(section_offset) = table_va.checked_sub(section.address()) else {
-            continue;
-        };
-        let Ok(offset) = usize::try_from(section_offset) else {
-            continue;
-        };
         let Ok(bytes) = section.data() else {
             continue;
         };
-        let Some(end) = offset.checked_add(byte_count) else {
-            continue;
-        };
-        let Some(entries) = bytes.get(offset..end) else {
+        let Some(entries) = section_entries(section.address(), bytes, table_va, byte_count) else {
             continue;
         };
         let targets = decode_thumb_table_entries(

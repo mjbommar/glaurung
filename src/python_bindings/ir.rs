@@ -990,8 +990,8 @@ pub(super) fn decompile_at_session(
     // value verbatim, and decoding one byte in recovers a body with no
     // parameters at all. See `arm32_mode::normalise_entry`.
     let func_va = image.normalize_function_entry(func_va);
-    let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
-    let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
+    let exception_sites = image.exception_call_sites();
+    let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&image));
     let dwarf_types = (style == "decbench" && types).then(|| session.debug_types());
     let dwarf_type_env = dwarf_types
         .as_deref()
@@ -1295,8 +1295,8 @@ fn decompile_range_at_py(
     let session = crate::program::session::ProgramSession::from_image(image);
     let image = session.image().clone();
     let data = image.bytes();
-    let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
-    let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&data));
+    let exception_sites = image.exception_call_sites();
+    let dwarf_outputs = (style == "decbench" && types).then(|| dwarf_output_contracts(&image));
     let dwarf_types = (style == "decbench" && types).then(|| session.debug_types());
     let dwarf_type_env = dwarf_types
         .as_deref()
@@ -2529,8 +2529,8 @@ fn decompile_all_py(
     let session = crate::program::session::ProgramSession::from_image(image);
     let image = session.image().clone();
     let data = image.bytes();
-    let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
-    let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
+    let exception_sites = image.exception_call_sites();
+    let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&image));
     let dwarf_types = (style == "decbench").then(|| session.debug_types());
     let dwarf_type_env = dwarf_types
         .as_deref()
@@ -2570,13 +2570,6 @@ fn decompile_all_py(
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
     // of a locally-defined global folds to that global instead of dereferencing
     // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
-    // Slot -> the in-image address the loader stores there, so a `-fPIC`
-    // read of a locally-defined global folds to that global instead of
-    // dereferencing an unrelocated linkage word. See `ir::got_fold`.
     let got_targets: std::collections::HashMap<u64, u64> =
         crate::analysis::elf_got::elf_got_target_map(&data)
             .into_iter()
@@ -2779,8 +2772,8 @@ fn decompile_many_py(
         .into_iter()
         .map(|va| image.normalize_function_entry(va))
         .collect();
-    let exception_sites = crate::analysis::exception::extract_exception_call_sites(&data);
-    let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&data));
+    let exception_sites = image.exception_call_sites();
+    let dwarf_outputs = (style == "decbench").then(|| dwarf_output_contracts(&image));
     let dwarf_types = (style == "decbench").then(|| session.debug_types());
     let dwarf_type_env = dwarf_types
         .as_deref()
@@ -2830,13 +2823,6 @@ fn decompile_many_py(
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
     // of a locally-defined global folds to that global instead of dereferencing
     // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
-    // Slot -> the in-image address the loader stores there, so a `-fPIC`
-    // read of a locally-defined global folds to that global instead of
-    // dereferencing an unrelocated linkage word. See `ir::got_fold`.
     let got_targets: std::collections::HashMap<u64, u64> =
         crate::analysis::elf_got::elf_got_target_map(&data)
             .into_iter()

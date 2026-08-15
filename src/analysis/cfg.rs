@@ -951,7 +951,7 @@ fn elf_x86_tail_target_looks_like_function_start(
         || matches!(after_landing_pad, [0x53 | 0x55 | 0x56 | 0x57, ..])
 }
 
-/// Is this ELF branch target a PLT stub — i.e. is the branch a tail call?
+/// The ELF PLT stub extents this walk may treat as tail-call targets.
 ///
 /// A PLT entry is linker-generated import glue. No compiler places one inside a
 /// function body, so an unconditional branch to one always leaves the function
@@ -962,13 +962,39 @@ fn elf_x86_tail_target_looks_like_function_start(
 /// This is deliberately a section-membership proof rather than a byte-pattern
 /// guess. The object architecture must also agree with the active decoder so a
 /// mismatched caller cannot classify unrelated bytes as a tail target.
-fn elf_tail_target_is_plt_stub(data: &[u8], target_va: u64, arch: BArch) -> bool {
+///
+/// Resolved ONCE per discovery run. The membership question used to be answered
+/// per branch instruction by reopening the object, so one whole-binary
+/// discovery paid an object parse per discovered function and address-scoped
+/// discovery paid one per call. The proof is unchanged; the section table now
+/// comes from the session's image, or at worst from one parse on the byte-only
+/// compatibility path.
+fn elf_plt_stub_ranges(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    arch: BArch,
+) -> Vec<std::ops::Range<u64>> {
     use object::{Object, ObjectSection};
+    if !matches!(
+        arch,
+        BArch::ARM | BArch::AArch64 | BArch::X86 | BArch::X86_64
+    ) {
+        return Vec::new();
+    }
+    if let Some(image) = image {
+        // The image's architecture came from the same parse that produced its
+        // section index, so an image whose architecture disagrees with the
+        // active decoder is the mismatched-caller case the byte path rejects.
+        if image.arch() != arch {
+            return Vec::new();
+        }
+        return image.plt_stub_ranges().to_vec();
+    }
     if !data.starts_with(b"\x7fELF") {
-        return false;
+        return Vec::new();
     }
     let Ok(object) = crate::decompile::profile::parse_object(data) else {
-        return false;
+        return Vec::new();
     };
     let architecture_matches = matches!(
         (arch, object.architecture()),
@@ -978,16 +1004,21 @@ fn elf_tail_target_is_plt_stub(data: &[u8], target_va: u64, arch: BArch) -> bool
             | (BArch::X86_64, object::Architecture::X86_64)
     );
     if !architecture_matches {
-        return false;
+        return Vec::new();
     }
-    object.sections().any(|section| {
-        matches!(
-            section.name(),
-            Ok(".plt" | ".plt.sec" | ".plt.got" | ".iplt")
-        ) && section.size() != 0
-            && target_va >= section.address()
-            && target_va < section.address().saturating_add(section.size())
-    })
+    object
+        .sections()
+        .filter(|section| {
+            matches!(
+                section.name(),
+                Ok(".plt" | ".plt.sec" | ".plt.got" | ".iplt")
+            ) && section.size() != 0
+        })
+        .filter_map(|section| {
+            let address = section.address();
+            address.checked_add(section.size()).map(|end| address..end)
+        })
+        .collect()
 }
 
 /// Discover a single function starting at `entry` within executable regions.
@@ -1155,6 +1186,8 @@ struct DiscoveryFacts<'a> {
     tables: &'a std::collections::BTreeMap<u64, Vec<u64>>,
     // Resolved import/thunk addresses whose contracts prohibit fallthrough.
     noreturn_targets: &'a std::collections::HashSet<u64>,
+    // PLT stub extents proven once for this run by `elf_plt_stub_ranges`.
+    plt_stub_ranges: &'a [std::ops::Range<u64>],
     // Optional authoritative ranges for a continuation/landing-pad walk. A
     // direct jump that stays inside these ranges is intra-function even when
     // its target bytes resemble a standalone prologue.
@@ -1180,6 +1213,11 @@ impl DiscoveryFacts<'_> {
         self.proven_end.is_some_and(|end| va >= end)
     }
 
+    /// True when `va` lands inside linker-generated import glue.
+    fn target_is_plt_stub(&self, va: u64) -> bool {
+        self.plt_stub_ranges.iter().any(|range| range.contains(&va))
+    }
+
     fn owns(&self, va: u64) -> bool {
         self.owned_ranges.is_some_and(|ranges| {
             ranges.iter().any(|range| {
@@ -1193,6 +1231,7 @@ impl DiscoveryFacts<'_> {
 }
 
 fn resolve_dispatch(
+    image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
     regions: &[ExecRegion],
     tracker: &crate::analysis::dispatch::DispatchTracker,
@@ -1213,6 +1252,7 @@ fn resolve_dispatch(
         };
         return Some(
             match decode_thumb_table_branch(
+                image,
                 data,
                 branch.table_va,
                 branch.entry_size,
@@ -1230,7 +1270,7 @@ fn resolve_dispatch(
         );
     }
     tracker.resolve_with(instruction, tables, |table_va, entry_count| {
-        decode_bounded_relative_jump_table(data, table_va, entry_count, |target| {
+        decode_bounded_relative_jump_table(image, data, table_va, entry_count, |target| {
             in_exec_regions(regions, target).is_some()
         })
         .map(|table| table.targets)
@@ -1483,7 +1523,7 @@ fn discover_function(
                         && !facts.owns(tgt)
                         && tgt != entry.value
                         && is_exec_target
-                        && elf_tail_target_is_plt_stub(data, tgt, arch);
+                        && facts.target_is_plt_stub(tgt);
                     if is_pe_tail_target || is_elf_x86_tail_target || is_elf_plt_tail_target {
                         call_edges.push(FunctionXref {
                             callsite_va: cur_va,
@@ -1516,7 +1556,14 @@ fn discover_function(
                         // transfer we cannot follow. Before this, both produced
                         // the same thing — no edges — so a switch lost every arm
                         // and nothing recorded that the graph was incomplete.
-                        match resolve_dispatch(data, regions, &dispatch, &ins, facts.tables) {
+                        match resolve_dispatch(
+                            facts.image,
+                            data,
+                            regions,
+                            &dispatch,
+                            &ins,
+                            facts.tables,
+                        ) {
                             Some(crate::analysis::dispatch::Resolution::Table {
                                 targets, ..
                             }) => {
@@ -1832,7 +1879,14 @@ fn discover_function(
                 )
                 .and_then(|(tracker, instruction)| {
                     instruction.and_then(|instruction| {
-                        resolve_dispatch(data, regions, &tracker, &instruction, facts.tables)
+                        resolve_dispatch(
+                            facts.image,
+                            data,
+                            regions,
+                            &tracker,
+                            &instruction,
+                            facts.tables,
+                        )
                     })
                 })
             });
@@ -3709,14 +3763,21 @@ fn parse_function_seeds(data: &[u8], regions: &[ExecRegion], arch: BArch) -> Vec
 /// heuristic discovery missed — that's a v1.5 follow-up. v1's measurable
 /// win is: every -g function gets its real name and authoritative
 /// chunk list, so the chunk-merge band-aid stops being load-bearing.
-fn apply_dwarf_overrides(data: &[u8], functions: &mut [Function]) -> usize {
-    let entries = extract_dwarf_functions(data);
+fn apply_dwarf_overrides(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    functions: &mut [Function],
+) -> usize {
+    let entries = image.map_or_else(
+        || extract_dwarf_functions(data).into(),
+        crate::program::image::ProgramImage::dwarf_functions,
+    );
     if entries.is_empty() {
         return 0;
     }
     use std::collections::HashMap;
     let mut by_va: HashMap<u64, &DwarfFunction> = HashMap::new();
-    for e in &entries {
+    for e in entries.iter() {
         by_va.entry(e.entry_va).or_insert(e);
     }
 
@@ -3771,7 +3832,10 @@ fn attach_exception_landing_pads(
     functions: &mut [Function],
     deadline: Deadline<'_>,
 ) -> Vec<(u64, FunctionXref)> {
-    let sites = crate::analysis::exception::extract_exception_call_sites(data);
+    let sites = facts.image.map_or_else(
+        || crate::analysis::exception::extract_exception_call_sites(data).into(),
+        crate::program::image::ProgramImage::exception_call_sites,
+    );
     if sites.is_empty() {
         return Vec::new();
     }
@@ -3795,7 +3859,7 @@ fn attach_exception_landing_pads(
     let mut call_edges = Vec::new();
     let mut touched = std::collections::BTreeSet::new();
 
-    for site in sites {
+    for site in sites.iter() {
         let Some(&parent_index) = parent_by_fde_start.get(&site.function_start) else {
             continue;
         };
@@ -3853,6 +3917,7 @@ fn attach_exception_landing_pads(
                 image: facts.image,
                 tables: facts.tables,
                 noreturn_targets: facts.noreturn_targets,
+                plt_stub_ranges: facts.plt_stub_ranges,
                 owned_ranges: Some(&ranges),
                 owned_leaders: Some(&leaders),
                 proven_end: None,
@@ -4287,11 +4352,13 @@ pub(crate) fn discover_function_image_at(
     let bits = if arch.is_64_bit() { 64 } else { 32 };
     let entry = Address::new(AddressKind::VA, entry_va, bits, None, None).ok()?;
     let tables = std::collections::BTreeMap::new();
-    let noreturn_targets = crate::analysis::call_semantics::imported_noreturn_targets(data);
+    let noreturn_targets = image.noreturn_import_targets();
+    let plt_stub_ranges = elf_plt_stub_ranges(Some(image), data, arch);
     let facts = DiscoveryFacts {
         image: Some(image),
         tables: &tables,
         noreturn_targets: &noreturn_targets,
+        plt_stub_ranges: &plt_stub_ranges,
         owned_ranges: None,
         owned_leaders: None,
         proven_end: None,
@@ -4371,7 +4438,17 @@ fn analyze_functions_bytes_within(
         stats.elapsed_ms = deadline.elapsed_ms();
         return (functions, cg, stats);
     }
-    let noreturn_targets = crate::analysis::call_semantics::imported_noreturn_targets(data);
+    // One import-table read per image, shared with every other consumer of it.
+    // The byte-only compatibility path still recovers its own copy.
+    let noreturn_targets: std::sync::Arc<std::collections::HashSet<u64>> = image.map_or_else(
+        || {
+            std::sync::Arc::new(crate::analysis::call_semantics::imported_noreturn_targets(
+                data,
+            ))
+        },
+        crate::program::image::ProgramImage::noreturn_import_targets,
+    );
+    let plt_stub_ranges = elf_plt_stub_ranges(image, data, arch);
 
     // Explicit caller-provided addresses are authoritative and go first so a
     // tight function budget cannot be consumed by whole-binary heuristics
@@ -4898,6 +4975,7 @@ fn analyze_functions_bytes_within(
         image,
         tables: &jump_table_index,
         noreturn_targets: &noreturn_targets,
+        plt_stub_ranges: &plt_stub_ranges,
         owned_ranges: None,
         owned_leaders: None,
         proven_end: None,
@@ -5107,7 +5185,7 @@ fn analyze_functions_bytes_within(
     // which beat the heuristic discovery output on -g builds. We only
     // *override* fields that DWARF has hard answers for; heuristic
     // basic-block CFG and edges remain.
-    apply_dwarf_overrides(data, &mut functions);
+    apply_dwarf_overrides(image, data, &mut functions);
 
     // C++/Itanium handlers are reached through LSDA metadata rather than a
     // branch instruction. Merge their blocks only after DWARF establishes the
@@ -5775,16 +5853,31 @@ mod arm_tail_call_tests {
         std::fs::read(path).expect("read checked-in cross sample")
     }
 
+    /// The byte-only fallback and the session image must agree exactly: the
+    /// image path is what production takes, and a range list that disagreed
+    /// with the object it was built from would silently reclassify tail calls.
+    fn target_is_plt_stub(data: &[u8], target_va: u64, arch: BArch) -> bool {
+        let from_bytes = elf_plt_stub_ranges(None, data, arch);
+        let image = crate::program::image::ProgramImage::from_bytes(data.to_vec())
+            .expect("index the checked-in sample");
+        let from_image = elf_plt_stub_ranges(Some(&image), data, arch);
+        assert_eq!(
+            from_bytes, from_image,
+            "byte and image PLT indices diverged"
+        );
+        from_image.iter().any(|range| range.contains(&target_va))
+    }
+
     /// `.plt` in the checked-in armhf sample spans 0x4d8..0x54c (a 20-byte
     /// header plus eight 12-byte stubs). A branch into that range is a tail
     /// call; a branch into `.text` is ordinary control flow.
     #[test]
     fn an_arm_branch_into_the_plt_is_a_tail_call() {
         let data = sample("armhf/c2_demo-armhf-gcc");
-        assert!(elf_tail_target_is_plt_stub(&data, 0x4ec, BArch::ARM));
-        assert!(elf_tail_target_is_plt_stub(&data, 0x540, BArch::ARM));
-        assert!(!elf_tail_target_is_plt_stub(&data, 0x4d0, BArch::ARM));
-        assert!(!elf_tail_target_is_plt_stub(&data, 0x698, BArch::ARM));
+        assert!(target_is_plt_stub(&data, 0x4ec, BArch::ARM));
+        assert!(target_is_plt_stub(&data, 0x540, BArch::ARM));
+        assert!(!target_is_plt_stub(&data, 0x4d0, BArch::ARM));
+        assert!(!target_is_plt_stub(&data, 0x698, BArch::ARM));
     }
 
     /// A decoder/object architecture mismatch must never reclassify a target.
@@ -5792,10 +5885,10 @@ mod arm_tail_call_tests {
     fn matching_architectures_are_required_and_supported() {
         let data = sample("armhf/c2_demo-armhf-gcc");
         for arch in [BArch::X86_64, BArch::X86, BArch::AArch64] {
-            assert!(!elf_tail_target_is_plt_stub(&data, 0x4ec, arch));
+            assert!(!target_is_plt_stub(&data, 0x4ec, arch));
         }
         let arm64 = sample("arm64/c2_demo-arm64-gcc");
-        assert!(elf_tail_target_is_plt_stub(&arm64, 0x810, BArch::AArch64));
+        assert!(target_is_plt_stub(&arm64, 0x810, BArch::AArch64));
     }
 }
 
@@ -6819,6 +6912,7 @@ mod degenerate_block_tests {
             image: None,
             tables: &tables,
             noreturn_targets: &noreturn_targets,
+            plt_stub_ranges: &[],
             owned_ranges: None,
             owned_leaders: None,
             proven_end: None,

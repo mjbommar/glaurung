@@ -128,6 +128,23 @@ pub(crate) fn parse_object(data: &[u8]) -> object::read::Result<object::read::Fi
     object::read::File::parse(data)
 }
 
+/// Count the object parses `operation` performs on this thread.
+///
+/// `OBJECT_PARSE_TOTAL` only advances inside an active run, which is what keeps
+/// the counter free when profiling is off. Tests that pin per-session parse
+/// ownership need the same instrument without the environment variable and
+/// without the JSON output, so they open a counting scope here rather than
+/// timing anything.
+#[cfg(test)]
+pub(crate) fn count_object_parses<T>(operation: impl FnOnce() -> T) -> (T, u64) {
+    ACTIVE_RUNS.with(|active| active.set(active.get().saturating_add(1)));
+    let before = OBJECT_PARSE_TOTAL.with(Cell::get);
+    let output = operation();
+    let after = OBJECT_PARSE_TOTAL.with(Cell::get);
+    ACTIVE_RUNS.with(|active| active.set(active.get().saturating_sub(1)));
+    (output, after.saturating_sub(before))
+}
+
 fn saturating_nanos(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }

@@ -4769,3 +4769,221 @@ fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. **No
 baseline was refreshed and nothing was committed** — fixture 193 needs
 `baseline.json`, `structural_baseline.json`, `arch_baseline.json` and
 `tools/fitness_baseline.json` regenerated before the gate is green.
+
+## Entry 33 — 40,865 parses that cost nothing, and the one number that was wrong
+
+The roadmap's performance table has one row the decompiler misses: **base object
+parses per session, target exactly one.** Measured at HEAD (01f0b23) with
+`GLAURUNG_PIPELINE_PROFILE=1` over one
+`g.ir.decompile_all(hello-gcc-O2, style="decbench", limit=50)`:
+
+```
+{"event":"run","entry_point":"decompile_all","duration_ns":284711275,"object_parse_count":58}
+```
+
+58 parses for 49 functions. The brief's hypothesis was that this re-parsing is
+what the instrumented stages fail to account for — they sum to roughly 100 ms of
+that 285 ms run, and re-parsing is the obvious suspect for the other 185 ms.
+
+**That hypothesis is wrong, and the miss is much larger than 58.** Both halves
+of that took measuring, and the second half is the one worth keeping.
+
+### Where the parses actually were
+
+`GLAURUNG_TRACE_PARSES` (a temporary `Backtrace::force_capture` in the
+`profile::parse_object` adapter, removed before the patch) attributes every one:
+
+```
+hello-gcc-O2, limit=50, 58 parses
+  39  cfg::elf_tail_target_is_plt_stub  <- discover_function
+   4  analyze_functions_bytes_within (seeds, symbol rename, vtables)
+  15  fifteen distinct one-shot program analyses
+
+hello-rust-musl, limit=50, 3517 parses
+2965  cfg::elf_tail_target_is_plt_stub  <- discover_function
+ 366  jump_table::decode_bounded_relative_jump_table <- resolve_dispatch
+ 168  elf_plt::elf_plt_map <- imported_noreturn_targets <- discover_function_image_at
+  18  everything else
+```
+
+99% of it is three helpers, and all three take `&[u8]` and reopen the object.
+`elf_tail_target_is_plt_stub` asks "is this branch target inside `.plt`?" — a
+section-table question — once per unconditional branch. `imported_noreturn_targets`
+reads the import tables once per *call* to `discover_function_image_at`, and
+`decompile_all` calls that path hundreds of times to recover direct-callee
+contracts. So the count is not `O(1) + O(functions)`; it is
+`O(functions) + O(branches) + O(callees)`.
+
+`hello-rust-musl` at the *default* `limit=30000` — which is what `--all` does —
+paid **40,865 parses**. That is the real size of the miss. `limit=50` hides it
+because it caps discovery, not because the pipeline is well behaved.
+
+### The counter was under-reporting
+
+Two production call sites parse with `object::read::File::parse` directly
+instead of the `profile::parse_object` adapter, so they never incremented
+`OBJECT_PARSE_TOTAL`: `analysis/elf_got.rs:176` (`elf_got_target_map`) and
+`debug/dwarf_signatures.rs:120`. The instrument was not measuring everything it
+claimed to measure. Both now go through the adapter, so the "after" numbers
+below are counted against a *stricter* rule than the "before" ones.
+
+While reading that path: `decompile_all_py` and `decompile_many_py` each
+computed `got_targets` twice, the second binding shadowing the first. HEAD
+already emitted `warning: unused variable: got_targets` at both sites and it had
+been read as harmless. It was two whole relocation walks per call.
+
+### What was done — ownership, not memoisation
+
+`ProgramImage` already existed and already documented itself as the thing that
+"extracts durable, owned indices during construction" so "consumers query these
+indices and never reopen the object". The work was making that true, not
+inventing a cache:
+
+- **`plt_stub_ranges`** is now indexed inside the constructor's existing single
+  parse, at zero additional cost. `elf_tail_target_is_plt_stub` is gone;
+  `DiscoveryFacts` carries the range list and the test is
+  `ranges.iter().any(|r| r.contains(&va))`.
+- **Three program-level artifacts became image-owned, computed at most once
+  each**: `noreturn_import_targets()`, `exception_call_sites()`,
+  `dwarf_functions()`. Every one of those had two or more independent consumers
+  re-deriving it from bytes. This is the "session is the sole owner" clause of
+  Phase 1, not a byte-keyed memo table: the artifact lives on the image, dies
+  with it, and cannot be served to a different image.
+- **`ProgramImage::from_bytes` stopped reopening its own file.** It called
+  `eh_frame_functions(&bytes)` while holding a live parsed object of those exact
+  bytes. Now `eh_frame_functions_in(&object)`. The single-owner claim used to
+  cost two parses to make.
+- **`resolve_dispatch`, `decode_bounded_relative_jump_table` and
+  `decode_thumb_table_branch` take the session image** and read its section
+  index instead of parsing per dispatch.
+
+### What was deliberately NOT collapsed
+
+Failing to dedupe is slow; wrongly deduping is a correctness bug. Left alone:
+
+- The byte-only entry points (`analyze_functions_bytes*`) keep their own single
+  per-run parse. `parse_exec_regions(data)` and `parse_exec_regions_in(image)`
+  are *not* the same computation — the image path prefers section-derived
+  executable ranges and falls back to segments — so no `ProgramImage` was
+  fabricated from bytes to make one number smaller.
+- `elf_plt_map` still parses once for `name_resolve::collect_address_map_*`.
+  That consumer takes a path as well as bytes (PDB companion lookup) and is not
+  on the image seam yet. Residue, honestly counted.
+- `scan_pe_code_pointers`' own `parse_exec_regions` is a PE-only path with no
+  image threaded to it.
+
+The soundness of the one collapse that changes a *decision* — PLT membership —
+is pinned directly: `target_is_plt_stub` in the cfg tests computes the range
+list both ways and `assert_eq!`s them before answering, on two real
+cross-compiled samples.
+
+### Result
+
+| binary | limit | parses before | parses after |
+|---|---|---|---|
+| `hello-gcc-O2` | 50 | 58 | **17** |
+| `hello-go-static` | 50 | 80 | **17** |
+| `hello-rust-musl` | 50 | 3517–3555 | **17** |
+| `hello-rust-musl` | 30000 | 40,865–40,995 | **17** |
+
+Not one. But **17 is now a constant**: it does not vary with the binary, its
+size, or the number of functions analysed. The "before" column varies between
+runs of the *same* binary (40865 / 40872 / 40995) because it was a function of
+how far a timeout-bounded discovery got. The residue is seventeen distinct
+one-shot program analyses — image index, DWARF types, DWARF functions,
+exception sites, no-return imports, FLIRT seeds and overrides, vtables, PE
+pointer scan, symbol seeds, symbol rename, address map, GOT map, GOT target map,
+PLT map, function-pointer tables — each of which now parses exactly once per
+session. Driving those to zero means giving `ProgramImage` a relocation and
+symbol-table index; that is the next slice, not this one.
+
+### The claim the brief made that measurement refuted
+
+**Re-parsing was not the missing wall time.** Seven interleaved A/B pairs
+(same process, `.so` swapped between every run, same machine minute):
+
+```
+                          parses          min       median
+hello-gcc-O2     before      58         0.069s      0.075s
+                 after       17         0.064s      0.072s
+hello-go-static  before      80         0.136s      0.150s
+                 after       17         0.131s      0.136s
+hello-rust-musl  before    3517         1.873s      1.973s
+                 after       17         1.857s      2.058s
+```
+
+Nothing moved. The decisive measurement is the tail case: removing **40,848**
+parses from a 1146-function `hello-rust-musl` run changed 35.75s/34.26s into
+34.56s/37.77s — noise in both directions. `object::read::File::parse` on ELF
+reads a header and a section table; it costs on the order of **12 µs**. The 58
+parses in the original 285 ms run were worth about 0.7 ms of it — 0.25%, not
+65%. The 185 ms accounting gap is somewhere else entirely and this change does
+not find it.
+
+So the honest statement of value is: this closes a named architectural gap and
+removes a real tail risk (a 30k-function binary was on track for ~30k parses),
+and it is **not** a speed optimisation. Coverage is unchanged, errors are
+unchanged, tail latency is unchanged. The row that moves in the roadmap's
+performance table is the parse-count row, and only that one.
+
+### The test
+
+`OBJECT_PARSE_TOTAL` is the instrument, so the pin uses it rather than a clock.
+`profile::count_object_parses` (a `#[cfg(test)]` scope that activates the
+existing thread-local counter without the environment variable or the JSON
+output) backs three tests in `program::session_tests`:
+
+- `indexing_one_image_parses_the_object_exactly_once` — the constructor is 1,
+  full stop.
+- `discovery_parse_count_does_not_scale_with_the_number_of_functions` — runs
+  whole-binary discovery twice on one warm session, at `max_functions: 4` and
+  `max_functions: 4096`, asserts the wide run found at least 4x the functions,
+  and asserts the two parse counts are **equal**. This is the invariant, not the
+  absolute number: any reintroduced per-function or per-branch parse makes them
+  diverge, and the failure message prints both.
+- `address_scoped_discovery_reuses_the_session_image` — eight
+  `discover_function_image_at` calls must cost **zero** parses. Before this
+  patch each one cost four.
+
+### Gates
+
+```
+cargo test --features python-ext    2467 passed, 0 failed at 01f0b23 + patch
+                                    (2464 at 01f0b23 + 3 new session tests);
+                                    re-verified as 2483 passed, 0 failed after
+                                    rebasing the patch onto 54b0f31, which had
+                                    landed 16 more tests in the meantime
+cargo build --features python-ext   0 "never used"; the single dead-code warning
+                                    is the pre-existing never-read field at
+                                    src/analysis/ioctl_taint.rs:409 — count 1
+                                    before the patch and 1 after. The two
+                                    pre-existing "unused variable: got_targets"
+                                    warnings are GONE, because the duplicate
+                                    computation they flagged was deleted.
+tools/dectest.py @o0                362 lanes, no regressions, no improvements
+tools/dectest.py @o2                362 lanes, no regressions, no improvements
+uv run pytest -m "not slow"         113 tests over the cfg / decompiler / IR /
+  (18 relevant files)               DWARF / jump-table / CLI files: 1 failure,
+                                    7 skipped. The failure,
+                                    test_cli_decompile.py::
+                                    test_decompile_entry_prints_pseudocode,
+                                    reproduces byte-for-byte with the unpatched
+                                    .so swapped back in — it is pre-existing at
+                                    01f0b23, not caused here.
+rustfmt --edition 2021              on the ten touched Rust files
+```
+
+The full Python suite was NOT run to completion: `pytest python/tests/` pulls in
+the `slow`-marked end-to-end fixture matrix, which this work is not allowed to
+run.
+
+724 lane-verdicts unchanged in both directions is the predicted result for a
+pure ownership migration, and it was run to falsify the prediction: if any of
+the four collapsed analyses had been serving a *different* view to a *different*
+consumer, a lane would have moved.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. **No
+baseline was refreshed and nothing was committed.**

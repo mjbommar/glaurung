@@ -16,19 +16,20 @@ pub(super) struct DwarfPrototypeContract {
 }
 
 pub(super) fn dwarf_output_contracts(
-    data: &[u8],
+    image: &crate::program::image::ProgramImage,
 ) -> std::collections::HashMap<u64, DwarfPrototypeContract> {
-    crate::debug::dwarf::extract_dwarf_functions(data)
-        .into_iter()
+    image
+        .dwarf_functions()
+        .iter()
         .map(|function| {
             (
                 function.entry_va,
                 DwarfPrototypeContract {
                     prototyped: function.prototyped,
-                    parameter_types: function.parameter_types,
-                    return_type: function.return_type,
-                    stack_objects: function.stack_objects,
-                    register_locals: function.register_locals,
+                    parameter_types: function.parameter_types.clone(),
+                    return_type: function.return_type.clone(),
+                    stack_objects: function.stack_objects.clone(),
+                    register_locals: function.register_locals.clone(),
                 },
             )
         })

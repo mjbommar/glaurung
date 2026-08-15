@@ -173,7 +173,7 @@ pub fn elf_got_map(data: &[u8]) -> Vec<(u64, String)> {
 /// their existing treatment.
 pub fn elf_got_target_map(data: &[u8]) -> Vec<(u64, u64)> {
     let mut out: Vec<(u64, u64)> = Vec::new();
-    let Ok(obj) = object::read::File::parse(data) else {
+    let Ok(obj) = crate::decompile::profile::parse_object(data) else {
         return out;
     };
     if obj.format() != object::BinaryFormat::Elf {

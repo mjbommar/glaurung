@@ -15,7 +15,7 @@
       "path": "ir/ast.rs"
     },
     {
-      "loc": 6076,
+      "loc": 6154,
       "path": "analysis/cfg.rs"
     },
     {
@@ -35,7 +35,7 @@
       "path": "symbolic/solver/axeyum_backend.rs"
     },
     {
-      "loc": 3063,
+      "loc": 3049,
       "path": "python_bindings/ir.rs"
     },
     {
@@ -76,19 +76,19 @@
     "ir_median_loc": 492.0,
     "product_files_above_1000": 27,
     "product_files_above_2000": 13,
-    "product_mean_loc": 526.341935483871,
+    "product_mean_loc": 526.9709677419355,
     "product_median_loc": 276.0,
-    "product_pct_loc_above_1000": 44.371989262468894
+    "product_pct_loc_above_1000": 44.35820054970281
   },
   "product": {
     "file_count": 310,
     "files_above_1000": 27,
     "files_above_2000": 13,
-    "loc_in_files_above_1000": 72400,
-    "mean_loc": 526.341935483871,
+    "loc_in_files_above_1000": 72464,
+    "mean_loc": 526.9709677419355,
     "median_loc": 276.0,
-    "pct_loc_above_1000": 44.371989262468894,
-    "total_loc": 163166
+    "pct_loc_above_1000": 44.35820054970281,
+    "total_loc": 163361
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -98,7 +98,7 @@
       "measure": "product_mean_loc",
       "meets_target": false,
       "target": 450.0,
-      "value": 526.341935483871
+      "value": 526.9709677419355
     },
     {
       "label": "Product-code median",
@@ -126,7 +126,7 @@
       "measure": "product_pct_loc_above_1000",
       "meets_target": false,
       "target": 25.0,
-      "value": 44.371989262468894
+      "value": 44.35820054970281
     },
     {
       "label": "src/ir median",

@@ -1,9 +1,9 @@
 //! Owned binary image and immutable indices shared by one analysis session.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use object::{
     Object, ObjectSection, ObjectSegment, ObjectSymbol, SectionFlags, SectionKind, SymbolKind,
@@ -133,9 +133,13 @@ pub struct ProgramImage {
     sections: Arc<[IndexedSection]>,
     memory_ranges: Arc<[IndexedMemoryRange]>,
     executable_ranges: Arc<[Range<u64>]>,
+    plt_stub_ranges: Arc<[Range<u64>]>,
     eh_frame_functions: Arc<[crate::analysis::exception::EhFrameFunction]>,
     defined_text_symbols_by_name: Arc<HashMap<String, u64>>,
     defined_symbols_by_va: Arc<HashMap<u64, String>>,
+    noreturn_import_targets: Arc<OnceLock<Arc<HashSet<u64>>>>,
+    exception_call_sites: Arc<OnceLock<Arc<[crate::analysis::exception::ExceptionCallSite]>>>,
+    dwarf_functions: Arc<OnceLock<Arc<[crate::debug::dwarf::DwarfFunction]>>>,
 }
 
 impl ProgramImage {
@@ -184,9 +188,25 @@ impl ProgramImage {
         let mut sections = Vec::new();
         let mut memory_ranges = Vec::new();
         let mut executable_ranges = Vec::new();
+        let mut plt_stub_ranges = Vec::new();
         for section in object.sections() {
             let address = section.address();
             let size = section.size();
+            // Linker-generated import glue, proven by the section table rather
+            // than guessed from bytes. Indexed here so a tail-branch test can
+            // ask an owned range list instead of reopening the object once per
+            // discovered function.
+            if format == Format::ELF
+                && size != 0
+                && matches!(
+                    section.name(),
+                    Ok(".plt" | ".plt.sec" | ".plt.got" | ".iplt")
+                )
+            {
+                if let Some(end) = address.checked_add(size) {
+                    plt_stub_ranges.push(address..end);
+                }
+            }
             if let (Some(kind), Some(end)) = (
                 image_memory_kind(section.kind(), section.flags()),
                 address.checked_add(size),
@@ -258,7 +278,7 @@ impl ProgramImage {
                     .or_insert(address);
             }
         }
-        let eh_frame_functions = crate::analysis::exception::eh_frame_functions(&bytes);
+        let eh_frame_functions = crate::analysis::exception::eh_frame_functions_in(&object);
         drop(object);
 
         Ok(Self {
@@ -271,9 +291,13 @@ impl ProgramImage {
             sections: sections.into(),
             memory_ranges: memory_ranges.into(),
             executable_ranges: executable_ranges.into(),
+            plt_stub_ranges: plt_stub_ranges.into(),
             eh_frame_functions: eh_frame_functions.into(),
             defined_text_symbols_by_name: Arc::new(defined_text_symbols_by_name),
             defined_symbols_by_va: Arc::new(defined_symbols_by_va),
+            noreturn_import_targets: Arc::new(OnceLock::new()),
+            exception_call_sites: Arc::new(OnceLock::new()),
+            dwarf_functions: Arc::new(OnceLock::new()),
         })
     }
 
@@ -335,6 +359,50 @@ impl ProgramImage {
     /// Executable section ranges in object order.
     pub fn executable_ranges(&self) -> impl Iterator<Item = &Range<u64>> {
         self.executable_ranges.iter()
+    }
+
+    /// ELF PLT stub section ranges (`.plt`, `.plt.sec`, `.plt.got`, `.iplt`).
+    ///
+    /// Empty for every non-ELF format. No compiler places import glue inside a
+    /// function body, so an unconditional branch into one of these ranges
+    /// always leaves the function for good.
+    pub fn plt_stub_ranges(&self) -> &[Range<u64>] {
+        &self.plt_stub_ranges
+    }
+
+    /// Every LSDA-proven exceptional transfer in this image, recovered once.
+    ///
+    /// Both function discovery and the decompilation entry points need these,
+    /// and each used to walk `.eh_frame` from its own object parse.
+    pub fn exception_call_sites(&self) -> Arc<[crate::analysis::exception::ExceptionCallSite]> {
+        self.exception_call_sites
+            .get_or_init(|| {
+                crate::analysis::exception::extract_exception_call_sites(self.bytes()).into()
+            })
+            .clone()
+    }
+
+    /// DWARF function entries for this image, recovered once.
+    pub fn dwarf_functions(&self) -> Arc<[crate::debug::dwarf::DwarfFunction]> {
+        self.dwarf_functions
+            .get_or_init(|| crate::debug::dwarf::extract_dwarf_functions(self.bytes()).into())
+            .clone()
+    }
+
+    /// Import/thunk addresses whose symbol contract prohibits fallthrough.
+    ///
+    /// Recovered at most once per image. Function discovery consults this on
+    /// every call instruction, and address-scoped discovery runs hundreds of
+    /// times per decompile, so the import tables are read once and shared by
+    /// every consumer of this image.
+    pub fn noreturn_import_targets(&self) -> Arc<HashSet<u64>> {
+        self.noreturn_import_targets
+            .get_or_init(|| {
+                Arc::new(crate::analysis::call_semantics::imported_noreturn_targets(
+                    self.bytes(),
+                ))
+            })
+            .clone()
     }
 
     /// Iterate all valid file-backed sections in object order.

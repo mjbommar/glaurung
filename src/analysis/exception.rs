@@ -273,6 +273,14 @@ pub fn eh_frame_functions(data: &[u8]) -> Vec<EhFrameFunction> {
     let Ok(object) = crate::decompile::profile::parse_object(data) else {
         return Vec::new();
     };
+    eh_frame_functions_in(&object)
+}
+
+/// [`eh_frame_functions`] over an object the caller has already parsed.
+///
+/// `ProgramImage` builds this index during its own single parse; reopening the
+/// file to read the same section table is pure duplicate work.
+pub(crate) fn eh_frame_functions_in(object: &object::read::File<'_>) -> Vec<EhFrameFunction> {
     let Some(eh_section) = object.section_by_name(".eh_frame") else {
         return Vec::new();
     };

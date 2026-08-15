@@ -117,7 +117,7 @@ type Unit<'a> = gimli::Unit<Slice<'a>, usize>;
 /// than partially described: a caller that executed it would be marshalling
 /// through a contract this reader declined to make.
 pub fn extract_dwarf_signatures(data: &[u8]) -> Vec<DwarfSignature> {
-    let Ok(object) = object::read::File::parse(data) else {
+    let Ok(object) = crate::decompile::profile::parse_object(data) else {
         return Vec::new();
     };
     let endian = if object.is_little_endian() {
