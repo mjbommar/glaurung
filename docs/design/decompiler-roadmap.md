@@ -144,6 +144,11 @@ Committed to `master` after `fb4ee6b` (see
 ### Foundations still incomplete
 
 - [ ] Typed completeness and diagnostics do not yet travel through every stage.
+  Still true, but no longer for want of typed signals — four now exist and none
+  of them travels. See the same item under Phase 1 for the evidence; the sharp
+  end is that `decompile_all`/`decompile_many` drop `LiftError` on the floor with
+  a bare `continue`, so a function that failed to lift is indistinguishable from
+  a function that does not exist.
 - [~] `ProgramSession` is not yet the sole owner of every parse and cache.
   Substantially closed 2026-08-15: object parses per session went from
   `O(functions + branches + callees)` — 58 on a small C binary, 40,865 on
@@ -154,14 +159,83 @@ Committed to `master` after `fb4ee6b` (see
   one-shot analyses; reaching exactly one needs a relocation/symbol index on
   `ProgramImage`. Note two production sites had been bypassing the
   `profile::parse_object` adapter entirely, so the instrument was under-reporting
-  its own subject.
+  its own subject. Re-measured at HEAD 2026-08-15: the 19 above is the
+  `decompile_at` figure; whole-program `decompile_all` is 20, and both are now
+  pinned as constants rather than bounds. See the Phase 1 view.
 - [ ] The canonical target and ABI model is not ARM32-complete.
+  Still true, and the Phase 2 view now says exactly which eight things remain
+  (VFP s/d/q overlap, `d0`-`d7` argument slots, 64-bit integer argument pairing,
+  shifter carry-out/V on logical `S` forms, NEON, register-shifted-register and
+  RRX, LDM/STM writeback, and the synchronisation/system instructions). PC bias,
+  literal pools, A32 condition decoding, IT blocks and hard-float ABI selection
+  are done and should stop being listed as open.
 - [ ] The verified MIR/MemorySSA boundary is not yet the production authority
   for all definition-sensitive transformations.
+  Audited 2026-08-15: 0 of the 7 named consumers are migrated, and the reason is
+  upstream of all of them — MIR is not BUILT on a production decompile.
+  `lower_verified_with_image` has two non-test call sites: one inside
+  `if std::env::var("GLAURUNG_DUMP_PASSES").is_ok()` whose result is `eprintln!`'d
+  and dropped, and `PreparedLlir::mir`, which is `#[allow(dead_code)]` with a
+  single `#[test]` caller. `DefinitionOracle` and its query surface appear in four
+  files, all under `src/ir/mir/`, with zero production callers. Meanwhile four
+  AST-level substitutes are live and say so in their own doc comments —
+  `copy_prop` ("sound without dataflow analysis"), `expr_reconstruct` ("without a
+  proper alias analysis"), `stack_locals`, and `structured_reaching.rs`, which
+  return-type recovery and spill coalescing both call. `73bdca3` did not move
+  this: `verify_defs.rs` is a string-keyed AST walk downstream of every transform
+  that bails on flow it cannot linearize. First step: build MIR unconditionally
+  in `prepare_llir_for_lowering` and carry it on `PreparedLlir` — no consumer can
+  migrate to an artifact that is never computed. The measured cost of doing so is
+  +13% on a whole-binary decompile, which is the real decision.
 - [ ] The production aggregate/type consumers still depend on AST-era adapters.
+  Audited 2026-08-15: 7 consumers on the adapter, 0 on MIR.
+  `memory_objects/ast.rs` describes itself as "Prepared-AST compatibility
+  adapter", and its `infer_from_ast` is the only object-model producer with a
+  production caller (`high_variables.rs`). The one live query,
+  `has_conflict_free_extent`, looks up `ObjectIdentity::LegacyRegister`. `554dbb4`
+  added the MIR-side `memory_objects/shape.rs` but its own message says nothing in
+  the production render path reads shapes yet, and the deletion of
+  `memory_objects/llir.rs` was dead-code removal, not a migration. First step is
+  the one this file already names at the rank-ordered plan's item 2: partition the
+  MIR frame object into per-variable extents so `ObjectIdentity::MirValue` can be
+  joined to `stack_locals`' promoted-local names.
 - [ ] PDB and inferred type facts do not yet populate the same canonical store.
+  Audited 2026-08-15: 1 of 3 sources populates it, and the store has no reader.
+  `TypeStore` has exactly one production insert site — `program/types/dwarf.rs`
+  under `TypeAuthority::Debug` — reached from `ProgramSession`. PDB facts go to a
+  Python SQLite table and to AST string hints in `ir/pdb_fields.rs`. Inferred
+  types live in their own lattice, `types_recover.rs`'s `TypeMap`/`TypeMapV`; that
+  7,274-line file contains zero occurrences of `TypeStore`. And
+  `ProgramEnvironment::types()` has only test callers, so today the canonical
+  store is write-only. First step: a reader path, not another writer — a producer
+  with no consumer is what made the DWARF slice easy to land and impossible to
+  validate.
 - [ ] Semantic HIR and pure renderers are not complete.
+  Audited 2026-08-15: there is no HIR at all. `find src -iname "*hir*"` returns
+  nothing; the `src/ir/hir/` directory this file's own ownership map names does
+  not exist, and the only "HIR" token in the tree is a comment. The renderers are
+  demonstrably not pure: the production entry
+  `render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types`
+  is 581 lines, writes 28 times into 15 `DEC_*` thread-local cells, and calls
+  `recover_named_call_prototypes` (prototype INFERENCE, with conflict removal and
+  a symbol lookup) and `infer_return_ctype` from inside rendering. Two of those
+  analyses also run AFTER `verify_before_render`, so the thing verified is not the
+  thing rendered. First step, and the cheapest cut at purity before any HIR
+  exists: hoist `infer_return_ctype` and `refine_opaque_parameter_types_from_calls`
+  into named `pass!` steps ahead of the verification boundary.
 - [ ] File-size and ownership targets remain substantially open.
+  Audited 2026-08-15 with `tools/fitness_report.py`: 5 of 7 targets missed, and
+  every one of the top five files grew in the last 30 commits. 314 product files,
+  166,455 LOC. Mean 530.1 against a target of 450; median 276 against 250; 13
+  files over 2,000 LOC against a target of 5; 44.5% of LOC in files over 1,000
+  against 25%; `src/ir` has 14 files over 1,000 against 5. Only "files over 1,000"
+  (28 <= 35) and `src/ir` median (479 < 500) pass. `ir/ast.rs` is 11,628 product
+  lines. Of the ownership map's directories, `src/lift/`, `src/ir/lifted/`,
+  `src/ir/hir/` and `src/render/` do not exist. The measurement and the ratchet
+  test both exist and pass — but `tools/fitness_baseline.json` has been rewritten
+  in three of the last six commits, so the ratchet only ever records where the
+  numbers went. First step: stop refreshing the baseline as part of unrelated
+  work; the ratchet is only a ratchet if failing it is a decision.
 
 ## Non-negotiable design rules
 
@@ -673,13 +747,61 @@ End-state fitness targets:
   suite if a fresh measurement is worse than that baseline. The targets
   themselves are not met yet (see Entry 19 in the diary for current numbers) --
   this box is only the measurement and ratchet infrastructure, not the fitness.
-- [ ] Reject new production modules over 1,000 LOC without a documented review.
-- [ ] Exempt generated tables/data only; mixed-responsibility logic is not an
-  exemption.
-- [ ] Add dependency checks: renderers cannot import lifters, HIR cannot parse
+- [x] Reject new production modules over 1,000 LOC without a documented review.
+  `python/tests/test_large_module_review.py` ratchets the SET, not the count.
+  `product_files_above_1000` above is a count, and a count cannot see a swap: a
+  change that splits one owner below the line while pushing a new one over it
+  leaves the count unchanged and the baseline ratchet silent. The new module
+  holds `REVIEWED_LARGE_MODULES`, one entry per file currently over 1,000
+  product LOC (28 today), each carrying the review that admits it — "scheduled
+  split" for the nine named in the priority-split list above, "accepted" for the
+  rest. An unlisted file over the line fails the suite; a listed file that drops
+  below it also fails, so a landed split takes its licence with it instead of
+  leaving a standing permission to re-cross. Proven by adding a real 1,400-line
+  `src/ir/audit_probe_blockb.rs` (the gate failed naming it, and passed again on
+  removal) and by a `tmp_path` case showing test-only and `@generated` files are
+  correctly not counted. `ir/x87.rs` (`dcc62aa`) is the worked example the gate
+  formalises: it crossed 1,000 LOC, the count ratchet fired, and the reasoning
+  went into a commit message with nowhere permanent to live.
+- [x] Exempt generated tables/data only; mixed-responsibility logic is not an
+  exemption. `tools/fitness_report.py::is_generated` exempts a file only for an
+  `@generated`/`DO NOT EDIT` marker in its first 20 lines, and
+  `python/tests/test_fitness_report.py::test_a_marker_past_the_header_window_does_not_exempt_the_file`
+  pins the window so a generated-looking table buried inside a hand-written file
+  cannot buy an exemption for the logic around it. Measured 2026-08-15: **zero**
+  files in `src/` are currently exempt under this rule, so the exemption is a
+  closed door rather than an unmeasured one.
+- [x] Add dependency checks: renderers cannot import lifters, HIR cannot parse
   images, targets cannot import renderers, and correctness cannot depend on
-  environment variables.
-- [ ] Delete compatibility owners promptly after their consumers reach parity.
+  environment variables. All four are enforced by
+  `python/tests/test_src_dependency_boundaries.py` as source-text checks over
+  the checked-out `src/`, with `#[cfg(test)]` items and whole-line comments
+  stripped first so a fixture or a rustdoc link cannot read as a dependency. The
+  environment rule is the strictest of the four: every `std::env::var`/`var_os`/
+  `vars()` read in production code must appear in `ENV_VAR_ALLOWLIST` with one
+  of six reviewed categories, the list is two-sided (a stale entry fails too),
+  and a separate tripwire fails if a category outside that six is ever
+  introduced — the categories deliberately have no slot for "changes what counts
+  as correct". Tightened 2026-08-15: the renderer/HIR rules now discover their
+  file list (`ir/ast.rs` plus everything under `src/ir/ast/`) instead of naming
+  one file, so each submodule Phase 7 carves out of `ast.rs` is covered on
+  arrival rather than escaping the boundary until someone remembers to add it.
+  The rules are stated against today's layout, where the renderer and HIR share
+  one owner and `src/render/`, `src/lift/` do not exist yet; when the physical
+  split lands the file lists get updated, not deleted.
+- [~] Delete compatibility owners promptly after their consumers reach parity.
+  Honoured once and not yet overdue anywhere, but there is no gate. Executed:
+  `src/ir/memory_objects/llir.rs` was deleted in `34b17c2` together with its
+  producer-less `AccessSource`/`MemoryStateIdentity` variants once `mir::attach`
+  superseded it. Remaining: `src/ir/memory_objects/ast.rs`, the prepared-AST
+  compatibility adapter, which EPIC 3 above deliberately retains as production
+  authority precisely because its consumers have NOT reached parity — so nothing
+  is currently overdue for deletion. What is missing is the enforcement: the
+  closest proxy is the never-used-function count from
+  `cargo build --features python-ext` (0 today, and it is what found
+  `llir.rs`), but a superseded owner that still has one live caller is invisible
+  to it. First step: record each compatibility owner with the parity condition
+  that retires it, so "promptly" has a measurable trigger.
 
 ## Performance plan
 
@@ -687,13 +809,62 @@ Improve performance through avoided work first, then profile-led local tuning.
 
 - [~] Parse object and debug data once per session; continue removing remaining
   independent parsers.
-- [ ] Cache artifacts by image revision/hash, target, function, pipeline version,
+- [~] Cache artifacts by image revision/hash, target, function, pipeline version,
   configuration, and exact dependency revisions.
+  Audited 2026-08-15. Three in-memory caches exist and none of them is keyed on
+  the tuple this box names. `RenderKey` (`src/python_bindings/ir/session.rs:11`)
+  is `{func_va, max_blocks, max_instructions, timeout_ms, types, style,
+  max_functions}`; `DiscoveryKey` and `EnvironmentKey`
+  (`src/program/session.rs:24`, `:34`) are budget scalars plus seeds/VAs. Of the
+  six named key components: **function** is present (`func_va`, normalised);
+  **target** is absent but sound by construction, since the target comes from
+  the image and the image is fixed for the session's lifetime; **configuration**
+  is present only as budgets, and there `EnvironmentKey` omits `total_timeout_ms`
+  even though `recover_program_environment` inherits it into a `Deadline`
+  (`src/program/environment.rs:842`) — two calls differing only in whole-run
+  ceiling share one cached environment; **image revision/hash**, **pipeline
+  version**, and **dependency revisions** are absent everywhere (there is no
+  `pipeline_fingerprint` symbol in the tree at all, which is the still-open
+  fingerprint box in the HIR section). Cache identity is therefore object
+  identity — "the same `ProgramSession`" — which is safe only because nothing
+  persists (see Phase 8). Note also that `diagnostics_are_disabled()`
+  (`src/python_bindings/ir/session.rs:195`) bypasses the artifact cache entirely
+  whenever any of five `GLAURUNG_*` diagnostic variables is set: correct, since
+  those paths have side effects, but it means the cache vanishes under exactly
+  the conditions you would measure it.
 - [ ] Analyze call-graph SCCs to fixed point instead of repeatedly relifting
   callees from each root.
-- [ ] Use immutable environment snapshots for function-parallel work and
+  Nothing in `src/` computes SCCs: `scc`/`tarjan`/`strongly` match once, in an
+  unrelated doc comment. The callee path is depth-bounded re-lifting on purpose
+  — `recover_direct_callee_definition`
+  (`src/python_bindings/ir/callee_contracts.rs:415`) truncates at one layer
+  explicitly to avoid "looping on mutually recursive functions", which is the
+  SCC case being declined rather than solved. First step: stop discarding the
+  call graph — `ProgramSession::discover_functions` computes it and drops it on
+  the floor (`let (functions, _call_graph) = ...`, `src/program/session.rs:263`),
+  so condensation has no input today.
+- [~] Use immutable environment snapshots for function-parallel work and
   deterministic phase-barrier merges.
+  The snapshot half holds: `ProgramEnvironment` is handed out only as
+  `Arc<ProgramEnvironment>` (`src/program/session.rs:281`), discovery results as
+  `Arc<[Function]>`, and `ProgramImage` is `Arc`-of-everything behind
+  `OnceLock` lazies. The function-parallel half does not exist — see the
+  identical Phase 8 box.
 - [ ] Replace whole-HIR clones used for fixed points with change sets/epochs.
+  No epoch or change-set mechanism exists (`epoch`/`ChangeSet`/`dirty` match only
+  page tables, register halves and VEX call kinds). Two whole-`Function`
+  clone-and-compare fixed points are still live on the render path:
+  `src/ir/ast.rs:7185` (bounded at 4 iterations, one deep clone plus one full
+  structural `PartialEq` walk each) and `prune_unreachable_tails`
+  (`src/ir/label_prune.rs:35`), which is an **unbounded** `loop` with the same
+  clone-and-compare shape and is called twice from the `prepare_for_decbench`
+  chain. The dataflow fixed points are already change-flag driven and are not
+  what this box is about. First step is smaller than "epochs": make
+  `propagate_copies`/`fold_constants`/`prune_*` return whether they changed
+  anything, which deletes both the clone and the equality walk with no new
+  machinery. Do it for correctness of shape, not for speed — the section's own
+  ~100 ms-of-285 ms accounting gap means there is no evidence these clones cost
+  anything measurable.
 - [~] Make expensive type/object/reference passes demand-driven and cacheable.
   `DecompilerSession` already caches artifacts and discovery per image, and the
   warm-query row is met through it (3081x on `hello-gcc-O2`, 271180x on
@@ -705,7 +876,29 @@ Improve performance through avoided work first, then profile-led local tuning.
   invalidations are not. Caution recorded with the measurement: instrumented
   stages account for only ~100 ms of a 285 ms run, so the timings are not yet
   complete enough to choose optimisation targets from.
-- [ ] Enforce per-function and per-session budgets plus cooperative cancellation.
+- [~] Enforce per-function and per-session budgets plus cooperative cancellation.
+  Both halves exist; neither reaches the decompile path. `Budgets`
+  (`src/analysis/cfg.rs:31`) bounds functions, blocks, instructions and two
+  clocks, and its own doc comments are the best evidence against ticking this:
+  `timeout_ms` "has never bounded an analysis" because `discover_function`
+  restarts its clock per seed, and the session-level `total_timeout_ms` defaults
+  to `0` (no ceiling) for a recorded reason — a ceiling changes what discovery
+  finds, and every corpus number was measured without one. Every decompile entry
+  point hardcodes `total_timeout_ms: 0` (`src/python_bindings/ir.rs:1032`,
+  `:1373`, `:2727`, `:2984`, `:3340`), so there is no session budget on that path
+  at all. Cooperative cancellation is real and well built — `Deadline` with an
+  `Option<&AtomicBool>` (`src/analysis/cfg.rs:74`),
+  `analyze_functions_bytes_cancellable` (`:4438`), the signal-driven
+  `analyze_interruptible` (`src/python_bindings/analysis.rs:227`), test
+  `a_cancelled_analysis_stops_and_reports_the_truncation` — but its only two
+  callers are in `analysis.rs`. The decompiler calls `discover_functions` with no
+  cancel flag and interrupts only *between* functions via `py.check_signals()`,
+  so one pathological function is uninterruptible and `DecompilerSession
+  .decompile_at` has no cancellation point at all. No memory or allocation budget
+  exists anywhere. First step: thread an `AtomicBool` from `decompile_all_py`'s
+  existing `check_signals` site into `discover_functions` via
+  `Deadline::with_cancel`; the plumbing can be lifted verbatim from
+  `analysis.rs`.
 - [x] Profile before changing arenas, layouts, allocation, or parallel granularity.
 
 Performance acceptance on the pinned host:
@@ -886,8 +1079,48 @@ or aggregate scores.
 - [x] Pass-attributed output traces and pass-fire instrumentation.
 - [x] Cold/warm/resource and pipeline baselines.
 - [ ] Refresh the canonical ledger for each exact release artifact.
-- [ ] Add the A32 and GCC 15 control lanes.
-- [ ] Close the linked-list ByteMatch investigation and AArch64-only diagnosis.
+  Audited 2026-08-15: this is a standing process obligation, not an artifact, so
+  it can only ever read "currently satisfied" — and it is not. The ledger is
+  `tools/decbench_score_ledger.py` over
+  `tests/decbench_scoreboard/baseline-ledger.json`, which pins
+  `baseline_revision c1cfdc9` and `glaurung-c1cfdc98-results.zip`; it was last
+  written by `d1bfd14` (2026-08-08) and has never described `fb4ee6b`. `c1cfdc9`
+  is 171 commits behind HEAD, `fb4ee6b` 64. First step: it needs a DecBench
+  evaluator run, which is out of scope here, and it folds into the two sibling
+  items below it that also await one.
+- [x] Add the A32 and GCC 15 control lanes.
+  Done in `e2b76a4` (2026-08-06) and audited 2026-08-15 — this box is a stale
+  duplicate of the two already-`[x]` items in the score-campaign list above
+  ("Add and evaluate the A32 `-marm` lane", "Rebuild the x86-64 control with
+  GCC 15"). Both lanes are real, not relabels: `tools/arch_roundtrip.py:194`
+  compiles `armv7_a32` with `-marm` against `armv7`'s `-mthumb`, and
+  `x86_64_gcc15` (line 162) is the unpinned host `gcc 15.2.0` against the
+  control's pinned `gcc 11.4.0`. Both are in `REQUIRED_ARCHES`, asserted by
+  `test_arm32_required_lanes_select_distinct_instruction_sets` and
+  `test_gcc15_x86_64_shape_control_is_required_and_host_built`. Both are fully
+  populated: 364 cells each in `arch_baseline.json`, no skips, no nulls, no
+  empty cells. They are not copies of their siblings — 40 of 364 `armv7_a32`
+  cells differ from `armv7`, and 33 of 364 `x86_64_gcc15` cells differ from
+  `x86_64`. (The "350 ratcheted lanes" in the two older items is stale; it is
+  364 now.)
+- [~] Close the linked-list ByteMatch investigation and AArch64-only diagnosis.
+  Audited 2026-08-15; both halves moved, neither closed.
+  **ByteMatch:** root-caused, not re-measured. `defect-register-2026-08-05.md`
+  lines 644-687 withdraw the "structurally closer" explanation this roadmap
+  still objects to, bisect the drop to `b2003b5`, and record the recovery to
+  0.31 through `199af22`/`9a6f627`/`1fc76ab`, attributing the residual to
+  recompiling a Clang 21 binary's output with GCC 15. That argument has not been
+  re-scored on the current artifact, which is the same blocker as the ledger
+  item. First step: restate this bullet as "re-score `linkedlist:clang:O0` and
+  confirm the residual is still cross-compiler", and run it with the ledger.
+  **AArch64:** partially diagnosed. `039c7d6` lifted AArch64 scalar float and
+  measurably moved 12 fixture functions fail->pass with 0 pass->fail, but diary
+  Entry 23 splits the 94-strong set as 22 float-adjacent (diagnosed, fixed), 7
+  `141_atomics` (diagnosed as missing `ldar`/`stlrb`, NOT fixed), and 65 with no
+  float instruction and no cause identified. Recomputed from `arch_baseline.json`
+  at HEAD the set is 93, still led by `141_atomics` at 7. First step: the 7
+  `ldar`/`stlrb` cells, which are a named decoder gap rather than an
+  investigation.
 
 ### Phase 1 — One session, image, pipeline, and artifact boundary
 
@@ -898,11 +1131,62 @@ behavior.
 - [x] Route public entry-point shapes through shared session data.
 - [~] Continue moving debug, symbol, relocation, string, unwind, and format data
   behind the session.
-- [ ] Carry typed diagnostics/completeness through discovery, lifting, recovery,
+- [~] Carry typed diagnostics/completeness through discovery, lifting, recovery,
   HIR, and rendering.
+  Audited 2026-08-15: four stage-local typed signals now exist, and none of them
+  travels. Discovery has `dispatch::Unresolved`'s `UnknownBase`/`NoTableAt`/
+  `NoBound` decline reason, serialized by `4ad8800`. Lifting has `LiftError`
+  (`eed4b75`) with `UnsupportedArchitecture`/`IncoherentCodeMode`/
+  `NoLiftableBlocks { disowned ranges }`. MIR has `EffectCompleteness`. Rendering
+  has `verify_before_render` and `verify.rs`'s `ResidualUnknown`. There is no
+  common carrier — a repo-wide grep for a `Diagnostic`/`Diagnostics` type returns
+  nothing — and the typing dies at the artifact boundary: `decompile_at` flattens
+  `LiftError` into a `PyValueError` string, losing the variant and the disowned
+  ranges, while `decompile_all` and `decompile_many` discard it entirely with
+  `let Ok(lf_raw) = lift_function_from_image(..) else { continue; }`. That is the
+  same silent-`continue` shape `eed4b75` removed from `xrefs.rs`, still present on
+  the two whole-program entry points. First step: give the whole-program entry
+  points somewhere to put a `LiftError`, so a skipped function is a reported
+  incompleteness rather than an absent row.
 - [ ] Establish one explicit pipeline stage list and deterministic fingerprint.
-- [ ] Prove exactly one base object parse per reusable session.
-- [ ] Expose stable reusable Python session/result APIs.
+  Audited 2026-08-15: open, though the raw material is all there. Stage names
+  exist only as string literals at the ~38 `pass!`/`refine!` sites in
+  `python_bindings/ir.rs` plus a handful of hardcoded `profiler.measure` calls;
+  one `decompile_at` emits 40 stage events. There is no enumerated list, no
+  ordering contract, and no fingerprint anywhere in the crate. First step: make
+  the stage name an `enum PipelineStage` in `decompile::profile` so the list is
+  the type, then hash the ordered sequence into the existing `run` event.
+- [~] Prove exactly one base object parse per reusable session.
+  Substantially closed by `2ed9b07`; see the `ProgramSession` entry under
+  "Foundations still incomplete" for the ownership work. Re-measured at HEAD
+  2026-08-15 with `GLAURUNG_PIPELINE_PROFILE=1`: a whole-program `decompile_all`
+  costs **20** parses and a single-function `decompile_at` **19**. Not one — but
+  the number is now genuinely a constant. It is identical across `hello-gcc-O0`,
+  `hello-clang-O2`, `hello-go-static` and the 1146-function `hello-rust-musl`,
+  identical at `limit=50` and `limit=30000`, and identical between repeated runs;
+  before the ownership work the same measurement was 58, 80, 3517 and 40,865 and
+  varied run to run on the SAME binary. Note the 19 quoted previously was the
+  `decompile_at` figure; whole-program is 20, and the constant has crept 17 -> 20
+  across the six commits since, unnoticed, because the only pin was a
+  `object_parse_count < 100` bound. That is now
+  `test_object_parse_count_is_a_session_constant_not_a_function_of_the_binary`,
+  which asserts the four-binary/two-limit equality directly and ratchets the
+  bound to 20. The residue is a fixed set of one-shot program analyses; reaching
+  one needs a relocation and symbol index on `ProgramImage`.
+- [~] Expose stable reusable Python session/result APIs.
+  Audited 2026-08-15. The SESSION half is done and the RESULT half has not
+  started. `glaurung.ir.DecompilerSession` exists with `path`,
+  `discovery_cache_stats`, `artifact_cache_stats`, `clear_caches` and
+  `decompile_at`; it is typed in `python/glaurung/__init__.pyi`, and
+  `test_decompiler_session.py` pins on a real compiled binary that a session
+  query is byte-identical to the module-level `decompile_at`. What is missing:
+  `decompile_at` returns a bare `str`, so there is no result object to carry
+  entry VA, prototype, diagnostics or completeness; there is no whole-program
+  query on the session; and the class has **zero production consumers** — the CLI
+  and every tool still call the module-level functions, so nothing in the repo
+  actually reuses a session. First step: give the CLI's multi-function paths a
+  session, which is the consumer that would show whether the API is the right
+  shape before a result type is designed around it.
 
 ### Phase 2 — Canonical target and exact lifted semantics
 
@@ -910,10 +1194,89 @@ behavior.
 
 - [~] Finish canonical `TargetSpec` and migrate all consumers.
 - [ ] Finish exact-width constants and operand provenance.
-- [ ] Complete shared register banks and generated view/write conformance tests.
+  Audited 2026-08-15: not started, and neither half is partially built.
+  `ir::types::Const(i64)` and `ast::Expr::Const(i64)` carry no width — a doc
+  comment on the former disclaims it, `expression_width` returns `None` for
+  `Expr::Const`, and `ast::FloatConst { bits, width }` is the only width-tagged
+  constant in the IR. Operand provenance is discarded at the source: the x86
+  lifter's `value_of_operand` receives the operand index and drops it, and no IR
+  value carries an operand reference; only `MirInstruction::source_va` survives.
+  The shape already exists in `symbolic::expr::Const { value: u128, width }` and
+  was never carried into `src/ir/`. First step: add `width` to `Value::Const`,
+  which turns the 579 construction sites into a compiler-enforced worklist.
+- [~] Complete shared register banks and generated view/write conformance tests.
+  Audited 2026-08-15. The generated conformance tests EXIST and are the strong
+  half: `ir::regview`'s `every_view_conforms_to_the_partial_write_rule` iterates
+  every row of the bank (~377 views) rather than a hand-listed sample, with four
+  more generated suites beside it. The bank is not shared, though: `regview::Arch`
+  has exactly two variants, `X86_64` and `AArch64`. ARM32 is absent — `lift_arm32.rs`
+  never mentions `regview`, and `abi::result_view_arch` returns `None` for
+  `Arm | ArmHardFloat | Cdecl32` with the comment "ARM32 has none". 32-bit x86 is
+  gated off inside the x86-64 table (views apply only when `bits == 64`). A
+  second, unrelated abstraction — `target::registers::RegisterRoles` — does cover
+  Arm32, but it is a four-role name table (sp/fp/lr/pc), not widths or views.
+  Execution-level partial-write checks remain hand-written spot tests
+  (`tests/register_view_semantics.rs`). First step below, shared with ARM32.
 - [ ] Complete ARM32 A32/Thumb/PC/condition/VFP/ABI semantics.
-- [ ] Widen the entry-stack coordinate model to ARM32.
-- [ ] Add the real A32 lane and differential execution coverage.
+  Open, and much further along than this line implies — audited 2026-08-15
+  against the code, because "ARM32 is incomplete" is not actionable. ARM32 is
+  still the worst lane in the corpus at 320/1288 = 24.8% failures against
+  x86-64's 173/1345 = 12.9%, and design rule 11 makes it a conformance target.
+  **Already landed** (not open, despite the item-4 note further down still
+  listing three of these): PC bias `+8` A32 / `+4` Thumb and literal-pool
+  resolution restricted to executable sections (`lift_arm32.rs:135-190`); A32
+  condition codes decoded from bits 31:28 of the word rather than guessed from a
+  mnemonic suffix; Thumb-2 IT blocks lowered to conditional selects; full NZCV
+  including C and V on ADD/SUB; the modified-immediate rotation fold (`f1a6e4c`),
+  which took ARM32's opaque-intrinsic rate from 6.6% to 6 instances in 2349;
+  hard-float ABI SELECTION from `EF_ARM_ABI_FLOAT_HARD`; and 64-bit `r0:r1`
+  return pairing with an executed round-trip test.
+  **Actually remaining, in value order:** (1) VFP s/d/q overlap is not modelled
+  at all, so writing `s1` does not touch `d0`; (2) consequently
+  `abi::arm_hard_float_argument_slots` lists only `s0`..`s15` and has no `d0`..`d7`,
+  so a double-precision argument is unrepresentable; (3) 64-bit integer argument
+  register pairing and even-register alignment — `call_args` returns `None` for
+  `long long`/`int64_t`/`uint64_t` and nothing implements the even-register skip;
+  (4) logical-op `S` flags set only Z and N, with shifter carry-out and V
+  deliberately unmodelled; (5) NEON entirely absent, and VFP
+  `vcmp/vcvt/vabs/vsqrt/vmrs/vmsr/vmla/vsel` absent; (6) register-shifted-register
+  and RRX explicitly declined; (7) LDM/STM base writeback is a conservative
+  no-op; (8) LDREX/STREX, DMB/DSB/ISB, SVC, MSR/MRS and BFC fall to the
+  `Op::Unknown` catch-all. `test_decompiler_arm32_semantics.py`'s six QEMU
+  round-trips cover none of (1)-(5). First step: (1) and (2) are the same fact —
+  an s/d/q overlap table in `regview::Arch::Arm32` deletes the `None` arm in
+  `abi::result_view_arch`, admits ARM32 to the existing generated conformance
+  suite above, and makes `d0`..`d7` expressible.
+- [x] Widen the entry-stack coordinate model to ARM32.
+  Done, and this box duplicates two already-ticked homes: the rank-ordered plan's
+  item 4 and EPIC 4's Thumb frame-promotion bullet. `stack_locals::entry_stack_base`
+  returns `"entry_sp"` for `Arm | ArmHardFloat | Aarch64`;
+  `aapcs_entry_stack_coordinate` re-expresses `sp`-relative accesses in that
+  coordinate for the same three; `is_arm_frame_pointer` covers `fp`/`r11` plus a
+  prologue-proven Thumb `r7` anchor; and `dwarf_contracts` maps ARM
+  `DW_OP_breg11/breg7` to `fp` and `DW_AT_frame_base=CFA` to `entry_sp`. Proved
+  in both modes by `stack_locals/arm32_tests.rs`:
+  `thumb_frame_register_shares_the_a32_entry_stack_coordinates`,
+  `a32_frame_pointer_address_rejoins_the_entry_cfa_object`, and the negative
+  control `thumb_scratch_r7_is_not_a_frame_anchor`. Commits `401ac4f` and
+  `152d240`; the measured effect was that Thumb had been promoting NOTHING
+  (`07_packet_parser` recovered 1 distinct local against A32's 25) and seven of
+  eight Thumb lanes now match their A32 control exactly. The remainder is EPIC
+  4's separate bullet on frame promotion, aggregate extents and argument homes.
+- [x] Add the real A32 lane and differential execution coverage.
+  Done in `e2b76a4`; same lane as the Phase 0 box above, and also ticked twice in
+  the score-campaign list. The lane is genuinely A32 (`-marm` against `armv7`'s
+  `-mthumb`, pinned by `test_arm32_required_lanes_select_distinct_instruction_sets`)
+  and fully populated: 364 cells, 1288 checks, no skips or nulls, and 40 cells
+  whose verdict differs from the Thumb sibling. Differential EXECUTION is real,
+  not a structural check: the recovered C is recompiled with the target driver
+  and executed under `qemu-arm` against the original ARM object through a
+  generated dependency-free ILP32 worker, judged by the same `diff_decompile.py`
+  the x86-64 gate uses, and `arch_roundtrip.py --check` refuses a scoped matrix
+  so gate lane 3 always includes `armv7_a32`. Honest caveat: signatures outside
+  the worker's subset fall back to a host LP64 rebuild guarded by `incomparable`
+  / `nonportable`; the 10 `incomparable` cells are a proven lower bound on that
+  fallback and the exact split was not measured.
 
 ### Phase 3 — Verified MIR and definedness authority
 
@@ -959,35 +1322,288 @@ identity and provenance.
 
 **Outcome:** verified memory accesses become source-level objects and layouts.
 
+This block is a second view of EPIC 3; audited 2026-08-15 against the code, with
+the detail kept there and only the delta recorded here.
+
 - [x] Land the common object/access model and MIR identities.
 - [ ] Port the safe affine-index slice with real end-to-end coverage.
+  Step 3 of the four-step plan under EPIC 3's "Near-term retained work" landed
+  and nothing else did. The fixture exists —
+  `tests/decompiler_fixtures/src/187_constant_bias_index.c` (`8f661ff`), five
+  functions including two deliberate controls, with the `[bias]` and
+  `[aggregates]` sets in `sets.toml` — but all 20 of its lanes are already
+  `pass` in `baseline.json`, because execution equivalence is green whether or
+  not the analysis exists. So the coverage is not yet a test the port would flip.
+  The named helpers are absent from master: `affine_of`, `affine_of_expr`,
+  `collect_affine_index_defs` and `is_version_stable` match **zero** times in
+  `src/` and `tests/`. Do not credit `resolve_affine_values`/`AffineFact`
+  (`src/ir/memory_objects/mir.rs:338`) here — those resolve `root + constant` at
+  scale 1, not `root*scale + bias` folded into a frame displacement. First step:
+  add a failing slot-recognition assertion on `187_constant_bias_index` before
+  re-deriving the helpers, since the execution lane cannot fail.
 - [ ] Migrate the first production aggregate consumer from AST to MIR.
-- [ ] Solve arrays, structs, unions, bitfields, extents, and pointees.
+  **Blocked, and both halves of the blocker are now verified in code rather than
+  suspected.** (1) There is no frame object left to migrate by the time a
+  consumer could ask: `promote_stack_locals_with_facts` runs at
+  `src/python_bindings/ir.rs:579`, inside `prepare_for_decbench`, and mints every
+  `(base, disp)` slot into its own named local; the only production consumer of
+  the object model, `refine_pointer_high_variables`, runs at `:1944`. The AST
+  adapter forms an object only where `record_access`
+  (`src/ir/memory_objects/ast.rs:265`) sees a `Deref` over an affine address —
+  a pointer held in a local, never the frame — while the MIR adapter keys every
+  stack access by the frame root, so "a whole frame arrives as one object"
+  (`src/ir/memory_objects/partition.rs:3`). The two models have disjoint object
+  populations. (2) The consumer's question is the one MIR refuses:
+  `is_proven_promoted_object_cursor` requires `has_conflict_free_extent`, extent
+  is derived only from `stride` (`src/ir/memory_objects.rs:394`), and
+  `partition.rs:174` inserts `PartitionConflict::UnboundedCursor` **because**
+  `stride.is_some()` — the single property the AST consumer treats as proof is
+  the single property the MIR partition treats as disqualifying. Proven by
+  `a_walking_frame_cursor_refuses_to_partition`
+  (`src/ir/memory_objects/partition_tests.rs:664`). First step: migrate a
+  different consumer. The frame-slot *extent* question is already answerable end
+  to end — `StackLocalFacts::frame_coordinates` →
+  `MemoryObjectModel::resolve_frame_coordinate` → `bounds_at`, test-proven by
+  `every_promoted_frame_coordinate_resolves_to_its_own_extent`
+  (`partition_tests.rs:252`) — and today has no non-test caller.
+- [~] Solve arrays, structs, unions, bitfields, extents, and pointees.
+  Four of the six are settled, two of them by proof of *undecidability* rather
+  than by an answer; see the `[~]` "Classify struct versus array versus union
+  versus bitfield" item under EPIC 3 for the detail, which is not repeated here.
+  Extents are the sixth settled one: `ObjectPartition`/`ExtentBounds` gives
+  two-sided bounds with five typed refusals (`partition.rs:82`, `:31`).
+  **Pointees are the one noun with neither an answer nor a proof.**
+  `ObjectOrigin::ParameterPointee` exists as an origin tag
+  (`src/ir/memory_objects.rs:148`, set in `mir.rs:350`) but nothing classifies a
+  pointee's shape, which is why EPIC 3's "Propagate pointee and object
+  constraints across calls" is still open. The whole layer also remains
+  diagnostic: `object_shapes` has no production consumer.
 - [ ] Implement aggregate ABI transfers and real execution fixtures.
+  Neither half. No SysV eightbyte classifier exists for aggregates; the code
+  fails closed instead, and the refusal is pinned by
+  `locked_sysv_parameters_decline_the_whole_signature_on_an_aggregate`
+  (`src/ir/types_recover.rs:4466`) — one aggregate poisons the whole signature.
+  `RecoveredOutputKind::HiddenReturn` is declared (`types_recover.rs:509`) and
+  **never constructed**: its only three other references are match arms that
+  treat it as a no-op or spell it `"long"`. The renderer refuses by-value
+  aggregates in as many words (`src/ir/ast.rs:7565`). On fixtures, the corpus
+  dodges the boundary on purpose:
+  `tests/decompiler_fixtures/src/129_struct_by_value.c` keeps both struct-taking
+  functions `static`, exposes only `int32_t` signatures in the manifest, and
+  says so at line 52 — "Returning the whole struct would cross the same boundary
+  in reverse." No fixture anywhere returns a struct by value, so there is no
+  sret execution lane at all. First step: add exported `struct Small f(...)`
+  (register-pair return) and `struct Large g(...)` (sret) lanes; the new code
+  would be `HiddenReturn`'s first producer.
 - [ ] Project solved access paths to semantic HIR.
+  Zero, and it is gated on Phase 7 rather than on Phase 6: there is no HIR to
+  project onto (no `src/ir/hir/`, no `Field`/`Index`/`Member`/`AddressOf` node in
+  `Expr`). Nothing reads a solved access path — `object_shapes` has three call
+  sites and all are definitions or tests. What ships today is two independent
+  older stories: members come from debug info (`annotate_function_fields`,
+  `src/ir/dwarf_fields.rs:18`, plus `pdb_fields.rs`), and arrays come from the
+  `stack_locals` indexed-start heuristic (`src/ir/stack_locals.rs:1016`) rendered
+  as `unsigned char {local}[{size}]` (`src/ir/ast.rs:8136`) — a *different*
+  array story from the one `shape.rs` proves, and the one that reaches output.
+  Even the shipping cursor projection says it is waiting: it emits `char *`
+  because that is "the only portable C declaration that preserves those byte
+  displacements until semantic Field/Index HIR can carry the recovered layout"
+  (`src/ir/high_variables.rs:130`). First step: land the `Index` node and project
+  `ObjectShape::Array { element }` into it — the one shape with a positive proof
+  and an existing passing assertion (`20_graph_bfs`) to measure against.
 
 ### Phase 7 — Semantic HIR, pure rendering, and physical decomposition
 
 **Outcome:** semantic ownership becomes visible in APIs and file structure.
 
+This block is a second view of "Semantic HIR and pure rendering" above; audited
+2026-08-15, with only the delta recorded here.
+
 - [ ] Finish HIR and shared visitors/rewriters.
-- [ ] Move all semantic renderer behavior into declared verified passes.
-- [ ] Make all output profiles pure and deterministic.
+  Not started, and the second half is the larger problem. `src/ir/hir/` does not
+  exist; the HIR is `Expr`/`Stmt`/`Function` in `src/ir/ast.rs`. There is no
+  visitor or rewriter trait anywhere — 51 files under `src/ir` hand-match
+  `Stmt::If` across **540** sites, each with its own descent
+  (`visit_children`, `rewrite_body`, `walk_stmt`, `walk_stmt_rw`, all
+  file-private and all different). The one generic helper,
+  `for_each_expr_in_stmt` (`src/ir/expr_reconstruct.rs:261`), is private with one
+  caller. First step: one descent trait plus a single well-bounded convert
+  (`src/ir/canary.rs`, 13 sites) as proof of shape, before touching
+  `guard_chain.rs` (55).
+- [~] Move all semantic renderer behavior into declared verified passes.
+  The pipeline half is real and the registry half is not. 19 steps are named
+  between `trace_pass("prepare_for_decbench")` and `trace_pass("ready_to_render")`
+  via the `pass!`/`refine!` macros at `src/python_bindings/ir.rs:1904`, def-use
+  is verified (`src/ir/verify_defs.rs`, `#[must_use] RenderVerification` in
+  `73bdca3`), and `symbol_env::clear()` was removed from the renderer tail in the
+  same commit so the renderer no longer releases a thread-local it never
+  installed. But "declared" is not yet true in the type system: there is no
+  `PassSpec`, no pass list, no registry — `pass!` is a macro over a hardcoded
+  straight-line sequence that lives in `python_bindings`, so a pure-Rust consumer
+  of `crate::ir` sees no declared pipeline at all. Residue still executing inside
+  the renderer, each verified at its call site: `renderable_dwarf_structs`
+  (`src/ir/ast.rs:7681`), `recover_named_call_prototypes` (`:7722`),
+  `infer_return_ctype` (`:7931`, which also runs pre-render at
+  `python_bindings/ir.rs:2109` — it genuinely runs twice), and the
+  `DEC_DECLARED_CTYPES` cell (written `:8009`/`:8160`, read `:10438`). That last
+  one is not circular and is therefore extractable as a declaration plan.
+  `DEC_SEMANTIC_WIDE_CAST` (`:10964`) is correctly called unmovable: it is a
+  dynamically-scoped *formatting* parameter carrying destination type down an
+  expression print, so it becomes a `&RenderCtx` argument, not a pass.
+- [~] Make all output profiles pure and deterministic.
+  Determinism is tested; purity is not achieved; and the coverage is the inverse
+  of what the risk profile wants. `python/tests/test_decompile_determinism.py`
+  runs 9 cases (3 tests x x86-64 ELF, AArch64 ELF, PE): same-process repeat,
+  sequential-process repeat, and 6-way concurrent processes against a serial
+  baseline. But it calls `g.ir.decompile_all(...)` with no `style`, so it
+  exercises the **plain** profile only; `decbench` is compared only across
+  separate subprocesses
+  (`test_decompiler_emission_invariants.py:509`), which by construction cannot
+  observe thread-local leakage; and `c` (`render_c`) has no determinism test at
+  all. So the one profile that owns all 16 `DEC_*` thread-locals
+  (`src/ir/ast.rs:9150-9257`) is never rendered twice in one process by any test.
+  Two purity defects worth carrying: `DEC_POINTER_WIDTH` is set and reset only by
+  the decbench renderer but read by the shared `target_int_ctype`
+  (`ast.rs:5127`), so the `c`/`plain` paths read a default of 8 regardless of
+  target; and `symbol_env` install/clear (`python_bindings/ir.rs:1796`, `:1814`)
+  is a bare statement pair with no `Drop` guard, so a panic mid-render leaves the
+  previous function's prototypes installed for the next one on that thread.
+  First step: parametrize the in-process determinism test over
+  `style in {"", "c", "decbench"}` — that single change makes the whole
+  thread-local class falsifiable.
 - [ ] Split large owners only along migrated responsibility boundaries.
-- [ ] Add dependency and file-size ratchets.
+  Zero splits. `git log --diff-filter=R -- src/ir` over the last 200 commits
+  returns nothing, and every new file under `src/ir` in the last 40 commits is
+  additive capability (`x87.rs`, `memory_objects/shape.rs`, `indirect_targets.rs`,
+  `effect_census.rs`, `mir/*`), not decomposition. `ast.rs` grew monotonically
+  across the last seven commits, 19,158 to 19,315 lines. This is correct
+  sequencing rather than neglect — the box is conditional on a migrated boundary
+  and the two boxes above have not produced one — but the conditional should not
+  be read as progress. First step, when it comes: the `prepare_for_decbench` /
+  renderer line is the one boundary already paid for.
+- [x] Add dependency and file-size ratchets. Both are live, green, and collected
+  by default (`pytest.ini` `testpaths = python/tests`). File size:
+  `tools/fitness_report.py` + `tools/fitness_baseline.json` +
+  `python/tests/test_fitness_report.py` ratchet the seven measures, and
+  `python/tests/test_large_module_review.py` (added 2026-08-15) ratchets the
+  *set* of files over 1,000 LOC, which the count cannot. Dependencies:
+  `python/tests/test_src_dependency_boundaries.py` — see the ownership map above
+  for both. **A ratchet is not fitness, and this tick must not be read as one.**
+  `tools/fitness_baseline.json` has been relaxed upward on five of its last seven
+  commits (`product_mean_loc` 526.34 -> 530.11, `product_files_above_1000`
+  27 -> 28, `ir_files_above_1000` 13 -> 14), two of them dedicated
+  `chore: refresh the fitness baseline` commits. The gate is installed and the
+  measures are moving away from target through it.
 - [ ] Remove compatibility layers as parity is proven.
+  Standing layers, none removed. The renderer overload chain is four wrappers
+  deep (`render_decbench_typed` at `src/ir/ast.rs:7306` through
+  `..._and_local_types` at `:7612`; only the last does work) with exactly one
+  production caller; `ObjectIdentity::LegacyRegister`
+  (`src/ir/memory_objects.rs:37`) is still load-bearing; `stack_locals.rs:2940`
+  advances a counter "for legacy callers"; and `python_bindings/ir.rs` keeps
+  `bits=` back-compat at `:672`. First step, and the only one where parity is
+  already *proven* rather than assumed: the two legacy collectors kept alive
+  purely as differential oracles —
+  `indexed_image_string_pool_matches_the_legacy_collector`
+  (`src/ir/strings_fold.rs:507`) and
+  `indexed_image_readonly_regions_match_the_legacy_collector`
+  (`src/ir/readonly_fold.rs:710`). Those are the healthy form of this debt and
+  the ones actually ready to delete.
 
 ### Phase 8 — Persistence, deterministic parallelism, and hardening
 
 **Outcome:** stable boundaries produce faster, safer long-running analysis.
 
+This block overlaps the Performance plan almost box for box; audited 2026-08-15.
+The pairings are: persistence *contains* the cache-key box (that one is
+in-memory, this one is disk); parallel scheduling **is** the SCC box plus the
+immutable-snapshot box; change epochs **is** the whole-HIR-clone box; and
+cancellation/budgets **is** the budgets box plus three unrelated hardening
+items. Read the reasoning there and the delta here.
+
 - [ ] Persist versioned environment and artifacts with dependency fingerprints.
+  Nothing in `src/` writes an environment or a decompiled artifact to disk; all
+  three caches are a `HashMap` behind a `Mutex` and die with the process. The
+  `.glaurung` SQLite KB (`python/glaurung/llm/kb/`) persists **analyst facts
+  only** — names, comments, prototypes, xrefs, stack vars, bookmarks, undo — and
+  the decisive evidence is that `render_decompile_with_names`
+  (`xref_db.py:2070`) calls `g.ir.decompile_at` live and applies stored names to
+  fresh output. No pseudocode, no HIR, no lifted IR, no environment is stored.
+  It does anchor on a sha256 of the image (`persistent.py:104`), which is an
+  image fingerprint on analyst facts, not a dependency fingerprint on artifacts;
+  there is no pass-set hash or pipeline version anywhere. First step is
+  ordering, not code: a persisted artifact without a pipeline fingerprint is
+  unsafe to reuse across builds, so the fingerprint box has to close first.
 - [ ] Add deterministic function-parallel scheduling and SCC phase barriers.
+  The scheduler does not exist. `decompile_all_py` and `decompile_many_py` are
+  plain sequential `for` loops with the GIL held
+  (`src/python_bindings/ir.rs:2763`); `rayon` appears only in `src/strings/` and
+  `src/python_bindings/triage.rs`, never on the decompile path; and the only
+  `thread::spawn`s in the pipeline are single workers for stack size
+  (`src/ir/ast.rs:3282`) and for Ctrl-C (`src/python_bindings/analysis.rs:241`).
+  There are no barriers because there is nothing to barrier. The SCC half is the
+  Performance-plan box above, and it is the keystone: the condensation is what
+  would define the phase barriers, and it currently has no input.
 - [ ] Add incremental invalidation for analyst edits, new facts, and pass changes.
-- [ ] Replace global rescans/clones with indices and change epochs.
-- [ ] Add cancellation, resource budgets, fuzzing, crash recovery, and schema
+  Every one of the ~30 `invalidate` matches in `src/` is intra-function dataflow
+  (`copy_prop::invalidate`, `invalidate_loads`,
+  `invalidate_written_definitions`); there is not a single cache-invalidation
+  call site. The only lifecycle primitive is the blunt `clear_caches()`
+  (`src/program/session.rs:327`), which is manual, all-or-nothing, and takes no
+  argument saying what changed. Against the box's three axes: analyst edits live
+  in the Python KB with no channel to the Rust caches (which is why
+  `render_decompile_with_names` re-decompiles instead); a new fact requires a new
+  session; and pass changes are undetectable because there is no pipeline
+  fingerprint. First step: a per-key `invalidate_function(va)` so
+  `clear_caches` stops being the only option.
+- [~] Replace global rescans/clones with indices and change epochs.
+  The indices half is the strongest measured work in this phase; the epochs half
+  is untouched. `ProgramImage` (`src/program/image.rs:126`) is now a real index —
+  segment/section/code mappings, executable and PLT ranges, eh_frame functions,
+  symbols by name and by VA, plus four `OnceLock` lazies — and it retired the
+  named anti-pattern of re-reading relocation tables per function. Measured:
+  object parses per session went from `O(functions + branches + callees)` to a
+  constant **19**, held by three tests in `src/program/session_tests.rs`
+  (`indexing_one_image_parses_the_object_exactly_once` at `:845`,
+  `discovery_parse_count_does_not_scale_with_the_number_of_functions` at `:870`,
+  `address_scoped_discovery_reuses_the_session_image` at `:913`). The epochs half
+  is the whole-HIR-clone box in the Performance plan: no `epoch`, no `ChangeSet`,
+  no dirty tracking, and two clone-and-compare fixed points still live.
+- [~] Add cancellation, resource budgets, fuzzing, crash recovery, and schema
   migration coverage.
-- [ ] Meet the performance targets without correctness or coverage regression.
+  Five independent things at five different maturities; bundling them into one
+  box hides that. Cancellation and resource budgets: see the Performance-plan
+  budgets box — real for discovery through `analysis`, absent on every decompile
+  entry point, and no memory budget exists. Fuzzing: `fuzz/` exists with
+  `cargo-fuzz` and five targets, but the crate is pulled with
+  `default-features = false, features = ["triage-core", "triage-heuristics",
+  "triage-containers"]`, so the IR, lifters, MIR and HIR are **not compiled into
+  the fuzz build at all** — it is triage-only, and the roadmap's own "fuzz
+  decoders, lifters, MIR editors..." box is correctly still open. Crash
+  recovery: `catch_unwind` appears exactly twice, in one place, wrapping
+  `pelite` (`src/triage/parsers.rs:44`); there is no partial artifact on panic
+  and no journal replay. Schema migration: self-declared unimplemented —
+  `python/glaurung/llm/kb/persistent.py:213` raises with the string "migrations
+  are not yet implemented" on a `SCHEMA_VERSION` mismatch, and the additive
+  `ALTER TABLE` path in `xref_db.py` documents that it does not bump the
+  version. First step, cheapest of the five: point one fuzz target at
+  `lift_function_from_bytes` and drop `default-features = false`.
+- [~] Meet the performance targets without correctness or coverage regression.
+  Five of the six rows in the table above are met as measured and one is not:
+  base object parses per session is **19** against a target of exactly one, and
+  that is still true at this HEAD (the only commit touching `parse_object` since
+  the measurement, `4ad8800`, refactored two existing call sites into typed
+  errors without changing the site count). Two of the five "met" rows carry
+  caveats already recorded above and repeated here because a table row is what
+  gets quoted: the wall-clock row substituted 138 binaries sequential for the
+  stated 224 at 12 workers, which is a different measurement rather than a met
+  one; and the warm-query row is only meetable through `DecompilerSession`,
+  since repeated `decompile_many` gives 1.98x. The "without regression" clause
+  now has one real guard where it previously had none —
+  `python/tests/test_decompile_determinism.py`, 9 cases over three real binaries
+  — but its scope is process-level and plain-profile (see Phase 7), so it pins
+  the property that holds today rather than proving the property the eventual
+  parallel scheduler will need.
 
 ## Immediate rank-ordered plan
 

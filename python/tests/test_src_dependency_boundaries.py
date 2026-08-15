@@ -70,6 +70,30 @@ def _product_text(relative: str, *, drop_comment_lines: bool = False) -> str:
 # `src/ir/ast.rs` today, alongside the HIR model itself.
 RENDERER_HIR_FILE = "ir/ast.rs"
 
+
+def renderer_hir_files() -> list[str]:
+    """Every product file in the renderer/HIR owner, discovered rather than
+    listed: `src/ir/ast.rs` plus everything under `src/ir/ast/`.
+
+    Discovery matters because Phase 7 splits this owner. A hard-coded single
+    filename would keep passing while each new submodule carved out of
+    `ast.rs` escaped the boundary unchecked.
+    """
+    found = [RENDERER_HIR_FILE]
+    for path in sorted((SRC / "ir" / "ast").rglob("*.rs")):
+        relative = path.relative_to(SRC)
+        if not fr.is_test_path(relative):
+            found.append(str(relative))
+    return found
+
+
+def test_the_renderer_owner_is_more_than_one_file_or_still_the_one_we_know():
+    """Guards the discovery above against a layout move that would empty it."""
+    files = renderer_hir_files()
+    assert RENDERER_HIR_FILE in files
+    assert all((SRC / relative).is_file() for relative in files)
+
+
 # `src/ir/lift_*` are the per-architecture lifters (machine bytes -> LLIR).
 LIFTER_REFERENCE_RE = re.compile(
     r"crate::ir::lift_(x86|arm32|arm64|function)\b|"
@@ -78,13 +102,14 @@ LIFTER_REFERENCE_RE = re.compile(
 
 
 def test_renderer_hir_does_not_reference_the_lifters():
-    text = _product_text(RENDERER_HIR_FILE, drop_comment_lines=True)
-    hit = LIFTER_REFERENCE_RE.search(text)
-    assert hit is None, (
-        f"{RENDERER_HIR_FILE} (renderer/HIR) references a lifter module "
-        f"({hit.group(0) if hit else ''!r}); the renderer must consume the "
-        "already-lifted IR, not lift bytes itself"
-    )
+    for relative in renderer_hir_files():
+        text = _product_text(relative, drop_comment_lines=True)
+        hit = LIFTER_REFERENCE_RE.search(text)
+        assert hit is None, (
+            f"{relative} (renderer/HIR) references a lifter module "
+            f"({hit.group(0) if hit else ''!r}); the renderer must consume the "
+            "already-lifted IR, not lift bytes itself"
+        )
 
 
 # --- HIR cannot parse images --------------------------------------------------
@@ -96,13 +121,14 @@ IMAGE_PARSING_RE = re.compile(r"crate::formats::|\bProgramImage\b|\bobject::File
 
 
 def test_hir_does_not_parse_images():
-    text = _product_text(RENDERER_HIR_FILE, drop_comment_lines=True)
-    hit = IMAGE_PARSING_RE.search(text)
-    assert hit is None, (
-        f"{RENDERER_HIR_FILE} (HIR) references image parsing "
-        f"({hit.group(0) if hit else ''!r}); HIR construction must receive "
-        "already-lifted evidence, never parse a binary image itself"
-    )
+    for relative in renderer_hir_files():
+        text = _product_text(relative, drop_comment_lines=True)
+        hit = IMAGE_PARSING_RE.search(text)
+        assert hit is None, (
+            f"{relative} (HIR) references image parsing "
+            f"({hit.group(0) if hit else ''!r}); HIR construction must receive "
+            "already-lifted evidence, never parse a binary image itself"
+        )
 
 
 # --- targets cannot import renderers -----------------------------------------

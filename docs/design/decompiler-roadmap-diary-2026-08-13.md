@@ -6813,3 +6813,348 @@ DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
 fixture matrix, any unfiltered `arch_roundtrip.py` sweep, repo-wide `cargo fmt`,
 and `pytest python/tests/` (no Python file changed). **No baseline was refreshed
 and nothing was committed.**
+
+## Entry 41 — Nineteen boxes audited; six of them were already true
+
+The brief was breadth, not depth: four blocks of the roadmap — "Foundations
+still incomplete" and Phases 0, 1 and 2 — nineteen open boxes, and the standing
+observation that the plan has drifted far enough from the code to be a worse
+guide than `git log`. Determine the true state of each, annotate in place, and
+close whatever is cheaply and provably closable.
+
+The headline is the drift itself. **Of nineteen open boxes, three were fully
+done and never ticked, and six more were materially further along than their one
+line of text said.** That is consistent with the eleven previous cases this week
+of a brief describing as missing something that already existed, and it has a
+structural cause a sibling agent named in `0768c4c` on the same day: the Phase
+blocks are a second view of the EPIC blocks, so landing a thing ticks one of its
+two or three homes and the others silently rot.
+
+### The three that were already done
+
+**Phase 0's "Add the A32 and GCC 15 control lanes"** and **Phase 2's "Add the
+real A32 lane and differential execution coverage"** are the same work, done in
+`e2b76a4` on 2026-08-06, and *already ticked twice* in the score-campaign list
+forty lines above. Nine days open. The lanes are real rather than relabels —
+`armv7_a32` compiles with `-marm` against `armv7`'s `-mthumb`, and
+`x86_64_gcc15` is the unpinned host `gcc 15.2.0` against the control's pinned
+`11.4.0` — and they are fully populated at 364 cells each with no skips or
+nulls. The check that actually rules out a placeholder is that they are not
+copies of their siblings: 40 of 364 `armv7_a32` verdicts differ from `armv7`,
+and 33 of 364 `x86_64_gcc15` verdicts differ from `x86_64`.
+
+The A32 lane's differential execution is genuine and, for 32-bit lanes,
+*more* careful than the 64-bit ones: the recovered C is recompiled with the
+target driver and executed under `qemu-arm` against the original ARM object
+through a generated dependency-free ILP32 worker, judged by the same
+`diff_decompile.py` the x86-64 gate uses. `arch_roundtrip.py --check` refuses a
+scoped matrix, so gate lane 3 has been running `armv7_a32` all along even though
+its step label names only "aarch64 / armv7 / i386".
+
+**Phase 2's "Widen the entry-stack coordinate model to ARM32"** is done in code
+and ticked in two other views — the rank-ordered plan's item 4 and EPIC 4's
+Thumb frame-promotion bullet. `entry_stack_base` returns `"entry_sp"` for
+`Arm | ArmHardFloat | Aarch64`, `aapcs_entry_stack_coordinate` re-expresses
+`sp`-relative accesses in that coordinate, `is_arm_frame_pointer` covers
+`fp`/`r11` plus a prologue-proven Thumb `r7`, and `arm32_tests.rs` proves both
+modes with a negative control (`thumb_scratch_r7_is_not_a_frame_anchor`).
+
+### The precise version of "ARM32 is incomplete"
+
+That box is the one the brief specifically asked not to leave as a slogan, and
+it turns out to be the most mis-stated line in the four blocks. ARM32 is still
+the worst lane in the corpus — 320/1288 = 24.8% failures against x86-64's
+173/1345 = 12.9%, recomputed from `arch_baseline.json` — but five of the things
+the roadmap lists as open are done, including three that the rank-ordered plan's
+item 4 still enumerates as remaining:
+
+- PC bias `+8` A32 / `+4` Thumb, with literal-pool resolution restricted to
+  executable sections, because freezing a mutable `.data` word into a constant
+  is exactly the wrong answer.
+- A32 condition codes decoded from bits 31:28 of the instruction word, not
+  guessed from a mnemonic suffix.
+- Thumb-2 IT blocks lowered to conditional selects.
+- Hard-float ABI *selection*, from `EF_ARM_ABI_FLOAT_HARD`.
+- The modified-immediate rotation fold (`f1a6e4c`), which took ARM32's
+  opaque-intrinsic rate from 6.6% of lifted instructions to 6 instances in 2349.
+
+What actually remains, in value order, is eight things, and the top two are one
+fact: **VFP s/d/q overlap is not modelled at all** — `abi::result_view_arch`
+returns `None` for every ARM32 convention with the comment "ARM32 has none" — and
+consequently `arm_hard_float_argument_slots` lists `s0`..`s15` with no `d0`..`d7`,
+so **a double-precision argument is unrepresentable**. Then: 64-bit integer
+argument pairing and even-register alignment (`call_args` returns `None` for
+`int64_t` and nothing implements the skip); logical-`S` flags setting only Z and
+N; NEON absent entirely; register-shifted-register and RRX declined; LDM/STM
+writeback a conservative no-op; and the synchronisation/system instructions
+falling to the `Op::Unknown` catch-all.
+
+The pleasing part is that the first step is shared with a different box.
+`regview::Arch` has exactly two variants, `X86_64` and `AArch64`, and its
+`every_view_conforms_to_the_partial_write_rule` is a genuinely *generated*
+conformance test that iterates all ~377 rows rather than a hand-listed sample.
+Adding `regview::Arch::Arm32` with the s/d/q overlap table deletes the `None`
+arm in `abi.rs`, makes `d0`..`d7` expressible, and admits ARM32 to that
+generated suite for free.
+
+### The number that had crept, and the pin that let it
+
+Phase 1's "Prove exactly one base object parse per reusable session" is the box
+I could close a piece of. `2ed9b07` took object parses per session from
+`O(functions + branches + callees)` to a constant, and the roadmap records 19.
+
+Re-measured at HEAD with `GLAURUNG_PIPELINE_PROFILE=1`, it is **20 for a
+whole-program `decompile_all` and 19 for a single-function `decompile_at`** — so
+the 19 in the plan is the single-function figure, and the whole-program constant
+has crept **17 -> 19 -> 20 across the six commits since**, unnoticed.
+
+It went unnoticed because the only end-to-end pin was
+`assert report["runs"][0]["object_parse_count"] < 100`, with a comment quoting
+47. A bound of 100 on a quantity that is 20 does not detect a 15% rise; it does
+not detect a 400% rise.
+
+The invariant worth pinning is not the absolute number, which is a residue of
+one-shot analyses that will legitimately change. It is that **the number does not
+depend on what is being analysed** — that is precisely the property the
+pre-`2ed9b07` `O(functions)` behaviour violated, and precisely what a
+reintroduced per-function or per-branch parse would break.
+`test_object_parse_count_is_a_session_constant_not_a_function_of_the_binary`
+measures five runs — `hello-gcc-O0`, `hello-clang-O2`, `hello-go-static`, the
+1146-function `hello-rust-musl`, and `hello-gcc-O0` again at `limit=30000` — and
+asserts they are all equal. They are all 20. Before the ownership work the same
+five measurements were 58, 80, 3517, 40865, and varying between runs of the same
+binary. The `< 100` bound is now `<= 20`.
+
+The test was run in the failing direction to prove it is not vacuous: setting the
+ratchet to 19 produces
+`AssertionError: whole-program object parses moved off the measured constant:
+{...: 20, ...: 20, ...: 20, ...: 20, 'hello-gcc-O0 @ limit=30000': 20}`. Total
+cost 2.7 s.
+
+### The two findings I did not expect
+
+**Typed diagnostics have producers and no channel.** Phase 1 asks that typed
+completeness travel through discovery, lifting, recovery, HIR and rendering.
+Four typed signals now exist — `dispatch::Unresolved`'s decline reason
+(`4ad8800`), `LiftError` (`eed4b75`), `EffectCompleteness`, and
+`verify.rs`'s `ResidualUnknown` — and a repo-wide grep for a
+`Diagnostic`/`Diagnostics` type returns nothing. They are four stage-local
+enums, not a carrier. The typing then dies at the boundary: `decompile_at`
+flattens `LiftError` into a `PyValueError` string, losing the variant and the
+disowned byte ranges; `decompile_all` and `decompile_many` discard it entirely
+with `let Ok(lf_raw) = lift_function_from_image(..) else { continue; }`. That is
+the same silent-`continue` shape `eed4b75`'s own message describes removing from
+`xrefs.rs` — still present, on the two whole-program entry points, where a
+function that failed to lift is indistinguishable from a function that does not
+exist.
+
+**The fitness ratchet passes because it is rewritten.** Foundations' file-size
+box is missed on 5 of 7 measures — mean 530.1 against 450, 13 files over 2,000
+LOC against 5, 44.5% of LOC in files over 1,000 against 25%, `ir/ast.rs` at
+11,628 product lines — and every one of the top five files grew over the last 30
+commits. The measurement exists (`tools/fitness_report.py`), the ratchet exists
+(`--check-ratchet`), and the ratchet is wired to a consumer
+(`test_fitness_report.py`), which **passes**. It passes because
+`tools/fitness_baseline.json` has been rewritten in three of the last six
+commits, including HEAD. A ratchet whose baseline is refreshed by the change
+that would have failed it is a logbook, not a ratchet. I did not change that
+policy — it is a decision, not a defect — but it should be recorded that the
+green test is measuring nothing.
+
+Two more, briefly. **MIR is not built on any production decompile**:
+`lower_verified_with_image` has two non-test call sites, one behind
+`GLAURUNG_DUMP_PASSES` whose result is `eprintln!`'d and dropped, and one
+`#[allow(dead_code)]` method with a single `#[test]` caller. Zero of the seven
+named definition-sensitive consumers can migrate to an artifact that is never
+computed; the honest blocker is the measured +13% of building it. And **there is
+no HIR**: `find src -iname "*hir*"` returns nothing, and the render entry point
+is 581 lines that write 28 times into 15 thread-local cells and run prototype
+*inference* from inside rendering, two of those analyses after
+`verify_before_render` — so the thing verified is not the thing rendered.
+
+### Verdict table
+
+| box | before | after |
+|---|---|---|
+| F: typed completeness travels every stage | open | open, four producers named |
+| F: canonical target/ABI ARM32-complete | open | open, eight residuals named |
+| F: MIR/MemorySSA the production authority | open | open, 0 of 7, MIR never built |
+| F: aggregate/type consumers off AST adapters | open | open, 7 on adapter, 0 on MIR |
+| F: PDB + inferred into the canonical store | open | open, 1 of 3, store has no reader |
+| F: semantic HIR and pure renderers | open | open, no HIR exists |
+| F: file-size and ownership targets | open | open, 5 of 7 missed and drifting |
+| P0: refresh the canonical ledger | open | open, standing obligation, needs DecBench |
+| P0: A32 and GCC 15 control lanes | open | **done** `e2b76a4` |
+| P0: linked-list ByteMatch + AArch64 diagnosis | open | partial, both halves stated |
+| P1: typed diagnostics through the stages | open | partial |
+| P1: one pipeline stage list and fingerprint | open | open |
+| P1: exactly one base object parse | open | partial, constant 20/19, now pinned |
+| P1: stable Python session/result APIs | open | partial, session done, result not |
+| P2: exact-width constants, operand provenance | open | open, neither half started |
+| P2: shared register banks + generated tests | open | partial, tests generated, bank is 2 arches |
+| P2: ARM32 A32/Thumb/PC/condition/VFP/ABI | open | open, precisely enumerated |
+| P2: entry-stack coordinate model to ARM32 | open | **done** `401ac4f`+`152d240` |
+| P2: real A32 lane + differential execution | open | **done** `e2b76a4` |
+
+### Gates
+
+```
+cargo test --features python-ext    2547 passed, 0 failed (no Rust changed;
+                                    this is the HEAD count, run to confirm it)
+uvx ruff format --check             1 file already formatted
+uvx ruff check                      All checks passed
+uvx ty check                        3 diagnostics, all pre-existing
+                                    `Module pytest has no member ...` on lines
+                                    this patch did not touch
+pytest test_pipeline_profile_report 7 passed in 2.73s
+touch src/lib.rs && cargo build     never-used FUNCTION count 0; the one
+  --features python-ext             `field 0 is never read` at
+                                    analysis/ioctl_taint.rs:409 is pre-existing
+```
+
+`@o0`/`@o2` were NOT run and are not applicable: the only non-documentation
+change is a Python test file, and no code on the decompile path was touched.
+## Entry 42 — A count cannot see a swap: auditing the ownership, performance, and Phase 6-8 blocks
+
+Five blocks of the roadmap, 26 open boxes between them, audited against the code
+rather than against the plan. The headline is not any single verdict. It is that
+**four of the five blocks are second views of work recorded elsewhere in the same
+document**, which `0768c4c` had just finished saying, and the audit is mostly the
+job of finding where the first view already carries the evidence and refusing to
+write it twice.
+
+### What actually closed, and why it is not the box it looks like
+
+Three of the four open ownership-map boxes were already true and unticked. That
+is the failure mode `0768c4c` predicted: the work landed, one view got the tick,
+the others kept claiming it was undone.
+
+- "Exempt generated tables/data only" — `tools/fitness_report.py::is_generated`
+  has enforced exactly this since `9a6290e`, with the 20-line header window
+  pinned by its own test so a generated table buried inside a hand-written file
+  cannot buy an exemption for the logic around it. Measured today: **zero** files
+  in `src/` are exempt. The exemption is a closed door, not an unmeasured one.
+- "Add dependency checks" — all four sub-rules are enforced by
+  `python/tests/test_src_dependency_boundaries.py`, and the environment rule is
+  the strictest thing in the repo's test suite: a two-sided allowlist over every
+  production `std::env::var` read, six reviewed categories, and a tripwire that
+  fails if a seventh is ever introduced. The categories deliberately have no slot
+  for "changes what counts as correct."
+
+The fourth box is the one that needed code, and the reason is a measurement
+argument rather than a coverage gap.
+
+`tools/fitness_baseline.json` ratchets `product_files_above_1000`. That is a
+**count**, and a count cannot see a swap. Split one owner below the line in the
+same change that pushes a new owner above it and the count is unchanged, the
+ratchet stays silent, and a fresh 1,400-line module lands with nobody looking at
+it. So `python/tests/test_large_module_review.py` ratchets the **set**:
+`REVIEWED_LARGE_MODULES` holds one entry per file currently over 1,000 product
+LOC — 28 today — and each entry is the review that admits it, either "scheduled
+split" for the nine already named in the ownership map's priority-split list or
+"accepted" for a file the review found to have one owner and one reason to
+change.
+
+It is two-sided on purpose. An unlisted file over the line fails, which is the
+gate. A listed file that drops below the line also fails, which is the part that
+matters six months from now: without it, a landed split leaves behind a standing
+permission for that file to re-cross unreviewed.
+
+Proven both directions rather than asserted. A real `src/ir/audit_probe_blockb.rs`
+of 1,400 lines was written into `src/`, the gate failed naming the file and its
+LOC, and passed again when the file was removed. A `tmp_path` case proves the
+same detector correctly ignores a test-only file and an `@generated` one.
+
+`ir/x87.rs` is the worked example this formalises. It crossed 1,000 LOC in
+`dcc62aa`, the count ratchet fired, the author refreshed the baseline, and the
+reasoning — the x87 depth fixed point, the eight-slot lowering and the
+control-word matcher are one analysis, not three — went into a commit message,
+which is the one place nobody looks when asking "why is this file allowed to be
+this big?" It now lives next to the file it is about.
+
+One tightening came with it. The renderer/HIR boundary checks named a single
+file, `ir/ast.rs`. Phase 7's entire job is splitting that file, so the check was
+written to go stale by design: every submodule carved out of `ast.rs` would
+escape the boundary until someone remembered to add it. They now discover their
+file list — `ir/ast.rs` plus everything under `src/ir/ast/` — so `width_semantics.rs`
+is already covered and the next extraction is covered on arrival.
+
+### The audit's three most useful findings
+
+**The cache is not keyed on what the plan says it is.** The warm-query target is
+met at 3081x, which reads like the caching box is nearly done. It is not. Of the
+six key components the box names, `RenderKey` has one (`func_va`); target is
+absent but sound by construction; configuration is present only as budgets; and
+image hash, pipeline version and dependency revisions are absent everywhere —
+there is no `pipeline_fingerprint` symbol in the tree at all. Cache identity is
+object identity, which is safe only because nothing persists. There is also a
+real gap inside the half that exists: `EnvironmentKey` omits `total_timeout_ms`
+while `recover_program_environment` inherits it into a `Deadline`, so two calls
+differing only in whole-run ceiling share one cached environment.
+
+**The budget with the most reassuring name has never bounded anything, and the
+code says so itself.** `Budgets::timeout_ms`'s own doc comment: "Despite the bare
+name this has never bounded an analysis: `discover_function` restarts its clock
+per seed." The session-level `total_timeout_ms` exists, defaults to zero, and is
+hardcoded to zero at all five decompile entry points. Cooperative cancellation is
+real, well built, and reachable only through `analysis.rs`; the decompiler
+interrupts between functions and not within one. Reading a struct field list
+would have scored this box far too high.
+
+**The consumer that cannot migrate is not blocked by effort.** The AST-to-MIR
+aggregate migration is blocked by a contradiction, and both halves of it are now
+verified rather than suspected. `stack_locals` splits the frame into named locals
+at `python_bindings/ir.rs:579`, long before the only production object-model
+consumer runs at `:1944`, so there is no frame object left to hand over. And the
+consumer's precondition is `stride.is_some()` — which is precisely the condition
+under which the MIR partition inserts `PartitionConflict::UnboundedCursor` and
+refuses. The single property one side treats as proof is the single property the
+other treats as disqualifying. `a_walking_frame_cursor_refuses_to_partition`
+pins it. The productive move is to migrate a different consumer: the frame-slot
+extent question is already answerable end to end and has no non-test caller.
+
+### What I got wrong on the way in
+
+Two of the leads I was handed were misattributed and the corrections are worth
+recording, because both would have put a wrong SHA into a permanent document.
+`f21e990` is a strings commit; the determinism suite it is credited with is
+`python/tests/test_decompile_determinism.py`, and the determinism claim that
+matters is narrower than "determinism is tested" — the 9 cases exercise the
+*plain* profile in-process and `decbench` only across separate subprocesses,
+which by construction cannot observe the thread-local leakage that is the whole
+risk. The one profile owning all 16 `DEC_*` cells is never rendered twice in one
+process by any test.
+
+### Verified
+
+```
+cargo test --features python-ext         2547 passed / 0 failed
+touch src/lib.rs && cargo build          never-used FUNCTION count 0; the single
+  --features python-ext                  `field 0 is never read` at
+                                         analysis/ioctl_taint.rs:409 is
+                                         pre-existing
+pytest test_large_module_review.py       6 passed (plus the negative proof above)
+       test_src_dependency_boundaries.py 13 passed together
+       test_fitness_report.py            34 passed across all three
+ruff format / ruff check / ty check      clean on both touched files
+```
+
+No Rust file was changed, which is why `@o0`/`@o2` were not run: the decompile
+path cannot have moved. Both new checks are pure source-text checks over the
+checked-out `src/` and need no build.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. **No
+baseline was refreshed and nothing was committed.**
+
+### One caveat on the patches
+
+Three sibling agents were auditing other blocks of the same file concurrently,
+and two commits (`0768c4c`, `c20cf28`) landed on `docs/design/decompiler-roadmap.md`
+during this work. The roadmap patch is generated against `dcc62aa` and its hunks
+fall in the four audited blocks only; the sibling hunks are at lines 34, 291 and
+366, so the two do not overlap, but the roadmap patch will need an offset apply.
+fixture matrix, `arch_roundtrip.py`, repo-wide `cargo fmt`. **No baseline was
+refreshed and nothing was committed.**

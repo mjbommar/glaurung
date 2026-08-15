@@ -163,7 +163,11 @@ def test_decompile_at_reuses_one_program_image_for_address_translation(report_mo
     # Object-backed analyses still parse independently while ProgramImage is
     # introduced incrementally, but address translation must never reopen the
     # object once per decoded instruction (3,679 parses on this fixture before
-    # the program-scoped index existed, versus 47 after this migration).
+    # the program-scoped index existed, versus 47 after that migration, versus
+    # 19 measured at dcc62aa once ProgramImage took ownership of PLT ranges,
+    # no-return imports, exception sites and DWARF functions). The bound is a
+    # ratchet on that residue; the binary-independence of the number is pinned
+    # separately below.
     assert report["runs"] == [
         {
             "duration_ns": report["runs"][0]["duration_ns"],
@@ -171,4 +175,75 @@ def test_decompile_at_reuses_one_program_image_for_address_translation(report_mo
             "object_parse_count": report["runs"][0]["object_parse_count"],
         }
     ]
-    assert report["runs"][0]["object_parse_count"] < 100
+    assert report["runs"][0]["object_parse_count"] <= 20
+
+
+# Four checked-in ELFs that share no toolchain, no libc, and no size class:
+# a small unoptimized gcc C binary, an optimized clang one, a static Go binary
+# with a `.gopclntab`, and a 1146-function static Rust/musl binary.
+_PARSE_BUDGET_BINARIES = (
+    "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0",
+    "samples/binaries/platforms/linux/amd64/export/native/clang/O2/hello-clang-O2",
+    "samples/binaries/platforms/linux/amd64/export/go/hello-go-static",
+    "samples/binaries/platforms/linux/amd64/export/rust/hello-rust-musl",
+)
+
+
+def _whole_program_parse_count(report_module, relative_path: str, limit: int) -> int:
+    """Return the object parses one whole-program decompile run performs."""
+    binary = ROOT / relative_path
+    script = (
+        "import glaurung as g; "
+        f"g.ir.decompile_all({str(binary)!r}, style='decbench', limit={limit})"
+    )
+    environment = os.environ.copy()
+    environment["GLAURUNG_PIPELINE_PROFILE"] = "1"
+    profiled = subprocess.run(
+        [str(ROOT / ".venv/bin/python"), "-c", script],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+
+    assert profiled.returncode == 0, profiled.stderr
+    report = report_module.build_report(
+        report_module.parse_trace(profiled.stderr.splitlines())
+    )
+    assert report["runs"][0]["entry_point"] == "decompile_all"
+    return int(report["runs"][0]["object_parse_count"])
+
+
+def test_object_parse_count_is_a_session_constant_not_a_function_of_the_binary(
+    report_module,
+):
+    """A session's object parses must not depend on what it is analysing.
+
+    The Phase 1 target is exactly one base object parse per reusable session.
+    The count is not one — it is a fixed set of one-shot program analyses that
+    each parse once — but it *is* a constant, and that is the property a
+    regression would break. Before `ProgramImage` took ownership the count was
+    `O(functions + branches + callees)`: 58 parses on `hello-gcc-O2` and 40,865
+    on `hello-rust-musl` at the default limit, varying between runs of the same
+    binary. Any reintroduced per-function, per-branch or per-callee parse makes
+    these four binaries — and the two limits — disagree.
+    """
+    counts = {
+        path: _whole_program_parse_count(report_module, path, 50)
+        for path in _PARSE_BUDGET_BINARIES
+    }
+    # Raising the discovery limit finds far more functions on the small binary
+    # and must still cost the same parses.
+    counts["hello-gcc-O0 @ limit=30000"] = _whole_program_parse_count(
+        report_module, _PARSE_BUDGET_BINARIES[0], 30_000
+    )
+
+    assert len(set(counts.values())) == 1, (
+        f"object parses vary with the binary or the discovery limit: {counts}"
+    )
+    only = next(iter(counts.values()))
+    assert 0 < only <= 20, (
+        f"whole-program object parses moved off the measured constant: {counts}"
+    )
