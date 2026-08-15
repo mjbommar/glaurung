@@ -200,8 +200,13 @@ description = "The six coverage-directed fixtures (181-186): each one exists bec
 selectors = ["181_*", "182_*", "183_*", "184_*", "185_*", "186_*"]
 
 [sentinel]
-description = "Sentinel-terminated searches (183) — the shape `loop_form::recover_sentinel_search_loops` targets."
-selectors = ["183_*"]
+description = "Sentinel-terminated searches: the index/NUL shapes (183) and the parameter-supplied pointer chase (192) that `loop_form::recover_sentinel_search_loops` was actually written for."
+# 183 covers the sentinel shapes the harness could build before it had a
+# linked-structure argument kind, and `dormant-transforms-2026-08-12.md`
+# measured every one of them at 0 fires. 192 is the isolated trigger — a
+# parameter head advanced by a dependent load — so any future edit to the
+# rotation matcher is measured against the input it was designed for.
+selectors = ["183_*", "192_*"]
 
 [subword-division]
 description = "Signed and unsigned division at 8 and 16 bits (185) — the Cbw/Cwd sign-extension pairs."

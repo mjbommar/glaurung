@@ -45,6 +45,7 @@ uv run glaurung kickoff <binary>        # full analysis → .glaurung KB
 uv run pytest python/tests/                # Python suite (~345 test files)
 uv run pytest python/tests/test_x.py -xvs  # one file, stop on first failure
 cargo test                              # Rust suite (~125 test modules)
+cargo test --features python-ext        # ...PLUS src/python_bindings/ (see below)
 
 # Decompiler: iterate small, gate big — docs/development/decompiler-testing.md
 tools/build_guard.py                              # is the .so current?
@@ -84,6 +85,17 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   fixtures and analysis output. Use real binaries from `samples/`, `tests/`,
   `tests/fixtures/`.
 - **Don't claim "done" without running tests + ruff + ty.**
+- **`cargo test` does NOT build `src/python_bindings/`.** It is behind the
+  `python-ext` feature (`src/lib.rs`), so a plain `cargo test` skips ~120 tests
+  AND does not compile that code at all. On 2026-08-14 a signature change there
+  left five test call sites on the old arity and `cargo test` still reported
+  `2321 passed; 0 failed` — a green result over code it never built. This is not
+  a corner: `python_bindings/ir.rs` is the real pipeline entry point, so most
+  passes are only reachable through it. Use `cargo test --features python-ext`
+  for anything touching that tree. The same gate applies to dead-code counts:
+  plain `cargo build` reported ~98 never-used functions where the shipped
+  configuration had 4, and two files totalling 1,782 lines looked unreachable
+  while running on every decompile.
 - Surface real results faithfully (if a test fails or a step was skipped, say so).
 - **Never run DecBench / Joern unless explicitly asked.** `tests/decompiler_fixtures/`
   is the corpus we verify against: it executes recompiled output and diffs it

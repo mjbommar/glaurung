@@ -10,13 +10,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::ir::memory_ssa::{MemoryRegion, MemoryVersionId};
+use crate::ir::memory_ssa::MemoryRegion;
 use crate::ir::mir::{InstructionId, MemoryAccessId, MemoryValueId, ValueId};
 use crate::ir::types::VReg;
-use crate::ir::use_def::InstrAddr;
 
 mod ast;
-pub(crate) mod llir;
 pub(crate) mod mir;
 mod partition;
 
@@ -64,8 +62,6 @@ pub enum AccessRole {
 pub enum AccessSource {
     /// Pre-order statement ordinal in the prepared AST.
     AstStatement(u32),
-    /// Exact instruction position in the LLIR CFG.
-    LlirInstruction(InstrAddr),
     /// Stable instruction identity in typed MIR.
     MirInstruction(InstructionId),
 }
@@ -73,7 +69,6 @@ pub enum AccessSource {
 /// Reaching memory state attached to an access at its owning IR boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MemoryStateIdentity {
-    Llir(MemoryVersionId),
     Mir(MemoryValueId),
 }
 

@@ -45,6 +45,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from itertools import pairwise
 from pathlib import Path
 
 # Import the native API once per fixture lane.  The lane itself is already an
@@ -1368,6 +1369,97 @@ def _float_fuzz(rng: random.Random, width: int) -> float:
     )
 
 
+def _self_linked_pointer_params(params: list[dict]) -> list[int]:
+    """Indices of the pointer parameters whose pointee links back to itself.
+
+    This is the LINKED-STRUCTURE argument kind: a caller-owned array of nodes
+    whose `next` field is a real address into that same array. It is the one
+    aggregate pointer the differential can build without inventing object
+    ownership, which is why `DwarfType::SelfPointer` exists at all.
+    """
+    found = []
+    for index, desc in enumerate(params):
+        if desc["k"] != "ptr":
+            continue
+        pointee = _pointee_desc(desc)
+        if pointee["k"] != "struct":
+            continue
+        if any(field["t"]["k"] == "self_ptr" for field in pointee["fields"]):
+            found.append(index)
+    return found
+
+
+def _validated_link_chains(
+    sig: dict, ov: dict, params: list[dict], ptr_len: int
+) -> list[list[int]] | None:
+    """The manifest's declared node chains, or None when it declares none.
+
+    `link_chains` is a LIST OF CHAINS, each an element-index walk through one
+    self-linked node buffer: `chain[0] -> chain[1] -> ... -> NULL`, with every
+    node the chain does not name left NULL-linked. The chains are cycled by
+    vector index, so one function still sees several graph shapes.
+
+    Why it is needed at all: the only chain this harness can synthesise on its
+    own is the IDENTITY SUCCESSOR (`nodes[i].next = &nodes[i+1]`), and a
+    recovery that turns a dependent load `p = p->next` into affine arithmetic
+    `p += 1` walks that chain identically. A pointer-chase fixture built on the
+    identity successor therefore passes whatever the decompiler did with the
+    load — it measures nothing. A scrambled, proper-subset chain separates the
+    two on the first vector.
+
+    Validated fail-closed, because every failure mode here is silent. A chain
+    that does not start at element 0 is unreachable (the callee is handed
+    `&buffer[0]`), so the function under test would walk nothing and pass
+    trivially. A repeated index is a CYCLE, and a cyclic input does not
+    terminate — the original would burn the worker's whole wall clock and the
+    verdict would be a timeout attributed to the decompiler. An out-of-range
+    index cannot be relocated into the buffer at all.
+    """
+    raw = ov.get("link_chains")
+    if raw is None:
+        return None
+    linked = _self_linked_pointer_params(params)
+    if not linked:
+        raise ValueError(
+            f"{sig['name']}: link_chains is declared, but no parameter is a "
+            f"pointer to a struct with a self-referential field — the manifest "
+            f"describes a function this is not"
+        )
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise ValueError(f"{sig['name']}: link_chains must be a non-empty list")
+    chains: list[list[int]] = []
+    for position, chain in enumerate(raw):
+        if not isinstance(chain, (list, tuple)) or not chain:
+            # A bare `[0, 3, 1]` is the likely mistake, and reading it as three
+            # one-element chains would quietly test three single-node graphs.
+            raise ValueError(
+                f"{sig['name']}: link_chains[{position}] must be a non-empty list "
+                f"of element indices — link_chains is a LIST OF CHAINS, so a "
+                f"single chain is spelled [[0, 3, 1]]"
+            )
+        nodes = [int(node) for node in chain]
+        if nodes[0] != 0:
+            raise ValueError(
+                f"{sig['name']}: link_chains[{position}] starts at {nodes[0]}, but "
+                f"the callee is handed &buffer[0] — a chain that does not start at "
+                f"element 0 is unreachable and the walk would test nothing"
+            )
+        if len(set(nodes)) != len(nodes):
+            raise ValueError(
+                f"{sig['name']}: link_chains[{position}] repeats an element index, "
+                f"which is a cycle — the ORIGINAL would not terminate on it"
+            )
+        out_of_range = [node for node in nodes if not 0 <= node < ptr_len]
+        if out_of_range:
+            raise ValueError(
+                f"{sig['name']}: link_chains[{position}] names element(s) "
+                f"{out_of_range} outside the {ptr_len}-element buffer; they cannot "
+                f"be relocated"
+            )
+        chains.append(nodes)
+    return chains
+
+
 def _stable_seed(name: str, seed: int) -> int:
     """A per-function seed that is IDENTICAL across processes. Python's built-in
     hash() of a str is randomized by PYTHONHASHSEED, so `hash(name)` produced
@@ -1421,6 +1513,14 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
                 f"contents and for exact floating-point inputs"
             )
         arg_values[i] = vals
+    # The linked-structure argument kind. Absent -> every self link keeps the
+    # historical identity-successor chain, bit for bit, so no existing lane moves.
+    link_chains = _validated_link_chains(sig, ov, params, ptr_len)
+
+    def chain_for(k: int) -> list[int] | None:
+        """The declared chain this vector uses, cycled by vector index."""
+        return None if link_chains is None else link_chains[k % len(link_chains)]
+
     # "cstr" is "u8" plus the one invariant a string function needs: a NUL inside the
     # buffer. Without it `str_len` walks off the end, and the two libraries then agree
     # only because they read the SAME heap in the SAME process — luck that breaks the
@@ -1460,8 +1560,15 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
                 values.append(_wrap(field_seed, field_type["w"], field_type["s"]))
         return values
 
-    def chain(values, d, length):
-        """Populate self links as a bounded acyclic prefix of one struct array."""
+    def chain(values, d, length, order=None):
+        """Populate self links as a bounded acyclic prefix of one struct array.
+
+        `order` is a declared element-index walk (see `_validated_link_chains`).
+        With it, node `order[i]` links to `order[i + 1]`, the last node and every
+        node the walk does not name link to NULL, and `length` is ignored — the
+        chain is exactly what the manifest declared. Without it the successor is
+        `index + 1`, which is what every existing fixture records.
+        """
         if d["k"] != "struct":
             return values
         link_fields = [
@@ -1469,6 +1576,12 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
             for index, field in enumerate(d["fields"])
             if field["t"]["k"] == "self_ptr"
         ]
+        if order is not None:
+            successor = dict(pairwise(order))
+            for field_index in link_fields:
+                for index, value in enumerate(values):
+                    value[field_index] = successor.get(index, -1)
+            return values
         for field_index in link_fields:
             for index, value in enumerate(values):
                 value[field_index] = index + 1 if index + 1 < length else -1
@@ -1503,7 +1616,7 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         pointee = _pointee_desc(d)
         if pointee["k"] == "struct":
             values = [aggregate(k * 7 + j * 3, pointee) for j in range(ptr_len)]
-            return chain(values, pointee, 1 + k % ptr_len)
+            return chain(values, pointee, 1 + k % ptr_len, chain_for(k))
         if is_cstr:
             # Vary the length with k so a string loop is exercised at 0, 1, and full.
             return _terminate([(k * 7 + j * 3) for j in range(ptr_len)], k % ptr_len)
@@ -1520,13 +1633,16 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
             ]
         return [((k * 7 + j * 3) % 17) - 8 for j in range(ptr_len)]
 
-    def buf_rng(d):
+    def buf_rng(k, d):
         pointee = _pointee_desc(d)
         if pointee["k"] == "struct":
             values = [
                 aggregate(rng.randrange(-64, 64), pointee) for _ in range(ptr_len)
             ]
-            return chain(values, pointee, rng.randrange(1, ptr_len + 1))
+            # The length draw is kept even when a chain is declared, so adding
+            # `link_chains` to an existing function changes the LINKS and nothing
+            # else about that function's seeded stream.
+            return chain(values, pointee, rng.randrange(1, ptr_len + 1), chain_for(k))
         if is_cstr:
             n = rng.randrange(0, ptr_len)
             return _terminate([rng.randrange(0, 255) for _ in range(n)], n)
@@ -1587,7 +1703,7 @@ def make_vectors(sig: dict, ov: dict, seed: int, fuzz: int) -> list[list]:
         filled = []
         for _i, (d, a) in enumerate(zip(params, args)):
             if d["k"] == "ptr" and a is None:
-                filled.append(buf_det(k, d) if k % 2 == 0 else buf_rng(d))
+                filled.append(buf_det(k, d) if k % 2 == 0 else buf_rng(k, d))
             else:
                 filled.append(a)
         out.append(filled)
@@ -1763,7 +1879,19 @@ def _snapshot_value(d, value):
 
 
 def _materialize_buffer(pointee: dict, values: list):
-    """Build one caller-owned buffer, resolving self links after allocation."""
+    """Build one caller-owned buffer, resolving self links after allocation.
+
+    Node contents are stated as ELEMENT INDICES and become real addresses only
+    here, once the array exists. Called once per side, so the original and the
+    rebuilt object are handed the same graph relocated into their own storage —
+    the property the whole linked-structure kind rests on. `_snapshot_buffer`
+    reverses it, mapping any surviving link back to an index.
+
+    `-1` is NULL. Any other index outside the buffer is REFUSED rather than
+    quietly nulled: nulling it would shorten the chain, both sides would agree
+    on the short walk, and the lane would report `pass` for a graph nobody
+    declared.
+    """
     ctype = _value_ctype(pointee)
     buffer = (ctype * len(values))()
     for index, value in enumerate(values):
@@ -1777,11 +1905,16 @@ def _materialize_buffer(pointee: dict, values: list):
             if field["t"]["k"] != "self_ptr":
                 continue
             target = int(field_value)
-            pointer = (
-                ctypes.pointer(buffer[target])
-                if 0 <= target < len(buffer)
-                else ctypes.POINTER(ctype)()
-            )
+            if target == -1:
+                pointer = ctypes.POINTER(ctype)()
+            elif 0 <= target < len(buffer):
+                pointer = ctypes.pointer(buffer[target])
+            else:
+                raise ValueError(
+                    f"self link {target} on element {element_index} field "
+                    f"{field_index} is neither -1 (NULL) nor an index into the "
+                    f"{len(buffer)}-element buffer, so it cannot be relocated"
+                )
             setattr(buffer[element_index], f"f{field_index}", pointer)
     return buffer
 

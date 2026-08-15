@@ -2819,7 +2819,7 @@
   },
   "190_dual_role_products:clang:O2": {
     "dp190_div_and_rem": "pass",
-    "dp190_mul_both_halves": "fail",
+    "dp190_mul_both_halves": "pass",
     "dp190_pair_across_join": "pass",
     "dp190_quotient_only": "pass",
     "dp190_sdiv_and_rem": "pass"
@@ -2833,7 +2833,7 @@
   },
   "190_dual_role_products:gcc:O2": {
     "dp190_div_and_rem": "pass",
-    "dp190_mul_both_halves": "fail",
+    "dp190_mul_both_halves": "pass",
     "dp190_pair_across_join": "pass",
     "dp190_quotient_only": "pass",
     "dp190_sdiv_and_rem": "pass"
@@ -2861,6 +2861,34 @@
     "t191_direct_control": "pass",
     "t191_dispatch": "pass",
     "t191_fold": "fail"
+  },
+  "192_pointer_chased_list:clang:O0": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
+  },
+  "192_pointer_chased_list:clang:O2": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
+  },
+  "192_pointer_chased_list:gcc:O0": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
+  },
+  "192_pointer_chased_list:gcc:O2": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
   },
   "19_disjoint_set:clang:O0": {
     "dsu_find": "pass",

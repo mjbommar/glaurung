@@ -3741,3 +3741,372 @@ surfaced as "the fix does not help here" instead of as wrong output. The patch
 was written by an agent that was terminated by a spend limit mid-task, leaving
 the change on disk and its report unwritten; it was verified from scratch here
 rather than taken on trust.
+
+## Entry 28 — Two source variables, one register, and the narrow one won
+
+`190_dual_role_products:{gcc,clang}:O2:dp190_mul_both_halves` was the corpus's
+only failing widening multiply. Every division-based function in the same
+fixture passed, which is the shape of a clue: the dual-role *value* machinery
+was working, and something about *width specifically* was not.
+
+The recovered C:
+
+    low = (arg1 * arg2);
+    *(long *)(((long)arg0)) = (unsigned long)(low);
+    var4 = ((unsigned long)(low) >> 32);
+    return (unsigned int)(((var4 + (var4 * 4)) + low));
+
+`low` is declared `unsigned int` but holds the full 64-bit product, so
+`(unsigned long)(low) >> 32` is identically zero and the high half is gone.
+
+### The first wrong stage
+
+Not a width pass. `GLAURUNG_DUMP_PASSES=1` shows every width map agreeing that
+the value is eight bytes — `numbered value types`, `recovered declaration
+types` and `recovered expression-width types` all carry `var2: width 8`. The
+prepared AST is right too:
+
+    %var2 = ((unsigned long)((unsigned int)(%arg1)) * (unsigned long)((unsigned int)(%arg2)));
+    store &[%arg0] = %var2;
+    %var4 = (%var2 >> 32);
+    return (unsigned long)((unsigned int)(((%var4 + (%var4 * 4)) + %var2)));
+
+The damage happens earlier, in DWARF naming, and the dump names it outright:
+
+    DWARF register local { source_name: "low",     c_type: "uint32_t", ... }: role counts {"var2": 4}
+    DWARF register local { source_name: "product", c_type: "uint64_t", ... }: role counts {"var2": 4}
+
+Two source locals, the same DWARF register, the same PC range, the same
+recovered value, the same evidence count. gcc served `product` and `low` from
+one live `rsi` because one is the other's truncation, and DWARF faithfully
+recorded both there.
+
+`merge_dwarf_register_local_facts` bound the **first** claimant it happened to
+walk and dropped the rest — `facts.source_names.contains_key(&role)` sends the
+second one to `continue`. `low` came first, so `var2` was locked to `uint32_t`
+via `apply_locked_fact`, and every correct width downstream was then overruled
+by an authoritative-looking DWARF fact. Order of appearance was doing the work
+of evidence.
+
+That also explains why `refine_decbench_abi_widths_with_value_widths` could not
+save it, twice over: its widening loop is gated on `is_high_variable(name)`, and
+the value was no longer named `var2` but `low`; and even unblocked, a
+`force_scalar_int` does not outrank a locked DWARF fact. Papering over a wrong
+lock downstream would have been the wrong fix anyway.
+
+### The rule
+
+When several source locals resolve to one recovered value, only the widest can
+be declared without losing bits. The narrow reads of that value already carry
+their own truncating casts — here the return's `(unsigned int)` — while a narrow
+*declaration* discards the high half before any use can see it. So: group
+claimants by winning role, and when one has a unique strict maximum integer
+width, it owns the value. A tie at the top, or spellings that do not resolve to
+a scalar integer, leave the previous order untouched; the rule only fires where
+it can prove which claimant subsumes the others.
+
+The output is now both correct and better named than what it replaced —
+`product`, the variable the source actually declares:
+
+    unsigned long product;
+    long var4;
+    ...
+    product = ((unsigned long)(arg1) * (unsigned long)(arg2));
+    *(long *)(((long)arg0)) = product;
+    var4 = ((unsigned long)(product) >> 32);
+    return (unsigned int)(((var4 + (var4 * 4)) + product));
+
+`src/python_bindings/ir/dwarf_contracts.rs`: the role-resolution half of the
+loop becomes `resolve_register_local_role`, and `widest_claimant_per_role`
+arbitrates. `cc` and the DWARF type env are threaded in so `long` resolves to
+the right width per target.
+
+### What it was worth
+
+`@o2` (360 lanes, 49% of the corpus): **no regressions, 2 improvements** — the
+two target cells. `@o0` (360 lanes): no regressions, no improvements. The
+remaining twelve `rustc` lanes, run separately: no regressions. That is the
+**whole corpus, 732 of 732 lanes**, and the only two cells that moved are the
+two that were meant to. `cargo test` 2321 passed, 0 failed; `cargo test
+--features python-ext` 2441 passed, 0 failed.
+
+Worth stating plainly, because a first look at the sweep is misleading: `@o2`
+reports 14 improvements, but 12 of them belong to Entry 27 and are already
+recorded in the working tree's un-committed `baseline.json`. The committed
+baseline is stale relative to `874fe33`. Only the two `dp190_mul_both_halves`
+cells are this change's.
+
+### How far the shape reaches
+
+The sweep says which lanes MOVED; it does not say how often the collision
+occurs. Parsing `GLAURUNG_DUMP_PASSES=1` across all 720 built fixture objects
+for roles claimed by two source locals of differing width found **nine**, all at
+`-O2`, which is where merged values live:
+
+    190_dual_role_products {gcc,clang}  var2   low:uint32_t      product:uint64_t
+    45_string_algorithms   clang        var22  count:int32_t     accumulator:int64_t
+    55_modular_arithmetic  gcc          var12  remainder:int32_t result:uint64_t
+    58_rational            clang        var17  numerator:int32_t left:int64_t
+    58_rational            gcc          var13  numerator:int32_t right:int64_t
+    63_numerical_integration clang      var23  width:int32_t     total:int64_t
+    74_moving_statistics   gcc          var8   average:int32_t   total:int64_t
+    96_integer_promotion   gcc          arg0   a:uint8_t         narrow:int16_t
+
+Two are the defect. Six more now bind the wider claimant where order used to
+decide, and all six still pass the execution differential — expected, because
+widening a declaration cannot lose bits, only gain them. The last is on `arg0`,
+where the pass already declines to rename argument roles at all, so nothing
+changes there.
+
+So this was not a one-fixture accident: one function in roughly eighty carries
+the shape, and before this change the declaration was chosen by DWARF DIE order
+in every one of them.
+
+### `cargo test` does not compile `src/python_bindings/`
+
+Found the hard way, and worth writing down. `python_bindings` is behind the
+`python-ext` feature (`src/lib.rs:70`), so the command CLAUDE.md documents —
+plain `cargo test` — never builds it. This change alters the signature of
+`merge_dwarf_register_local_facts`, which lives there and has **five** unit-test
+call sites. All five were left passing the old five arguments, and plain
+`cargo test` went green anyway: 2321 passed, 0 failed, nothing compiled that
+could have objected.
+
+That is a 120-test hole (2441 - 2321) in the documented verification command,
+and it is worse than a plain gap because it is *reassuring*: the suite reports
+success over code it did not build. `cargo build --features python-ext` does not
+close it either — that compiles the crate but not its `#[cfg(test)]` modules.
+Only `cargo test --features python-ext` sees these tests. Anything touching
+`src/python_bindings/` needs that spelling.
+
+### Four dead functions, decided
+
+`cargo build` reports ~98 never-used functions, which is an artifact:
+`python_bindings` sits behind the `python-ext` feature and most passes are only
+reachable from it. `cargo build --features python-ext` is the honest measure and
+reported four.
+
+* **`ast.rs:refine_decbench_abi_widths`** — kept, now `#[cfg(test)]`. The
+  premise that its helper machinery (`collect_definition_widths`,
+  `collect_high_half_requirements`, `propagate_required_widths`,
+  `expression_value_width`, …) is unreachable is **false**: the sibling
+  `refine_decbench_abi_widths_with_value_widths` holds all of it and is called
+  twice from `src/python_bindings/ir.rs`. Only the two-line no-evidence wrapper
+  is test-only. Deleting the machinery would have removed a live width pass.
+* **`canary.rs:is_canary_addr`** — deleted. Born dead in `adde50b`, the
+  end-to-end decompiler commit; `git log -S` finds exactly one commit, the one
+  that added it, and it never had a caller in shipped code or in tests.
+* **`memory_objects/llir.rs:infer_from_llir` / `observe_memop`** — deleted, with
+  the module, its two tests, and the now producer-less `AccessSource::
+  LlirInstruction` and `MemoryStateIdentity::Llir`. Superseded by
+  `memory_objects::mir::attach`, which does the same job at the MIR boundary
+  with stable instruction identity and is wired at `src/ir/mir/memory.rs:34`.
+  The adapter was still costing maintenance: `fb4ee6b` mechanically updated it
+  for the `RawAccess` refactor. Its `verify`-rejects-a-foreign-sidecar test
+  duplicates `memory_ssa_tests.rs:467` and `:566`.
+
+`cargo build --features python-ext`: 23 warnings before, 19 after, none of them
+never-used functions.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, `arch_roundtrip.py`, repo-wide `cargo fmt`. `rustfmt --edition
+2021` on the touched files only. No baseline refreshed and nothing committed.
+
+## Entry 29 — The linked-structure argument kind, and what it found
+
+Task: build the "linked-structure argument kind" the roadmap names as a
+prerequisite (*"Add a linked-structure argument kind to the differential harness
+before changing the nearly dormant sentinel-list recovery pass"*), then the
+pointer-chased fixture it enables. Worked from `874fe33`. Numbered 29 rather
+than 28 because another agent was appending 28 concurrently.
+
+### The premise was half wrong, and the half that was right is the half that matters
+
+`dormant-transforms-2026-08-12.md` records that "a parameter of type `struct
+node *` whose `next` fields are real addresses into that buffer is not something
+`tools/diff_decompile.py` can synthesise today", and Entry 24's roadmap
+cross-references repeat it. That stopped being true at `5e24383`, which landed
+the Rust DWARF reader with `DwarfType::SelfPointer` and the whole marshalling
+path behind it: `_materialize_buffer` turns declared element indices into real
+addresses AFTER allocating each side's array, `_snapshot_buffer` maps any
+surviving link back to an index, and `pointer_return_arg` compares a returned
+node by its index. It is exercised by
+`test_recursive_linked_list_round_trips_values_links_and_pointer_returns` —
+which passes at `874fe33` — and by the DecBench `linkedlist` overrides. Nothing
+in `tests/decompiler_fixtures/` used it, so it was invisible.
+
+What was genuinely missing is narrower and sharper: **every chain the harness
+could build was the identity successor**. `chain()` linked `nodes[i].next =
+&nodes[i+1]` over a prefix whose length varied with the vector index. Under that
+graph chain order IS array order, and a recovery that reads `p = p->next` as
+affine arithmetic walks it correctly. A pointer-chase fixture built on the
+identity successor measures nothing about pointer chasing.
+
+Measured, not argued. Take the realistic confusion — the NULL TEST recovered off
+the pointer load, the ADVANCE rendered as `+ 1`:
+
+    while (c != 0) { c->payload += s; v += 1; c = (c->next == 0) ? 0 : (c + 1); }
+
+| node buffer | verdict |
+|---|---|
+| identity successor (all the harness could build) | **pass**, 22 cases |
+| declared `link_chains` (what it can build now)   | **fail**, `return 6 != 4` |
+
+That is the whole justification for the feature, and it is pinned in
+`test_link_chains_catch_an_affine_advance_the_identity_chain_hides`. If that
+test ever goes green on the declared chain, every pointer-chase verdict in the
+corpus is worthless.
+
+### What was added
+
+`link_chains: [[int]]` in `tests/decompiler_fixtures/manifest.py` — a list of
+element-index walks over one caller-owned array of self-referential structs,
+cycled by vector index. `chain[0] -> chain[1] -> ... -> NULL`; every node the
+walk does not name is NULL-linked.
+
+The same relocation reaches both sides because both go through the one
+`_materialize_buffer` call site that already existed. The chain is stated as
+INDICES and becomes addresses only inside that function, once per side, so there
+is no second path to drift from — which is the property the whole kind rests on.
+
+Fail-closed, on the rule that every rejected shape is one that would otherwise
+pass silently:
+
+* a chain not starting at element 0 is unreachable from the `&buffer[0]` the
+  callee is handed, so the function would walk nothing and report `pass`;
+* a repeated index is a CYCLE, and the ORIGINAL side does not return from one —
+  the verdict would be a 300s worker timeout attributed to the decompiler;
+* an index outside `ptr_len` cannot be relocated at all;
+* a bare `[0, 3, 1]` where a list of chains is meant would quietly become three
+  single-node graphs;
+* `link_chains` on a function with no self-linked pointer parameter is a
+  manifest describing a different function.
+
+Separately, `_materialize_buffer` now REFUSES a link that is neither `-1` (NULL)
+nor an index into the buffer, instead of silently nulling it. Nulling shortens
+the chain on both sides, both sides then agree, and the lane reports `pass` for
+a graph nobody declared.
+
+Absent `link_chains`, materialisation is bit-for-bit what it was — the seeded
+`randrange` draw is even kept when a chain IS declared, so adding one to an
+existing function changes its links and nothing else. That is what makes this
+safe against 733 recorded lanes, and it is pinned by
+`test_absent_link_chains_keep_the_historical_identity_successor`.
+
+### The fixture
+
+`192_pointer_chased_list.c`, five functions. `l192_find_key` is the probe from
+`dormant-transforms-2026-08-12.md` character for character: parameter head,
+`p = p->next`, NULL sentinel, no counter. `l192_chase_keys` writes the visit
+ORDER into a caller-owned int buffer; `l192_stamp_chain` mutates the nodes it
+visits, so the visited SET is compared too; `l192_sum_until_key` is
+order-dependent by construction. `l192_scan_index_control` walks the same nodes
+BY INDEX — simultaneously the degeneracy control (the affine recovery must keep
+working, so the fixture cannot be satisfied by refusing to transform anything)
+and the near-miss (it is exactly the answer a chase-to-stride confusion gives).
+
+One hand-built graph is declared inline and its shape is the point: chain
+`0 -> 3 -> 5 -> NULL`, with nodes 1, 2 and 4 sitting OFF the chain carrying the
+keys the searches ask for. An index walk answers node 1 where the chase answers
+node 3, and answers node 2 where the chase answers "not found".
+
+Every chase function was checked against a deliberately wrong stride recovery
+and each fails with the designed message — `l192_find_key` reports
+`return node 3 != 1`. The control was checked the other way: implemented as a
+chase it fails with `return 2 != -1`. A fixture nobody has tried to break is a
+fixture nobody has tested.
+
+### What the fixture found
+
+**All 20 lanes pass.** The pointer chase is recovered correctly at
+`{gcc,clang} x {O0,O2}`. `clang:O2` renders it with the real `L192Node` type:
+
+    while (1) { ret = p; if (p->key == arg1) break; p = p->next;
+                if (p == 0) return (L192Node *)0; }
+
+So this is standing coverage rather than a bug report — the honest outcome, and
+worth having, because the shape had none.
+
+**`recover_sentinel_search_loops` still fires 0 times, on its own designed
+input.** `GLAURUNG_PASS_STATS=1` over all four built objects of fixture 192: 8
+attempts, 0 fires. Over the doc's probe source built standalone under the pinned
+clang 14 at `-O0/-O1/-O2` and gcc 11 at `-O0/-O1/-O2`: 0 fires everywhere. The
+2026-08-12 record of "1 fire at clang -O1 and -O2" does not reproduce at
+`874fe33`.
+
+Why that record cannot simply be re-checked: `5e24383`, the commit that CONTAINS
+`dormant-transforms-2026-08-12.md`, has no `pass_stats` call sites in
+`src/ir/loop_form.rs` at all — `git show 5e24383:src/ir/loop_form.rs | grep
+pass_stats` is empty. The instrumentation was restored in `0ecb8e1`. That
+measurement was taken on a build that is not in this history, and the number was
+never reproducible from the tree.
+
+Where the matcher loses it, read off `sentinel_search_candidate`'s preconditions
+against the actual AST. The divergence is upstream in `ir::structure`, before
+`loop_form` is offered anything:
+
+| the matcher requires | what the pipeline produces |
+|---|---|
+| `Stmt::While { cond: match_continue, .. }` — the match test IS the loop condition | `while (1)` with an interior `break` on the match |
+| a 2- or 3-statement loop body | 4 statements (`ret = p`, the break guard, the advance, the null guard) |
+| `sentinel` is `Expr::Const` | a cast of `0` |
+
+So the pass is not one clause too strict; it describes a head-tested shape the
+structurer does not emit for this CFG. That is a decision for whoever picks the
+roadmap item up — repoint the matcher at the `while (1) { ... break ... }` form
+the structurer actually produces, or retire it deliberately, which is what "add
+standing real coverage for extremely rare transforms or retire them
+deliberately" asks for. The coverage half is done: `@sentinel` now covers 183
+and 192, so an edit to the matcher is finally measured against the input it was
+written for.
+
+**`111_self_referential_struct` is unchanged and its recorded diagnosis is
+confirmed.** `clang:O0` passes, the other three lanes fail, exactly as the
+baseline records. The dump corroborates Entry 24 / cluster E with no new
+theorising: after `promote_stack_locals` AND after `recognise_machine_frame`,
+
+    %rdx#6 = (%rdx#5 + %rbp)
+
+is still unpromoted, and the rendered C declares `long rbp;` and derives every
+node address from it. The interesting detail is how PARTIAL the recovery is: the
+`next` field is stored as `&local_90[0] + (index << 4)` — the real frame object —
+while the store TARGET on the adjacent line is `(index << 4) + rbp - 144`. One
+expression found the object and its neighbour did not. First wrong stage remains
+`src/ir/stack_locals.rs`, an EPIC 3 gap. Not touched here; the brief was the
+harness and the fixture, and a wrong fix to stack promotion is worse than an
+accurate diagnosis.
+
+### Verification
+
+* `cargo test`: **2323 passed, 0 failed**.
+* `tools/dectest.py 192_pointer_chased_list --full` — 20/20 pass.
+* `tools/dectest.py 111_self_referential_struct --full` — 1 pass, 3 fail, no
+  change against the baseline.
+* `@o0` 362 lanes: no regressions. `@o2` 362 lanes: no regressions, 12
+  improvements — all twelve are Entry 27's, already recorded there; the
+  committed `baseline.json` is stale relative to `874fe33`. 724 of 736 lanes
+  (98%) swept, which is the coverage a change to argument materialisation needs.
+* `python/tests/test_decompiler_fixture_harness.py -k "link_chain or
+  unrelocatable or pointer_chase_fixture or recursive_linked"` — 13 passed.
+* `uvx ruff format --check` / `uvx ruff check` clean on the three touched Python
+  files. `uvx ty check` adds four diagnostics, all the pre-existing
+  `Module 'pytest' has no member 'raises'` false positive the file already
+  carries.
+
+### Baselines this needs (not regenerated here, deliberately)
+
+`192_pointer_chased_list` needs `baseline.json` (20 lanes),
+`structural_baseline.json` (aggregate counts shift) and `arch_baseline.json`
+(six architectures). Two arch lanes were probed scoped rather than swept:
+`aarch64:O0` is 5/5 pass, and `i386:O0` reports 5 ABI-incomparable — the node
+struct is 12 bytes there against the host reference's 16, so
+`abi_incomparable` declines cleanly instead of raising a lane error, and
+`--write-baseline` is not blocked.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, a full `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. No
+baseline refreshed, nothing committed.

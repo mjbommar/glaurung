@@ -7869,7 +7869,7 @@
   },
   "190_dual_role_products:aarch64:O2": {
     "dp190_div_and_rem": "pass",
-    "dp190_mul_both_halves": "fail",
+    "dp190_mul_both_halves": "pass",
     "dp190_pair_across_join": "pass",
     "dp190_quotient_only": "pass",
     "dp190_sdiv_and_rem": "pass"
@@ -7925,7 +7925,7 @@
   },
   "190_dual_role_products:x86_64:O2": {
     "dp190_div_and_rem": "pass",
-    "dp190_mul_both_halves": "fail",
+    "dp190_mul_both_halves": "pass",
     "dp190_pair_across_join": "pass",
     "dp190_quotient_only": "pass",
     "dp190_sdiv_and_rem": "pass"
@@ -7939,7 +7939,7 @@
   },
   "190_dual_role_products:x86_64_gcc15:O2": {
     "dp190_div_and_rem": "pass",
-    "dp190_mul_both_halves": "fail",
+    "dp190_mul_both_halves": "pass",
     "dp190_pair_across_join": "pass",
     "dp190_quotient_only": "pass",
     "dp190_sdiv_and_rem": "pass"
@@ -8015,6 +8015,90 @@
     "t191_direct_control": "pass",
     "t191_dispatch": "pass",
     "t191_fold": "fail"
+  },
+  "192_pointer_chased_list:aarch64:O0": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
+  },
+  "192_pointer_chased_list:aarch64:O2": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
+  },
+  "192_pointer_chased_list:armv7:O0": {
+    "l192_chase_keys": "incomparable",
+    "l192_find_key": "incomparable",
+    "l192_scan_index_control": "incomparable",
+    "l192_stamp_chain": "incomparable",
+    "l192_sum_until_key": "incomparable"
+  },
+  "192_pointer_chased_list:armv7:O2": {
+    "l192_chase_keys": "incomparable",
+    "l192_find_key": "incomparable",
+    "l192_scan_index_control": "incomparable",
+    "l192_stamp_chain": "incomparable",
+    "l192_sum_until_key": "incomparable"
+  },
+  "192_pointer_chased_list:armv7_a32:O0": {
+    "l192_chase_keys": "incomparable",
+    "l192_find_key": "incomparable",
+    "l192_scan_index_control": "incomparable",
+    "l192_stamp_chain": "incomparable",
+    "l192_sum_until_key": "incomparable"
+  },
+  "192_pointer_chased_list:armv7_a32:O2": {
+    "l192_chase_keys": "incomparable",
+    "l192_find_key": "incomparable",
+    "l192_scan_index_control": "incomparable",
+    "l192_stamp_chain": "incomparable",
+    "l192_sum_until_key": "incomparable"
+  },
+  "192_pointer_chased_list:i386:O0": {
+    "l192_chase_keys": "incomparable",
+    "l192_find_key": "incomparable",
+    "l192_scan_index_control": "incomparable",
+    "l192_stamp_chain": "incomparable",
+    "l192_sum_until_key": "incomparable"
+  },
+  "192_pointer_chased_list:i386:O2": {
+    "l192_chase_keys": "incomparable",
+    "l192_find_key": "incomparable",
+    "l192_scan_index_control": "incomparable",
+    "l192_stamp_chain": "incomparable",
+    "l192_sum_until_key": "incomparable"
+  },
+  "192_pointer_chased_list:x86_64:O0": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
+  },
+  "192_pointer_chased_list:x86_64:O2": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
+  },
+  "192_pointer_chased_list:x86_64_gcc15:O0": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
+  },
+  "192_pointer_chased_list:x86_64_gcc15:O2": {
+    "l192_chase_keys": "pass",
+    "l192_find_key": "pass",
+    "l192_scan_index_control": "pass",
+    "l192_stamp_chain": "pass",
+    "l192_sum_until_key": "pass"
   },
   "19_disjoint_set:aarch64:O0": {
     "dsu_find": "pass",

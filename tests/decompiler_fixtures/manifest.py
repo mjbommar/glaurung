@@ -63,6 +63,29 @@ FIXTURE_FUZZ = 12
 #                          within this caller-owned pointer-argument buffer.
 #   non_length_args: [int] — human-reviewed scalar parameters beside a pointer
 #                          that are values/keys, not bounds used for addressing.
+#   link_chains: [[int]] — THE LINKED-STRUCTURE ARGUMENT KIND. A list of node
+#                          chains over a caller-owned array of self-referential
+#                          structs; the buffer for vector `k` uses chain
+#                          `k % len(link_chains)`. A chain is an element-index
+#                          walk (`chain[0] -> chain[1] -> ... -> NULL`); every
+#                          node the chain does not name is NULL-linked. The
+#                          worker turns the indices into real addresses AFTER
+#                          allocating each side's array, so the original and the
+#                          rebuilt object get the same graph in their own
+#                          storage, and reads any surviving link back as an
+#                          index.
+#                          Declare one whenever a fixture is ABOUT pointer
+#                          chasing. Without it the successor is `index + 1`, and
+#                          a recovery that turns `p = p->next` into `p += 1`
+#                          walks the identity chain identically — the fixture
+#                          would pass no matter what the decompiler did with the
+#                          load. Validated fail-closed: a chain must start at
+#                          element 0 (the callee is handed `&buffer[0]`; anything
+#                          else is unreachable), must not repeat an index (a
+#                          cycle does not terminate, and the ORIGINAL side would
+#                          eat the whole wall clock), and must stay inside
+#                          ptr_len. `extra_vectors` state their links inline and
+#                          are not affected by this.
 # --- the DecBench validation corpus (tests/decbench_corpus/) --------------------
 #
 # The same mechanism, for a corpus that had none. Without these the harness invents
@@ -216,6 +239,34 @@ DECBENCH_PROJECTS: dict[str, list[str]] = {
     "structs": ["dist2", "rect_area"],
     "switch_jt": ["dispatch"],
 }
+
+#: The node chains `192_pointer_chased_list` links its generated buffers with,
+#: cycled by vector index. Named rather than repeated so every function in that
+#: fixture walks the SAME graphs and their answers are comparable by hand.
+#:
+#: Four are deliberately not the identity successor -- a subset, a short chain
+#: that reaches the last element, a singleton, and a full permutation -- because
+#: the identity chain is exactly the one a `p += 1` misrecovery walks correctly.
+#: The fifth IS the identity, so the degenerate graph keeps a lane.
+_L192_CHAINS: list[list[int]] = [
+    [0, 5, 2, 9, 1, 14],
+    [0, 15, 7, 3],
+    [0],
+    [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15],
+    list(range(16)),
+]
+
+#: One hand-built graph for `192_pointer_chased_list`, as `[next, key, payload]`
+#: per node in DWARF field order. Chain 0 -> 3 -> 5 -> NULL; nodes 1, 2 and 4 are
+#: reachable only by an index walk, and carry the keys the searches ask for.
+_L192_GRAPH: list[list[int]] = [
+    [3, 5, 1],
+    [-1, 7, 20],
+    [-1, 8, 30],
+    [5, 7, 4],
+    [-1, 9, 50],
+    [-1, 6, 7],
+]
 
 OVERRIDES: dict[tuple[str, str], dict] = {
     # x86 DIV/IDIV trap on zero; IDIV also traps on INT64_MIN / -1 because the
@@ -1494,6 +1545,78 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # scratch[0] is the effect counter, scratch[1] the selected value,
     # scratch[2] the witnessed count; flags are pinned to both polarities so
     # each arm of every diamond is actually taken.
+    # A caller-owned node array walked by POINTER CHASE. `link_chains` is what
+    # makes these functions test anything: the generated buffers are linked as a
+    # scrambled, proper subset of the array, so a recovery that reads `p =
+    # p->next` as `p += 1` visits a different set of nodes in a different order
+    # on the very first vector. Four of the five chains are deliberately not the
+    # identity; the fifth IS the identity, so the degenerate graph stays covered.
+    # `l192_scan_index_control` shares the chains because it must walk the SAME
+    # memory by index and disagree with the chase — that is what makes it a
+    # near-miss control rather than an unrelated function.
+    #
+    # `extra_vectors` state one hand-built graph inline (links are element
+    # indices; `link_chains` does not apply to them). Its shape is the point:
+    # nodes 1, 2 and 4 sit OFF the chain and carry the keys the searches ask
+    # for, so an index walk answers 1 where the chase answers 3, and answers 2
+    # where the chase answers "not found". The padding the harness appends
+    # (`next = -1`, `key = 0`) is off-chain too, which is why key 0 is searched.
+    #
+    #   idx: [next, key, payload]      chain: 0 -> 3 -> 5 -> NULL
+    #     0: [ 3,  5,  1]   on chain, head
+    #     1: [-1,  7, 20]   OFF chain, decoy key 7 at a lower index than node 3
+    #     2: [-1,  8, 30]   OFF chain, decoy key 8 that the chase must NOT find
+    #     3: [ 5,  7,  4]   on chain, the correct answer for key 7
+    #     4: [-1,  9, 50]   OFF chain
+    #     5: [-1,  6,  7]   on chain, tail
+    ("192_pointer_chased_list", "l192_find_key"): {
+        "pointer_return_arg": 0,
+        "non_length_args": [1],
+        "link_chains": _L192_CHAINS,
+        "extra_vectors": [
+            [_L192_GRAPH, 7],  # chase -> node 3; an index walk -> node 1
+            [_L192_GRAPH, 5],  # head
+            [_L192_GRAPH, 6],  # tail
+            [_L192_GRAPH, 8],  # chase -> NULL; an index walk -> node 2
+            [_L192_GRAPH, 0],  # chase -> NULL; an index walk -> the padding
+            [_L192_GRAPH, 99],  # absent everywhere
+        ],
+    },
+    ("192_pointer_chased_list", "l192_chase_keys"): {
+        "arg_values": {2: [0, 1, 3, 8, 16, 17]},
+        "link_chains": _L192_CHAINS,
+        "extra_vectors": [
+            [_L192_GRAPH, [0], 16],
+            [_L192_GRAPH, [0], 2],
+        ],
+    },
+    ("192_pointer_chased_list", "l192_sum_until_key"): {
+        "non_length_args": [1],
+        "link_chains": _L192_CHAINS,
+        "extra_vectors": [
+            [_L192_GRAPH, 7],  # stops after node 0
+            [_L192_GRAPH, 6],  # stops after nodes 0 and 3
+            [_L192_GRAPH, 99],  # runs the whole chain
+        ],
+    },
+    ("192_pointer_chased_list", "l192_stamp_chain"): {
+        "non_length_args": [1],
+        "link_chains": _L192_CHAINS,
+        "extra_vectors": [
+            [_L192_GRAPH, 1],
+            [_L192_GRAPH, -3],
+        ],
+    },
+    ("192_pointer_chased_list", "l192_scan_index_control"): {
+        "len_args": [1],
+        "non_length_args": [2],
+        "link_chains": _L192_CHAINS,
+        "extra_vectors": [
+            [_L192_GRAPH, 6, 7],  # index walk -> node 1, where the chase says 3
+            [_L192_GRAPH, 6, 8],  # index walk -> node 2, where the chase says -1
+            [_L192_GRAPH, 6, 99],
+        ],
+    },
     # A call through a proven function-pointer table. Every entry records the
     # arguments it received in the caller's buffer (slots 0-2), so an argument
     # list that is wrong but plausible is caught by the witness rather than by
@@ -2637,6 +2760,22 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     # architectural argument registers gets plausible, wrong values), and
     # `t191_direct_control` is the degeneracy control (the same protocol through
     # a direct call, which must keep passing).
+    # A parameter-supplied, harness-relocated linked list walked by pointer
+    # chase — the shape `dormant-transforms-2026-08-12.md` isolated as the single
+    # trigger for `loop_form::recover_sentinel_search_loops` and recorded as
+    # unbuildable at the time. `l192_find_key` is that probe verbatim;
+    # `l192_chase_keys` and `l192_stamp_chain` put the visit ORDER and the visited
+    # SET in caller-owned memory; `l192_sum_until_key` is order-dependent by
+    # construction. `l192_scan_index_control` walks the same nodes by INDEX: it is
+    # both the degeneracy control (the affine recovery must keep working) and the
+    # near-miss (it is the answer a chase-to-stride confusion produces).
+    "192_pointer_chased_list": [
+        "l192_chase_keys",
+        "l192_find_key",
+        "l192_scan_index_control",
+        "l192_stamp_chain",
+        "l192_sum_until_key",
+    ],
     "191_indirect_table_args": [
         "t191_computed_args",
         "t191_direct_control",

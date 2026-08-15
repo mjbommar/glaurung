@@ -2209,6 +2209,178 @@ def test_recursive_linked_list_round_trips_values_links_and_pointer_returns():
     assert "return node" in wrong["list_find"]["detail"]
 
 
+#: A caller-owned node array: `next` links back into it, then two scalars.
+_LINKED_NODE = {
+    "k": "ptr",
+    "p": {
+        "k": "struct",
+        "w": 16,
+        "name": "Node",
+        "fields": [
+            {"name": "next", "off": 0, "t": {"k": "self_ptr", "w": 8}},
+            {"name": "key", "off": 8, "t": {"k": "int", "w": 4, "s": True}},
+            {"name": "payload", "off": 12, "t": {"k": "int", "w": 4, "s": True}},
+        ],
+    },
+    "const": False,
+}
+_LINKED_SIG = {
+    "name": "walk",
+    "params": [_LINKED_NODE, {"k": "int", "w": 4, "s": True}],
+    "ret": {"k": "int", "w": 4, "s": True},
+}
+
+
+def _links(buffer: list) -> list[int]:
+    """The `next` field of every node in one generated buffer."""
+    return [node[0] for node in buffer]
+
+
+def test_declared_link_chains_replace_the_identity_successor():
+    """`link_chains` is what makes a pointer-chase fixture test pointer chasing.
+
+    Every generated buffer must be linked as the manifest declared — the chain
+    walk, and NULL for every node it does not name — rather than as
+    `nodes[i].next = &nodes[i+1]`.
+    """
+    chains = [[0, 5, 2], [0, 3, 1, 2]]
+    vectors = D.make_vectors(
+        _LINKED_SIG, {"ptr_len": 6, "link_chains": chains}, seed=1234, fuzz=4
+    )
+    assert vectors
+    for index, vector in enumerate(vectors):
+        chain = chains[index % len(chains)]
+        expected = [-1] * 6
+        for node, successor in pairwise(chain):
+            expected[node] = successor
+        assert _links(vector[0]) == expected, (index, vector[0])
+
+
+def test_absent_link_chains_keep_the_historical_identity_successor():
+    """The default is bit-for-bit what every recorded baseline was written with.
+
+    A change to argument materialisation touches every fixture, so the new kind
+    must be inert unless a manifest asks for it.
+    """
+    ov = {"ptr_len": 6}
+    vectors = D.make_vectors(_LINKED_SIG, ov, seed=1234, fuzz=4)
+    for vector in vectors:
+        links = _links(vector[0])
+        # A prefix chain: `index + 1` up to the terminator, NULL after it.
+        terminator = links.index(-1)
+        assert links[:terminator] == list(range(1, terminator + 1)), links
+        assert set(links[terminator:]) == {-1}, links
+
+
+@pytest.mark.parametrize(
+    "chains,expected",
+    [
+        ([[3, 1]], "unreachable"),
+        ([[0, 1, 0]], "cycle"),
+        ([[0, 99]], "outside"),
+        ([[]], "LIST OF CHAINS"),
+        ([0, 3, 1], "LIST OF CHAINS"),
+        ([], "non-empty list"),
+    ],
+)
+def test_link_chains_are_validated_fail_closed(chains, expected):
+    """Every rejected shape here is one that would otherwise pass SILENTLY.
+
+    A chain that does not start at element 0 is unreachable from the `&buffer[0]`
+    the callee is handed, so the function under test would walk nothing; a
+    repeated index is a cycle the ORIGINAL side does not return from; an
+    out-of-range index cannot be relocated; and a bare list of ints read as a
+    list of chains would quietly test single-node graphs.
+    """
+    with pytest.raises(ValueError, match=expected):
+        D.make_vectors(
+            _LINKED_SIG, {"ptr_len": 6, "link_chains": chains}, seed=1234, fuzz=2
+        )
+
+
+def test_link_chains_refuse_a_function_with_no_linked_parameter():
+    plain = {
+        "name": "plain",
+        "params": [{"k": "ptr", "p": {"k": "int", "w": 4, "s": True}, "pw": 4}],
+        "ret": {"k": "int", "w": 4, "s": True},
+    }
+    with pytest.raises(ValueError, match="self-referential"):
+        D.make_vectors(plain, {"link_chains": [[0, 1]]}, seed=1234, fuzz=2)
+
+
+def test_unrelocatable_self_link_is_refused_rather_than_nulled():
+    """Nulling it would shorten the chain on BOTH sides, which reads as `pass`."""
+    pointee = _LINKED_NODE["p"]
+    with pytest.raises(ValueError, match="cannot be relocated"):
+        D._materialize_buffer(pointee, [[7, 1, 2], [-1, 3, 4]])
+    # -1 is NULL and stays legal.
+    buffer = D._materialize_buffer(pointee, [[1, 1, 2], [-1, 3, 4]])
+    assert D._snapshot_buffer(pointee, buffer) == [[1, 1, 2], [None, 3, 4]]
+
+
+def test_the_pointer_chase_fixture_declares_chains_that_are_not_the_identity():
+    """`192_pointer_chased_list` is ABOUT the difference between a dependent load
+    and affine arithmetic, so its declared graphs must actually differ from the
+    array order — otherwise a `p += 1` recovery walks them correctly."""
+    chains = M.override("192_pointer_chased_list", "l192_find_key")["link_chains"]
+    scrambled = [c for c in chains if c != list(range(len(c)))]
+    assert len(scrambled) >= 3, chains
+    assert any(len(c) < M.DEFAULT_PTR_LEN for c in scrambled), chains
+
+
+def test_link_chains_catch_an_affine_advance_the_identity_chain_hides():
+    """The measured justification for the whole feature.
+
+    A recovery that reads the NULL TEST off the pointer load but renders the
+    ADVANCE as `+ 1` visits exactly the right nodes under the identity
+    successor, so the historical harness reports `pass`. Under a declared
+    scrambled chain it visits the wrong nodes and is caught. If this test ever
+    reports `pass` for the declared chain, the feature has stopped working and
+    every pointer-chase verdict in the corpus is worthless.
+    """
+    source = (
+        "#include <stdint.h>\n"
+        "struct node { struct node *next; int32_t key; int32_t payload; };\n"
+        "__attribute__((noinline)) int32_t stamp(struct node *head, int32_t s) {\n"
+        "  struct node *c = head; int32_t v = 0;\n"
+        "  while (c != 0) { c->payload = (int32_t)((uint32_t)c->payload +\n"
+        "    (uint32_t)s); v += 1; c = c->next; }\n"
+        "  return v; }\n"
+    )
+    original = _compile_so(source, "affine_advance")
+    address = D.exported_functions(original)["stamp"]
+    affine = {
+        address: (
+            "struct node { struct node *next; int key; int payload; };\n"
+            "int stamp(struct node *head, int s) {\n"
+            "  struct node *c = head; int v = 0;\n"
+            "  while (c != 0) { c->payload = (int)((unsigned)c->payload +\n"
+            "    (unsigned)s); v += 1; c = (c->next == 0) ? 0 : (c + 1); }\n"
+            "  return v; }"
+        )
+    }
+
+    def verdict(override: dict) -> dict:
+        M.OVERRIDES[("linkchains_probe", "stamp")] = override
+        try:
+            return D.run(
+                original,
+                original[:-3] + ".c",
+                "linkchains_probe",
+                seed=1234,
+                fuzz=4,
+                only={"stamp"},
+                decompiled_by_va=affine,
+            )["stamp"]
+        finally:
+            del M.OVERRIDES[("linkchains_probe", "stamp")]
+
+    identity = verdict({"ptr_len": 8})
+    assert identity["status"] == "pass", identity
+    declared = verdict({"ptr_len": 8, "link_chains": [[0, 5, 2, 7], [0, 3, 1]]})
+    assert declared["status"] == "fail", declared
+
+
 def test_run_uses_injected_backend_source_without_invoking_glaurung(monkeypatch):
     original = _compile_so(
         "static __attribute__((noinline)) int injected_helper(int value) { "

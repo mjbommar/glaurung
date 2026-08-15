@@ -5139,6 +5139,13 @@ fn ctype_for(ident: &str, tm: Option<&TypeMap>) -> &'static str {
 /// The same dataflow supplies the return width. A result assembled from 64-bit
 /// casts/operations must not inherit a stray final `eax` hint and render as
 /// `int`, which truncates a valid machine `long` at the C ABI boundary.
+///
+/// Test scaffolding only. The shipped pipeline always has exact per-SSA-value
+/// widths to hand and calls [`refine_decbench_abi_widths_with_value_widths`]
+/// directly; this no-evidence form exists so unit tests can exercise the
+/// AST-only inference path without building a value map. It is `cfg(test)` so
+/// that a reader grepping for the live width pass cannot land on the wrong one.
+#[cfg(test)]
 pub(crate) fn refine_decbench_abi_widths(f: &Function, tm: &mut TypeMap) {
     refine_decbench_abi_widths_with_value_widths(f, tm, None);
 }

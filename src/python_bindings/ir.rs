@@ -1139,6 +1139,8 @@ pub(super) fn decompile_at_session(
         &lf,
         &role_names,
         arch,
+        cc,
+        dwarf_type_env.as_ref(),
     );
     if style == "decbench" {
         crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
@@ -1409,6 +1411,8 @@ fn decompile_range_at_py(
         &lf,
         &role_names,
         arch,
+        cc,
+        dwarf_type_env.as_ref(),
     );
     if style == "decbench" {
         crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
@@ -2654,6 +2658,8 @@ fn decompile_all_py(
             &lf,
             &role_names,
             arch,
+            cc,
+            dwarf_type_env.as_ref(),
         );
         if style == "decbench" {
             crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
@@ -2945,6 +2951,8 @@ fn decompile_many_py(
             &lf,
             &role_names,
             arch,
+            cc,
+            dwarf_type_env.as_ref(),
         );
         if style == "decbench" {
             crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
@@ -3723,6 +3731,8 @@ mod tests {
             &numbered,
             &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
             Arch::ARM,
+            crate::ir::call_args::CallConv::Arm,
+            None,
         );
 
         assert_eq!(
@@ -3799,10 +3809,138 @@ mod tests {
             &numbered,
             &roles,
             Arch::X86_64,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            None,
         );
 
         assert!(facts.source_names.is_empty());
         assert_eq!(facts.source_types.get("i").map(String::as_str), Some("int"));
+    }
+
+    /// One machine value serving two source locals of different widths must be
+    /// declared at the WIDER one. gcc `-O2` does exactly this for
+    /// `dp190_mul_both_halves`: `product` (uint64_t) and `low` (uint32_t) both
+    /// live in `rsi` over the same range because `low` is `product`'s
+    /// truncation. Binding the narrow claimant makes `product >> 32`
+    /// identically zero, so the high half of the widening multiply is lost.
+    /// Declaration order is not evidence, and the loser here is deliberately
+    /// listed FIRST so the test fails against first-claimant-wins.
+    #[test]
+    fn dwarf_register_widest_claimant_owns_a_shared_recovered_value() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation};
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let at_rsi = |name: &str, c_type: &str| DwarfRegisterLocal {
+            source_name: name.to_string(),
+            c_type: c_type.to_string(),
+            locations: vec![DwarfRegisterLocation {
+                start: 0x100,
+                end: 0x110,
+                register: 4,
+            }],
+        };
+        let contract = DwarfPrototypeContract {
+            prototyped: true,
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: Vec::new(),
+            register_locals: vec![at_rsi("low", "uint32_t"), at_rsi("product", "uint64_t")],
+        };
+        let numbered = LlirFunction {
+            entry_va: 0x100,
+            blocks: vec![LlirBlock {
+                start_va: 0x100,
+                end_va: 0x110,
+                instrs: vec![LlirInstr {
+                    va: 0x104,
+                    op: Op::Assign {
+                        dst: VReg::phys("rax#1"),
+                        src: Value::Reg(VReg::phys("rsi#1")),
+                    },
+                }],
+                succs: Vec::new(),
+            }],
+        };
+        let roles = std::collections::HashMap::from([("rsi#1".to_string(), "var2".to_string())]);
+        let mut facts = crate::ir::stack_locals::StackLocalFacts::default();
+
+        merge_dwarf_register_local_facts(
+            &mut facts,
+            Some(&contract),
+            &numbered,
+            &roles,
+            Arch::X86_64,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            None,
+        );
+
+        assert_eq!(
+            facts.source_names.get("var2").map(String::as_str),
+            Some("product")
+        );
+        assert_eq!(
+            facts.source_types.get("var2").map(String::as_str),
+            Some("uint64_t")
+        );
+    }
+
+    /// Equal widths carry no preference, so the established order still decides
+    /// and the rule above must not fire.
+    #[test]
+    fn dwarf_register_equal_width_claimants_keep_the_established_order() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation};
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let at_rsi = |name: &str| DwarfRegisterLocal {
+            source_name: name.to_string(),
+            c_type: "uint32_t".to_string(),
+            locations: vec![DwarfRegisterLocation {
+                start: 0x100,
+                end: 0x110,
+                register: 4,
+            }],
+        };
+        let contract = DwarfPrototypeContract {
+            prototyped: true,
+            parameter_types: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: Vec::new(),
+            register_locals: vec![at_rsi("first"), at_rsi("second")],
+        };
+        let numbered = LlirFunction {
+            entry_va: 0x100,
+            blocks: vec![LlirBlock {
+                start_va: 0x100,
+                end_va: 0x110,
+                instrs: vec![LlirInstr {
+                    va: 0x104,
+                    op: Op::Assign {
+                        dst: VReg::phys("rax#1"),
+                        src: Value::Reg(VReg::phys("rsi#1")),
+                    },
+                }],
+                succs: Vec::new(),
+            }],
+        };
+        let roles = std::collections::HashMap::from([("rsi#1".to_string(), "var2".to_string())]);
+        let mut facts = crate::ir::stack_locals::StackLocalFacts::default();
+
+        merge_dwarf_register_local_facts(
+            &mut facts,
+            Some(&contract),
+            &numbered,
+            &roles,
+            Arch::X86_64,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            None,
+        );
+
+        assert_eq!(
+            facts.source_names.get("var2").map(String::as_str),
+            Some("first")
+        );
     }
 
     #[test]
@@ -3878,6 +4016,8 @@ mod tests {
             &numbered,
             &roles,
             Arch::X86_64,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            None,
         );
 
         assert_eq!(
@@ -3943,6 +4083,8 @@ mod tests {
             &numbered,
             &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
             Arch::ARM,
+            crate::ir::call_args::CallConv::Arm,
+            None,
         );
 
         assert!(facts.source_names.is_empty());
@@ -3993,6 +4135,8 @@ mod tests {
             &numbered,
             &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
             Arch::ARM,
+            crate::ir::call_args::CallConv::Arm,
+            None,
         );
 
         assert!(facts.source_names.is_empty());

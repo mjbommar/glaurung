@@ -83,78 +83,191 @@ pub(super) fn dwarf_stack_object_hints(
         .collect()
 }
 
+/// Which recovered value, if any, a DWARF register local names.
+enum RegisterLocalRole {
+    /// No numbered value uses the register anywhere in the recorded ranges.
+    Unbound,
+    /// Several distinct values tie for the strongest evidence.
+    Ambiguous,
+    /// Exactly one numbered role carries the local.
+    Bound(String),
+}
+
+/// Score every numbered value that uses the local's register inside its live
+/// ranges and keep the single strongest, if there is one.
+fn resolve_register_local_role(
+    local: &crate::debug::dwarf::DwarfRegisterLocal,
+    numbered: &crate::ir::types::LlirFunction,
+    role_names: &std::collections::HashMap<String, String>,
+    arch: crate::core::binary::Arch,
+) -> RegisterLocalRole {
+    let mut counts = std::collections::HashMap::<String, usize>::new();
+    for location in &local.locations {
+        let Some(machine_register) = dwarf_machine_register(arch, location.register) else {
+            continue;
+        };
+        for instruction in numbered
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter(|instruction| instruction.va >= location.start && instruction.va < location.end)
+        {
+            // A range ending at an epilogue can overlap the instruction
+            // that restores the same callee-saved register. That restore
+            // is a definition of machine state, not a use of the source
+            // local. Requiring an in-range use rejects that false tie
+            // while retaining the value that actually feeds the body.
+            let (_definition, registers) = crate::ir::use_def::def_uses(&instruction.op);
+            let mut seen_roles = std::collections::HashSet::new();
+            for register in registers {
+                let crate::ir::types::VReg::Phys(raw_name) = register else {
+                    continue;
+                };
+                if crate::ir::abi::ssa_base(&raw_name) != machine_register {
+                    continue;
+                }
+                let Some(role) = role_names.get(&raw_name) else {
+                    continue;
+                };
+                if seen_roles.insert(role.clone()) {
+                    *counts.entry(role.clone()).or_default() += 1;
+                }
+            }
+        }
+    }
+    let Some(maximum) = counts.values().copied().max() else {
+        if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
+            eprintln!("DWARF register local {:?}: no numbered role", local);
+        }
+        return RegisterLocalRole::Unbound;
+    };
+    if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
+        eprintln!("DWARF register local {:?}: role counts {counts:?}", local);
+    }
+    let mut winners = counts
+        .into_iter()
+        .filter_map(|(role, count)| (count == maximum).then_some(role));
+    let Some(role) = winners.next() else {
+        return RegisterLocalRole::Unbound;
+    };
+    if winners.next().is_some() {
+        // Equal evidence cannot select one machine value as the source
+        // identity.
+        return RegisterLocalRole::Ambiguous;
+    }
+    RegisterLocalRole::Bound(role)
+}
+
+/// The declared width of a scalar integer C type, when it is one.
+///
+/// Pointers and floats deliberately answer `None`: they do not participate in
+/// the narrow/wide role contest below, and leaving them unresolved keeps the
+/// established first-claimant behaviour for shapes this rule does not cover.
+fn scalar_int_width(
+    c_type: &str,
+    cc: crate::ir::call_args::CallConv,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
+) -> Option<u8> {
+    match dwarf_return_hint_with_env(c_type, cc, type_env) {
+        Some(crate::ir::types_recover::TypeHint::Int { width, .. }) => Some(width),
+        _ => None,
+    }
+}
+
+/// Pick the claimant that must own a recovered value when several source
+/// locals resolve to the same one.
+///
+/// An optimiser can serve two source variables of DIFFERENT widths from one
+/// machine value whenever the narrow one is the wide one's truncation:
+/// `product = (uint64_t)a * b; low = (uint32_t)product` leaves a single 64-bit
+/// register live as both, and DWARF then records both locals at that register
+/// over the same range. Only the widest claimant can be declared without
+/// losing bits — the narrow reads of the same value already carry their own
+/// truncating casts, while a narrow DECLARATION discards the high half before
+/// any use can see it. Order of appearance is no evidence at all, so the
+/// previous first-claimant-wins rule decided this on nothing.
+///
+/// Only a UNIQUE strict maximum overrides the existing order; a tie at the top
+/// or unresolvable spellings leave the choice exactly where it was.
+fn widest_claimant_per_role(
+    locals: &[crate::debug::dwarf::DwarfRegisterLocal],
+    roles: &[RegisterLocalRole],
+    cc: crate::ir::call_args::CallConv,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
+) -> std::collections::HashMap<String, usize> {
+    let mut claimants = std::collections::HashMap::<&str, Vec<usize>>::new();
+    for (index, role) in roles.iter().enumerate() {
+        if let RegisterLocalRole::Bound(role) = role {
+            claimants.entry(role.as_str()).or_default().push(index);
+        }
+    }
+    let mut preferred = std::collections::HashMap::new();
+    for (role, indices) in claimants {
+        if indices.len() < 2 {
+            continue;
+        }
+        let widths = indices
+            .iter()
+            .map(|&index| scalar_int_width(&locals[index].c_type, cc, type_env))
+            .collect::<Vec<_>>();
+        let Some(widest) = widths.iter().flatten().copied().max() else {
+            continue;
+        };
+        let mut at_widest = indices
+            .iter()
+            .zip(&widths)
+            .filter(|(_, width)| **width == Some(widest));
+        let Some((&winner, _)) = at_widest.next() else {
+            continue;
+        };
+        if at_widest.next().is_some() {
+            continue;
+        }
+        preferred.insert(role.to_string(), winner);
+    }
+    preferred
+}
+
 pub(super) fn merge_dwarf_register_local_facts(
     facts: &mut crate::ir::stack_locals::StackLocalFacts,
     contract: Option<&DwarfPrototypeContract>,
     numbered: &crate::ir::types::LlirFunction,
     role_names: &std::collections::HashMap<String, String>,
     arch: crate::core::binary::Arch,
+    cc: crate::ir::call_args::CallConv,
+    type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
 ) {
     let Some(contract) = contract else {
         return;
     };
-    for local in &contract.register_locals {
-        if local.locations.is_empty() {
-            record_declaration_only(facts, local);
-            continue;
-        }
-        let mut counts = std::collections::HashMap::<String, usize>::new();
-        for location in &local.locations {
-            let Some(machine_register) = dwarf_machine_register(arch, location.register) else {
+    let roles = contract
+        .register_locals
+        .iter()
+        .map(|local| {
+            if local.locations.is_empty() {
+                RegisterLocalRole::Unbound
+            } else {
+                resolve_register_local_role(local, numbered, role_names, arch)
+            }
+        })
+        .collect::<Vec<_>>();
+    let preferred = widest_claimant_per_role(&contract.register_locals, &roles, cc, type_env);
+
+    for (index, local) in contract.register_locals.iter().enumerate() {
+        let role = match &roles[index] {
+            // Keep the authoritative declaration without rewriting either
+            // candidate's dataflow.
+            RegisterLocalRole::Unbound | RegisterLocalRole::Ambiguous => {
+                record_declaration_only(facts, local);
                 continue;
-            };
-            for instruction in numbered
-                .blocks
-                .iter()
-                .flat_map(|block| &block.instrs)
-                .filter(|instruction| {
-                    instruction.va >= location.start && instruction.va < location.end
-                })
-            {
-                // A range ending at an epilogue can overlap the instruction
-                // that restores the same callee-saved register. That restore
-                // is a definition of machine state, not a use of the source
-                // local. Requiring an in-range use rejects that false tie
-                // while retaining the value that actually feeds the body.
-                let (_definition, registers) = crate::ir::use_def::def_uses(&instruction.op);
-                let mut seen_roles = std::collections::HashSet::new();
-                for register in registers {
-                    let crate::ir::types::VReg::Phys(raw_name) = register else {
-                        continue;
-                    };
-                    if crate::ir::abi::ssa_base(&raw_name) != machine_register {
-                        continue;
-                    }
-                    let Some(role) = role_names.get(&raw_name) else {
-                        continue;
-                    };
-                    if seen_roles.insert(role.clone()) {
-                        *counts.entry(role.clone()).or_default() += 1;
-                    }
-                }
             }
-        }
-        let Some(maximum) = counts.values().copied().max() else {
-            if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
-                eprintln!("DWARF register local {:?}: no numbered role", local);
-            }
-            record_declaration_only(facts, local);
-            continue;
+            RegisterLocalRole::Bound(role) => role.clone(),
         };
-        if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
-            eprintln!("DWARF register local {:?}: role counts {counts:?}", local);
-        }
-        let mut winners = counts
-            .into_iter()
-            .filter_map(|(role, count)| (count == maximum).then_some(role));
-        let Some(role) = winners.next() else {
-            continue;
-        };
-        if winners.next().is_some() {
-            // Equal evidence cannot select one machine value as the source
-            // identity. Keep the authoritative declaration without rewriting
-            // either candidate's dataflow.
-            record_declaration_only(facts, local);
+        if preferred
+            .get(role.as_str())
+            .is_some_and(|winner| *winner != index)
+        {
+            // A wider source local owns this recovered value.
             continue;
         }
         if !crate::ir::naming::valid_authoritative_local_name(&local.source_name)

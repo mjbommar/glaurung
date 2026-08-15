@@ -710,11 +710,6 @@ fn known_tls_load(addr: &Expr) -> Option<(i64, &'static str)> {
     None
 }
 
-/// True when `addr` is the stack-canary TLS load specifically.
-fn is_canary_addr(addr: &Expr) -> bool {
-    matches!(known_tls_load(addr), Some((_, CANARY_NAME)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
