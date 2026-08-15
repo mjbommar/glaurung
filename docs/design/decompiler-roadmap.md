@@ -268,11 +268,19 @@ The same bits may validly mean different things at different use sites.
 
 - [x] Recover direct and address-taken function symbols in several existing
   paths without emitting conflicting `extern void name(void)` declarations.
-- [ ] Add an operand/use-site `ReferenceInterpretation` with source instruction,
+- [x] Add an operand/use-site `ReferenceInterpretation` with source instruction,
   exact width, provenance, alternatives, and confidence.
-- [ ] Resolve evidence in order: relocation/loader semantics, decoded operand
+- [~] Resolve evidence in order: relocation/loader semantics, decoded operand
   role and PC calculation, mapped region, MIR provenance, call/type constraints,
   xref consistency, then conservative heuristics.
+  **Tiers 1-3 resolved; 4-6 cannot be queried from this layer.** A resolver that
+  reached MIR provenance, call/type constraints or xref consistency would have to
+  live downstream of MIR construction, and `readonly_fold` calls this from
+  upstream. They are accepted as validated caller input instead, and a caller
+  claiming a tier the resolver owns is dropped rather than outranked. The
+  implementation is also two RULES rather than a priority list — role admission
+  (a relocation is admitted everywhere, anything weaker needs the role to already
+  say "reference") and fail-closed supply.
 - [ ] Index references once for decompilation, xrefs, call graph, readonly
   folding, function tables, and UI consumers.
 - [ ] Project selected interpretations as semantic HIR operations.
@@ -280,7 +288,7 @@ The same bits may validly mean different things at different use sites.
   and function pointers with an exact-literal fallback.
 - [ ] Migrate and delete separate name, string, readonly, and function-table
   constant recognizers.
-- [ ] Prove with negative controls that a mapped numeric value used in arithmetic
+- [x] Prove with negative controls that a mapped numeric value used in arithmetic
   remains numeric.
 
 ### EPIC 3 — Aggregate and memory-object recovery
@@ -421,16 +429,21 @@ memory_version(region, point)
 
 ### Complete CFG and semantic structuring
 
-- [ ] Carry unresolved transfers, skipped bytes, clipped blocks, budgets, and
+- [~] Carry unresolved transfers, skipped bytes, clipped blocks, budgets, and
   edge completeness through every artifact.
-- [ ] Represent direct, conditional, switch, indirect, exceptional, call,
+  **Done: unresolved transfers, clipped blocks, clipped targets, edge
+  completeness.** Undecodable blocks survive as an explicit `undecoded_bytes`
+  intrinsic instead of vanishing (`38d6591`); terminal edges are typed and the
+  unexplained ones counted (`01f0b23`). **Not carried: budgets, and skipped bytes
+  on the discovery side.**
+- [x] Represent direct, conditional, switch, indirect, exceptional, call,
   return, tail-call, and unknown terminal edges explicitly.
 - [ ] Build graph-complete region recovery with total edge accounting.
 - [ ] Preserve irreducible and unresolved flow with explicit goto/indirect
   fallback rather than inventing structure.
 - [ ] Separate dominance/loop discovery, region selection, verification, and HIR
   projection from the current large structuring owner.
-- [ ] Diagnose the 43 historically AArch64-only DecBench failures by first wrong
+- [x] Diagnose the 43 historically AArch64-only DecBench failures by first wrong
   semantic stage, not verdict alone.
 - [ ] Attack large O2-noinline GED failures directly after CFG completeness and
   definition ownership are trustworthy.
@@ -533,10 +546,15 @@ Improve performance through avoided work first, then profile-led local tuning.
   deterministic phase-barrier merges.
 - [ ] Replace whole-HIR clones used for fixed points with change sets/epochs.
 - [ ] Make expensive type/object/reference passes demand-driven and cacheable.
-- [ ] Record per-pass time, allocations, graph sizes, iterations, cache hits, and
+- [~] Record per-pass time, allocations, graph sizes, iterations, cache hits, and
   invalidations.
+  **Per-pass time is recorded** (`GLAURUNG_PIPELINE_PROFILE`) and was used for the
+  first time on 2026-08-15. Allocations, graph sizes, iterations, cache hits and
+  invalidations are not. Caution recorded with the measurement: instrumented
+  stages account for only ~100 ms of a 285 ms run, so the timings are not yet
+  complete enough to choose optimisation targets from.
 - [ ] Enforce per-function and per-session budgets plus cooperative cancellation.
-- [ ] Profile before changing arenas, layouts, allocation, or parallel granularity.
+- [x] Profile before changing arenas, layouts, allocation, or parallel granularity.
 
 Performance acceptance on the pinned host:
 
