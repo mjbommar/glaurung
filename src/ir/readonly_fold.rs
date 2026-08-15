@@ -13,12 +13,14 @@
 //! conditional operator evaluates only the selected arm, so every in-range load
 //! is portable while an unproved index keeps the original machine expression.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use object::{Object, ObjectSection};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
+use crate::program::image::ProgramImage;
+use crate::program::references::{InterpretationKind, OperandRole, ReferenceResolver};
 
 const MAX_GUARDED_ENTRIES: usize = 64;
 
@@ -33,6 +35,15 @@ struct ReadonlyRegion {
 pub struct ReadonlyData {
     regions: Vec<ReadonlyRegion>,
     little_endian: bool,
+    /// Proved readings of relocation-fixed read-only pointer storage, keyed by
+    /// the place. Populated only by [`Self::resolve_relocated_slots`]; these
+    /// places are deliberately absent from `regions`, so the integer path
+    /// cannot reach them and cannot turn a reference into a number.
+    slots: BTreeMap<u64, String>,
+    /// Pointer width in bytes for the resolved slots. Zero until
+    /// [`Self::resolve_relocated_slots`] runs, which keeps the reference path
+    /// inert for every caller that supplies no reference evidence.
+    pointer_width: u8,
 }
 
 /// Collect constant-data sections once per input object.
@@ -56,6 +67,7 @@ pub fn collect_readonly_data(data: &[u8]) -> ReadonlyData {
     ReadonlyData {
         regions,
         little_endian,
+        ..ReadonlyData::default()
     }
 }
 
@@ -75,6 +87,7 @@ pub fn collect_readonly_data_from_image(
     ReadonlyData {
         regions,
         little_endian: image.endianness() == crate::core::binary::Endianness::Little,
+        ..ReadonlyData::default()
     }
 }
 
@@ -93,7 +106,70 @@ fn collect_readonly_region(regions: &mut Vec<ReadonlyRegion>, name: &str, base: 
     }
 }
 
+/// Storage the loader fixes up and then makes read-only. The object format is
+/// stating, in the section name itself, that these words are addresses: the
+/// section exists precisely because its contents needed relocations.
+fn is_relocation_fixed_pointer_storage(name: &str) -> bool {
+    name.starts_with(".data.rel.ro")
+}
+
 impl ReadonlyData {
+    /// Record every relocation-fixed read-only slot whose runtime value the
+    /// resolver proves is a C-string.
+    ///
+    /// A `static const char *const NAMES[]` table lands here rather than in
+    /// `.rodata`, so the integer collector above never sees it and an indexed
+    /// read of it decompiles to `*(long *)(0x403de0 + i * 8)` — an address that
+    /// exists in the input image and in no rebuilt unit. Reading the bytes as
+    /// integers is not the fix: that yields `(i == 0) ? 0x402008 : ...`, the
+    /// same dangling address wearing a number's clothes.
+    ///
+    /// So the decision is delegated. For each pointer-width place the resolver
+    /// is asked what the word *means*, with the role the format declares, and
+    /// only a proved [`InterpretationKind::StringLiteral`] is recorded. A
+    /// relocation the resolver cannot follow — an import, a symbol defined in
+    /// another object — resolves to an explicit unknown and is skipped, leaving
+    /// the original load in place.
+    pub fn resolve_relocated_slots(&mut self, image: &ProgramImage, resolver: &ReferenceResolver) {
+        let Some(pointer_bits) = image.target().address_bits() else {
+            return;
+        };
+        if !matches!(pointer_bits, 32 | 64) {
+            return;
+        }
+        let stride = u64::from(pointer_bits / 8);
+        self.pointer_width = pointer_bits / 8;
+        for section in image.sections() {
+            if !is_relocation_fixed_pointer_storage(section.name()) {
+                continue;
+            }
+            let base = section.address();
+            let length = section.data().len() as u64;
+            let mut offset = 0u64;
+            while offset.saturating_add(stride) <= length {
+                let place = base.saturating_add(offset);
+                offset = offset.saturating_add(stride);
+                let Some(interpretation) =
+                    resolver.interpret_storage(place, pointer_bits, OperandRole::MemoryAccess)
+                else {
+                    continue;
+                };
+                if let InterpretationKind::StringLiteral { text, .. } = interpretation.kind() {
+                    self.slots.insert(place, text.clone());
+                }
+            }
+        }
+    }
+
+    /// The proved string a relocation-fixed pointer slot holds, when the place
+    /// is exactly one pointer wide.
+    fn read_reference(&self, address: u64, width: u8) -> Option<&str> {
+        (self.pointer_width != 0 && width == self.pointer_width)
+            .then(|| self.slots.get(&address))
+            .flatten()
+            .map(String::as_str)
+    }
+
     fn read_integer(&self, address: u64, width: u8) -> Option<i64> {
         if !matches!(width, 1 | 2 | 4 | 8) {
             return None;
@@ -337,6 +413,14 @@ fn fold_expr(
     match expression {
         Expr::Deref { addr, size } => {
             fold_expr(addr, data, aliases, bounds, active_guard);
+            if let Some(text) =
+                constant_u64(addr).and_then(|address| data.read_reference(address, *size))
+            {
+                *expression = Expr::StringLit {
+                    value: text.to_string(),
+                };
+                return;
+            }
             if let Some(value) =
                 constant_u64(addr).and_then(|address| data.read_integer(address, *size))
             {
@@ -354,17 +438,23 @@ fn fold_expr(
             if count == 0 || count > MAX_GUARDED_ENTRIES {
                 return;
             }
-            let mut values = Vec::with_capacity(count);
+            let mut values: Vec<Expr> = Vec::with_capacity(count);
             for slot in 0..count {
                 let Some(address) =
                     base.checked_add((slot as u64).saturating_mul(u64::from(*size)))
                 else {
                     return;
                 };
+                if let Some(text) = data.read_reference(address, *size) {
+                    values.push(Expr::StringLit {
+                        value: text.to_string(),
+                    });
+                    continue;
+                }
                 let Some(value) = data.read_integer(address, *size) else {
                     return;
                 };
-                values.push(value);
+                values.push(Expr::Const(value));
             }
             let lookup_width = *size;
             let mut replacement = Expr::Deref {
@@ -378,7 +468,7 @@ fn fold_expr(
                         lhs: Box::new(index.clone()),
                         rhs: Box::new(Expr::Const(slot as i64)),
                     }),
-                    if_true: Box::new(Expr::Const(value)),
+                    if_true: Box::new(value),
                     if_false: Box::new(replacement),
                     width: lookup_width,
                 };
@@ -644,6 +734,7 @@ mod tests {
                 bytes,
             }],
             little_endian: true,
+            ..ReadonlyData::default()
         };
         let mut function = Function {
             name: "constant_lane".into(),
@@ -697,6 +788,7 @@ mod tests {
                 bytes: section_bytes,
             }],
             little_endian: true,
+            ..ReadonlyData::default()
         };
         let mut function = Function {
             name: "lookup".into(),
@@ -817,6 +909,7 @@ mod tests {
                     .collect(),
             }],
             little_endian: true,
+            ..ReadonlyData::default()
         };
         let lookup = |index: Expr| Expr::Deref {
             addr: Box::new(Expr::Bin {
@@ -887,6 +980,7 @@ mod tests {
                     .collect(),
             }],
             little_endian: true,
+            ..ReadonlyData::default()
         };
         let copied_mask = Expr::Cast {
             signed: false,

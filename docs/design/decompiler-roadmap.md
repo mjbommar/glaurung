@@ -214,6 +214,12 @@ lossy `HashMap<u64, String>` or C type strings.
   verify the current working slice.
 - [x] Implement a canonical `SymbolStore`: aliases, ranges, imports, exports,
   thunks, bindings, demangled names, and contextual address queries.
+  **Built, and until 2026-08-15 it had ZERO production consumers** — every caller
+  of `ProgramSession::symbol_store()` lived in `session_tests.rs`. It retained
+  alternatives, conflicts, incompleteness and relocation sites by place the whole
+  time; nothing asked. `program/references.rs` is now the first production
+  consumer. "Implemented" and "connected" are different claims and this box only
+  ever justified the first.
 - [ ] Import PDB facts into `TypeStore` and `ObjectStore`; remove the separate
   PDB-only field-map authority.
 - [ ] Import FLIRT/library catalog facts with explicit provenance.

@@ -1545,6 +1545,39 @@ OVERRIDES: dict[tuple[str, str], dict] = {
     # scratch[0] is the effect counter, scratch[1] the selected value,
     # scratch[2] the witnessed count; flags are pinned to both polarities so
     # each arm of every diamond is actually taken.
+    # Address-shaped constants in two roles, against `program::references`.
+    # `MC193_NAMES` is a relocation-fixed pointer table: its slots are
+    # references the loader writes, and reading them as either an image address
+    # or a number produces a value the rebuilt unit does not map.
+    # `MC193_OFFSETS` is the control — same indexed-table shape, entries chosen
+    # to sit inside this object's own mapped range, and still integers. `which`
+    # covers the table domain and both out-of-range neighbours (the source
+    # masks, so nothing is UB). `probe` is pinned to the exact control entries
+    # (0x00f0, 0x1140, 0x2008, 0x2100) and to values either side, so an entry
+    # that was promoted to a pointer moves the comparison instead of cancelling.
+    ("193_mapped_constant_roles", "mc193_name_length"): {
+        "arg_values": {0: [-1, 0, 1, 2, 3, 4]},
+    },
+    ("193_mapped_constant_roles", "mc193_name_bytes"): {
+        "ptr_len": 4,
+        "non_length_args": [0],
+        "arg_values": {0: [-1, 0, 1, 2, 3, 4]},
+    },
+    ("193_mapped_constant_roles", "mc193_names_differ"): {
+        "arg_values": {0: [0, 1, 2, 3], 1: [0, 1, 2, 3]},
+    },
+    ("193_mapped_constant_roles", "mc193_offset_sum"): {
+        "arg_values": {0: [0, 1, 2, 3, 4]},
+    },
+    ("193_mapped_constant_roles", "mc193_offset_matches"): {
+        "arg_values": {
+            0: [0, 1, 2, 3],
+            1: [0, 240, 4415, 4416, 8200, 8448, 4294967295],
+        },
+    },
+    ("193_mapped_constant_roles", "mc193_scaled_constant"): {
+        "arg_values": {0: [0, 1, 2, 255, 65536, 4294967295]},
+    },
     # A caller-owned node array walked by POINTER CHASE. `link_chains` is what
     # makes these functions test anything: the generated buffers are linked as a
     # scrambled, proper subset of the array, so a recovery that reads `p =
@@ -2760,6 +2793,19 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
     # architectural argument registers gets plausible, wrong values), and
     # `t191_direct_control` is the degeneracy control (the same protocol through
     # a direct call, which must keep passing).
+    # A relocation-fixed `const char *const` table beside an integer table of
+    # address-shaped values. The name functions are the positives (the table
+    # holds references, and neither "leave the load alone" nor "read the bytes
+    # as numbers" recompiles); the offset functions and `mc193_scaled_constant`
+    # are the controls that must stay numeric.
+    "193_mapped_constant_roles": [
+        "mc193_name_bytes",
+        "mc193_name_length",
+        "mc193_names_differ",
+        "mc193_offset_matches",
+        "mc193_offset_sum",
+        "mc193_scaled_constant",
+    ],
     # A parameter-supplied, harness-relocated linked list walked by pointer
     # chase — the shape `dormant-transforms-2026-08-12.md` isolated as the single
     # trigger for `loop_form::recover_sentinel_search_loops` and recorded as

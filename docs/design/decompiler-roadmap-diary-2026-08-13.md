@@ -4540,3 +4540,232 @@ None. No fixture was added, no baseline regenerated.
 DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
 fixture matrix, a full `arch_roundtrip.py` sweep, repo-wide `cargo fmt`.
 Nothing committed.
+
+## Entry 32 — Use-site reference interpretation, and the table that was wrong twice
+
+Numbered 32 rather than 30 because two other agents appended concurrently.
+
+Task: EPIC 2's first two open bullets — an operand/use-site
+`ReferenceInterpretation` with source instruction, exact width, provenance,
+alternatives and confidence, and a resolver that orders evidence
+relocation → decoded operand → mapped region → MIR provenance → call/type
+constraint → xref consistency → heuristic — plus the negative controls that
+prove a mapped numeric used in arithmetic stays numeric. Worked from `21b0fde`.
+Migrating and deleting the existing recognizers was explicitly out of scope.
+
+### What the survey changed about the brief
+
+Three things in the framing were off, and one of them changed the design.
+
+**There is no `ReferenceInterpretation`, but there are fourteen recognizers.**
+`grep` for `ReferenceInterpretation` / `ReferenceIndex` / `OperandRole` /
+`use_site` across `src/` returns nothing, so the type really was absent. What
+exists instead is fourteen independent deciders — `analysis/xrefs.rs`,
+`ir/name_resolve.rs`, `ir/strings_fold.rs`, `ir/readonly_fold.rs`,
+`ir/got_fold.rs`, `ir/function_tables.rs`, `analysis/vtable.rs`,
+`analysis/jump_table.rs`, `ast::lower_memop`, `const_fold`'s `Addr ± Const`
+re-fold, the `glaurung_global_*` renderer, the three lifters' `Value::Addr` tag,
+and `analysis/cfg.rs` — sharing no vocabulary. Two of them model uncertainty:
+`function_tables` keeps its whole `targets` list, and `program::symbols` keeps
+selected/alternatives/conflicts/incompleteness.
+
+**The negative-control property was already mostly true on x86-64, for a reason
+nobody wrote down.** `Value::Const` and `Value::Addr` are distinct in LLIR, and
+`ast.rs:758` carries that split into `Expr::Const` vs `Expr::Addr`. An x86-64
+immediate arrives as `Const` and no pass symbolizes a `Const` except
+`strings_fold`, and only when a known library contract declares that parameter
+`char *`. `const_fold:865-915` narrows further with an `Add`/`Sub`-only operator
+whitelist, whose comment records the damage that motivated it (an ADRP page
+collided with `__cxa_finalize` and a volatile counter printed as
+`__cxa_finalize + 28`). So the roadmap's *first* tier — "decoded operand role" —
+is already half materialised, as a two-valued tag with no provenance, no width,
+no alternatives, and no way to disagree with it.
+
+**`SymbolStore` had zero production consumers.** It is the canonical store
+EPIC 1 marks `[x]`, it indexes relocation sites by place, and it refuses to
+guess (`AddressUnknown::AmbiguousRanges`). Every caller of
+`ProgramSession::symbol_store()` in the tree was in `session_tests.rs`. The
+decompiler used the flat `HashMap<u64, String>` from `name_resolve` instead.
+
+### The defect the survey pointed at, reproduced
+
+A `static const char *const` table does not live in `.rodata`. It lives in
+`.data.rel.ro`, which `readonly_fold`'s section-name filter and
+`strings_fold`'s both exclude, so nothing in the tree touches it. Built from a
+four-entry probe, `gcc -O2`, both PIE and `-no-pie`:
+
+```c
+name_len:  var4 = *(long *)(0x403de0 + (arg0 & 3) * 8);
+```
+
+`0x403de0` exists in the input image and in no rebuilt unit, so every lane that
+reads such a table segfaults.
+
+The instructive part is what happens if you "fix" it with mapped-region
+evidence. Adding `.data.rel.ro` to the readonly collector — a two-line spike —
+gives:
+
+```c
+name_len:  var4 = (i == 0) ? 0x402008 : (i == 1) ? 0x40200e : ... ;
+```
+
+which is the same dangling address wearing a number's clothes, and is exactly
+the failure mode the roadmap's negative-control bullet describes. Both readings
+are available from the bits; neither is right. The reading that recompiles is
+"slot 0 holds the string `"alpha"`", and only something that knows the slot is a
+*reference* can produce it.
+
+That is why the consumer is `readonly_fold` and not the higher-traffic
+`name_resolve`: it is a place where the resolver's answer is demonstrably
+different from every answer available without it.
+
+### `program::references`
+
+`ReferenceSite` is `{ origin, width_bits }`, where `origin` is either
+`Instruction { va, operand }` or `Storage { va }` — a table slot has no source
+instruction, and pretending it does would make the site identity a lie.
+`OperandRole` is the use-site question ("is this operand being used as a
+reference?"), kept separate from the value question ("could these bits be an
+address?"). `EvidenceSource` has the roadmap's seven tiers and derives `Ord` in
+that order, so `min()` is "the strongest claim". `InterpretationKind` covers
+integer / address / symbol+addend / code address / string literal /
+`Unknown(reason)`.
+
+Two rules do the work, and neither is ordering:
+
+* **Role admission.** `OperandRole::admits` says a relocation is admitted
+  everywhere — a relocated place *is* a reference regardless of what the
+  surrounding code does with it — and everything weaker needs the role to
+  already say "reference". `ScalarArithmetic` admits nothing below a relocation.
+  `Unclassified` admits only the decoder's own tag, not mapped-range membership.
+  This is the negative control expressed as policy instead of as a pass-ordering
+  accident.
+* **Fail-closed supply.** Tiers 4-7 (MIR provenance, call/type constraints, xref
+  consistency, heuristics) live in stages this module cannot see, so callers
+  supply them. A caller claiming a tier the resolver owns is *dropped*, not
+  outranked, and `a_caller_may_not_supply_a_tier_the_resolver_owns` pins that.
+
+Selection never destroys anything: `alternatives()` returns every rejected
+claim, `conflicts()` names tiers where equals disagreed, and a conflict at the
+only available tier resolves to `Unknown(ConflictingEvidence)` rather than a
+pick (rules 3 and 8).
+
+One honest limitation is baked into the API. The resolver establishes tiers 1-3
+because the image and `SymbolStore` are exactly the facts those need. It cannot
+establish tiers 4-6 from where it sits, and rather than fake them it takes them
+as input and validates their provenance. A resolver that queried MIR would have
+to live downstream of MIR construction, which is a different module than the one
+`readonly_fold` can call.
+
+`SymbolStore` drops symbol-less relocations — `index_relocation` records
+`SymbolIncompleteness::UnresolvedRelocationTargets` and returns — and
+`R_*_RELATIVE` is precisely what fills a `const` pointer table. So the resolver
+carries its own place index for those, and defers to `SymbolStore` wherever a
+symbol-backed reference exists, so the two never manufacture a conflict with
+each other.
+
+### The consumer
+
+`ReadonlyData` gains `slots` and `pointer_width`, populated only by
+`resolve_relocated_slots`. Relocation-fixed sections are deliberately **not**
+added to `regions`, so `read_integer` cannot reach them and the existing numeric
+path cannot see a byte it could not see before — which is why the corpus does
+not move. For each pointer-width place in `.data.rel.ro*` the resolver is asked
+what the word means, and only a proved `StringLiteral` is recorded. An import,
+or a symbol defined in another object, resolves to an explicit unknown and is
+skipped, leaving the original load in place.
+
+Four sites in `python_bindings/ir.rs` now build the resolver from
+`session.symbol_store()`, which makes the canonical symbol store production code
+for the first time.
+
+Result, on the same probe, PIE and non-PIE alike:
+
+```c
+name_len:  name = (i == 0) ? "alpha" : (i == 1) ? "beta" : ... ;
+```
+
+### The fixture, and proving it is not vacuous
+
+`193_mapped_constant_roles` pairs a relocation-fixed `const char *const` table
+against an integer table of the same shape whose entries were checked with
+`readelf -lW` to lie inside this object's own PT_LOADs in all four lanes
+(0x00f0, 0x1140, 0x2008, 0x2100), plus an address-shaped immediate consumed by
+multiplication.
+
+Non-vacuity was measured, not asserted. With `resolve_relocated_slots` disabled
+behind a temporary switch and everything else identical:
+
+| function | role | resolver off | resolver on |
+|---|---|---|---|
+| `mc193_name_length` | positive | **fail** | pass |
+| `mc193_name_bytes` | positive | **fail** | pass |
+| `mc193_names_differ` | positive | **fail** | pass |
+| `mc193_offset_sum` | control | pass | pass |
+| `mc193_offset_matches` | control | pass | pass |
+| `mc193_scaled_constant` | control | pass | pass |
+
+Twelve positive verdicts require the change; twelve control verdicts forbid
+over-reach. The switch was removed before the gate — an untested env var is
+cruft, and the measurement is recorded here instead.
+
+One design detail the corpus taught: the first draft used `"d"` as a table
+entry. The string pool's three-character floor rejects it, one unproved slot
+correctly aborts the whole fold, and the entire positive silently reverted to
+the broken form. That is the right behaviour and a bad fixture; every entry now
+clears the floor and the comment says why.
+
+### What this type could subsume, and what blocks each
+
+Nothing was migrated or deleted, per scope. Ordered by value:
+
+| recognizer | fits? | what blocks it today |
+|---|---|---|
+| `ir/name_resolve.rs` `Addr -> Named` | yes, highest value: no role guard at all, `HashMap<u64,String>`, last-writer-wins across eight sources | `addr_map` merges PLT, GOT, IAT, PE exports and Mach-O stubs; `SymbolStore` imports none of those, so migrating would silently drop those names until EPIC 1's importer bullets land |
+| `ir/got_fold.rs` | yes, mostly mechanical: already tier-1, already width- and role-guarded | needs symbol-less `R_*_RELATIVE` resolution, which this resolver's place index now provides; the `got_fold`-before-`resolve_names` pass ordering is load-bearing and must be preserved explicitly rather than by luck |
+| `analysis/xrefs.rs::code_to_data_xrefs` | yes; line 98 takes *any* operand immediate from *any* instruction and calls mapped-range membership a data reference | there is no role at that layer — the scanner sees decoded operands, not AST or MIR, so the disassembler must first say whether an immediate is a branch displacement, a memory displacement, or an ALU immediate. `analysis/cfg.rs` already does this for branch targets only |
+| `ir/strings_fold.rs` | yes; its `Const` path is already a tier-5 decision and its `Addr`/`Named` path a tier-2 one | pure behaviour risk, not a technical block: `Addr`/`Named` fold unconditionally inside `Expr::Cmp` and `Expr::Bin`, so an honest `ScalarArithmetic` role would delete string literals the corpus currently renders. That needs its own measured pass |
+| `ast.rs` `glaurung_global_*` + the `note_address_taken_global` stub | yes — the stub's own doc asks for `CodeAddress` vs `Address` vs `StringLiteral` plus a read-only test, which is `describe_address` and `is_readonly` | the rendering pass receives no image handle at all |
+| `ir/function_tables.rs` | partly: per-slot `CodeAddress` + defined-`Text` is exactly `describe_address` | table *identity* (size a multiple of pointer width, 2..=64 entries) is aggregate recovery, EPIC 3, not reference interpretation |
+| `analysis/vtable.rs`, `analysis/jump_table.rs` | in principle; `is_relocation_table`'s hand-written GOT/PLT exclusion is what tier-1 evidence generalises | they run at *discovery*, before any image-wide symbol store exists, and they feed function discovery — a layering inversion unless `ProgramSession` builds symbols before discovery |
+| `ir/readonly_fold.rs` integer path | not yet | I could not construct an x86-64 case where a relocation covers a `.rodata` place this path folds, so gating it on `place_is_relocated` would add an unexercised guard. Reported rather than added |
+
+### Gates
+
+```
+cargo test --features python-ext    2457 passed, 0 failed, 1 ignored (pre-existing)
+                                    (2441 at HEAD + 16 new program::references tests)
+cargo build --features python-ext   19 warnings, byte-identical in class to HEAD:
+                                    0 "never used" functions; the one dead-code
+                                    warning is the pre-existing never-read field at
+                                    src/analysis/ioctl_taint.rs:409, and the two
+                                    unused `got_targets` bindings at
+                                    python_bindings/ir.rs are also pre-existing
+tools/dectest.py @o0                364 lanes, no regressions in scope
+tools/dectest.py @o2                364 lanes, no regressions in scope
+tools/dectest.py 193_*              24/24 pass; 12/24 with the consumer disabled
+cargo clippy --all-targets          nothing on the touched files
+  --features python-ext
+per-function decompile cost         0.31s vs 0.31s for 40 functions of
+                                    hello-gcc-O2; the relocation index is built
+                                    per call, and it does not show
+rustfmt --edition 2021              on the six touched Rust files
+uvx ruff format/check               clean on manifest.py
+gcc/clang -Wall -Wextra -Werror     clean on the new fixture
+```
+
+`@o0` and `@o2` are 364 rather than 362 because fixture 193 adds one lane to
+each compiler in each set.
+
+A corpus that does not move is the predicted result and was run to falsify the
+prediction: the consumer only reads storage the previous code could not reach,
+so no existing fold could change. The only verdicts that DID move are fixture
+193's twelve positives, from fail to pass.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. **No
+baseline was refreshed and nothing was committed** — fixture 193 needs
+`baseline.json`, `structural_baseline.json`, `arch_baseline.json` and
+`tools/fitness_baseline.json` regenerated before the gate is green.

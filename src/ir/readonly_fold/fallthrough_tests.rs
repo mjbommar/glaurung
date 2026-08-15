@@ -11,6 +11,7 @@ fn terminating_upper_bound_guard_materialises_the_fallthrough_lookup() {
                 .collect(),
         }],
         little_endian: true,
+        ..ReadonlyData::default()
     };
     let lookup = || Expr::Deref {
         addr: Box::new(Expr::Bin {

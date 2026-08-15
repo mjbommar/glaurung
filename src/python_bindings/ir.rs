@@ -429,6 +429,29 @@ fn annotate_calls_in(
 /// The pass-by-pass AST dump (`GLAURUNG_DUMP_PASSES=1`) is read here, so EVERY entry
 /// point gets identical diagnostics rather than only the one that happened to carry the
 /// macro. Debugging `--all` used to produce no dump at all.
+/// Constant-data facts for one image, with relocation-fixed storage interpreted
+/// rather than read.
+///
+/// Read-only storage the loader fixes up holds references, not data: a
+/// `static const char *const` table lands in `.data.rel.ro`, and reading its
+/// bytes as integers yields an image address that the rebuilt unit does not
+/// map. The canonical reference resolver is asked what each pointer-width slot
+/// means before any pass can see those bytes at all. See
+/// [`crate::program::references`].
+fn readonly_data_for(
+    session: &crate::program::session::ProgramSession,
+    image: &crate::program::image::ProgramImage,
+    str_pool: &std::collections::HashMap<u64, String>,
+) -> crate::ir::readonly_fold::ReadonlyData {
+    let mut readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(image);
+    let symbols = session.symbol_store();
+    readonly_data.resolve_relocated_slots(
+        image,
+        &crate::program::references::ReferenceResolver::new(image, &symbols, str_pool),
+    );
+    readonly_data
+}
+
 fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
     profiler: &mut crate::decompile::profile::FunctionProfiler,
@@ -1102,7 +1125,7 @@ pub(super) fn decompile_at_session(
     }
     dp!("lower");
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
+    let readonly_data = readonly_data_for(&session, &image, &str_pool);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
     // of a locally-defined global folds to that global instead of dereferencing
     // an unrelocated linkage word. See `ir::got_fold`.
@@ -1373,7 +1396,7 @@ fn decompile_range_at_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
+    let readonly_data = readonly_data_for(&session, &image, &str_pool);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
     // of a locally-defined global folds to that global instead of dereferencing
@@ -2542,7 +2565,7 @@ fn decompile_all_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
+    let readonly_data = readonly_data_for(&session, &image, &str_pool);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
     // of a locally-defined global folds to that global instead of dereferencing
@@ -2802,7 +2825,7 @@ fn decompile_many_py(
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
     let str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    let readonly_data = crate::ir::readonly_fold::collect_readonly_data_from_image(&image);
+    let readonly_data = readonly_data_for(&session, &image, &str_pool);
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Slot -> the in-image address the loader stores there, so a `-fPIC` read
     // of a locally-defined global folds to that global instead of dereferencing

@@ -8100,6 +8100,102 @@
     "l192_stamp_chain": "pass",
     "l192_sum_until_key": "pass"
   },
+  "193_mapped_constant_roles:aarch64:O0": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "pass",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:aarch64:O2": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "pass",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:armv7:O0": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "pass",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:armv7:O2": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "fail",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:armv7_a32:O0": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "pass",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:armv7_a32:O2": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "pass",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:i386:O0": {
+    "mc193_name_bytes": "fail",
+    "mc193_name_length": "fail",
+    "mc193_names_differ": "fail",
+    "mc193_offset_matches": "fail",
+    "mc193_offset_sum": "fail",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:i386:O2": {
+    "mc193_name_bytes": "fail",
+    "mc193_name_length": "fail",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "fail",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:x86_64:O0": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "pass",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:x86_64:O2": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "pass",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:x86_64_gcc15:O0": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "pass",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
+  "193_mapped_constant_roles:x86_64_gcc15:O2": {
+    "mc193_name_bytes": "pass",
+    "mc193_name_length": "pass",
+    "mc193_names_differ": "pass",
+    "mc193_offset_matches": "pass",
+    "mc193_offset_sum": "pass",
+    "mc193_scaled_constant": "pass"
+  },
   "19_disjoint_set:aarch64:O0": {
     "dsu_find": "pass",
     "dsu_union": "pass"
