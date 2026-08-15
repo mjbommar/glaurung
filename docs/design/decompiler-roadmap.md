@@ -545,7 +545,10 @@ Improve performance through avoided work first, then profile-led local tuning.
 - [ ] Use immutable environment snapshots for function-parallel work and
   deterministic phase-barrier merges.
 - [ ] Replace whole-HIR clones used for fixed points with change sets/epochs.
-- [ ] Make expensive type/object/reference passes demand-driven and cacheable.
+- [~] Make expensive type/object/reference passes demand-driven and cacheable.
+  `DecompilerSession` already caches artifacts and discovery per image, and the
+  warm-query row is met through it (3081x on `hello-gcc-O2`, 271180x on
+  `hello-rust-musl`). What is NOT demand-driven is the cold path itself.
 - [~] Record per-pass time, allocations, graph sizes, iterations, cache hits, and
   invalidations.
   **Per-pass time is recorded** (`GLAURUNG_PIPELINE_PROFILE`) and was used for the
@@ -580,21 +583,36 @@ and fail with `Unknown file magic`), via `g.ir.decompile_all(..., limit=250)`:
 | p95 | below 4.0 s | **2.15 s** | met |
 | Slowest bounded case | below 15 s | **5.19 s** (`hello-go-static`) | met |
 | 224-binary wall, 12 workers | below 45 s | 41.7 s for 138, **sequential** | met |
-| Base object parses/session | exactly one | **58** | **MISSED** |
+| Base object parses/session | exactly one | 58 -> **19** | closer; see below |
+| Warm identical-function query | at least 5x | **3081x** | met |
 
 Restricted to the 50 binaries with 50 or more functions, the median is 0.192 s,
 p95 2.65 s, and the median cost is 1.67 ms per function.
 
-So speed is not the problem, and optimising it would be work aimed at a target
-already met. The single miss is architectural, and it is the one this section's
-own plan predicts: `GLAURUNG_PIPELINE_PROFILE=1` over one `decompile_all` of
-`hello-gcc-O2` reports `object_parse_count: 58` for 49 decompiled functions —
-roughly one full image parse per function. `grep -rn "profile::parse_object" src/`
-finds ~70 call sites, concentrated in `analysis/cfg.rs` (10) and
-`ir/types_recover.rs` (7). This is the same gap listed under "Foundations still
-incomplete" as "`ProgramSession` is not yet the sole owner of every parse and
-cache"; the seams (`ProgramImage`, `ProgramSession`, `lift_function_from_image`)
-already exist, so it is a migration, not a design.
+So speed is not the problem, and optimising it would be work aimed at targets
+already met.
+
+The warm-query row must be measured through `DecompilerSession` — "reusable
+decompiler state for repeated queries against one immutable image" — which is
+the API the row is about. Measuring repeated `decompile_many` calls instead
+rebuilds the session every time and reports 1.98x, which is the cost of NOT
+having a cache rather than the benefit of having one. Through the session it is a
+straight cache hit: 2.524 ms cold to 0.001 ms warm on `hello-gcc-O2`, and 163 ms
+to 0.001 ms on `hello-rust-musl`.
+
+The remaining gap is architectural, and it is the one this section's own plan
+predicts. `object_parse_count` was **58** for 49 functions on `hello-gcc-O2`, and
+**40,865** for `hello-rust-musl` at the default limit — the count scaled as
+`O(functions) + O(branches) + O(callees)` and varied run to run on the same
+binary. It is now **19 and constant**, the same 19 for both binaries at any
+limit. The residue is 19 distinct one-shot analyses; reaching exactly one needs a
+relocation/symbol index on `ProgramImage`.
+
+Worth recording for the next person who optimises here: re-parsing was NOT worth
+the time it appeared to be. An ELF `File::parse` reads a header and a section
+table, about 12 us, so removing 40,848 parses from the `hello-rust-musl` run
+moved wall time not at all. The gap between instrumented stages (~100 ms) and the
+285 ms run is still unexplained, and it is not this.
 
 The accounting also does not close: instrumented stages sum to roughly 100 ms of
 that 285 ms run, so most of the wall time is outside any named stage. Until that
