@@ -4,9 +4,12 @@
 //! block's VA range. This module lifts each block's raw bytes through
 //! `lift_x86::lift_bytes` and assembles an `LlirFunction`.
 //!
-//! Only x86 and x86-64 are supported today (the only ISA the lifter covers);
-//! other architectures return `None` so callers can handle the unsupported
-//! case explicitly rather than receive a silently-incomplete result.
+//! Only x86, x86-64, AArch64 and ARM32 are supported today. Every other
+//! architecture — and every incoherent target/mode combination — is rejected
+//! with a typed [`LiftError`] before a single byte is decoded, so a caller can
+//! tell "this ISA has no lifter" from "this function had nothing to lift".
+
+use std::fmt;
 
 use crate::analysis::entry::va_to_code_file_offset;
 use crate::core::binary::Arch;
@@ -14,32 +17,186 @@ use crate::core::function::Function;
 use crate::ir::types::*;
 use crate::ir::use_def::def_uses;
 use crate::ir::{lift_arm32, lift_arm64, lift_x86};
+use crate::target::{CodeMode, TargetId, TargetSpec};
 
-/// Lift a byte window into LLIR using the appropriate per-arch lifter.
+/// Why a lift request produced no [`LlirFunction`].
+///
+/// The lifter used to answer `Option<LlirFunction>`, and its `None` meant three
+/// unrelated things at once: the architecture has no lifter at all, the
+/// function's encoding mode contradicts its target, or the architecture *is*
+/// supported and the function simply owned no liftable block. A caller must
+/// treat those differently — the first is a permanent capability gap worth
+/// reporting once per binary, the second is a defect in the function record
+/// that names an exact function, and the third is per-function data loss whose
+/// affected ranges are worth surfacing. Reporting all three as `None` is why
+/// the Python surface raised "LLIR lifter does not support this architecture"
+/// for x86-64 binaries whose lifter works fine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiftError {
+    /// No LLIR lifter exists for this architecture. Permanent for this binary:
+    /// every function in it will fail the same way.
+    UnsupportedArchitecture {
+        /// The architecture the caller asked for.
+        arch: Arch,
+    },
+    /// The function's instruction-encoding marker cannot be reconciled with its
+    /// target — for example an `IS_THUMB` function on a target with no Thumb
+    /// mode. Lifting it anyway decodes one ISA's bytes with another's decoder,
+    /// which produces confident nonsense rather than an error.
+    IncoherentCodeMode {
+        /// Architecture the request named.
+        arch: Arch,
+        /// Target identity, when the request carried one.
+        target: Option<TargetId>,
+        /// Whether the function is marked as Thumb-encoded.
+        thumb: bool,
+        /// Entry VA of the offending function.
+        entry_va: u64,
+    },
+    /// The architecture is supported and the mode is coherent, but no block
+    /// survived to be lifted. `disowned` carries the exact VA ranges rejected
+    /// because they lie outside every range the function owns, so the caller
+    /// can report *which* bytes went missing instead of only that some did.
+    NoLiftableBlocks {
+        /// Entry VA of the function that produced nothing.
+        entry_va: u64,
+        /// How many CFG basic blocks were offered to the lifter.
+        considered: usize,
+        /// The `[start, end)` ranges rejected as belonging to another function.
+        disowned: Vec<(u64, u64)>,
+    },
+}
+
+impl LiftError {
+    /// The VA ranges this failure lost, when it lost any.
+    ///
+    /// Only [`LiftError::NoLiftableBlocks`] loses specific bytes; the other two
+    /// reject the whole request before any range is considered.
+    pub fn affected_ranges(&self) -> &[(u64, u64)] {
+        match self {
+            LiftError::NoLiftableBlocks { disowned, .. } => disowned,
+            _ => &[],
+        }
+    }
+
+    /// True when every function in this binary will fail the same way, so a
+    /// caller sweeping many functions should stop rather than retry each one.
+    pub fn is_whole_binary(&self) -> bool {
+        matches!(self, LiftError::UnsupportedArchitecture { .. })
+    }
+}
+
+impl fmt::Display for LiftError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LiftError::UnsupportedArchitecture { arch } => {
+                write!(f, "no LLIR lifter exists for architecture {arch:?}")
+            }
+            LiftError::IncoherentCodeMode {
+                arch,
+                target,
+                thumb,
+                entry_va,
+            } => write!(
+                f,
+                "function at {entry_va:#x} is marked thumb={thumb}, which architecture {arch:?} \
+                 (target {target:?}) has no encoding mode for"
+            ),
+            LiftError::NoLiftableBlocks {
+                entry_va,
+                considered,
+                disowned,
+            } => write!(
+                f,
+                "function at {entry_va:#x} lifted no blocks ({considered} considered, \
+                 {} disowned)",
+                disowned.len()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LiftError {}
+
+/// Lift a byte window into LLIR using the decoder the validated mode selects.
+///
+/// Taking a [`CodeMode`] rather than `(arch, thumb)` is what removes the
+/// lifter's last untyped hole: the match is total, so there is no `_ =>
+/// Vec::new()` arm silently producing an empty block for an ISA nobody checked.
 ///
 /// `image` is the whole file the window came from. ARM32 needs it: its
 /// constants live in a literal pool read through `ldr Rd,[pc,#imm]`, and the
 /// pool sits after the function's last basic block — outside every per-block
 /// window this function lifts.
-fn lift_window(
-    bytes: &[u8],
-    start_va: u64,
-    arch: Arch,
-    thumb: bool,
-    image: &[u8],
-) -> Vec<LlirInstr> {
-    match arch {
-        Arch::X86 => lift_x86::lift_bytes(bytes, start_va, 32),
-        Arch::X86_64 => lift_x86::lift_bytes(bytes, start_va, 64),
-        Arch::AArch64 => lift_arm64::lift_bytes(bytes, start_va),
-        Arch::ARM => lift_arm32::lift_bytes_in_image(bytes, start_va, thumb, Some(image)),
-        _ => Vec::new(),
+fn lift_window(bytes: &[u8], start_va: u64, mode: CodeMode, image: &[u8]) -> Vec<LlirInstr> {
+    match mode {
+        CodeMode::X86_32 => lift_x86::lift_bytes(bytes, start_va, 32),
+        CodeMode::X86_64 => lift_x86::lift_bytes(bytes, start_va, 64),
+        CodeMode::AArch64 => lift_arm64::lift_bytes(bytes, start_va),
+        CodeMode::ArmA32 => lift_arm32::lift_bytes_in_image(bytes, start_va, false, Some(image)),
+        CodeMode::ArmThumb => lift_arm32::lift_bytes_in_image(bytes, start_va, true, Some(image)),
     }
 }
 
 /// Returns true when an LLIR lifter exists for the given architecture.
 pub fn supports_arch(arch: Arch) -> bool {
     matches!(arch, Arch::X86 | Arch::X86_64 | Arch::AArch64 | Arch::ARM)
+}
+
+/// Resolve and validate the instruction-encoding mode for one function, from
+/// its architecture and its own Thumb marker alone.
+///
+/// This runs *before* any byte is decoded. Previously the mode was re-derived
+/// inside the per-block loop as a raw `(arch, thumb)` pair and no combination
+/// was ever checked: a Thumb-marked x86-64 function was lifted as x86-64
+/// because the x86 arm of the decoder match simply ignores `thumb`. Neither the
+/// caller nor the output recorded that a mode marker had been discarded.
+pub fn validate_code_mode(arch: Arch, thumb: bool, entry_va: u64) -> Result<CodeMode, LiftError> {
+    match arch {
+        Arch::ARM => Ok(if thumb {
+            CodeMode::ArmThumb
+        } else {
+            CodeMode::ArmA32
+        }),
+        Arch::X86 | Arch::X86_64 | Arch::AArch64 if thumb => Err(LiftError::IncoherentCodeMode {
+            arch,
+            target: None,
+            thumb,
+            entry_va,
+        }),
+        Arch::X86 => Ok(CodeMode::X86_32),
+        Arch::X86_64 => Ok(CodeMode::X86_64),
+        Arch::AArch64 => Ok(CodeMode::AArch64),
+        other => Err(LiftError::UnsupportedArchitecture { arch: other }),
+    }
+}
+
+/// Resolve and validate the encoding mode for one function against a full
+/// [`TargetSpec`], which knows more than the bare architecture does.
+///
+/// Both answers must agree. `TargetSpec::code_mode_for_function` already
+/// rejected a Thumb marker on a non-ARM target, but `lift_function_from_image`
+/// threw that rejection away into a `?` on an `Option`, so the caller saw the
+/// same `None` it would have seen for an unsupported ISA.
+///
+/// The architecture is resolved first, so a RISC-V image is reported as an
+/// unsupported architecture rather than as a mode problem — which is what it
+/// actually is. `code_mode_for_function` answers `None` for both, and only the
+/// first is worth telling the analyst.
+pub fn validate_target_mode(target: TargetSpec, func: &Function) -> Result<CodeMode, LiftError> {
+    let arch = target.architecture();
+    let thumb = func.has_flag(crate::core::function::FunctionFlags::IS_THUMB);
+    let entry_va = func.entry_point.value;
+    let from_arch = validate_code_mode(arch, thumb, entry_va)?;
+    match target.code_mode_for_function(thumb) {
+        Some(from_target) if from_target == from_arch => Ok(from_arch),
+        _ => Err(LiftError::IncoherentCodeMode {
+            arch,
+            target: Some(target.id()),
+            thumb,
+            entry_va,
+        }),
+    }
 }
 
 /// Intersect a heuristic basic block with the authoritative chunks owned by
@@ -91,43 +248,50 @@ fn undecoded_bytes(va: u64) -> LlirInstr {
 
 /// Lift every basic block of `func` from `data` into LLIR blocks.
 ///
-/// Returns `None` when the architecture has no LLIR lifter yet.
+/// The target/mode combination is validated up front (see
+/// [`validate_code_mode`]); an unsupported architecture and an incoherent Thumb
+/// marker are distinct, typed rejections rather than a shared `None`.
 ///
 /// Blocks outside every range the function owns belong to a neighbouring
-/// function and are excluded. Blocks the function *does* own whose bytes cannot
-/// be located, or whose window is clipped by the end of the image, are kept and
-/// marked [`undecoded_bytes`] rather than skipped.
-pub fn lift_function_from_bytes(data: &[u8], func: &Function, arch: Arch) -> Option<LlirFunction> {
-    lift_function(data, func, arch, None)
+/// function and are excluded — and their exact ranges are reported on
+/// [`LiftError::NoLiftableBlocks`] when nothing is left. Blocks the function
+/// *does* own whose bytes cannot be located, or whose window is clipped by the
+/// end of the image, are kept and marked [`undecoded_bytes`] rather than
+/// skipped.
+pub fn lift_function_from_bytes(
+    data: &[u8],
+    func: &Function,
+    arch: Arch,
+) -> Result<LlirFunction, LiftError> {
+    let thumb = func.has_flag(crate::core::function::FunctionFlags::IS_THUMB);
+    let mode = validate_code_mode(arch, thumb, func.entry_point.value)?;
+    lift_function(data, func, mode, None)
 }
 
 /// Lift a function while reusing the immutable indices in `image`.
+///
+/// Validates the function's encoding mode against the image's full target, not
+/// just its architecture: the target is what knows whether a Thumb marker is
+/// meaningful here.
 pub fn lift_function_from_image(
     image: &crate::program::image::ProgramImage,
     func: &Function,
-) -> Option<LlirFunction> {
-    image
-        .target()
-        .code_mode_for_function(func.has_flag(crate::core::function::FunctionFlags::IS_THUMB))?;
-    lift_function(
-        image.bytes(),
-        func,
-        image.target().architecture(),
-        Some(image),
-    )
+) -> Result<LlirFunction, LiftError> {
+    let mode = validate_target_mode(*image.target(), func)?;
+    lift_function(image.bytes(), func, mode, Some(image))
 }
 
 fn lift_function(
     data: &[u8],
     func: &Function,
-    arch: Arch,
+    mode: CodeMode,
     image: Option<&crate::program::image::ProgramImage>,
-) -> Option<LlirFunction> {
-    if !supports_arch(arch) {
-        return None;
-    }
-
+) -> Result<LlirFunction, LiftError> {
     let mut blocks: Vec<LlirBlock> = Vec::with_capacity(func.basic_blocks.len());
+    // Kept for the failure report: a caller told only "nothing lifted" cannot
+    // tell an empty CFG from a function whose every block was attributed to a
+    // neighbour, and the second case names the bytes that went missing.
+    let mut disowned: Vec<(u64, u64)> = Vec::new();
 
     for bb in &func.basic_blocks {
         let Some((start, end)) =
@@ -136,6 +300,7 @@ fn lift_function(
             // Outside every range this function owns, so the block belongs to a
             // neighbouring function. Excluding it — and pruning edges into it
             // below — is correct, not lossy.
+            disowned.push((bb.start_address.value, bb.end_address.value));
             continue;
         };
 
@@ -159,7 +324,6 @@ fn lift_function(
         }
 
         let size = (end - start) as usize;
-        let thumb = func.has_flag(crate::core::function::FunctionFlags::IS_THUMB);
         let window = image
             .map_or_else(
                 || va_to_code_file_offset(data, start),
@@ -173,7 +337,7 @@ fn lift_function(
             // Emit the block as explicitly undecoded rather than dropping it.
             None => vec![undecoded_bytes(start)],
             Some((foff, end_off)) => {
-                let mut instrs = lift_window(&data[foff..end_off], start, arch, thumb, data);
+                let mut instrs = lift_window(&data[foff..end_off], start, mode, data);
                 if end_off - foff < size {
                     // The window was clipped by the end of the image, so this
                     // block's tail was never decoded. A silently short block
@@ -203,12 +367,16 @@ fn lift_function(
 
     recover_proven_direct_tail_calls(&mut blocks, func);
     resolve_pc_thunk_calls(&mut blocks, |target| {
-        image_pc_thunk_register(image, data, arch, target)
+        image_pc_thunk_register(image, data, mode, target)
     });
     annotate_resolved_switch_indices(&mut blocks);
 
     if blocks.is_empty() {
-        return None;
+        return Err(LiftError::NoLiftableBlocks {
+            entry_va: func.entry_point.value,
+            considered: func.basic_blocks.len(),
+            disowned,
+        });
     }
 
     // Every SSA/dominance/structuring consumer defines block index zero as the
@@ -250,7 +418,7 @@ fn lift_function(
     // boundary.
     lower_unknowns(&mut blocks);
 
-    Some(LlirFunction {
+    Ok(LlirFunction {
         entry_va: func.entry_point.value,
         blocks,
     })
@@ -607,10 +775,10 @@ fn resolve_pc_thunk_calls(
 fn image_pc_thunk_register(
     image: Option<&crate::program::image::ProgramImage>,
     data: &[u8],
-    arch: Arch,
+    mode: CodeMode,
     va: u64,
 ) -> Option<String> {
-    if arch != Arch::X86 {
+    if mode != CodeMode::X86_32 {
         return None;
     }
     let offset = image.map_or_else(
@@ -739,10 +907,13 @@ mod tests {
         .expect("sample binary");
         let entry = 0u64;
         assert_eq!(
-            image_pc_thunk_register(None, &data, Arch::X86_64, entry),
+            image_pc_thunk_register(None, &data, CodeMode::X86_64, entry),
             None
         );
-        assert_eq!(image_pc_thunk_register(None, &data, Arch::ARM, entry), None);
+        assert_eq!(
+            image_pc_thunk_register(None, &data, CodeMode::ArmA32, entry),
+            None
+        );
     }
 
     #[test]
@@ -1113,7 +1284,7 @@ mod tests {
             let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
             let mut checked = 0;
             for f in &funcs {
-                if let Some(lf) = lift_function_from_bytes(&data, f, arch) {
+                if let Ok(lf) = lift_function_from_bytes(&data, f, arch) {
                     for b in &lf.blocks {
                         for i in &b.instrs {
                             assert!(
@@ -1131,14 +1302,104 @@ mod tests {
         }
     }
 
+    /// An architecture with no lifter names itself in the rejection. It is not
+    /// the same answer as "this function lifted nothing", which is the whole
+    /// reason the return type stopped being an `Option`.
     #[test]
-    fn returns_none_for_unsupported_arch() {
+    fn an_unsupported_arch_is_named_in_the_rejection() {
         use crate::core::address::{Address, AddressKind};
         use crate::core::function::{Function, FunctionKind};
         let entry = Address::new(AddressKind::VA, 0, 64, None, None).unwrap();
         let f = Function::new("f".into(), entry, FunctionKind::Normal).unwrap();
-        assert!(lift_function_from_bytes(&[0u8; 0], &f, Arch::MIPS64).is_none());
-        assert!(lift_function_from_bytes(&[0u8; 0], &f, Arch::RISCV64).is_none());
+        for arch in [Arch::MIPS64, Arch::RISCV64] {
+            assert_eq!(
+                lift_function_from_bytes(&[0u8; 0], &f, arch),
+                Err(LiftError::UnsupportedArchitecture { arch })
+            );
+        }
+        // A *supported* arch with nothing to lift is a different verdict, and
+        // it is per-function rather than per-binary.
+        let empty = lift_function_from_bytes(&[0u8; 0], &f, Arch::X86_64);
+        assert_eq!(
+            empty,
+            Err(LiftError::NoLiftableBlocks {
+                entry_va: 0,
+                considered: 0,
+                disowned: Vec::new(),
+            })
+        );
+        assert!(!empty.unwrap_err().is_whole_binary());
+    }
+
+    /// A Thumb marker on an ISA with no Thumb encoding is rejected up front.
+    ///
+    /// Before the mode was validated, the marker was passed to `lift_window`
+    /// and the x86 arm simply ignored it: the function was decoded as x86-64
+    /// and nothing anywhere recorded that a mode marker had been discarded.
+    #[test]
+    fn a_thumb_marker_on_a_non_arm_arch_is_rejected_before_decoding() {
+        use crate::core::address::{Address, AddressKind};
+        use crate::core::function::{Function, FunctionFlags, FunctionKind};
+        let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
+        let mut f = Function::new("f".into(), entry, FunctionKind::Normal).unwrap();
+        f.add_flag(FunctionFlags::IS_THUMB);
+        assert_eq!(
+            lift_function_from_bytes(&[0u8; 0], &f, Arch::X86_64),
+            Err(LiftError::IncoherentCodeMode {
+                arch: Arch::X86_64,
+                target: None,
+                thumb: true,
+                entry_va: 0x1000,
+            })
+        );
+        // The same marker on ARM32 selects the Thumb decoder rather than failing.
+        assert_eq!(
+            validate_code_mode(Arch::ARM, true, 0x1000),
+            Ok(CodeMode::ArmThumb)
+        );
+        assert_eq!(
+            validate_code_mode(Arch::ARM, false, 0x1000),
+            Ok(CodeMode::ArmA32)
+        );
+    }
+
+    /// A function whose every block belongs to a neighbour reports the exact
+    /// ranges it disowned, not merely that it produced nothing.
+    #[test]
+    fn a_fully_disowned_function_reports_the_ranges_it_lost() {
+        use crate::core::address::{Address, AddressKind};
+        use crate::core::address_range::AddressRange;
+        use crate::core::basic_block::BasicBlock;
+        use crate::core::function::{Function, FunctionKind};
+
+        let entry = Address::new(AddressKind::VA, 0x1000, 64, None, None).unwrap();
+        let mut f = Function::new("bounded".into(), entry.clone(), FunctionKind::Normal).unwrap();
+        f.range = Some(AddressRange::new(entry, 0x10, None).unwrap());
+        // Both blocks start past the owned range, so both belong to the next
+        // function.
+        for (start, end) in [(0x2000u64, 0x2004u64), (0x3000, 0x3008)] {
+            f.basic_blocks.push(BasicBlock::new(
+                format!("bb{start:x}"),
+                Address::new(AddressKind::VA, start, 64, None, None).unwrap(),
+                Address::new(AddressKind::VA, end, 64, None, None).unwrap(),
+                0,
+                None,
+                None,
+            ));
+        }
+        let error = lift_function_from_bytes(&[0u8; 0], &f, Arch::X86_64).unwrap_err();
+        assert_eq!(
+            error.affected_ranges(),
+            &[(0x2000, 0x2004), (0x3000, 0x3008)]
+        );
+        assert!(matches!(
+            error,
+            LiftError::NoLiftableBlocks {
+                entry_va: 0x1000,
+                considered: 2,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1256,7 +1517,7 @@ mod tests {
             };
             let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
             for f in &funcs {
-                let Some(lf) = lift_function_from_bytes(&data, f, arch) else {
+                let Ok(lf) = lift_function_from_bytes(&data, f, arch) else {
                     continue;
                 };
                 lifted += 1;

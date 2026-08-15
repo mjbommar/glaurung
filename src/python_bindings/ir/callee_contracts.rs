@@ -443,7 +443,7 @@ fn recover_direct_callee_definition(
             &targeted
         }
     };
-    let mut lifted = lift_function_from_image(image, callee)?;
+    let mut lifted = lift_function_from_image(image, callee).ok()?;
     inline_soft_helper_calls_in(&mut lifted, address_names);
     annotate_calls_in(&mut lifted, cc, address_names);
 

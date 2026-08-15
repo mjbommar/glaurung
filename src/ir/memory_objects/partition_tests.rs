@@ -72,7 +72,7 @@ fn real_x86_function(
         function,
         crate::core::binary::Arch::X86_64,
     )
-    .unwrap_or_else(|| panic!("lift {name}"));
+    .unwrap_or_else(|error| panic!("lift {name}: {error}"));
     // Production lowers MIR from call-annotated LLIR, and an argument register
     // is where a frame address leaves the function.
     crate::ir::abi::annotate_calls(&mut lifted, crate::ir::call_args::CallConv::SysVAmd64);

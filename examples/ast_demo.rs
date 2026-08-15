@@ -15,7 +15,7 @@ fn main() {
     let data = std::fs::read(&path).expect("read sample");
     let (funcs, _) = analyze_functions_bytes(&data, &Budgets::default());
     for f in &funcs[..funcs.len().min(4)] {
-        if let Some(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
+        if let Ok(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
             let sinfo = ssa::compute_ssa(&lf);
             let r = structure::recover(&lf, &sinfo);
             let astf = ast::lower(&lf, &r, f.name.clone());

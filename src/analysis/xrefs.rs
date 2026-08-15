@@ -532,8 +532,15 @@ pub fn function_data_xrefs(
         if out.len() >= max_xrefs {
             break;
         }
-        let Some(lf) = lift_function_from_bytes(data, func, arch) else {
-            continue;
+        let lf = match lift_function_from_bytes(data, func, arch) {
+            Ok(lf) => lf,
+            // A whole-binary failure (no lifter for this ISA) will repeat
+            // identically for every remaining function; only a per-function
+            // failure is worth stepping over. Under the old `Option` return the
+            // caller could not tell the two apart and re-ran CFG-shaped work
+            // once per function on an architecture that can never lift.
+            Err(error) if error.is_whole_binary() => break,
+            Err(_) => continue,
         };
         let remaining = max_xrefs.saturating_sub(out.len());
         for xref in llir_to_data_xrefs(&lf, &data_ranges, bits, remaining) {
@@ -1042,7 +1049,7 @@ mod tests {
         let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
         let mut any_xref = false;
         for f in &funcs {
-            if let Some(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
+            if let Ok(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
                 let xrefs = llir_to_data_xrefs(&lf, &ranges, 64, 64);
                 if !xrefs.is_empty() {
                     any_xref = true;

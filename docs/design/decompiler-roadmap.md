@@ -652,13 +652,26 @@ optimise.
 
 ## Safety and reliability plan
 
-- [ ] Replace semantically ambiguous `Option` results with typed errors or
-  partial artifacts carrying exact reasons and affected ranges.
+- [~] Replace semantically ambiguous `Option` results with typed errors or
+  partial artifacts carrying exact reasons and affected ranges. **The lifter
+  boundary is done** (entry 35): `lift_function_from_bytes`/`_from_image` return
+  `Result<LlirFunction, LiftError>` with three distinguishable reasons, and
+  `LiftError::NoLiftableBlocks` carries the exact disowned VA ranges. Two
+  analyst-visible Python messages that guessed at the reason were replaced with
+  the real one. Other ambiguous `Option`s remain; the ranking is in entry 35.
 - [ ] Attach address, instruction, operand, and source origin to every lifted
   instruction and value.
 - [ ] Preserve skipped bytes and unresolved CFG edges to API diagnostics.
-- [ ] Validate target/mode/ABI combinations before lifting.
-- [ ] Require declared register and memory effects for every call/intrinsic.
+- [x] Validate target/mode/ABI combinations before lifting. `validate_code_mode`
+  and `validate_target_mode` resolve one `CodeMode` before any byte is decoded,
+  and `lift_window` now matches on that mode exhaustively instead of on
+  `(arch, thumb)` with a silent `_ => Vec::new()` arm. A Thumb marker on a
+  non-ARM target is a typed rejection naming the function (entry 35).
+- [~] Require declared register and memory effects for every call/intrinsic.
+  Censused, not asserted (entry 35): `ir::effect_census` measures the corpus, the
+  last `Op::Unknown` escape into a public API is closed, and two invariant tests
+  hold the line. `Op::Unknown` still exists as the per-arch lifters' internal
+  marker, deliberately — entry 35 records why it cannot be deleted yet.
 - [ ] Verify every IR boundary and every graph-changing pass.
 - [ ] Keep manual/debug facts immutable by default; inference cannot overwrite
   them.

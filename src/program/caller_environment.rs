@@ -32,7 +32,7 @@ fn caller_ast(
         ..*budgets
     };
     let function = discover_function_image_at(image, &targeted_budgets, owner)?;
-    let mut lifted = lift_function_from_image(image, &function)?;
+    let mut lifted = lift_function_from_image(image, &function).ok()?;
     crate::ir::abi::annotate_calls(&mut lifted, cc);
     let ssa = crate::ir::ssa::compute_ssa(&lifted);
     let region = crate::ir::structure::recover_verified(&lifted, &ssa);

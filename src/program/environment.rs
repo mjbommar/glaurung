@@ -847,7 +847,7 @@ pub fn recover_program_environment(
         let Some(function) = discover_function_image_at(image, &targeted_budgets, owner) else {
             continue;
         };
-        let Some(lifted) = lift_function_from_image(image, &function) else {
+        let Ok(lifted) = lift_function_from_image(image, &function) else {
             continue;
         };
         let targets = callback_targets(&lifted, image, cc, &api_targets);

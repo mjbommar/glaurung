@@ -4987,3 +4987,304 @@ consumer, a lane would have moved.
 DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
 fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. **No
 baseline was refreshed and nothing was committed.**
+
+## Entry 35 — Three reasons wearing one `None`, and a census that moved the defect
+
+Three bullets from the roadmap's "Safety and reliability plan", which was 0 of
+10 when this started: typed errors instead of ambiguous `Option`s, up-front
+target/mode validation, and declared effects for every call and intrinsic.
+
+(Numbered 35 rather than 34: a parallel session claimed 34 while this was in
+flight. It also silently overwrote a shared scratch file this entry was drafted
+in, which is its own small lesson about agents sharing a scratchpad — the draft
+was recovered, but the first append put someone else's entry into this file.)
+
+Two of the three landed close to the brief. The third did not, because the brief
+described a defect that had already been fixed — and measuring it moved the real
+defect somewhere the brief did not look.
+
+### The `Option` that meant three things
+
+`lift_function_from_bytes` and `lift_function_from_image` returned
+`Option<LlirFunction>`. `None` meant, indistinguishably:
+
+1. **no LLIR lifter exists for this architecture** — permanent for the whole
+   binary; every remaining function will fail identically;
+2. **the function's encoding mode contradicts its target** — a defect in one
+   function record, which the caller can name;
+3. **the architecture is supported and this function owned no liftable block** —
+   per-function data loss, with specific VA ranges attached.
+
+A caller must treat those differently, and two callers were demonstrably
+guessing. `python_bindings/ir.rs` raised, twice:
+
+```rust
+.ok_or_else(|| PyValueError::new_err("LLIR lifter does not support this architecture"))
+```
+
+for a `None` that is condition 3 as often as condition 1 — so an x86-64 function
+whose blocks were all attributed to a neighbouring symbol told the analyst the
+x86-64 lifter does not exist. `python_bindings/exec.rs` was more honest about its
+own ignorance and printed the guess out loud:
+
+```rust
+.ok_or_else(|| PyValueError::new_err("failed to lift function (unsupported arch?)"))
+```
+
+The question mark is the `Option` leaking into the user interface.
+
+Both functions now return `Result<LlirFunction, LiftError>` with those three
+variants. `LiftError::NoLiftableBlocks` carries `entry_va`, how many blocks were
+`considered`, and the exact `disowned: Vec<(u64, u64)>` ranges rejected as
+belonging to another function — the "affected ranges" the roadmap bullet asks
+for, and previously discarded inside the `continue` that skipped them.
+`LiftError::is_whole_binary()` exists so a sweep can distinguish 1 from 2 and 3;
+`analysis/xrefs.rs` now `break`s on it instead of re-running per-function work
+across a binary that can never lift.
+
+54 call sites moved. Most are tests and most became `Ok(...)`; the production
+sites that legitimately do not care about the reason say `.ok()` explicitly,
+which is a shorter and more honest statement than the `?` that used to hide
+there.
+
+### Validating the mode before decoding anything
+
+The second bullet turned out to be the same defect from the other end.
+
+`lift_function_from_image` did check the mode — and threw the answer away:
+
+```rust
+image.target().code_mode_for_function(func.has_flag(FunctionFlags::IS_THUMB))?;
+```
+
+A `?` on an `Option`, producing the same `None` as an unsupported ISA. The check
+existed; nothing downstream could tell it had fired.
+
+`lift_function_from_bytes` did not check at all. It carried `(arch, thumb)` into
+the per-block loop and re-derived the decoder there:
+
+```rust
+match arch {
+    Arch::X86 => lift_x86::lift_bytes(bytes, start_va, 32),
+    ...
+    _ => Vec::new(),
+}
+```
+
+The x86 arms ignore `thumb`. A Thumb-marked x86-64 function was therefore lifted
+as x86-64 and nothing anywhere recorded that a mode marker had been discarded —
+and the `_ => Vec::new()` arm silently produced an empty block for any ISA that
+slipped past `supports_arch`.
+
+Now `validate_code_mode(arch, thumb, entry_va)` and
+`validate_target_mode(target, func)` resolve exactly one `CodeMode` before a byte
+is read, and `lift_window` takes that `CodeMode` and matches on it exhaustively.
+There is no `_` arm left to fall through.
+
+**Honest scope:** the CFG pass sets `IS_THUMB` only under
+`matches!(arch, BArch::ARM)` (`cfg.rs:1312`), so the internal pipeline does not
+currently produce this combination. This is not a reproduced defect. It is
+reachable though: `FunctionFlags.IS_THUMB` is a public Python class attribute
+(`= 256`) with `Function.set_flags` and `Function.add_flag` next to it, the flag
+round-trips through persistence, and `lift_function_from_bytes` is a `pub` API
+that takes its `Arch` from the caller rather than deriving it from the function.
+The guard costs one match arm and converts a silent discard into a named
+rejection.
+
+### The third bullet was already done, so I measured it instead
+
+The brief: `Op::Unknown { mnemonic }` "still exists and declares no footprint at
+all, which is unsound for dataflow". True of the type. Not true of anything that
+reaches a consumer, and this had been closed before I arrived:
+
+* `lift_function` ends with `lower_unknowns`, which rewrites every residual
+  `Op::Unknown` into `Op::opaque` — an `Op::Intrinsic` with no ins, no outs, and
+  `reads_mem`/`writes_mem` both set.
+* `memory_ssa::memory_effects` already treats `Op::Unknown` as
+  `unknown_effects(true, true)` regardless.
+* `analysis/linux_symbolic_frontend.rs` migrates its own raw-lifter output, and
+  additionally *rejects* unmodelled control flow before doing so.
+* `ir/verify.rs` reports `VerifyError::ResidualUnknown`, and two tests in
+  `lift_function.rs` already asserted zero residuals over sample binaries.
+
+So a census, per the brief. `src/ir/effect_census.rs` sorts every effect-bearing
+op into four buckets; `src/ir/effect_census_tests.rs` runs it over nine committed
+sample binaries across three ISAs. This is a measurement, not a table:
+
+```
+files=9  functions=332  instructions=26185
+
+residual Op::Unknown            0
+opaque intrinsics              61  over 10 names
+modelled intrinsics             8  over  2 names   (x86.umul_hi.64, x86.clz.64)
+calls, raw lift:  with_effects  0   placeholder 65   without_effects 566
+
+per ISA:
+  X86_64   24842 instrs   45 opaque  (0.18%)  pmovmskb 12, tzcnt 10, ud2 7,
+                                              hlt 5, pause 4, pcmpgtb 3,
+                                              pcmpeqb 2, pshuflw 1, punpcklbw 1
+  AArch64   1101 instrs    0 opaque  (0%)
+  ARM        242 instrs   16 opaque  (6.6%)   add 16
+```
+
+Two things fall out of that table that the brief did not predict.
+
+**One: ARM32 loses `add`.** 6.6% of all ARM32 LLIR in this corpus is an opaque
+intrinsic, every one of them named `add`, against 0.18% on x86-64 and 0% on
+AArch64. These are sound — they read and write all memory — and they are
+worthless: an ADD is a pure register operation with a completely known
+footprint, and modelling it as "clobbers everything" poisons every dataflow
+result that flows through it. On the architecture design rule 11 calls a
+conformance architecture, not an afterthought. That is a specific, measured
+lifter gap and it is the most valuable thing this census produced. I did not fix
+it — it is an ARM32 decoder-coverage job, not a safety-plan job, and it wants its
+own patch.
+
+**Two: the undeclared footprint is on calls, not instructions.** Raw
+`lift_function_from_bytes` output has 566 calls with `effects: None` and 65 with
+a placeholder (`is_tail_call` set, no argument, no result — attached by
+`recover_proven_direct_tail_calls` before any convention is known). For a call
+with `effects: None`, `use_def::def_uses` returns *no def and no use*:
+
+```rust
+// Not annotated (see `abi::annotate_calls`): report what is certain
+// rather than guessing at an ABI.
+None => None,
+```
+
+That is design rule 5's forbidden reading — unknown meaning no effect — and the
+comment two lines above it already records what it costs ("told every consumer
+that the return register survived the call ... which is why `fib` used its own
+argument in place of the returned value").
+
+The window is real but it is *narrow and structural*: `abi::annotate_calls` is
+the next thing every production path runs, and it closes every one of the 631,
+placeholders included (it recognises the tail-call shape explicitly and refills
+it). `every_raw_lifted_call_is_closed_by_the_abi_pass` measures both halves. I
+did **not** make `def_uses` conservative for un-annotated calls: that changes
+liveness and DCE for every consumer, and the correct fix is to make the
+un-annotated state unrepresentable rather than to guess an ABI inside `def_uses`.
+That is a larger change than this brief, and it should be measured against the
+fixture corpus on its own.
+
+**One escape path did close.** `python_bindings/ir.rs::lift_for_arch` — the
+public `glaurung.ir.lift_bytes` API — calls the per-arch lifters directly and so
+never ran `lower_unknowns`, while being an API a caller may build dataflow on.
+`ir.rs:375` renders `kind: "unknown"` for exactly this. It now applies the same
+lowering. No Python test required the `unknown` kind; `test_ir.py` merely listed
+it among the permitted kinds.
+
+**Why `Op::Unknown` still exists**, precisely. It is the per-arch lifters'
+internal "not modelled" marker, and lowering it at the source would destroy
+information one consumer needs: `linux_symbolic_frontend` inspects the mnemonic
+of an `Op::Unknown` through `is_unmodeled_control_flow` and *rejects the whole
+symbol* before lowering. After lowering, an opaque `Intrinsic` named `br` is
+indistinguishable from a deliberately-opaque intrinsic named `br`. Keeping
+`Unknown` internal and migrating it at exactly two boundaries is what makes that
+distinction expressible. The 300-odd producer sites in `lift_x86.rs`,
+`lift_arm64` and `lift_arm32` should stay as they are; their unit tests assert on
+the marker, and the marker is doing a job.
+
+### What this does not claim
+
+The first bullet is `[~]`, not `[x]`. One `Option` boundary is typed; the shape
+recurs. The survey covered `src/ir`, `src/program`, `src/analysis`,
+`src/python_bindings`, `src/target`, `src/symbols` and `src/debug`; the four
+below are the ones where the fusion *and* a caller acting on the wrong half were
+both read in the source. None were converted here — mass-converting `Option`s
+whose `None` means exactly one thing is churn, not safety.
+
+**1. `ProgramImage::memory_kind_at` (`src/program/image.rs:420`).** The doc
+comment already confesses it — "conflicting overlapping section claims fail
+closed as `None`" — so `None` is either "no section covers this VA" or "two
+sections disagree about it":
+
+```rust
+let first = matches.next()?;                        // no section covers va
+matches.all(|kind| kind == first).then_some(first)  // sections disagree
+```
+
+Those are opposite conclusions, and the caller draws the wrong one.
+`references.rs:697`:
+
+```rust
+if self.image.memory_kind_at(va).is_none() {
+    return InterpretationKind::Unknown(UnresolvedReason::UnmappedReference);
+}
+```
+
+`UnmappedReference` is proof the value is not a pointer. For the disagreement
+case it is simply false — and the right variant is already in the same enum
+sixty lines up: `UnresolvedReason::ConflictingEvidence`, documented as "two
+claims of equal rank disagree; selecting one would be a guess". This is the
+strongest remaining candidate in the tree: two causes, opposite meanings, one
+caller, and the correct answer already spelled.
+
+**2. `va_to_code_file_offset` (`src/program/image.rs:431`,
+`src/analysis/entry.rs:114`).** `FileMapping::translate` returns `None` for a VA
+outside every mapping, for header arithmetic that overflows, and for an offset
+past the end of the bytes we hold — that last one is *file truncation*, which is
+user-fixable and reads identically to "this address is not part of the program".
+A fourth cause is invisible at the call: a section with no file range is skipped
+at index-build time, so a legitimately mapped `.bss` VA looks like an unmapped
+one. Two user-visible messages guess the same sentence in two independent entry
+points (`python_bindings/ir.rs:739`, `disasm/py_api.rs:211`: `"no mapping for VA
+0x{:x}"`), and `analysis/cfg.rs:510` converts the failure into `unwrap_or(0)` —
+an unmapped executable range silently becomes file offset zero. 13 production
+call sites.
+
+**3. `discover_function_image_at` / `discover_function` (`analysis/cfg.rs:4341`,
+`:1300`).** Contains the same `UnsupportedArchitecture` just typed one layer up,
+still as an `Option`: `registry::for_arch(darch, end)?` at `cfg.rs:1311`. It also
+fuses "the image has no executable region at all" with "this VA is not code"
+into one guard, and discards an entire recovered function when a single leader
+fails to decode (`if s >= e { return None; }`) — with a comment already recording
+that this "crashed the whole decompile of any binary with an undecodable branch
+target". Six production call sites, all `?` or `continue`. Two Python messages
+assert `"no function discovered at {:#x}"` for causes that include "there is no
+decoder for this ISA".
+
+**4. `disasm::registry::for_arch` (`src/disasm/registry.rs:61`).** Fuses "we
+never identified the ISA", "capstone has no mapping for this arch", and
+"capstone itself refused to open it — this build lacks that backend". Only the
+third is a packaging problem with an actionable fix. `registry.rs:103` then
+flattens all three into `DisassemblerError::UnsupportedArchitecture()`, which
+carries no payload at all, not even the architecture it rejected.
+
+`src/ir/mir/query.rs` is the in-repo precedent worth copying for all four:
+`UnknownReason` / `NoDefinition` / `Unreachable` / `Set { undefined_path }` is
+exactly this shape done properly.
+
+### Verification
+
+```
+cargo build --features python-ext   17 warnings before, 17 after; 0 "never used"
+  (after `touch src/lib.rs`)        both times. The touch is load-bearing: cargo
+                                    does not re-emit warnings for a cached crate,
+                                    so a warning census run without it silently
+                                    measures nothing.
+cargo test --features python-ext    2487 passed, 0 failed, 2 ignored. The brief
+                                    records 2483 at HEAD; this patch adds four
+                                    non-ignored tests (two on LiftError, two on
+                                    the census) and one ignored reporting test.
+tools/dectest.py @o0                364 lanes, no regressions, no improvements
+tools/dectest.py @o2                364 lanes, no regressions, no improvements
+                                    (both re-run against a rebuilt .so after the
+                                    last source edit, not against the earlier one)
+pytest test_ir.py                   36 passed, 7 skipped
+pytest test_exec_engine.py +        23 passed
+  test_annotated_lift_grounding.py
+rustfmt --edition 2021              on the 24 touched Rust files
+```
+
+No regressions and no improvements is the predicted result: every conversion is
+`None` -> `Err(reason)` at the same decision points, and the census adds no
+production behaviour. It was run to falsify that, not to confirm it — a lane
+moving would have meant a `?` read as infallible was not.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`, and
+`pytest python/tests/` in full. **No baseline was refreshed and nothing was
+committed.**

@@ -958,7 +958,7 @@ mod tests {
             },
         );
         for f in &funcs {
-            if let Some(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
+            if let Ok(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
                 let info = compute_ssa(&lf);
                 // No assertions about exact counts — just that SSA completes
                 // on real input without panics and produces internally-

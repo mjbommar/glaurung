@@ -1177,7 +1177,7 @@ mod tests {
 
         let mut ran = 0usize;
         for f in &funcs {
-            let Some(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) else {
+            let Ok(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) else {
                 continue;
             };
             let mut m = machine();
@@ -1244,7 +1244,7 @@ mod tests {
 
         let mut ran = 0usize;
         for f in &funcs {
-            let Some(lf) = lift_function_from_bytes(&data, f, Arch::AArch64) else {
+            let Ok(lf) = lift_function_from_bytes(&data, f, Arch::AArch64) else {
                 continue;
             };
             let mut m = Machine::new_with_arch(Concrete, RegArch::AArch64);

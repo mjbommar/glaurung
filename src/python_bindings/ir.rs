@@ -665,10 +665,10 @@ fn recognise_machine_frame(f: &mut crate::ir::ast::Function, cc: crate::ir::call
 
 fn lift_for_arch(data: &[u8], start_va: u64, bits: u32, arch: &str) -> PyResult<Vec<LlirInstr>> {
     let a = arch.to_ascii_lowercase();
-    match a.as_str() {
-        "x86" => Ok(lift_x86::lift_bytes(data, start_va, 32)),
-        "x86_64" | "x64" | "amd64" => Ok(lift_x86::lift_bytes(data, start_va, 64)),
-        "arm64" | "aarch64" => Ok(lift_arm64::lift_bytes(data, start_va)),
+    let mut instructions = match a.as_str() {
+        "x86" => lift_x86::lift_bytes(data, start_va, 32),
+        "x86_64" | "x64" | "amd64" => lift_x86::lift_bytes(data, start_va, 64),
+        "arm64" | "aarch64" => lift_arm64::lift_bytes(data, start_va),
         // If arch was omitted, fall back to bits= for x86 back-compat.
         "" => {
             if bits != 32 && bits != 64 {
@@ -676,12 +676,27 @@ fn lift_for_arch(data: &[u8], start_va: u64, bits: u32, arch: &str) -> PyResult<
                     "bits must be 32 or 64 when arch is omitted",
                 ));
             }
-            Ok(lift_x86::lift_bytes(data, start_va, bits))
+            lift_x86::lift_bytes(data, start_va, bits)
         }
-        _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "unsupported arch: {arch}"
-        ))),
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unsupported arch: {arch}"
+            )))
+        }
+    };
+    // This was the last path on which a footprint-declaring-nothing `Op::Unknown`
+    // reached a consumer. `lift_function` lowers every residual `Unknown` to a
+    // conservative `Op::Intrinsic` at the function boundary, but this entry point
+    // calls the per-arch lifters directly and so skipped that migration — while
+    // being a *public* API whose output a caller may build dataflow on. The
+    // per-arch lifters keep emitting `Unknown` internally; their unit tests assert
+    // on it. Nothing crossing into Python does.
+    for instruction in &mut instructions {
+        if let Op::Unknown { mnemonic } = &instruction.op {
+            instruction.op = Op::opaque(mnemonic.clone());
+        }
     }
+    Ok(instructions)
 }
 
 /// Lift raw bytes into a list of LLIR op dicts.
@@ -1034,9 +1049,12 @@ pub(super) fn decompile_at_session(
     crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
-    let lf_raw = lift_function_from_image(&image, &func).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
-    })?;
+    // The reason is the analyst-visible one. This used to blame the
+    // architecture unconditionally, so an x86-64 function whose blocks were all
+    // attributed to a neighbour reported "LLIR lifter does not support this
+    // architecture" about a lifter that supports it perfectly well.
+    let lf_raw = lift_function_from_image(&image, &func)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
     // call participates in def/use like any other instruction instead of every later
     // pass having to special-case it (see `ir::abi`).
@@ -1343,9 +1361,12 @@ fn decompile_range_at_py(
     };
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
-    let lf_raw = lift_function_from_image(&image, &func).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err("LLIR lifter does not support this architecture")
-    })?;
+    // The reason is the analyst-visible one. This used to blame the
+    // architecture unconditionally, so an x86-64 function whose blocks were all
+    // attributed to a neighbour reported "LLIR lifter does not support this
+    // architecture" about a lifter that supports it perfectly well.
+    let lf_raw = lift_function_from_image(&image, &func)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
     // call participates in def/use like any other instruction instead of every later
     // pass having to special-case it (see `ir::abi`).
@@ -2582,7 +2603,7 @@ fn decompile_all_py(
         // never notices a signal. This is the supported way to stay
         // interruptible without releasing: it raises `KeyboardInterrupt` here.
         py.check_signals()?;
-        let Some(lf_raw) = lift_function_from_image(&image, func) else {
+        let Ok(lf_raw) = lift_function_from_image(&image, func) else {
             continue;
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.
@@ -2863,7 +2884,7 @@ fn decompile_many_py(
         if !wanted.contains(&func_va) {
             continue;
         }
-        let Some(lf_raw) = lift_function_from_image(&image, func) else {
+        let Ok(lf_raw) = lift_function_from_image(&image, func) else {
             continue;
         };
         // See `ir::abi`: the ABI's call effects go on the calls before SSA.

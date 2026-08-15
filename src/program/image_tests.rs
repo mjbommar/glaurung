@@ -260,7 +260,7 @@ fn llir_lifting_reuses_the_owned_image_without_changing_instructions() {
     let mut contradictory = function.clone();
     contradictory.add_flag(crate::core::function::FunctionFlags::IS_THUMB);
     assert!(
-        crate::ir::lift_function::lift_function_from_image(&image, &contradictory).is_none(),
+        crate::ir::lift_function::lift_function_from_image(&image, &contradictory).is_err(),
         "a per-function mode marker must belong to the image target"
     );
 }

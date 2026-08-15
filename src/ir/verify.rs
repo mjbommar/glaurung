@@ -319,7 +319,7 @@ mod tests {
         );
         let mut checked = 0;
         for f in &funcs {
-            if let Some(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
+            if let Ok(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
                 let fatal = verify_fatal(&lf);
                 assert!(
                     fatal.is_empty(),

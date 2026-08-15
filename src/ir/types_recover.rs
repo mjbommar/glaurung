@@ -4922,7 +4922,7 @@ mod tests {
                 function,
                 crate::core::binary::Arch::X86_64,
             )
-            .unwrap_or_else(|| panic!("lift {name}"));
+            .unwrap_or_else(|error| panic!("lift {name}: {error}"));
             let ssa = compute_ssa(&lifted);
             let slots = crate::ir::value_number::live_in_arg_slots_llir(
                 &lifted,
@@ -5004,7 +5004,7 @@ mod tests {
                     function,
                     crate::core::binary::Arch::X86_64,
                 )
-                .unwrap_or_else(|| panic!("lift {compiler} {name}"));
+                .unwrap_or_else(|error| panic!("lift {compiler} {name}: {error}"));
                 let ssa = compute_ssa(&lifted);
                 let slots = crate::ir::value_number::live_in_arg_slots_llir(
                     &lifted,
@@ -5088,7 +5088,7 @@ int never_returns(void) { for (;;) {} }
                 function,
                 crate::core::binary::Arch::X86_64,
             )
-            .unwrap_or_else(|| panic!("lift {name}"));
+            .unwrap_or_else(|error| panic!("lift {name}: {error}"));
             // The production pipeline attaches ABI call inputs/results before
             // SSA and type recovery.  Tail-call materialization now happens at
             // the LLIR boundary, so this fixture must exercise the same order:
@@ -7256,7 +7256,7 @@ int never_returns(void) { for (;;) {} }
         );
         let mut saw_pointer = false;
         for f in &funcs {
-            if let Some(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
+            if let Ok(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
                 let tm = recover_types(&lf);
                 if tm
                     .iter()

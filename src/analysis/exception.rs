@@ -941,7 +941,7 @@ mod tests {
 
         let (mut checked, mut abutting, mut unexplained) = (0usize, 0usize, 0usize);
         for function in &funcs {
-            let Some(lf) = crate::ir::lift_function::lift_function_from_bytes(
+            let Ok(lf) = crate::ir::lift_function::lift_function_from_bytes(
                 &data,
                 function,
                 crate::core::binary::Arch::X86_64,

@@ -75,8 +75,10 @@ fn emulate_function_py(
             PyValueError::new_err(format!("no function discovered at {:#x}", entry_va))
         })?;
 
+    // "(unsupported arch?)" was the conflation made visible: the message had to
+    // guess, because the `Option` it came from could not say.
     let lf = lift_function_from_bytes(&data, func, cfg_arch)
-        .ok_or_else(|| PyValueError::new_err("failed to lift function (unsupported arch?)"))?;
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
     let mut m = Machine::new_with_arch(Concrete, reg_arch);
     // A sane, aligned stack pointer so push/pop/[sp+d] land in plausible memory.

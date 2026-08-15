@@ -1049,7 +1049,7 @@ mod tests {
             };
             let (funcs, _cg) = analyze_functions_bytes(&data, &budgets);
             for f in &funcs {
-                let Some(lf) = crate::ir::lift_function::lift_function_from_bytes(&data, f, arch)
+                let Ok(lf) = crate::ir::lift_function::lift_function_from_bytes(&data, f, arch)
                 else {
                     continue;
                 };

@@ -42,6 +42,7 @@ pub mod definedness;
 pub mod direct_output;
 pub mod dwarf_fields;
 pub(crate) mod dwarf_type_env;
+pub mod effect_census;
 pub(crate) mod effectful_loop;
 pub mod exception_recover;
 pub mod expr_reconstruct;
@@ -96,6 +97,8 @@ pub mod widen;
 pub mod winapi_prototypes;
 pub mod x86_prologue;
 
+#[cfg(test)]
+mod effect_census_tests;
 #[cfg(test)]
 mod health_tests;
 

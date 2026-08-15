@@ -2318,7 +2318,7 @@ mod tests {
             },
         );
         for f in &funcs {
-            if let Some(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
+            if let Ok(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
                 let ssa = compute_ssa(&lf);
                 let r = recover(&lf, &ssa);
                 let mut ast = lower(&lf, &r, f.name.clone());
