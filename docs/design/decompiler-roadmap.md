@@ -325,8 +325,17 @@ The same bits may validly mean different things at different use sites.
   implementation is also two RULES rather than a priority list — role admission
   (a relocation is admitted everywhere, anything weaker needs the role to already
   say "reference") and fail-closed supply.
-- [ ] Index references once for decompilation, xrefs, call graph, readonly
-  folding, function tables, and UI consumers.
+- [~] Index references once for decompilation, xrefs, call graph, readonly
+  folding, function tables, and UI consumers. Three of six as of 2026-08-15:
+  decompilation and readonly folding through `ReferenceResolver` (`4af32f1`), and
+  function-table/indirect-branch targets through `ir/indirect_targets.rs`
+  (`f1a6e4c`), which resolves a jump's destination from a relocation at
+  `Confidence::Proved`. NOT xrefs — `analysis/xrefs.rs` has zero references to the
+  module and still treats any immediate landing in a mapped range as a data
+  reference — nor the call graph, nor UI consumers. The xrefs migration has a
+  named blocker: no operand ROLE exists at that layer, so the disassembler must
+  first distinguish a branch displacement from a memory displacement from an ALU
+  immediate.
 - [ ] Project selected interpretations as semantic HIR operations.
 - [ ] Render `symbol + addend`, strings, enum members, globals, field offsets,
   and function pointers with an exact-literal fallback.
@@ -400,10 +409,24 @@ mode, ABI classification, call effects, stack/frame rules, and exact widths.
 
 - [x] Introduce canonical target identity at the program and MIR boundaries.
 - [x] Centralize substantial x86-64/AArch64 register-view behavior.
-- [ ] Finish `TargetSpec`: ISA, mode, endian, address width, pointer width,
+- [x] Finish `TargetSpec`: ISA, mode, endian, address width, pointer width,
   object format, OS ABI, default calling convention, and register bank.
-- [ ] Remove remaining register-name inference from SSA, widths, execution,
-  lifting, and recovery.
+  Audited 2026-08-15: `src/target/spec.rs` carries exactly those nine —
+  `architecture`, `default_code_mode`, `endianness`, `address_bits`,
+  `pointer_bits`, `format`, `os_abi`, `calling_convention`, `registers` — and it
+  is production, not a declaration: 29 references outside `src/target/`, 24 of
+  them reading a specific field. The struct is finished; what remains is
+  consumers still deciding without asking it, which is the NEXT bullet, not this
+  one.
+- [~] Remove remaining register-name inference from SSA, widths, execution,
+  lifting, and recovery. Substantially advanced by the register-view model
+  (`5724717`), which moved vector-lane facts out of string surgery into one
+  descriptor table with generated conformance tests. Still parsing names:
+  `types::phys_reg_width` matches against literal name lists and
+  `types.rs:621,627` parse a numeric suffix, as does `regview.rs:379`. The
+  blocker on `phys_reg_width` is recorded and real — it is arch-blind, so `sp`
+  would resolve to a 16-bit view on x86 and a 64-bit one on AArch64, and fixing it
+  means threading the target through every caller.
 - [ ] Represent constants as exact-width bitvectors with operand provenance.
 - [ ] Make all call and intrinsic read/write/clobber effects target-owned.
 - [ ] Unify ABI argument/result/aggregate classification behind the target.
