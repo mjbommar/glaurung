@@ -383,9 +383,31 @@ scripts/decbench-local-gate.sh --decbench   # + DecBench lanes 4-5 (ask first)
 ```
 
 The default three lanes are `cargo test`, the x86-64 fixture matrix + structural
-ratchet, and the cross-architecture ratchet — all over
++ definition-before-use ratchets, and the cross-architecture ratchet — all over
 `tests/decompiler_fixtures/`. It sets up its own PATH and exec tmpdir and checks
 the build first, so it runs from a fresh shell.
+
+### The definition-before-use lane
+
+`python/tests/test_decompiler_defuse_census.py` gates what the pre-render
+verifier (`src/ir/verify_defs.rs::verify_before_render`) found on the exact AST
+each function was printed from. A violation means the emitted C reads a value the
+machine never produced, so the recompiled function returns garbage — invisible to
+`type_match` / `GED` / `byte_match`, because the C still parses and still has the
+right shape.
+
+The structural lane already ratchets these, but it builds each fixture once with
+`gcc -O0`; that single lane held **7 of the 304** violations in REQUIRED
+functions when the census was first taken. This lane censuses every lane each
+fixture's language supports and ratchets both directions, at two precisions:
+REQUIRED functions per function and per message, everything else emitted against
+a per-lane ceiling on totals. Refresh with `tools/gen_defuse_baseline.py`.
+
+Every `glaurung decompile` also now names any function that failed the check on
+**stderr** — stdout stays exactly the payload — so the failure is visible without
+running the gate at all. `GLAURUNG_VERIFY_DEFS=1` adds the per-violation
+`// glaurung-verify:` comments; it stays opt-in because the decbench render is an
+artifact external tooling parses and scores.
 
 `--decbench` (or `GLAURUNG_RUN_DECBENCH=1`) adds the legacy/curriculum executable
 round trips and the per-cell metric ratchet. Use it when a change could move a
@@ -419,6 +441,7 @@ Only from full runs:
 tools/fixture_harness.py --write-baseline      # behaviour, x86-64, all 56 lanes
 tools/arch_roundtrip.py --write-baseline       # behaviour, 4 arches x {O0,O2}
 tools/gen_structural_baseline.py               # structural facts
+tools/gen_defuse_baseline.py                   # def-before-use, every lane
 tools/decbench_matrix.py --write-baseline      # metrics, all 56 cells
 ```
 

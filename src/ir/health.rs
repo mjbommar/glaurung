@@ -136,6 +136,133 @@ pub struct HealthViolation {
     pub kind: &'static str,
 }
 
+/// One function's definition-before-use verdict at the final pre-render boundary.
+///
+/// The counter is the same `undefined_uses` [`AstHealth`] carries, recorded here
+/// against the exact function it belongs to so it survives the render rather than
+/// being observable only while `GLAURUNG_PASS_HEALTH` is set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RenderVerdict {
+    /// Recovered function name at the boundary.
+    pub function: String,
+    /// Hexadecimal virtual address, avoiding JSON integer-width ambiguity.
+    pub entry_va: String,
+    /// Definition-before-use violations in the AST that was printed.
+    pub undefined_uses: usize,
+    /// Named violations, in the verifier's stable order.
+    pub violations: Vec<HealthViolation>,
+}
+
+/// What the pre-render verifier proved, and failed to prove, since the last drain.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct RenderVerificationReport {
+    /// Functions whose printed AST reads only values it defines.
+    pub verified_functions: usize,
+    /// Functions whose printed AST reads at least one value it never produced.
+    pub unverified_functions: usize,
+    /// Total definition-before-use violations across `unverified`.
+    pub undefined_uses: usize,
+    /// Failing verdicts dropped because the ledger reached [`LEDGER_CAPACITY`].
+    ///
+    /// Reported rather than silently discarded: "no unverified functions" and
+    /// "we stopped writing them down" are different claims.
+    pub dropped_verdicts: usize,
+    /// Every failing verdict, ordered by entry address then name.
+    pub unverified: Vec<RenderVerdict>,
+}
+
+/// Failing verdicts retained before the ledger starts counting rather than storing.
+///
+/// A whole-binary render of a large image can fail verification thousands of
+/// times; the ledger is a diagnostic, not a heap of the program.
+pub const LEDGER_CAPACITY: usize = 4096;
+
+/// Failing verdicts, keyed so recording the same function twice is idempotent.
+///
+/// A `Mutex` rather than a `thread_local!`: function lowering runs on its own
+/// spawned stack, so a thread-scoped ledger would silently record nothing. Keyed
+/// and drained in `BTreeMap` order so a parallel run reports exactly what a serial
+/// run reports (design rule 12).
+///
+/// KNOWN LIMIT: `PyDecompilerSession`'s rendered-artifact cache replays a
+/// previously rendered function without re-running the boundary, so a verdict
+/// already drained is not re-recorded on a cache hit. Every path that produces a
+/// fresh render — the CLI, `decompile_all`, `decompile_many`, and the fixture
+/// lanes — records unconditionally.
+static RENDER_LEDGER: std::sync::OnceLock<std::sync::Mutex<RenderLedger>> =
+    std::sync::OnceLock::new();
+
+#[derive(Debug, Default)]
+struct RenderLedger {
+    verified: usize,
+    unverified: std::collections::BTreeMap<(u64, String), RenderVerdict>,
+    dropped: usize,
+}
+
+fn render_ledger() -> std::sync::MutexGuard<'static, RenderLedger> {
+    RENDER_LEDGER
+        .get_or_init(|| std::sync::Mutex::new(RenderLedger::default()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Record one pre-render verdict.
+///
+/// This is the consumer that makes [`crate::ir::verify_defs::verify_before_render`]
+/// worth calling: without it the proof runs, fails, and vanishes.
+pub fn record_render_verification(verification: &crate::ir::verify_defs::RenderVerification) {
+    let mut ledger = render_ledger();
+    if verification.verified() {
+        ledger.verified += 1;
+        return;
+    }
+    if ledger.unverified.len() >= LEDGER_CAPACITY {
+        ledger.dropped += 1;
+        return;
+    }
+    let key = (verification.entry_va, verification.function.clone());
+    ledger
+        .unverified
+        .entry(key)
+        .or_insert_with(|| RenderVerdict {
+            function: verification.function.clone(),
+            entry_va: format!("{:#x}", verification.entry_va),
+            undefined_uses: verification.violations.len(),
+            violations: verification.violations.iter().map(violation_of).collect(),
+        });
+}
+
+/// Drain and return everything verified since the last call.
+pub fn take_render_verification() -> RenderVerificationReport {
+    let mut ledger = render_ledger();
+    let taken = std::mem::take(&mut *ledger);
+    RenderVerificationReport {
+        verified_functions: taken.verified,
+        unverified_functions: taken.unverified.len(),
+        undefined_uses: taken
+            .unverified
+            .values()
+            .map(|verdict| verdict.undefined_uses)
+            .sum(),
+        dropped_verdicts: taken.dropped,
+        unverified: taken.unverified.into_values().collect(),
+    }
+}
+
+fn violation_of(violation: &crate::ir::verify_defs::Violation) -> HealthViolation {
+    HealthViolation {
+        name: violation.name.clone(),
+        kind: match violation.kind {
+            crate::ir::verify_defs::ViolationKind::NeverDefined => "never_defined",
+            crate::ir::verify_defs::ViolationKind::UsedBeforeDefinition => "used_before_definition",
+            crate::ir::verify_defs::ViolationKind::UndefinedValue => "undefined_value",
+            crate::ir::verify_defs::ViolationKind::UninitialisedFramePointer => {
+                "uninitialised_frame_pointer"
+            }
+        },
+    }
+}
+
 /// Measure one function without changing it.
 pub fn measure(function: &Function) -> AstHealth {
     measure_with_cfg(function, CfgHealth::default())
@@ -185,22 +312,7 @@ pub fn snapshot_with_cfg(pass: &str, function: &Function, cfg: CfgHealth) -> Pas
         function: function.name.clone(),
         entry_va: format!("{:#x}", function.entry_va),
         health: measure_with_undefined_count(function, violations.len(), cfg),
-        violations: violations
-            .into_iter()
-            .map(|violation| HealthViolation {
-                name: violation.name,
-                kind: match violation.kind {
-                    crate::ir::verify_defs::ViolationKind::NeverDefined => "never_defined",
-                    crate::ir::verify_defs::ViolationKind::UsedBeforeDefinition => {
-                        "used_before_definition"
-                    }
-                    crate::ir::verify_defs::ViolationKind::UndefinedValue => "undefined_value",
-                    crate::ir::verify_defs::ViolationKind::UninitialisedFramePointer => {
-                        "uninitialised_frame_pointer"
-                    }
-                },
-            })
-            .collect(),
+        violations: violations.iter().map(violation_of).collect(),
     }
 }
 

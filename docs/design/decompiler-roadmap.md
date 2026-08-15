@@ -498,12 +498,35 @@ Measured cautions:
 - [ ] Complete semantic HIR with stable variables, object paths, calls, casts,
   predicates, regions, and preserved CFG provenance.
 - [ ] Generate or centralize one visitor/rewriter surface.
-- [ ] Move copy-chain folding and every semantic renderer rewrite into named,
-  verified pre-render passes.
-- [ ] Verify def-before-use after the final semantic transform, before rendering.
+- [~] Move copy-chain folding and every semantic renderer rewrite into named,
+  verified pre-render passes. Copy-chain folding was already out. 17 anonymous
+  passes between `prepare_for_decbench` and `ready_to_render` now have names,
+  which matters because `pass_health_report.py` blames the FIRST pass at which a
+  counter moves — every new undefined read in that tail was being attributed to
+  `ready_to_render`, the boundary that observes the damage rather than the pass
+  that caused it. Still at render time, with blockers named:
+  `renderable_dwarf_structs` (no blocker), `recover_named_call_prototypes`,
+  `infer_return_ctype` (runs both pre-render AND in the renderer), and the
+  `DEC_DECLARED_CTYPES` keystone — which is NOT circular, so the declaration plan
+  is extractable. `DEC_SEMANTIC_WIDE_CAST` is genuinely unmovable and wants a
+  parameter, not a pass.
+- [x] Verify def-before-use after the final semantic transform, before rendering.
+  The check already RAN at that boundary — `decbench_text` called
+  `verify_defs::check` right after `ready_to_render` — but the answer was
+  computed, found non-empty, logged at debug level and dropped. It now returns a
+  `#[must_use] RenderVerification`, so discarding the proof is a compile error,
+  and the verdict leaves by a channel that is not the C: stderr on every
+  `glaurung decompile`, plus `take_render_verification()` programmatically. It is
+  deliberately NOT a comment in the rendered output — that output is scored by an
+  external benchmark, and a note announcing our own bug does not belong inside
+  the code being scored.
 - [ ] Make faithful, C, and DecBench output profiles pure projections of the same
   verified HIR.
-- [ ] Remove renderer thread-local type/name state and renderer-time fixed points.
+- [ ] Remove renderer thread-local type/name state. (The bullet also said
+  "renderer-time fixed points"; measured 2026-08-15, there are none — every
+  bounded-iteration loop reachable from a DecBench render is inside
+  `prepare_for_decbench` or `refine_decbench_abi_widths_with_value_widths`, both
+  pre-render. The 16 `DEC_*` thread-local cells are real and remain.)
 - [ ] Require deterministic pipeline fingerprints for every entry point/profile.
 
 ## Code quality, composition, and file-size program

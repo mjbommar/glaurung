@@ -8154,7 +8154,9 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow_mut().clear());
     DEC_WIDE_LOCALS.with(|locals| locals.borrow_mut().clear());
     DEC_POINTER_WIDTH.with(|width| width.set(8));
-    crate::ir::symbol_env::clear();
+    // The program-level callee environment is NOT cleared here. It is installed
+    // by the caller that owns the render (`python_bindings::ir::decbench_text`)
+    // and released by that same caller, so this projection only reads it.
     out
 }
 

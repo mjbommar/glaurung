@@ -1708,16 +1708,27 @@ fn remap_type_map_impl(
 /// 2. [`crate::ir::guarded_switch::collapse_range_guards_with_types`] uses the
 ///    recovered integer widths to prove compiler range-check wrappers around
 ///    switches redundant when an untyped proof was deliberately insufficient;
-/// 3. [`crate::ir::verify_defs::check`] verifies the result — the AST that is
-///    about to be printed, which is what makes the check trustworthy;
+/// 3. [`crate::ir::verify_defs::verify_before_render`] verifies the result — the
+///    AST that is about to be printed, which is what makes the check trustworthy;
 /// 4. the renderer formats it, and nothing else.
 ///
-/// Violations are reported as `// glaurung-verify:` comment lines ahead of the
-/// code. They are comments, so the emitted C is unchanged for recompilation, and
-/// the structural lane records them per function against a committed baseline —
-/// known ones stay visible, a new one fails the gate. Reporting rather than
-/// erroring is deliberate: a violation means the decompilation of THAT function is
-/// untrustworthy, not that the analyst's whole run should fail.
+/// The verdict leaves the boundary through three channels, deliberately ranked by
+/// how much they cost the consumer:
+///
+/// * ALWAYS: [`crate::ir::health::record_render_verification`] records it, so
+///   `take_render_verification` can report an honest count for the run. The CLI
+///   turns a non-empty report into one stderr line. Nothing about the emitted C
+///   changes, which is why this channel can be unconditional.
+/// * `GLAURUNG_PASS_HEALTH`: the same count appears as `undefined_uses` on the
+///   `ready_to_render` event, beside the CFG fidelity counters.
+/// * `GLAURUNG_VERIFY_DEFS`: each violation is spliced in as a
+///   `// glaurung-verify:` comment line. Opt-in because the decbench render is an
+///   artifact other tools parse and score.
+///
+/// Reporting rather than erroring is deliberate: a violation means the
+/// decompilation of THAT function is untrustworthy, not that the analyst's whole
+/// run should fail, and suppressing the body would destroy the only evidence of
+/// what went wrong.
 ///
 /// The type maps are computed by the caller from the UNPREPARED function, whose
 /// names the recovered `TypeMap` keys were remapped against.
@@ -1763,9 +1774,54 @@ fn decbench_text(
     addr_map: &std::collections::HashMap<u64, String>,
     symbol_env: &crate::ir::symbol_env::SymbolEnv,
 ) -> String {
-    // Install the program-level callee records for this render. The renderer
-    // clears them alongside its other per-render selections.
+    // Install the program-level callee records for this render, and clear them
+    // when it ends. The renderer used to do the clearing, which made it the
+    // owner of a thread-local it never installed: a formatting projection was
+    // mutating caller state on the way out. Install and release now happen in
+    // the same function, so the renderer's only remaining relationship with the
+    // environment is to read it.
     crate::ir::symbol_env::install(symbol_env.clone());
+    let text = decbench_text_with_installed_environment(
+        f,
+        profiler,
+        cfg_health,
+        exception_sites,
+        decl,
+        width,
+        exact_value_widths,
+        readonly_data,
+        recovered_prototype,
+        declared_prototype,
+        dwarf_types,
+        dwarf_local_types,
+        dwarf_local_names,
+        cc,
+        addr_map,
+    );
+    crate::ir::symbol_env::clear();
+    text
+}
+
+/// The prepare/verify/render body of [`decbench_text`], with the program-level
+/// callee environment already installed by its caller.
+#[allow(clippy::too_many_arguments)]
+fn decbench_text_with_installed_environment(
+    f: &crate::ir::ast::Function,
+    profiler: &mut crate::decompile::profile::FunctionProfiler,
+    cfg_health: crate::ir::health::CfgHealth,
+    exception_sites: &[crate::analysis::exception::ExceptionCallSite],
+    decl: Option<&crate::ir::types_recover::TypeMap>,
+    width: Option<&crate::ir::types_recover::TypeMap>,
+    exact_value_widths: Option<&std::collections::HashMap<String, u8>>,
+    readonly_data: &crate::ir::readonly_fold::ReadonlyData,
+    recovered_prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
+    declared_prototype: Option<&crate::ir::call_contracts::CallPrototype>,
+    dwarf_types: &[crate::debug::dwarf::DwarfType],
+    dwarf_local_types: &std::collections::HashMap<String, String>,
+    dwarf_local_names: &std::collections::HashMap<String, String>,
+    cc: crate::ir::call_args::CallConv,
+    addr_map: &std::collections::HashMap<u64, String>,
+) -> String {
     let output_kind = recovered_prototype.map_or(
         crate::ir::types_recover::RecoveredOutputKind::Unknown,
         crate::ir::types_recover::RecoveredPrototype::output_kind,
@@ -1817,7 +1873,42 @@ fn decbench_text(
         crate::ir::canary::collapse_canary_save(&mut prepared);
         prepared
     });
-    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
+    // From here to the verification boundary every semantic step is a NAMED pass.
+    //
+    // Naming is not cosmetic. `run_ast_passes` has always announced each of its
+    // passes; this tail did not, so seventeen AST-mutating transforms ran between
+    // `prepare_for_decbench` and `ready_to_render` with no boundary between them.
+    // The consequence is concrete: `tools/pass_health_report.py` attributes the
+    // FIRST pass at which a counter moves, so a newly introduced undefined read
+    // anywhere in this tail was reported against `ready_to_render` — the boundary
+    // that observes the damage rather than the pass that caused it. With the
+    // passes named, the same report blames the transform.
+    //
+    // `pass!` is for a transform that rewrites the AST: it is profiled, dumped
+    // under `GLAURUNG_DUMP_PASSES`, and health-traced. `refine!` is for a
+    // transform that only sharpens a `TypeMap` — the AST is unchanged, so a health
+    // event would repeat the previous one, and only the timing is worth recording.
+    macro_rules! pass {
+        ($name:expr, $operation:expr) => {{
+            let result = profiler.measure($name, || $operation);
+            if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
+                eprintln!(
+                    "\n===== after {} =====\n{}",
+                    $name,
+                    crate::ir::ast::render(&prepared)
+                );
+            }
+            crate::ir::health::trace_pass($name, &prepared, cfg_health);
+            result
+        }};
+    }
+    macro_rules! refine {
+        ($name:expr, $operation:expr) => {
+            profiler.measure($name, || $operation)
+        };
+    }
+
+    if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
         eprintln!(
             "\n===== after prepare_for_decbench =====\n{}",
             crate::ir::ast::render(&prepared)
@@ -1831,39 +1922,67 @@ fn decbench_text(
     let mut refined_decl = decl.cloned();
     let mut refined_width = width.cloned();
     if let Some(tm) = refined_decl.as_mut() {
-        crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
-            &prepared,
-            tm,
-            exact_value_widths,
+        refine!("refine_decbench_abi_widths", {
+            crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
+                &prepared,
+                tm,
+                exact_value_widths,
+            );
+            crate::ir::high_variables::refine_pointer_high_variables(&prepared, tm);
+        });
+    }
+    if let Some(tm) = refined_decl.as_mut() {
+        pass!(
+            "coalesce_loop_entry_copies",
+            crate::ir::latch_predicate::coalesce_loop_entry_copies(
+                &mut prepared,
+                &protected_locals,
+                tm,
+            )
         );
-        crate::ir::high_variables::refine_pointer_high_variables(&prepared, tm);
-        crate::ir::latch_predicate::coalesce_loop_entry_copies(
-            &mut prepared,
-            &protected_locals,
-            tm,
-        );
-        crate::ir::latch_predicate::coalesce_source_loop_updates(
-            &mut prepared,
-            &protected_locals,
-            tm,
-            exact_value_widths,
+        pass!(
+            "coalesce_source_loop_updates",
+            crate::ir::latch_predicate::coalesce_source_loop_updates(
+                &mut prepared,
+                &protected_locals,
+                tm,
+                exact_value_widths,
+            )
         );
     }
     if let Some(tm) = refined_width.as_mut() {
-        crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
-            &prepared,
-            tm,
-            exact_value_widths,
+        refine!(
+            "refine_decbench_abi_widths_for_width_map",
+            crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
+                &prepared,
+                tm,
+                exact_value_widths,
+            )
         );
     }
     if let Some(tm) = refined_decl.as_ref() {
-        crate::ir::copy_prop::propagate_adjacent_typed_promoted_values(&mut prepared, tm);
-        crate::ir::const_fold::fold_typed_declared_views(&mut prepared, tm);
-        crate::ir::typed_simplify::fold_consumed_extensions(&mut prepared, tm);
-        crate::ir::const_fold::fold_typed_comparison_extensions(&mut prepared, tm);
-        crate::ir::const_fold::fold_constants(&mut prepared);
+        pass!(
+            "propagate_adjacent_typed_promoted_values",
+            crate::ir::copy_prop::propagate_adjacent_typed_promoted_values(&mut prepared, tm)
+        );
+        pass!(
+            "fold_typed_declared_views",
+            crate::ir::const_fold::fold_typed_declared_views(&mut prepared, tm)
+        );
+        pass!(
+            "fold_consumed_extensions",
+            crate::ir::typed_simplify::fold_consumed_extensions(&mut prepared, tm)
+        );
+        pass!(
+            "fold_typed_comparison_extensions",
+            crate::ir::const_fold::fold_typed_comparison_extensions(&mut prepared, tm)
+        );
+        pass!(
+            "fold_constants_after_typed_folds",
+            crate::ir::const_fold::fold_constants(&mut prepared)
+        );
     }
-    profiler.measure("fold_guarded_readonly_lookups", || {
+    pass!("fold_guarded_readonly_lookups", {
         crate::ir::readonly_fold::fold_guarded_readonly_lookups(&mut prepared, readonly_data);
         // Read-only folding can turn an image load into a literal after the main
         // expression pipeline has already run. Re-propagate and fold immediately so
@@ -1872,45 +1991,55 @@ fn decbench_text(
         crate::ir::copy_prop::propagate_copies(&mut prepared);
         crate::ir::const_fold::fold_constants(&mut prepared);
     });
-    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
-        eprintln!(
-            "\n===== after fold_guarded_readonly_lookups =====\n{}",
-            crate::ir::ast::render(&prepared)
-        );
-    }
-    crate::ir::health::trace_pass("fold_guarded_readonly_lookups", &prepared, cfg_health);
     if let Some(tm) = refined_decl.as_ref() {
-        crate::ir::guarded_switch::collapse_range_guards_with_types(&mut prepared, tm);
+        pass!(
+            "collapse_range_guards_with_types",
+            crate::ir::guarded_switch::collapse_range_guards_with_types(&mut prepared, tm)
+        );
     }
     // A typed range proof may have synthesized an exhaustive switch default,
     // exposing the same exact switch-result join as the untyped preparation
     // path. Fold it before verification and rendering as well.
-    crate::ir::ast::fold_exhaustive_switch_returns(&mut prepared);
-    let decl = refined_decl.as_ref();
-    let width = refined_width.as_ref();
-    if let Some(tm) = decl {
-        crate::ir::ast::fold_typed_return_abi_extensions(&mut prepared, tm);
-    }
-    // Declarations are recovered at true machine width, so a value read in a wider
-    // context needs the extension the hardware performed made explicit. Runs before
-    // verification and rendering; it changes no definition, use, or value identity.
-    if let Some(tm) = decl {
-        crate::ir::widen::insert_widening_casts_for_machine_width(
-            &mut prepared,
-            tm,
-            machine_word_bytes(cc),
+    pass!(
+        "fold_exhaustive_switch_returns",
+        crate::ir::ast::fold_exhaustive_switch_returns(&mut prepared)
+    );
+    if let Some(tm) = refined_decl.as_ref() {
+        pass!(
+            "fold_typed_return_abi_extensions",
+            crate::ir::ast::fold_typed_return_abi_extensions(&mut prepared, tm)
+        );
+        // Declarations are recovered at true machine width, so a value read in a
+        // wider context needs the extension the hardware performed made explicit.
+        // Runs before verification and rendering; it changes no definition, use,
+        // or value identity.
+        pass!(
+            "insert_widening_casts_for_machine_width",
+            crate::ir::widen::insert_widening_casts_for_machine_width(
+                &mut prepared,
+                tm,
+                machine_word_bytes(cc),
+            )
         );
     }
+    let decl = refined_decl.as_ref();
+    let width = refined_width.as_ref();
     // Call specifications belong to concrete AST calls, not to renderer-local
     // symbol guesses. Refresh them after every expression/type refinement so
     // string folding, promoted objects, and pointer facts are represented on
     // the exact call boundary the verifier and C renderer consume.
-    crate::ir::call_contracts::refine_call_site_specs(&mut prepared, decl);
-    let mut dwarf_pointer_types = crate::ir::dwarf_fields::annotate_function_fields(
-        &mut prepared,
-        declared_prototype,
-        dwarf_types,
-        calling_convention_pointer_width(cc),
+    pass!(
+        "refine_call_site_specs",
+        crate::ir::call_contracts::refine_call_site_specs(&mut prepared, decl)
+    );
+    let mut dwarf_pointer_types = pass!(
+        "annotate_function_fields",
+        crate::ir::dwarf_fields::annotate_function_fields(
+            &mut prepared,
+            declared_prototype,
+            dwarf_types,
+            calling_convention_pointer_width(cc),
+        )
     );
     for (internal_name, source_name) in &dwarf_local_names {
         let internal = crate::ir::types::VReg::phys(internal_name);
@@ -1918,7 +2047,10 @@ fn decbench_text(
             dwarf_pointer_types.insert(crate::ir::types::VReg::phys(source_name), pointer_type);
         }
     }
-    crate::ir::naming::apply_authoritative_local_names(&mut prepared, &dwarf_local_names);
+    pass!(
+        "apply_authoritative_local_names",
+        crate::ir::naming::apply_authoritative_local_names(&mut prepared, &dwarf_local_names)
+    );
     let rendered_local_types = dwarf_local_types
         .iter()
         .map(|(internal_name, c_type)| {
@@ -1931,11 +2063,29 @@ fn decbench_text(
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
-    crate::ir::exception_recover::recover_typed_handlers(&mut prepared, exception_sites);
-    crate::ir::exception_recover::recover_throws(&mut prepared);
-    crate::ir::dead_stores::prune_unobserved_promoted_object_stores(&mut prepared);
+    pass!(
+        "recover_typed_handlers",
+        crate::ir::exception_recover::recover_typed_handlers(&mut prepared, exception_sites)
+    );
+    pass!(
+        "recover_throws",
+        crate::ir::exception_recover::recover_throws(&mut prepared)
+    );
+    pass!(
+        "prune_unobserved_promoted_object_stores",
+        crate::ir::dead_stores::prune_unobserved_promoted_object_stores(&mut prepared)
+    );
     crate::ir::health::trace_pass("ready_to_render", &prepared, cfg_health);
-    let violations = profiler.measure("verify_defs", || crate::ir::verify_defs::check(&prepared));
+    // THE pre-render verification boundary. Every semantic transform is behind us
+    // and the renderer below is formatting-only, so this AST is exactly what is
+    // printed. The verdict is RECORDED, not merely computed: an undefined read
+    // means the emitted C reads a value the machine never produced, and a proof
+    // that fails into a dropped `Vec` is a wrong-code bug nobody can count.
+    let verification = profiler.measure("verify_before_render", || {
+        crate::ir::verify_defs::verify_before_render(&prepared)
+    });
+    crate::ir::health::record_render_verification(&verification);
+    let violations = verification.violations;
     let recovered_render_prototype = if declared_prototype.is_none() {
         recovered_prototype.and_then(|prototype| {
             let mut machine_prototype = recovered_call_prototype(prototype, cc);
@@ -3057,6 +3207,48 @@ fn decompile_many_py(
 
 use crate::ir::name_resolve::resolve_outer_function_name;
 
+/// Drain and return the definition-before-use verdicts recorded since the last call.
+///
+/// The dictionary carries `verified_functions`, `unverified_functions`,
+/// `undefined_uses`, `dropped_verdicts`, and `unverified` — a list of
+/// `{"function", "entry_va", "undefined_uses", "violations": [{"name", "kind"}]}`
+/// ordered by entry address.
+///
+/// A non-empty `unverified` list means the recovered C for those functions reads a
+/// value the machine never produced. Draining rather than peeking is deliberate:
+/// the caller that asks is the caller that reports, and the next question should
+/// be about the next run.
+#[pyfunction]
+#[pyo3(name = "take_render_verification")]
+fn take_render_verification_py(py: Python<'_>) -> PyResult<Py<pyo3::PyAny>> {
+    use pyo3::types::{PyDict, PyList};
+
+    let report = crate::ir::health::take_render_verification();
+    let out = PyDict::new(py);
+    out.set_item("verified_functions", report.verified_functions)?;
+    out.set_item("unverified_functions", report.unverified_functions)?;
+    out.set_item("undefined_uses", report.undefined_uses)?;
+    out.set_item("dropped_verdicts", report.dropped_verdicts)?;
+    let unverified = PyList::empty(py);
+    for verdict in &report.unverified {
+        let entry = PyDict::new(py);
+        entry.set_item("function", &verdict.function)?;
+        entry.set_item("entry_va", &verdict.entry_va)?;
+        entry.set_item("undefined_uses", verdict.undefined_uses)?;
+        let violations = PyList::empty(py);
+        for violation in &verdict.violations {
+            let item = PyDict::new(py);
+            item.set_item("name", &violation.name)?;
+            item.set_item("kind", violation.kind)?;
+            violations.append(item)?;
+        }
+        entry.set_item("violations", violations)?;
+        unverified.append(entry)?;
+    }
+    out.set_item("unverified", unverified)?;
+    Ok(out.into())
+}
+
 /// Register LLIR-related Python bindings under the `ir` submodule.
 pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let ir_mod = pyo3::types::PyModule::new(py, "ir")?;
@@ -3067,6 +3259,7 @@ pub fn register_ir_bindings(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult
     ir_mod.add_function(wrap_pyfunction!(decompile_range_at_py, &ir_mod)?)?;
     ir_mod.add_function(wrap_pyfunction!(decompile_all_py, &ir_mod)?)?;
     ir_mod.add_function(wrap_pyfunction!(decompile_many_py, &ir_mod)?)?;
+    ir_mod.add_function(wrap_pyfunction!(take_render_verification_py, &ir_mod)?)?;
     m.add_submodule(&ir_mod)?;
     Ok(())
 }

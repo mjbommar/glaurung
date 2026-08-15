@@ -124,10 +124,17 @@ else
   note "FAILED"; fail=1
 fi
 
-step "2/$lanes  decompiler fixture matrix + structural ratchet (x86-64)"
+# The def-before-use lane joins here rather than getting its own step because it
+# answers the same question as the structural ratchet — does the emitted C read a
+# value the machine never produced — over the lanes the structural ratchet cannot
+# see. `structural.py` builds each fixture once with gcc -O0, which held 7 of the
+# 304 violations in REQUIRED functions when the census was first taken; the other
+# 297 are in the clang, -O2 and rustc lanes.
+step "2/$lanes  decompiler fixture matrix + structural + def-before-use ratchets (x86-64)"
 note "exec tmpdir: $GLAURUNG_FIXTURE_TMPDIR"
 if python -m pytest -p no:cacheprovider -m slow -q \
      python/tests/test_decompiler_fixture_matrix.py \
+     python/tests/test_decompiler_defuse_census.py \
      python/tests/test_decompiler_fixture_structural.py 2>&1 | tail -6; then
   note "ok"
 else

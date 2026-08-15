@@ -79,6 +79,7 @@ class _IrModule:
         pdb_cache: str = "",
         max_functions: int = 1,
     ) -> str: ...
+    def take_render_verification(self) -> dict[str, object]: ...
 
 ir: _IrModule
 

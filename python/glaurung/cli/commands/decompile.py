@@ -270,6 +270,7 @@ class DecompileCommand(BaseCommand):
                 else:
                     for name, va, text in results:
                         formatter.output_plain(text)
+                _report_unverified_functions()
                 return _report_unresolved_vas(vas, results)
 
             if args.all:
@@ -289,6 +290,7 @@ class DecompileCommand(BaseCommand):
                 else:
                     for name, va, text in results:
                         formatter.output_plain(text)
+                _report_unverified_functions()
                 return 0
 
             # Single-function mode.
@@ -373,10 +375,63 @@ class DecompileCommand(BaseCommand):
                 )
             else:
                 formatter.output_plain(text)
+            _report_unverified_functions()
             return 0
         except Exception as e:  # pragma: no cover - surfaces as CLI error
             formatter.output_plain(f"Error: {e}")
             return 1
+
+
+def _report_unverified_functions() -> None:
+    """Name, on stderr, every function whose recovered C failed def-before-use.
+
+    The decompiler verifies the exact AST it is about to print
+    (``ir::verify_defs::verify_before_render``). A violation means the emitted C
+    reads a value the machine never produced, so the recompiled function returns
+    garbage — a wrong-code bug, not a formatting one, and one that ``type_match``
+    / ``GED`` / ``byte_match`` cannot see.
+
+    Suppressing the body would destroy the only evidence of what went wrong, and
+    aborting the run would fail a whole binary over one function. So the body is
+    printed and the failure is named: design rule 8's "honest diagnostic".
+
+    Stderr, not stdout, for the reason ``_report_unresolved_vas`` documents —
+    stdout stays exactly the payload callers parse — and for one more: the
+    decbench render is an artifact an external benchmark scores, and a note
+    announcing our own bug does not belong inside the code being scored.
+    """
+    import sys
+
+    try:
+        report: dict = g.ir.take_render_verification()
+    except AttributeError:  # pragma: no cover - extension predates the binding
+        return
+    unverified: int = int(report.get("unverified_functions", 0))
+    if not unverified:
+        return
+    verdicts: list[dict] = list(report.get("unverified", []))
+    named = ", ".join(
+        f"{v['function']}@{v['entry_va']} ({v['undefined_uses']})" for v in verdicts[:8]
+    )
+    more = max(0, unverified - 8)
+    total = int(report.get("verified_functions", 0)) + unverified
+    reads = int(report.get("undefined_uses", 0))
+    print(
+        f"Warning: definition-before-use verification failed for "
+        f"{unverified} of {total} rendered function(s), "
+        f"{reads} undefined read(s). The recovered C reads "
+        f"values the original never produced. Set GLAURUNG_VERIFY_DEFS=1 for the "
+        f"per-violation detail. Affected: {named}"
+        + (f", and {more} more" if more else ""),
+        file=sys.stderr,
+    )
+    dropped = int(report.get("dropped_verdicts", 0))
+    if dropped:
+        print(
+            f"Warning: {dropped} further unverified function(s) were counted but "
+            "not recorded (verdict ledger full)",
+            file=sys.stderr,
+        )
 
 
 def _parse_va_list(raw: str) -> list[int]:

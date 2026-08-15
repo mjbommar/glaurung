@@ -4988,6 +4988,268 @@ DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
 fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. **No
 baseline was refreshed and nothing was committed.**
 
+## Entry 34 — The proof that ran, failed, and told nobody
+
+The roadmap's "Semantic HIR and pure rendering" block is 0 of 7. Two of its
+bullets are reachable without the HIR rewrite:
+
+- *Verify def-before-use after the final semantic transform, before rendering.*
+- *Move copy-chain folding and every semantic renderer rewrite into named,
+  verified pre-render passes.*
+
+Three things in the framing turned out to be wrong, and two of the three are
+worth more than the patch.
+
+### Correction 1: the verification already runs at the right boundary
+
+`decbench_text` (`src/python_bindings/ir.rs`) already called
+`ir::verify_defs::check` immediately after the `ready_to_render` health trace and
+immediately before the formatting-only renderer. That is exactly the last
+pre-render boundary, and `src/ir/verify_defs.rs`'s module docstring already
+explains why it must be there (an earlier version checked a different AST than
+the one printed, and flagged correct functions).
+
+What was missing is not the check. It is that **the answer was thrown away**:
+
+```rust
+let violations = profiler.measure("verify_defs", || verify_defs::check(&prepared));
+...
+if violations.is_empty() { return body; }
+tracing::debug!(...);
+if std::env::var_os("GLAURUNG_VERIFY_DEFS").is_none() { return body; }
+```
+
+A `Vec<Violation>` that is computed, found non-empty, and then dropped is a
+failed proof with no artifact, no counter, and no diagnostic. Design rule 8 says
+a failed proof becomes an explicit unknown or an honest diagnostic. Silence is
+neither.
+
+### Correction 2: the ratchet exists — it watches the wrong 2.3%
+
+The brief said nothing fails on these violations. That is false for one lane and
+true for the rest. `structural.py` records a per-function `verify` map,
+`test_no_structural_regression` fails on a new violation, and
+`test_structural_improvements_require_a_baseline_refresh` fails on a resolved
+one. A real two-sided ratchet, already committed, holding 7 violations.
+
+But `structural.py::_build` compiles each fixture exactly once, with
+`gcc -shared -fPIC -g -O0`. Censused at `2ed9b07` over all 740 lanes, the
+REQUIRED functions carry:
+
+| lane | violations in REQUIRED functions |
+|---|---|
+| clang:O2 | 128 |
+| gcc:O2 | 107 |
+| rustc:O0 | 32 |
+| rustc:O2 | 22 |
+| clang:O0 | 8 |
+| **gcc:O0** | **7** |
+| total | **304** |
+
+The ratchet covered 7 of 304 — **2.3%** — and it covered the lane least able to
+produce a violation in the first place. `-O0` keeps every value in its own stack
+slot; the copy chains, register views, phi coalescing and landing-pad live-ins
+that actually drop definitions are what `-O2` and `rustc` do. The gate was
+watching the shallow end.
+
+### Correction 3: there are no renderer-time fixed points
+
+The roadmap's next bullet complains about "renderer thread-local type/name state
+and renderer-time fixed points". The thread-local state is real — sixteen `DEC_*`
+cells at `src/ir/ast.rs:9119-9226`. The fixed points are not. Every
+bounded-iteration loop reachable from a DecBench render is inside
+`prepare_for_decbench` (`ast.rs:7156`, `7225`) or
+`refine_decbench_abi_widths_with_value_widths` (`ast.rs:5167`, `5184`) — both
+pre-render passes. Nothing between `render_decbench_typed_…:7583` and its return
+at `8159` iterates to convergence. That half of the bullet is already done and
+the roadmap should say so.
+
+### Re-deriving the number
+
+The brief quoted 173 functions / 296 violations in REQUIRED functions and
+3368 / 12687 across every emitted function. A number in a document is not a
+measurement, so it was re-derived at `2ed9b07`: every fixture compiled in every
+lane its language supports (`fixture_harness.matrix_for`) under the pinned
+docker toolchain, decompiled `--all --style decbench` with
+`GLAURUNG_VERIFY_DEFS=1`, violations counted from the spliced comments.
+
+```
+740 lanes, 0 unbuildable
+REQUIRED:      304 violations in 175 of 2562 emitted function-lanes
+ALL EMITTED: 12702 violations in 3355 of 14485 emitted functions
+```
+
+The brief's figures were real; they were taken eight commits earlier. Kinds, in
+REQUIRED functions: 266 `never_defined`, 25 `used_before_definition`, 7
+`undefined_value`, 6 `uninitialised_frame_pointer`.
+
+One number is worth pulling out of the all-emitted total: **12,144 of the 12,702
+are in the two `rustc` lanes** (7,629 at O0 and 4,515 at O2), against 558 across
+all four C lanes. Rust fixtures statically link inlined `core`/`std` bodies, so
+those lanes decompile thousands of functions nobody wrote a contract for. The
+number is real, but it is a statement about Rust monomorphisation, not about the
+C corpus, and reporting the two together would hide both.
+
+### What was built
+
+**A named boundary with a verdict that cannot be dropped.**
+`verify_defs::verify_before_render` returns `RenderVerification { function,
+entry_va, violations }` and is `#[must_use]` with a message naming the consumer.
+`check` still exists and still returns a bare `Vec` for the twenty-nine unit
+tests that want one; the pipeline uses the verdict.
+
+**A ledger where `CfgHealth`/`AstHealth` already live.**
+`health::record_render_verification` / `health::take_render_verification`, backed
+by a `BTreeMap<(entry_va, function), RenderVerdict>` behind a `Mutex`:
+
+- a `Mutex` and not a `thread_local!`, because function lowering runs on its own
+  spawned 256 MB stack (`4caa607`) and a thread-scoped ledger would record
+  nothing at all;
+- keyed, so a function rendered twice in one run counts once;
+- drained in `BTreeMap` order, so a parallel run reports what a serial run
+  reports (design rule 12);
+- capped at 4096 retained failing verdicts with an explicit `dropped_verdicts`
+  count, because "no unverified functions" and "we stopped writing them down"
+  are different claims.
+
+**What the artifact carries: nothing new.** This was the one real design
+decision, and the answer is that the C is byte-identical — proved, not asserted:
+the census re-run after the change differs in 0 of 14,485 function cells across
+all 740 lanes.
+
+The tempting move was a `// glaurung-unverified: N` line in the render. It was
+rejected because `test_verify_diagnostics_are_opt_in` records a considered
+decision with a reason that still holds: the decbench render is an artifact an
+external benchmark parses and scores, and a note announcing our own bug does not
+belong inside the code being scored. Erroring out was rejected for the reason the
+existing docstring gives — a violation means *that function* is untrustworthy,
+not that the analyst's binary should fail — and suppressing the body would
+destroy the only evidence of what went wrong.
+
+So the verdict leaves by a channel that is not the scored C. `glaurung decompile`
+now ends with, on **stderr**, where `_report_unresolved_vas` already establishes
+that diagnostics go so stdout stays exactly the payload:
+
+```
+Warning: definition-before-use verification failed for 1 of 17 rendered
+function(s), 2 undefined read(s). The recovered C reads values the original
+never produced. Set GLAURUNG_VERIFY_DEFS=1 for the per-violation detail.
+Affected: cpp_destruction_order@0x11e4 (2)
+```
+
+(`139_cpp_object_lifetime:gcc:O0`, which is one of the seven the old ratchet
+already knew about — now it says so without being asked.) The same report is
+available programmatically as `glaurung._native.ir.take_render_verification()`.
+
+**A ratchet over all six lanes.** `tests/decompiler_fixtures/defuse.py` censuses
+the matrix; `tools/gen_defuse_baseline.py` writes
+`tests/decompiler_fixtures/defuse_baseline.json`; the slow-marked
+`python/tests/test_decompiler_defuse_census.py` gates it two ways, at two
+precisions:
+
+- REQUIRED functions are pinned per function *and per message* — 2,562
+  function-lanes, 175 of them non-empty. A new violation names itself, a resolved
+  one fails and forces a refresh.
+- every other emitted function is held to a per-lane ceiling on totals. Naming
+  12,702 violations would be a transcript, not a gate; a ceiling still makes the
+  number impossible to grow quietly.
+
+The toolchain fingerprint is recorded and compared, for the same reason the
+execution baseline records it: these violations follow the compiled binary, so
+across compiler releases the census is a snapshot of one machine rather than a
+gate.
+
+### Second bullet: what the renderer still rewrites
+
+Copy-chain folding is genuinely out of the renderer already; that landed with
+`prepare_for_decbench`. What remains was surveyed in full. The renderer does
+**not** mutate the `Function` — it takes `&Function`, and `Expr`/`Stmt` have no
+interior mutability, so the property is structural. But two tests advertise more
+than they check: `ast.rs:13886` ("the renderer must not rewrite value
+identities") and `ast.rs:14393` (`assert_eq!(prepared, before, "rendering mutated
+the AST")`) both run the *untyped* entry point with no `TypeMap`, no prototype
+and no DWARF, so every `DEC_*` table is empty and every rewrite below is disabled
+for the duration of the test. The second assertion cannot fail for any input,
+given the type.
+
+What is still recovery-at-render-time, with what blocks moving it:
+
+| what | where | blocker |
+|---|---|---|
+| `renderable_dwarf_structs` — validates DWARF layouts by re-deriving every field offset, decides which aggregates exist for this function | `ast.rs:7407`, called 7652 | **none.** Reads only its parameters. The cheapest move in the file. |
+| `recover_named_call_prototypes` — infers callee return types, arity and **variadicity** from call-site observations, synthesising a `CallSiteSpec` on the spot when the AST carries none | `ast.rs:9087`, called 7693 | only its self-entry, which needs the function's own signature; `decbench_text` already computes one. |
+| `infer_return_ctype` | `ast.rs:6108`, called 7903 — **and again** pre-render at `ir.rs:1911` | two inference sites for one fact; the pre-render result is kept only when a declared prototype is absent *and* a refinement changed something. |
+| per-local declaration type selection, which fills `DEC_DECLARED_CTYPES` | `ast.rs:8104-8135` | the keystone: `declared_reg_ctype` is the single input to essentially every cast decision, so nothing downstream moves until it does. Not circular, though — it consumes the `DecIdents` walk, which is a *separate pass over the body performed before printing*. |
+| `expression_has_pointer_representation`, shift-width inference, ILP32 wrapped-index normalisation (`p[0x3fffffff]` → `p[-1]`) | `ast.rs:10832`, `9402`, `9518` | all consume the declaration tables above. |
+| `DEC_SEMANTIC_WIDE_CAST` | declared `9154`, **mutated mid-print** at `10910` | genuinely not movable as data: it is dynamic scoping over the node currently under the cursor, and `Expr` has no node identity. The fix is not a pass — it is to thread the destination type through `write_expr_dec` as a parameter, the way `write_representation_value_dec` already does. |
+
+Two things were moved now, both small and both verified byte-identical:
+
+**Seventeen anonymous passes got names.** Everything between
+`prepare_for_decbench` and `ready_to_render` — `coalesce_loop_entry_copies`,
+`fold_typed_declared_views`, `insert_widening_casts_for_machine_width`,
+`recover_throws`, and thirteen more — ran with no boundary between them.
+`run_ast_passes` has always announced each of its passes; this tail did not. The
+cost was concrete: `tools/pass_health_report.py` attributes a counter to the
+FIRST pass at which it moves, so a newly introduced undefined read anywhere in
+that tail was blamed on `ready_to_render` — the boundary that *observes* the
+damage rather than the pass that caused it. They are now profiled, dumped and
+health-traced individually, which is what makes the ratchet above actionable
+instead of merely accusatory.
+
+**The renderer stopped clearing state it never installed.**
+`symbol_env::install` was called by `decbench_text`; `symbol_env::clear` was
+called by the renderer, on its way out. A formatting projection was releasing a
+thread-local owned by its caller. Install and release now happen in the same
+function.
+
+### Verification
+
+- `cargo test --features python-ext`: **2491 passed, 0 failed, 1 ignored**
+  (2483 before; +8 new tests — five for the ledger, three for the boundary).
+- `cargo build --features python-ext`: never-used **functions** stay at 0;
+  warning count unchanged at 17 (13 pre-existing pyo3 deprecations, one
+  pre-existing never-read field, one unreachable pattern, two needless `mut`).
+- Census before and after the change: **0 differing function cells** of 14,485,
+  across all 740 lanes. The C is unchanged; only the diagnostic channel is new.
+- `tools/dectest.py @o0`: 364 lanes of 740, no regressions, no improvements.
+- `tools/dectest.py @o2`: 364 lanes of 740, no regressions, no improvements.
+- `python/tests/test_decompiler_defuse_census.py -m slow`: 6 passed against the
+  baseline it was generated from — and, with the baseline deliberately perturbed
+  three ways, it fails in all four directions it claims to gate (new violation,
+  resolved violation, exceeded lane ceiling, missing function-lane). A ratchet
+  nobody has seen red is not a ratchet.
+- `test_cli_decompile.py`, `test_src_dependency_boundaries.py`,
+  `test_pass_health_report.py`, `test_decompiler_session.py`,
+  `test_local_gate_fails_closed.py`, `test_dectest_selection.py`: 89 passed. The
+  new stderr line does not break `test_decompile_vas_is_silent_when_every_entry_resolves`
+  because that path renders the `plain` style, which never reaches the DecBench
+  pre-render boundary.
+- `ruff check` / `ruff format`: the four new/changed Python files are clean;
+  `decompile.py` carries the same five pre-existing findings it had before.
+
+### What is still open in this block
+
+The bullet is *verify def-before-use before rendering*, and the verification is
+now real, recorded, reported and ratcheted at all six lanes. It is not zero. 304
+REQUIRED-function violations remain, in the clusters already diagnosed elsewhere
+(phi coalescing from an undefined incoming in `value_number.rs`, landing-pad
+live-ins `exception_recover::mark_landing_pads` never seeds, frame arrays with a
+runtime index failing `recognise_machine_frame`). What changed is that the number
+can no longer move without saying so.
+
+The second bullet is partly closed: copy-chain folding was already out, seventeen
+passes are now named, and the renderer no longer releases state it does not own.
+The rest is blocked on one thing — `DEC_DECLARED_CTYPES` and the four tables
+around it are computed where they are consumed. The good news from the survey is
+that this is *not* circular: the tables are derived from the `DecIdents` walk,
+which is a separate pass over the body that already runs before any printing, and
+`health_identifiers` already calls that walk standalone. So the declaration plan
+is extractable as a `DeclarationTable` artifact, and the cast-insertion engine
+becomes a pure function of `(DeclarationTable, Expr)`. The one genuinely
+unmovable thing is `DEC_SEMANTIC_WIDE_CAST`, and the fix there is a parameter,
+not a pass.
+
 ## Entry 35 — Three reasons wearing one `None`, and a census that moved the defect
 
 Three bullets from the roadmap's "Safety and reliability plan", which was 0 of

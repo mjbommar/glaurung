@@ -152,3 +152,163 @@ fn pass_snapshot_names_definition_violations_not_only_their_count() {
     assert_eq!(event.violations[0].name, "var9");
     assert_eq!(event.violations[0].kind, "never_defined");
 }
+
+// --- pre-render verification ledger ----------------------------------------
+//
+// The ledger is process-global by design (function lowering runs on its own
+// spawned stack, so a thread-local one would record nothing). Only these tests
+// drain it, so they serialise against each other; they assert about the verdicts
+// they themselves recorded and ignore anything a concurrently running
+// decompilation test contributed.
+
+static LEDGER_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn ledger_guard() -> std::sync::MutexGuard<'static, ()> {
+    LEDGER_TESTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn reads_undefined(name: &str, entry_va: u64) -> Function {
+    Function {
+        name: name.into(),
+        entry_va,
+        body: vec![Stmt::Return {
+            value: Some(Expr::Reg(reg("var9"))),
+        }],
+    }
+}
+
+fn defines_what_it_reads(name: &str, entry_va: u64) -> Function {
+    Function {
+        name: name.into(),
+        entry_va,
+        body: vec![
+            Stmt::Assign {
+                dst: reg("var9"),
+                src: Expr::Reg(reg("arg0")),
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("var9"))),
+            },
+        ],
+    }
+}
+
+#[test]
+fn a_failed_pre_render_proof_is_recorded_rather_than_dropped() {
+    let _serialised = ledger_guard();
+    let _ = crate::ir::health::take_render_verification();
+
+    let function = reads_undefined("ledger_broken", 0x4a1000);
+    let verification = crate::ir::verify_defs::verify_before_render(&function);
+    assert!(!verification.verified());
+    crate::ir::health::record_render_verification(&verification);
+
+    let report = crate::ir::health::take_render_verification();
+    let recorded = report
+        .unverified
+        .iter()
+        .find(|verdict| verdict.function == "ledger_broken")
+        .expect("the failing function is named in the report");
+    assert_eq!(recorded.entry_va, "0x4a1000");
+    assert_eq!(recorded.undefined_uses, 1);
+    assert_eq!(recorded.violations[0].name, "var9");
+    assert_eq!(recorded.violations[0].kind, "never_defined");
+    assert!(report.undefined_uses >= 1);
+}
+
+#[test]
+fn a_verified_function_is_counted_but_not_listed_as_a_defect() {
+    let _serialised = ledger_guard();
+    let _ = crate::ir::health::take_render_verification();
+
+    let function = defines_what_it_reads("ledger_clean", 0x4a2000);
+    let verification = crate::ir::verify_defs::verify_before_render(&function);
+    assert!(verification.verified());
+    crate::ir::health::record_render_verification(&verification);
+
+    let report = crate::ir::health::take_render_verification();
+    assert!(report.verified_functions >= 1);
+    assert!(
+        !report
+            .unverified
+            .iter()
+            .any(|verdict| verdict.function == "ledger_clean"),
+        "a function that verifies must not be reported as a defect: {report:?}"
+    );
+}
+
+#[test]
+fn draining_the_ledger_resets_it_so_the_next_run_reports_its_own_functions() {
+    let _serialised = ledger_guard();
+    let _ = crate::ir::health::take_render_verification();
+
+    let function = reads_undefined("ledger_drained", 0x4a3000);
+    crate::ir::health::record_render_verification(&crate::ir::verify_defs::verify_before_render(
+        &function,
+    ));
+    let first = crate::ir::health::take_render_verification();
+    assert!(first
+        .unverified
+        .iter()
+        .any(|verdict| verdict.function == "ledger_drained"));
+
+    let second = crate::ir::health::take_render_verification();
+    assert!(
+        !second
+            .unverified
+            .iter()
+            .any(|verdict| verdict.function == "ledger_drained"),
+        "a drained verdict must not be reported twice: {second:?}"
+    );
+}
+
+#[test]
+fn recording_one_function_twice_counts_it_once() {
+    // The same function can be re-rendered inside one run (multi-`--vas`, a
+    // session replay). Two entries for one defect would inflate every count the
+    // ratchet reads, so the ledger is keyed rather than appended to.
+    let _serialised = ledger_guard();
+    let _ = crate::ir::health::take_render_verification();
+
+    let function = reads_undefined("ledger_repeat", 0x4a4000);
+    let verification = crate::ir::verify_defs::verify_before_render(&function);
+    crate::ir::health::record_render_verification(&verification);
+    crate::ir::health::record_render_verification(&verification);
+
+    let report = crate::ir::health::take_render_verification();
+    assert_eq!(
+        report
+            .unverified
+            .iter()
+            .filter(|verdict| verdict.function == "ledger_repeat")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn the_report_is_ordered_by_entry_address_so_parallel_and_serial_runs_agree() {
+    // Design rule 12: serial and parallel analysis must produce identical facts.
+    // Renders complete in whatever order the scheduler picks, so insertion order
+    // is not a reportable order.
+    let _serialised = ledger_guard();
+    let _ = crate::ir::health::take_render_verification();
+
+    for entry_va in [0x4a7000u64, 0x4a5000, 0x4a6000] {
+        let function = reads_undefined(&format!("ledger_order_{entry_va:x}"), entry_va);
+        crate::ir::health::record_render_verification(
+            &crate::ir::verify_defs::verify_before_render(&function),
+        );
+    }
+
+    let report = crate::ir::health::take_render_verification();
+    let ours = report
+        .unverified
+        .iter()
+        .filter(|verdict| verdict.function.starts_with("ledger_order_"))
+        .map(|verdict| verdict.entry_va.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ours, vec!["0x4a5000", "0x4a6000", "0x4a7000"]);
+}

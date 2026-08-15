@@ -725,6 +725,60 @@ fn poisoned_defs(body: &[Stmt], out: &mut BTreeSet<String>) {
     }
 }
 
+/// The result of verifying one function at the final pre-render boundary.
+///
+/// [`check`] asks the question; this type is the ANSWER, carried as a value the
+/// caller must consume rather than a `Vec` that is easy to drop on the floor.
+/// That distinction is the whole point: the check has existed and run on every
+/// DecBench render for some time, and its result was discarded unless
+/// `GLAURUNG_VERIFY_DEFS` was set, so a failed proof produced no artifact, no
+/// counter, and no diagnostic. Design rule 8 requires a failed proof to become an
+/// explicit unknown or an honest diagnostic; a dropped `Vec<Violation>` is
+/// neither.
+///
+/// Carrying the verdict does NOT mean suppressing the render. A violation means
+/// the decompilation of THAT function is untrustworthy, not that the analyst's
+/// run should fail, so the C is still produced. What changes is that the failure
+/// is now recorded (see [`crate::ir::health::record_render_verification`]) and
+/// therefore reportable and rachetable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderVerification {
+    /// Recovered function name at the verified boundary.
+    pub function: String,
+    /// Entry address of the verified function.
+    pub entry_va: u64,
+    /// Every violation present in the exact AST that is about to be printed.
+    pub violations: Vec<Violation>,
+}
+
+impl RenderVerification {
+    /// Whether every invented value the printed C reads has a reaching definition.
+    pub fn verified(&self) -> bool {
+        self.violations.is_empty()
+    }
+
+    /// Number of definition-before-use violations at this boundary.
+    pub fn undefined_uses(&self) -> usize {
+        self.violations.len()
+    }
+}
+
+/// Verify the exact AST that is about to be rendered.
+///
+/// This is THE definition-before-use boundary: it runs after the final semantic
+/// transform and before the formatting-only renderer, so what it checks is what
+/// gets printed. Callers must consume the verdict — recording it, reporting it,
+/// or both — which is why the result is `#[must_use]`.
+#[must_use = "a definition-before-use verdict that is dropped is a failed proof \
+              nobody hears about; record it via ir::health::record_render_verification"]
+pub fn verify_before_render(f: &Function) -> RenderVerification {
+    RenderVerification {
+        function: f.name.clone(),
+        entry_va: f.entry_va,
+        violations: check(f),
+    }
+}
+
 /// Verify `f`, returning every violation found (sorted, deduplicated by name and
 /// kind). An empty result means every invented value the function reads has a
 /// definition that reaches it.
@@ -815,6 +869,57 @@ mod tests {
 
     fn names(v: &[Violation]) -> Vec<String> {
         v.iter().map(|x| x.name.clone()).collect()
+    }
+
+    #[test]
+    fn the_pre_render_boundary_carries_the_function_it_verified() {
+        // `check` returns a bare Vec that is trivially dropped; the boundary
+        // verdict names the function and address so a recorded failure can be
+        // attributed to something. That attribution is what makes the count
+        // reportable and rachetable instead of an anonymous total.
+        let mut f = func(vec![Stmt::Return {
+            value: Some(reg("var9")),
+        }]);
+        f.name = "reads_undefined".into();
+        f.entry_va = 0x4010;
+
+        let verdict = verify_before_render(&f);
+
+        assert!(!verdict.verified());
+        assert_eq!(verdict.function, "reads_undefined");
+        assert_eq!(verdict.entry_va, 0x4010);
+        assert_eq!(verdict.undefined_uses(), 1);
+        assert_eq!(names(&verdict.violations), vec!["var9".to_string()]);
+    }
+
+    #[test]
+    fn the_pre_render_boundary_agrees_with_the_check_it_wraps() {
+        // The verdict must not become a second, laxer opinion: whatever `check`
+        // finds on this exact AST is what the boundary reports.
+        let f = func(vec![
+            assign("local_1", reg("ret")),
+            assign("ret", reg("local_1")),
+            Stmt::Return {
+                value: Some(reg("ret")),
+            },
+        ]);
+
+        assert_eq!(verify_before_render(&f).violations, check(&f));
+    }
+
+    #[test]
+    fn a_function_that_defines_what_it_reads_verifies() {
+        let f = func(vec![
+            assign("var0", reg("arg0")),
+            Stmt::Return {
+                value: Some(reg("var0")),
+            },
+        ]);
+
+        let verdict = verify_before_render(&f);
+
+        assert!(verdict.verified());
+        assert_eq!(verdict.undefined_uses(), 0);
     }
 
     #[test]
