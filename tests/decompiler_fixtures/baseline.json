@@ -1312,7 +1312,7 @@
   },
   "131_obfuscated_composite:clang:O2": {
     "nested_conditional_matrix": "pass",
-    "obfuscated_pipeline": "fail"
+    "obfuscated_pipeline": "pass"
   },
   "131_obfuscated_composite:gcc:O0": {
     "nested_conditional_matrix": "pass",
@@ -1320,7 +1320,7 @@
   },
   "131_obfuscated_composite:gcc:O2": {
     "nested_conditional_matrix": "pass",
-    "obfuscated_pipeline": "fail"
+    "obfuscated_pipeline": "pass"
   },
   "132_cpp_vtable_layout:clang:O0": {
     "cpp_vtable_area": "fail",
@@ -1818,9 +1818,9 @@
     "obfuscated_transform": "fail"
   },
   "150_obfuscation_composite:clang:O2": {
-    "obfuscated_digest": "fail",
-    "obfuscated_predicate_chain": "fail",
-    "obfuscated_transform": "fail"
+    "obfuscated_digest": "pass",
+    "obfuscated_predicate_chain": "pass",
+    "obfuscated_transform": "pass"
   },
   "150_obfuscation_composite:gcc:O0": {
     "obfuscated_digest": "pass",
@@ -1829,7 +1829,7 @@
   },
   "150_obfuscation_composite:gcc:O2": {
     "obfuscated_digest": "fail",
-    "obfuscated_predicate_chain": "fail",
+    "obfuscated_predicate_chain": "pass",
     "obfuscated_transform": "fail"
   },
   "151_wide_branch_ladder:clang:O0": {
@@ -2845,10 +2845,10 @@
     "t191_fold": "pass"
   },
   "191_indirect_table_args:clang:O2": {
-    "t191_computed_args": "fail",
+    "t191_computed_args": "pass",
     "t191_direct_control": "pass",
-    "t191_dispatch": "fail",
-    "t191_fold": "fail"
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
   },
   "191_indirect_table_args:gcc:O0": {
     "t191_computed_args": "pass",
@@ -2857,9 +2857,9 @@
     "t191_fold": "pass"
   },
   "191_indirect_table_args:gcc:O2": {
-    "t191_computed_args": "fail",
+    "t191_computed_args": "pass",
     "t191_direct_control": "pass",
-    "t191_dispatch": "fail",
+    "t191_dispatch": "pass",
     "t191_fold": "fail"
   },
   "19_disjoint_set:clang:O0": {
@@ -4112,7 +4112,7 @@
   },
   "95_function_pointer_table:clang:O2": {
     "dispatch_operation": "pass",
-    "fold_operations": "fail"
+    "fold_operations": "pass"
   },
   "95_function_pointer_table:gcc:O0": {
     "dispatch_operation": "pass",
