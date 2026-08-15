@@ -1019,3 +1019,151 @@ fn real_functions_never_answer_with_the_wrong_value() {
         }
     }
 }
+
+// -------------------------------------------------------- exceptional flow --
+
+/// A landing pad is reachable only because the LSDA proves the unwind edge.
+///
+/// This case was recorded as untestable — "LLIR has no exceptional-edge
+/// representation yet". That was already false for MIR when it was written:
+/// `analysis::exception::with_exceptional_successors` builds the augmented graph
+/// from LSDA proof and `python_bindings::ir` hands *that* graph to SSA. What
+/// still has no exceptional edges is the STRUCTURER — `ir::cfg_edges::classify`
+/// runs with an empty proof set — which is a separate, open Phase 4 item. So the
+/// oracle can be held to its contract across an unwind today.
+///
+/// The contrast is what the edge buys, and it is not the phi: a landing pad
+/// already names the join as its successor, so the join merges two operands
+/// either way, and the reaching set contains both either way. Without the proven
+/// edge the pad has no PREDECESSOR — its block is unreachable and its operand is
+/// a `Definition::Unreachable` root, a value no execution can produce. The edge
+/// is what makes that root a real `InstructionOutput`. A consumer reading the
+/// un-augmented answer would be told the handler is dead code.
+///
+/// The augmentation is block-granular: the exceptional successor leaves the
+/// protected block at its end, so the operand contributed by the normal path is
+/// that block's final definition. That is the graph SSA already consumes, and
+/// pinning the query against it is the point.
+#[test]
+fn value_at_a_landing_pad_join_merges_the_lsda_proven_edge() {
+    use crate::analysis::exception::{
+        exceptional_edges, with_exceptional_successors, ExceptionAction, ExceptionCallSite,
+    };
+
+    let llir = function(vec![
+        (
+            0x500,
+            vec![
+                Op::Call {
+                    target: CallTarget::Direct(0x9000),
+                    effects: None,
+                },
+                set("rbx", 1),
+            ],
+            vec![0x530],
+        ),
+        (0x520, vec![set("rbx", 2)], vec![0x530]),
+        (0x530, vec![add("rax", "rbx", 1)], vec![]),
+    ]);
+    let site = ExceptionCallSite {
+        function_start: 0x500,
+        protected_start: 0x500,
+        protected_end: 0x508,
+        landing_pad: 0x520,
+        action: ExceptionAction::Catch,
+        catch_type: None,
+        type_info_location: None,
+    };
+    assert_eq!(
+        exceptional_edges(&llir, std::slice::from_ref(&site))
+            .into_iter()
+            .collect::<Vec<_>>(),
+        vec![(0x500, 0x520)],
+        "the LSDA site must prove exactly one edge into the pad"
+    );
+
+    let handler_value = |mir: &super::MirFunction| {
+        let instruction = mir
+            .instructions()
+            .iter()
+            .find(|instruction| instruction.source_va == 0x520)
+            .expect("handler instruction");
+        (instruction.block, instruction.outputs[0])
+    };
+
+    // Without the edge nothing reaches the pad, so its definition is unreachable
+    // and the join's phi merges a value no execution can produce.
+    let normal = lower_verified(&llir, x86()).expect("valid MIR");
+    let normal_oracle = DefinitionOracle::new(&normal);
+    let (normal_block, normal_handler) = handler_value(&normal);
+    assert!(
+        !normal.blocks()[normal_block.0].reachable,
+        "an un-augmented landing pad has no predecessor"
+    );
+    assert_eq!(
+        normal.value(normal_handler).definition,
+        Definition::Unreachable {
+            block: normal_block
+        }
+    );
+    let normal_join = normal.instructions().last().expect("join instruction");
+    let normal_reaching = normal_oracle.reaching_definitions(normal_join.uses[0]);
+    assert!(
+        normal_reaching.definitions().contains(&normal_handler),
+        "the operand is still merged — it is merely unproducible: {normal_reaching:#?}"
+    );
+
+    // With it, the handler is live and its definition must enter the set.
+    let augmented = with_exceptional_successors(&llir, std::slice::from_ref(&site));
+    let mir = lower_verified(&augmented, x86()).expect("valid MIR over the augmented graph");
+    let oracle = DefinitionOracle::new(&mir);
+    let (handler_block, handler) = handler_value(&mir);
+    assert!(
+        mir.blocks()[handler_block.0].reachable,
+        "the proven unwind edge is the pad's only predecessor"
+    );
+    assert!(matches!(
+        mir.value(handler).definition,
+        Definition::InstructionOutput { .. }
+    ));
+
+    let join = mir.instructions().last().expect("join instruction");
+    let phi = mir.use_(join.uses[0]).value;
+    assert!(
+        matches!(mir.value(phi).definition, Definition::Phi { .. }),
+        "the landing pad must reach the join as a phi operand: {:#?}",
+        mir.value(phi).definition
+    );
+    assert_eq!(
+        oracle.value_at(
+            mir.use_(join.uses[0]).storage,
+            ProgramPoint::before(&mir, join.id).expect("join point")
+        ),
+        DefinitionState::Exact(phi)
+    );
+
+    let reaching = oracle.reaching_definitions(join.uses[0]);
+    assert!(reaching.is_complete(), "{reaching:#?}");
+    assert_eq!(reaching.phis(), &[phi]);
+    assert!(
+        !reaching
+            .definitions()
+            .iter()
+            .any(|value| matches!(mir.value(*value).definition, Definition::Unreachable { .. })),
+        "the proven edge must leave no unreachable root behind: {reaching:#?}"
+    );
+    let normal_path = mir
+        .instructions()
+        .iter()
+        .find(|instruction| instruction.source_va == 0x504)
+        .expect("protected definition")
+        .outputs[0];
+    assert!(
+        reaching.definitions().contains(&handler),
+        "the handler's definition must be in the reaching set: {reaching:#?}"
+    );
+    assert!(
+        reaching.definitions().contains(&normal_path),
+        "the normal path's definition must stay in the reaching set: {reaching:#?}"
+    );
+}

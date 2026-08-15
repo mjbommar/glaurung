@@ -563,16 +563,61 @@ memory_version(region, point)
   it yet, and every call still poisons every unnamed machine storage because no
   target-owned clobber contract exists (EPIC 4). See diary entry 10.
 - [ ] Add transactional graph editing and precise analysis invalidation.
+  Audited 2026-08-15: not started. `src/ir/mir/` exports `lower_verified`,
+  `lower_verified_with_image`, `verify` and the query/model types — no `&mut`
+  editing surface leaves the module, and the only `invalidat|transaction|commit`
+  hit in the whole tree is an unrelated `.expect()` string at `mir/mod.rs:385`.
+  First step: it is not the editor. `DefinitionOracle` has no caching — `value_at`
+  runs a fresh fixed point per call and `clobbers_between` rebuilds a `PointGraph`
+  — so the first per-instruction consumer needs a memoized per-storage solve
+  before an invalidation protocol has anything to invalidate (diary entry 10).
 - [ ] Port call argument recovery, copy propagation, DCE, stack promotion,
   return recovery, expression reconstruction, and aggregate recovery to oracle
   proofs.
+  Audited 2026-08-15: **zero of the seven have moved.** `DefinitionOracle::new`
+  has no non-test caller anywhere in `src/`, and none of `call_args.rs`,
+  `copy_prop.rs`, `dce.rs`, `stack_locals.rs`, `direct_output.rs`,
+  `expr_reconstruct.rs`, `high_variables.rs` mentions `mir` at all. Two findings
+  that change the plan rather than the score:
+  * The listed ORDER looks wrong. Aggregate recovery is last, but it is the only
+    consumer whose verified MIR model is already built and independently verified
+    (`memory_objects/mir.rs`, `mir/verify_objects.rs`) and sitting unused beside
+    the AST version production actually calls (`high_variables.rs:36` ->
+    `memory_objects/ast.rs`). It is the cheapest migration, not the dearest.
+  * Call-argument recovery has since grown its OWN reaching-definition machinery
+    (`call_args::EnclosingSlots::reaching`, `9952fc0`) rather than migrating. It
+    is fail-closed and it works, but it is an eighth approximation, and its two
+    remaining corpus failures are precisely the shape `value_at` answers and it
+    cannot — see "Function contracts and indirect calls" below.
+  Blocked on the box above it in Phase 3: until call clobbers are target-owned,
+  every post-call `value_at` on a real body answers
+  `Unknown(OpaqueInstruction)`, so migrating first would trade a confident wrong
+  answer for a universal refusal.
 - [ ] Delete local backward scans and AST reaching-definition approximations as
   each consumer reaches parity.
-- [~] Diamonds, loops, irreducible flow, conditional definitions, multi-output
-  intrinsics, undef/poison, calls, and memory aliases are covered by
-  `src/ir/mir/query_tests.rs`, including a real x86-64/ARM32 property test that
-  a query may refuse to answer but may never contradict the verified SSA edge.
-  Exceptions are not covered: LLIR has no exceptional-edge representation yet.
+  Audited 2026-08-15: nothing deleted, and the count went UP. `73bdca3` promoted
+  `ir/verify_defs.rs` — an AST-only def-before-use walk — from a discarded debug
+  check to the pipeline's render-time authority, and ratcheted it across six
+  lanes. That was the right call for the defect it fixed and it is movement away
+  from this box. The live set is `call_args::EnclosingSlots`, `copy_prop`'s
+  `copies.clear()` invalidation, `dce::prune_body`'s reverse walk,
+  `structured_reaching.rs`, `use_def.rs` (intra-block only, by its own docstring)
+  and `verify_defs.rs`.
+- [x] Diamonds, loops, irreducible flow, conditional definitions, multi-output
+  intrinsics, undef/poison, calls, memory aliases, and **exceptional flow** are
+  covered by `src/ir/mir/query_tests.rs`, including a real x86-64/ARM32 property
+  test that a query may refuse to answer but may never contradict the verified
+  SSA edge.
+  The exception gap is closed as of 2026-08-15. The old note — "LLIR has no
+  exceptional-edge representation yet" — was already false for MIR when it was
+  written: `analysis::exception::with_exceptional_successors` builds the
+  LSDA-proven augmented graph and `python_bindings::ir` hands *that* graph to
+  SSA. `value_at_a_landing_pad_join_merges_the_lsda_proven_edge` lowers both
+  graphs and pins the difference: without the proven edge the pad has no
+  predecessor, so its operand is a `Definition::Unreachable` root — the oracle
+  would be telling a consumer the handler is dead code — and with it the same
+  operand is a real `InstructionOutput` in the reaching set. What still has no
+  exceptional edges is the STRUCTURER, which is Phase 4's box, not this one.
 
 ## Cross-cutting decompiler workstreams
 
@@ -580,12 +625,60 @@ memory_version(region, point)
 
 - [x] Recover several direct, address-taken, format-sink, callback, and library
   contracts from reusable evidence.
-- [ ] Recover function-pointer-table entry contracts before liveness/DCE.
-- [ ] Preserve ABI may-use argument registers for proven indirect-table calls in
+- [~] Recover function-pointer-table entry contracts before liveness/DCE.
+  Done for LAYOUTS, not for contracts. `callee_contracts::recover_table_entry_layouts`
+  (`9952fc0`) recovers each entry's parameter storage through the same
+  demand-driven cached callee analysis the direct path uses, bounded by the
+  fail-closed `function_tables::tables_referenced_by` scan. Ordering is proved:
+  it runs in `recover_direct_callee_layouts` before the AST pipeline, and its one
+  consumer runs in the `reconstruct_args` pass, ~80 lines of pass ordering ahead
+  of `eliminate_dead_stores` and well ahead of `copy_prop::remove_dead` inside
+  `prepare_for_decbench`. What is NOT done: the recovered `CallPrototype` is
+  discarded at `callee_contracts.rs:765` — only the storage list is kept, in a
+  separate `DirectCalleeFacts::table_entry_layouts` no other consumer can reach.
+  Per-entry return and parameter TYPES are still unrecovered, so the emitted cast
+  on a table call is inferred, not proven.
+- [x] Preserve ABI may-use argument registers for proven indirect-table calls in
   the safe over-approximation direction.
-- [ ] Reconstruct actual reaching values at the call site, not architectural
+  `call_args::table_call_may_use_layout` (`9952fc0`) unions the entry layouts
+  over a callee set proven by relocations — `collect_function_pointer_tables`
+  builds a table only when a defined data symbol has pointer-sized storage, EVERY
+  slot carries an exact dynamic relocation, and EVERY relocation resolves to a
+  defined function symbol. It fails closed three ways: a missing entry layout,
+  layouts that do not nest, or a union that is not a valid ABI allocation prefix.
+  Note what "preserve" had to mean: the union is MATERIALISED as real `Call.args`
+  (`call_args.rs:1528`), not recorded as a side set. `abi::call_effects` is
+  deliberately unchanged. At the AST/C boundary a may-use set that does not
+  become arguments is cosmetic — the emitted call passes nothing regardless of
+  which local assignments survive above it — so the design doc's cheaper "teach
+  DSE about may-uses" option was correctly not taken. See diary entry 25.
+- [~] Reconstruct actual reaching values at the call site, not architectural
   register names that may now denote different caller arguments.
-- [ ] Re-test the `dispatch_operation` table-call fixture and the full corpus.
+  Implemented and load-bearing: `EnclosingSlots::reaching` records a slot's
+  reaching definition only from a top-level unconditional `Stmt::Assign` with a
+  VERSIONED destination (`call_args.rs:1012`). That versioning requirement is the
+  whole difference from the reverted patch below, which named architectural
+  `rdi`/`rsi` and let the naming pass render them as this caller's own `arg0`.
+  The residue is exact and measured. `fold_one_table_call` is all-or-nothing over
+  the union, and the one shape it cannot name is a LOOP-CARRIED argument. For
+  `191_indirect_table_args:gcc:O2:t191_fold` the union is recovered correctly —
+  all four entries yield `[rdi, rsi, rdx]`, dumped under `GLAURUNG_DUMP_PASSES` —
+  but the accumulator lives in `rsi`, defined at the loop head and rewritten
+  inside the guarded arm, so `reaching_value` refuses slot 1, the fold declines,
+  and the ordinary backward scan emits the single adjacent `rdi`. The recovered
+  call is `T191_OPS[i](witness)` for a callee that reads three. Same cause for
+  `95_function_pointer_table:gcc:O2:fold_operations`; both are recorded `fail`.
+  This is the exact query `mir::query::value_at` answers and the AST scan cannot,
+  and it is the strongest concrete argument for EPIC 5's consumer migration.
+- [x] Re-test the `dispatch_operation` table-call fixture and the full corpus.
+  Re-run 2026-08-15 at `dcc62aa`: `tools/dectest.py 95_function_pointer_table`
+  and `191_indirect_table_args 08_indirect_dispatch` — 12 lanes, no regressions;
+  `95:gcc:O2:dispatch_operation` is `pass` in the committed `baseline.json`.
+  The corpus half was done by `2c2bf68`, which ratcheted the 26 cells the
+  indirect-call work repaired after `874fe33` stopped the lifter fabricating
+  `call @0x0` for `call *(%rcx,%rax,8)`; that single lifter repair moved twelve
+  cells including six `191` lanes and five unpredicted obfuscation cells. Two
+  cells remain `fail`, both the loop shape, both attributed above.
 - [r] Do not restore the reverted late table-layout patch: it emitted plausible,
   well-typed, but wrong arguments.
 
@@ -1287,9 +1380,22 @@ behavior.
 - [~] Value-at, clobber, reaching-set, and memory-version queries are complete;
   the transactional mutation/invalidation API is still open.
 - [ ] Model complete call/intrinsic effects.
+  Audited 2026-08-15: not started, and it gates the next box harder than this
+  ordering suggests. `mir::builder::register_effects` returns `Opaque`
+  unconditionally for `Op::Call` and `Op::Unknown` (`builder.rs:349`), so every
+  call poisons every unnamed machine storage; `grep -rn clobber src/target/
+  src/disasm/` returns zero hits and `ir::types::CallEffects` has no clobber
+  field. `call_contracts::apply_known_llir_call_contracts` narrows a call's READS
+  from a catalog but never states a write footprint, and `register_effects`
+  short-circuits before it would be consulted anyway. First step: a clobber set
+  on `TargetSpec`, since the calling convention already lives there.
 - [ ] Migrate high-risk consumers in order: call arguments, copy propagation,
   DCE, stack promotion, return recovery, expression reconstruction, aggregates.
+  Audited 2026-08-15: zero of seven migrated; the listed order is probably wrong
+  (aggregates are the cheapest, not the dearest). Full evidence under the same
+  box in EPIC 5 above — this is the duplicate, not a second workstream.
 - [ ] Delete migrated local approximations.
+  Audited 2026-08-15: nothing deleted; `73bdca3` added one. See EPIC 5 above.
 
 ### Phase 4 — Function contracts and graph completeness
 
@@ -1297,14 +1403,74 @@ behavior.
 machine control flow.
 
 - [ ] Implement stable `FunctionFacts`/`CallFactStore` and SCC propagation.
-- [ ] Repair indirect-table call arity before DCE using reaching values.
-- [ ] Complete terminal/indirect/switch/exception edge representation.
+  Audited 2026-08-15: none of it exists. `FunctionFacts`, `CallFact` and
+  `CallFactStore` appear only in docs; `grep -rn "scc|tarjan|strongly_connected"
+  src/` returns zero, so there is no interprocedural fixed point of any kind.
+  This box is the single most duplicated open item in the plan (EPIC 1, here, and
+  Phase 5). The design is now written down in
+  `docs/design/function-facts-and-call-facts-2026-08-15.md`, which names the
+  stable-ID scheme (the normalized entry VA that `ProgramImage::normalize_function_entry`
+  already canonicalizes, plus a call-site instruction VA) and the owner
+  (`ProgramSession`, on the keyed-cache pattern `environment()` uses, not the
+  `OnceLock` pattern). First step is smaller than the box looks:
+  `analyze_functions_image_with_seeds` already RETURNS a `CallGraph` and
+  `session.rs:263` discards it into `_call_graph` one line later. The SCC input
+  is computed and thrown away today.
+- [x] Repair indirect-table call arity before DCE using reaching values.
+  Done by `9952fc0`, with a correction to this box's premise: DCE was never the
+  first wrong stage. `GLAURUNG_DUMP_PASSES` put the boundary at
+  `copy_prop::remove_dead` inside `prepare_for_decbench`, which drops the
+  argument setup because the call reads nothing — the deletion is the consequence
+  of the empty argument list, not its cause. The repair is a union over a
+  relocation-proven callee set, materialised as arguments before naming; a
+  may-use set that is not materialised as arguments is cosmetic at the AST/C
+  boundary. Residue (two loop-shape cells) is recorded under "Function contracts
+  and indirect calls".
+- [~] Complete terminal/indirect/switch/exception edge representation.
+  Represented; not all of it reaches a consumer. `01f0b23` added
+  `EdgeKind::Exceptional`/`Unknown` and the nine-variant `TerminalKind`, with the
+  invariant that no block has zero ways out; `f1a6e4c` and `4ad8800` then split
+  indirect terminals into `Indirect`/`IndirectToSymbol`/`IndirectThroughSlot`.
+  Three gaps, in descending size:
+  * **Exceptional edges do not reach the structurer.** `prepare_llir_for_lowering`
+    calls `analysis::exception::with_exceptional_successors`, feeds the augmented
+    graph to SSA and the bit-demand oracle, and DROPS it — region recovery is
+    handed the un-augmented `function` (`python_bindings/ir.rs:776-786` vs
+    `:899-903`). `Cfg::from` then calls `cfg_edges::classify`, which is
+    `classify_with_exceptions` with an EMPTY proof set, so `EdgeKind::Exceptional`
+    cannot fire in production. `classify_with_exceptions` has no production
+    caller at all. Representation was never the blocker; plumbing is, and the
+    reason it was not plumbed is real: a landing pad is a second entry into the
+    middle of a region.
+  * Switch edges are DERIVED, not read. There is no `Op::Switch`; `SwitchDefault`
+    is inferred, and `is_dispatch`'s `_ => succ_count > 2` still reads any
+    non-branch terminator with three successors as a jump table.
+  * `EdgeKind` has no `Call`/`Return`/`TailCall`; those live only on
+    `TerminalKind`, which is why the box below can only be `[~]`.
 - [~] Verify total region ownership and edge accounting. Successor-edge
   accounting is verified and enforced (0 uncovered, 0 invented across the
   measured corpus); terminal ownership is not, because the region algebra has no
   `Return` node.
-- [ ] Attack large-function GED and AArch64-only failures from the first wrong
+- [~] Attack large-function GED and AArch64-only failures from the first wrong
   stage.
+  Split verdict, and the two halves are not comparable.
+  **AArch64: the method worked and is partly spent.** Diary entry 23 censused 94
+  AArch64-only failures from `arch_baseline.json` and named the first wrong stage
+  for 29 of them — 22 FP/FP-adjacent (LIFTING: `scvtf`/`fmov` arriving with no
+  output, no input, no register footprint, behind two ABI holes) and 7
+  `141_atomics` (`ldar`/`stlrb` unlifted). `039c7d6` fixed the FP cluster: 12
+  functions fail->pass, 0 pass->fail. Each remaining blocker is named with an
+  owner (`fcmp` needs a float NZCV model; `fcvtzu`/`ucvtf` need an unsigned
+  `ScalarType`; `fmadd` is a rendering decision). **65 of the 94 are still
+  undiagnosed** — no FP instruction, no single cause — which is what Phase 0's
+  open "AArch64-only diagnosis" box refers to. The same method has since been
+  applied to i386 instead (`dcc62aa`, x87 opaque rate 100% -> 0.35%).
+  **Large-function GED: untouched.** `ged-recovery-measured-trade.md` is dated
+  2026-07-26, is marked strictly experimental, and measures one rejected
+  experiment (+50.32 GED points, 4 functions answered WRONG). No commit since
+  addresses GED; every diary mention says "unmeasured" or "out of scope". The
+  structural reason is in this plan's own ordering — GED is a DecBench metric,
+  and DecBench is opt-in. First step for that half is a measurement, not a fix.
 
 ### Phase 5 — Canonical program environment and references
 
@@ -1312,11 +1478,55 @@ machine control flow.
 identity and provenance.
 
 - [~] Finish and commit the session-owned DWARF `TypeStore` producer.
-- [ ] Implement `SymbolStore`, PDB import, call facts, and analyst persistence.
-- [ ] Add contextual operand reference interpretations.
+- [~] Implement `SymbolStore`, PDB import, call facts, and analyst persistence.
+  A four-way conjunction with one part done. **`SymbolStore`: built (`6783274`)
+  and, since `4af32f1`, connected** — `python_bindings/ir.rs:447` builds a
+  `ReferenceResolver` from `session.symbol_store()`, the first production caller
+  after every earlier one lived in `session_tests.rs`. Its reach is one
+  `InterpretationKind` (`StringLiteral`) over pointer-width slots in
+  relocation-fixed sections; `ir/symbol_env.rs` and `ir/name_resolve.rs` are
+  still the real symbol path. **PDB import: open** — `symbols/pdb.rs` and the
+  Windows tooling exist and are real, but nothing in them touches
+  `crate::program::symbols`; `SymbolSource::Debug` is declared and never emitted.
+  **Call facts: open, and not started** — see Phase 4. **Analyst persistence:
+  open** — `SymbolAuthority::Analyst` is constructed only in
+  `symbols_tests.rs:109`; the `.glaurung` KB schema has no symbol projection.
+- [~] Add contextual operand reference interpretations.
+  `4af32f1` landed `program/references.rs`: a seven-tier `EvidenceSource`
+  ordering, `OperandRole` admission (a mapped value consumed by arithmetic stays
+  a number; only a relocation may promote it), and fail-closed supply — a caller
+  may not hand in evidence claiming a tier the resolver could have proved itself,
+  pinned by `a_caller_may_not_supply_a_tier_the_resolver_owns`. Nineteen tests,
+  and `193_mapped_constant_roles` measures non-vacuity (12 positives fail with
+  the consumer off, 12 controls pass either way).
+  Tiers 4-6 — MIR provenance, call/type constraints, xref consistency — cannot be
+  proved from this layer by construction, and are recorded as caller-supplied.
+  The one production caller supplies nothing, so tiers 4-7 are dead in
+  production. Known defect, unfixed: `references.rs:697` maps
+  `memory_kind_at(..).is_none()` to `UnmappedReference`, but `ProgramImage`
+  returns `None` for overlapping sections that DISAGREE, where the answer is
+  `ConflictingEvidence` (diary entry 35).
 - [ ] Migrate symbols, strings, globals, enums, function tables, RTTI, and vtables.
+  Audited 2026-08-15: nothing migrated. Legacy owners, one per item:
+  `ir/name_resolve.rs` + `ir/symbol_env.rs` (symbols, as `HashMap<u64, String>`),
+  `ir/strings_fold.rs` and the threaded `str_pool` (strings), `ast.rs:9259`'s
+  `format!("glaurung_global_{address:x}")` and `got_fold.rs` (globals),
+  `core/data_type.rs` (enums — `TypeShape::Enum` exists in the canonical store
+  and nothing reads it), `ir/function_tables.rs` (tables), nothing at all for
+  RTTI beyond one integer-RTTI proof in `exception_recover.rs`, and
+  `analysis/vtable.rs` (vtables). First step is not a migration but a layering
+  fix: `vtable.rs` and `jump_table.rs` run during DISCOVERY, before a symbol
+  store exists, so they cannot ask it no matter how good it gets.
 - [ ] Integrate bounded name-based library knowledge through evidence policy.
+  Audited 2026-08-15: open. FLIRT exists and is wired straight into discovery
+  seeds and name overrides rather than through `SymbolEvidence`;
+  `NameMatch::Resemblance` is defined in `symbols.rs` and never produced. The
+  policy this box points at is written (see "Name-based knowledge: permitted,
+  bounded, and never silent" above) and has no enforcement point yet.
 - [ ] Delete legacy maps and scattered recognizers after parity.
+  Audited 2026-08-15: open, and correctly last — all fourteen recognizers the
+  entry-32 survey counted are still live, and none has reached parity. Nothing
+  here is deletable yet.
 
 ### Phase 6 — Aggregate recovery
 

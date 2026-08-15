@@ -7158,3 +7158,238 @@ fall in the four audited blocks only; the sibling hunks are at lines 34, 291 and
 366, so the two do not overlap, but the roadmap patch will need an offset apply.
 fixture matrix, `arch_roundtrip.py`, repo-wide `cargo fmt`. **No baseline was
 refreshed and nothing was committed.**
+
+
+## Entry 43 — The union was right, the loop was not
+
+Audit of five roadmap blocks — "Function contracts and indirect calls", EPIC 5,
+Phase 3, Phase 4, Phase 5 — nineteen open boxes, at `dcc62aa`. Breadth first, on
+the premise that the plan had drifted far enough from the code that the git log
+was the better guide. That premise held for one block and failed for four.
+
+### The scoreboard
+
+| Block | boxes | -> `[x]` | -> `[~]` | stayed `[ ]` |
+|---|---|---|---|---|
+| Function contracts and indirect calls | 4 | 2 | 2 | 0 |
+| EPIC 5 | 3 (+1 `[~]`) | 1 (the `[~]`) | 0 | 3 |
+| Phase 3 | 3 | 0 | 0 | 3 |
+| Phase 4 | 4 | 1 | 2 | 1 |
+| Phase 5 | 5 | 0 | 2 | 3 |
+
+Ten boxes moved: four to `[x]`, six to `[~]`. Ten were open and are still open,
+and for those the value of the audit is the first-step line, not the mark.
+
+The distribution is the finding. Every box that had silently become true is in
+one block — the one whose work shipped in the last three days and whose commit
+messages describe the fix but not the plan item it closed. The MIR migration
+blocks (EPIC 5, Phase 3) are exactly as open as they say they are: the files
+implementing the seven named consumers contain no reference to `mir` at all, and
+`DefinitionOracle::new` has no non-test caller anywhere in `src/`.
+
+### The one that had to be measured, not read
+
+"Preserve ABI may-use argument registers for proven indirect-table calls" and
+"Reconstruct actual reaching values at the call site" both look closed by
+`9952fc0`, and the diary entry 25 that describes it is accurate. But its own
+"Gates run" section lists six `191_indirect_table_args` cells failing on an
+unrelated lifter defect, `874fe33` then fixed that defect, and `2c2bf68`
+ratcheted 26 cells. Reading forward from three commit messages, all four boxes
+look done.
+
+They are not. `baseline.json` records two cells `fail`:
+`95_function_pointer_table:gcc:O2:fold_operations` and
+`191_indirect_table_args:gcc:O2:t191_fold`. Both are loops. That is not a
+coincidence and it is not a residue of the lifter defect.
+
+`GLAURUNG_DUMP_PASSES=1` on `t191_fold` at gcc `-O2` puts it exactly. The union
+is recovered, correctly, for all four table entries:
+
+```
+table entry 0x1100: recovered layout [Phys("rdi"), Phys("rsi"), Phys("rdx")]
+table entry 0x1120: recovered layout [Phys("rdi"), Phys("rsi"), Phys("rdx")]
+table entry 0x1140: recovered layout [Phys("rdi"), Phys("rsi"), Phys("rdx")]
+table entry 0x1160: recovered layout [Phys("rdi"), Phys("rsi"), Phys("rdx")]
+```
+
+and the call still comes out with one argument:
+
+```
+call T191_OPS[%r8#2](%r14#1);
+```
+
+The setup in the loop body is
+
+```
+        %rsi#1 = %rsi#2;            <- accumulator, at the loop head
+        ...
+        if ((%t140 != 0)) {
+            %rdi#2 = %r14#1;
+            %rdx#3 = (unsigned long)((unsigned int)(%rbx#2));
+            call T191_OPS[%r8#2]();
+            %rsi#3 = (unsigned long)((unsigned int)(%rax#2));
+            %rsi#1 = %rsi#3;        <- and again, from the call's own result
+        }
+```
+
+`rdi` and `rdx` are set adjacently; `rsi` carries the accumulator and is
+written in two places in the body, one of them after the call.
+`EnclosingSlots::reaching` refuses slot 1 — correctly, by its own fail-closed
+rules — `fold_one_table_call` is all-or-nothing over the union, so it declines
+the whole thing, and the ordinary backward scan emits the single adjacent
+`rdi`.
+
+So the "preserve the may-uses" box is genuinely `[x]`: the union is proved,
+nests, passes the ABI prefix check, and is materialised as real arguments. The
+"reconstruct the reaching values" box is `[~]`, and its residue is a single
+named shape: a loop-carried value in an argument register.
+
+The reason this is worth an entry rather than a footnote is where the fix
+lives. `value_at` at that call site is precisely the query `mir::query`
+implements and `EnclosingSlots` cannot answer — the loop-header definition is a
+phi, and an AST scan that only records top-level unconditional versioned
+assignments will never name one. EPIC 5's "port call argument recovery to
+oracle proofs" has been open since it was written with no consumer asking for
+it. It now has a consumer asking for it, with two failing corpus cells
+attached. That is a better argument for the migration order than anything in
+the plan.
+
+### The claim that was false when it was written
+
+EPIC 5's last box read:
+
+> Exceptions are not covered: LLIR has no exceptional-edge representation yet.
+
+`analysis::exception::with_exceptional_successors` has existed for some time. It
+builds an LSDA-proven augmented graph, and `python_bindings::ir` hands *that*
+graph to SSA and to the bit-demand oracle. Entry 31 already corrected the same
+sentence in its own brief ("this is the sixth brief in three days whose premise
+was already implemented") and struck it for `cfg_edges`; it survived in the MIR
+box, which is a different file.
+
+So the case was testable and nobody had tested it. It is now:
+`value_at_a_landing_pad_join_merges_the_lsda_proven_edge`. Two lowerings of the
+same three-block function, with and without the proven edge.
+
+The first attempt asserted the wrong contrast. I expected the un-augmented
+graph to answer `Exact` at the join and the augmented one to answer a phi. It
+answers a phi both times, and the reason is worth recording: **a landing pad
+already names the join as its successor.** The edge the LSDA proves is the
+pad's *incoming* one. Without it the pad has no predecessor, so it is an
+unreachable block whose definition is `Definition::Unreachable` — merged into
+the phi, present in the reaching set, and unproducible by any execution. With
+it, the same operand is a real `InstructionOutput`. The difference the query
+surface exposes is not "one operand versus two", it is "this handler is dead
+code" versus "this handler runs", which is the answer a consumer would actually
+act on.
+
+The test is non-vacuous by construction: remove the augmentation and the
+`blocks()[handler].reachable` assertion fails.
+
+Note the scope. This closes the box about the *query surface*. It does not
+touch Phase 4's separate, still-open item: the structurer never sees an
+exceptional edge, because `prepare_llir_for_lowering` builds the augmented
+graph, gives it to SSA, and then hands region recovery the un-augmented
+`function` (`python_bindings/ir.rs:776-786` versus `:899-903`). `Cfg::from`
+calls `cfg_edges::classify`, which is `classify_with_exceptions` with an empty
+proof set, so `EdgeKind::Exceptional` cannot fire in production and
+`classify_with_exceptions` has no production caller at all. Two different
+boxes, two different files, and only one of them was cheap.
+
+### Phase 4's most duplicated box, and why it has not moved
+
+`FunctionFacts`/`CallFactStore` appears in EPIC 1, Phase 4, and by reference in
+Phase 5. It does not exist: the identifiers appear only in docs, and
+`grep -rn "scc|tarjan|strongly_connected" src/` returns nothing, so there is no
+interprocedural fixed point of any kind in the tree.
+
+It has never had a design, which is most of why. Written now as
+`docs/design/function-facts-and-call-facts-2026-08-15.md`. Two conclusions from
+the audit that make it smaller than it reads:
+
+* **The stable-ID scheme already exists and should not be invented.**
+  `ProgramImage::normalize_function_entry` strips the Thumb bit and is already
+  the canonicalizer behind `DiscoveryKey`, `EnvironmentKey`, and
+  `recover_program_environment`. `FunctionId` is that value in a newtype;
+  `CallSiteId` is `(FunctionId, call instruction VA)`. The pair rather than the
+  bare VA because an ICF-merged tail is otherwise one call site with two
+  callers, silently.
+* **The SCC input is computed today and thrown away.**
+  `analyze_functions_image_with_seeds` returns `(Vec<Function>, CallGraph)` and
+  `session.rs:263` binds the second to `_call_graph`. The first commit on this
+  box is keeping that value and re-keying its `Vec<String>` nodes, not building
+  a framework.
+
+The note also records the ownership choice with its reason: the keyed-cache
+pattern `environment()` uses, not the `OnceLock` pattern `symbol_store()` uses,
+because call facts depend on budgets and a `OnceLock` store would be built under
+whichever budget arrived first and be quietly wrong for every larger one.
+
+### Phase 5: three `[ ]` boxes that are conjunctions
+
+"Implement `SymbolStore`, PDB import, call facts, and analyst persistence" is
+one checkbox over four independent things, three of which have not started and
+one of which shipped on 2026-08-14 and got its first production consumer the
+next day. That shape is worth naming because the audit hit it twice: a
+conjunction box reports the state of its weakest conjunct, so `SymbolStore`
+being real and connected is invisible in the plan, and `PDB import` being
+entirely absent is invisible too. Split into `[~]` with the four states
+enumerated.
+
+`Add contextual operand reference interpretations` moved `[ ]` -> `[~]` on the
+same reasoning: `program/references.rs` is real, tested nineteen ways, and
+measured non-vacuous by `193_mapped_constant_roles`. What is not there is tiers
+4-6, and they are not there by construction — MIR provenance, call/type
+constraints, and xref consistency cannot be proved from the resolver's layer, so
+they are caller-supplied, and the single production caller supplies nothing.
+`[ ]` claimed too little; `[x]` would claim far too much.
+
+### What was measured
+
+```
+tools/dectest.py 95_function_pointer_table            4 lanes, no regressions
+tools/dectest.py 191_indirect_table_args 08_indirect_dispatch
+                                                      8 lanes, no regressions
+tools/dectest.py 191_indirect_table_args --full       16 cells listed;
+                                                      gcc:O2:t191_fold fail,
+                                                      matching baseline.json
+glaurung decompile ... --func t191_fold --style decbench
+                                                one recovered argument against
+                                                a union of three
+GLAURUNG_DUMP_PASSES=1 on the same lane         the union is present and
+                                                correct at reconstruct_args
+```
+
+### Gates
+
+```
+cargo test --features python-ext   2548 passed, 0 failed, 1 ignored
+                                   (2547 at dcc62aa; +1 is the new test)
+cargo check --lib --tests          clean without the feature, so the new
+                                   test compiles on the plain gate too
+touch src/lib.rs
+cargo build --features python-ext  never-used FUNCTION count 0, unchanged
+rustfmt --edition 2021             on src/ir/mir/query_tests.rs only
+pytest python/tests/test_src_dependency_boundaries.py   7 passed
+```
+
+`@o0`/`@o2` were NOT run and are not applicable: the only code change is a new
+`#[cfg(test)]` case in `src/ir/mir/query_tests.rs`. No production path was
+touched, and `DefinitionOracle` still has no production caller to touch.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. **No
+baseline was refreshed and nothing was committed.**
+
+### The thing I did not fix, and why not
+
+`191_indirect_table_args:gcc:O2:t191_fold` is one `reaching_value` case away
+from passing, and it is tempting. It is also exactly the shape
+`table-dispatch-arguments-2026-08-12.md` records as having been fixed once
+already with plausible, well-typed, wrong output, and the guard that prevents a
+repeat — "only a versioned destination is recorded" — is the same rule that
+declines this case. Loosening it to admit a loop-header phi is a soundness
+argument, not a patch, and it belongs to the consumer migration it argues for.
+Left failing, diagnosed, and attached to the box that owns it.
