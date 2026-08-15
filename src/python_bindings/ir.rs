@@ -887,7 +887,20 @@ fn prepare_llir_for_lowering(
             }
         }
     }
-    let (region, cfg_health) = crate::ir::structure::recover_verified_with_health(function, &ssa);
+    // What a relocation proves about each computed transfer. The image's slot
+    // index is recovered once and shared, so this costs a def-use walk per
+    // function and no extra object parse. It reaches only the terminal census;
+    // no region decision depends on it.
+    let indirect_destinations = crate::ir::indirect_targets::resolve_indirect_jumps(
+        function,
+        &ssa,
+        &image.relocated_symbol_slots(),
+    );
+    let (region, cfg_health) = crate::ir::structure::recover_verified_with_health_and_destinations(
+        function,
+        &ssa,
+        &indirect_destinations,
+    );
     let (numbered, definition_widths, mut parameter_slots) = if recover_semantic_prototype {
         let source_lifetimes = dwarf_source_register_lifetimes(declared, cc);
         crate::ir::value_number::value_number_with_parameter_slots_and_lifetimes(

@@ -162,6 +162,81 @@ fn every_raw_lifted_call_is_closed_by_the_abi_pass() {
     assert!(annotated.calls_with_effects > 0);
 }
 
+/// No ARM32 *data-processing* mnemonic may reach a consumer as an opaque
+/// intrinsic.
+///
+/// The per-ISA census caught this as a rate: ARM32 rendered 16 of its 242
+/// lifted instructions — 6.6% — as an opaque `add`, against 0.18% on x86-64 and
+/// 0% on AArch64, and every one of the 16 was the same mnemonic. They were the
+/// A32 modified-immediate encoding capstone reports as a split
+/// `#<imm8>, #<rotation>` pair, which no arity check in `lift_arm32` matched
+/// (see `fold_modified_immediate`). An opaque intrinsic declares a maximal
+/// footprint, so a register-plus-constant `add` was telling every dataflow
+/// consumer that it read and wrote all memory.
+///
+/// This pins the repair by *category* rather than by count: a raw total would
+/// move whenever an unrelated mnemonic gained or lost coverage, and would say
+/// nothing about the thing that was wrong. Any of these names reappearing means
+/// an encoding of a fully-modelled operation stopped being decoded.
+#[test]
+fn no_arm32_data_processing_mnemonic_is_opaque() {
+    /// Mnemonics `lift_arm32` lowers exactly, so an opaque one is a decode gap.
+    const MODELLED: &[&str] = &[
+        "add", "adds", "addw", "sub", "subs", "subw", "and", "ands", "orr", "orrs", "eor", "eors",
+        "mov", "movs", "movw", "cmp", "cmn", "mvn", "mvns", "lsl", "lsls", "lsr", "lsrs", "asr",
+        "asrs", "mul", "muls", "rsb", "rsbs", "neg", "negs",
+    ];
+
+    let budgets = Budgets {
+        max_functions: 96,
+        max_blocks: 512,
+        max_instructions: 60_000,
+        timeout_ms: 4000,
+        total_timeout_ms: 0,
+    };
+    let mut census = EffectCensus::default();
+    let mut lifted_any = false;
+    for (relative, arch) in CORPUS {
+        if *arch != Arch::ARM {
+            continue;
+        }
+        let path = Path::new(relative);
+        if !path.exists() {
+            continue;
+        }
+        let data = std::fs::read(path).expect("read sample");
+        let (discovered, _call_graph) = analyze_functions_bytes(&data, &budgets);
+        for function in &discovered {
+            if let Ok(lifted) = lift_function_from_bytes(&data, function, Arch::ARM) {
+                census_into(&lifted, &mut census);
+                lifted_any = true;
+            }
+        }
+    }
+    assert!(
+        lifted_any,
+        "no ARM32 sample lifted, so this measures nothing"
+    );
+    assert!(
+        census.instructions > 100,
+        "too little ARM32 code to mean anything: {}",
+        census.instructions
+    );
+    let regressed: Vec<_> = census
+        .opaque_intrinsic
+        .iter()
+        .filter(|(name, _)| MODELLED.contains(&name.as_str()))
+        .collect();
+    assert!(
+        regressed.is_empty(),
+        "ARM32 lowers these exactly, yet they reached a consumer as opaque \
+         intrinsics declaring a maximal footprint: {regressed:?} \
+         (of {} instructions, {} opaque overall)",
+        census.instructions,
+        census.opaque(),
+    );
+}
+
 /// Print the histogram the two tests above only summarise, per architecture.
 ///
 /// The per-ISA split is the part that turns the report into a work queue: a

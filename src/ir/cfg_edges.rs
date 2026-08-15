@@ -57,7 +57,7 @@
 //! names them, and [`classify_terminals`] guarantees the total: every block has at
 //! least one way out, listed or terminal.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::types::{LlirFunction, Op};
 
@@ -136,11 +136,35 @@ pub enum TerminalKind {
     /// clip removed from the function. Both are honest as "leaves directly, to
     /// somewhere outside", and neither may be reported as a return.
     Direct,
+    /// A computed transfer whose destination a relocation proves: it reads a
+    /// place the loader binds to a named symbol, so control goes there. A PLT
+    /// stub's `jmp *GOT[f]` is the everyday case, and `deregister_tm_clones`'
+    /// `jmp *%rax` one load later is the same fact with a register hop.
+    ///
+    /// Frame-replacing, like [`TerminalKind::TailCall`], but proven by a
+    /// different thing: `TailCall` reads `CallEffects::is_tail_call` off a
+    /// direct call, and this reads a relocation off the place the transfer
+    /// dereferences. Kept apart so a reader can tell which proof was available.
+    IndirectToSymbol,
+    /// A computed transfer that reads a fixed, statically known place which no
+    /// relocation names.
+    ///
+    /// The place is recovered and the contents are not, and the difference is
+    /// worth a kind of its own: `.plt`'s header stub reads `.got.plt[2]`, which
+    /// the loader fills with `_dl_runtime_resolve`. Nothing static can name it
+    /// and nothing is wrong — that is not the same situation as a dispatch whose
+    /// table was never found, and lumping the two together is what made the
+    /// unresolved count unreadable.
+    IndirectThroughSlot,
     /// A computed transfer whose destinations were never recovered — `jmp *%rax`
     /// with an empty successor list.
     ///
     /// The precise shape that made `statemachine:clang:O0` look faithful while
     /// thirty instructions of case arms were missing from the function entirely.
+    ///
+    /// After [`classify_terminals_with_destinations`] this is the residue: the
+    /// transfers no relocation and no table recovery accounted for. A declined
+    /// jump table stays here, by design — see [`crate::ir::indirect_targets`].
     Indirect,
     /// Control leaves and nothing in the block says how.
     ///
@@ -321,10 +345,37 @@ pub fn classify_with_exceptions(
 /// Every block either names a successor or names how it leaves, and a block that
 /// can prove neither reports [`TerminalKind::Unknown`] rather than nothing.
 pub fn classify_terminals(lf: &LlirFunction, succs: &[Vec<usize>]) -> Vec<Vec<TerminalEdge>> {
+    classify_terminals_with_destinations(lf, succs, &BTreeMap::new())
+}
+
+/// [`classify_terminals`] with relocation-proven computed destinations named as
+/// such.
+///
+/// `destinations` maps the virtual address of an `Op::IndirectJump` to what a
+/// relocation proves about where it goes, as produced by
+/// [`crate::ir::indirect_targets::resolve_indirect_jumps`]. It is a parameter
+/// for the same reason `exceptional` is one on
+/// [`classify_with_exceptions`]: the proof lives in the relocation table, and no
+/// instruction in the block carries it. A transfer with no entry keeps
+/// [`TerminalKind::Indirect`], so the default is always the weaker claim.
+pub fn classify_terminals_with_destinations(
+    lf: &LlirFunction,
+    succs: &[Vec<usize>],
+    destinations: &BTreeMap<u64, crate::ir::indirect_targets::IndirectDestination>,
+) -> Vec<Vec<TerminalEdge>> {
+    use crate::ir::indirect_targets::IndirectDestination;
+
+    let indirect_kind = |va: u64| match destinations.get(&va) {
+        Some(IndirectDestination::Symbol(_)) => TerminalKind::IndirectToSymbol,
+        Some(IndirectDestination::UnnamedSlot(_)) => TerminalKind::IndirectThroughSlot,
+        None => TerminalKind::Indirect,
+    };
+
     (0..succs.len())
         .map(|i| {
             let instrs = lf.blocks.get(i).map(|b| b.instrs.as_slice()).unwrap_or(&[]);
             let term = instrs.last().map(|x| &x.op);
+            let term_va = instrs.last().map(|x| x.va);
             let mut edges = Vec::new();
             if term.is_some_and(|op| op.is_conditional_return()) {
                 edges.push(TerminalEdge {
@@ -364,7 +415,9 @@ pub fn classify_terminals(lf: &LlirFunction, succs: &[Vec<usize>]) -> Vec<Vec<Te
                         TerminalKind::Call
                     }
                 }
-                Some(Op::IndirectJump { .. }) => TerminalKind::Indirect,
+                Some(Op::IndirectJump { .. }) => {
+                    term_va.map_or(TerminalKind::Indirect, &indirect_kind)
+                }
                 Some(Op::Jump { .. }) => TerminalKind::Direct,
                 // A conditional return with no successor already reported the
                 // returning side; the OTHER side went somewhere unrecorded.

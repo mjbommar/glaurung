@@ -5550,3 +5550,418 @@ DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
 fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`, and
 `pytest python/tests/` in full. **No baseline was refreshed and nothing was
 committed.**
+
+## Entry 36 — 11% of terminals were not unresolved, they were unread
+
+The brief: *"11% of all terminal control-flow edges are unresolved indirect
+transfers. Reduce that, honestly."* It also said to classify before fixing, and
+predicted the classification would be the more valuable half. It was.
+
+Entry 33's census recorded 2706 `unresolved_indirect_edges` against 24046
+`terminal_edges` over 60 gcc-O2 fixture objects, and the roadmap now reads that
+as "2706 places where the decompiler genuinely does not know where control
+goes". Re-derived over all 182 gcc-O2 fixture objects — 94809 health events,
+2431 distinct functions — the count is 32838 of 141765 terminals, 23.2%. The
+ratio is higher than 11% because the object set is different, not because
+anything regressed; the shape of the answer is what matters and it is the same.
+
+**Of that 23.2%, 98.8% is boilerplate whose destination a relocation states
+outright. The number of functions in this corpus whose control flow the
+decompiler genuinely cannot follow is four.**
+
+### The histogram
+
+Classified independently of Glaurung, from `objdump` and `readelf` ground truth
+— section membership, relocation tables, and the reaching definition of each
+jump register — so that the fix could be checked against something that is not
+itself the thing being fixed:
+
+| shape | functions | event-weighted | share |
+|---|---|---|---|
+| `crtstuff` `jmp *%rax` after a GOT load | 364 | 14196 | 43.2% |
+| `.plt.got` / `.plt.sec` stub, `jmp *GOT[f]` | 286 | 11154 | 34.0% |
+| `.plt[0]` lazy-binding header, `jmp *.got.plt[2]` | 182 | 7098 | 21.6% |
+| table dispatch, `jmp *(%rdx,%rax,8)` and friends | 9 sites | 390 | 1.2% |
+| **total** | **842** | **32838** | |
+
+The first two are *proven*. A PLT stub reads a slot that `.rela.plt` binds to a
+named import. `deregister_tm_clones` and `register_tm_clones` — one pair in
+every single shared object gcc emits — do
+
+```
+mov  rax, [GOT[_ITM_deregisterTMCloneTable]]
+test rax, rax
+je   .Lret
+jmp  *rax
+```
+
+which is the same fact with a register hop and a null guard. `.rela.dyn` names
+the symbol at the far end. Calling either "a computed transfer whose
+destinations were never recovered" is not a conservative reading; it is a wrong
+one.
+
+The third is not proven and never can be: `.plt[0]` reads `.got.plt[2]`, which
+the loader fills with `_dl_runtime_resolve` and which **no relocation names**.
+But it is not mysterious either, and lumping it with a dispatch whose table was
+never found is what made the counter unreadable.
+
+### What was built
+
+`src/ir/indirect_targets.rs`. One rule covers all three shapes and separates
+them correctly: walk SSA from the jump's target register to its reaching
+definition; if that definition is a load from a *fixed* place, ask whether a
+relocation names a symbol there.
+
+* named → `TerminalKind::IndirectToSymbol` (destination proven)
+* not named → `TerminalKind::IndirectThroughSlot` (place proven, contents not)
+* anything else → `TerminalKind::Indirect`, exactly as before
+
+A base or an index register on the load means the place is computed, not fixed,
+so a table dispatch matches nothing here and is left entirely alone. That is a
+test, not a comment: `a_table_dispatch_is_left_entirely_alone`.
+
+**The stored bytes are never consulted.** A GOT slot's link-time contents are a
+placeholder the loader overwrites — zero, or the lazy trampoline. Reading them
+and calling the result a destination is the same error as the `call
+*(%rcx,%rax,8)` → `Indirect(Addr(0))` defect the brief warned about. The only
+admitted evidence is a relocation naming a symbol, which is precisely
+`EvidenceSource::Relocation` at `Confidence::Proved`, the one tier
+`OperandRole::BranchTarget` may act on without the role vouching for it.
+`without_relocations_no_transfer_names_a_symbol` pins that: with an empty
+relocation index, the same PLT stub resolves to a slot and never to a name.
+
+The relocation-by-place index is a new lazily-owned `ProgramImage` accessor,
+`relocated_symbol_slots()`, following the `noreturn_import_targets` pattern from
+`2ed9b07`. Recovered once per image, not once per function — a per-function
+`elf_got_map` would have added one object parse per function of an `--all`
+decompile, which is the exact cost that ownership commit exists to prevent.
+
+`classify_terminals_with_destinations` takes the proof as a parameter for the
+same reason `classify_with_exceptions` takes the landing pads as one: the
+evidence lives in a table outside the instruction stream, and `cfg_edges` cannot
+see it.
+
+### Result
+
+Same corpus, same 94809 events, before and after:
+
+```
+                            before        after
+terminal_edges              141765       141765
+unresolved_indirect_edges    32838          351     23.16% -> 0.25%
+indirect_symbol_edges            -        25350     (17.88%)
+indirect_slot_edges              -         7137     ( 5.03%)
+```
+
+`351 + 25350 + 7137 = 32838` exactly. Nothing was dropped and nothing invented;
+every transfer was re-attributed, and the residue is the residue.
+
+The two independent classifications agree to the unit. `14196 + 11154 = 25350`
+is `indirect_symbol_edges`. `7098` plus one of `ifunc_lazy_double`'s two sites
+is `7137`. `390` minus that same site is `351`.
+
+Every other counter over those 94809 events is **bit-identical**: `undefined_uses`
+4712, `structure_fallbacks` 3666, `statements` 2609281, `gotos` 56410, and
+`unknown_terminal_edges` / `unknown_cfg_edges` / `uncovered_cfg_edges` /
+`invented_cfg_edges` all still zero. `TerminalKind` is consumed only by the
+health counters, so this cannot move output — and it was measured rather than
+asserted.
+
+### The nine that are left, and why
+
+| fixture | function | renders |
+|---|---|---|
+| `08_indirect_dispatch` | `dispatch`, `tail_dispatch` | fully recovered |
+| `95_function_pointer_table` | `dispatch_operation` | fully recovered |
+| `148_dispatch_obfuscation` | `obfuscated_dispatch`, `computed_index_dispatch` | fully recovered |
+| `103_computed_goto` | `threaded_interpreter`, `sub_1130` | `/* unrecovered indirect jump */` |
+| `148_dispatch_obfuscation` | `permuted_switch` | `/* unrecovered indirect jump */` |
+| `159_ifunc_resolver` | `ifunc_lazy_double` | `/* unrecovered indirect jump */` x2 |
+
+Five of the nine already decompile perfectly. `08_indirect_dispatch:dispatch`
+emits the whole table and the guarded call:
+
+```c
+static void (*ops[5])(void) = { h_add, h_sub, h_mul, h_xor, h_max };
+if (arg0 <= 4) { ret = ops[var0](var1, var2); return ret; }
+```
+
+**They count as unresolved because the census is taken at the wrong point.**
+`cfg_health` is computed once in `recover_verified_with_health`, at LLIR
+structure time — before `ir::function_tables::resolve_function_table_entries`
+and the rest of the AST pipeline run. It is then re-emitted unchanged at ~39
+pipeline boundaries per function, which is where Entry 33's double-counting
+caveat comes from. The effect is worse than double counting: a frozen early
+snapshot re-stamped at every later boundary *looks* like a pipeline-wide
+measurement, and reports as unresolved a dispatch three passes later fully
+recovered. Re-measuring `CfgHealth` after the passes that can change it is the
+obvious next piece of work, and this entry does not do it.
+
+So the honest floor is four functions — a threaded interpreter's computed goto,
+an intentionally obfuscated permuted switch, and an IFUNC resolver dispatching
+through a mutable global. Every one of those is a fixture written to be
+unresolvable, and all four decompile to an explicit `/* unrecovered indirect
+jump */` rather than to a plausible lie.
+
+### Why the jump-table decoder declined, per case
+
+The brief asked. The answer is that **it already records the reason and nobody
+reads it.**
+
+`analysis::dispatch::Unresolved` has three variants — `UnknownBase`,
+`NoTableAt(table_va)`, `NoBound(table_va)` — and `cfg.rs` stores them in
+`FunctionDiscoveryStats::unresolved_indirect: Vec<(u64, Unresolved)>`. That
+vector is never serialized: `function_discovery_stats_to_py` emits some sixty
+counters, including `scan_rejections` with `reason`/`detail` strings, and not
+this one. The reason is computed, stored, and dropped at the FFI boundary, so
+the only thing that survives into the IR layer is a reason-free count.
+
+Upstream of that, `jump_table.rs` has no reason type at all — roughly fourteen
+distinct decline points (entry budget, section-bounds miss, non-executable
+target, target inside the table, `entry_count` absent, parse failure) all return
+a bare `None`, which `resolve_dispatch` then collapses into the single
+`NoTableAt`. So even a wired-up reason would today say "no table" for six
+different situations.
+
+Two things found while reading that path which are not this entry's to fix:
+
+* `cfg.rs` sets `bb.relationships_known = true` unconditionally when building
+  blocks, including for a block whose dispatch was just declined. A block that
+  lost a 40-way transfer advertises that its relationships are known.
+* `discover_jump_tables` guards with `if !obj.is_64() && !obj.is_little_endian()
+  { return Vec::new(); }`. `&&` where `||` was surely meant: only 32-bit
+  big-endian is rejected.
+
+### What this does not claim
+
+Not a resolver. No transfer that was unproven became resolved; the only change
+is that transfers which were *already proven* stopped being reported as
+unresolved. No successor edge was added to any CFG, no region decision consults
+the new evidence, and a declined table stays `Indirect` — design rule 8, intact.
+Non-ELF images produce an empty relocation index and therefore no claims at all.
+
+### Verification
+
+```
+cargo test --features python-ext    2502 passed, 0 failed, 1 ignored.
+                                    2495 at HEAD; this adds 7 tests (6 unit,
+                                    1 real-binary census).
+cargo build --features python-ext   1 dead-code warning before, 1 after
+  (after `touch src/lib.rs`)        (`ioctl_taint.rs:409`, pre-existing and
+                                    untouched). Verified by building HEAD with
+                                    the patch stashed, not by assuming.
+tools/dectest.py @o0                364 lanes: no regressions, no improvements
+tools/dectest.py @o2                364 lanes: no regressions, no improvements
+edge census, 182 objects            32838 -> 351 unresolved; every other counter
+  94809 events                      bit-identical (see the table above)
+real-binary test, hello-gcc-O2      symbol=23 slot=1 unresolved=0 of 24
+rustfmt --edition 2021              on the 7 touched Rust files
+```
+
+No lane moving is the predicted result and the reason to run it: `TerminalKind`
+reaches nothing but the counters, so a lane that moved would have meant it did.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`, and
+`pytest python/tests/` in full. No fixture was added — the shapes in question
+appear in all 182 existing objects, and adding one would have required
+refreshing three baselines. **No baseline was refreshed and nothing was
+committed.**
+## Entry 37 — One rotation field, 87.7% of ARM32's opaque intrinsics
+
+Entry 35's census ended by naming its own most valuable output: ARM32 rendered
+6.6% of its lifted instructions as an opaque intrinsic, every one of them the
+mnemonic `add`, against 0.18% on x86-64 and 0% on AArch64. It declined to fix
+it — "an ARM32 decoder-coverage job, not a safety-plan job" — and left it for
+its own patch. This is that patch.
+
+### Reproducing the number before touching anything
+
+`report_effect_census` is `#[ignore]`d and prints rather than asserts, so it
+re-runs on demand. It reproduced entry 35's table cell for cell:
+
+```
+X86_64:  instrs=24842  opaque=45  {hlt 5, pause 4, pcmpeqb 2, pcmpgtb 3,
+                                   pmovmskb 12, pshuflw 1, punpcklbw 1,
+                                   tzcnt 10, ud2 7}
+AArch64: instrs=1101   opaque=0   {}
+ARM:     instrs=242    opaque=16  {add 16}
+files=9 functions=332 instructions=26185
+```
+
+Worth saying plainly, since this repo has twice shipped a table no run
+produced: this one was produced by a run, and the identical numbers on a
+different day are the evidence that the census is deterministic rather than
+that it was copied.
+
+### Which `add`
+
+The brief guessed the gap would be "one or two specific forms, not `add`
+generally", and that is right, but not for any of the forms it listed. A probe
+that lifted the armhf sample, kept the VA of every opaque intrinsic, and
+re-disassembled at those VAs gave sixteen instructions and exactly two spellings:
+
+```
+va=0x414 len=4 bytes=[00,c6,8f,e2] mnem="add" nops=4
+    op0 Register ip   op1 Register pc   op2 Immediate 0    op3 Immediate 12
+va=0x418 len=4 bytes=[10,ca,8c,e2] mnem="add" nops=4
+    op0 Register ip   op1 Register ip   op2 Immediate 16   op3 Immediate 20
+```
+
+**Four operands.** Not a shift form, not a register-shifted-register, not a
+Thumb encoding, not `adds`. A32 data-processing immediates are not 12-bit
+literals: `imm12` is `rotation:imm8` and the constant is `ROR(imm8, 2*rotation)`
+(DDI 0406C A5.2.4). Capstone folds that pair into one operand *only* when the
+assembler picked the canonical rotation. When it did not, capstone declines to
+fold and reports the rotation as one extra trailing immediate. Every arity check
+in `lift_arm32::lift_one` is written against the folded shape — `ops.len() == 3`,
+`ops.len() == 2` — so the unfolded form matched nothing and fell out of the
+bottom into `Op::Unknown`, which `lift_function::lower_unknowns` then turned
+into an intrinsic declaring that it reads and writes all memory.
+
+Both instructions are the armhf PLT stub preamble. `add ip, pc, #0, #12` is
+written with rotation 12 and `add ip, ip, #16, #20` with rotation 20 precisely
+*because* the stub must occupy one word whatever offset the linker resolves;
+the non-canonical rotation is the point of the idiom, not an accident. Which is
+why this hits ARM32 and nothing else: the encoding only exists in A32, and the
+one construct that reliably uses it non-canonically is on every PLT entry.
+
+### It was never an `add` gap
+
+The census sees one ARM binary. Widening the same probe to all four committed
+armhf samples showed the shape is 128 of 146 opaque intrinsics — 87.7% — and
+still spelled `add` every time. But `add` is incidental. Feeding capstone
+hand-built words for the rest of the family:
+
+```
+0xe28cca10  add  nops=4  [R:ip, R:ip, I:16, I:20]
+0xe24cca10  sub  nops=4  [R:ip, R:ip, I:16, I:20]
+0xe20cca10  and  nops=4  [R:ip, R:ip, I:16, I:20]
+0xe22cca10  eor  nops=4  [R:ip, R:ip, I:16, I:20]
+0xe29cca10  adds nops=4  [R:ip, R:ip, I:16, I:20]
+0xe35c0a10  cmp  nops=3  [R:ip, I:16, I:20]
+0xe3a00f40  mov  nops=3  [R:r0, I:64, I:30]
+0xe2810004  add  nops=3  [R:r0, R:r1, I:4]        <- canonical, already folded
+0xe38104ff  orr  nops=3  [R:r0, R:r1, I:-16777216] <- canonical, already folded
+```
+
+The rule is uniform: capstone appends **one** extra immediate to the normal
+operand list. So the repair belongs in one place, before any arity check, and it
+covers the whole data-processing family rather than the single mnemonic the
+corpus happened to contain. `add` is what this corpus caught; `sub`, `and`,
+`eor`, `cmp` and `mov` would have been the next binary's entry.
+
+### The fold, and the three things it insists on proving
+
+`fold_modified_immediate` rewrites the operand list, and `lift_one` splits into
+a thin normalising wrapper over `lift_one_decoded`. The wrapper *rebuilds the
+instruction* rather than shadowing a local slice, which is the only detail here
+that is easy to get wrong: `shifted_operand` re-reads `ins.operands` by index,
+so a rebound local would have left `add ip, ip, #16, #20` lifting as `ip + 16`
+where the encoding means `ip + 0x10000`. A confidently wrong constant is worse
+than the opaque intrinsic it replaces, which is the whole reason design rule 8
+exists.
+
+Three facts are checked against the instruction word before anything is folded:
+
+* `word[27:25] == 0b001`, **excluding** `op1 == 10xx0` — the block A5.2 reserves
+  for `movw`/`movt` (whose `imm12` is a plain literal half, not a rotated one)
+  and for `msr`/hint. Without that exclusion the fold would rewrite `movw`
+  literals. Note `cmp`/`tst` also sit at `word[24:23] == 0b10` and are saved
+  only by their `S` bit, which is why the exclusion tests bit 20 as well.
+* The last two operands are both immediates **and equal to** `word[7:0]` and
+  `2 * word[11:8]`. A canonical fold puts the *rotated* value in that slot, so
+  this is precisely what distinguishes "capstone split the pair" from "capstone
+  folded it and these two operands mean something else".
+* The rotation is non-zero. A zero rotation encodes `imm8` itself, which is the
+  canonical encoding of every value it can represent, so capstone never splits
+  it — and requiring this leaves no encoding where the fold is a silent no-op
+  over an operand list of unproven shape.
+
+Anything failing those checks is left exactly as capstone reported it and still
+becomes an honest opaque intrinsic.
+
+### Before and after
+
+```
+                 before                        after
+X86_64   24842 instrs  45 opaque (0.18%)   24842 instrs  45 opaque (0.18%)
+AArch64   1101 instrs   0 opaque (0%)       1101 instrs   0 opaque (0%)
+ARM        242 instrs  16 opaque (6.6%)      242 instrs   0 opaque (0%)
+```
+
+Over all four armhf samples rather than the census's one: 2349 instructions,
+opaque 134 -> 6. The six that remain are `predicated control effect`, an
+unrelated and deliberate fail-closed path. Instruction counts are identical on
+every line, which is the check that this folded operands rather than dropping
+an instruction.
+
+### What did not move, and the honest reading of that
+
+No fixture cell moved. 680 ARM function-cells over ten fixture stems on both
+`armv7` and `armv7_a32`, compared against the committed `arch_baseline.json`:
+every verdict identical. The only diff was the `__toolchain__` metadata record,
+which lists only the arch actually invoked when the run is filtered.
+
+That is the expected result and it should not be dressed up as more. These
+sixteen instructions live in PLT stubs, which the execution differential does
+not route through per-function contracts, so no lane could have improved. What
+changed is what the census measures: an operation with a completely known
+footprint no longer tells memory SSA it clobbers everything, no longer keeps
+dead values alive through DCE, and no longer terminates value tracking. The
+fixture lanes prove the change is not a regression; the census is the only thing
+that can show it is an improvement, and it is what the ratchet was added to.
+
+### The ratchet
+
+`no_arm32_data_processing_mnemonic_is_opaque` pins the repair by *category*, not
+by count: it fails if any mnemonic `lift_arm32` lowers exactly ever reappears in
+the ARM32 opaque histogram. A total would drift whenever an unrelated mnemonic
+gained coverage and would say nothing about the thing that was wrong.
+
+### Was the brief's framing right?
+
+Mostly, and it was right to ask. "6.6%, all one mnemonic, and an opaque `add`
+poisons dataflow" is accurate and reproduced exactly. Two corrections:
+
+* The suggested culprits — immediate vs register, register-shifted-register,
+  ADDS, conditional forms, Thumb 16 vs 32 — were all already handled. The gap
+  was a form none of them names.
+* **The PC-bias rule was already implemented and already correct.** The brief
+  warned to get `PC = insn + 8` in A32 and `+ 4` in Thumb right or leave it
+  opaque; `LiftCtx::pc_at` has done exactly that for some time, and
+  `the_armhf_pic_stack_guard_preamble_resolves_to_its_got_slot` has been pinning
+  the Thumb half of it. Once the operand list was folded, `add ip, pc, #0, #12`
+  resolved to `Value::Addr(0x41c)` with no new PC handling at all. This is the
+  tenth time in three days that a brief described something as missing which
+  already existed — the ratio is high enough that "check before building" has
+  earned its place ahead of "build".
+
+### Commands run
+
+```
+cargo test --features python-ext        2500 passed, 0 failed, 1 ignored.
+                                        The brief records 2495 at HEAD; this
+                                        patch adds four lifter tests and one
+                                        census ratchet.
+cargo test ... effect_census --ignored  the census, before and after
+touch src/lib.rs && cargo build         1 warning, `field 0 is never read` at
+  --features python-ext                 analysis/ioctl_taint.rs:409. Verified
+                                        pre-existing by stashing the patch and
+                                        rebuilding: same 1. Never-used count is
+                                        0 before and after.
+tools/dectest.py @o0                    364 lanes, no regressions in scope
+tools/dectest.py @o2                    364 lanes, no regressions in scope
+tools/arch_roundtrip.py --arch armv7    10 stems, --json, no --write-baseline
+tools/arch_roundtrip.py --arch          10 stems, --json, no --write-baseline
+  armv7_a32                             680 cells total, 0 moved vs baseline
+rustfmt --edition 2021                  on the two touched Rust files
+```
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any full `arch_roundtrip.py` sweep, repo-wide `cargo fmt`, and
+`pytest python/tests/`. **No baseline was refreshed and nothing was committed.**

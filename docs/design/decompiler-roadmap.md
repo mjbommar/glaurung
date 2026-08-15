@@ -467,9 +467,26 @@ memory_version(region, point)
   exactly the successor graph — `structure_accounting::account` is not merely a
   diagnostic, it gates region selection through `structure_accounting_is_unsound`.
   What is NOT total is terminal ownership: there is no `Return` region node, so
-  terminals are classified and counted but not owned by the tree. The numbers to
-  chase are the 2706 unresolved indirect edges and the 594 structure fallbacks,
-  neither of which is an accounting defect.
+  terminals are classified and counted but not owned by the tree.
+
+  **The 2706 turned out to be ~99% mis-attribution, not unknown control flow.**
+  Classified against `objdump`/`readelf` ground truth over 182 objects: 43.2%
+  `crtstuff` `jmp *%rax` after a GOT load, 34.0% `.plt.got`/`.plt.sec` stubs,
+  21.6% the `.plt[0]` lazy-binding header — 98.8% boilerplate whose destination a
+  relocation states outright — and 1.2% real table dispatch. Resolving them from
+  the relocation rather than the stored bytes took the corpus from 32838 to 351
+  unresolved (23.2% to 0.25%), re-attributing every one and inventing none.
+
+  Two things that census exposed are worth more than the number. The count is
+  taken at the WRONG POINT: `cfg_health` is frozen at LLIR structure time, before
+  `function_tables` runs, then re-stamped at ~39 later boundaries, so five of the
+  nine residual functions already decompile perfectly — the honest floor is four,
+  all fixtures written to be unresolvable. And "why the decoder declined" is
+  already computed and thrown away: `analysis::dispatch::Unresolved` records
+  `UnknownBase`/`NoTableAt`/`NoBound` and nothing serializes it, while ~14
+  distinct decline points in `jump_table.rs` collapse to a bare `None`.
+
+  What remains to chase here is the 594 structure fallbacks.
 - [ ] Preserve irreducible and unresolved flow with explicit goto/indirect
   fallback rather than inventing structure.
 - [ ] Separate dominance/loop discovery, region selection, verification, and HIR

@@ -58,6 +58,8 @@ fn health_counts_nested_output_risks_without_parsing_rendered_c() {
             terminal_edges: 0,
             unknown_terminal_edges: 0,
             unresolved_indirect_edges: 0,
+            indirect_symbol_edges: 0,
+            indirect_slot_edges: 0,
             unresolved_transfers: 2,
             statements: 8,
         }

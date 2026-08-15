@@ -278,6 +278,90 @@ fn arm32_word(ins: &Instruction) -> Option<u32> {
     Some(u32::from_le_bytes(b))
 }
 
+/// Fold capstone's split `#<imm8>, #<rotation>` operand pair back into the one
+/// constant the A32 *modified immediate* actually encodes, or `None` when this
+/// instruction does not carry that pair.
+///
+/// A32 data-processing immediates are not 12-bit literals. The `imm12` field is
+/// `rotation:imm8` and the constant is `ROR(imm8, 2 * rotation)` (ARM DDI 0406C
+/// A5.2.4). Capstone folds that for you *only* when the assembler picked the
+/// canonical rotation. When it did not — as the PLT stub preamble deliberately
+/// does, since `add ip, pc, #0, #12` must occupy exactly one word whatever the
+/// offset turns out to be — capstone declines to fold and reports the rotation
+/// as one extra trailing immediate operand. So `add ip, pc, #0, #12` arrives
+/// with FOUR operands and `mov r0, #0x40, #30` with THREE.
+///
+/// Every arity check in [`lift_one_decoded`] is written against the folded
+/// shape, so the unfolded form matched nothing and fell through to
+/// [`Op::Unknown`] — which `lift_function` then turns into an opaque intrinsic
+/// declaring that it reads and writes all memory. That is what a register-plus-
+/// constant `add` was costing: 128 of the 146 opaque intrinsics over the four
+/// committed armhf samples, and every one of the 16 opaque `add`s in the
+/// effect census, at 6.6% of all ARM32 LLIR against 0.18% on x86-64.
+///
+/// The fold is performed only when the instruction word *proves* the two
+/// trailing immediates are that pair, which is three separate facts:
+///
+/// * The encoding is A32 data-processing (immediate): `word[27:25] == 0b001`,
+///   excluding the `10xx0` block of `op1` that A5.2 reserves for the 16-bit
+///   immediate loads (`movw`/`movt`, whose `imm12` is a plain literal half) and
+///   for `msr`/hint. Getting this wrong would rewrite a `movw` literal.
+/// * Capstone's last two operands are both immediates, and they are *equal to*
+///   `word[7:0]` and `2 * word[11:8]`. A canonical fold puts the rotated value
+///   in that slot instead, so this is what separates "capstone split the pair"
+///   from "capstone folded it and these are two unrelated operands".
+/// * The rotation is non-zero. A zero rotation encodes the value `imm8`, which
+///   is the canonical encoding of every constant it can represent, so capstone
+///   never splits it — and requiring this leaves no encoding where folding
+///   would be a silent no-op over an operand list of unproven shape.
+///
+/// Anything that fails those checks is left exactly as capstone reported it,
+/// which for a genuinely unrecognised form still means an honest opaque
+/// intrinsic rather than a confidently wrong constant.
+fn fold_modified_immediate(ins: &Instruction, ctx: &LiftCtx) -> Option<Vec<Operand>> {
+    if ctx.thumb {
+        // T32 modified immediates use an unrelated encoding (`i:imm3:a:bcdefgh`,
+        // DDI 0406C A6.3.2) and capstone does not report them as a pair.
+        return None;
+    }
+    let word = arm32_word(ins)?;
+    if (word >> 25) & 0x7 != 0b001 {
+        return None;
+    }
+    if (word >> 23) & 0x3 == 0b10 && (word >> 20) & 1 == 0 {
+        // op1 == 10xx0: `movw`/`movt` and `msr`/hint, not data processing.
+        return None;
+    }
+    let rotation = (word >> 8) & 0xf;
+    if rotation == 0 {
+        return None;
+    }
+    let operands = &ins.operands;
+    let last = operands.len().checked_sub(1)?;
+    let base = last.checked_sub(1)?;
+    let literal = immediate_operand(&operands[base])?;
+    let reported_rotation = immediate_operand(&operands[last])?;
+    if literal != i64::from(word & 0xff) || reported_rotation != i64::from(2 * rotation) {
+        return None;
+    }
+
+    // ROR over the 32-bit value, then sign-extended through `i32` so the folded
+    // constant is spelled the same way capstone spells the ones it folds itself.
+    let value = (word & 0xff).rotate_right(2 * rotation) as i32;
+    let mut folded = operands[..last].to_vec();
+    folded[base].immediate = Some(i64::from(value));
+    Some(folded)
+}
+
+/// The value of an operand that is an immediate, or `None` for anything else.
+fn immediate_operand(op: &Operand) -> Option<i64> {
+    if matches!(op.kind, OperandKind::Immediate) {
+        op.immediate
+    } else {
+        None
+    }
+}
+
 /// The shift a data-processing instruction applies to its last source register.
 ///
 /// T32: "Data-processing (shifted register)", `hw1[15:9] == 0b1110101` — the
@@ -1001,6 +1085,25 @@ fn scaled_memop(ins: &Instruction, ctx: &LiftCtx, mut addr: MemOp) -> MemOp {
 /// operand encodings differ completely between the two and cannot be recovered
 /// from the operand list.
 fn lift_one(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
+    // Normalise the one operand shape capstone reports unfolded, before any
+    // arity check sees it. The folded list must reach the helpers that re-read
+    // `ins.operands` by index — `shifted_operand` is the one that matters —
+    // so this rebuilds the instruction rather than shadowing a local slice:
+    // reading `#16` where the encoding means `#0x10000` is exactly the
+    // confident wrong answer an opaque intrinsic is preferable to.
+    match fold_modified_immediate(ins, ctx) {
+        Some(operands) => {
+            let mut normalized = ins.clone();
+            normalized.operands = operands;
+            lift_one_decoded(&normalized, mnem, ctx)
+        }
+        None => lift_one_decoded(ins, mnem, ctx),
+    }
+}
+
+/// [`lift_one`] over an instruction whose operand list is already in the folded
+/// shape every arity check below is written against.
+fn lift_one_decoded(ins: &Instruction, mnem: &str, ctx: &LiftCtx) -> Vec<Op> {
     let ops = &ins.operands;
 
     // Scalar VFP arithmetic has IEEE semantics that integer `Op::Bin` cannot
@@ -4616,6 +4719,175 @@ mod tests {
         assert!(
             !out.iter().any(|i| matches!(&i.op, Op::Cmp { .. })),
             "plain sub fabricated condition flags"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // A32 modified immediates: capstone's split `#<imm8>, #<rotation>` pair
+    // -----------------------------------------------------------------------
+
+    /// The armhf PLT stub preamble is two `add`s with a non-canonical rotated
+    /// immediate, and it was 108 + 20 of the 146 opaque intrinsics in the ARM32
+    /// sample corpus — every one of the 16 opaque `add`s the effect census
+    /// counts. `add ip, pc, #0, #12` is a pure register computation with a
+    /// completely known footprint; as an opaque intrinsic it declared that it
+    /// read and wrote all memory.
+    #[test]
+    fn the_plt_stub_rotated_immediate_adds_lift_to_their_constants() {
+        // 0x414: add ip, pc, #0, #12   e28fc600  -> ip = (0x414+8) + ROR(0,12)
+        // 0x418: add ip, ip, #16, #20  e28cca10  -> ip = ip + ROR(16,20) = +0x10000
+        let mut window = Vec::new();
+        window.extend_from_slice(&0xe28fc600u32.to_le_bytes());
+        window.extend_from_slice(&0xe28cca10u32.to_le_bytes());
+        let out: Vec<Op> = lift_bytes(&window, 0x414, false)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            !out.iter().any(|op| matches!(op, Op::Unknown { .. })),
+            "PLT preamble did not lift: {out:#?}"
+        );
+        assert_eq!(
+            out[0],
+            Op::Bin {
+                dst: VReg::phys("ip"),
+                op: BinOp::Add,
+                lhs: Value::Addr(0x41c),
+                rhs: Value::Const(0),
+            },
+            "add ip, pc, #0, #12: {out:#?}"
+        );
+        assert_eq!(
+            out[1],
+            Op::Bin {
+                dst: VReg::phys("ip"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("ip")),
+                rhs: Value::Const(0x1_0000),
+            },
+            "add ip, ip, #16, #20: {out:#?}"
+        );
+    }
+
+    /// The split pair is a property of the *encoding*, not of `add`: capstone
+    /// declines to fold it for every A32 data-processing mnemonic. Folding it
+    /// once, before the arity checks, is what keeps the whole family out of
+    /// `Op::Unknown` rather than only the one mnemonic the census happened to
+    /// catch.
+    #[test]
+    fn every_data_processing_mnemonic_folds_its_rotated_immediate() {
+        // Rd = Rn = ip, imm8 = 16, rotation = 20  ->  ROR(16, 20) = 0x10000.
+        let cases: [(u32, &str, Option<BinOp>); 5] = [
+            (0xe28cca10, "add", Some(BinOp::Add)),
+            (0xe24cca10, "sub", Some(BinOp::Sub)),
+            (0xe20cca10, "and", Some(BinOp::And)),
+            (0xe22cca10, "eor", Some(BinOp::Xor)),
+            (0xe38cca10, "orr", Some(BinOp::Or)),
+        ];
+        for (word, name, binop) in cases {
+            let out: Vec<Op> = lift_bytes(&word.to_le_bytes(), 0x1000, false)
+                .into_iter()
+                .map(|i| i.op)
+                .collect();
+            assert!(
+                !out.iter().any(|op| matches!(op, Op::Unknown { .. })),
+                "{name} left an unlifted instruction: {out:#?}"
+            );
+            assert_eq!(
+                out[0],
+                Op::Bin {
+                    dst: VReg::phys("ip"),
+                    op: binop.unwrap(),
+                    lhs: Value::Reg(VReg::phys("ip")),
+                    rhs: Value::Const(0x1_0000),
+                },
+                "{name}: {out:#?}"
+            );
+        }
+    }
+
+    /// The two-source-operand forms carry the same pair with one fewer register,
+    /// so the fold must be written against the *tail* of the operand list rather
+    /// than a fixed index.
+    #[test]
+    fn the_two_operand_forms_fold_their_rotated_immediate_too() {
+        // mov r0, #0x40, #30  e3a00f40  ->  ROR(0x40, 30) = 0x100
+        let out: Vec<Op> = lift_bytes(&0xe3a00f40u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(
+            out[0],
+            Op::Assign {
+                dst: VReg::phys("r0"),
+                src: Value::Const(0x100),
+            },
+            "mov r0, #0x40, #30: {out:#?}"
+        );
+        // cmp ip, #16, #20  e35c0a10  ->  compares against 0x10000
+        let out: Vec<Op> = lift_bytes(&0xe35c0a10u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            !out.iter().any(|op| matches!(op, Op::Unknown { .. })),
+            "cmp left an unlifted instruction: {out:#?}"
+        );
+        assert!(
+            out.iter().any(|op| matches!(
+                op,
+                Op::Cmp {
+                    rhs: Value::Const(0x1_0000),
+                    ..
+                }
+            )),
+            "cmp did not compare against the folded constant: {out:#?}"
+        );
+    }
+
+    /// The fold must not fire on an encoding whose trailing immediates are not
+    /// that pair. `movw` puts a 16-bit literal in the same `imm12` field and is
+    /// the encoding most likely to be confused with it; a canonical rotation is
+    /// already folded by capstone and must pass through untouched.
+    #[test]
+    fn the_fold_declines_encodings_that_are_not_a_rotated_pair() {
+        // movw r0, #0x1234  e3010234 : imm4:imm12, NOT a modified immediate.
+        let out: Vec<Op> = lift_bytes(&0xe3010234u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(
+            out[0],
+            Op::Assign {
+                dst: VReg::phys("r0"),
+                src: Value::Const(0x1234),
+            },
+            "movw was rewritten: {out:#?}"
+        );
+        // add r0, r1, #4  e2810004 : canonical, already folded by capstone.
+        let out: Vec<Op> = lift_bytes(&0xe2810004u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert_eq!(
+            out[0],
+            Op::Bin {
+                dst: VReg::phys("r0"),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("r1")),
+                rhs: Value::Const(4),
+            },
+            "a canonical immediate was disturbed: {out:#?}"
+        );
+        // add r0, r1, r2, lsl #3  e0810182 : a shifted *register*, no immediate
+        // pair at all — the shift decoding must keep working.
+        let out: Vec<Op> = lift_bytes(&0xe0810182u32.to_le_bytes(), 0x1000, false)
+            .into_iter()
+            .map(|i| i.op)
+            .collect();
+        assert!(
+            !out.iter().any(|op| matches!(op, Op::Unknown { .. })),
+            "shifted-register add regressed: {out:#?}"
         );
     }
 }

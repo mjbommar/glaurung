@@ -641,6 +641,24 @@ pub fn recover_verified_with_health(
     lf: &LlirFunction,
     ssa: &SsaInfo,
 ) -> (Region, crate::ir::health::CfgHealth) {
+    recover_verified_with_health_and_destinations(lf, ssa, &std::collections::BTreeMap::new())
+}
+
+/// [`recover_verified_with_health`] told what a relocation proves about each
+/// computed transfer.
+///
+/// The region recovery is identical — `destinations` reaches only the terminal
+/// census, which is a diagnostic. It is threaded here rather than derived here
+/// because the proof needs the image's relocation tables and this module sees
+/// only the lifted function; see [`crate::ir::indirect_targets`].
+pub fn recover_verified_with_health_and_destinations(
+    lf: &LlirFunction,
+    ssa: &SsaInfo,
+    destinations: &std::collections::BTreeMap<
+        u64,
+        crate::ir::indirect_targets::IndirectDestination,
+    >,
+) -> (Region, crate::ir::health::CfgHealth) {
     let cfg = Cfg::from(lf, ssa);
     let region = build_full(lf, &cfg);
     let errors = verify_region(&cfg.succs, 0, &region);
@@ -689,7 +707,8 @@ pub fn recover_verified_with_health(
     // that leaves the function by no route we can name. A region can account
     // perfectly for a graph that is missing half the control flow, so both counts
     // travel together or neither is worth reading.
-    let terminals = crate::ir::cfg_edges::classify_terminals(lf, &cfg.succs);
+    let terminals =
+        crate::ir::cfg_edges::classify_terminals_with_destinations(lf, &cfg.succs, destinations);
     let health = crate::ir::health::cfg_health_from_accounting(
         &selected_accounting,
         region_is_fallback || is_unsound,

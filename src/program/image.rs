@@ -140,6 +140,7 @@ pub struct ProgramImage {
     noreturn_import_targets: Arc<OnceLock<Arc<HashSet<u64>>>>,
     exception_call_sites: Arc<OnceLock<Arc<[crate::analysis::exception::ExceptionCallSite]>>>,
     dwarf_functions: Arc<OnceLock<Arc<[crate::debug::dwarf::DwarfFunction]>>>,
+    relocated_symbol_slots: Arc<OnceLock<Arc<HashMap<u64, String>>>>,
 }
 
 impl ProgramImage {
@@ -298,6 +299,7 @@ impl ProgramImage {
             noreturn_import_targets: Arc::new(OnceLock::new()),
             exception_call_sites: Arc::new(OnceLock::new()),
             dwarf_functions: Arc::new(OnceLock::new()),
+            relocated_symbol_slots: Arc::new(OnceLock::new()),
         })
     }
 
@@ -401,6 +403,34 @@ impl ProgramImage {
                 Arc::new(crate::analysis::call_semantics::imported_noreturn_targets(
                     self.bytes(),
                 ))
+            })
+            .clone()
+    }
+
+    /// Places whose runtime contents a relocation binds to a named symbol,
+    /// keyed by the place's address.
+    ///
+    /// A GOT slot is the everyday entry: `.rela.dyn` / `.rela.plt` name the
+    /// symbol the loader writes there. That makes the map the admissible
+    /// evidence for reading a transfer *through* such a slot — the stored bytes
+    /// are the link-time placeholder and the loader is entitled to replace
+    /// them, so the relocation is the only thing that speaks for the contents.
+    ///
+    /// Recovered at most once per image, like the other indices here: the
+    /// consumer is per-function and re-reading the relocation tables for each
+    /// function of a `--all` decompile is the exact cost this ownership exists
+    /// to avoid.
+    ///
+    /// ELF only. Other formats produce an empty map, which resolves nothing and
+    /// therefore claims nothing.
+    pub fn relocated_symbol_slots(&self) -> Arc<HashMap<u64, String>> {
+        self.relocated_symbol_slots
+            .get_or_init(|| {
+                Arc::new(
+                    crate::analysis::elf_got::elf_got_map(self.bytes())
+                        .into_iter()
+                        .collect(),
+                )
             })
             .clone()
     }

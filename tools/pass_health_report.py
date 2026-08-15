@@ -49,6 +49,8 @@ OPTIONAL_COUNTERS = (
     "terminal_edges",
     "unknown_terminal_edges",
     "unresolved_indirect_edges",
+    "indirect_symbol_edges",
+    "indirect_slot_edges",
 )
 JsonObject = dict[str, Any]
 

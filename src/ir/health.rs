@@ -37,7 +37,24 @@ pub struct CfgHealth {
     /// Not a defect on its own — an unresolved dispatch is a fact about the binary.
     /// It is here because the alternative was an empty successor list, which reads
     /// downstream exactly like a function that ended.
+    ///
+    /// This counts only the transfers nothing accounted for. It used to also
+    /// carry the two counters below, and that made it unreadable: measured over
+    /// the gcc-O2 fixture corpus, 98.8% of what it reported was PLT and
+    /// `crtstuff` boilerplate whose destination a relocation states outright.
     pub unresolved_indirect_edges: usize,
+    /// Computed transfers whose destination a relocation proves to be a named
+    /// symbol — a PLT stub, or a jump through a GOT slot.
+    ///
+    /// Resolved, not unresolved. Counted because "we know exactly where this
+    /// goes and it is out of this image" is a different fact from a return, and
+    /// because the number stops being mistaken for a recovery failure.
+    pub indirect_symbol_edges: usize,
+    /// Computed transfers that read a fixed, known place no relocation names.
+    ///
+    /// `.plt`'s header stub reading `.got.plt[2]` is essentially all of these.
+    /// Not resolvable and not a defect: the loader writes that slot.
+    pub indirect_slot_edges: usize,
 }
 
 impl CfgHealth {
@@ -66,11 +83,16 @@ impl CfgHealth {
             .flatten()
             .filter(|edge| edge.kind == TerminalKind::Unknown)
             .count();
-        self.unresolved_indirect_edges = terminals
-            .iter()
-            .flatten()
-            .filter(|edge| edge.kind == TerminalKind::Indirect)
-            .count();
+        let count = |kind: TerminalKind| {
+            terminals
+                .iter()
+                .flatten()
+                .filter(|edge| edge.kind == kind)
+                .count()
+        };
+        self.unresolved_indirect_edges = count(TerminalKind::Indirect);
+        self.indirect_symbol_edges = count(TerminalKind::IndirectToSymbol);
+        self.indirect_slot_edges = count(TerminalKind::IndirectThroughSlot);
         self
     }
 }
@@ -104,6 +126,10 @@ pub struct AstHealth {
     pub unknown_terminal_edges: usize,
     /// Computed transfers whose destinations were never recovered.
     pub unresolved_indirect_edges: usize,
+    /// Computed transfers a relocation proves reach a named symbol.
+    pub indirect_symbol_edges: usize,
+    /// Computed transfers reading a fixed place no relocation names.
+    pub indirect_slot_edges: usize,
     /// Number of indirect transfers or unsupported instructions.
     pub unresolved_transfers: usize,
     /// Recursive AST statement count.
@@ -293,6 +319,8 @@ fn measure_with_undefined_count(
         terminal_edges: cfg.terminal_edges,
         unknown_terminal_edges: cfg.unknown_terminal_edges,
         unresolved_indirect_edges: cfg.unresolved_indirect_edges,
+        indirect_symbol_edges: cfg.indirect_symbol_edges,
+        indirect_slot_edges: cfg.indirect_slot_edges,
         unresolved_transfers: identifiers.unresolved_transfers,
         statements: identifiers.statements,
     }

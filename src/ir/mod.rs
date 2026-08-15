@@ -54,6 +54,7 @@ pub(crate) mod guarded_call;
 pub mod guarded_switch;
 pub mod health;
 pub mod high_variables;
+pub mod indirect_targets;
 pub mod label_prune;
 pub(crate) mod latch_predicate;
 pub(crate) mod lazy_call_select;
