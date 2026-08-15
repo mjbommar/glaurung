@@ -986,15 +986,38 @@ This is the practical next-work queue as of the planning baseline.
    wrong answer.
 
    Architecture-only failures, computed directly from `arch_baseline.json` as
-   "passes on x86-64, fails here":
+   "passes on x86-64, fails here". Recomputed 2026-08-15 after the AArch64 scalar
+   float, SysV SSE parameter, indirect-call and dual-width fixes landed and the
+   corpus grew by four fixtures:
 
-   | architecture | functions |
-   |---|---:|
-   | armv7_a32 | 153 |
-   | armv7 | 144 |
-   | i386 | 102 |
-   | aarch64 | 94 |
-   | x86_64_gcc15 | 22 |
+   | architecture | 2026-08-14 | 2026-08-15 | absolute failure rate |
+   |---|---:|---:|---:|
+   | armv7_a32 | 153 | **164** | 320/1288 = 24.8% |
+   | armv7 | 144 | **159** | 312/1288 = 24.2% |
+   | i386 | 102 | **116** | 280/1290 = 21.7% |
+   | aarch64 | 94 | **93** | 243/1346 = 18.1% |
+   | x86_64_gcc15 | 22 | **25** | 184/1346 = 13.7% |
+   | x86_64 (reference) | — | — | 173/1345 = 12.9% |
+
+   The differential grew even though the decompiler improved, because most of
+   this week's fixes were x86-64-side: every cell they moved from fail to pass on
+   x86-64 that is still failing elsewhere ENLARGES this column. It is a
+   differential, not a defect count, and reading a rise in it as a regression
+   would be a mistake. AArch64 is the one that fell, which is where the float
+   lifting landed.
+
+   Read the absolute rate alongside it: **ARM32 is the worst architecture in the
+   corpus at roughly one function in four, nearly double x86-64** — on the
+   architecture design rule 11 designates a conformance target, not an optional
+   afterthought. A contributing measurement: ARM32 renders 6.6% of its lifted
+   instructions as an OPAQUE intrinsic, all of them the single mnemonic `add`,
+   against 0.18% for x86-64 and 0% for AArch64. An opaque declares a maximal
+   memory footprint, so a pure register `add` modelled that way poisons dataflow
+   for everything downstream.
+
+   The reverse differential is also worth keeping, because it shows this is not a
+   one-sided deficit: 23 functions pass on aarch64 and fail on x86-64, 20 on
+   armv7, 17 on armv7_a32, 14 on x86_64_gcc15, 9 on i386.
 
    That is 94 AArch64-only failures against the item's 43, and they cluster:
    `141_atomics` (7), `173_float_int_conversions` (6), `175_float_matrix_kernel`
