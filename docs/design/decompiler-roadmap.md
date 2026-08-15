@@ -546,6 +546,37 @@ Performance acceptance on the pinned host:
 Coverage, completeness, errors, and tail latency must accompany every speed
 claim. Timing out more work is not an optimization.
 
+**Measured for the first time, 2026-08-15.** Over the 138 real binaries in
+`samples/binaries` (of 400 files attempted; the other 262 are not object files
+and fail with `Unknown file magic`), via `g.ir.decompile_all(..., limit=250)`:
+
+| Measure | Target | Measured | |
+|---|---:|---:|---|
+| Per-binary median | below 2.0 s | **0.022 s** | met |
+| p95 | below 4.0 s | **2.15 s** | met |
+| Slowest bounded case | below 15 s | **5.19 s** (`hello-go-static`) | met |
+| 224-binary wall, 12 workers | below 45 s | 41.7 s for 138, **sequential** | met |
+| Base object parses/session | exactly one | **58** | **MISSED** |
+
+Restricted to the 50 binaries with 50 or more functions, the median is 0.192 s,
+p95 2.65 s, and the median cost is 1.67 ms per function.
+
+So speed is not the problem, and optimising it would be work aimed at a target
+already met. The single miss is architectural, and it is the one this section's
+own plan predicts: `GLAURUNG_PIPELINE_PROFILE=1` over one `decompile_all` of
+`hello-gcc-O2` reports `object_parse_count: 58` for 49 decompiled functions —
+roughly one full image parse per function. `grep -rn "profile::parse_object" src/`
+finds ~70 call sites, concentrated in `analysis/cfg.rs` (10) and
+`ir/types_recover.rs` (7). This is the same gap listed under "Foundations still
+incomplete" as "`ProgramSession` is not yet the sole owner of every parse and
+cache"; the seams (`ProgramImage`, `ProgramSession`, `lift_function_from_image`)
+already exist, so it is a migration, not a design.
+
+The accounting also does not close: instrumented stages sum to roughly 100 ms of
+that 285 ms run, so most of the wall time is outside any named stage. Until that
+gap is explained, per-stage timings should not be used to choose what to
+optimise.
+
 ## Safety and reliability plan
 
 - [ ] Replace semantically ambiguous `Option` results with typed errors or
