@@ -4854,12 +4854,36 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                 )))),
                 effects: None,
             }],
-            OpKind::Memory => vec![Op::Call {
-                // Indirect call through memory: we surface it as Indirect
-                // with the memory operand recovered into a temp.
-                target: CallTarget::Indirect(Value::Addr(instr.memory_displacement64())),
-                effects: None,
-            }],
+            OpKind::Memory => {
+                // The memory operand holds the destination pointer; its
+                // effective address is not the callee. This used to lift to
+                // `Indirect(Addr(memory_displacement64()))`, which named the
+                // DISPLACEMENT as a resolved target and dropped base, index and
+                // scale entirely: `call *(%rcx,%rax,8)` became a confident call
+                // to address zero, and `call *[rip+got]` named the import slot
+                // rather than the imported function. Nothing downstream could
+                // tell that fiction from a real direct call — the dispatch
+                // table's identity was already gone — and because
+                // `Indirect(Addr(..))` reads no register, DCE saw the index
+                // arithmetic as dead and deleted the lookup too.
+                //
+                // Mirror the `jmp *[mem]` path exactly: materialize the
+                // dereference, then transfer through the loaded value. That
+                // keeps every operand component in a real `Load`, which is what
+                // xrefs, memory SSA, and the relocation-proven function-table
+                // recovery all read the dispatch out of.
+                let target = VReg::Temp(0);
+                vec![
+                    Op::Load {
+                        dst: target.clone(),
+                        addr: mem_op_of(instr),
+                    },
+                    Op::Call {
+                        target: CallTarget::Indirect(Value::Reg(target)),
+                        effects: None,
+                    },
+                ]
+            }
             _ => vec![Op::Unknown {
                 mnemonic: "call".into(),
             }],
@@ -6364,6 +6388,80 @@ mod tests {
             Op::IndirectJump {
                 target: Value::Reg(VReg::Temp(0)),
                 index: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn call_through_indexed_memory_keeps_the_whole_operand() {
+        // call qword ptr [rcx+rax*8] (ff 14 c1) — the ordinary shape of a
+        // C++ vtable dispatch, a jump-table-driven callback, and most
+        // obfuscated dispatch.
+        //
+        // This used to lift to `Indirect(Addr(memory_displacement64()))`,
+        // i.e. `Addr(0)`, because base/index/scale live nowhere in a
+        // `CallTarget`. Every consumer downstream then reasoned about a
+        // resolved call to address zero and none of them could tell it was
+        // fiction. The dereference must be explicit, exactly as it is for
+        // `jmp *[mem]`, so the dispatch table survives to the passes that
+        // recover it.
+        let ops = lift64(&[0xff, 0x14, 0xc1]);
+        assert_eq!(ops.len(), 2, "expected Load + Call, got {ops:?}");
+        match &ops[0].op {
+            Op::Load {
+                dst: VReg::Temp(0),
+                addr,
+            } => {
+                assert_eq!(addr.base, Some(VReg::phys("rcx")));
+                assert_eq!(addr.index, Some(VReg::phys("rax")));
+                assert_eq!(addr.scale, 8);
+                assert_eq!(addr.disp, 0);
+                assert_eq!(addr.size, 8);
+            }
+            other => panic!("expected a Load of the call slot, got {other:?}"),
+        }
+        assert!(matches!(
+            &ops[1].op,
+            Op::Call {
+                target: CallTarget::Indirect(Value::Reg(VReg::Temp(0))),
+                effects: None,
+            }
+        ));
+        // The registers forming the effective address must be reported as
+        // reads of this machine instruction; otherwise DCE deletes the index
+        // arithmetic that selects the callee.
+        let (_, uses) = crate::ir::use_def::def_uses(&ops[0].op);
+        assert!(uses.contains(&VReg::phys("rcx")), "base must be a use");
+        assert!(uses.contains(&VReg::phys("rax")), "index must be a use");
+    }
+
+    #[test]
+    fn call_through_rip_memory_targets_the_loaded_pointer_not_the_slot() {
+        // call qword ptr [rip+0x1234] (ff 15 34 12 00 00) from 0x1000 — a
+        // PLT-less indirect call through a GOT slot. Instruction length is 6,
+        // so the slot is 0x1006 + 0x1234 = 0x223a. The callee is the CONTENTS
+        // of that slot, not the slot, which is what naming the displacement as
+        // the target claimed.
+        let ops = lift64(&[0xff, 0x15, 0x34, 0x12, 0x00, 0x00]);
+        assert_eq!(ops.len(), 2, "expected Load + Call, got {ops:?}");
+        assert!(matches!(
+            &ops[0].op,
+            Op::Load {
+                dst: VReg::Temp(0),
+                addr: MemOp {
+                    base: None,
+                    index: None,
+                    disp: 0x223a,
+                    size: 8,
+                    ..
+                }
+            }
+        ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Call {
+                target: CallTarget::Indirect(Value::Reg(VReg::Temp(0))),
+                ..
             }
         ));
     }

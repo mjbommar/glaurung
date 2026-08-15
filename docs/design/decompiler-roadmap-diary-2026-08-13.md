@@ -3689,3 +3689,55 @@ NOT the parameter binding — the prototype is now `xmm0_d0` and correct — the
 functions where the body reads BOTH `xmm0` and one of its lanes as live-ins, which
 no choice of parameter spelling can satisfy. That needs the lane/parent merge
 `regview::ssa_parent` deliberately declines to do, and is a separate decision.
+
+## Entry 27 — A confident lie about where a call goes
+
+`call *(%rcx,%rax,8)` lifted to `Indirect(Addr(memory_displacement64()))` — which,
+for an operand with no displacement, is `Addr(0)`. Base, index and scale were
+dropped outright. Downstream this reads as a *resolved* call to address zero, and
+nothing can tell it from a real one.
+
+That is worse than the dropped blocks fixed in `38d6591`, and for the same
+structural reason with one turn of the screw. A dropped block is missing
+information; a fabricated target is wrong information wearing the costume of
+right information. Design rule 8 asks for an explicit unknown when a proof fails.
+This produced a confident answer instead, and every consumer — call graph, xrefs,
+memory SSA, argument recovery, taint, and the relocation-proven table recovery
+added the same day — believed it.
+
+The second-order effect is the instructive one. Because `Indirect(Addr(..))`
+reads no register, DCE saw the index arithmetic feeding the lookup as dead and
+deleted it. So the table load disappeared too, and the evidence that would have
+revealed the first error was removed by a pass acting entirely correctly on the
+IR it was given. A wrong fact upstream does not stay one wrong fact.
+
+The fix mirrors the `jmp *[mem]` path, which had been right all along: materialise
+the dereference as a real `Load`, then transfer through the loaded value. That
+asymmetry between two nearly identical instruction forms was the whole clue, and
+it is worth remembering as a search heuristic — when one of a pair of analogous
+paths works and the other does not, compare them before theorising.
+
+### What it was worth
+
+720 of 732 lanes swept (`@o0` + `@o2`, 98% of the corpus): **no regressions, 12
+improvements**, including six that the table-call may-use work committed hours
+earlier could not reach because the table identity was already gone by the time
+it looked:
+
+    95_function_pointer_table:clang:O2   fold_operations
+    191_indirect_table_args:{gcc,clang}:O2  t191_dispatch, t191_computed_args, t191_fold
+
+`95:gcc:O2:dispatch_operation` had been passing on luck — gcc emits that one as
+`jmp *(...)`, the path that was already correct. The same function through
+`call *(...)` failed. A green cell next to a red one, same fixture, same
+function, differing only in which instruction the compiler chose, is a fair
+description of what this defect looked like from the outside for a long time.
+
+### Provenance
+
+Found by the indirect-table may-use work (Entry 25), which correctly DECLINED on
+these calls rather than guessing — the right behaviour, and the reason the defect
+surfaced as "the fix does not help here" instead of as wrong output. The patch
+was written by an agent that was terminated by a spend limit mid-task, leaving
+the change on disk and its report unwritten; it was verified from scratch here
+rather than taken on trust.
