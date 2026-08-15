@@ -1032,6 +1032,31 @@ This is the practical next-work queue as of the planning baseline.
    memory footprint, so a pure register `add` modelled that way poisons dataflow
    for everything downstream.
 
+   **i386 has no x87 lifting at all** — found 2026-08-15, and it is the same shape
+   as the AArch64 scalar-float gap that `039c7d6` closed. Grepping `lift_x86.rs`
+   for `fld`, `fstp`, `fadd`, `fmul`, `fdiv`, `fild`, `fistp`, `fucomi`, `faddp`
+   returns ZERO for every one. i386 does all floating point on x87, so every float
+   function on that lane lifts its arithmetic to nothing. Compiling
+   `173_float_int_conversions.c` with `gcc -m32 -O2` gives 16 `fstp`, 12 `flds`,
+   10 `fldcw`, 5 `fnstcw`, 3 `fistpl`, 2 each of `fxch`/`fldz`/`fistpll`/`fildl`,
+   and the recovered C is:
+
+       __attribute__((no_stack_protector)) int truncate_toward_zero(void) {
+           long rsp;
+           cf_2 = ((unsigned long)((unsigned int)(rsp)) < (unsigned long)(8));
+           /* asm: fld */
+           /* asm: fld */
+
+   A function taking a float recovered as `(void)`, its arithmetic dropped to
+   comments, and `rsp` read before definition. i386-only failures cluster
+   accordingly: `173_float_int_conversions` 7, `175_float_matrix_kernel` 6,
+   `181_compensated_summation` 5 — 18 of 116 from this one gap.
+
+   The other i386 cluster is `193_mapped_constant_roles` at 8, the fixture added
+   for EPIC 2 the day before. Its reference resolver is exercised only on x86-64;
+   32-bit PIE resolves GOT-relative addresses through a different idiom, so that
+   is a coverage gap in new code rather than an old one.
+
    The reverse differential is also worth keeping, because it shows this is not a
    one-sided deficit: 23 functions pass on aarch64 and fail on x86-64, 20 on
    armv7, 17 on armv7_a32, 14 on x86_64_gcc15, 9 on i386.
