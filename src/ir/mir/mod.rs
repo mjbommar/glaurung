@@ -23,8 +23,9 @@ mod query_tests;
 
 pub use crate::ir::memory_objects::{
     AccessPath, AccessRole, AccessSource, BoundaryEvidence, ExtentBounds, FrameCoordinate,
-    LayoutConflict, MemoryObject, MemoryStateIdentity, ObjectId, ObjectIdentity, ObjectOrigin,
-    ObjectPartition, PartitionBoundary, PartitionConflict, PartitionExtent,
+    IndexedAccess, LayoutConflict, MemoryObject, MemoryStateIdentity, ObjectId, ObjectIdentity,
+    ObjectOrigin, ObjectPartition, ObjectShape, PartitionBoundary, PartitionConflict,
+    PartitionExtent, ShapeFinding, ShapeRefusal,
 };
 pub use builder::lower_verified;
 pub use memory::lower_verified_with_image;

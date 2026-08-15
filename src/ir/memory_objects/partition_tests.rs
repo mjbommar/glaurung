@@ -17,14 +17,14 @@ use super::{
 use crate::ir::mir::{lower_verified_with_image, MirFunction};
 use crate::program::image::ProgramImage;
 
-struct RealFunction {
-    mir: MirFunction,
+pub(super) struct RealFunction {
+    pub(super) mir: MirFunction,
     _image: ProgramImage,
     _dir: tempfile::TempDir,
 }
 
 /// Compile one real fixture source and lower the named function to verified MIR.
-fn real_x86_function(
+pub(super) fn real_x86_function(
     name: &str,
     source_name: &str,
     source: &[u8],
@@ -85,7 +85,62 @@ fn real_x86_function(
     })
 }
 
-fn frame_object(mir: &MirFunction) -> &MemoryObject {
+/// Compile one real fixture source and classify EVERY object of EVERY function
+/// it defines, as `(function name, shape findings)`.
+///
+/// `None` when GCC is unavailable, matching [`real_x86_function`]. Individual
+/// functions that fail to lift or verify are skipped: a census must not be an
+/// assertion about the rest of the pipeline.
+pub(super) fn real_x86_objects(
+    source: &std::path::Path,
+) -> Option<Vec<(String, Vec<super::ShapeFinding>)>> {
+    let dir = tempfile::tempdir().expect("temporary fixture build directory");
+    let binary = dir.path().join("fixture.so");
+    let build = match Command::new("gcc")
+        .args(["-shared", "-fPIC", "-g", "-O0", "-o"])
+        .arg(&binary)
+        .arg(source)
+        .output()
+    {
+        Ok(build) => build,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => panic!("launch GCC: {error}"),
+    };
+    if !build.status.success() {
+        return Some(Vec::new());
+    }
+
+    let data = std::fs::read(&binary).expect("read GCC output");
+    let image = ProgramImage::from_path(&binary).expect("index the fixture ELF");
+    let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+        &data,
+        &crate::analysis::cfg::Budgets::default(),
+    );
+    let mut units = Vec::new();
+    for function in &functions {
+        let Ok(mut lifted) = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        ) else {
+            continue;
+        };
+        crate::ir::abi::annotate_calls(&mut lifted, crate::ir::call_args::CallConv::SysVAmd64);
+        let Ok(mir) = lower_verified_with_image(&lifted, &image) else {
+            continue;
+        };
+        let findings = mir
+            .objects()
+            .iter()
+            .filter_map(|object| mir.object_shapes(object.id))
+            .flatten()
+            .collect::<Vec<_>>();
+        units.push((format!("{:#x}", function.entry_point.value), findings));
+    }
+    Some(units)
+}
+
+pub(super) fn frame_object(mir: &MirFunction) -> &MemoryObject {
     let mut stack = mir.objects().iter().filter(|object| {
         object
             .origins

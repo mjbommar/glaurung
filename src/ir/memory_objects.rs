@@ -17,12 +17,14 @@ use crate::ir::types::VReg;
 mod ast;
 pub(crate) mod mir;
 mod partition;
+mod shape;
 
 pub(crate) use ast::infer_from_ast;
 pub use partition::{
     BoundaryEvidence, ExtentBounds, ObjectPartition, PartitionBoundary, PartitionConflict,
     PartitionExtent,
 };
+pub use shape::{ObjectShape, ShapeFinding, ShapeRefusal};
 
 /// Stable identity within one inferred object model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -92,6 +94,35 @@ pub struct AccessPath {
     pub mir_access: Option<MemoryAccessId>,
 }
 
+/// One access whose address a RUNTIME index scales into, so no constant offset
+/// names the bytes it reaches.
+///
+/// The adapter refuses such an access for bounding purposes — it still raises
+/// [`PartitionConflict::UnmodeledAccess`], and nothing rooted in the object can
+/// be bounded afterwards. What it must not do is throw the access away. Two
+/// facts in it are exact, not inferred:
+///
+/// * `offset` is the affine base's proven offset plus the encoded displacement,
+///   so index zero lands on a known byte of this object.
+/// * `stride` is the encoded scale, so the address advances exactly that many
+///   bytes per unit of the index.
+///
+/// That pair is the only machine evidence that separates an array from a
+/// same-sized struct of identical fields, and before this record existed it was
+/// discarded at the point of refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IndexedAccess {
+    /// Offset of index zero, in this object's byte coordinate.
+    pub offset: i64,
+    /// Bytes the address advances per unit of the runtime index. Never zero:
+    /// the unity scale is normalised from the legacy zero spelling.
+    pub stride: u8,
+    /// Width of this access itself.
+    pub width: u8,
+    pub role: AccessRole,
+    pub source: AccessSource,
+}
+
 /// Why an observed object cannot yet receive a concrete layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum LayoutConflict {
@@ -127,6 +158,12 @@ pub struct MemoryObject {
     pub identity: ObjectIdentity,
     pub origins: Vec<ObjectOrigin>,
     pub accesses: Vec<AccessPath>,
+    /// Accesses reached through a runtime index, ascending and deduplicated.
+    ///
+    /// These are exactly the accesses that made the partition refuse. They are
+    /// retained (rule 3) because their `(offset, stride)` pair is the array
+    /// evidence, and consumed by [`ShapeFinding`].
+    pub indexed_accesses: Vec<IndexedAccess>,
     pub stride: Option<u64>,
     pub extent: Option<u64>,
     pub conflicts: BTreeSet<LayoutConflict>,
@@ -192,6 +229,7 @@ pub(super) struct RawAccess {
 struct ObjectObservations {
     origins: Vec<ObjectOrigin>,
     accesses: Vec<RawAccess>,
+    indexed: Vec<IndexedAccess>,
     aliases: BTreeSet<ObjectIdentity>,
     strides: Vec<i64>,
     conflicts: BTreeSet<LayoutConflict>,
@@ -211,6 +249,20 @@ impl MemoryObjectBuilder {
             .entry(object.into())
             .or_default()
             .accesses
+            .push(access);
+    }
+
+    /// Retain one runtime-indexed access. The caller must still refuse the
+    /// access for bounding purposes; this only keeps the evidence it carries.
+    pub(super) fn observe_indexed_access(
+        &mut self,
+        object: impl Into<ObjectIdentity>,
+        access: IndexedAccess,
+    ) {
+        self.observations
+            .entry(object.into())
+            .or_default()
+            .indexed
             .push(access);
     }
 
@@ -363,11 +415,15 @@ impl MemoryObjectBuilder {
             }
             partition_conflicts.push(observation.partition_conflicts);
             let base_offsets = observation.base_offsets;
+            let mut indexed_accesses = observation.indexed;
+            indexed_accesses.sort_unstable();
+            indexed_accesses.dedup();
             objects.push(MemoryObject {
                 id,
                 identity,
                 origins,
                 accesses: access_paths,
+                indexed_accesses,
                 stride,
                 extent,
                 conflicts,
@@ -432,6 +488,19 @@ impl MemoryObjectModel {
     /// The per-variable byte partition of one object's observed accesses.
     pub fn partition(&self, id: ObjectId) -> Option<&ObjectPartition> {
         self.partitions.get(id.0)
+    }
+
+    /// What shape occupies each bounded region of one object, or why the
+    /// evidence does not say.
+    ///
+    /// This is the layer above [`Self::partition`]: the partition answers
+    /// "which bytes belong together", this answers "what is that". Both fail
+    /// closed, and a refusal here is [`ObjectShape::Unclassified`] with a
+    /// reason, never an absent finding.
+    pub fn object_shapes(&self, id: ObjectId) -> Option<Vec<ShapeFinding>> {
+        let object = self.object(id)?;
+        let partition = self.partition(id)?;
+        Some(shape::classify_object(object, partition))
     }
 
     /// Translate one AST frame coordinate into this model's byte coordinate.
@@ -505,3 +574,7 @@ mod tests;
 #[cfg(test)]
 #[path = "memory_objects/partition_tests.rs"]
 mod partition_tests;
+
+#[cfg(test)]
+#[path = "memory_objects/shape_tests.rs"]
+mod shape_tests;

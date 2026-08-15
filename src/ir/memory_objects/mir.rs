@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::memory_objects::{
-    AccessRole, AccessSource, LayoutConflict, MemoryObjectBuilder, MemoryStateIdentity,
-    ObjectIdentity, ObjectOrigin, PartitionConflict, RawAccess,
+    AccessRole, AccessSource, IndexedAccess, LayoutConflict, MemoryObjectBuilder,
+    MemoryStateIdentity, ObjectIdentity, ObjectOrigin, PartitionConflict, RawAccess,
 };
 use crate::ir::memory_ssa::primary_region_for_memop;
 use crate::ir::mir::{Definition, InstructionId, MirFunction, MirUse, UseId, ValueId};
@@ -69,7 +69,28 @@ pub(crate) fn attach(function: &mut MirFunction, llir: &LlirFunction, image: &Pr
         });
 
         if memop.index.is_some() {
-            // A scaled index reaches bytes this adapter cannot place.
+            // A scaled index reaches bytes this adapter cannot place, so the
+            // partition must still refuse. The stride and the base offset are
+            // exact though, and they are the only array evidence there is:
+            // retain them before refusing (rule 3).
+            if let (Some(base), Some(root)) = (base, address_root) {
+                let anchor = resolved
+                    .facts
+                    .get(&base.value)
+                    .map_or(0, |fact| fact.offset);
+                if let Some(offset) = anchor.checked_add(memop.disp) {
+                    builder.observe_indexed_access(
+                        root,
+                        IndexedAccess {
+                            offset,
+                            stride: memop.scale.max(1),
+                            width: memop.size,
+                            role,
+                            source: AccessSource::MirInstruction(instruction),
+                        },
+                    );
+                }
+            }
             refuse(&mut builder, address_root);
             continue;
         }

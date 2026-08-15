@@ -315,9 +315,30 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
 - [ ] Migrate the first production aggregate consumer to verified MIR evidence.
 - [ ] Import authoritative DWARF/PDB/manual layouts into the same constraint
   system.
-- [ ] Collect exact load/store, affine-offset, repeated-stride, overlap, pointer,
-  and call-boundary constraints.
-- [ ] Classify struct versus array versus union versus bitfield conservatively.
+- [~] Collect exact load/store, affine-offset, repeated-stride, overlap, pointer,
+  and call-boundary constraints. Load/store footprints, affine offsets and
+  overlap were already carried by `MemoryObject` and its partition. Scaled-index
+  addresses are now retained as `MemoryObject::indexed_accesses` instead of
+  being discarded at the point of refusal — the refusal itself is unchanged.
+  Pointer and call-boundary constraints are still only refusals
+  (`EscapedRoot`), not facts.
+- [~] Classify struct versus array versus union versus bitfield conservatively.
+  `src/ir/memory_objects/shape.rs`, reached through
+  `MirFunction::object_shapes`. **Two of those four are not decidable from
+  access evidence and the module says so rather than guessing.** Arrays are
+  claimed only from a scaled-index address, which is the one signal no
+  aggregate spelling imitates; their element COUNT is never claimed. Struct
+  versus array is not claimed at all — `int32_t[4]`, a four-field homogeneous
+  struct, and four packed locals are the same bytes and the same instructions,
+  so the model reports the proven cells and declines the noun. Union versus
+  punned struct is refused with a measured justification: a real union, a real
+  byte array read through a wider load, and a real bitfield container all
+  produce the identical verdict on real fixtures (diary entry 38). Bitfields
+  carry no evidence here at all, because their field edges live in value
+  arithmetic and never appear as a memory footprint. The ignored `shape_census`
+  test measures the whole corpus: 40 arrays recovered across 32 of the 173 C
+  fixtures, 910 cell decompositions, 14 overlapping cells, and zero index
+  refusals. Diagnostic only; no production consumer, per the `[~]` item above.
 - [ ] Propagate pointee and object constraints across calls.
 - [ ] Model by-value aggregates, split register/stack values, hidden structure
   returns, and aggregate result storage for each ABI.

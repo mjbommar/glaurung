@@ -1,7 +1,7 @@
 //! Stable, arena-backed MIR identities and records.
 
 use crate::ir::memory_objects::{
-    FrameCoordinate, MemoryObject, MemoryObjectModel, ObjectId, ObjectPartition,
+    FrameCoordinate, MemoryObject, MemoryObjectModel, ObjectId, ObjectPartition, ShapeFinding,
 };
 use crate::ir::types::{VReg, Width};
 use crate::target::TargetSpec;
@@ -212,6 +212,12 @@ impl MirFunction {
     /// The per-variable byte partition of one object's observed accesses.
     pub fn object_partition(&self, object: ObjectId) -> Option<&ObjectPartition> {
         self.object_model.partition(object)
+    }
+
+    /// What shape occupies each bounded region of one object, or why the
+    /// evidence does not say.
+    pub fn object_shapes(&self, object: ObjectId) -> Option<Vec<ShapeFinding>> {
+        self.object_model.object_shapes(object)
     }
 
     /// Translate one AST frame coordinate `(base, disp)` — the pair

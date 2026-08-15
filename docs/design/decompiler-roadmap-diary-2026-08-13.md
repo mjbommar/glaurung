@@ -6262,3 +6262,248 @@ already has a lane, and the one new test needing a file that does not exist
 (a big-endian object) is served by a hand-assembled image inside the test rather
 than by a corpus fixture. **No baseline was refreshed and nothing was
 committed.**
+
+## Entry 39 — The strongest array evidence was the access we were deleting
+
+EPIC 3's classification bullet asks for struct versus array versus union versus
+bitfield "conservatively". The brief that came with it ordered the evidence:
+access widths and their stride first, overlap second, sub-byte patterns third,
+DWARF fourth. That ordering is inverted at the top, and the inversion is the
+whole entry.
+
+### The framing check, first
+
+`src/ir/memory_objects/partition.rs` was exactly as described — `PartitionExtent`,
+`Spanned`/`Abutting`, `bounds_at` with `at_least`/`at_most`, and typed refusals
+including `UnboundedCursor` and `MergedPointer`. Nothing about the partition
+needed rebuilding, and the brief's account of it was accurate. What follows is
+about the layer above it.
+
+### A repeated stride of constant offsets is not evidence of an array
+
+Take the three claims a classifier could make about four adjacent four-byte
+accesses at a fixed base:
+
+```c
+int32_t a[4];                       /* an array          */
+struct { int32_t w, x, y, z; };     /* a homogeneous struct */
+int32_t w, x, y, z;                 /* four locals the allocator packed */
+```
+
+These compile to the same instructions at the same offsets. There is no access
+pattern that separates them, because there is no *difference* to separate — the
+bytes are identical and so is every load and store that touches them. Reading a
+repeated width as a stride and emitting `int32_t[4]` is not a conservative
+inference from weak evidence; it is a claim about a distinction the machine does
+not carry.
+
+`ua162_store_be32` makes this concrete. Its frame decomposes into eight storage
+units, and the first three are consecutive four-byte cells. A stride-inventing
+classifier calls that `int32_t[3]`. The correct answer is that the accesses
+prove three separable cells and prove nothing at all about what they spell.
+
+So what *does* prove an array? A scaled-index address. `mov -0x60(%rbp,%rax,4)`
+encodes, in the instruction itself, that the address advances four bytes per
+unit of a runtime value. No aggregate spelling imitates that, and no other
+evidence in the model comes close to it.
+
+And that was precisely the access the MIR adapter was deleting:
+
+```rust
+if memop.index.is_some() {
+    // A scaled index reaches bytes this adapter cannot place.
+    refuse(&mut builder, address_root);
+    continue;
+}
+```
+
+The refusal is right — a runtime index reaches bytes no constant offset names,
+and the partition must not bound anything afterwards. But `refuse` recorded the
+*conflict* and dropped the *fact*, and the fact is the only array evidence in
+the function. Rule 3 says a conflict is retained and the evidence that produced
+it is not destroyed. Here the two had been fused.
+
+### What was built
+
+**`MemoryObject::indexed_accesses`** (`memory_objects.rs`, populated in
+`memory_objects/mir.rs`). Each `IndexedAccess` carries the offset of index zero
+in the object's own coordinate — the affine base's proven offset plus the
+encoded displacement — the encoded stride, the access width, the role, and the
+instruction. The refusal is unchanged: every indexed access still raises
+`PartitionConflict::UnmodeledAccess` and every covered run in that object still
+declines to bound. Only the evidence survives now.
+
+**`src/ir/memory_objects/shape.rs`**, reached through
+`MemoryObjectModel::object_shapes` and `MirFunction::object_shapes`. It reports,
+per region:
+
+| shape | claim |
+|---|---|
+| `Array { element }` | a runtime index advances `element` bytes per unit and each access reads exactly one unit |
+| `Scalar { width }` | one footprint, and it is the whole region |
+| `Cells { cells }` | two or more separable storage units, each classified in turn |
+| `Overlapping { container }` | footprints overlap; `container` is the width of the one that covers the region, if any |
+| `Unclassified(reason)` | no claim, with the reason |
+
+`Cells` is where struct-versus-array goes to be *not answered*. It says what the
+accesses prove — these bytes are separable, those are one unit — and declines
+the spelling, because the spelling is not in the bytes.
+
+### `graph_bfs`, both arrays, from the addressing alone
+
+`20_graph_bfs.c` declares `int32_t queue[16]` and `uint8_t seen[16]` in one
+frame. With no debug information and no size heuristic:
+
+```
+arrays(findings) == [(-104, 4), (-40, 1)]
+```
+
+Two arrays, two element strides, two proven bases, and exactly two — the source
+declares exactly two. Every `Array` finding carries `end: None`: nothing in the
+address arithmetic bounds the index, and the covered runs cannot substitute
+because an indexed access is by definition an unmodelled one, so the runs do not
+account for every byte. Rule 8 — the element count is an explicit absence.
+
+The same frame is its own control. `head`, `tail` and `count` sit at
+`[-124, -112)` as three adjacent four-byte locals: a uniform four-byte tiling,
+untouched by any index, and claimed as nothing.
+
+### Three source shapes, one verdict
+
+The refusal that matters most is the one that can be *measured*, and this one
+can. Three different C constructs, three real fixtures, one machine shape:
+
+| fixture | source | verdict at its four-byte cell |
+|---|---|---|
+| `91_union_type_punning.c` `pun_halves_swapped` | `union { uint32_t word; struct { uint16_t low, high; } halves; }` | `Overlapping { container: Some(4) }` |
+| `162_unaligned_memcpy_access.c` `ua162_store_be32` | `uint8_t` staging bytes, copied out as one `uint32_t` | `Overlapping { container: Some(4) }` |
+| `90_bitfields.c` `bitfield_extract` | `struct Flags { unsigned low : 3, middle : 5; signed high : 4; unsigned rest : 20; }` | `Overlapping { container: Some(4) }` |
+
+`a_union_and_a_punned_byte_array_are_indistinguishable_and_both_refuse` asserts
+the first two are *equal*, not merely both refused. That is the difference
+between "the classifier gave up" and "there is nothing here to classify":
+choosing `union` for the first fabricates an aliasing the second does not have,
+and choosing `struct` for the second fabricates a size the first does not have.
+
+The bitfield row is the same lesson from a third direction. The sub-byte
+partition of `struct Flags` lives entirely in the mask and shift arithmetic
+applied to the loaded *value*. The memory operations name the container and
+nothing smaller, so no sub-byte evidence reaches an object model built from
+memory footprints. This module therefore makes no bitfield claim — not because
+bitfields are hard, but because it holds no bitfield evidence. Getting that
+capability would mean teaching the adapter to read value consumers, which is a
+different kind of evidence and a different patch.
+
+### The one positive union-adjacent result
+
+`pun_byte_of_word` reads `punner.bytes[index]` — the union member that really is
+an array. It recovers as `Array { element: 1 }` at the union's offset while the
+covered run around it stays `Unclassified(UnboundedObject)`. The array is
+claimed because an index proves it; the union is not, because nothing does.
+
+### The census, and the claim it deleted
+
+`shape_census` (ignored; `cargo test --features python-ext shape_census --
+--ignored --nocapture`) compiles all 173 C fixtures at `-O0` and classifies
+every object of every function:
+
+```
+   40  run Array
+  910  run Cells
+ 2394  run Scalar
+ 1174  run UnboundedObject
+ 3192  cell Scalar
+   14  cell Overlapping
+    0  UnprovenIndexStride, ConflictingIndexStrides
+```
+
+Forty arrays across thirty-two fixtures, from address encodings alone — among
+them `49_crc32` at frame-1048 with four-byte elements (a 256-entry table),
+`39_counting_radix_sort` at the same width and offset, four separate arrays in
+`16_red_black_tree`, and both of `20_graph_bfs`'s. The 14 `cell Overlapping`
+verdicts are the entire union/pun/bitfield-container population of the corpus.
+
+This census exists because the first draft of this entry asserted, in prose,
+that no fixture emits a scaled index whose scale differs from its access width.
+A disassembly scan of every fixture found 150 scaled-index accesses at scale 4
+width 4, 41 at scale 1 width 1, and **30 at scale 1 with a four- or eight-byte
+access** — the claim was simply false. The reason `UnprovenIndexStride` is still
+zero is a different mechanism than the one I had assumed: in all thirty, GCC put
+the *pre-multiplied index* in the base operand and the table address in the
+index operand (`lea table(%rip),%rax; mov (%rdx,%rax,1),%eax`), so the address
+root carries no affine fact, has no constant-offset access of its own, and never
+becomes an object at all. Verified directly on `static_table_lookup`, whose only
+object is its frame, with an empty `indexed_accesses`.
+
+So `UnprovenIndexStride`, `ConflictingIndexStrides`, and the `UnboundedCursor`
+interaction are covered by synthetic LLIR, in the same `mod synthetic` style the
+partition tests already use — now for a measured reason rather than an assumed
+one. The obvious corpus candidate for a wide stride,
+`111_self_referential_struct.c` with its `struct Node nodes[8]` of sixteen-byte
+elements, also never reaches this path: GCC emits `shl $0x4,%rdx` and folds the
+base in with an ordinary `add`, so the memop carries no index and the frame
+escapes through the non-affine addition instead.
+
+### No new fixture, on purpose
+
+The brief offered 194 and listed the interesting shapes: two-array frames,
+overlapping unions, bitfields, and arrays bounded only by access patterns. The
+first three already have real lanes — `20_graph_bfs`, `91_union_type_punning`,
+`90_bitfields` — and this patch reads all three through the real compile-and-lower
+harness in `partition_tests.rs`, so they are fixture-backed without being
+duplicated. The fourth shape does not exist: array bounds are *not* provable
+from access patterns here, which is a finding rather than a gap to fill. The
+control the brief rightly insists on is real too, and it is `ua162_store_be32`'s
+three adjacent same-width cells plus `graph_bfs`'s three adjacent scalars: a
+classifier that fabricates strides fails both, and a classifier that does
+nothing fails the two-array assertion.
+
+### Blast radius
+
+Zero, by construction. Nothing in the production decompile path reads
+`ObjectShape` or `indexed_accesses`; the MIR object model remains diagnostic, as
+the EPIC 3 `[~]` item requires, and no second production heuristic path was
+created. The only production-visible change is one additional field on
+`MemoryObject`. `@o0`, `@o2`, `@structs` and `@aggregates` confirm it.
+
+### Was the brief's framing right?
+
+The description of what exists was right, and the instruction to prefer refusing
+was right and load-bearing. The evidence ordering was not. "Access widths and
+their stride" is listed first and is worth nothing on its own; the scaled-index
+address, which the brief did not mention, is the only thing in the model that
+proves an array. "Mixed widths at fixed offsets are a struct" is also not sound
+— an inlined block copy of `char buf[7]` produces exactly the footprints of
+`struct { int a; short b; char c; }` — which is why `Cells` reports the
+decomposition and refuses the noun.
+
+The brief's own hedge turned out to be the most important sentence in it:
+overlapping offsets are "a union, or a punned struct — and distinguishing those
+may be impossible, in which case say so." It is impossible, two real fixtures
+now say so by producing equal verdicts, and a third shows a bitfield container
+landing in the same place.
+
+### Commands run
+
+```
+cargo test --features python-ext        2517 passed, 0 failed, 2 ignored.
+                                        The brief records 2507 at HEAD; this
+                                        patch adds ten shape tests and one
+                                        ignored census.
+cargo test ... shape_census --ignored   173 fixtures, the table above
+touch src/lib.rs && cargo build         1 warning, `field 0 is never read` at
+  --features python-ext                 analysis/ioctl_taint.rs:409, which the
+                                        brief names as pre-existing. Never-used
+                                        FUNCTION count is 0.
+tools/dectest.py @structs               8 lanes, no regressions in scope
+tools/dectest.py @aggregates            36 lanes, no regressions in scope
+tools/dectest.py @o0                    364 lanes, no regressions in scope
+tools/dectest.py @o2                    364 lanes, no regressions in scope
+rustfmt --edition 2021                  on the seven touched Rust files
+```
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`, and
+`pytest python/tests/`. **No baseline was refreshed and nothing was committed.**
