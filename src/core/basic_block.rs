@@ -29,7 +29,17 @@ pub struct BasicBlock {
     pub successor_ids: Vec<String>,
     /// IDs of predecessor basic blocks
     pub predecessor_ids: Vec<String>,
-    /// Whether relationships were explicitly provided (for entry/exit classification)
+    /// Whether the successor and predecessor lists are the block's WHOLE set.
+    ///
+    /// Gates [`Self::is_entry_block`] and [`Self::is_exit_block`], both of which
+    /// read an empty list as a classification. That only follows if the list is
+    /// complete: a block terminated by an indirect transfer whose targets were
+    /// never recovered also has an empty successor list, and with this flag set
+    /// it reports as a function exit. `analysis::cfg` therefore clears it for
+    /// exactly those blocks — see `discover_function`.
+    ///
+    /// Both predicates are knowledge-shaped: `false` means "not known to be",
+    /// never "known not to be".
     pub relationships_known: bool,
 }
 

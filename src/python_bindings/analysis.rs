@@ -526,6 +526,48 @@ fn function_discovery_stats_to_py(
         code_labels.append(item)?;
     }
     dict.set_item("code_labels", code_labels)?;
+    // Indirect transfers this analysis could not follow, and why.
+    //
+    // `FunctionDiscoveryStats` has recorded a typed reason for every declined
+    // dispatch since `analysis::dispatch` was written, and this function — which
+    // emits some sixty other counters, `scan_rejections` with reason/detail
+    // strings included — dropped it at the FFI boundary. The reason was
+    // computed, stored, and then existed nowhere a consumer could reach, which
+    // is design rule 8's failure mode applied to a pass that had already done
+    // the work.
+    //
+    // Shaped like `scan_rejections` / `scan_rejection_counts` deliberately: a
+    // per-site list for "why did THIS dispatch decline", and a pre-aggregated
+    // histogram so a corpus census does not have to re-derive one.
+    let unresolved_indirect = pyo3::types::PyList::empty(py);
+    let mut unresolved_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    for (site_va, why) in &stats.unresolved_indirect {
+        let item = pyo3::types::PyDict::new(py);
+        item.set_item("va", *site_va)?;
+        item.set_item("reason", why.label())?;
+        item.set_item("table_va", why.table_va())?;
+        item.set_item("detail", why.detail())?;
+        unresolved_indirect.append(item)?;
+        *unresolved_counts.entry(why.label()).or_default() += 1;
+    }
+    dict.set_item("unresolved_indirect", unresolved_indirect)?;
+    let unresolved_indirect_counts = pyo3::types::PyDict::new(py);
+    for (reason, count) in &unresolved_counts {
+        unresolved_indirect_counts.set_item(reason, *count)?;
+    }
+    dict.set_item("unresolved_indirect_counts", unresolved_indirect_counts)?;
+    // The matching positive: dispatches that DID resolve, with their arm count.
+    // Reported alongside so a census has a denominator; a decline histogram with
+    // no success count cannot say whether recovery is getting better or worse.
+    let resolved_dispatches = pyo3::types::PyList::empty(py);
+    for (site_va, arms) in &stats.resolved_dispatches {
+        let item = pyo3::types::PyDict::new(py);
+        item.set_item("va", *site_va)?;
+        item.set_item("arms", *arms)?;
+        resolved_dispatches.append(item)?;
+    }
+    dict.set_item("resolved_dispatches", resolved_dispatches)?;
     dict.set_item("thunk_functions", stats.thunk_functions)?;
     dict.set_item("import_thunk_functions", stats.import_thunk_functions)?;
     dict.set_item("tail_thunk_functions", stats.tail_thunk_functions)?;

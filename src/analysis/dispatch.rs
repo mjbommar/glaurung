@@ -94,11 +94,19 @@ enum Val {
 pub enum Unresolved {
     /// The jump register was never tracked to a table-derived value.
     UnknownBase,
-    /// The register resolved to a table-derived value, but no table was
-    /// discovered at that address. Distinct from `UnknownBase` because it means
+    /// The register resolved to a table-derived value, but no table could be
+    /// read at that address. Distinct from `UnknownBase` because it means
     /// the *dispatch* was understood and the *table scan* came up short — a
     /// different defect, and one worth reporting separately.
-    NoTableAt(u64),
+    ///
+    /// `decline` names which of the decoder's checks refused. Without it this
+    /// variant answers "no table" for a dozen unrelated situations — an address
+    /// in no section, a target outside `.text`, an extent above the entry
+    /// ceiling — and a consumer cannot tell a mapping problem from a budget one.
+    NoTableAt {
+        table: u64,
+        decline: crate::analysis::jump_table::TableDecline,
+    },
     /// The dispatch and its table were both found, but no range check bounded
     /// the index, so the table's entry count is unknown.
     ///
@@ -107,6 +115,39 @@ pub enum Unresolved {
     /// dozens of foreign blocks to the function. This is the most *recoverable*
     /// of the three: it names a table that exists and only wants an extent.
     NoBound(u64),
+}
+
+impl Unresolved {
+    /// A stable histogram key. `NoTableAt` folds its decline in, because that is
+    /// where the interesting variation lives: without it the bucket is one
+    /// undifferentiated pile and ranks no work.
+    pub fn label(&self) -> String {
+        match self {
+            Self::UnknownBase => "unknown_base".to_string(),
+            Self::NoTableAt { decline, .. } => format!("no_table_at:{}", decline.label()),
+            Self::NoBound(_) => "no_bound".to_string(),
+        }
+    }
+
+    /// The table address this decline is about, when it names one.
+    pub fn table_va(&self) -> Option<u64> {
+        match self {
+            Self::UnknownBase => None,
+            Self::NoTableAt { table, .. } | Self::NoBound(table) => Some(*table),
+        }
+    }
+
+    /// Human-readable detail, paired with [`Self::label`] the way
+    /// [`crate::analysis::cfg::ScanRejection`] pairs `reason` with `detail`.
+    pub fn detail(&self) -> String {
+        match self {
+            Self::UnknownBase => "jump register never tracked to a table-derived value".to_string(),
+            Self::NoTableAt { table, decline } => format!("table {table:#x}: {decline}"),
+            Self::NoBound(table) => {
+                format!("table {table:#x} found, no range check bounds the index")
+            }
+        }
+    }
 }
 
 /// What a guard established, carried across its in-range edge.
@@ -825,11 +866,17 @@ impl DispatchTracker {
         ins: &Instruction,
         tables: &BTreeMap<u64, Vec<u64>>,
     ) -> Option<Resolution> {
-        self.resolve_with(ins, tables, |_table, _entry_count| None)
+        self.resolve_with(ins, tables, |_table, _entry_count| {
+            Err(crate::analysis::jump_table::TableDecline::DecodeNotAttempted)
+        })
     }
 
     /// Resolve a dispatch, decoding an exact bounded table on demand when the
     /// whole-section scan did not expose this table's starting address.
+    ///
+    /// `decode_bounded` reports *which* check refused rather than a bare
+    /// `None`, so the reason reaches [`Unresolved::NoTableAt`] instead of being
+    /// reconstructed as a guess here.
     pub fn resolve_with<F>(
         &self,
         ins: &Instruction,
@@ -837,7 +884,7 @@ impl DispatchTracker {
         decode_bounded: F,
     ) -> Option<Resolution>
     where
-        F: FnOnce(u64, usize) -> Option<Vec<u64>>,
+        F: FnOnce(u64, usize) -> Result<Vec<u64>, crate::analysis::jump_table::TableDecline>,
     {
         let reg = ins.operands.first()?.register.as_deref()?;
         Some(match self.get(reg) {
@@ -860,25 +907,39 @@ impl DispatchTracker {
                     let entry_count = usize::try_from(bound)
                         .ok()
                         .and_then(|bound| bound.checked_add(1));
-                    let targets = entry_count.and_then(|entry_count| {
-                        tables
-                            .get(&table)
-                            .and_then(|targets| targets.get(..entry_count))
-                            .map(<[u64]>::to_vec)
-                            .or_else(|| decode_bounded(table, entry_count))
-                    });
-                    match targets {
-                        Some(targets) => Resolution::Table {
+                    let Some(entry_count) = entry_count else {
+                        return Some(Resolution::Unresolved(Unresolved::NoTableAt {
+                            table,
+                            decline:
+                                crate::analysis::jump_table::TableDecline::BoundExceedsAddressSpace {
+                                    bound,
+                                },
+                        }));
+                    };
+                    let scanned = tables
+                        .get(&table)
+                        .and_then(|targets| targets.get(..entry_count))
+                        .map(<[u64]>::to_vec);
+                    match scanned
+                        .ok_or(())
+                        .or_else(|()| decode_bounded(table, entry_count))
+                    {
+                        Ok(targets) => Resolution::Table {
                             table_va: table,
                             targets,
                         },
-                        None => Resolution::Unresolved(Unresolved::NoTableAt(table)),
+                        Err(decline) => {
+                            Resolution::Unresolved(Unresolved::NoTableAt { table, decline })
+                        }
                     }
                 }
                 None if tables.contains_key(&table) => {
                     Resolution::Unresolved(Unresolved::NoBound(table))
                 }
-                None => Resolution::Unresolved(Unresolved::NoTableAt(table)),
+                None => Resolution::Unresolved(Unresolved::NoTableAt {
+                    table,
+                    decline: crate::analysis::jump_table::TableDecline::ScanFoundNoTable,
+                }),
             },
             _ => Resolution::Unresolved(Unresolved::UnknownBase),
         })
@@ -1585,7 +1646,13 @@ mod tests {
         t.observe(&ins("add", vec![reg_op("rax"), reg_op("rcx")]));
         assert_eq!(
             t.resolve(&ins("jmp", vec![reg_read("rax")]), &tables()),
-            Some(Resolution::Unresolved(Unresolved::NoTableAt(0x9999)))
+            Some(Resolution::Unresolved(Unresolved::NoTableAt {
+                table: 0x9999,
+                // No guard bounded the index and the scan holds no table here,
+                // so no bounded decode was even possible — which is a different
+                // decline from a decode that ran and refused, and now says so.
+                decline: crate::analysis::jump_table::TableDecline::ScanFoundNoTable,
+            }))
         );
     }
 

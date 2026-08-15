@@ -1259,12 +1259,15 @@ fn resolve_dispatch(
                 entry_count,
                 |target| in_exec_regions(regions, target).is_some(),
             ) {
-                Some(table) => crate::analysis::dispatch::Resolution::Table {
+                Ok(table) => crate::analysis::dispatch::Resolution::Table {
                     table_va: table.table_va,
                     targets: table.targets,
                 },
-                None => crate::analysis::dispatch::Resolution::Unresolved(
-                    crate::analysis::dispatch::Unresolved::NoTableAt(branch.table_va),
+                Err(decline) => crate::analysis::dispatch::Resolution::Unresolved(
+                    crate::analysis::dispatch::Unresolved::NoTableAt {
+                        table: branch.table_va,
+                        decline,
+                    },
                 ),
             },
         );
@@ -2040,6 +2043,33 @@ fn discover_function(
             }
         }
     }
+    // Blocks whose terminator is an indirect transfer this pass declined.
+    //
+    // Their successor list is empty because the targets were never recovered,
+    // not because the block has no successors — and `relationships_known` was
+    // set true for them along with everyone else, which made
+    // `BasicBlock::is_exit_block()` (`relationships_known && successors.empty()`)
+    // answer TRUE for a `jmp *%rax` with forty arms. Measured over the 758
+    // fixture objects: 2909 of the 28169 blocks claiming to be exits, 10.3%.
+    //
+    // The flag is one bit covering both directions, so the honest single-bit
+    // answer for these blocks is `false`. That also withdraws
+    // `is_entry_block()` from 45 of them, which is the correct direction:
+    // both predicates are knowledge-shaped (`false` means "not known to be",
+    // not "known not to be"), so clearing the flag turns a claim into an
+    // absence of one, while leaving it set turned an absence into a claim.
+    let declined_dispatch_blocks: std::collections::BTreeSet<&str> = stats
+        .unresolved_indirect
+        .iter()
+        .filter_map(|(site, _)| {
+            blocks
+                .iter()
+                .find(|(start, (end, _))| *site >= **start && *site < *end)
+                .and_then(|(start, _)| bb_ids.get(start))
+                .map(String::as_str)
+        })
+        .collect();
+
     // Patch blocks with relationships (best-effort): replace blocks with enriched copies
     for bb in &mut func.basic_blocks {
         let id = bb.id.clone();
@@ -2049,7 +2079,7 @@ fn discover_function(
         if let Some(p) = preds.get(&id) {
             bb.predecessor_ids = p.clone();
         }
-        bb.relationships_known = true;
+        bb.relationships_known = !declined_dispatch_blocks.contains(id.as_str());
     }
 
     // Seed the function's primary chunk from the basic-block extents so
@@ -4131,7 +4161,12 @@ fn rebuild_block_relationships(function: &mut Function) {
         block.successor_ids.sort();
         block.successor_ids.dedup();
         block.predecessor_ids.clear();
-        block.relationships_known = true;
+        // `relationships_known` is deliberately NOT re-asserted here. This pass
+        // recomputes the PREDECESSOR direction only; a block that arrived with
+        // the flag cleared did so because its successors were never recovered
+        // (a declined indirect dispatch), and rebuilding predecessors does not
+        // recover them. Forcing it true put the false `is_exit_block()` claim
+        // back on every function that had a landing pad merged into it.
     }
     let mut predecessors: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
@@ -7043,6 +7078,114 @@ mod elf_prologue_scan_tests {
             scan_elf_prologue_function_starts(None, b"MZ\x90\x00", &regions, BArch::X86_64)
                 .is_empty()
         );
+    }
+}
+
+#[cfg(test)]
+mod dispatch_decline_reporting_tests {
+    use super::*;
+
+    /// A checked-in gcc -O2 shared object. Every gcc ELF carries the crtstuff
+    /// `register_tm_clones` / `deregister_tm_clones` pair, whose `jmp *%rax`
+    /// after a GOT load is a register-indirect transfer this pass declines - so
+    /// this sample exercises the decline path without needing a compiler.
+    fn hello_gcc_o2() -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2");
+        std::fs::read(path).expect("read the checked-in gcc -O2 sample")
+    }
+
+    /// Every declined dispatch names a reason, and the reason renders.
+    ///
+    /// The reason has always been computed; this pins that it is a real value a
+    /// consumer can read rather than a variant nothing formats.
+    #[test]
+    fn every_declined_dispatch_carries_a_labelled_reason() {
+        let data = hello_gcc_o2();
+        let (_functions, _cg, stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        assert!(
+            !stats.unresolved_indirect.is_empty(),
+            "the crtstuff TM-clone pair must produce at least one declined dispatch"
+        );
+        for (site, why) in &stats.unresolved_indirect {
+            assert!(
+                !why.label().is_empty() && !why.detail().is_empty(),
+                "site {site:#x} declined with an unlabelled reason: {why:?}"
+            );
+            // `UnknownBase` is the only variant that names no table; the other
+            // two are about a specific address and must carry it.
+            assert_eq!(
+                why.table_va().is_none(),
+                matches!(why, crate::analysis::dispatch::Unresolved::UnknownBase),
+                "site {site:#x}: {why:?}"
+            );
+        }
+    }
+
+    /// A block whose indirect terminator was declined must not advertise itself
+    /// as a function exit.
+    ///
+    /// `is_exit_block()` is `relationships_known && successors.is_empty()`, and
+    /// `relationships_known` used to be set unconditionally - so a `jmp *%rax`
+    /// whose targets were never recovered read as a block with no successors
+    /// BECAUSE IT HAS NONE. Measured over the 758 fixture objects that was 2909
+    /// of 28169 exit claims.
+    #[test]
+    fn a_block_with_a_declined_dispatch_does_not_claim_to_be_an_exit() {
+        let data = hello_gcc_o2();
+        let (functions, _cg, stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let sites: Vec<u64> = stats
+            .unresolved_indirect
+            .iter()
+            .map(|(site, _)| *site)
+            .collect();
+        assert!(!sites.is_empty(), "no declined dispatch to check");
+
+        let mut checked = 0usize;
+        for function in &functions {
+            for block in &function.basic_blocks {
+                let owns = sites.iter().any(|site| {
+                    *site >= block.start_address.value && *site < block.end_address.value
+                });
+                if !owns {
+                    continue;
+                }
+                checked += 1;
+                assert!(
+                    block.successor_ids.is_empty(),
+                    "a declined dispatch attaches no successors"
+                );
+                assert!(
+                    !block.is_exit_block(),
+                    "block {} ends in an unfollowed indirect transfer and must not \
+                     be classified as a function exit",
+                    block.id
+                );
+            }
+        }
+        assert!(checked > 0, "no block owned a declined dispatch site");
+    }
+
+    /// The complement: ordinary blocks keep their entry/exit classification.
+    /// A fix that cleared the flag everywhere would also pass the test above.
+    #[test]
+    fn ordinary_blocks_still_classify_as_entries_and_exits() {
+        let data = hello_gcc_o2();
+        let (functions, _cg, _stats) =
+            analyze_functions_bytes_with_stats(&data, &Budgets::default());
+        let entries = functions
+            .iter()
+            .flat_map(|function| &function.basic_blocks)
+            .filter(|block| block.is_entry_block())
+            .count();
+        let exits = functions
+            .iter()
+            .flat_map(|function| &function.basic_blocks)
+            .filter(|block| block.is_exit_block())
+            .count();
+        assert!(entries > 0 && exits > 0, "entries={entries} exits={exits}");
     }
 }
 

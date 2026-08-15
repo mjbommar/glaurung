@@ -5968,3 +5968,297 @@ rustfmt --edition 2021                  on the two touched Rust files
 DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
 fixture matrix, any full `arch_roundtrip.py` sweep, repo-wide `cargo fmt`, and
 `pytest python/tests/`. **No baseline was refreshed and nothing was committed.**
+
+## Entry 38 — The decline reason, ranked: 77% of it is two crtstuff functions
+
+Three defects entry 36 found and deliberately left: the jump-table decline
+reason is computed and discarded, `cfg.rs` sets `relationships_known = true`
+unconditionally, and `discover_jump_tables` guards with `&&` where `||` was
+"surely meant". All three are real. The third is real in a different way than
+recorded, and saying so is most of this entry's value.
+
+The brief asked for a histogram over the fixture corpus as the actual
+deliverable — "it turns *jump table recovery sometimes fails* into a ranked work
+list". It does, and the ranking is not what the roadmap's 1.2% figure predicts,
+because the two censuses count different populations. That is the first thing to
+get right.
+
+### Two censuses, two populations
+
+Entry 36 measured `cfg_health::unresolved_indirect_edges`: **terminal edges**,
+counted at LLIR structure time, 32838 events over 182 gcc-O2 objects. Its
+histogram is 43.2% crtstuff, 34.0% `.plt.got`/`.plt.sec` stubs, 21.6%
+`.plt[0]`, 1.2% table dispatch.
+
+This entry measures `FunctionDiscoveryStats::unresolved_indirect`: **declined
+dispatch sites**, counted at function-discovery time, where
+`analysis::dispatch` actually declines. 2949 events over all 758 fixture
+objects.
+
+They are not the same population and the second is not a refinement of the
+first. **No PLT stub appears in this histogram at all** — a `.plt` stub is
+`jmp *GOT(%rip)`, memory-indirect, which `cfg.rs` answers with
+`indirect_memory_target` and records as a tail call long before
+`resolve_dispatch` is reached (`874fe33`). 55.6% of entry 36's events are
+therefore invisible here. Conversely this census sees every architecture and
+every optimisation level in the corpus, not gcc-O2 alone.
+
+Any count in this entry is taken at function-discovery time. Nothing here
+re-measures `cfg_health`, and the "census taken at the wrong point" problem
+entry 36 named is untouched.
+
+### The histogram
+
+758 objects, `analyze_functions_path_with_stats`, default budgets. 593 dispatch
+sites resolved (13568 arms); 2949 declined.
+
+| decline reason | sites | share | objects |
+|---|---|---|---|
+| `unknown_base` | 2439 | 82.7% | 758 |
+| `no_table_at:scan_found_no_table` | 291 | 9.9% | 10 |
+| `no_bound` | 219 | 7.4% | 11 |
+
+`unknown_base` in every single object is the tell. Classified independently
+from `objdump` function boundaries and `readelf` section tables:
+
+| what it actually is | sites | share of all declines |
+|---|---|---|
+| crtstuff `register_tm_clones` | 1516 | 51.4% |
+| crtstuff `deregister_tm_clones` | 758 | 25.7% |
+| `no_table_at:scan_found_no_table` | 291 | 9.9% |
+| `no_bound` | 219 | 7.4% |
+| real code, `unknown_base` | 165 | 5.6% |
+
+**77.1% of every declined dispatch in the corpus is two functions the linker
+writes into every gcc ELF**, and it is the same population entry 36 already
+proved resolvable from a relocation. `ir::indirect_targets` walks SSA from the
+jump register to a load from a fixed place and asks whether a relocation names
+a symbol there; for `jmp *rax` after `mov rax,[GOT[_ITM_registerTMCloneTable]]`
+the answer is yes. That pass runs at LLIR time. `analysis::dispatch` runs at
+CFG-discovery time, does not consult relocations, and reports `unknown_base`.
+
+The evidence is already reachable from where the decline happens:
+`DiscoveryFacts` carries the `ProgramImage`, and
+`ProgramImage::relocated_symbol_slots()` — added by `f1a6e4c` for exactly this
+— is one call away. **That is the top item on the ranked work list, and it is a
+port of a solved problem, not new analysis.** This entry does not do it: it
+would add successor edges to CFGs across the whole corpus, which is a
+behaviour change wanting its own patch and its own sweep.
+
+The remaining 675 (22.9%) split three ways:
+
+* **`scan_found_no_table`, 291 sites, 10 objects, every one `rustc -O0`**
+  (`166_rust_generics`, `167_rust_trait_objects`, `168_rust_enum_niche`,
+  `169_rust_slices_bounds`, `170_rust_panic_unwind`, `171_rust_overflow`). The
+  dispatch was understood and named a table address; the whole-section rodata
+  scan has nothing there and no guard bound was available to attempt an exact
+  decode. Rust's tables sit at high `.rodata` offsets (`0x46600`, `0x47e88`,
+  `0x49840`) in objects several hundred KB large.
+* **`no_bound`, 219 sites, 11 objects.** 216 of them are the same Rust six.
+  The other three are the *entire* non-Rust, non-boilerplate decline population
+  of the corpus:
+
+      148_dispatch_obfuscation-gcc-O2    0x11ca   table 0x2000
+      154_wide_switch-clang-O2           0x15d9   table 0x4000
+      42_rpn_evaluator-clang-O2          0x11bf   table 0x2000
+
+  This is the most recoverable class: the dispatch is understood, the table
+  address is in the scan index, and only the extent is missing. Worth noting
+  that `resolve_dispatch` already has a speculative path for `NoBound` — attach
+  the scanned run when it holds `2..=256` entries, then require post-CFG
+  revalidation to prove an exact prefix — and it fired for none of these three.
+  Those three objects resolve no dispatch at all.
+* **`unknown_base` on real code, 165 sites.** `core::fmt` and `core::slice::sort`
+  in the Rust objects, plus `threaded_interpreter` (10) and `ifunc_lazy_double`
+  (4) — two of entry 36's four honest-floor functions, which are fixtures
+  written to be unresolvable.
+
+### Making the reason survive, and making it granular
+
+Two independent gaps, and the brief was right about both.
+
+**At the FFI boundary.** `function_discovery_stats_to_py` emits some sixty
+counters including `scan_rejections` with `reason`/`detail` strings, and did not
+emit `unresolved_indirect`. The reason was computed, stored in
+`FunctionDiscoveryStats`, and then existed nowhere any consumer could reach —
+`glaurung cfg`, `windows_analysis.py` and four LLM tools all read this dict. It
+now carries three keys, shaped after the `scan_rejections` precedent rather than
+inventing a new one:
+
+```python
+stats["unresolved_indirect"]         # [{va, reason, table_va, detail}, ...]
+stats["unresolved_indirect_counts"]  # {reason: count} — the histogram, pre-aggregated
+stats["resolved_dispatches"]         # [{va, arms}, ...] — the denominator
+```
+
+`resolved_dispatches` is there because a decline histogram with no success count
+cannot say whether recovery is improving.
+
+**Upstream of it.** `jump_table.rs` had no reason type at all: an entry budget,
+a section-bounds miss, a non-executable target, a target landing inside its own
+table, an absent extent and a parse failure all returned a bare `None`, which
+`resolve_with` collapsed into one `NoTableAt`. `TableDecline` now names twelve
+distinct checks and carries the operands each one compared —
+`EntryCountAboveCeiling { requested, ceiling }`,
+`NonExecutableTarget { index, target }`,
+`NoSectionCovers { table_va, byte_count }` — so a consumer can tell a mapping
+problem from a budget one. Both decoders return `Result<JumpTable,
+TableDecline>`; `Unresolved::NoTableAt` became
+`NoTableAt { table, decline }`; `label()` is the stable histogram key and
+`Display` the human detail, kept apart so a census can rank without parsing a
+sentence.
+
+Only one of the twelve fires in this corpus (`ScanFoundNoTable`). That is not an
+argument against the other eleven: the whole point is that when one of them does
+fire, it will say so instead of joining a pile of 291.
+
+### `relationships_known`, and what actually reads it
+
+`BasicBlock::relationships_known` gates two predicates and nothing else:
+
+```rust
+pub fn is_entry_block(&self) -> bool { self.relationships_known && self.predecessor_ids.is_empty() }
+pub fn is_exit_block(&self)  -> bool { self.relationships_known && self.successor_ids.is_empty() }
+```
+
+Consumers: `BasicBlock::summary()`, the two PyO3 wrappers, and
+`windows_analysis.py`, which puts them in a structured fact dict as
+`is_entry`/`is_exit`. Nothing in the decompiler pipeline reads the flag — so
+this is the smaller of the two problems the brief distinguished, and the fix
+should be proportionate.
+
+It is still a false claim, and measurably. A block whose terminator is a
+declined indirect jump has an empty successor list *because the targets were
+never recovered*, and `is_exit_block()` reads that as "this block is where the
+function ends". Over the 758 objects: **2909 of the 28169 blocks claiming to be
+function exits, 10.3%, end in a transfer the analysis could not follow.**
+
+`discover_function` now clears the flag for exactly those blocks, and
+`rebuild_block_relationships` no longer re-asserts it (it recomputes the
+predecessor direction only, so forcing it true put the false claim back on every
+function that had a landing pad merged into it). Same corpus, before and after:
+
+```
+                                            before    after
+blocks                                      163741   163741
+blocks claiming is_exit_block()              28169    25260
+  ...of which own a declined dispatch         2909        0
+  ...of which also claim is_entry_block()       45        0
+```
+
+`28169 - 2909 = 25260` exactly. Only the false claims were withdrawn.
+
+The flag is one bit covering both directions, so clearing it also withdraws
+`is_entry_block()` from 45 blocks that legitimately have no predecessors. That
+is the correct direction and the reason no field was added: both predicates are
+knowledge-shaped — `false` means "not known to be", never "known not to be" — so
+clearing the flag turns a claim into the absence of one, while leaving it set
+turned the absence of knowledge into a claim. Splitting the bit would change a
+`#[pyclass]` with `Encode`/`Decode` and a public constructor arity to serve two
+call sites of one Python fact dict.
+
+### The `&&` that should not become `||`
+
+```rust
+if !obj.is_64() && !obj.is_little_endian() { return Vec::new(); }
+```
+
+Entry 36 read this as "`&&` where `||` was surely meant: only 32-bit big-endian
+is rejected". The first half is right and the second half is the wrong repair.
+
+`||` means "64-bit little-endian only". That withdraws the scan from
+architectures it currently serves: i386 PIC lowers a switch to precisely this
+table shape (`target = table_va + (i32)table[i]`), and three of the six lanes
+in `tools/arch_roundtrip.py` are 32-bit (`i386`, `armv7`, `armv7_a32`). It buys
+nothing, because there is no
+64-bitness anywhere in the decoder to protect — entries are `i32` whatever the
+pointer size, `endian_le` parameterises the only byte-order decision, and every
+candidate target must pass `is_executable_va` before a run is accepted.
+
+So the guard is deleted rather than repaired. It has been there since `4f2c325`,
+the walker's first commit, and its one real effect is an arbitrary exclusion.
+
+This is a behaviour change and it needs stating precisely: **32-bit big-endian
+ELF images are now scanned, and nothing else changes.** Every other class
+already passed the old guard. It is unobservable on this repository —
+`file(1)` over the whole `samples/` and `tests/` tree returns 996
+`ELF 64-bit LSB`, 10 `ELF 32-bit LSB`, and no MSB object at all, and all six
+`arch_roundtrip` lanes are little-endian. That absence is exactly why the guard's one effect went
+unnoticed, so the claim is pinned by a test rather than by the corpus:
+`a_32_bit_big_endian_image_is_scanned_like_every_other` hand-assembles a genuine
+ELF32/MSB image (`object::read::File::parse` accepts it) with `.text` at
+`0x1000` and a four-entry table at `0x2000`, and asserts the scan recovers it.
+That test fails on the old guard and passes on the new code; it was run both
+ways.
+
+`relative_entries_decode_the_same_table_in_either_byte_order` pins the
+supporting claim — the same table, byte-reversed, decodes identically — which is
+the reason the guard was protecting against a bug that does not exist.
+
+Separately, the ARM32 lane does not lose anything either way: over the ten
+32-bit samples in the tree, `discover_jump_tables` currently contributes **zero**
+seeds and zero resolved dispatches, because ARM/Thumb switches go through
+`decode_thumb_table_branch` (inline `.text` tables named by `pc`) and never
+touch the rodata scan.
+
+### What this does not claim
+
+Not a resolver. No transfer that was unproven became resolved, no successor edge
+was added to any CFG, no region decision consults anything new, and the
+`Resolution` a declined dispatch produces is the same `Unresolved` variant it
+produced before — carrying a payload. Design rule 8 is the point of the patch,
+not a casualty of it.
+
+The 77.1% crtstuff finding is a work item, not work done.
+
+### Verification
+
+```
+cargo test --features python-ext    2512 passed, 0 failed, 2 ignored. This
+                                    patch adds exactly 5 non-ignored tests (2 in
+                                    jump_table, 3 in cfg), which is consistent
+                                    with the 2507 the brief records at HEAD.
+                                    HEAD's suite was not re-run; the warning
+                                    census below WAS re-run against a stashed
+                                    working tree.
+pytest test_dispatch_decline_reasons.py   4 passed (new file)
+pytest test_cfg.py test_basic_block.py    24 passed
+cargo build --features python-ext   1 dead-code warning before, 1 after
+  (after `touch src/lib.rs`)        (`ioctl_taint.rs:409`, never-read FIELD,
+                                    pre-existing). Never-used FUNCTION count 0
+                                    before and after.
+tools/dectest.py @o0                364 lanes of 740 (49%): no regressions, no
+tools/dectest.py @o2                improvements, exit 0 on both. Re-run from
+                                    scratch after a `--release` rebuild: an
+                                    earlier attempt tripped `build_guard`,
+                                    because a `git stash` taken mid-run for the
+                                    warning census bumped a source mtime and
+                                    dectest correctly refused to report verdicts
+                                    that would have described the previous
+                                    build.
+decline census, 758 objects         2949 declines, 593 resolved (13568 arms);
+                                    histogram above. Run twice, against the
+                                    debug and the release extension: site list,
+                                    histogram and resolved counts compare equal
+                                    element for element.
+block census, 758 objects           163741 blocks; exit claims 28169 -> 25260,
+                                    the 2909 false ones and nothing else
+uvx ruff format / check / ty        clean on the new Python test
+rustfmt --edition 2021              on the 5 touched Rust files
+```
+
+No lane moving is the predicted result and the reason to run it. The decline
+reason reaches the Python stats dict and nothing else; `relationships_known`
+reaches two predicates the decompiler does not call; the guard deletion affects
+only an architecture class the corpus does not contain. A lane that moved would
+have meant one of those three statements was wrong.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`, and
+`pytest python/tests/` in full. No fixture was added — every shape measured here
+already has a lane, and the one new test needing a file that does not exist
+(a big-endian object) is served by a hand-assembled image inside the test rather
+than by a corpus fixture. **No baseline was refreshed and nothing was
+committed.**
