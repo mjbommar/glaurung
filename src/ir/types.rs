@@ -612,6 +612,16 @@ pub fn phys_reg_width(name: &str) -> Option<Width> {
     if matches!(n.as_str(), "cs" | "ds" | "es" | "fs" | "gs" | "ss") {
         return Some(Width::W16);
     }
+    // The eight absolute x87 stack slots `crate::ir::x87` resolves `%st(i)`
+    // into. Reported as 64 bits, which is the width this IR MODELS them at, not
+    // the 80 the hardware holds: `ScalarType` has no extended-precision variant,
+    // so every transfer is exact and only intermediate rounding differs. See
+    // the `crate::ir::x87` module documentation.
+    if let Some(rest) = n.strip_prefix("st") {
+        if rest.parse::<u8>().is_ok_and(|index| index < 8) {
+            return Some(Width::W64);
+        }
+    }
     // x86 SSE/AVX vector registers
     if let Some(rest) = n.strip_prefix("xmm") {
         if rest.parse::<u8>().is_ok() {

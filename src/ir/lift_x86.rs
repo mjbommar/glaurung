@@ -356,7 +356,7 @@ fn memory_displacement_i64(instr: &iced_x86::Instruction) -> i64 {
     }
 }
 
-fn mem_op_of(instr: &iced_x86::Instruction) -> MemOp {
+pub(crate) fn mem_op_of(instr: &iced_x86::Instruction) -> MemOp {
     let base = if instr.memory_base() == Register::RIP {
         None
     } else {
@@ -1610,11 +1610,24 @@ fn scalar_float_compare_ops(
         }
     };
 
+    ops.extend(float_compare_flag_ops(lhs, rhs));
+    ops
+}
+
+/// The flag half of [`scalar_float_compare_ops`], for producers that already
+/// hold both operands as values.
+///
+/// x87's `fcomi`/`fcomip`/`fucomi`/`fucomip` report the identical four-outcome
+/// result into the identical EFLAGS bits — that is the entire reason those
+/// instructions exist — so [`crate::ir::x87`] shares this model rather than
+/// restating it. A second copy of the NaN rule is a second chance to get the
+/// unordered case wrong on one architecture and not the other.
+pub(crate) fn float_compare_flag_ops(lhs: Value, rhs: Value) -> Vec<Op> {
     let lhs_is_nan = VReg::Temp(15);
     let rhs_is_nan = VReg::Temp(16);
     let ordered_equal = VReg::Temp(17);
     let ordered_below = VReg::Temp(18);
-    ops.extend([
+    Vec::from([
         Op::Cmp {
             dst: lhs_is_nan.clone(),
             op: CmpOp::Ne,
@@ -1670,8 +1683,7 @@ fn scalar_float_compare_ops(
             dst: VReg::Flag(Flag::A),
             src: Value::Const(0),
         },
-    ]);
-    ops
+    ])
 }
 
 /// `shrd dst, src, imm8` / `shld dst, src, imm8` — the double-precision shift.
@@ -4928,6 +4940,28 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
 /// Lift a byte window of x86 / x86-64 machine code into LLIR instructions.
 /// Decoding stops on the first invalid instruction.
 pub fn lift_bytes(bytes: &[u8], start_va: u64, bits: u32) -> Vec<LlirInstr> {
+    // x87 is a register STACK, so which storage `%st(1)` names depends on the
+    // depth at that program point — a fact no per-instruction lifter can know.
+    // A caller holding only raw bytes has no CFG to consult, so the depths are
+    // resolved from the branch targets inside the window itself; `lift_function`
+    // has the recovered basic blocks and supplies a whole-function answer.
+    let depths = crate::ir::x87::plan_window(bytes, start_va, bits);
+    lift_bytes_with_x87(bytes, start_va, bits, depths.as_ref())
+}
+
+/// [`lift_bytes`], with the x87 stack depths resolved by the caller.
+///
+/// `None` means "no proven depths": every x87 instruction is then lowered as a
+/// conservative opaque that declares its memory footprint, rather than as an
+/// operand-free [`Op::Unknown`] that declares nothing. That distinction matters
+/// — an `fstp` whose store is invisible lets a later reload of the same slot
+/// resolve to a stale value.
+pub(crate) fn lift_bytes_with_x87(
+    bytes: &[u8],
+    start_va: u64,
+    bits: u32,
+    depths: Option<&crate::ir::x87::Depths>,
+) -> Vec<LlirInstr> {
     let mut out = Vec::new();
     let mut decoder = Decoder::new(bits, bytes, DecoderOptions::NONE);
     decoder.set_ip(start_va);
@@ -4937,7 +4971,20 @@ pub fn lift_bytes(bytes: &[u8], start_va: u64, bits: u32) -> Vec<LlirInstr> {
             break;
         }
         let va = instr.ip();
-        for op in lift_one(&instr, bits) {
+        let ops = if crate::ir::x87::is_x87(instr.mnemonic()) {
+            depths
+                .and_then(|depths| depths.state_at(va))
+                .and_then(|state| crate::ir::x87::lift_instruction(&instr, state))
+                .unwrap_or_else(|| {
+                    vec![Op::opaque(format!(
+                        "x87.{}",
+                        format!("{:?}", instr.mnemonic()).to_ascii_lowercase()
+                    ))]
+                })
+        } else {
+            lift_one(&instr, bits)
+        };
+        for op in ops {
             out.push(LlirInstr { va, op });
         }
     }

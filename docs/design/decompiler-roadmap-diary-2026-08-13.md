@@ -6507,3 +6507,309 @@ rustfmt --edition 2021                  on the seven touched Rust files
 DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
 fixture matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`, and
 `pytest python/tests/`. **No baseline was refreshed and nothing was committed.**
+
+
+## Entry 40 — x87 is a stack, so the lifter had to become a pass
+
+`grep` in `src/ir/lift_x86.rs` for `fld`, `fstp`, `fadd`, `fmul`, `fdiv`, `fild`,
+`fistp`, `fucomi` and `faddp` returned zero for every one. i386 has no SSE in its
+baseline ABI, so that is not a gap in x87 coverage — it is the absence of
+floating point on that lane entirely. `truncate_toward_zero(float)` decompiled to
+
+```c
+__attribute__((no_stack_protector)) int truncate_toward_zero(void) {
+    long rsp;
+    cf_2 = ((unsigned long)((unsigned int)(rsp)) < (unsigned long)(8));
+    /* asm: fld */
+    /* asm: fld */
+```
+
+a `float` parameter recovered as `(void)`, the arithmetic dropped to comments,
+and `rsp` read before it was defined.
+
+This is the third instance of the same failure mode in three days — `039c7d6`
+for AArch64 scalar floating point, `f1a6e4c` for ARM32 modified immediates — and
+the two of them shortened this one considerably. What they did not prepare for is
+the one way x87 is genuinely different.
+
+### The difference: `%st(1)` is not a register
+
+AArch64's `d0` is storage. x87's `ST(1)` is an *offset from the current top*:
+`fld` pushes, `fstp` pops, and the same three characters name different physical
+storage at different points in the same function. A per-instruction lifter — and
+`lift_one` is exactly that — cannot name what an x87 instruction touches without
+knowing the stack DEPTH there.
+
+So `src/ir/x87.rs` is a pass that runs before lifting and answers one question
+per instruction: how deep is the stack here? With a proven depth `d`, `ST(i)` is
+the absolute slot `d - 1 - i`, and the eight absolute slots become eight ordinary
+physical registers `st0`..`st7`. SSA, liveness, DCE and type recovery then handle
+x87 with no special cases, which is the same trick this lifter already plays on
+packed XMM lanes.
+
+`st0`..`st7` are ABSOLUTE slots, NOT `%st(0)`..`%st(7)`: `st0` is the bottom of
+the stack. The two spellings coincide at depth 1, which is the only depth the ABI
+can observe — cdecl requires the x87 stack to be empty at every call boundary
+except for a result left in `%st(0)` — which is why
+`abi::float_return_registers(Cdecl32)` could already name `st0` and be right.
+
+### It is not a per-block question either
+
+The first draft resolved depths inside `lift_bytes`, over one flat window. That
+is what the public `lift_bytes` API sees, but it is not what the decompiler
+uses: `lift_function` lifts **one basic block at a time**. Every block therefore
+started at depth zero, and the shape the corpus is full of —
+
+```asm
+dot_product_f32:
+    fldz                      ; the accumulator, in the entry block
+.loop:
+    flds (%ebx,%eax,4)
+    fmuls (%edx,%eax,4)
+    faddp %st,%st(1)          ; consumed in a DIFFERENT block
+```
+
+— underflowed on the second block and refused. Half of `truncate_toward_zero`
+lifted and half stayed `unknown(fld)`, in one function, which is how the
+mistake announced itself. The depth resolution now takes the recovered basic
+blocks and their CFG edges (`x87::plan_function`), and the flat-window entry
+point recovers blocks from its own branch targets so both callers share one
+fixed point.
+
+### What is refused, and why refusing is the point
+
+`plan` returns `None` — and every x87 instruction keeps an opaque lowering —
+when it cannot prove what it needs:
+
+* a depth that disagrees between two predecessors of the same instruction,
+* an underflow, an overflow past eight slots, or an indirect branch,
+* **a call reached at non-zero depth**, which cdecl forbids,
+* any x87 mnemonic outside the modelled set,
+* any control-word traffic that is not the exact GCC truncation idiom.
+
+A wrong depth renames every later slot, so it would not lose one instruction's
+meaning — it would silently attach one variable's arithmetic to another's.
+
+The call rule is not defensive tidiness; it is load-bearing.
+`ast::scalar_float_semantics_are_closed` returns false at any call unless the
+convention makes a float value impossible to carry across one, and without that
+the `call __x86.get_pc_thunk.*` at the head of every PIC i386 function would send
+the whole body back to comments. On x86-64 the justification is a table lookup
+("every SSE register is caller-saved"). Here it is a proof obligation the pass
+discharges: if `st0`..`st7` appear in a function at all, no x87 value is live
+across a call in it, because a window where one was would have been refused.
+
+### AT&T lies about `fsubp`, and it matters
+
+`gas` and `objdump` swap `fsub`/`fsubr` and `fdiv`/`fdivr` for the two-register
+forms. `de e1` prints as `fsubp %st,%st(1)` and IS Intel `FSUBRP ST(1), ST(0)`,
+whose result is `ST(0) - ST(1)` — the other operand order. Every encoding in the
+new tests came from `as --32`, and `att_and_intel_disagree_about_fsubp` pins both
+directions so nobody re-derives the table from disassembly text.
+
+The rest of the semantics are deliberately not new. `fadd`/`fsub`/`fmul`/`fdiv`
+emit the SSE lifter's own `addsd`/`subsd`/`mulsd`/`divsd`; `flds`/`fstps` reuse
+`cvtss2sd`/`cvtsd2ss`; `fild` reuses `cvtsi2sd.l`/`cvtsi2sd.q`; `fchs` reuses
+ARM's `vneg.f64`; `fcomi` reuses the exact `comisd` NaN flag model, because it
+reports the identical four outcomes into the identical bits. One lowering, two
+producers — the choice `wide_integer_intrinsic` already records for `umulh`.
+
+### The control word, which is where a plausible wrong answer lives
+
+`fistp` rounds according to RC, so it is a C truncating cast only when RC is 11.
+Under the default control word it is `lrint`, and the difference is one ulp on
+every value with a fraction: code that compiles, runs, and is wrong. GCC states
+the answer itself, identically at `-O0` and `-O2`, around every float-to-integer
+cast on i386:
+
+```asm
+fnstcw  M1              ; save
+movzwl  M1, %eax
+or      $0xc, %ah       ; RC := 11, round toward zero
+mov     %ax, M2
+fldcw   M2              ; install
+fistpl  Mdst            ; the conversion, now truncating
+fldcw   M1              ; restore
+```
+
+`truncation_windows` matches that seven-instruction window exactly — the same
+memory slot read back, the same register family, the restore included — and
+nothing else. The immediate is checked rather than assumed: `or $0xc,%ah` sets
+bits 8..15, so the value ORed in is `0x0c00`, and an immediate setting only one
+of the two RC bits selects round-down or round-up and must not match
+(`a_partial_rounding_control_immediate_does_not_match`). An `fistp` whose
+rounding this cannot prove sends the whole window to the opaque path. Matched, it
+becomes `cvttsd2si`, which the AST already lowers to `(int)x`; the whole
+save/modify/restore dance then dies in DCE and the recovered C says what the
+source said.
+
+The corpus emits 11 `fistp`s and 22 `fldcw`s — exactly eleven save/restore
+pairs. Every one matches.
+
+### 80 bits, stated rather than hidden
+
+x87 computes internally in 80-bit extended. A slot is modelled as binary64.
+Every *transfer* is therefore exact — a binary32 load widens exactly, a binary64
+load or store is the identity — and only intermediate rounding differs from
+hardware. That difference is not papered over: it is the same difference the
+recompiled C carries, because the fixture harness rebuilds our output with the
+same compiler for the same target, where `double` arithmetic is again evaluated
+on the x87 stack. `181_compensated_summation` is the fixture that can tell, which
+is why it is in the measured set. A slot is NOT `long double`: `ScalarType` has
+no 80-bit variant, and adding one is a larger change than the arithmetic it buys.
+
+### Three defects behind it, each found by the x87 work rather than assumed
+
+**1. A `double`-returning callee's result was undefined.**
+`abi::result_register_candidates(Cdecl32)` was `None`, so every i386 call was
+annotated as returning `rax`. The `fstpl` that pops a `double` result therefore
+read a stack slot nothing had defined —
+`181_compensated_summation::summation_disagrees` compared two undefined values.
+It is now `(["st0", "rax"], "rax")`, the same first-read-wins shape x86-64 SysV
+uses for `xmm0`. `return_registers(Cdecl32)` gained `st0` for the same reason
+`039c7d6` gave `Aarch64` its `v0`/`d0`/`s0`: the third bank of the same hole.
+
+**2. A push between a call and its consumer hid the demand.**
+Nothing in an instruction stream says a callee returned a float, so the pass
+decides by demand: an x87 instruction needing a deeper stack than the caller had
+can only be describing the callee's result. Reading only the FIRST x87
+instruction after the call was wrong, and `summation_disagrees` at `-O2` is the
+counter-example:
+
+```asm
+call kahan_sum_f64        ; leaves the result in %st(0)
+fldl 0x18(%esp)           ; a PUSH — needs nothing, so demands nothing
+fucomip %st(1),%st        ; here is where the missing value is noticed
+```
+
+The same function at `-O0`, whose reload follows the call directly, lifted
+correctly the whole time — which is exactly the sort of split that looks like an
+optimisation-level problem and is not. The scan now tracks depth forward to the
+first genuine underflow. Measured effect: the corpus-wide residual opaque count
+fell from 6 to 2.
+
+**3. A `double` in a `float` context was punned, not converted.**
+`write_float_expr_dec` accepted a register only when its declared C type matched
+the context's float type EXACTLY, and everything else fell through to the
+reinterpreting `union { unsigned int bits; float value; }`. Since every x87 slot
+is a `double`, every single-precision i386 function rendered its whole
+computation as bit patterns:
+
+```c
+return (((union { unsigned int bits; float value; }){ .bits = (unsigned int)(var0) }).value * ...);
+```
+
+`double` to `float` is a numeric conversion, not a reinterpretation. Two arms —
+a register declared as the other float type, and a `NumericConvert` to the other
+float type — now narrow or widen instead. Only a value whose declared type is not
+floating point at all has bits worth punning. On its own this fix was worth three
+of the sixteen recovered lanes and cost none.
+
+### Measurements
+
+Opaque-intrinsic census over the 344 i386 fixture objects
+(`gcc -m32 -shared -fPIC -g -O{0,2} -w`), counting x87 instructions that reach a
+consumer as a maximally-conservative intrinsic:
+
+| | x87 instructions | still opaque |
+|---|---|---|
+| before | 574 | 574 (100%) |
+| after | 574 | 2 (0.35%) |
+
+The 574 are `flds` 141, `fstp` 72, `fldl` 46, `fldz` 41, `fstps` 26, `fcomip` 23,
+`fldcw` 22, `fmulp` 21, `fstpl` 21, `faddp` 18, `fucomip` 17, `fmuls` 15, `fxch`
+12, `fcomi` 11, `fnstcw` 11, `fmull` 9, and a tail of 19 more mnemonics. The
+residual 2 are one function, `174_float_compare_classify::fp174_bits_to_float` at
+`-O0`, and the cause is named: its stack-protector failure path ends in a
+`call __stack_chk_fail_local` that never returns, and a model in which calls
+return merges depth 1 and depth 0 at the epilogue. Refusing is correct given what
+that path knows; the number is measured on the flat-window entry point, which has
+no CFG to tell it the call is noreturn.
+
+Execution-differential verdicts, `tools/arch_roundtrip.py --arch i386` over five
+float fixtures and four non-float controls, compared cell by cell against the
+committed `tests/decompiler_fixtures/arch_baseline.json`:
+
+**16 fail -> pass, 0 pass -> fail.**
+
+```
+172_float_double_widths:i386:O0   single_precision_horner
+172_float_double_widths:i386:O2   single_precision_horner
+173_float_int_conversions:i386:O0 widen_int_to_float, widen_long_to_double
+173_float_int_conversions:i386:O2 widen_int_to_float, widen_long_to_double
+174_float_compare_classify:i386:O0 negate_binary32, ordered_compare_binary32
+174_float_compare_classify:i386:O2 negate_binary32, ordered_compare_binary32
+175_float_matrix_kernel:i386:O0   dot_product_f64, matrix2_determinant,
+                                  sum_of_squares_f32
+181_compensated_summation:i386:O0 kahan_sum_f64, naive_sum_f64,
+                                  summation_disagrees
+```
+
+The control lane the harness always runs (`x86_64`) was verdict-identical, and
+so were the four non-float i386 fixtures (`03_loop_shapes`, `06_calling_conventions`,
+`14_flag_effects`, `118_bit_tricks` — 96 function-cells, all passing).
+
+### What is still failing, named with its blocker
+
+Forty-six of the 62 i386 float function-cells still fail. They are not one thing:
+
+* **i386 stacks its parameters in four-byte slots, and an 8-byte parameter
+  breaks the stride.** `stack_locals::alloc_name` maps `entry_esp+4+4k` to
+  `arg{k}` with a fixed stride, so `compensation_of_step(double, double)` binds
+  its first parameter and reads the second as an undefined `stack_0`. The
+  prototype knows the widths; the promotion pass is not given them. This blocks
+  `compensation_of_step`, `difference_of_products` and most of
+  `172_float_double_widths`.
+* **`ret` names two banks at once.** `naming.rs` gives every alias in
+  `return_registers` the name `ret`, so on i386 the GOT base in `eax` and an x87
+  result share one C identifier. Restricting it to one bank per function was
+  tried here and measured: it recovers different lanes than it costs
+  (`175_float_matrix_kernel::matrix2_determinant` at `x86_64:O0` breaks, because
+  `direct_output::find_written_return_reg` relies on the merge to carry an
+  `xmm0` result past an `rax` write). The merge is load-bearing and unpicking it
+  is its own patch with its own measurement. This is why the four variants of
+  this change scored 9, 9, 10 and 16: they differ only in which values the
+  naming pass merges.
+* **Excess precision**, for the fixtures written to detect it —
+  `172_float_double_widths::width_disagreement` renders correctly and still
+  disagrees.
+
+Deliberately NOT lifted, each with a reason rather than a shrug: `fsqrt` and
+`fabs` (no modelled x86 intrinsic name, so they would become opaque float
+producers feeding real arithmetic), `fcom`/`fucom`/`fcomp` (their result reaches
+the program only through `fnstsw`/`sahf`, a separate model), `fldt`/`fstpt` (a
+real 80-bit transfer with no exact binary64), `fldpi` and friends (80-bit
+constants), `fiadd`/`fisub`/`fimul`/`fidiv`, and `fprem`/`frndint`. The corpus
+emits none of them. Each sends its window to the opaque path rather than
+acquiring a plausible wrong meaning.
+
+### Verification
+
+```
+cargo test --features python-ext        2547 passed / 0 failed
+                                        (2522 at HEAD; this patch adds 25
+                                        x87 tests and no ignored ones)
+tools/dectest.py @o0                    364 lanes, no regressions in scope
+tools/dectest.py @o2                    364 lanes, no regressions in scope
+tools/arch_roundtrip.py --arch i386     9 fixtures, 16 fail->pass, 0 pass->fail
+  (filtered, --json, no --write-baseline)
+x87 opaque census, 344 i386 objects     574 -> 2
+touch src/lib.rs && cargo build         never-used FUNCTION count 0; the single
+  --features python-ext                 `field 0 is never read` at
+                                        analysis/ioctl_taint.rs:409 is
+                                        pre-existing.
+rustfmt --edition 2021                  on the six touched files and src/ir/x87.rs
+```
+
+There is a reason `@o0`/`@o2` could not have moved, and it was measured rather
+than assumed: `objdump` over all 346 x86-64 fixture objects at `-O0` and `-O2`
+finds **zero** instructions whose mnemonic begins with `f`. The x87 path is
+unreachable there. The lanes were run anyway, because a shared lifter's
+restructuring is exactly the change that finds a way to be wrong about that.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` gate lanes, the full
+fixture matrix, any unfiltered `arch_roundtrip.py` sweep, repo-wide `cargo fmt`,
+and `pytest python/tests/` (no Python file changed). **No baseline was refreshed
+and nothing was committed.**

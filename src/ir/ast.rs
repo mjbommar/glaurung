@@ -869,10 +869,14 @@ fn scalar_vfp_register(register: &VReg) -> bool {
         let base = crate::ir::abi::ssa_base(name);
         base.strip_prefix('s').is_some_and(|n| n.parse::<u8>().is_ok())
             || base.strip_prefix('d').is_some_and(|n| n.parse::<u8>().is_ok())
-            // x86-64 and i386 carry every scalar float in an SSE register.
+            // x86-64 carries every scalar float in an SSE register.
             // Unlike ARM's `s`/`d` banks the name does not state a width, so
             // the width always comes from the instruction, never the register.
             || base.starts_with("xmm")
+            // i386 has no SSE in its baseline ABI: its scalar floats live on
+            // the x87 stack, which `crate::ir::x87` resolves into the eight
+            // absolute slots `st0`..`st7`.
+            || crate::ir::x87::is_slot_name(base)
     })
 }
 
@@ -1336,6 +1340,20 @@ fn unmodelled_x86_float_mnemonic(name: &str) -> bool {
     {
         return false;
     }
+    // The x87 CONTROL WORD is a 16-bit integer status value, not a float. GCC
+    // saves, modifies and restores it around every float-to-integer cast, so
+    // treating those two as opaque float producers would cost every i386
+    // conversion function the arithmetic around it — and there is no float
+    // value for them to invent, which is what this guard is protecting.
+    if matches!(name, "x87.fldcw" | "x87.fnstcw") {
+        return false;
+    }
+    // Everything else `crate::ir::x87` declines to model IS a float producer:
+    // the stack slots it leaves undefined are the values later arithmetic
+    // would otherwise read as an invented live-in.
+    if name.starts_with("x87.") {
+        return true;
+    }
     const OPAQUE_PREFIXES: [&str; 8] = [
         "cvt", "ucomi", "comi", "sqrt", "rcp", "rsqrt", "shuf", "unpck",
     ];
@@ -1352,6 +1370,15 @@ fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
     // Inferred from the register names in play rather than threaded down as a
     // convention: an `xmm` bank IS x86-64, and x86-64 has no callee-saved
     // scalar-float register. A function mixing the two banks cannot occur.
+    //
+    // The x87 slot bank qualifies for the same reason, but it is PROVEN rather
+    // than looked up: the i386 ABI requires the x87 stack to be empty at a call
+    // boundary, and `x87::plan_function` refuses to lift a function that reaches a call
+    // at non-zero depth. So if `st0`..`st7` appear here at all, no x87 value is
+    // live across a call in this function. Without this the very first
+    // instruction of every PIC i386 function — the `call __x86.get_pc_thunk.*`
+    // that materialises the GOT base — would send the whole body back to
+    // opaque comments.
     let float_registers_are_all_caller_saved = lf
         .blocks
         .iter()
@@ -1361,8 +1388,10 @@ fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
             definition.into_iter().chain(uses)
         })
         .any(|register| {
-            matches!(&register, VReg::Phys(name)
-                if crate::ir::abi::ssa_base(name).starts_with("xmm"))
+            matches!(&register, VReg::Phys(name) if {
+                let base = crate::ir::abi::ssa_base(name);
+                base.starts_with("xmm") || crate::ir::x87::is_slot_name(base)
+            })
         });
     let mut saw_scalar_float = false;
     for instruction in lf.blocks.iter().flat_map(|block| &block.instrs) {
@@ -10501,12 +10530,40 @@ fn write_float_expr_dec(expr: &Expr, width: u8, out: &mut String) {
         Expr::Reg(register @ VReg::Phys(_)) if declared_reg_ctype(register) == float_type => {
             write_reg_lvalue_dec(register, out);
         }
+        // The OTHER float width is a numeric conversion, not a reinterpretation.
+        // Only a value whose declared type is not floating point at all has
+        // bits worth punning; `double` to `float` is `(float)x`, and taking its
+        // bits instead hands back an unrelated number. i386 makes this routine
+        // rather than exotic: `crate::ir::x87` models every x87 stack slot as
+        // binary64, so a `float`-returning function's own result reaches a
+        // four-byte context as a `double`-declared register, and
+        // `172_float_double_widths::single_precision_horner` rendered its whole
+        // Horner evaluation as bit patterns because of it.
+        Expr::Reg(register @ VReg::Phys(_))
+            if matches!(declared_reg_ctype(register).as_str(), "float" | "double") =>
+        {
+            let _ = write!(out, "({float_type})(");
+            write_reg_lvalue_dec(register, out);
+            out.push(')');
+        }
         // A recovered conversion already states its own result type. Wrapping
         // it in the reinterpreting union below would take the bits of a value
         // that was just numerically converted — `(unsigned)((float)arg0)` —
         // and hand back a different number entirely.
         Expr::NumericConvert { to, .. } if *to == ScalarType::Float(width) => {
             write_expr_dec(expr, out);
+        }
+        // A conversion to the OTHER float width is still a number, so narrow or
+        // widen it rather than punning it. `crate::ir::x87` widens every x87
+        // load to binary64, which puts a `(double)` conversion in front of a
+        // `float` context in every i386 single-precision function.
+        Expr::NumericConvert {
+            to: ScalarType::Float(_),
+            ..
+        } => {
+            let _ = write!(out, "({float_type})(");
+            write_expr_dec(expr, out);
+            out.push(')');
         }
         Expr::Deref {
             addr,

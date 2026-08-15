@@ -207,8 +207,15 @@ pub fn return_registers(cc: CallConv) -> &'static [&'static str] {
         // SSA canonicalises EAX and its subregisters to the RAX parent name
         // even when decoding a 32-bit binary, so keep that logical spelling at
         // the head of the alias set as the decompiler's logical return value.
-        // i386 returns floating point on the x87 stack, not in an SSE register.
-        CallConv::Cdecl32 => &["rax", "eax", "ax", "al"],
+        // i386 returns floating point on the x87 stack, not in an SSE register:
+        // `st0` is the bottom absolute slot `crate::ir::x87` lifts the stack
+        // into, and at the depth of 1 the ABI permits at a return it IS
+        // `%st(0)`. Listing it is what lets the naming pass call an x87 result
+        // `ret` instead of an anonymous `varN` — the same hole `xmm0` had above
+        // and `v0`/`d0`/`s0` had for AArch64, now closed for the third bank.
+        // Ordered after the integer names for the same reason: when a function
+        // writes both, `rax` is the result and the stack slot was scratch.
+        CallConv::Cdecl32 => &["rax", "eax", "ax", "al", "st0"],
         // AAPCS64 returns an integer or pointer in `x0` and a scalar float or
         // double in `v0`, whose scalar views are spelled `d0` and `s0`. Listing
         // the float names is what lets the naming pass call that value `ret`
@@ -482,7 +489,16 @@ fn result_register_candidates(cc: CallConv) -> Option<(&'static [&'static str], 
         // variable and returned a different, undefined one.
         CallConv::SysVAmd64 | CallConv::Win64 => Some((&["xmm0", "rax"], "rax")),
         CallConv::ArmHardFloat => Some((&["s0", "d0", "r0"], "r0")),
-        CallConv::Aarch64 | CallConv::Arm | CallConv::Cdecl32 => None,
+        // i386 has the same split, with the x87 stack in place of `xmm0`: a
+        // `double`-returning callee leaves its result in `%st(0)` and the
+        // caller pops it with `fstpl`. Annotating every i386 call as returning
+        // `rax` meant that `fstpl` read a stack slot nothing had defined —
+        // `181_compensated_summation::summation_disagrees` compared two
+        // undefined values. The stack is empty at the call by ABI (an
+        // invariant `x87::plan_function` refuses to lift without), so the returned
+        // value is always the bottom slot `st0`.
+        CallConv::Cdecl32 => Some((&["st0", "rax"], "rax")),
+        CallConv::Aarch64 | CallConv::Arm => None,
     }
 }
 

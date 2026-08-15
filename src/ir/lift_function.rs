@@ -128,14 +128,71 @@ impl std::error::Error for LiftError {}
 /// constants live in a literal pool read through `ldr Rd,[pc,#imm]`, and the
 /// pool sits after the function's last basic block — outside every per-block
 /// window this function lifts.
-fn lift_window(bytes: &[u8], start_va: u64, mode: CodeMode, image: &[u8]) -> Vec<LlirInstr> {
+fn lift_window(
+    bytes: &[u8],
+    start_va: u64,
+    mode: CodeMode,
+    image: &[u8],
+    x87: Option<&crate::ir::x87::Depths>,
+) -> Vec<LlirInstr> {
     match mode {
-        CodeMode::X86_32 => lift_x86::lift_bytes(bytes, start_va, 32),
-        CodeMode::X86_64 => lift_x86::lift_bytes(bytes, start_va, 64),
+        CodeMode::X86_32 => lift_x86::lift_bytes_with_x87(bytes, start_va, 32, x87),
+        CodeMode::X86_64 => lift_x86::lift_bytes_with_x87(bytes, start_va, 64, x87),
         CodeMode::AArch64 => lift_arm64::lift_bytes(bytes, start_va),
         CodeMode::ArmA32 => lift_arm32::lift_bytes_in_image(bytes, start_va, false, Some(image)),
         CodeMode::ArmThumb => lift_arm32::lift_bytes_in_image(bytes, start_va, true, Some(image)),
     }
+}
+
+/// One basic block, located in the image and ready to lift.
+struct PreparedBlock {
+    start: u64,
+    end: u64,
+    succs: Vec<u64>,
+    /// Byte span of the block in `data`, or `None` when the block's VA maps to
+    /// no file offset.
+    window: Option<(usize, usize)>,
+}
+
+/// Resolve the x87 stack depth over the whole function, or `None` when there is
+/// no x87 or it is not provable.
+///
+/// This has to be a FUNCTION-level question. `%st(1)` names different storage
+/// at different depths, and compiler-emitted x87 routinely pushes an
+/// accumulator in one basic block and consumes it in another —
+/// `175_float_matrix_kernel::dot_product_f32` does exactly that with `fldz`
+/// before its loop and `faddp` inside it. A per-block analysis starting each
+/// block at depth zero would underflow on the second block and refuse, which is
+/// how the first draft of this left half of every conversion function opaque.
+fn x87_depths(
+    data: &[u8],
+    prepared: &[PreparedBlock],
+    mode: CodeMode,
+    entry_va: u64,
+) -> Option<crate::ir::x87::Depths> {
+    let bits = match mode {
+        CodeMode::X86_32 => 32,
+        CodeMode::X86_64 => 64,
+        _ => return None,
+    };
+    let windows: Vec<crate::ir::x87::BlockWindow<'_>> = prepared
+        .iter()
+        .map(|block| crate::ir::x87::BlockWindow {
+            start_va: block.start,
+            // A block whose bytes could not be located transfers control to a
+            // depth nothing observed. Presenting it as empty with no successors
+            // stops the propagation there instead of guessing across it.
+            bytes: match block.window {
+                Some((from, to)) => &data[from..to],
+                None => &[],
+            },
+            succs: match block.window {
+                Some(_) => &block.succs,
+                None => &[],
+            },
+        })
+        .collect();
+    crate::ir::x87::plan_function(&windows, bits, entry_va)
 }
 
 /// Returns true when an LLIR lifter exists for the given architecture.
@@ -293,6 +350,7 @@ fn lift_function(
     // neighbour, and the second case names the bytes that went missing.
     let mut disowned: Vec<(u64, u64)> = Vec::new();
 
+    let mut prepared: Vec<PreparedBlock> = Vec::with_capacity(func.basic_blocks.len());
     for bb in &func.basic_blocks {
         let Some((start, end)) =
             clip_block_to_owned_ranges(func, bb.start_address.value, bb.end_address.value)
@@ -331,28 +389,42 @@ fn lift_function(
             )
             .map(|foff| (foff, foff.saturating_add(size).min(data.len())))
             .filter(|(foff, end_off)| foff < end_off);
+        prepared.push(PreparedBlock {
+            start,
+            end,
+            succs,
+            window,
+        });
+    }
 
-        let instrs = match window {
+    // Resolved before any block is lifted, because the answer for one block
+    // depends on every block that can reach it.
+    let x87 = x87_depths(data, &prepared, mode, func.entry_point.value);
+
+    for block in &prepared {
+        let size = (block.end - block.start) as usize;
+        let instrs = match block.window {
             // The VA maps to no file offset, or maps past the end of the image.
             // Emit the block as explicitly undecoded rather than dropping it.
-            None => vec![undecoded_bytes(start)],
+            None => vec![undecoded_bytes(block.start)],
             Some((foff, end_off)) => {
-                let mut instrs = lift_window(&data[foff..end_off], start, mode, data);
+                let mut instrs =
+                    lift_window(&data[foff..end_off], block.start, mode, data, x87.as_ref());
                 if end_off - foff < size {
                     // The window was clipped by the end of the image, so this
                     // block's tail was never decoded. A silently short block
                     // reads downstream as a complete one.
-                    instrs.push(undecoded_bytes(start + (end_off - foff) as u64));
+                    instrs.push(undecoded_bytes(block.start + (end_off - foff) as u64));
                 }
                 instrs
             }
         };
 
         blocks.push(LlirBlock {
-            start_va: start,
-            end_va: end,
+            start_va: block.start,
+            end_va: block.end,
             instrs,
-            succs,
+            succs: block.succs.clone(),
         });
     }
 

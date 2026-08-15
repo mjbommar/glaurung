@@ -97,6 +97,7 @@ pub mod verify_defs;
 pub mod widen;
 pub mod winapi_prototypes;
 pub mod x86_prologue;
+pub mod x87;
 
 #[cfg(test)]
 mod effect_census_tests;

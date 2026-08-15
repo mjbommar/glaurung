@@ -6653,7 +6653,7 @@
     "accumulate_wide": "fail",
     "double_precision_horner": "fail",
     "narrow_after_double_math": "fail",
-    "single_precision_horner": "fail",
+    "single_precision_horner": "pass",
     "width_disagreement": "fail"
   },
   "172_float_double_widths:i386:O2": {
@@ -6661,7 +6661,7 @@
     "accumulate_wide": "fail",
     "double_precision_horner": "fail",
     "narrow_after_double_math": "fail",
-    "single_precision_horner": "fail",
+    "single_precision_horner": "pass",
     "width_disagreement": "fail"
   },
   "172_float_double_widths:x86_64:O0": {
@@ -6756,8 +6756,8 @@
     "truncate_double_to_i64": "fail",
     "truncate_to_unsigned": "fail",
     "truncate_toward_zero": "fail",
-    "widen_int_to_float": "fail",
-    "widen_long_to_double": "fail"
+    "widen_int_to_float": "pass",
+    "widen_long_to_double": "pass"
   },
   "173_float_int_conversions:i386:O2": {
     "int32_round_trip_delta": "fail",
@@ -6765,8 +6765,8 @@
     "truncate_double_to_i64": "fail",
     "truncate_to_unsigned": "fail",
     "truncate_toward_zero": "fail",
-    "widen_int_to_float": "fail",
-    "widen_long_to_double": "fail"
+    "widen_int_to_float": "pass",
+    "widen_long_to_double": "pass"
   },
   "173_float_int_conversions:x86_64:O0": {
     "int32_round_trip_delta": "fail",
@@ -6861,8 +6861,8 @@
   "174_float_compare_classify:i386:O0": {
     "absolute_binary32": "fail",
     "classify_binary32": "fail",
-    "negate_binary32": "fail",
-    "ordered_compare_binary32": "fail",
+    "negate_binary32": "pass",
+    "ordered_compare_binary32": "pass",
     "sign_bit_of_binary32": "fail",
     "unordered_compare_flags": "fail",
     "zero_sign_from_product": "fail"
@@ -6870,8 +6870,8 @@
   "174_float_compare_classify:i386:O2": {
     "absolute_binary32": "fail",
     "classify_binary32": "fail",
-    "negate_binary32": "fail",
-    "ordered_compare_binary32": "fail",
+    "negate_binary32": "pass",
+    "ordered_compare_binary32": "pass",
     "sign_bit_of_binary32": "fail",
     "unordered_compare_flags": "fail",
     "zero_sign_from_product": "fail"
@@ -6962,11 +6962,11 @@
   },
   "175_float_matrix_kernel:i386:O0": {
     "dot_product_f32": "fail",
-    "dot_product_f64": "fail",
-    "matrix2_determinant": "fail",
+    "dot_product_f64": "pass",
+    "matrix2_determinant": "pass",
     "matrix2_multiply": "fail",
     "scale_series_f32": "fail",
-    "sum_of_squares_f32": "fail"
+    "sum_of_squares_f32": "pass"
   },
   "175_float_matrix_kernel:i386:O2": {
     "dot_product_f32": "fail",
@@ -7101,9 +7101,9 @@
   "181_compensated_summation:i386:O0": {
     "compensation_of_step": "fail",
     "difference_of_products": "fail",
-    "kahan_sum_f64": "fail",
-    "naive_sum_f64": "fail",
-    "summation_disagrees": "fail"
+    "kahan_sum_f64": "pass",
+    "naive_sum_f64": "pass",
+    "summation_disagrees": "pass"
   },
   "181_compensated_summation:i386:O2": {
     "compensation_of_step": "fail",
