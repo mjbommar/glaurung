@@ -448,7 +448,28 @@ memory_version(region, point)
   on the discovery side.**
 - [x] Represent direct, conditional, switch, indirect, exceptional, call,
   return, tail-call, and unknown terminal edges explicitly.
-- [ ] Build graph-complete region recovery with total edge accounting.
+- [~] Build graph-complete region recovery with total edge accounting.
+  **Measured 2026-08-15 and the successor-edge half already holds.** Census over
+  60 gcc-O2 fixture objects (15576 health events; the absolute sums double-count
+  because health is emitted at several pipeline points per function, but the
+  zeros and the ratios do not depend on that):
+
+      terminal_edges             24046
+      unresolved_indirect_edges   2706     11% of terminals
+      undefined_uses               761
+      structure_fallbacks          594
+      uncovered_cfg_edges            0
+      invented_cfg_edges             0
+      unknown_cfg_edges              0
+      unknown_terminal_edges         0
+
+  Zero uncovered and zero invented edges means the region tree already expresses
+  exactly the successor graph — `structure_accounting::account` is not merely a
+  diagnostic, it gates region selection through `structure_accounting_is_unsound`.
+  What is NOT total is terminal ownership: there is no `Return` region node, so
+  terminals are classified and counted but not owned by the tree. The numbers to
+  chase are the 2706 unresolved indirect edges and the 594 structure fallbacks,
+  neither of which is an accounting defect.
 - [ ] Preserve irreducible and unresolved flow with explicit goto/indirect
   fallback rather than inventing structure.
 - [ ] Separate dominance/loop discovery, region selection, verification, and HIR
@@ -784,7 +805,10 @@ machine control flow.
 - [ ] Implement stable `FunctionFacts`/`CallFactStore` and SCC propagation.
 - [ ] Repair indirect-table call arity before DCE using reaching values.
 - [ ] Complete terminal/indirect/switch/exception edge representation.
-- [ ] Verify total region ownership and edge accounting.
+- [~] Verify total region ownership and edge accounting. Successor-edge
+  accounting is verified and enforced (0 uncovered, 0 invented across the
+  measured corpus); terminal ownership is not, because the region algebra has no
+  `Return` node.
 - [ ] Attack large-function GED and AArch64-only failures from the first wrong
   stage.
 
