@@ -251,12 +251,12 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 13,
-        "ir_median_loc": 492.0,
+        "ir_median_loc": 491,
         "product_files_above_1000": 27,
         "product_files_above_2000": 13,
-        "product_mean_loc": pytest.approx(526.9709677419355),
-        "product_median_loc": 276.0,
-        "product_pct_loc_above_1000": pytest.approx(44.35820054970281),
+        "product_mean_loc": pytest.approx(527.4212218649518),
+        "product_median_loc": 276,
+        "product_pct_loc_above_1000": pytest.approx(44.30950813275782),
     }
 
 
