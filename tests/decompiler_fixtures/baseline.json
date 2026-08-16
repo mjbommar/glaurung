@@ -2922,6 +2922,54 @@
     "mc193_offset_sum": "pass",
     "mc193_scaled_constant": "pass"
   },
+  "195_by_value_aggregates:clang:O0": {
+    "bv195_big_roundtrip": "fail",
+    "bv195_consume_pair": "pass",
+    "bv195_make_big": "structural",
+    "bv195_make_mixed": "structural",
+    "bv195_make_pair": "structural",
+    "bv195_make_quad": "structural",
+    "bv195_mixed_roundtrip": "fail",
+    "bv195_pair_roundtrip": "pass",
+    "bv195_quad_roundtrip": "fail",
+    "bv195_scalar_control": "pass"
+  },
+  "195_by_value_aggregates:clang:O2": {
+    "bv195_big_roundtrip": "fail",
+    "bv195_consume_pair": "pass",
+    "bv195_make_big": "structural",
+    "bv195_make_mixed": "structural",
+    "bv195_make_pair": "structural",
+    "bv195_make_quad": "structural",
+    "bv195_mixed_roundtrip": "fail",
+    "bv195_pair_roundtrip": "pass",
+    "bv195_quad_roundtrip": "fail",
+    "bv195_scalar_control": "pass"
+  },
+  "195_by_value_aggregates:gcc:O0": {
+    "bv195_big_roundtrip": "fail",
+    "bv195_consume_pair": "pass",
+    "bv195_make_big": "structural",
+    "bv195_make_mixed": "structural",
+    "bv195_make_pair": "structural",
+    "bv195_make_quad": "structural",
+    "bv195_mixed_roundtrip": "fail",
+    "bv195_pair_roundtrip": "pass",
+    "bv195_quad_roundtrip": "fail",
+    "bv195_scalar_control": "pass"
+  },
+  "195_by_value_aggregates:gcc:O2": {
+    "bv195_big_roundtrip": "fail",
+    "bv195_consume_pair": "pass",
+    "bv195_make_big": "structural",
+    "bv195_make_mixed": "structural",
+    "bv195_make_pair": "structural",
+    "bv195_make_quad": "structural",
+    "bv195_mixed_roundtrip": "fail",
+    "bv195_pair_roundtrip": "pass",
+    "bv195_quad_roundtrip": "fail",
+    "bv195_scalar_control": "pass"
+  },
   "19_disjoint_set:clang:O0": {
     "dsu_find": "pass",
     "dsu_union": "pass"

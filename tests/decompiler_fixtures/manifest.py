@@ -1669,6 +1669,32 @@ OVERRIDES: dict[tuple[str, str], dict] = {
         "len_args": [2],
     },
     ("191_indirect_table_args", "t191_direct_control"): {"ptr_len": 8},
+    # Aggregates by value across the SysV classification boundaries. The
+    # struct-returning helpers are reachable only through their callers, which
+    # is deliberate: the harness rebuilds one function at a time against extern
+    # callees, so a caller's recovered C must get the aggregate ABI right to call
+    # its helper at all. `seed` is pinned small and exact so the mixed case's
+    # double stays exactly representable.
+    ("195_by_value_aggregates", "bv195_pair_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("195_by_value_aggregates", "bv195_quad_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("195_by_value_aggregates", "bv195_mixed_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("195_by_value_aggregates", "bv195_big_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("195_by_value_aggregates", "bv195_scalar_control"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
     # Two logically distinct values from ONE machine operation. `b` is pinned
     # away from zero on most vectors (the guard returns early otherwise, which
     # tests nothing) and includes values where quotient and remainder differ in
@@ -2827,6 +2853,25 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "t191_direct_control",
         "t191_dispatch",
         "t191_fold",
+    ],
+    # BY-VALUE AGGREGATES. Before this lane the corpus had none: zero fixtures
+    # returned a struct by value, and RecoveredOutputKind::HiddenReturn was a
+    # declared variant matched in three places and constructed in none. SysV
+    # gives each size class a different contract — <=8 bytes integer in rax,
+    # <=16 in rax:rdx, int+double SPLIT across rax and xmm0, and >16 bytes via a
+    # hidden pointer that shifts every real argument one register right. A
+    # decompiler that treats those uniformly still emits C that compiles.
+    # Each caller witnesses the individual fields in a caller-owned buffer with
+    # distinct coefficients, so the right total from the wrong fields is caught.
+    # bv195_scalar_control is the control: an ordinary scalar return that must
+    # NOT acquire aggregate handling, without which a decompiler routing
+    # everything through the memory-class path would satisfy the rest.
+    "195_by_value_aggregates": [
+        "bv195_big_roundtrip",
+        "bv195_mixed_roundtrip",
+        "bv195_pair_roundtrip",
+        "bv195_quad_roundtrip",
+        "bv195_scalar_control",
     ],
     # ONE machine operation, TWO logically distinct outputs. x86-64 `div` writes
     # the quotient to rax and the remainder to rdx; AArch64 spells the same

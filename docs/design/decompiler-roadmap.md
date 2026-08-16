@@ -459,6 +459,34 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
 - [ ] Propagate pointee and object constraints across calls.
 - [ ] Model by-value aggregates, split register/stack values, hidden structure
   returns, and aggregate result storage for each ABI.
+  **Fixture `195_by_value_aggregates` maps the boundary exactly** (added
+  2026-08-15, after an audit found the corpus had NO lane returning a struct by
+  value and `RecoveredOutputKind::HiddenReturn` was matched in three places and
+  constructed in none):
+
+      8-byte struct  -> rax             INTEGER      pass on all 4 lanes
+      scalar control                                 pass on all 4 lanes
+      16-byte struct -> rax:rdx         INTEGER      FAIL on all 4
+      int + double   -> rax + xmm0      split banks  FAIL on all 4
+      32-byte struct -> hidden pointer  MEMORY       FAIL on all 4
+
+  Correct up to eight bytes, wrong at every boundary beyond, with the control
+  passing so the lane is not vacuous.
+
+  The cause is one modelling decision. `abi::return_registers(SysVAmd64)` is
+  `["rax","eax","ax","al","xmm0"]` — ALIASES of a single logical result plus the
+  SSE spelling. There is no representation of a SECOND result register, so a
+  16-byte INTEGER aggregate comes back as `extern long bv195_make_quad(int)` and
+  the `rdx` half is read while never defined:
+
+      var3 = bv195_make_quad(...);       // rax only
+      *(int *)((var1 + 0x8)) = var7;     // var7 is the rdx half: undefined
+
+  The fix is NOT adding `rdx` to that list — the list means "other spellings of
+  the same value", and `rax:rdx` is two values. It needs a return CLASS (single,
+  register pair, split across banks, memory via hidden pointer), which is the
+  same eightbyte classification the SysV parameter side already needs, so the two
+  should land together.
 - [ ] Project proven accesses as HIR `Field`, `Index`, `AddressOf`, and typed
   dereference nodes.
 - [ ] Model vtables and RTTI as global objects connected to relocations, types,
