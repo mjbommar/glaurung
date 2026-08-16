@@ -2190,7 +2190,7 @@
     "walk_until_sentinel": "pass"
   },
   "111_self_referential_struct:aarch64:O0": {
-    "link_and_sum": "fail"
+    "link_and_sum": "pass"
   },
   "111_self_referential_struct:aarch64:O2": {
     "link_and_sum": "pass"
@@ -2211,19 +2211,19 @@
     "link_and_sum": "pass"
   },
   "111_self_referential_struct:i386:O2": {
-    "link_and_sum": "fail"
+    "link_and_sum": "pass"
   },
   "111_self_referential_struct:x86_64:O0": {
     "link_and_sum": "fail"
   },
   "111_self_referential_struct:x86_64:O2": {
-    "link_and_sum": "fail"
+    "link_and_sum": "pass"
   },
   "111_self_referential_struct:x86_64_gcc15:O0": {
     "link_and_sum": "fail"
   },
   "111_self_referential_struct:x86_64_gcc15:O2": {
-    "link_and_sum": "fail"
+    "link_and_sum": "pass"
   },
   "112_recursion_shapes:aarch64:O0": {
     "mutual_parity": "pass",
@@ -4194,7 +4194,7 @@
     "cpp_template_int32": "pass",
     "cpp_template_nontype": "pass",
     "cpp_template_predicate": "pass",
-    "cpp_template_uint8": "fail"
+    "cpp_template_uint8": "pass"
   },
   "137_cpp_templates:x86_64:O0": {
     "cpp_template_int16": "pass",
@@ -4290,7 +4290,7 @@
     "cpp_live_object_count": "fail"
   },
   "139_cpp_object_lifetime:aarch64:O2": {
-    "cpp_array_destruction": "fail",
+    "cpp_array_destruction": "pass",
     "cpp_destruction_order": "pass",
     "cpp_live_object_count": "pass"
   },
@@ -4320,7 +4320,7 @@
     "cpp_live_object_count": "fail"
   },
   "139_cpp_object_lifetime:i386:O2": {
-    "cpp_array_destruction": "fail",
+    "cpp_array_destruction": "pass",
     "cpp_destruction_order": "pass",
     "cpp_live_object_count": "pass"
   },
@@ -4555,8 +4555,8 @@
     "atomic_increment": "pass"
   },
   "141_atomics:i386:O2": {
-    "atomic_compare_exchange_loop": "fail",
-    "atomic_exchange_and_or": "fail",
+    "atomic_compare_exchange_loop": "pass",
+    "atomic_exchange_and_or": "pass",
     "atomic_flag_round_trip": "fail",
     "atomic_increment": "pass"
   },
@@ -5636,7 +5636,7 @@
     "chain155_signed": "pass"
   },
   "155_long_dependency_chain:x86_64_gcc15:O2": {
-    "chain155_buffered": "fail",
+    "chain155_buffered": "pass",
     "chain155_scalar": "pass",
     "chain155_signed": "pass"
   },
@@ -6174,7 +6174,7 @@
     "pk161_layout_delta": "pass",
     "pk161_member_offset": "fail",
     "pk161_read_field": "pass",
-    "pk161_roundtrip": "fail"
+    "pk161_roundtrip": "pass"
   },
   "161_packed_struct_layout:x86_64:O0": {
     "pk161_encode": "pass",
@@ -6202,7 +6202,7 @@
     "pk161_layout_delta": "pass",
     "pk161_member_offset": "pass",
     "pk161_read_field": "pass",
-    "pk161_roundtrip": "fail"
+    "pk161_roundtrip": "pass"
   },
   "162_unaligned_memcpy_access:aarch64:O0": {
     "ua162_load_be32": "pass",
@@ -6272,7 +6272,7 @@
     "ua162_load_native16": "pass",
     "ua162_load_native32": "pass",
     "ua162_move_field32": "pass",
-    "ua162_roundtrip": "fail",
+    "ua162_roundtrip": "pass",
     "ua162_store_be32": "pass",
     "ua162_store_native32": "pass"
   },
@@ -6308,7 +6308,7 @@
     "ua162_load_native16": "pass",
     "ua162_load_native32": "pass",
     "ua162_move_field32": "fail",
-    "ua162_roundtrip": "fail",
+    "ua162_roundtrip": "pass",
     "ua162_store_be32": "pass",
     "ua162_store_native32": "pass"
   },
@@ -6462,7 +6462,7 @@
   "164_nested_tlv_walker:x86_64:O2": {
     "tlv164_encode_nested": "pass",
     "tlv164_find_type": "pass",
-    "tlv164_leaf_sum": "fail",
+    "tlv164_leaf_sum": "pass",
     "tlv164_max_depth": "fail",
     "tlv164_node_count": "pass"
   },
@@ -8395,7 +8395,7 @@
     "dfs196_spill_web": "pass"
   },
   "196_disjoint_frame_slots:x86_64:O2": {
-    "dfs196_alias_control": "fail",
+    "dfs196_alias_control": "pass",
     "dfs196_indexed_control": "pass",
     "dfs196_overlap_control": "pass",
     "dfs196_spill_web": "pass"
@@ -8650,13 +8650,13 @@
     "kmp_search": "pass"
   },
   "25_kmp_search:armv7:O2": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:armv7_a32:O0": {
     "kmp_search": "pass"
   },
   "25_kmp_search:armv7_a32:O2": {
-    "kmp_search": "fail"
+    "kmp_search": "pass"
   },
   "25_kmp_search:i386:O0": {
     "kmp_search": "pass"
@@ -8938,7 +8938,7 @@
   },
   "32_longest_common_subsequence:armv7_a32:O2": {
     "lcs_length": "fail",
-    "lcs_recover": "fail"
+    "lcs_recover": "pass"
   },
   "32_longest_common_subsequence:i386:O0": {
     "lcs_length": "pass",
@@ -9230,7 +9230,7 @@
   },
   "39_counting_radix_sort:armv7:O2": {
     "counting_sort_u8": "fail",
-    "radix_sort_u32": "fail"
+    "radix_sort_u32": "pass"
   },
   "39_counting_radix_sort:armv7_a32:O0": {
     "counting_sort_u8": "pass",
@@ -9238,7 +9238,7 @@
   },
   "39_counting_radix_sort:armv7_a32:O2": {
     "counting_sort_u8": "fail",
-    "radix_sort_u32": "fail"
+    "radix_sort_u32": "pass"
   },
   "39_counting_radix_sort:i386:O0": {
     "counting_sort_u8": "pass",
@@ -11606,7 +11606,7 @@
   "85_designated_initializers:i386:O2": {
     "designated_array_out_of_order": "fail",
     "designated_struct": "pass",
-    "designated_sum": "fail"
+    "designated_sum": "pass"
   },
   "85_designated_initializers:x86_64:O0": {
     "designated_array_out_of_order": "fail",
@@ -11616,7 +11616,7 @@
   "85_designated_initializers:x86_64:O2": {
     "designated_array_out_of_order": "pass",
     "designated_struct": "pass",
-    "designated_sum": "fail"
+    "designated_sum": "pass"
   },
   "85_designated_initializers:x86_64_gcc15:O0": {
     "designated_array_out_of_order": "fail",

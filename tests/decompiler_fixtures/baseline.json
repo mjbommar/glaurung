@@ -784,7 +784,7 @@
     "link_and_sum": "fail"
   },
   "111_self_referential_struct:gcc:O2": {
-    "link_and_sum": "fail"
+    "link_and_sum": "pass"
   },
   "112_recursion_shapes:clang:O0": {
     "mutual_parity": "pass",
@@ -2200,7 +2200,7 @@
   "164_nested_tlv_walker:gcc:O2": {
     "tlv164_encode_nested": "pass",
     "tlv164_find_type": "pass",
-    "tlv164_leaf_sum": "fail",
+    "tlv164_leaf_sum": "pass",
     "tlv164_max_depth": "fail",
     "tlv164_node_count": "pass"
   },
@@ -2989,7 +2989,7 @@
     "dfs196_spill_web": "pass"
   },
   "196_disjoint_frame_slots:gcc:O2": {
-    "dfs196_alias_control": "fail",
+    "dfs196_alias_control": "pass",
     "dfs196_indexed_control": "pass",
     "dfs196_overlap_control": "pass",
     "dfs196_spill_web": "pass"
@@ -4064,7 +4064,7 @@
   "85_designated_initializers:gcc:O2": {
     "designated_array_out_of_order": "pass",
     "designated_struct": "pass",
-    "designated_sum": "fail"
+    "designated_sum": "pass"
   },
   "86_flexible_array_member:clang:O0": {
     "flexible_header_size": "pass",

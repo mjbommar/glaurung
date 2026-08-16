@@ -26,8 +26,8 @@
     },
     "gcc:O2": {
       "functions_emitted": 2346,
-      "functions_with_violations": 61,
-      "violations": 126
+      "functions_with_violations": 53,
+      "violations": 108
     },
     "rustc:O0": {
       "functions_emitted": 3035,
@@ -429,9 +429,7 @@
     "111_self_referential_struct:gcc:O0:link_and_sum": [
       "rbp is declared as a local and never assigned, so reading it (and any address computed from it) is an uninitialised read"
     ],
-    "111_self_referential_struct:gcc:O2:link_and_sum": [
-      "local_98 is read but never defined"
-    ],
+    "111_self_referential_struct:gcc:O2:link_and_sum": [],
     "112_recursion_shapes:clang:O0:mutual_parity": [],
     "112_recursion_shapes:clang:O0:nontail_depth": [],
     "112_recursion_shapes:clang:O0:recursion_entry": [],
@@ -1657,9 +1655,7 @@
     "16_red_black_tree:clang:O2:rb_validate": [],
     "16_red_black_tree:gcc:O0:rb_validate": [],
     "16_red_black_tree:gcc:O2:rb_validate": [
-      "var20 is read but never defined",
-      "var5 is read but never defined",
-      "var6 is read but never defined"
+      "var18 is read but never defined"
     ],
     "170_rust_panic_unwind:rustc:O0:rust_panic_assert": [
       "ret is read before it is defined"
@@ -2271,9 +2267,7 @@
     "196_disjoint_frame_slots:gcc:O0:dfs196_indexed_control": [],
     "196_disjoint_frame_slots:gcc:O0:dfs196_overlap_control": [],
     "196_disjoint_frame_slots:gcc:O0:dfs196_spill_web": [],
-    "196_disjoint_frame_slots:gcc:O2:dfs196_alias_control": [
-      "local_2c is read but never defined"
-    ],
+    "196_disjoint_frame_slots:gcc:O2:dfs196_alias_control": [],
     "196_disjoint_frame_slots:gcc:O2:dfs196_indexed_control": [],
     "196_disjoint_frame_slots:gcc:O2:dfs196_overlap_control": [],
     "196_disjoint_frame_slots:gcc:O2:dfs196_spill_web": [],
@@ -2301,15 +2295,11 @@
     "22_dijkstra:clang:O0:dijkstra_dense": [],
     "22_dijkstra:clang:O2:dijkstra_dense": [],
     "22_dijkstra:gcc:O0:dijkstra_dense": [],
-    "22_dijkstra:gcc:O2:dijkstra_dense": [
-      "var6 is read but never defined"
-    ],
+    "22_dijkstra:gcc:O2:dijkstra_dense": [],
     "23_topological_sort:clang:O0:topological_sort": [],
     "23_topological_sort:clang:O2:topological_sort": [],
     "23_topological_sort:gcc:O0:topological_sort": [],
-    "23_topological_sort:gcc:O2:topological_sort": [
-      "var5 is read but never defined"
-    ],
+    "23_topological_sort:gcc:O2:topological_sort": [],
     "24_merge_sort:clang:O0:merge_sort_i32": [],
     "24_merge_sort:clang:O2:merge_sort_i32": [],
     "24_merge_sort:gcc:O0:merge_sort_i32": [],
@@ -2382,16 +2372,8 @@
     "33_knapsack:clang:O2:unbounded_knapsack": [],
     "33_knapsack:gcc:O0:knapsack_best_value": [],
     "33_knapsack:gcc:O0:unbounded_knapsack": [],
-    "33_knapsack:gcc:O2:knapsack_best_value": [
-      "var0 is read but never defined",
-      "var1 is read but never defined",
-      "var2 is read but never defined",
-      "var3 is read but never defined"
-    ],
-    "33_knapsack:gcc:O2:unbounded_knapsack": [
-      "var0 is read but never defined",
-      "var1 is read but never defined"
-    ],
+    "33_knapsack:gcc:O2:knapsack_best_value": [],
+    "33_knapsack:gcc:O2:unbounded_knapsack": [],
     "34_coin_change:clang:O0:count_change": [],
     "34_coin_change:clang:O0:min_coins": [],
     "34_coin_change:clang:O2:count_change": [],
@@ -2407,13 +2389,7 @@
       "var22 is read but never defined"
     ],
     "35_matrix_chain:gcc:O0:matrix_chain_cost": [],
-    "35_matrix_chain:gcc:O2:matrix_chain_cost": [
-      "var0 is read but never defined",
-      "var1 is read but never defined",
-      "var2 is read but never defined",
-      "var3 is read but never defined",
-      "var4 is read but never defined"
-    ],
+    "35_matrix_chain:gcc:O2:matrix_chain_cost": [],
     "36_quicksort:clang:O0:quicksort_i32": [],
     "36_quicksort:clang:O2:quicksort_i32": [],
     "36_quicksort:gcc:O0:quicksort_i32": [],
@@ -2447,9 +2423,7 @@
     "39_counting_radix_sort:clang:O2:radix_sort_u32": [],
     "39_counting_radix_sort:gcc:O0:counting_sort_u8": [],
     "39_counting_radix_sort:gcc:O0:radix_sort_u32": [],
-    "39_counting_radix_sort:gcc:O2:counting_sort_u8": [
-      "var0 is read but never defined"
-    ],
+    "39_counting_radix_sort:gcc:O2:counting_sort_u8": [],
     "39_counting_radix_sort:gcc:O2:radix_sort_u32": [],
     "40_quickselect:clang:O0:median_of_three": [],
     "40_quickselect:clang:O0:quickselect_kth": [],

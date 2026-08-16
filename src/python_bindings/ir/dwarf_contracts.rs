@@ -50,25 +50,33 @@ pub(super) fn dwarf_stack_object_hints(
         .stack_objects
         .iter()
         .filter_map(|object| {
-            let (base, adjustment) = match (cc, object.base) {
-                (CallConv::SysVAmd64 | CallConv::Win64, DwarfStackBase::Register(6)) => ("rbp", 0),
-                (CallConv::SysVAmd64 | CallConv::Win64, DwarfStackBase::CallFrameCfa) => {
-                    ("rbp", 16)
+            // `cfa_relative` records which of these arms produced the base, not
+            // just where it landed. The x86 CFA arms name a frame-pointer
+            // coordinate the body only forms when it establishes one; the stack
+            // pass rebases those onto the entry stack pointer when it does not,
+            // and must be able to tell them from a hint DWARF genuinely rooted
+            // at `rbp`/`ebp`.
+            let (base, adjustment, cfa_relative) = match (cc, object.base) {
+                (CallConv::SysVAmd64 | CallConv::Win64, DwarfStackBase::Register(6)) => {
+                    ("rbp", 0, false)
                 }
-                (CallConv::Cdecl32, DwarfStackBase::Register(5)) => ("ebp", 0),
-                (CallConv::Cdecl32, DwarfStackBase::CallFrameCfa) => ("ebp", 8),
-                (CallConv::Aarch64, DwarfStackBase::Register(29)) => ("x29", 0),
+                (CallConv::SysVAmd64 | CallConv::Win64, DwarfStackBase::CallFrameCfa) => {
+                    ("rbp", 16, true)
+                }
+                (CallConv::Cdecl32, DwarfStackBase::Register(5)) => ("ebp", 0, false),
+                (CallConv::Cdecl32, DwarfStackBase::CallFrameCfa) => ("ebp", 8, true),
+                (CallConv::Aarch64, DwarfStackBase::Register(29)) => ("x29", 0, false),
                 // DW_OP_fbreg is relative to the call-frame address, which is
                 // the architectural entry SP. The stack-local pass retains
                 // this coordinate for proven aggregates and reconciles it with
                 // the current-SP delta without globally rebasing AArch64's
                 // ordinary own-frame slots.
-                (CallConv::Aarch64, DwarfStackBase::CallFrameCfa) => ("entry_sp", 0),
+                (CallConv::Aarch64, DwarfStackBase::CallFrameCfa) => ("entry_sp", 0, true),
                 (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::Register(11 | 7)) => {
-                    ("fp", 0)
+                    ("fp", 0, false)
                 }
                 (CallConv::Arm | CallConv::ArmHardFloat, DwarfStackBase::CallFrameCfa) => {
-                    ("entry_sp", 0)
+                    ("entry_sp", 0, true)
                 }
                 _ => return None,
             };
@@ -79,6 +87,7 @@ pub(super) fn dwarf_stack_object_hints(
                 aggregate: object.aggregate,
                 source_name: object.source_name.clone(),
                 c_type: object.c_type.clone(),
+                cfa_relative,
             })
         })
         .collect()

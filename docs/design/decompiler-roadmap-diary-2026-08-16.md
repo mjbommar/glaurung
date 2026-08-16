@@ -8,7 +8,7 @@ Running evidence log for working the roadmap. One entry per increment,
 RED -> GREEN -> VERIFY, with the exact command output that justifies each claim.
 
 **Entry numbering continues across volumes**, so a reference to "Entry 34" stays
-unambiguous. The next free number is **53**.
+unambiguous. The next free number is **54**.
 
 Two conventions worth restating, both of which this project has paid to learn:
 
@@ -538,14 +538,19 @@ is a separate item from this entry and has not been done.
 
 ## Entry 53 — Three symptoms, two defects, and the proven extent was in a coordinate the body never forms
 
-> **STATUS: the finding is committed, the FIX IS NOT.** Running the `@o2` sweep
-> the entry did not complete found `24_merge_sort:gcc:O2:merge_sort_i32` going
-> `pass -> fail` alongside its four improvements. The declarations overlap —
-> `local_8c[140]` spans `[-140, 0)` and swallows `local_88[64]` at `[-136, -72)`
-> — so an extent is being over-extended. A cell that passed and now fails is a
-> stop condition regardless of how many others improve, so the code is held out
-> of the tree until that is resolved. The diagnosis below stands on its own.
+> Entry 52 is a concurrent session's (`3273120`); this one took 53, and the
+> header now says 54. That session also refreshed `defuse_baseline.json`
+> (`2c928d6`) and removed the corpus noise floor this entry had measured at 8
+> bodies, so every number below was re-measured on `3273120` rather than
+> carried over from `c2fb19d`.
 
+> **STATUS: measured clean and the fix is ready.** This entry was first
+> committed with the finding only, because the `@o2` sweep its author had not
+> finished found `24_merge_sort:gcc:O2:merge_sort_i32` going `pass -> fail`. That
+> was real, it was a FIFTH thing the coordinate repair exposed rather than an
+> over-extended extent, and rules 2 and 3 below are what close it. Re-measured on
+> `3273120`: `24_merge_sort` passes on all four lanes, `@o0` and `@o2` have no
+> regressions, and the four improvements stand.
 
 Entry 50 read `196_disjoint_frame_slots:gcc:O2:dfs196_alias_control`,
 `111_self_referential_struct` and (through Entry 51) `195_by_value_aggregates`'s
@@ -582,22 +587,44 @@ named, `mov %rsp,%rax` and `mov 0xc(%rsp),%edx` resolve to the same C object,
 with no store attribution, no stride proof and no non-escape proof. `111:gcc:O0`
 is the control — a real `rbp` frame, a live hint, and it does not move.
 
-### GREEN — three changes, each with the control that shaped it
+### GREEN — four changes, each with the control that shaped it
+
+Every one after the first exists because the first exposed something. Landing (1)
+alone regresses cells; the set is what is sound.
 
 1. **Rebase a CFA-derived hint onto the entry coordinate when the body omits the
    frame pointer.** `StackObjectHint::cfa_relative` records which arm of
    `dwarf_stack_object_hints` produced the base, because a hint DWARF genuinely
-   roots at `rbp` (`DW_OP_breg6`) is already in the body's coordinate and moving
+   rooted at `rbp` (`DW_OP_breg6`) is already in the body's coordinate and moving
    it would break a correct object. The omitted frame pointer would have sat one
    machine word below the entry SP, so the rebase is `disp - stack_word_size`.
-2. **The indexed heuristic yields to a debug-proven extent.** With (1) alone,
-   `111:gcc:O2` had TWO overlapping C arrays over one piece of storage: the
-   proven `struct Node[8]` at `entry_rsp-152` and `seed_indexed_stack_objects`'
-   partition at `entry_rsp-144`, seeded from `nodes[i].next` — an interior
-   element of the first. The recompiled C allocates them apart, so the list
-   terminator landed in the wrong object. The existing "debug bounds are
-   authoritative" rule covered only a partition at the SAME start.
-3. **A debug-proven object admits an address one past its end, in an
+   (Independent of whether `rbp` is pushed at all: CFA is `entry_rsp + 8`, the
+   hint carries `offset + 16`, so the entry coordinate is `offset + 8`.)
+2. **An indexed partition that OVERLAPS a debug-proven object is not a second
+   allocation.** Two shapes, both measured, both producing two C arrays over one
+   piece of storage — which the recompiled C then allocates apart:
+   * the partition starts INSIDE the object. `nodes[i].next` is an indexed access
+     eight bytes into `struct Node nodes[8]`, and seeding it separately put
+     `111_self_referential_struct:gcc:O2`'s list terminator in the wrong object.
+   * the partition starts BELOW it and runs through it. gcc addresses
+     `int32_t temp[16]` at `rsp+0x30` as `0x2c(%rsp) + (out+1)*4`, so the
+     recovered start is one element low; the conservative extent then covered the
+     proven array AND the `width` scalar in front of it, and
+     `24_merge_sort:gcc:O2:merge_sort_i32` went pass -> fail on the first
+     attempt at this entry.
+   The pre-existing rule ("never replace an exact extent with the heuristic's
+   conservative partition") covered only an exact START match.
+3. **An indexed access biased one element below a proven object still reaches
+   it.** The other half of merge_sort: with the partition suppressed, nothing
+   CONTAINED `entry_rsp-60`, and the store fell back to raw frame arithmetic.
+   `seed_indexed_stack_objects` already treats a start within one of its own
+   elements as an aliasing bias when comparing two heuristic partitions;
+   `biased_indexed_object` is that same rule against an authoritative extent, and
+   the relative offset comes out negative — `&temp[0] + (out+1)*4 - 4` — which is
+   exactly the bias the machine applied. The result is better than what passed
+   before: `width` is now an `int`, the canary a `long`, and `temp` a 64-byte
+   array, where the old output had one 140-byte blob covering all three.
+4. **A debug-proven object admits an address one past its end, in an
    assignment.** `lea 0x20(%rsp),%rdx` is `&a[8]`, the bound of the loop that
    fills `a`. While the heuristic ran to the frame base this was swallowed by
    accident; the exact extent refused it and left the bound as arithmetic on an
@@ -614,6 +641,47 @@ is the control — a real `rbp` frame, a live hint, and it does not move.
      `&a + sizeof a`. `mov %rsp,%rbp` is excluded for the same reason: it defines
      a coordinate system rather than computing a bound, and without that
      exclusion `-O0` prologues rendered as a dead `stack_0 = &local_c[0] + 12`.
+5. **An object that contains only the FIRST address of an indexed sequence is
+   not the array that sequence walks.** Found on `i386`, by a baseline
+   regeneration, after `@o0` and `@o2` had both been clean twice — see the
+   section below, which is the part of this entry worth reading twice.
+   `queue[head++]` in `23_topological_sort` is `0x58(%esp,%edi,4)` with `%edi`
+   starting at one: the same one-element bias as merge_sort, except that here the
+   element below `queue` is the LAST element of the adjacent `indegree[16]`.
+   Containment matched, and matched the wrong array — every dynamic address the
+   sequence produces is in `queue`, and only the base byte is in `indegree`, so
+   the recovered C read `indegree[16]`, one past its end, where the machine reads
+   `queue[0]`. Rule 3's bias lookup was never consulted because containment had
+   already succeeded. Two conditions, both RED-verified separately:
+   * the sequence must leave the containing object by its SECOND element;
+   * the base must not be that object's own start. A bias displaces the base from
+     the array it walks, so a base sitting exactly on an object is that object
+     being addressed. Without this, a one-element proven object indexed at its
+     own start hands itself to whatever follows it.
+
+### The i386 lane, and why two clean host sweeps could not see it
+
+This is the methodological result, and it cost a baseline regeneration to learn.
+Rules 1-4 were verified by `@o0` and `@o2` — 736 lanes, twice, no regressions —
+and by a 748-lane corpus render. **All of that is host x86-64.** `@o0` and `@o2`
+expand over `gcc`/`clang` and nothing else by design, so they cover 742 of the
+2950 selectable lanes; the 2208 cross-architecture lanes were untouched, and the
+regression lived there.
+
+It is not an ILP32 arithmetic bug — the rebase is exact on both: SysV has
+`CFA = entry_rsp + 8` with the hint carrying `offset + 16`, cdecl32 has
+`CFA = entry_esp + 4` with the hint carrying `offset + 8`, and `disp -
+stack_word_size` is right in both. What i386 supplied was a LAYOUT the host
+corpus does not contain: two proven arrays exactly adjacent, with a biased base
+landing in the last element of the lower one. On x86-64 the same source puts
+padding between them and the biased base falls in a gap, where nothing contains
+it and rule 3 alone was enough.
+
+The lesson for the next frame change is the cheap one: `dectest` takes arch
+selectors now, so
+`tools/dectest.py 23_topological_sort:i386:O2:topological_sort` is a 1.9-second
+question. A scoped `--arch` run over a frame-heavy set costs a couple of minutes
+and would have caught this before the baseline did.
 
 ### The third symptom is NOT fixed, and the blocker is not stack promotion
 
@@ -653,46 +721,109 @@ worth more than shipping an unmeasured guard over every frame in the corpus.
 
 ### VERIFY
 
-    cargo test --features python-ext          2577 passed, 0 failed
-                                              (2571 at c2fb19d; +6 new tests,
-                                               3 of them RED without the fix,
-                                               2 controls green by construction)
+All of it on `3273120`, not on the `c2fb19d` this entry started from.
+
+    cargo test --features python-ext          2583 passed, 0 failed
+                                              (2573 at 3273120; +10 new tests —
+                                               6 RED without the fix, 4 controls
+                                               green by construction, which is
+                                               what a control is for)
 
     tools/dectest.py 196_disjoint_frame_slots 111_self_referential_struct 195_by_value_aggregates
       IMPROVEMENTS (2): 111_self_referential_struct:gcc:O2:link_and_sum  fail -> pass
                         196_disjoint_frame_slots:gcc:O2:dfs196_alias_control fail -> pass
       no regressions in scope
+      (195's twelve cells are unchanged — see above)
 
-    tools/dectest.py @o0                      368 lanes, no regressions
-    tools/dectest.py @o2                      @O2_RESULT@
+    tools/dectest.py @o0                      368 lanes, no regressions, 0 improvements
+    tools/dectest.py @o2                      368 lanes, no regressions, 4 improvements:
+      111_self_referential_struct:gcc:O2:link_and_sum       fail -> pass
+      164_nested_tlv_walker:gcc:O2:tlv164_leaf_sum          fail -> pass
+      196_disjoint_frame_slots:gcc:O2:dfs196_alias_control  fail -> pass
+      85_designated_initializers:gcc:O2:designated_sum      fail -> pass
+
+    tools/dectest.py 24_merge_sort --full     all 4 lanes pass
+      (the cell rules 2 and 3 exist for; it regressed under rule 1 alone)
+
+    tools/dectest.py 23_topological_sort:i386:O2:topological_sort   pass
+      (the cell rule 5 exists for; 1.9s, and it regressed under rules 1-4)
+
+SCOPED ARCHITECTURE RUNS, which rules 1-4 did not have and needed. A frame-heavy
+selection — `@aggregates @structs @curriculum-graphs @curriculum-dynamic-programming
+@curriculum-sequences @curriculum-sorting @curriculum-structures` — retargeted:
+
+    ... --arch i386        74 lanes, no regressions, 3 improvements
+      111_self_referential_struct:i386:O2:link_and_sum   fail -> pass
+      161_packed_struct_layout:i386:O2:pk161_roundtrip   fail -> pass
+      162_unaligned_memcpy_access:i386:O2:ua162_roundtrip fail -> pass
+    ... --arch armv7_a32   74 lanes, no regressions, 3 improvements
+      25_kmp_search:armv7_a32:O2:kmp_search              fail -> pass
+      32_longest_common_subsequence:armv7_a32:O2:lcs_recover fail -> pass
+      39_counting_radix_sort:armv7_a32:O2:radix_sort_u32 fail -> pass
+
+and the bias-sensitive fixtures on every configured architecture:
+
+    tools/dectest.py 23_topological_sort 24_merge_sort 141_atomics
+      161_packed_struct_layout 162_unaligned_memcpy_access 39_counting_radix_sort
+      25_kmp_search 196_disjoint_frame_slots --arch <A>      16 lanes each
+        i386           no regressions, 4 improvements (141_atomics x2, 161, 162)
+        armv7          no regressions, 2 improvements
+        armv7_a32      no regressions, 2 improvements
+        aarch64        no regressions, 0 improvements
+        x86_64_gcc15   no regressions, 2 improvements
 
     touch src/lib.rs && cargo build --features python-ext
       never-used FUNCTION count: 0
+
+Two of those four were not on anybody's list. `164_nested_tlv_walker` and
+`85_designated_initializers` were failing for the same reason and nothing had
+named it, which is the ordinary consequence of a defect that lives in a
+COORDINATE rather than in a shape: it has no signature to grep for.
+
+**No baseline was refreshed.** `baseline.json` has four cells to move, all
+`gcc:O2`, all `fail -> pass`: the four listed above. `arch_baseline.json` moves
+too and by much more — a regeneration run elsewhere counted 23 improvements
+across five architectures against the one regression rule 5 now closes.
+`structural_baseline.json` was not measured: it builds one `gcc -O0 -g` lane per
+fixture, which `@o0` already covers here, but that is an argument, not a
+measurement, so it is left unclaimed.
 
 **Blast radius, which is the number this change has to be judged on.** A
 `--all --style decbench` render of every function in all 748 lanes, before and
 after (14,639 bodies):
 
-      60 bodies differ:  gcc:O2 51,  clang:O0 2,  rustc:O0 5,  rustc:O2 2
+      53 bodies differ (0.36%):  gcc:O2 51,  clang:O0 2,  rustc 0
 
-The tool's own noise floor, measured by running the SAME build twice, is 8
-bodies, all `rustc` — so all 7 rustc differences here are at or below noise and
-the real figure is **53 bodies, 0.36% of the corpus**, of which 47 changed which
-byte-array objects they declare. Sampling them, the change is quality-positive
-rather than merely neutral:
+Of those 53, 47 changed which byte-array objects they declare.
+
+The tool's own noise floor was re-measured on this HEAD the way Entry 48
+prescribes — the SAME build twice over all 748 lanes — and Entry 52 having fixed
+the `HashMap` iteration order, it is now **0 of 14,639**. So the figure above
+needs no subtraction, which is the first time a corpus-wide diff in this
+directory has been able to say that. Every changed body is in a lane that carries
+DWARF aggregates and omits its frame pointer, which is exactly the population the
+fix is about. Sampling them, the change is quality-positive rather than merely
+neutral:
 
 * `06_calling_conventions:gcc:O2:guarded_spin` — `local_4` becomes `x`. The
   rebase reaches SCALAR hints too, so DWARF source names land where they did not.
 * `10_cpp_runtime_shapes:gcc:O2:cpp_virtual_dispatch` — a frame-spanning
   `stack_1[16]` guess becomes two proven 8-byte objects, and the canary goes back
   to being `local_10`.
+* `24_merge_sort:gcc:O2:merge_sort_i32` — one 140-byte `local_8c[140]` blob that
+  covered `width`, `temp[16]` and the stack canary becomes `int local_8c`,
+  `unsigned char local_88[64]` and `long local_40`. It passed before and passes
+  after; the old output was right only because every offset was consistent
+  INSIDE one fictitious array.
 * `134_cpp_virtual_inheritance:clang:O0:*` — `local_30[48]` and `local_38[48]`
   overlapped by 40 bytes over one allocation. Now one object. **Both lanes passed
   before and after**: this is a fixture passing with output that was wrong in a
   way its vectors never exercised.
 
-**Def-before-use census** (`tests/decompiler_fixtures/defuse.py`'s report, over
-the same 748 lanes):
+**Def-before-use census.** `tools/gen_defuse_baseline.py --dry-run` (which
+prints and writes nothing) reports `299 violation(s) in 173 of 2598
+function-lanes` on the same 748 lanes, agreeing exactly with the snapshot above.
+Against the same measurement at `c2fb19d`:
 
     required violations   317 -> 299   (-18)   in 181 -> 173 function-lanes
     INTRODUCED: 0
@@ -702,9 +833,12 @@ the same 748 lanes):
       39_counting_radix_sort
     lane ceilings: gcc:O2 126 -> 108; clang:O0/clang:O2/gcc:O0/rustc:O0/rustc:O2 unchanged
 
-**`defuse_baseline.json` was NOT refreshed, and it is already stale at
-`c2fb19d`.** It pins 304 violations across 175 function-lanes; HEAD produces 317
-across 181. The whole +13 is `195_by_value_aggregates` and
-`196_disjoint_frame_slots`, both added after the census was last written, and it
-means `test_no_lane_emits_more_undefined_reads_than_recorded` is red before this
-change as well as after. Whoever refreshes should expect 299/173.
+**`defuse_baseline.json` was NOT refreshed.** `2c928d6` had just refreshed it for
+the two new fixtures, so it now pins exactly what `3273120` produces — 317
+violations across 181 function-lanes — and this change moves it to 299/173.
+Whoever ratchets should expect those, with `gcc:O2`'s aggregate ceiling going
+126 -> 108 and no other lane moving.
+
+(Measured before `2c928d6` landed, the same delta ran 304/175 -> 299/173, because
+the +13 the refresh absorbed is entirely `195_by_value_aggregates` and
+`196_disjoint_frame_slots`. Same nine resolved function-lanes either way.)

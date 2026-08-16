@@ -183,6 +183,7 @@ fn struct_by_value_frame(
 /// `DW_OP_fbreg -28`.
 fn struct_large_cfa_hint() -> [StackObjectHint; 1] {
     [StackObjectHint {
+        cfa_relative: true,
         base: "entry_sp".into(),
         disp: -28,
         size: 20,
@@ -488,6 +489,7 @@ fn a32_frame_pointer_address_rejoins_the_entry_cfa_object() {
         Some(CallConv::ArmHardFloat),
         Some(3),
         &[StackObjectHint {
+            cfa_relative: true,
             base: "entry_sp".into(),
             disp: -332,
             size: 64,

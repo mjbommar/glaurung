@@ -516,7 +516,7 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
 - [ ] Import authoritative DWARF/PDB/manual layouts into the same constraint
   system. Nothing is imported into the MIR constraint system yet. Worth knowing
   before that work starts: the AST-side import was silently COORDINATE-wrong on
-  x86-64 until Entry 52. `dwarf_stack_object_hints` mapped SysV
+  x86-64 until Entry 53. `dwarf_stack_object_hints` mapped SysV
   `DW_OP_call_frame_cfa` to `("rbp", +16)` — a frame-pointer displacement that a
   frame-pointer-omitted body never forms — so every proven aggregate extent in a
   `-O2` x86-64 function landed on a key nothing addressed, and promotion fell
@@ -593,11 +593,11 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
     into a call is not connected to the stack object the reads name, so the
     callee writes to an undefined `rsp` and the caller reads a buffer nothing
     wrote. ~~That is the same promotion-meets-a-borrowed-address shape as Entry
-    50 and `111_self_referential_struct`~~ — **it is not (Entry 52).** Those two
+    50 and `111_self_referential_struct`~~ — **it is not (Entry 53).** Those two
     were a DWARF coordinate bug and are fixed; this lane has no DWARF stack
     object at all, because `b` is recorded as four register `DW_OP_piece`s. Its
     buffer is formed heuristically by `stack_assignment_object_address` from the
-    epilogue's dead `%t147 = %rsp`, after the call argument was visited. Entry 52
+    epilogue's dead `%t147 = %rsp`, after the call argument was visited. Entry 53
     prototyped and reverted the connect: admitting a bare `%rsp` as an escaping
     address in argument position does hand out `&local_38[0]`, and the recovered
     callee prototype then truncates it — `extern long *bv195_make_big(int)`
@@ -1802,14 +1802,15 @@ the detail kept there and only the delta recorded here.
   with an empty conflict set, and **not one of those 1120 contains a single
   indexed access**.
 
-  **Correction, Entry 52 (2026-08-16): part of that "guessing" was not a guess
+  **Correction, Entry 53 (2026-08-16): part of that "guessing" was not a guess
   at all.** On x86-64 the DWARF extent was already exact and simply arrived in a
   coordinate the body never forms — `DW_OP_call_frame_cfa` was mapped to
   `("rbp", +16)`, which is only real when the body establishes a frame pointer.
   Repairing the coordinate replaced the heuristic partition with the declared one
-  in every frame-pointer-omitted x86-64 function that has an aggregate: 54 of the
-  748-lane corpus's `gcc:O2` bodies re-render, and the def-before-use census drops
-  18 violations. So the set of frame extents production genuinely guesses at is
+  in every frame-pointer-omitted x86-64 function that has an aggregate: 51 of the
+  748-lane corpus's `gcc:O2` bodies re-render, four `gcc:O2` cells go
+  `fail -> pass`, and the def-before-use census drops 18 violations with none
+  introduced. So the set of frame extents production genuinely guesses at is
   SMALLER than this measurement recorded, and the overlap with MIR's refusals is
   correspondingly weaker evidence than it looked. Re-measure before building on
   it.
@@ -2383,7 +2384,7 @@ This is the practical next-work queue as of the planning baseline.
    a local and never assigns it, so every address computed from it is an
    uninitialised read. A self-referential struct is the linked list.
 
-   Entry 52 split that in two. The `gcc:O2` lane is FIXED (`fail -> pass`): its
+   Entry 53 split that in two. The `gcc:O2` lane is FIXED (`fail -> pass`): its
    `nodes[8]` extent was proven by DWARF and lost to the CFA coordinate bug. The
    `gcc:O0` lane is unchanged and has a different cause — there `rbp` IS a real
    frame register, the proven object at `rbp-144` is live and used, and the

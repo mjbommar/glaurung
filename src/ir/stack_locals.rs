@@ -80,6 +80,12 @@ struct SlotVal {
     /// both occupy eight bytes while having fundamentally different C types.
     source_type: Option<String>,
     source_name: Option<String>,
+    /// Whether `object_size` is the source-declared extent rather than a
+    /// recovered guess. `bounded_object` says only that SOMETHING bounds the
+    /// object — a neighbouring slot, a partition boundary — which is enough to
+    /// stop it swallowing what follows and not enough to reason about its last
+    /// byte. Only an exact extent makes a one-past-the-end address meaningful.
+    debug_proven: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -110,6 +116,17 @@ pub struct StackObjectHint {
     pub aggregate: bool,
     pub source_name: Option<String>,
     pub c_type: Option<String>,
+    /// Whether the producer expressed this object against `DW_OP_call_frame_cfa`
+    /// rather than a named base register.
+    ///
+    /// The CFA is the CALLER's stack pointer, and the x86 front end spells it
+    /// here as a frame-pointer displacement — which is only a real coordinate
+    /// when the body establishes a frame pointer. A `-O2` body that omits one
+    /// addresses the same storage from the entry stack pointer, so the hint has
+    /// to be rebased rather than silently naming storage nothing references.
+    /// A hint the producer read from an actual base register (`DW_OP_breg6`) is
+    /// already in the coordinate the body uses and is never rebased.
+    pub cfa_relative: bool,
 }
 
 /// Source-level facts recovered while promoting frame storage.
@@ -262,6 +279,39 @@ fn frame_pointer_assignment(body: &[Stmt]) -> Option<bool> {
     None
 }
 
+/// The coordinate a debug-proven stack object actually occupies in THIS body.
+///
+/// `DW_OP_call_frame_cfa` is an offset from the caller's stack pointer, and the
+/// x86 front ends re-express it as a frame-pointer displacement because that is
+/// the coordinate an `-O0` body addresses its frame with. A body that omits the
+/// frame pointer never forms that address, so the hint lands on a key nothing
+/// else in the function ever reaches: measured at `c2fb19d`, the proven extent
+/// of `a` in `196_disjoint_frame_slots:gcc:O2:dfs196_alias_control` sat at
+/// `rbp-48` while every access resolved against `entry_rsp`, leaving `rsp+12` a
+/// bare scalar that the array's own initialising loop never appeared to define.
+///
+/// The omitted frame pointer would have sat exactly one machine word below the
+/// entry stack pointer — the word the prologue's `push` would have consumed — so
+/// the rebase is `disp - stack_word_size`. It applies only to CFA-derived hints:
+/// one the producer read from a real base register (`DW_OP_breg6`) is already in
+/// the coordinate the body uses, and rebasing it would move a correct object.
+fn rebased_hint_coordinate(hint: &StackObjectHint, ctx: StackContext) -> Option<(String, i64)> {
+    let frame_pointer_omitted = hint.cfa_relative
+        && is_frame_pointer(&hint.base)
+        && !ctx.frame_pointer_established
+        && matches!(
+            ctx.cc,
+            Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32)
+        );
+    if !frame_pointer_omitted {
+        return Some((hint.base.clone(), hint.disp));
+    }
+    Some((
+        entry_stack_base(ctx).to_string(),
+        hint.disp.checked_sub(stack_word_size(ctx))?,
+    ))
+}
+
 /// Rewrite stack-relative memory accesses to named locals.
 pub fn promote_stack_locals(f: &mut Function) {
     let _ = promote_stack_locals_typed(f, None);
@@ -320,19 +370,22 @@ pub fn promote_stack_locals_with_facts(
     };
     address_aliases::expand(&mut f.body, ctx);
     for hint in object_hints {
-        let authoritative_entry_coordinate = hint.base == entry_stack_base(ctx);
+        let Some((hint_base, hint_disp)) = rebased_hint_coordinate(hint, ctx) else {
+            continue;
+        };
+        let authoritative_entry_coordinate = hint_base == entry_stack_base(ctx);
         if hint.size == 0
-            || (!is_active_stack_base(&hint.base, ctx) && !authoritative_entry_coordinate)
+            || (!is_active_stack_base(&hint_base, ctx) && !authoritative_entry_coordinate)
         {
             continue;
         }
         let key = SlotKey {
-            base: hint.base.clone(),
-            disp: hint.disp,
+            base: hint_base.clone(),
+            disp: hint_disp,
         };
         let source_name = reserve_source_local_name(hint.source_name.as_deref(), &mut names);
         let name = map.get(&key).map_or_else(
-            || alloc_name(&hint.base, hint.disp, &mut names, ctx),
+            || alloc_name(&hint_base, hint_disp, &mut names, ctx),
             |slot| slot.name.clone(),
         );
         let scalar_size = (!hint.aggregate)
@@ -351,6 +404,7 @@ pub fn promote_stack_locals_with_facts(
                     slot.span_size = slot.span_size.max(size);
                 }
                 slot.bounded_object = true;
+                slot.debug_proven |= hint.aggregate;
                 merge_source_type(&mut slot.source_type, hint.c_type.as_deref());
                 merge_source_type(&mut slot.source_name, source_name.as_deref());
             })
@@ -362,6 +416,7 @@ pub fn promote_stack_locals_with_facts(
                 bounded_object: true,
                 source_type: hint.c_type.clone(),
                 source_name,
+                debug_proven: hint.aggregate,
             });
     }
     // Stack-address aliases and label stack depths depend on each other: an
@@ -1013,12 +1068,44 @@ fn seed_indexed_stack_objects(
         }
     }
 
+    // A partition that OVERLAPS a debug-proven object is not a second
+    // allocation, and seeding it makes the recompiled C allocate two arrays
+    // where the machine had one. Two ways this arises, both measured:
+    //
+    // * the partition starts inside the object — `nodes[i].next` is an indexed
+    //   access eight bytes into `struct Node nodes[8]`
+    //   (`111_self_referential_struct:gcc:O2`, which put the list terminator in
+    //   the wrong object);
+    // * the partition starts BELOW it and runs through it — gcc addresses
+    //   `int32_t temp[16]` at `rsp+0x30` as `0x2c(%rsp) + (out+1)*4`, so the
+    //   recovered start is one element low and the conservative extent then
+    //   covers the whole proven array plus the scalar in front of it
+    //   (`24_merge_sort:gcc:O2:merge_sort_i32`).
+    //
+    // The existing rule ("never replace an exact extent with the heuristic's
+    // conservative partition") covered only an exact START match.
+    let proven: Vec<(String, i64, i64)> = map
+        .iter()
+        .filter(|(_, slot)| slot.debug_proven)
+        .filter_map(|(key, slot)| {
+            let end = key.disp.checked_add(i64::from(slot.object_size?))?;
+            Some((key.base.clone(), key.disp, end))
+        })
+        .collect();
     for index in 0..partitions.len() {
         let (base, start) = &partitions[index];
         let end = partitions
             .get(index + 1)
             .filter(|(next_base, _)| next_base == base)
             .map_or(0, |(_, next_start)| *next_start);
+        if proven
+            .iter()
+            .any(|(proven_base, proven_start, proven_end)| {
+                proven_base == base && *start < *proven_end && end > *proven_start
+            })
+        {
+            continue;
+        }
         let Some(extent) = end.checked_sub(*start) else {
             continue;
         };
@@ -1045,6 +1132,7 @@ fn seed_indexed_stack_objects(
             bounded_object: partitions.get(index + 1).is_some(),
             source_type: None,
             source_name: None,
+            debug_proven: false,
         });
     }
 }
@@ -1066,10 +1154,27 @@ fn rewrite_body(
             }
             Stmt::Assign { dst, src } => {
                 rewrite_expr(src, map, names, ctx, *sp_delta, address_defs);
+                // `mov %rsp,%rbp` DEFINES a coordinate system; it does not
+                // compute a loop bound. `collect_stack_address_defs` already
+                // treats a write to an architectural frame base that way, and
+                // the frame base is one past the end of whatever object ends at
+                // it — so without the same rule here, `-O0`'s prologue rendered
+                // as a dead `stack_0 = &local_c[0] + 12` and stopped being
+                // recognised as a prologue at all. Only the END-POINTER reading
+                // is withheld: an address INSIDE a known object is still that
+                // object's address whatever the destination register is.
+                let establishes_a_frame_base = matches!(
+                    dst, VReg::Phys(name) if is_active_stack_base(name, ctx)
+                );
                 if !is_stack_pointer_reg(dst, ctx) {
-                    if let Some(object_addr) =
-                        stack_assignment_object_address(src, map, *sp_delta, ctx, address_defs)
-                    {
+                    if let Some(object_addr) = stack_assignment_object_address(
+                        src,
+                        map,
+                        *sp_delta,
+                        ctx,
+                        address_defs,
+                        !establishes_a_frame_base,
+                    ) {
                         *src = object_addr;
                     }
                 }
@@ -1508,6 +1613,7 @@ fn rewrite_expr(
                         bounded_object: false,
                         source_type: None,
                         source_name: None,
+                        debug_proven: false,
                     },
                 );
                 *e = Expr::Reg(VReg::phys(alias));
@@ -1839,7 +1945,8 @@ fn promote_address_taken_stack_object(
     // store, or debug hint already seeded. Preserve that interior byte offset:
     // collapsing `&local[0] + 1` to `&local[0]` changes the stored value even
     // though both addresses identify the same underlying stack object.
-    if let Some(object_addr) = stack_object_constant_address(expr, map, sp_delta, ctx, address_defs)
+    if let Some(object_addr) =
+        stack_object_constant_address(expr, map, sp_delta, ctx, address_defs, false)
     {
         *expr = object_addr;
         return;
@@ -1909,6 +2016,7 @@ fn promote_address_taken_stack_object(
         bounded_object: false,
         source_type: None,
         source_name: None,
+        debug_proven: false,
     });
     let object = VReg::phys(entry.name.clone());
     // A frame-local object starts at a negative offset and grows toward the
@@ -2421,6 +2529,31 @@ fn aapcs_entry_stack_coordinate(
         .map(|disp| ("entry_sp", disp))
 }
 
+/// The promoted object an access at `(base, disp)` falls inside.
+///
+/// `allow_end_pointer` admits an address that lands exactly ONE PAST the end of
+/// a debug-proven object. `lea 0x20(%rsp),%rdx` is the bound `&a[8]` of the loop
+/// that fills the `int32_t a[8]` at `rsp`, and C says that address exists; while
+/// a heuristic object ran to the frame base it was swallowed by accident, and
+/// with the exact DWARF extent, refusing it left the bound as arithmetic on an
+/// undefined `rsp` (`196_disjoint_frame_slots:gcc:O2:dfs196_indexed_control`).
+///
+/// Three conditions keep it from absorbing the NEXT object, which occupies the
+/// very same coordinate and is what makes this dangerous:
+///
+/// * a DEREFERENCE there is still refused — only `access_size == 0` qualifies;
+/// * the extent must be debug-proven. A recovered extent's last byte is a
+///   guess: allowing this for every bounded object added 275 undefined reads to
+///   `rustc:O0` and 165 to `rustc:O2`, whose iterator code is built out of end
+///   pointers, while moving no cell;
+/// * only a value-producing ASSIGNMENT asks for it. An address handed to a
+///   CALLEE that lands one past an object is far more likely to be the
+///   neighbouring object — at `-O0`, `Movable b` sitting directly above
+///   `Movable a` became `&a + 8` and the recompiled C wrote past `a`'s end
+///   (`10_cpp_runtime_shapes:gcc:O0:cpp_move`).
+///
+/// A slot that really starts at that coordinate and is already an object still
+/// wins, because the selection below keeps the greatest start.
 fn containing_stack_object<'a>(
     map: &'a HashMap<SlotKey, SlotVal>,
     base: &str,
@@ -2428,17 +2561,20 @@ fn containing_stack_object<'a>(
     access_size: u8,
     indexed: bool,
     require_bounded: bool,
+    allow_end_pointer: bool,
 ) -> Option<(i64, &'a SlotVal, u16)> {
     let access_end = disp.checked_add(i64::from(access_size))?;
     map.iter()
         .filter_map(|(key, slot)| {
             let size = slot.object_size?;
             let end = key.disp.checked_add(i64::from(size))?;
+            let end_pointer =
+                allow_end_pointer && access_size == 0 && disp == end && slot.debug_proven;
             (key.base == base
                 && (!require_bounded || slot.bounded_object)
                 && key.disp <= disp
-                && disp < end
-                && (indexed || access_end <= end))
+                && (disp < end || end_pointer)
+                && (indexed || access_end <= end || end_pointer))
                 .then_some((key.disp, slot, size))
         })
         .max_by_key(|(start, _, _)| *start)
@@ -2490,6 +2626,41 @@ fn bounded_scalar_slot(
         .or_else(|| bounded_scalar_at_coordinate(map, base, disp, access_size))
 }
 
+/// A debug-proven object an INDEXED access addresses from one element BELOW it.
+///
+/// Compilers routinely bias a subscript rather than the base: gcc reaches
+/// `int32_t temp[16]` at `rsp+0x30` as `0x2c(%rsp) + (out+1)*4`, so the
+/// recovered constant part sits one element under the proven array while the
+/// effective address is inside it. `seed_indexed_stack_objects` already treats
+/// that shape as an aliasing bias when comparing two heuristic partitions; this
+/// is the same rule against an authoritative extent, and it is what lets the
+/// proven object own the access instead of a second array being invented under
+/// it. The relative offset comes out NEGATIVE, which is exactly the bias the
+/// machine applied: `&temp[0] + (out + 1)*4 - 4`.
+///
+/// Bounded by one element deliberately. A larger gap is a different allocation,
+/// not a bias, and the caller has already asked every containment rule first.
+fn biased_indexed_object<'a>(
+    map: &'a HashMap<SlotKey, SlotVal>,
+    base: &str,
+    disp: i64,
+    index: Option<&VReg>,
+    scale: u8,
+) -> Option<(i64, &'a SlotVal, u16)> {
+    index?;
+    if scale == 0 {
+        return None;
+    }
+    let reach = disp.checked_add(i64::from(scale))?;
+    map.iter()
+        .filter_map(|(key, slot)| {
+            let size = slot.object_size?;
+            (key.base == base && slot.debug_proven && disp < key.disp && key.disp <= reach)
+                .then_some((key.disp, slot, size))
+        })
+        .min_by_key(|(start, _, _)| *start)
+}
+
 /// Materialise an access inside a seeded stack region as byte-pointer
 /// arithmetic rooted at one [`Expr::StackAddr`].
 fn stack_object_address(
@@ -2508,7 +2679,7 @@ fn stack_object_address(
     if bounded_scalar_slot(map, &base, disp, access_size, sp_delta, ctx).is_some() {
         return None;
     }
-    let (object_disp, start, slot, object_size) = alternate
+    let contained = alternate
         .and_then(|(alternate_base, alternate_disp)| {
             containing_stack_object(
                 map,
@@ -2517,13 +2688,51 @@ fn stack_object_address(
                 access_size,
                 index.is_some(),
                 true,
+                false,
             )
             .map(|(start, slot, size)| (alternate_disp, start, slot, size))
         })
         .or_else(|| {
-            containing_stack_object(map, &base, disp, access_size, index.is_some(), false)
+            containing_stack_object(map, &base, disp, access_size, index.is_some(), false, false)
                 .map(|(start, slot, size)| (disp, start, slot, size))
-        })?;
+        });
+    let biased = alternate
+        .and_then(|(alternate_base, alternate_disp)| {
+            biased_indexed_object(map, alternate_base, alternate_disp, index.as_ref(), scale)
+                .map(|(start, slot, size)| (alternate_disp, start, slot, size))
+        })
+        .or_else(|| {
+            biased_indexed_object(map, &base, disp, index.as_ref(), scale)
+                .map(|(start, slot, size)| (disp, start, slot, size))
+        });
+    // An object that contains only the FIRST address of an indexed sequence is
+    // not the array that sequence walks. `queue[head++]` at
+    // `23_topological_sort:i386:O2` is addressed `0x58(%esp,%edi,4)` with `%edi`
+    // starting at one — a base one element low, exactly the merge_sort bias —
+    // and there the element below `queue` is the LAST element of the adjacent
+    // `indegree[16]`. Containment therefore matched, and matched the wrong
+    // array: every dynamic address the sequence produces is in `queue`, and only
+    // the base byte is in `indegree`. Before the CFA repair neither array was
+    // proven and the heuristic partitioned from the biased base, which is why
+    // this shape has no host-lane analogue and survived two `@o0`/`@o2` sweeps.
+    //
+    // Two conditions, both needed. The sequence must leave the containing
+    // object by its SECOND element, and the base must not be that object's own
+    // start — a bias displaces the base from the array it walks, so a base
+    // sitting exactly on an object is that object being addressed directly.
+    // Without the second condition a one-element proven object indexed at its
+    // own start would hand itself to whatever follows it.
+    let escapes_immediately = |start: i64, size: u16| {
+        disp > start
+            && start
+                .checked_add(i64::from(size))
+                .is_some_and(|end| end <= disp.saturating_add(i64::from(scale)))
+    };
+    let (object_disp, start, slot, object_size) = match (contained, biased) {
+        (Some((_, start, _, size)), Some(biased)) if escapes_immediately(start, size) => biased,
+        (Some(contained), _) => contained,
+        (None, biased) => biased?,
+    };
 
     let mut offset = index.map(|index| {
         let index = Expr::Reg(index);
@@ -2571,17 +2780,26 @@ fn stack_object_constant_address(
     sp_delta: Option<i64>,
     ctx: StackContext,
     address_defs: &HashMap<VReg, (String, i64)>,
+    allow_end_pointer: bool,
 ) -> Option<Expr> {
     let recovered = escaped_stack_address(expr, sp_delta, ctx, address_defs, true)?;
     let (base, disp) = normalized_stack_slot(&recovered.0, recovered.1, sp_delta, ctx);
     let alternate = aapcs_entry_stack_coordinate(&base, disp, sp_delta, ctx);
     let (object_disp, start, slot, size) = alternate
         .and_then(|(alternate_base, alternate_disp)| {
-            containing_stack_object(map, alternate_base, alternate_disp, 0, true, true)
-                .map(|(start, slot, size)| (alternate_disp, start, slot, size))
+            containing_stack_object(
+                map,
+                alternate_base,
+                alternate_disp,
+                0,
+                true,
+                true,
+                allow_end_pointer,
+            )
+            .map(|(start, slot, size)| (alternate_disp, start, slot, size))
         })
         .or_else(|| {
-            containing_stack_object(map, &base, disp, 0, true, false)
+            containing_stack_object(map, &base, disp, 0, true, false, allow_end_pointer)
                 .map(|(start, slot, size)| (disp, start, slot, size))
         })?;
     let object = Expr::StackAddr {
@@ -2611,8 +2829,11 @@ fn stack_assignment_object_address(
     sp_delta: Option<i64>,
     ctx: StackContext,
     address_defs: &HashMap<VReg, (String, i64)>,
+    allow_end_pointer: bool,
 ) -> Option<Expr> {
-    if let Some(existing) = stack_object_constant_address(expr, map, sp_delta, ctx, address_defs) {
+    if let Some(existing) =
+        stack_object_constant_address(expr, map, sp_delta, ctx, address_defs, allow_end_pointer)
+    {
         return Some(existing);
     }
     let recovered = escaped_stack_address(expr, sp_delta, ctx, address_defs, true)?;
@@ -2623,7 +2844,14 @@ fn stack_assignment_object_address(
     };
     let first = map.get(&key)?;
     if first.object_size.is_some() {
-        return stack_object_constant_address(expr, map, sp_delta, ctx, address_defs);
+        return stack_object_constant_address(
+            expr,
+            map,
+            sp_delta,
+            ctx,
+            address_defs,
+            allow_end_pointer,
+        );
     }
 
     let boundary = map
@@ -2677,7 +2905,7 @@ fn stack_assignment_object_address(
     let slot = map.get_mut(&key)?;
     slot.object_size = Some(size);
     slot.bounded_object = true;
-    stack_object_constant_address(expr, map, sp_delta, ctx, address_defs)
+    stack_object_constant_address(expr, map, sp_delta, ctx, address_defs, allow_end_pointer)
 }
 
 /// Resolve an escaping stack address without broadening the established x86
@@ -2817,6 +3045,7 @@ fn try_promote_lea_to_local(
         bounded_object: false,
         source_type: None,
         source_name: None,
+        debug_proven: false,
     });
     entry.declared_size = entry.declared_size.min(size);
     entry.span_size = entry.span_size.max(size);
@@ -5135,6 +5364,503 @@ mod tests {
         );
     }
 
+    /// `sub $N,%rsp` and nothing else: the ordinary `-O2` frame-pointer-omitted
+    /// prologue.
+    fn frame_prologue(bytes: i64) -> Stmt {
+        Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(bytes)),
+            },
+        }
+    }
+
+    fn frame_pointer_omitted_prologue() -> Stmt {
+        frame_prologue(56)
+    }
+
+    /// `int32_t a[8]` at CFA-64, which the SysV front end spells `rbp-48`.
+    fn cfa_relative_array_hint() -> [StackObjectHint; 1] {
+        [StackObjectHint {
+            base: "rbp".into(),
+            disp: -48,
+            size: 32,
+            aggregate: true,
+            source_name: Some("a".into()),
+            c_type: Some("int32_t[]".into()),
+            cfa_relative: true,
+        }]
+    }
+
+    /// Two adjacent proven arrays, as `23_topological_sort` has them: DWARF
+    /// puts `indegree[16]` at the entry coordinate -160 and `queue[16]`
+    /// directly above it at -96.
+    fn two_adjacent_proven_arrays() -> [StackObjectHint; 2] {
+        [
+            StackObjectHint {
+                base: "rbp".into(),
+                disp: -152,
+                size: 64,
+                aggregate: true,
+                source_name: Some("indegree".into()),
+                c_type: Some("int32_t[]".into()),
+                cfa_relative: true,
+            },
+            StackObjectHint {
+                base: "rbp".into(),
+                disp: -88,
+                size: 64,
+                aggregate: true,
+                source_name: Some("queue".into()),
+                c_type: Some("int32_t[]".into()),
+                cfa_relative: true,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_biased_base_in_the_previous_array_still_reaches_the_one_it_walks() {
+        // `queue[head++]` is addressed `0x58(%esp,%edi,4)` with `%edi` starting
+        // at one — the same one-element bias as merge_sort, except that here the
+        // element below `queue` is the LAST element of the adjacent `indegree`.
+        // Containment therefore matches, and matches the wrong array: every
+        // dynamic address the sequence produces is in `queue`, and only the base
+        // byte is in `indegree`. This is what took
+        // `23_topological_sort:i386:O2` from pass to fail.
+        let mut f = Function {
+            name: "kahn".into(),
+            entry_va: 0,
+            body: vec![
+                frame_prologue(160),
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("rsp")),
+                            index: Some(reg("rdi")),
+                            scale: 4,
+                            disp: 60,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &two_adjacent_proven_arrays(),
+        );
+
+        assert!(
+            matches!(&f.body[1], Stmt::Assign { src: Expr::Deref { addr, .. }, .. }
+                if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { object, .. }
+                        if object == &reg("local_60")))),
+            "biased subscript was claimed by the array below the one it walks: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn an_unbiased_indexed_access_keeps_the_array_it_starts_in() {
+        // CONTROL for the rule above: the same two arrays, and an access whose
+        // base IS `indegree`'s own start. Nothing is biased here, and the
+        // sequence must stay in `indegree`.
+        let mut f = Function {
+            name: "count".into(),
+            entry_va: 0,
+            body: vec![
+                frame_prologue(160),
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("rsp")),
+                            index: Some(reg("rdi")),
+                            scale: 4,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &two_adjacent_proven_arrays(),
+        );
+
+        assert!(
+            matches!(&f.body[1], Stmt::Assign { src: Expr::Deref { addr, .. }, .. }
+                if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { object, .. }
+                        if object == &reg("local_a0")))),
+            "an unbiased access was redirected to the next array: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn a_one_element_object_indexed_at_its_own_start_is_not_handed_to_its_neighbour() {
+        // The narrow CONTROL for the second half of the rule. A proven object
+        // exactly one element wide is escaped by its own second element, so the
+        // "leaves by the second element" test alone would give it away to
+        // whatever starts at its end. A base sitting ON an object is that object
+        // being addressed, not a bias, and the `disp > start` clause says so.
+        let hints = [
+            StackObjectHint {
+                base: "rbp".into(),
+                disp: -152,
+                size: 4,
+                aggregate: true,
+                source_name: Some("one".into()),
+                c_type: Some("int32_t[]".into()),
+                cfa_relative: true,
+            },
+            StackObjectHint {
+                base: "rbp".into(),
+                disp: -148,
+                size: 64,
+                aggregate: true,
+                source_name: Some("many".into()),
+                c_type: Some("int32_t[]".into()),
+                cfa_relative: true,
+            },
+        ];
+        let mut f = Function {
+            name: "single".into(),
+            entry_va: 0,
+            body: vec![
+                frame_prologue(160),
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("rsp")),
+                            index: Some(reg("rdi")),
+                            scale: 4,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &hints,
+        );
+
+        assert!(
+            matches!(&f.body[1], Stmt::Assign { src: Expr::Deref { addr, .. }, .. }
+                if matches!(addr.as_ref(), Expr::StackAddr { object, .. }
+                    if object == &reg("local_a0"))
+                || matches!(addr.as_ref(), Expr::Bin { lhs, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { object, .. }
+                        if object == &reg("local_a0")))),
+            "a one-element object gave itself away to its neighbour: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn an_indexed_access_biased_one_element_low_still_reaches_the_proven_object() {
+        // gcc reaches `int32_t temp[16]` at `rsp+0x30` as
+        // `0x2c(%rsp) + (out+1)*4` — the base one element low, the subscript one
+        // element high. Here the proven array is at `entry_rsp-56` in a 64-byte
+        // frame, so the store's constant part resolves to `entry_rsp-60` and no
+        // object CONTAINS it. Inventing a second array under the proven one is
+        // what took `24_merge_sort:gcc:O2:merge_sort_i32` from pass to fail.
+        let mut f = Function {
+            name: "biased_fill".into(),
+            entry_va: 0,
+            body: vec![
+                frame_prologue(64),
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: Some(reg("rcx")),
+                        scale: 4,
+                        disp: 4,
+                        segment: None,
+                    },
+                    src: Expr::Reg(reg("eax")),
+                    size: 4,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &cfa_relative_array_hint(),
+        );
+
+        assert!(
+            matches!(&f.body[1], Stmt::Store { addr: Expr::Bin { lhs, rhs, .. }, .. }
+                if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 }
+                    if object == &reg("local_38"))
+                    && matches!(rhs.as_ref(), Expr::Bin { rhs: bias, .. }
+                        if bias.as_ref() == &Expr::Const(-4))),
+            "biased subscript did not reach the proven array: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn a_cfa_object_reaches_a_body_that_omits_the_frame_pointer() {
+        // `mov 0xc(%rsp),%edx` reads `a[3]` of an array the caller's CFA places
+        // at `rsp+0`. Without the rebase the proven extent sits at `rbp-48`,
+        // which this body never forms, and the read becomes a bare scalar that
+        // the array's own initialising loop never appears to define.
+        let mut f = Function {
+            name: "alias_control".into(),
+            entry_va: 0,
+            body: vec![
+                frame_pointer_omitted_prologue(),
+                Stmt::Assign {
+                    dst: reg("edx"),
+                    src: deref_of("rsp", 0xc, 4),
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &cfa_relative_array_hint(),
+        );
+
+        assert!(
+            matches!(
+                &f.body[1],
+                Stmt::Assign { src: Expr::Deref { addr, size: 4 }, .. }
+                    if matches!(addr.as_ref(), Expr::Bin { lhs, rhs, .. }
+                        if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 }
+                            if object == &reg("local_38"))
+                            && rhs.as_ref() == &Expr::Const(12))
+            ),
+            "interior read did not reach the rebased CFA object: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn a_cfa_object_is_left_alone_when_the_frame_pointer_is_established() {
+        // The same hint against `push %rbp; mov %rsp,%rbp`. Here `rbp-48` is a
+        // coordinate the body really forms, and rebasing it would move a
+        // correct object 8 bytes down.
+        let mut f = Function {
+            name: "framed".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("rsp")),
+                },
+                Stmt::Assign {
+                    dst: reg("edx"),
+                    src: deref_of("rbp", -36, 4),
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &cfa_relative_array_hint(),
+        );
+
+        assert!(
+            matches!(
+                &f.body[1],
+                Stmt::Assign { src: Expr::Deref { addr, size: 4 }, .. }
+                    if matches!(addr.as_ref(), Expr::Bin { lhs, rhs, .. }
+                        if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 }
+                            if object == &reg("local_30"))
+                            && rhs.as_ref() == &Expr::Const(12))
+            ),
+            "an established frame pointer's object moved: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn a_base_register_object_is_never_rebased() {
+        // `DW_OP_breg6` names `rbp` outright. Even where the prologue detector
+        // sees no establishment, that coordinate came from the producer and is
+        // not ours to move.
+        let mut f = Function {
+            name: "breg".into(),
+            entry_va: 0,
+            body: vec![
+                frame_pointer_omitted_prologue(),
+                Stmt::Assign {
+                    dst: reg("edx"),
+                    src: deref_of("rbp", -36, 4),
+                },
+            ],
+        };
+        let hints = [StackObjectHint {
+            cfa_relative: false,
+            ..cfa_relative_array_hint()[0].clone()
+        }];
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &hints,
+        );
+
+        assert!(
+            matches!(
+                &f.body[1],
+                Stmt::Assign { src: Expr::Deref { addr, size: 4 }, .. }
+                    if matches!(addr.as_ref(), Expr::Bin { lhs, rhs, .. }
+                        if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 }
+                            if object == &reg("local_30"))
+                            && rhs.as_ref() == &Expr::Const(12))
+            ),
+            "a base-register object was rebased: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn an_indexed_access_inside_a_proven_object_does_not_seed_a_second_one() {
+        // `nodes[i].next` is an indexed access eight bytes into the array. Left
+        // to itself the indexed heuristic partitions from THERE to the frame
+        // base, giving one piece of storage two overlapping C arrays — and the
+        // recompiled C then allocates them apart.
+        let mut f = Function {
+            name: "link".into(),
+            entry_va: 0,
+            body: vec![
+                frame_pointer_omitted_prologue(),
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: Some(reg("rcx")),
+                        scale: 16,
+                        disp: 8,
+                        segment: None,
+                    },
+                    src: Expr::Const(0),
+                    size: 8,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &cfa_relative_array_hint(),
+        );
+
+        assert!(
+            matches!(
+                &f.body[1],
+                Stmt::Store { addr: Expr::Bin { lhs, .. }, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 }
+                        if object == &reg("local_38"))
+            ),
+            "indexed store seeded a second object beside the proven one: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn a_proven_object_admits_a_loop_bound_one_past_its_end() {
+        // `lea 0x20(%rsp),%rdx` is `&a[8]`, the bound of the loop that fills
+        // `a`. The address exists in C; a DEREFERENCE there still does not.
+        let mut f = Function {
+            name: "fill".into(),
+            entry_va: 0,
+            body: vec![
+                frame_pointer_omitted_prologue(),
+                Stmt::Assign {
+                    dst: reg("rdx"),
+                    src: lea("rsp", 32),
+                },
+                Stmt::Assign {
+                    dst: reg("ecx"),
+                    src: deref_of("rsp", 32, 4),
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &cfa_relative_array_hint(),
+        );
+
+        assert!(
+            matches!(&f.body[1], Stmt::Assign { src: Expr::Bin { lhs, rhs, .. }, .. }
+                if matches!(lhs.as_ref(), Expr::StackAddr { object, size: 32 }
+                    if object == &reg("local_38"))
+                    && rhs.as_ref() == &Expr::Const(32)),
+            "end pointer did not reach the object it bounds: {f:#?}"
+        );
+        assert!(
+            !matches!(&f.body[2], Stmt::Assign { src: Expr::Deref { addr, .. }, .. }
+                if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
+                    if matches!(lhs.as_ref(), Expr::StackAddr { .. }))),
+            "a read one past the end was admitted: {f:#?}"
+        );
+    }
+
+    #[test]
+    fn an_address_one_past_the_end_handed_to_a_callee_is_not_absorbed() {
+        // CONTROL for the rule above. `Movable b` sits directly above
+        // `Movable a` at `-O0`, and its constructor takes its address — which
+        // is `&a + sizeof a`. Reading that as an interior offset of `a` makes
+        // the recompiled C write past `a`'s end, and it did:
+        // `10_cpp_runtime_shapes:gcc:O0:cpp_move` went pass -> fail.
+        let mut f = Function {
+            name: "construct_neighbour".into(),
+            entry_va: 0,
+            body: vec![
+                frame_pointer_omitted_prologue(),
+                Stmt::Call {
+                    target: Expr::Addr(0x1000),
+                    args: vec![lea("rsp", 32)],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        promote_stack_locals_typed_with_parameter_count_and_objects(
+            &mut f,
+            Some(CallConv::SysVAmd64),
+            None,
+            &cfa_relative_array_hint(),
+        );
+
+        let Stmt::Call { args, .. } = &f.body[1] else {
+            panic!("call statement disappeared: {f:#?}");
+        };
+        assert!(
+            !matches!(&args[0], Expr::Bin { lhs, .. }
+                if matches!(lhs.as_ref(), Expr::StackAddr { object, .. }
+                    if object == &reg("local_38"))),
+            "the neighbouring object was absorbed into the proven one: {f:#?}"
+        );
+    }
+
     #[test]
     fn debug_aggregate_extent_unifies_closure_fields() {
         let mut f = Function {
@@ -5160,6 +5886,7 @@ mod tests {
             ],
         };
         let hints = [StackObjectHint {
+            cfa_relative: false,
             base: "rbp".into(),
             disp: -0x20,
             size: 16,
@@ -5225,6 +5952,7 @@ mod tests {
         };
         let hints = [
             StackObjectHint {
+                cfa_relative: false,
                 base: "rbp".into(),
                 disp: -0x18,
                 size: 24,
@@ -5233,6 +5961,7 @@ mod tests {
                 c_type: None,
             },
             StackObjectHint {
+                cfa_relative: false,
                 base: "rbp".into(),
                 disp: -0xc,
                 size: 4,
@@ -5303,6 +6032,7 @@ mod tests {
             ],
         };
         let hints = [StackObjectHint {
+            cfa_relative: false,
             base: "entry_sp".into(),
             disp: -40,
             size: 16,
@@ -5386,6 +6116,7 @@ mod tests {
             ],
         };
         let hints = [StackObjectHint {
+            cfa_relative: false,
             base: "entry_sp".into(),
             disp: -48,
             size: 4,
@@ -5445,6 +6176,7 @@ mod tests {
             ],
         };
         let hints = [StackObjectHint {
+            cfa_relative: false,
             base: "entry_sp".into(),
             disp: -8,
             size: 8,
@@ -5545,6 +6277,7 @@ mod tests {
             ],
         };
         let hints = [StackObjectHint {
+            cfa_relative: false,
             base: "entry_sp".into(),
             disp: -364,
             size: 64,
@@ -5642,6 +6375,7 @@ mod tests {
             Some(CallConv::Arm),
             Some(3),
             &[StackObjectHint {
+                cfa_relative: false,
                 base: "entry_sp".into(),
                 disp: -292,
                 size: 128,
@@ -5729,6 +6463,7 @@ mod tests {
             Some(CallConv::Arm),
             Some(3),
             &[StackObjectHint {
+                cfa_relative: false,
                 base: "entry_sp".into(),
                 disp: -164,
                 size: 128,
@@ -5809,6 +6544,7 @@ mod tests {
             ],
         };
         let hints = [StackObjectHint {
+            cfa_relative: false,
             base: "entry_sp".into(),
             disp: -24,
             size: 12,
@@ -5858,6 +6594,7 @@ mod tests {
                 bounded_object: true,
                 source_type: None,
                 source_name: None,
+                debug_proven: false,
             },
         )]);
         let cursor = reg("x9#1");
@@ -5926,6 +6663,7 @@ mod tests {
             ],
         };
         let hints = [StackObjectHint {
+            cfa_relative: false,
             base: "entry_sp".into(),
             disp: -40,
             size: 16,
