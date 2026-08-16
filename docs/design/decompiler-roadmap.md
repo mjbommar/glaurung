@@ -1934,20 +1934,58 @@ This block is a second view of "Semantic HIR and pure rendering" above; audited
   `style in {"", "c", "decbench"}` — that single change makes the whole
   thread-local class falsifiable.
 
-  **And the profile is measurably non-deterministic today, which no test sees.**
-  Measured 2026-08-16 while establishing a byte-identity control for the
-  declaration-plan split: rendering all 15,698 functions of the 766 objects in
-  `tests/decompiler_fixtures/build` at `style="decbench"`, three runs of ONE
-  unmodified build disagreed with each other on **16 functions** — 13 of them
-  within those three runs alone. Fifteen are the same two `memchr` symbols across
-  six `rustc` fixtures; the sixteenth is `rust_slice_get_range`. The recovered
-  return type flips between `unsigned int` and `unsigned long`, in both
-  directions, and it varies **within a single process** as well as across
-  processes, which rules out per-process hash seeding and points at a time-based
-  budget rather than at ordering. That is 0.10% of the corpus, and it is enough
-  to make any byte-identity claim about this profile a coin flip unless the
-  unstable set is quarantined first. Give the parametrized determinism test above
-  the rustc fixtures; they are where the defect lives.
+  **The decbench non-determinism is fixed** (2026-08-16,
+  `merge_exact_definition_widths`). It was measured while establishing a
+  byte-identity control for the declaration-plan split: rendering all 15,698
+  functions of the 766 objects in `tests/decompiler_fixtures/build` at
+  `style="decbench"`, three same-process passes of ONE unmodified build disagreed
+  on **13 functions** (0.083%), fifteen of the sixteen ever seen being the same
+  two `memchr` symbols across six `rustc` fixtures plus `rust_slice_get_range`.
+  Confirmed at `51c2b88` and again at `c2fb19d` after the return-class
+  work: 13 of 15,698, same list
+  (`uv run python repro.py '*' 3`, one process, three passes).
+
+  The reading recorded here at the time — that within-process variation "rules
+  out per-process hash seeding and points at a time-based budget" — was **wrong,
+  and wrong in a way worth keeping on the page.** `RandomState::new` bumps a
+  per-thread counter for every map it builds, so two `HashMap`s constructed at
+  different moments inside ONE process already hash differently. Within-process
+  variation is therefore evidence *for* hash ordering, not against it. The
+  time-budget lead was also refuted directly: the only clocks reachable from a
+  decompile are `Budgets::timeout_ms` and `Deadline` in `src/analysis/cfg.rs`
+  (`grep -rl 'Instant::now\|\.elapsed()' src/` names 19 files, none of the
+  others on this path), and `total_timeout_ms` is `0` at every decompile entry
+  point, so no deadline can expire.
+
+  The actual cause is one `HashMap` walk into a many-to-one projection:
+  `merge_exact_definition_widths` (`src/python_bindings/ir.rs`) iterated
+  `definition_widths: HashMap<VReg, u8>` and wrote each storage's width through
+  `TypeMap::refine_from_value`, which is **last-write-wins on integer width**.
+  `role_names` maps several machine storages onto one rendered role, so for
+  `rust_slice_get_range` both `rax#3` (8 bytes) and `xmm0` (16) named `ret` and
+  the hash picked the winner. Same class and same symptom as the
+  `ir::stack_locals` `collect()` that alternated `char` and `long`.
+
+  A census over the 30 `-rustc-` objects (11,190 merge calls) found 506 (4.5%)
+  with a disagreeing role and **`ret` is the only role that ever disagrees**
+  (`(8,16)` 384, `(4,8)` 84, `(4,16)` 22, `(2,8)` 16), so the blast radius is the
+  return type alone. Conflicts are now resolved by *withholding* — an ambiguous
+  storage-to-role projection states no width, exactly as `stack_locals`'s
+  `ambiguous_coordinates` does — because `ret` already has two stronger
+  value-keyed sources on either side of the call.
+
+  After: **0 of 15,698 differ** over three same-process passes; 15,694 are
+  byte-identical to a HEAD variant and all 4 that changed were in the
+  already-flipping set, so no deterministic output moved. `@o0` and `@o2`, 368
+  lanes each: no regressions and no improvements. `rust_slice_get_range` now
+  renders `unsigned int`, and the fixture source declares `-> i32`, so the width
+  is right where both coin-flip answers were wrong.
+
+  `python/tests/test_decompile_determinism.py` now carries the missing shape:
+  a same-process repeated `decompile_at(style="decbench")` check on the two
+  symbols that flipped, RED at `51c2b88` and at `c2fb19d`, green after. The parametrization
+  over `style in {"", "c", "decbench"}` for `decompile_all` is still open, and
+  `c` still has no determinism test at all.
 - [~] Split large owners only along migrated responsibility boundaries.
   One split, along one boundary. Until 2026-08-16 this read "zero splits":
   `git log --diff-filter=R -- src/ir` over the last 200 commits returned nothing,

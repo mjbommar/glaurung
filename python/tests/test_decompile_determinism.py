@@ -145,3 +145,90 @@ def test_decompile_all_concurrent_processes_match_serial_baseline(
             f"serial baseline -- serial and parallel analysis produced "
             f"different output (roadmap design rule 12)"
         )
+
+
+# --- decbench render profile, same process --------------------------------
+#
+# The two shapes above miss a whole class. `test_decompile_all_repeats_
+# identically_in_one_process` runs the PLAIN profile, and every decbench check
+# in this file compares across SUBPROCESSES. Neither catches a decompile that
+# returns a different answer on the second call inside ONE process at
+# `style="decbench"` -- which is the profile the fixture differential, the
+# structural lane and every published number are rendered at.
+#
+# Measured on the 30 `-rustc-` objects in `tests/decompiler_fixtures/build`,
+# three same-process passes over all 5595 functions at `style="decbench"`:
+# 13 functions returned more than one distinct text. All 13 were a RETURN TYPE
+# flip -- `long` vs `unsigned long`, `unsigned int` vs `unsigned long` -- and
+# the flip goes in both directions, roughly 50/50, call to call, with no
+# process boundary anywhere near it.
+#
+# `decompile_at` on one such function reproduces it in seconds, so that is what
+# this test does.
+
+FIXTURE_BUILD = (
+    Path(__file__).resolve().parents[2] / "tests" / "decompiler_fixtures" / "build"
+)
+
+#: (object, symbol) pairs whose decbench return type was observed to flip.
+DECBENCH_FLIPPERS = [
+    pytest.param(
+        "169_rust_slices_bounds-rustc-O2.so",
+        "rust_slice_get_range",
+        id="rust_slice_get_range",
+    ),
+    pytest.param(
+        "169_rust_slices_bounds-rustc-O2.so",
+        "_ZN6memchr4arch6x86_646memchr10memchr_raw6detect17h23e80f1dec614340E",
+        id="memchr_raw-detect",
+    ),
+]
+
+
+def _defined_symbol_va(so: Path, name: str) -> int | None:
+    """VA of a defined text symbol.
+
+    `nm -D` alone is not enough here: the Rust standard library routines that
+    flip are internal to the cdylib and never reach `.dynsym`, so the full
+    `.symtab` is consulted too.
+    """
+    for argv in (
+        ["nm", "-D", "--defined-only", str(so)],
+        ["nm", "--defined-only", str(so)],
+    ):
+        r = subprocess.run(argv, capture_output=True, text=True, check=False)
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 3 and parts[1] in ("T", "t") and parts[2] == name:
+                return int(parts[0], 16)
+    return None
+
+
+@pytest.mark.parametrize("obj,symbol", DECBENCH_FLIPPERS)
+def test_decbench_render_repeats_identically_in_one_process(obj: str, symbol: str):
+    """Roadmap design rule 12 at the decbench profile, inside one process.
+
+    16 repeats: the observed split is near 50/50, so a run that flips has
+    under a 1-in-30000 chance of showing one distinct answer here.
+    """
+    so = FIXTURE_BUILD / obj
+    if not so.exists():
+        pytest.skip(f"fixture object missing (run the fixture build): {so}")
+    va = _defined_symbol_va(so, symbol)
+    if va is None:
+        pytest.skip(f"symbol not defined in {obj}: {symbol}")
+
+    import glaurung as g
+
+    outputs = [g.ir.decompile_at(str(so), va, style="decbench") for _ in range(16)]
+    distinct = sorted(set(outputs))
+    assert len(distinct) == 1, (
+        f"{obj}:{symbol} rendered {len(distinct)} distinct texts over 16 "
+        f"same-process decompile_at(style='decbench') calls -- identical "
+        f"inputs produced different output (roadmap design rule 12).\n"
+        f"first line of each variant:\n"
+        + "\n".join(
+            f"  {d.splitlines()[1] if len(d.splitlines()) > 1 else d!r}"
+            for d in distinct
+        )
+    )

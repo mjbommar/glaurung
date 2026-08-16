@@ -2452,6 +2452,36 @@ fn merge_exact_definition_widths(
     cc: crate::ir::call_args::CallConv,
 ) {
     let word = machine_word_bytes(cc);
+    // Collect first, apply second. `role_names` is many-to-one: several machine
+    // storages name one rendered role, and `ret` in particular collects every
+    // return carrier the naming pass found — an integer `rax#3` and an SSE
+    // `xmm0` alike. `TypeMap::refine_from_value` is last-write-wins on integer
+    // width, so writing straight out of a `HashMap` walk let iteration order
+    // pick the declared width.
+    //
+    // That is not a per-process defect. `RandomState::new` bumps a per-thread
+    // counter for every map it builds, so two maps built at different moments in
+    // ONE process hash differently; the winner therefore changed from one
+    // `decompile_at` call to the next inside a single interpreter. Measured on
+    // the 30 `-rustc-` objects in `tests/decompiler_fixtures/build`, three
+    // same-process passes over 5595 functions at `style="decbench"` left 13
+    // functions with more than one rendered text, every one of them a return
+    // type flipping between `long`, `unsigned long` and `unsigned int` in both
+    // directions. Same failure mode, same symptom and same fix shape as
+    // `ir::stack_locals`, whose bare `collect()` alternated `char` and `long`.
+    //
+    // Conflicts are resolved by withholding rather than by picking a winner: a
+    // census over those 11 190 merge calls found 506 (4.5%) with a role whose
+    // storages disagree, and `ret` is the ONLY role that ever disagrees
+    // (`(8,16)` 384, `(4,8)` 84, `(4,16)` 22, `(2,8)` 16). When the projection
+    // is not injective and its sources disagree there is no "exact definition
+    // width" for that role to state, and `ret` has two stronger, value-keyed
+    // sources on either side of this call — `RecoveredPrototype::result_type_map`
+    // above and the explicit `recovered_width.max(proven_width)` union in
+    // `ast::refine_decbench_abi_widths_with_value_widths` below. Same rule as
+    // `stack_locals`'s `ambiguous_coordinates`.
+    let mut by_role: std::collections::BTreeMap<&str, Option<u8>> =
+        std::collections::BTreeMap::new();
     for (storage, &exact_width) in definition_widths {
         // A full-width machine-register definition on a 32-bit target is not a
         // narrowing and therefore not evidence of an `int`. Recording it as one
@@ -2481,6 +2511,21 @@ fn merge_exact_definition_widths(
         if crate::ir::ast::parse_arg_index(role_name).is_some() {
             continue;
         }
+        by_role
+            .entry(role_name.as_str())
+            .and_modify(|agreed| {
+                if *agreed != Some(exact_width) {
+                    *agreed = None;
+                }
+            })
+            .or_insert(Some(exact_width));
+    }
+    for (role_name, agreed_width) in by_role {
+        // Two storages disagreed about this role's width; the projection states
+        // nothing rather than whichever one the hash happened to order last.
+        let Some(exact_width) = agreed_width else {
+            continue;
+        };
         let role = crate::ir::types::VReg::phys(role_name);
         // An exact SSA value used as an address is stronger than its register
         // storage width. On 32-bit ARM both facts are four bytes, but projecting
@@ -3539,6 +3584,96 @@ mod tests {
             Some(TypeHint::Int {
                 signed: true,
                 width: 8,
+            })
+        );
+    }
+
+    /// Two machine storages, one rendered role, disagreeing widths: the role
+    /// must come out the same every time.
+    ///
+    /// `role_names` is many-to-one, and `ret` is where it actually collides:
+    /// the naming pass maps every return carrier onto that one role, so an
+    /// integer `rax#3` (8 bytes) and an SSE `xmm0` (16) both land on it. This
+    /// loop used to write straight into the `TypeMap` out of a `HashMap` walk,
+    /// and `refine_from_value` is last-write-wins on width, so whichever
+    /// storage the hash ordered last chose the declared return type.
+    ///
+    /// The reproduction was not across processes. `RandomState::new` bumps a
+    /// per-thread counter per map, so two maps built at different points in one
+    /// process iterate differently: 16 repeated
+    /// `decompile_at(169_rust_slices_bounds-rustc-O2.so, 0x70a0,
+    /// style="decbench")` calls in a single interpreter returned both `long
+    /// rust_slice_get_range(...)` and `unsigned long rust_slice_get_range(...)`.
+    /// 64 iterations here because a 50/50 flip needs repeats to be caught.
+    #[test]
+    fn colliding_storages_for_one_role_state_no_width_instead_of_racing() {
+        let ret = VReg::phys("ret");
+        for _ in 0..64 {
+            let mut types = TypeMap::default();
+            types.upsert_public(
+                ret.clone(),
+                TypeHint::Int {
+                    signed: false,
+                    width: 4,
+                },
+            );
+            let definition_widths =
+                HashMap::from([(VReg::phys("rax#3"), 8), (VReg::phys("xmm0"), 16)]);
+            let role_names = HashMap::from([
+                ("rax#3".to_string(), "ret".to_string()),
+                ("xmm0".to_string(), "ret".to_string()),
+            ]);
+
+            merge_exact_definition_widths(
+                &mut types,
+                &definition_widths,
+                &role_names,
+                CallConv::SysVAmd64,
+            );
+
+            assert_eq!(
+                types.get(&ret),
+                Some(TypeHint::Int {
+                    signed: false,
+                    width: 4,
+                }),
+                "an ambiguous storage->role projection must state no width, \
+                 not whichever storage the hash ordered last"
+            );
+        }
+    }
+
+    /// Agreement is not ambiguity: several storages that all say the same
+    /// width still refine the role.
+    #[test]
+    fn agreeing_storages_for_one_role_still_refine_it() {
+        let ret = VReg::phys("ret");
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            ret.clone(),
+            TypeHint::Int {
+                signed: true,
+                width: 8,
+            },
+        );
+        let definition_widths = HashMap::from([(VReg::phys("eax#1"), 4), (VReg::phys("eax#7"), 4)]);
+        let role_names = HashMap::from([
+            ("eax#1".to_string(), "ret".to_string()),
+            ("eax#7".to_string(), "ret".to_string()),
+        ]);
+
+        merge_exact_definition_widths(
+            &mut types,
+            &definition_widths,
+            &role_names,
+            CallConv::SysVAmd64,
+        );
+
+        assert_eq!(
+            types.get(&ret),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
             })
         );
     }

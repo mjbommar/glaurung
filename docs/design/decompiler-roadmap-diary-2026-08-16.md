@@ -8,7 +8,7 @@ Running evidence log for working the roadmap. One entry per increment,
 RED -> GREEN -> VERIFY, with the exact command output that justifies each claim.
 
 **Entry numbering continues across volumes**, so a reference to "Entry 34" stays
-unambiguous. The next free number is **52**.
+unambiguous. The next free number is **53**.
 
 Two conventions worth restating, both of which this project has paid to learn:
 
@@ -17,8 +17,9 @@ Two conventions worth restating, both of which this project has paid to learn:
 - **Measure the tool's own noise floor before trusting a diff.** A byte-identity
   check over the corpus showed 16 functions changed by a refactor; running the
   unmodified build against itself showed 13 changed there too. Without that
-  control the refactor would have been blamed for a pre-existing 0.10%
-  non-determinism.
+  control the refactor would have been blamed for a pre-existing 0.083%
+  non-determinism. (Entry 52 found and fixed it: `HashMap` iteration order in
+  `merge_exact_definition_widths`, not the time-based budget first suspected.)
 
 ---
 
@@ -272,3 +273,252 @@ The AArch64 and ARM branches of that function already keep their banks apart;
 x86-64 does not. Splitting them is a soundness fix independent of aggregates, but
 on its own it converts wrong bytes into an undefined read and moves no cell, so it
 is left to land with the `SplitBanks` consumer rather than as unmeasured churn.
+
+## Entry 52 — The 0.10% was hash order, and the reason we thought it wasn't
+
+Entry 48 measured the tool's noise floor before trusting a diff, and found it:
+three same-process passes of ONE unmodified build over the corpus disagreed with
+themselves on 13 functions. The declaration-plan split had to quarantine 16
+functions to get a clean before/after comparison. That is the thing this entry
+removes, because a noise floor that only one person knows about is a trap for
+everybody else.
+
+### Reproduce first
+
+```
+$ uv run python repro.py '*rustc*' 3        # 30 objects, ONE process, 3 passes
+objects: 30  runs: 3
+run 0: 5595 functions  95.7s
+run 1: 5595 functions  191.8s
+run 2: 5595 functions  287.6s
+TOTAL functions (union): 5595
+DIFFERING functions:     13  (0.2324%)
+```
+
+All 13 are in the `-rustc-` subset, so the whole defect lives in 30 of the 766
+objects. The full corpus at `51c2b88` agrees exactly:
+
+```
+$ uv run python repro.py '*' 3
+run 2: 15698 functions  796.7s
+TOTAL functions (union): 15698
+DIFFERING functions:     13  (0.0828%)
+```
+
+13 of 15,698 is 0.083%, not 0.10% — the count reproduces, the percentage was
+rounded up. Same list of symbols: the two `memchr` routines across six `rustc`
+fixtures, plus `rust_slice_get_range`.
+
+A single function reproduces it in seconds, which is what made the rest of this
+tractable:
+
+```
+$ uv run python one.py 169_rust_slices_bounds-rustc-O2.so 28832 20
+2 distinct outputs over 20 same-process calls
+  variant runs=[0, 1, 3, 6, 7, 9, 11, 13, 17, 18] count=10
+  variant runs=[2, 4, 5, 8, 10, 12, 14, 15, 16, 19] count=10
+-long rust_slice_get_range(char * arg0, unsigned int arg1, ...) {
++unsigned long rust_slice_get_range(char * arg0, unsigned int arg1, ...) {
+```
+
+Ten and ten. A coin flip, inside one interpreter, on identical bytes.
+
+### RED
+
+```
+$ uv run pytest python/tests/test_decompile_determinism.py -k decbench_render -q
+E  AssertionError: 169_rust_slices_bounds-rustc-O2.so:rust_slice_get_range
+   rendered 2 distinct texts over 16 same-process decompile_at(style='decbench')
+   calls -- identical inputs produced different output (roadmap design rule 12).
+E    'long rust_slice_get_range(char * arg0, ...)'
+E    'unsigned long rust_slice_get_range(char * arg0, ...)'
+```
+
+Both parameters fail at `51c2b88`, and again at `c2fb19d` after Entry 51 gave
+SysV a return CLASS. That is worth stating: Entry 51 is the nearest work in the
+tree to this defect - it is about `rax`, `xmm0` and what the return storage
+contract is - and it does not touch this. The flip is not in the ABI model. The
+existing file had 9 cases and missed this
+entirely: its same-process test calls `decompile_all` with no `style`, so it
+renders the **plain** profile, and the only decbench coverage anywhere compares
+across separate subprocesses. Neither shape can see a second call in one process
+at the profile every published number is rendered at.
+
+### The lead that was wrong, and why it was believable
+
+The roadmap recorded that within-process variation "rules out per-process hash
+seeding and points at a time-based budget." That inference is backwards, and it
+is the reason this sat unexplained.
+
+`std::collections::hash_map::RandomState::new` seeds from a thread-local pair of
+keys **and bumps a counter on every construction**. Two `HashMap`s built at
+different moments in one process therefore iterate differently. Within-process
+variation is evidence *for* hash ordering, not against it.
+
+The time-budget hypothesis was also refuted directly rather than abandoned.
+`grep -rl 'Instant::now\|\.elapsed()' src/` names 19 files; the only one
+reachable from a decompile is `src/analysis/cfg.rs`, and its whole-run ceiling
+`total_timeout_ms` is hardcoded to `0` at every decompile entry point, so
+`Deadline::expired()` can never fire. There is no deadline on this path to be
+load-dependent.
+
+### Root cause
+
+Bisected by instrumenting the stages of `decbench_type_maps` and printing the
+`ret` hint after each:
+
+```
+DBGSTAGE decl:stack_source:    Some(Int { signed: false, width: 4 })
+DBGSTAGE decl:exact_defwidths: Some(Int { signed: false, width: 8 })   -> unsigned long
+...
+DBGSTAGE decl:stack_source:    Some(Int { signed: false, width: 4 })
+DBGSTAGE decl:exact_defwidths: Some(Int { signed: false, width: 16 })  -> long
+```
+
+One stage, both directions. Printing what that stage consumed named it outright:
+
+```
+DBGDEF storage=rax#3 role=ret width=8
+DBGDEF storage=xmm0  role=ret width=16   -> 16 wins
+DBGDEF storage=xmm0  role=ret width=16
+DBGDEF storage=rax#3 role=ret width=8    -> 8 wins
+```
+
+`merge_exact_definition_widths` (`src/python_bindings/ir.rs`) iterates
+`definition_widths: HashMap<VReg, u8>` and writes each storage's width through
+`TypeMap::refine_from_value`, which is last-write-wins on integer width. But
+`role_names` is **many-to-one**: the naming pass maps every return carrier onto
+the single role `ret`, so an integer `rax#3` and an SSE `xmm0` both land there
+and the hash picks which one the signature gets. `Int { width: 16 }` is not a C
+integer width at all, so `hint_to_ctype` degrades it to `long` and the `unsigned`
+is lost on the way — which is why the flip changes signedness as well as width.
+
+This is the third instance of one class. `ir::stack_locals` documents a bare
+`collect()` that "made HashMap iteration order choose the declaration width, so
+identical inputs could alternate between `char` and `long`"; `types_recover.rs`
+carries a `BTreeMap` with a comment naming the same failure. Neither fix covered
+this loop.
+
+### The fix, and why withholding rather than a winner
+
+A census of the blast radius before choosing a rule, over the 30 `-rustc-`
+objects:
+
+```
+merge calls: 11190   calls with >=1 conflicting role: 506 (4.52%)
+conflicting role families: [('ret', 506)]
+conflicting width sets: [((8,16), 384), ((4,8), 84), ((4,16), 22), ((2,8), 16)]
+```
+
+`ret` is the **only** role that ever disagrees. No `varN` ever does. That bounds
+the change to the return type and made the choice of rule a small decision rather
+than a large one.
+
+The loop now collects into a `BTreeMap<&str, Option<u8>>` keyed by role and
+applies afterwards; disagreeing storages set the entry to `None` and the role is
+left alone. Withholding, not min or max, for two reasons. It is what
+`stack_locals` already does with its `ambiguous_coordinates` when two machine slot
+keys reach one name — the same situation, so the same answer. And `ret` is the
+one role with better evidence on both sides of this call:
+`RecoveredPrototype::result_type_map` before it and the explicit
+`recovered_width.max(proven_width)` union in
+`ast::refine_decbench_abi_widths_with_value_widths` after it. A projection that
+cannot say which definition a role follows should say nothing, not guess.
+
+Reading `tm` moved out of the write loop as a consequence, which is its own small
+correctness gain: the pointer-class check and the signedness carry no longer
+observe writes the same loop made.
+
+### GREEN / VERIFY
+
+All numbers below are on `c2fb19d`.
+
+```
+$ uv run pytest python/tests/test_decompile_determinism.py -q -rs
+11 passed
+
+$ uv run python repro.py '*' 3
+run 0: 15698 functions  237.3s
+run 1: 15698 functions  487.8s
+run 2: 15698 functions  787.2s
+TOTAL functions (union): 15698
+DIFFERING functions:     0  (0.0000%)
+
+$ cargo test --features python-ext
+2573 passed; 0 failed          (2571 on c2fb19d, plus the two added here)
+
+$ uv run tools/dectest.py @o0
+SCOPED: 368 lanes of 748 (49%) - no regressions in scope
+$ uv run tools/dectest.py @o2
+SCOPED: 368 lanes of 748 (49%) - no regressions in scope
+
+$ touch src/lib.rs && cargo build --features python-ext | grep -c 'function .* is never used'
+0
+```
+
+No improvements either, on either set — expected: `ret` is the only affected
+role and the flipping functions are Rust standard-library code that no C fixture
+lane covers.
+
+The before/after comparison that matters most is not the lane count. Rendering
+the whole corpus on `c2fb19d` and again with the fix, and diffing the texts
+function by function:
+
+```
+keys: 15698 15698
+functions whose text differs (HEAD single pass vs fixed): 12
+```
+
+Every one of the 12 is in the already-flipping set - the two `memchr` symbols
+across six `rustc` objects, plus `rust_slice_get_range`. Nothing else in 15,698
+functions moved. **No deterministic output changed.** The same comparison run
+against `51c2b88`, using the set of texts from three HEAD passes rather than one,
+put it the other way round: 15,694 of 15,698 were byte-identical to a HEAD
+variant, and all 4 that were not were in the flipping set.
+
+And the one place there is ground truth, the fix is not merely deterministic but
+right. `tests/decompiler_fixtures/src/169_rust_slices_bounds.rs` declares
+
+```rust
+pub extern "C" fn rust_slice_get_range(p: *const i32, n: u32, a: u32, b: u32) -> i32
+```
+
+The coin flip returned `long` or `unsigned long`; both are the wrong width. It
+now renders `unsigned int` — 4 bytes, matching `i32`. The signedness is still
+wrong, and that is a separate pre-existing defect in this role's evidence chain,
+not something this change touches.
+
+### What is still open
+
+`decompile_all`/`decompile_many` are still not parametrized over
+`style in {"", "c", "decbench"}` in the determinism test, and `render_c` still
+has no determinism test at all. This entry closes the measured hole, not the
+class. The general defence — a determinism check that renders the same function
+twice in one process for every profile — is still the roadmap item.
+
+### The time-based budget that does exist, and is not this
+
+Worth recording precisely, because "the deadline hypothesis was wrong" is easy to
+over-read as "there is no load-dependent budget on the output path." There is
+one, it is just not what fired here.
+
+`Budgets::timeout_ms` carries a doc comment saying it "has never bounded an
+analysis." That is true of the *whole* analysis and false of a single function:
+`discover_function` checks `t0.elapsed() > budgets.timeout_ms` at two sites
+(`src/analysis/cfg.rs:1374`, `:1409`) and sets `stats.hit_timeout` before
+breaking out of the block walk, which truncates the recovered CFG. Wall clock in,
+different output out. `total_timeout_ms` really is `0` at all five decompile
+entry points, so the whole-run `Deadline` never expires, but the per-function
+clock is live.
+
+It is not a practical hazard at the decbench entry points — `decompile_all`
+passes `timeout_ms=10_000` and `decompile_at` `5_000`, against fixture objects
+where hundreds of functions are discovered in about a second, so the headroom is
+roughly four orders of magnitude. `decompile_range` (`ir.rs:1291`) is the thin
+one at `timeout_ms=500`.
+
+The principle from the task stands and should be written down: **a load-dependent
+budget is acceptable, a load-dependent RESULT is not.** The right shape is for a
+truncation to be reported rather than silently rendered - `hit_timeout` already
+exists and is already aggregated, and nothing on the decompile path reads it. That
+is a separate item from this entry and has not been done.
