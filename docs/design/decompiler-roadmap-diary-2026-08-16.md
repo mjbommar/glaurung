@@ -896,3 +896,42 @@ DOES move a cell, my model of the defect is incomplete.
     tools/gen_defuse_baseline.py --dry-run                   # 299 today
 
 Results and any corrections go below as they arrive.
+
+#### Prediction 1: CONFIRMED
+
+    tools/dectest.py 195_by_value_aggregates --full
+
+    195_by_value_aggregates:clang:O0:bv195_mixed_roundtrip  fail
+    195_by_value_aggregates:clang:O2:bv195_mixed_roundtrip  fail
+    195_by_value_aggregates:gcc:O0:bv195_mixed_roundtrip    fail
+    195_by_value_aggregates:gcc:O2:bv195_mixed_roundtrip    fail
+
+All four host lanes. `bv195_make_mixed` is `structural` on all four — the callee's
+own signature is not execution-scored, so this defect is only observable through
+the caller, which is why the fixture was built to exercise the helpers through
+`int32_t`-returning callers.
+
+#### The code argues the case better than the report did
+
+`call_result_split.rs:69-77`:
+
+```rust
+Some(match self.cc {
+    CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => "rax".to_string(),
+    CallConv::Aarch64 => "x0".to_string(),
+    // AAPCS hard-float has disjoint integer and FP result banks.  Keep
+    // their identities distinct; every call still invalidates all of
+    // them before installing its attributed destination below.
+    CallConv::Arm | CallConv::ArmHardFloat => base.to_string(),
+})
+```
+
+The ARM arm keeps `base`, and its comment states the principle: *disjoint integer
+and FP result banks keep distinct identities*. SysV amd64 has exactly that
+property — `rax` and `xmm0` are disjoint result banks — and collapses them to one
+key anyway. So this is not a design position that x86-64 declined; it is a
+principle already written down in this function and not applied to the
+architecture that also needs it. Win64 has the same shape (`rax`/`xmm0`).
+
+That also sharpens the fix: the ARM branch is the model, and the change is to
+stop special-casing the x86 conventions rather than to invent a rule.
