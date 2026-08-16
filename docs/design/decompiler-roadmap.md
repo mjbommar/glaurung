@@ -2197,6 +2197,32 @@ This is the practical next-work queue as of the planning baseline.
    memory footprint, so a pure register `add` modelled that way poisons dataflow
    for everything downstream.
 
+   **A structural contributor, now removed (2026-08-16).** The two worst
+   architectures were also the two with no iteration loop. `tools/dectest.py`
+   answers a question about one function in seconds, and it covered the 748
+   x86-64 gate lanes only; the 2208 cross lanes were reachable exclusively
+   through `tools/arch_roundtrip.py`, which has no function selection and no
+   named sets, and which forces the `x86_64` control lane alongside whatever you
+   asked for. Asking "what does `fib` do on armv7_a32" therefore meant executing
+   every export in the fixture, twice over. Measured on a 24-core host at
+   `9c4ba21`: `03_loop_shapes:i386:O2` cost **11.1 s** and now costs **1.1 s**; a
+   set on one architecture went from 16.9 s to 6.6 s. `dectest` now takes an
+   architecture in its compiler slot
+   (`173_float_int_conversions:i386:O2:widen_int_to_float`) and
+   retargets any committed set (`@loops --arch armv7_a32`), judged against
+   `arch_baseline.json`. `@o0`/`@o2` are unchanged at 368 lanes each: a glob in
+   the compiler slot never reaches an architecture.
+
+   This fixes no lifter defect, and it is recorded here rather than claimed as
+   progress on the numbers above. What it removes is the reason a defect on these
+   lanes was more expensive to look at than the same defect on x86-64 — which is
+   the mechanism by which a conformance target (design rule 11) drifts. Contrary
+   to the obvious guess, the cost was never the cross builds: of the ~1.1 s a
+   one-function i386 lane takes, 0.08 s is the cross compile and 0.59 s the
+   pinned reference build, while an unfiltered lane spent 11.7 s of its 12 s
+   inside `diff_decompile`. Function scoping bought the 10x, and no build cache
+   was added because the arch loop already runs at the speed of the host one.
+
    **i386 has no x87 lifting at all** — found 2026-08-15, and it is the same shape
    as the AArch64 scalar-float gap that `039c7d6` closed. Grepping `lift_x86.rs`
    for `fld`, `fstp`, `fadd`, `fmul`, `fdiv`, `fild`, `fistp`, `fucomi`, `faddp`

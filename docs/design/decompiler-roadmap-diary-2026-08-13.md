@@ -8307,3 +8307,217 @@ architecture change is supposed to do.
 
 DecBench, Joern, `decbench_matrix.py`, any JVM, the full fixture matrix, any
 `arch_roundtrip.py` sweep. Nothing was committed; no baseline was refreshed.
+
+---
+
+## Entry 49 — The architectures with the worst numbers had no way to look at them
+
+Based on `9c4ba21`. Every number below was measured against that build on a
+24-core host with `GLAURUNG_FIXTURE_JOBS` unset (default 8).
+
+The brief: `tools/dectest.py`, the seconds-per-function loop, has no
+architecture selection. It covers the 748 x86-64 gate lanes only. The other 2208
+lanes — `aarch64`, `armv7`, `armv7_a32`, `i386`, `x86_64`, `x86_64_gcc15`, 368
+each — are reachable only through `tools/arch_roundtrip.py`, which refuses
+fixture filters together with `--check`, has no named sets, and costs 12-19
+minutes.
+
+Half of that is right, and the half that is wrong is the expensive half.
+
+### What I checked before building anything
+
+The lane counts are exact. From the committed baselines:
+
+```
+gate lanes: 748
+arch lanes: 2208     (368 x 6 arches)
+armv7_a32  judged=1246 fail=26.5%
+i386       judged=1246 fail=21.8%
+x86_64     judged=1312 fail=13.7%
+```
+
+So the premise holds: the two worst architectures are the two with no fast loop.
+
+But `arch_roundtrip.py` is **not** 12-19 minutes when scoped. That figure is the
+full sweep. Filtered runs already work and are already seconds:
+
+```
+$ time arch_roundtrip.py --arch i386 --opt O2 173_float_int_conversions --json
+WALL 5.95 s
+$ time arch_roundtrip.py --arch i386 --opt O2 03_loop_shapes --json
+WALL 11.11 s
+$ time arch_roundtrip.py --arch i386 <the 8 @vector-float fixtures> --json
+WALL 16.93 s      # 32 lanes, 188 function results
+```
+
+Fixture, `--arch` and `--opt` filtering has been there all along. What is
+genuinely absent is narrower and more specific:
+
+1. **no function selection.** `arch_roundtrip._run_lane` never passed
+   `--function` to `diff_decompile`, though `fixture_harness._run_lane` has
+   passed it since `dectest` was written. Every arch question executes every
+   export in the fixture.
+2. **no named sets, no globs, no baseline diff, no `SCOPED` summary, no
+   fail-closed selection.** All of that lives in `dectest`.
+3. **the control lane is forced.** `main` prepends `x86_64` to any `--arch`, so
+   every scoped arch run costs double.
+
+### Where the time actually goes
+
+The brief's design note guessed builds — gate lanes are prebuilt, arch lanes
+cross-compile per run — and proposed a cache keyed on a toolchain fingerprint.
+I measured before optimising, and the guess is wrong:
+
+```
+cross build i386 (host gcc -m32):     0.08 s
+reference build (pinned, docker):     0.59 s
+detect_unsupported(i386):             0.11 s
+_run_lane 03_loop_shapes:i386:O2:    11.73 s   <- 18 functions
+  same lane, --function for_sum:      1.36 s
+```
+
+Builds are ~6% of an unfiltered lane. **The dominant cost is `diff_decompile`
+executing functions nobody asked about.** A build cache would have bought 0.6 s
+on an 11.7 s lane; function scoping buys 10.4 s.
+
+### The design decision
+
+Teach `dectest` to drive arch lanes, rather than give `arch_roundtrip` a scoped
+fast path. Two reasons, both about not having a second implementation:
+
+* the selector grammar, the sets, the fail-closed matching, the baseline diff and
+  the `SCOPED` summary are `dectest`'s and are already tested. Re-growing them in
+  `arch_roundtrip` would produce two things to keep in agreement.
+* `arch_baseline.json` keys its lanes `fixture:arch:opt`, exactly the shape
+  `baseline.json` uses for `fixture:cc:opt`. So the architecture goes in the
+  compiler slot — no new grammar at all — and `Lane.is_arch` picks the baseline.
+  The two vocabularies are disjoint (`gcc`/`clang`/`rustc` against six
+  architecture names), which a test now pins.
+
+`arch_roundtrip` gained exactly two things: a `funcs` parameter threaded to
+`--function`, and a `run_lanes` entry point mirroring `fixture_harness.run_lanes`
+(the same shared-`_run_lane`, no-`__toolchain__` shape, for the same reasons).
+
+### The containment property, which is the risky part
+
+If `*` in the compiler slot matched architectures, `@o0` would silently grow from
+368 lanes to about 2200 and stop being an iteration loop. So an architecture is
+never glob-matched: it must be named outright or requested with `--arch`.
+`--arch` retargets each selector, which is what lets every committed set be
+reused unchanged; a selector that already names a *different* architecture raises
+rather than being overwritten.
+
+### Two things a scoped arch run deliberately does not do
+
+**It does not force the `x86_64` control lane.** That lane exists because the
+sweep prints a per-architecture correctness percentage, and
+`control_problems`' own docstring makes the argument: a foreign-architecture
+verdict is interpretable when compared against that function's recorded result.
+A scoped run does exactly that and claims nothing else, so paying double buys
+nothing. What the control lane also catches — this host is not the baseline's
+host — is bought instead by `toolchain_notes`, one `--version` call per arch.
+
+**It warns rather than refuses on toolchain drift.** Five of six architectures
+are built by HOST compilers (the pinned image ships no cross toolchains and no
+multilib), so failing closed on a fingerprint mismatch would refuse to start on
+most machines. `--check` is the gate and still fails closed; this is the loop.
+The split is the same one `--allow-stale` draws. `host_fingerprint` was split out
+of `fingerprint` so the note costs a `--version` rather than six `docker exec`s.
+
+### GREEN
+
+```
+$ time dectest.py 173_float_int_conversions:i386:O2:widen_int_to_float --full
+173_float_int_conversions:i386:O2:widen_int_to_float  pass
+SCOPED: 1 lane of 2950 (0%) — no regressions in scope
+WALL 1.00 s
+
+$ time dectest.py 03_loop_shapes:i386:O2:for_sum --full
+WALL 1.06 s        # was 11.11 s
+
+$ time dectest.py @vector-float --arch i386
+SCOPED: 16 lanes of 2950 (1%) — no regressions in scope
+WALL 6.57 s        # was 16.93 s for the same 8 fixtures
+
+$ time dectest.py @loops --arch armv7_a32
+SCOPED: 6 lanes of 2950 (0%) — no regressions in scope
+WALL 8.14 s        # had no equivalent
+```
+
+| question | before | after |
+|---|---:|---:|
+| one function, one arch lane (`173:i386:O2`) | 5.95 s (whole fixture, x2 arches) | **1.00 s** |
+| one function, a big arch lane (`03:i386:O2`) | 11.11 s | **1.06 s** |
+| a named set on one architecture (`@vector-float`) | 16.93 s | **6.57 s** |
+
+For scale: the equivalent HOST selector, `03_loop_shapes:gcc:O2:for_sum`, costs
+**1.24 s** — the arch loop now runs at the speed of the loop it was modelled on,
+and on the tighter selectors slightly under it. That is why I did not add the
+build cache: about 0.6 s of a 1.0-1.4 s run is the pinned reference build, and
+spending a novel content-addressed-cache soundness surface to get under a bar we
+are already at is a bad trade. Recorded here so nobody re-litigates it from
+intuition.
+
+### The loop doing its job, immediately
+
+```
+$ dectest.py 06_calling_conventions:armv7_a32:O2:fib --show --full
+06_calling_conventions:armv7_a32:O2:fib  fail
+----- source -----
+int fib(int n) { if (n < 0) return -1; if (n < 2) return n;
+                 return fib(n - 1) + fib(n - 2); }
+----- our C -----
+__attribute__((no_stack_protector)) int fib(int arg0) {
+    int local_10; int local_14; int local_18; int local_1c; int local_20;
+    int local_24; unsigned char local_74[76]; ... long var0; long var1;
+    int var10; int var105; long var106; ... (20+ more)
+```
+
+`fib` passes on x86-64 and is one of 171 armv7_a32-only failures. `--show` on an
+arch lane had to be built (arch lanes cross-build into a temp dir and leave no
+artifact, so it rebuilds one); it is the check no metric performs, and it is
+needed most exactly here.
+
+### VERIFY
+
+```
+tools/dectest.py @o0   368 lanes of 748 (49%) — no regressions in scope   92.33 s
+tools/dectest.py @o2   368 lanes of 748 (49%) — no regressions in scope   87.94 s
+```
+
+Unchanged in count, in wording, and in verdict — the extension is additive.
+
+```
+pytest test_dectest_selection.py                          49 passed  (32 + 17 new)
+pytest test_dectest_equivalence.py -m slow                 5 passed  (3 + 2 new)
+pytest test_decompiler_arch_roundtrip.py
+       test_decompiler_fixture_harness.py                 181 passed
+uvx ruff format / ruff check                              clean
+uvx ty check                                              14 diagnostics, all the
+    pre-existing `Module pytest has no member ...` noise (10 at HEAD, +4 from the
+    new `pytest.raises` call sites); no new kind
+```
+
+The equivalence test is the one that matters: a filtered arch verdict must equal
+that function's verdict in the unfiltered lane, for both a passing and a failing
+function, on `112_recursion_shapes:i386:O0`. A fast answer that disagrees with
+the sweep is worse than no fast answer.
+
+### Not run, and one thing to know
+
+No Rust was touched, so `cargo test --features python-ext` was not run. No
+DecBench, no Joern, no `decbench_matrix.py`, no full `arch_roundtrip.py` sweep.
+**No baseline was refreshed and nothing was committed.**
+
+`test_decompiler_fixture_matrix.py::test_no_function_regressions` failed once in
+a combined five-file pytest invocation, then passed in isolation (201 s) and on a
+verbatim repeat of the same combined invocation (**243 passed in 321 s**).
+Nothing in this change is on that test's path — it imports `fixture_harness`,
+which is unmodified — so it reads as contention, but it is recorded rather than
+omitted.
+
+One process note, since it cost a rebase: `master` advanced by three commits
+(`ce7f432`, `8844be6`, `9c4ba21`) while this was in a worktree, taking diary
+entries 47 and 48 and restructuring the roadmap. Neither new entry touches this
+subject. The work was rebased onto `9c4ba21`, the extension refreshed from that
+build, and every number above re-measured against it.

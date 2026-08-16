@@ -318,6 +318,151 @@ def test_executable_tool_reexecs_under_the_synced_python(monkeypatch, tmp_path):
 # --- the sets file is consistent with the corpus ---------------------------
 
 
+# --- the architecture dimension --------------------------------------------
+#
+# `arch_roundtrip.py` has no function selection and no named sets, so the two
+# architectures with the worst recorded failure rates (`armv7_a32`, `i386`) were
+# the two with no fast loop. These pin the grammar that closes that, and — more
+# importantly — pin that opening it did not quietly widen every existing set.
+
+
+def test_an_architecture_is_selectable_in_the_compiler_slot():
+    """The same slot, because the lane key is the same shape: `arch_baseline.json`
+    keys `fixture:arch:opt` exactly as `baseline.json` keys `fixture:cc:opt`."""
+    lanes = D.resolve(["173_float_int_conversions:i386:O2"])
+    assert [lane.key for lane in lanes] == ["173_float_int_conversions:i386:O2"]
+    assert lanes[0].is_arch
+
+
+def test_an_architecture_lane_selects_one_function():
+    lanes = D.resolve(["173_float_int_conversions:i386:O2:widen_int_to_float"])
+    assert lanes[0].funcs == ("widen_int_to_float",)
+
+
+def test_host_lanes_are_not_architecture_lanes():
+    assert not D.resolve(["03_loop_shapes:gcc:O0"])[0].is_arch
+
+
+def test_a_glob_in_the_compiler_slot_never_reaches_an_architecture():
+    """The load-bearing containment property. A cross lane costs a cross build, a
+    pinned reference build and an emulator; if `*` matched architectures, every
+    committed set would silently grow by a factor of six and `@o0` would stop
+    being an iteration loop."""
+    lanes = D.resolve(["03_loop_shapes:*:O0"])
+    assert {lane.cc for lane in lanes} == {"gcc", "clang"}
+    assert not any(lane.is_arch for lane in lanes)
+
+
+def test_the_committed_opt_sets_are_unchanged_by_the_arch_dimension():
+    """`@o0` and `@o2` are the two broadest sets anyone runs. Their size is the
+    concrete form of the containment property above."""
+    for name in ("o0", "o2"):
+        lanes = D.resolve([f"@{name}"])
+        assert len(lanes) == 368, f"@{name} is now {len(lanes)} lanes"
+        assert not any(lane.is_arch for lane in lanes)
+
+
+def test_arch_retargets_an_existing_set():
+    """`@vector-float --arch i386` is the shape this exists for: every set names
+    fixtures rather than lanes, so they all retarget without being rewritten."""
+    lanes = D.resolve(["@vector-float"], arches=["i386"])
+    assert lanes and all(lane.cc == "i386" for lane in lanes)
+    assert {lane.fixture for lane in lanes} >= {"173_float_int_conversions"}
+
+
+def test_arch_retargets_a_selector_that_named_a_host_compiler():
+    lanes = D.resolve(["03_loop_shapes:gcc:O2:for_sum"], arches=["aarch64"])
+    assert [lane.key for lane in lanes] == ["03_loop_shapes:aarch64:O2"]
+
+
+def test_two_arches_expand_to_both():
+    lanes = D.resolve(["03_loop_shapes:*:O2:for_sum"], arches=["i386", "aarch64"])
+    assert {lane.cc for lane in lanes} == {"i386", "aarch64"}
+
+
+def test_arch_contradicting_an_explicit_architecture_is_an_error():
+    """Silently overwriting it would run something other than what was typed."""
+    with pytest.raises(D.NoMatch, match="--arch"):
+        D.resolve(["03_loop_shapes:i386:O2"], arches=["aarch64"])
+
+
+def test_naming_the_same_architecture_twice_is_merely_redundant():
+    lanes = D.resolve(["03_loop_shapes:i386:O2"], arches=["i386"])
+    assert [lane.key for lane in lanes] == ["03_loop_shapes:i386:O2"]
+
+
+def test_a_declared_unsupported_lane_says_so_instead_of_looking_like_a_typo():
+    """`__int128` is not a type on a 32-bit target, so `02_integer_widths` has no
+    i386 form at all. That is a probed, declared gap; reporting "no function
+    matches" would read as a misspelling and send someone hunting."""
+    with pytest.raises(D.NoMatch, match="declared, probed gap"):
+        D.resolve(["02_integer_widths:i386:O0"])
+
+
+def test_rust_fixtures_have_no_architecture_lanes():
+    """`arch_roundtrip.TARGETS` configures no cross-`rustc`, so an arch lane for
+    a Rust fixture names an object nothing builds."""
+    rust = [f for f in D.function_universe() if (D.FIXTURES / f"src/{f}.rs").is_file()]
+    assert rust, "no Rust fixture in the corpus to check"
+    universe = D.arch_lane_function_universe()
+    assert not [key for key in universe if key[0] in set(rust)]
+
+
+def test_an_unknown_architecture_error_lists_the_real_ones():
+    with pytest.raises(D.NoMatch, match="architectures:"):
+        D.resolve(["03_loop_shapes:mips64:O0"])
+
+
+def test_architecture_verdicts_are_compared_against_the_arch_baseline():
+    """The comparison this rests on. i386 and x86-64 disagree on plenty of
+    functions by construction; judging an i386 run against `baseline.json` would
+    manufacture a regression for every one of them."""
+    lane = D.Lane("03_loop_shapes", "i386", "O2", ("for_sum",))
+    observed = {"03_loop_shapes:i386:O2": {"for_sum": "fail"}}
+    host = {"03_loop_shapes:i386:O2": {"for_sum": "pass"}}
+    arch = {"03_loop_shapes:i386:O2": {"for_sum": "fail"}}
+    regressions, _improvements, infra = D.compare(
+        observed, host, [lane], arch_baseline=arch
+    )
+    assert not regressions and not infra
+    regressions, _improvements, _infra = D.compare(
+        observed,
+        host,
+        [lane],
+        arch_baseline={"03_loop_shapes:i386:O2": {"for_sum": "pass"}},
+    )
+    assert regressions
+
+
+def test_the_scope_denominator_grows_only_when_an_arch_lane_is_in_scope():
+    """A host-only run still reports its fraction of the 748 host lanes. Saying
+    "1 of 748" about a run that touched an i386 lane would overstate it."""
+    host = D.resolve(["03_loop_shapes:gcc:O0"])
+    assert D.denominator(host) == D.FULL_MATRIX_LANES
+    arch = D.resolve(["03_loop_shapes:i386:O0"])
+    assert D.denominator(arch) > D.FULL_MATRIX_LANES
+
+
+def test_an_arch_run_is_still_labelled_scoped():
+    lanes = D.resolve(["03_loop_shapes:i386:O0"])
+    summary = D.summary_line(lanes, regressions=[], improvements=[], full_matrix=False)
+    assert "SCOPED" in summary
+
+
+def test_the_arch_dimension_is_read_from_arch_roundtrip_not_restated():
+    """One list. A target added to `arch_roundtrip.TARGETS` must become
+    selectable without a second edit here."""
+    import arch_roundtrip as AR  # ty: ignore[unresolved-import]
+
+    assert set(D.ARCHES) == set(AR.TARGETS)
+
+
+def test_the_two_slot_vocabularies_stay_disjoint():
+    """`Lane.is_arch` decides which baseline judges a lane purely from the
+    compiler slot. A name in both sets would make that ambiguous."""
+    assert not set(D.COMPILERS) & set(D.ARCHES)
+
+
 def test_sets_only_name_fixtures_that_exist():
     stems = set(M.REQUIRED_FUNCTIONS)
     for name, spec in D.load_sets().items():

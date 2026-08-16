@@ -440,6 +440,7 @@ def _run_lane(
     fuzz: int,
     unsupported: str | None,
     detail: bool = False,
+    funcs: tuple[str, ...] | None = None,
 ) -> dict:
     """One (fixture, arch, opt) lane: `{func: status}` or a `__lane__` error.
 
@@ -448,6 +449,16 @@ def _run_lane(
     the architecture is then unverified, and unverified must never read as
     "passed". The single exception is a declared `unsupported` gap, whose
     unbuildability is ASSERTED here before it is recorded.
+
+    `funcs` restricts which exports are EXECUTED — the fast path
+    `tools/dectest.py` drives, and the reason an architecture lane can now cost a
+    second instead of eleven. It is the same `--function` filter
+    `fixture_harness._run_lane` already passed on the host lanes, and it carries
+    the same guarantee: the fixture, the cross build and the reference build are
+    all identical, and `diff_decompile._stable_seed` derives each function's fuzz
+    vectors from its own name, so a one-function verdict equals that function's
+    verdict in the whole-lane run. `None` means every export, which is what
+    `run_matrix` and therefore every baseline still passes.
     """
     compiler = compiler_for(arch, src)
     with tempfile.TemporaryDirectory(
@@ -486,6 +497,8 @@ def _run_lane(
             f"{arch}:{opt}",
             "--json",
         ]
+        for name in funcs or ():
+            cmd += ["--function", name]
         native = native_cc(arch)
         if native is not None:
             cmd += ["--native-cc", json.dumps(native)]
@@ -516,15 +529,13 @@ def _run_lane(
     return {name: v["status"] for name, v in fns.items()}
 
 
-def fingerprint(arches) -> dict:
-    """Identity of every compiler that shaped these verdicts.
+def host_fingerprint(arches) -> dict:
+    """The per-architecture half of `fingerprint`: fixture compilers, emulators, ASLR.
 
-    `rebuild` is the pinned toolchain (`fixture_toolchain`) that builds the
-    reference object and recompiles our decompiled C. `fixture` is the compiler
-    that built the object being decompiled, per architecture — pinned for
-    `x86_64` and unavoidably host-side for the rest, because the image has no
-    cross toolchains and no multilib. Each entry is tagged `pinned:`/`host:` so
-    a baseline can never be silently compared across the two.
+    Split out because it is CHEAP — `--version` on things already on PATH —
+    while the `rebuild` half is six `docker exec`s. `tools/dectest.py` warns on
+    cross-toolchain drift before every scoped architecture run and can afford
+    this; it could not afford the whole fingerprint.
     """
     fixture_cc: dict[str, str] = {}
     runners: dict[str, str] = {}
@@ -556,12 +567,20 @@ def fingerprint(arches) -> dict:
     # stack happened to hold. `aslr` records whether randomization is off; the
     # matching fixed-environment rule (`build_guard.worker_env`) is unconditional
     # and needs no flag. See `build_guard` for the function that forced both.
-    return {
-        "rebuild": TC.fingerprint(),
-        "fixture": fixture_cc,
-        "runner": runners,
-        "aslr": BG.aslr_mode(),
-    }
+    return {"fixture": fixture_cc, "runner": runners, "aslr": BG.aslr_mode()}
+
+
+def fingerprint(arches) -> dict:
+    """Identity of every compiler that shaped these verdicts.
+
+    `rebuild` is the pinned toolchain (`fixture_toolchain`) that builds the
+    reference object and recompiles our decompiled C. `fixture` is the compiler
+    that built the object being decompiled, per architecture — pinned for
+    `x86_64` and unavoidably host-side for the rest, because the image has no
+    cross toolchains and no multilib. Each entry is tagged `pinned:`/`host:` so
+    a baseline can never be silently compared across the two.
+    """
+    return {"rebuild": TC.fingerprint(), **host_fingerprint(arches)}
 
 
 def run_matrix(
@@ -602,6 +621,74 @@ def run_matrix(
         futures = {
             pool.submit(_run_lane, src, arch, opt, fuzz, unsup, detail): key
             for key, src, arch, opt, unsup in work
+        }
+        for fut in as_completed(futures):
+            key = futures[fut]
+            try:
+                result[key] = fut.result()
+            except Exception as e:  # noqa: BLE001 — a lane crash is a lane error
+                result[key] = {"__lane__": f"harness-crashed: {type(e).__name__}: {e}"}
+    return result
+
+
+def source_for(fixture: str) -> Path:
+    """The C/C++ source for one fixture stem.
+
+    Rust fixtures deliberately have no answer here: `TARGETS` configures no
+    cross-`rustc`, so `166_rust_generics:aarch64:O0` names an object nothing
+    builds. Raising is what keeps that a selection error rather than a lane that
+    silently reports `cross-build-failed`.
+    """
+    for suffix in (".c", ".cpp"):
+        candidate = SRC / f"{fixture}{suffix}"
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"no cross-buildable fixture source for {fixture!r} in {SRC}"
+    )
+
+
+def run_lanes(lane_specs, fuzz: int, jobs: int | None = None) -> dict:
+    """`run_matrix` for an explicit list of `(fixture, arch, opt, funcs)`.
+
+    The scoped entry point `tools/dectest.py` drives, and the exact counterpart
+    of `fixture_harness.run_lanes`. It shares `_run_lane` with the full sweep for
+    the same reason that one does: a separate fast path would eventually disagree
+    with the sweep, and a fast answer that differs from the gate's answer is
+    worse than no fast answer.
+
+    Two omissions are deliberate, and both are safety properties rather than
+    savings:
+
+    * **no `__toolchain__` fingerprint.** That key is what makes a result map
+      writable as a baseline, and a partial run must never be. See
+      `tools/dectest.py` on why there is no `--write-baseline`.
+    * **no forced control lane.** `main` prepends `CONTROL_ARCH` because it
+      PRINTS a correctness percentage per architecture, and a foreign-lifter
+      percentage produced without the apparatus check beside it is not
+      interpretable. A scoped run makes no such claim: it diffs each function
+      against that function's own recorded verdict in `arch_baseline.json`, which
+      is precisely the "compare against a recorded result" argument
+      `control_problems` makes for keeping non-passing baselines. Forcing the
+      control lane here would double every iteration for no added signal. What it
+      does buy — noticing that this host's toolchain is not the baseline's — is
+      bought instead by `toolchain_problems`, which costs a `--version` call.
+    """
+    if jobs is None:
+        jobs = H.default_jobs()
+    work = [
+        (lane_key(fixture, arch, opt), source_for(fixture), arch, opt, tuple(funcs))
+        for fixture, arch, opt, funcs in lane_specs
+    ]
+    result: dict = {}
+    if jobs == 1:
+        for key, src, arch, opt, funcs in work:
+            result[key] = _run_lane(src, arch, opt, fuzz, None, funcs=funcs)
+        return result
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = {
+            pool.submit(_run_lane, src, arch, opt, fuzz, None, funcs=funcs): key
+            for key, src, arch, opt, funcs in work
         }
         for fut in as_completed(futures):
             key = futures[fut]

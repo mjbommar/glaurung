@@ -25,6 +25,8 @@ cost barely more than 4.
 | did I break anything obvious | `tools/dectest.py @smoke` | **5.6 s** |
 | did I break this lane | `tools/dectest.py FIX:cc:opt` | 13 s |
 | did I break this shape family | `tools/dectest.py @switch` / `@loops` | 48 s / 54 s |
+| what does this function do on i386 / armv7 / aarch64 | `tools/dectest.py FIX:arch:opt:func --show` | **1.0 s** |
+| did I break this shape family on ONE architecture | `tools/dectest.py @loops --arch armv7_a32` | **8.1 s** |
 | did I break anything, behaviourally | `pytest -m slow python/tests/test_decompiler_fixture_matrix.py` | ~2 min |
 | did I break a NON-x86-64 lifter | `tools/arch_roundtrip.py --check` | **4.4 min** |
 | does recovered C still build for a 32-bit target | `pytest -m slow python/tests/test_decompiler_wide_arithmetic_width.py` | ~25 s |
@@ -93,6 +95,61 @@ Selector grammar is `fixture[:cc[:opt[:func]]]`, each component defaulting to
 — the manifest declares only about a third of the corpus, so selecting from it
 alone would leave `mul_widen`, `two_latches`, `tailcall_to_sum4` and 69 others
 unaddressable.
+
+### The compiler slot also takes an architecture
+
+```bash
+tools/dectest.py 173_float_int_conversions:i386:O2:widen_int_to_float   # 1.0 s
+tools/dectest.py @vector-float --arch i386        # a set, retargeted   # 6.6 s
+tools/dectest.py 06_calling_conventions:armv7_a32:O2:fib --show
+```
+
+`arch_baseline.json` keys its lanes `fixture:arch:opt`, exactly the shape
+`baseline.json` uses for `fixture:cc:opt`, so the architecture goes in the same
+slot and `Lane.is_arch` decides which baseline judges the result. The two
+vocabularies are disjoint — `gcc`/`clang`/`rustc` against six architecture names
+— and a test pins that they stay so.
+
+**A glob never reaches an architecture.** `*` in the compiler slot expands over
+the host compilers only, so `@o0` and `@o2` are still the 368 host lanes each
+that they have always been; an architecture must be named outright or asked for
+with `--arch`. Every committed set retargets unchanged, because sets name
+fixtures rather than lanes.
+
+Why this is a correctness lever and not just ergonomics: `arch_roundtrip.py` has
+no function selection, so asking about one function on one architecture meant
+executing every export in the fixture *and* the forced control lane beside it.
+Measured on this host, `03_loop_shapes:i386:O2` cost **11.1 s** that way and
+costs **1.1 s** now; a set on one architecture went from 16.9 s to 6.6 s. The
+two architectures with the worst recorded failure rates — `armv7_a32` at 26.5%
+and `i386` at 21.8%, against x86-64's 13.7% (`fail / (pass + fail + nonportable)`
+over `arch_baseline.json` as committed; the roadmap's differential table counts a
+different thing and reads a little lower) — were exactly the two with no fast
+loop, which is at least a plausible cause of the lag rather than a coincidence.
+
+Two things a scoped architecture run deliberately does NOT do, both of which
+`arch_roundtrip.py --check` still does and must:
+
+* **it does not force the `x86_64` control lane.** That lane exists because the
+  sweep PRINTS a per-architecture correctness percentage, and a foreign-lifter
+  percentage without the apparatus check beside it is uninterpretable. A scoped
+  run makes no such claim — it diffs each function against that function's own
+  recorded verdict — so paying double for it would buy nothing.
+* **it warns rather than refuses on toolchain drift.** Five of the six
+  architectures are built by HOST compilers (the pinned image ships no cross
+  toolchains and no multilib), so a machine whose `arm-linux-gnueabihf-gcc` is a
+  different release than the baseline's gets a `note:` on stderr naming the
+  difference. Failing closed there would mean refusing to start on most hosts;
+  the gate is where fail-closed belongs.
+
+Where the time actually goes, since the intuition is usually wrong: of the ~1.1 s
+a one-function i386 lane costs, the cross build is 0.08 s and the pinned
+reference build is 0.59 s. **Builds were never the dominant cost** — an
+unfiltered `03_loop_shapes:i386:O2` spent 11.7 s of its 12 s inside
+`diff_decompile`, decompiling and executing eighteen functions to answer a
+question about one. Function scoping is what bought the 10x; a build cache would
+be worth about 0.6 s on top, on a loop that already runs at the speed of the host
+one (1.2 s for the equivalent `gcc:O2` selector). That is why there is no cache.
 
 `--show` prints the source and our C side by side for every failing function in
 scope. That is the check no metric performs: `structs:dist2` scores a *perfect*
@@ -204,6 +261,13 @@ tools/arch_roundtrip.py --check                     # ratchet against the baseli
 tools/arch_roundtrip.py --write-baseline            # refresh it
 tools/arch_roundtrip.py --arch aarch64 --opt O0 03_loop_shapes   # one cell
 ```
+
+This is the SWEEP and the ratchet. For iteration, reach for
+`tools/dectest.py FIX:arch:opt:func` instead — same `_run_lane`, same
+`diff_decompile` judgement, same `arch_baseline.json` comparison, scoped to one
+function. `--check` and `--write-baseline` still refuse every filter, and still
+should: a ratchet refreshed from a partial run records new verdicts for the lanes
+that ran and leaves the rest describing an older build.
 
 Matrix: `{x86_64, i386, aarch64, armv7} x {O0, O2}` over the same 30-fixture
 corpus, keyed `fixture:arch:opt` and baselined in
