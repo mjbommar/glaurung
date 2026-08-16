@@ -20,6 +20,7 @@ These tests only inspect the script's control flow. They deliberately do NOT run
 gate — lane 3 alone takes ~37 minutes, since each of the 56 cells spawns a Joern JVM
 to compute a graph edit distance.
 """
+
 from __future__ import annotations
 
 import re
@@ -27,6 +28,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 GATE = ROOT / "scripts" / "decbench-local-gate.sh"
+PYTEST_INI = ROOT / "pytest.ini"
+TESTS = Path(__file__).resolve().parent
 
 
 def _text() -> str:
@@ -85,9 +88,9 @@ def test_the_success_line_does_not_claim_more_than_it_ran():
         "the old hedged success line is back; a pass must not carry a caveat that "
         "points at earlier output"
     )
-    assert 'echo "HEAVY GATE: passed (all five lanes ran, DecBench included)"' in text, (
-        "the unqualified pass must state that all five lanes ran"
-    )
+    assert (
+        'echo "HEAVY GATE: passed (all five lanes ran, DecBench included)"' in text
+    ), "the unqualified pass must state that all five lanes ran"
 
 
 def test_the_decbench_lanes_are_opt_in():
@@ -103,7 +106,9 @@ def test_the_decbench_lanes_are_opt_in():
     assert "GLAURUNG_RUN_DECBENCH" in text, (
         "the DecBench lanes must be gated behind an explicit opt-in"
     )
-    assert "--decbench)" in text, "there must be a --decbench flag as well as the env var"
+    assert "--decbench)" in text, (
+        "there must be a --decbench flag as well as the env var"
+    )
 
 
 def test_the_default_run_states_that_metrics_were_not_measured():
@@ -158,3 +163,71 @@ def test_decbench_dir_defaults_so_the_normal_path_needs_no_setup():
     assert "export" in text and "DECBENCH_DIR" in text, (
         "DECBENCH_DIR must be exported so tools/decbench_matrix.py sees it"
     )
+
+
+# --- the pytest side of the same opt-in --------------------------------------
+#
+# The gate script was already correct. pytest was the hole: a plain
+# `uv run pytest python/tests/` collected six `test_decbench_*.py` files, and on
+# any box where the fork happens to be checked out (this one, at
+# /nas4/data/workspace-infosec/decbench) the adapter integration tests really did
+# spawn it — gcc, the fork's interpreter, and the glaurung CLI — during ordinary
+# development. The rule below is deliberately NOT "the filename starts with
+# test_decbench_": five of those six are pure contract tests over data committed
+# under tests/decbench_corpus/ and tests/decbench_scoreboard/ that run in ~0.3s
+# and are the only thing guarding the adapter's schema. Moving them by name would
+# have dropped 116 real assertions to buy nothing.
+
+
+def _decbench_test_files() -> list[Path]:
+    return sorted(TESTS.glob("test_decbench_*.py"))
+
+
+def test_pytest_deselects_the_decbench_marker_by_default():
+    """One documented flag runs everything; the default is quiet."""
+    text = PYTEST_INI.read_text()
+    assert re.search(r'addopts\s*=.*-m\s+"not decbench"', text), (
+        "pytest.ini addopts must deselect the `decbench` marker by default, so "
+        "that `uv run pytest python/tests/` cannot reach the out-of-tree fork"
+    )
+    assert re.search(r"^\s*decbench:", text, re.MULTILINE), (
+        "the `decbench` marker must be registered in pytest.ini alongside `slow`"
+    )
+
+
+def test_the_fork_dependent_test_is_the_one_that_resolves_the_checkout():
+    """Classification by evidence: does the file go looking for $DECBENCH_DIR?
+
+    A file that resolves the DecBench checkout at runtime will run the fork the
+    moment that checkout exists. That is the property that has to carry the
+    marker — not the filename.
+    """
+    for path in _decbench_test_files():
+        source = path.read_text()
+        resolves_checkout = 'environ.get("DECBENCH_DIR"' in source or (
+            "workspace-infosec/decbench" in source
+        )
+        marked = "@pytest.mark.decbench" in source
+        assert resolves_checkout == marked, (
+            f"{path.name}: resolves the DecBench checkout={resolves_checkout} but "
+            f"carries @pytest.mark.decbench={marked}. A file that reaches the fork "
+            f"must be marked; a contract test over committed data must not be, or "
+            f"the default run silently loses coverage it was paying nothing for."
+        )
+
+
+def test_the_decbench_marker_replaced_slow_rather_than_joining_it():
+    """`-m slow` must not be a back door into the fork.
+
+    CI (`.github/workflows/decompiler-fixtures.yml`) and lane 2 of the gate both
+    select `-m slow`, and an explicit `-m` on the command line REPLACES the
+    `not decbench` default from addopts. A file carrying both marks would be
+    pulled back in by exactly the lanes that exist to run our own corpus.
+    """
+    for path in _decbench_test_files():
+        source = path.read_text()
+        if "@pytest.mark.decbench" not in source:
+            continue
+        assert "@pytest.mark.slow" not in source, (
+            f"{path.name} carries both marks; `-m slow` would re-select it"
+        )

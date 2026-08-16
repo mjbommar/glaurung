@@ -8011,3 +8011,146 @@ promoted by `promote_address_taken_stack_object` into a byte OBJECT whose
 accesses render as `Stmt::Store { addr: StackAddr + off }`, not as
 `Stmt::Assign { dst }`, so the two forms do not mix on the same storage. That is
 an argument, not a proof, and it deserves a fixture rather than a paragraph.
+
+## Entry 47 — Five of the six were never the problem
+
+The instruction was to take DecBench out of the normal development flow: keep it
+available on demand and for a paper refresh, and stop anything ordinary from
+reaching it. The suspicion was pytest, where six `test_decbench_*.py` files
+collect by default and only one of them is marked `slow`.
+
+The tempting move — mark all six and deselect them — would have been wrong, and
+wrong in the expensive direction. So the first job was to classify them by what
+they actually do, not by what they are called.
+
+### The evidence, per file
+
+I read all six and then ran the five candidates together to check the reading.
+
+| file | tests | imports / reads / spawns | verdict |
+| --- | --- | --- | --- |
+| `test_decbench_corpus_contracts.py` | 63 | parses `tests/decbench_corpus/src/*.c` (committed, 14 files) and `tests/decompiler_fixtures/manifest.py` | NAMED |
+| `test_decbench_matrix_ratchet.py` | 33 | `importlib` loads `tools/decbench_matrix.py` (stdlib + `tools/build_guard.py`, no side effects); its evaluator-failure tests install a 2-line `/bin/sh` fake `decbench` on `PATH` under `tmp_path` | NAMED |
+| `test_decbench_external_agentic.py` | 10 | `importlib` loads `tools/decbench_external_agentic.py` (stdlib only); one test shells out to `cc`/`gcc` to compile ~40 lines, and skips if neither exists | NAMED |
+| `test_decbench_score_ledger.py` | 9 | `importlib` loads `tools/decbench_score_ledger.py` (stdlib only); reads three committed JSON files under `tests/decbench_scoreboard/` | NAMED |
+| `test_decbench_type_defect_corpus.py` | 1 | reads one committed JSON, `tests/decbench_scoreboard/type-distance-one-9c25fcb.json` | NAMED |
+| `test_decbench_glaurung_backend.py` | 4 | `os.environ.get("DECBENCH_DIR", "/nas4/data/workspace-infosec/decbench")`, then runs `tools/decbench_glaurung.py` under **that checkout's** `.venv/bin/python`, with `gcc` builds and the real `glaurung` CLI | **DEPENDENT** |
+
+The five NAMED files: **116 passed in 0.27 s.** That is not a borderline call.
+They are the only automated thing that holds the adapter's payload schema, the
+ratchet's comparator direction (GED is a distance, the other two are
+similarities — getting that backwards would make the ratchet celebrate every
+decline), and the out-of-bounds argument contracts that once made a *correct*
+`sum_array` report as a decompiler bug. Moving them behind an opt-in would have
+deleted 116 assertions and bought 0.27 seconds.
+
+### The leak was real, not hypothetical
+
+`test_decbench_glaurung_backend.py` skips when the checkout is absent, which is
+presumably why it looked harmless. Both preconditions hold on this machine:
+
+```
+/nas4/data/workspace-infosec/decbench/.venv/bin/python -> cpython-3.12
+/home/mjbommar/projects/personal/glaurung/.venv/bin/glaurung
+```
+
+So a plain `uv run pytest python/tests/` on this box was compiling shared
+objects with `gcc` and executing the DecBench fork's interpreter, four times,
+every run. (No JVM — this file never reaches Joern. I did not run it to confirm
+the spawn; the `is_file()` guards and the paths above are the proof, and running
+it is the thing the task exists to stop.)
+
+### Mechanism
+
+`pytest.ini` grows a registered `decbench` marker and `-m "not decbench"` in
+`addopts`. An explicit `-m` on the command line *replaces* that expression, so
+the opt-in is one documented flag and needs no second spelling:
+
+```
+uv run pytest python/tests/ -m decbench
+```
+
+The marker **replaces** `slow` on that file rather than joining it. That is the
+one subtle part: CI (`decompiler-fixtures.yml`) and gate lane 2 both select
+`-m slow`, and because an explicit `-m` discards the `not decbench` default,
+carrying both marks would have let the lanes that exist to run *our* corpus pull
+the fork back in. Verified: `-m slow` now collects zero tests from that file.
+
+Counts, same command before and after:
+
+| | collected | deselected |
+| --- | --- | --- |
+| before | 3116 | — |
+| after, default | 3115 | 4 |
+| after, `-m decbench` | 4 | 3115 |
+
+3119 total after, not 3116, because of the three tests below.
+
+### The classification is pinned by evidence, not by filename
+
+The risk with this change is not today; it is the next person who greps
+`test_decbench_*` and finishes the job. So `test_local_gate_fails_closed.py` —
+which already guards the gate script's opt-in structure — gains three tests. The
+load-bearing one asserts an equivalence over every `test_decbench_*.py`:
+
+> resolves the checkout (`environ.get("DECBENCH_DIR"` or the literal path)
+> **iff** it carries `@pytest.mark.decbench`
+
+That fails in both directions. Marking a cheap contract test fails it, and so
+does adding a new file that goes looking for `$DECBENCH_DIR` without the marker.
+The other two pin the `addopts` deselection and the `slow`/`decbench`
+mutual exclusion.
+
+### The gate script was already right
+
+`scripts/decbench-local-gate.sh` needed nothing. Lanes 4-5 are behind
+`--decbench` / `GLAURUNG_RUN_DECBENCH=1`, the default exit says `NOT RUN` and
+`UNMEASURED` rather than `passed`, and lane 2 names three fixture files
+explicitly, so its `-m slow` never had a path to a DecBench file. I checked the
+CI workflows too: `CI.yml` runs no pytest at all, and the two fixture jobs name
+their files.
+
+### The roadmap was still handing out DecBench work
+
+`docs/design/decompiler-roadmap.md` had a `## DecBench and evaluation roadmap`
+section sitting between the safety plan and the execution phases, containing a
+numbered "Metric attack order" that reads as a queue: TypeMatch and GED first,
+textual normalization last. That ordering is now a description of a finished
+campaign, not a plan. It is moved verbatim to `## Appendix A — DecBench and
+evaluation (ON DEMAND ONLY)` at the end of the file, with a preamble stating
+that none of its open boxes are scheduled and that an untouched box there is not
+a defect. The reproducibility requirements — package hashes, evaluator revision,
+metric schema, compiler versions, target triples, exact function joins, and the
+nine-point score-campaign acceptance policy — are kept word for word; they are
+good practice and a refresh cannot happen without them.
+
+The attack order keeps its content and gains a header saying what supersedes it.
+The honest reason is in Entry 44 and the entries around it: the changes that
+actually moved fixture cells over 2026-08-13..16 were missing capabilities —
+AArch64 scalar FP, i386 x87, ARM32 modified immediates, `call *(mem)` lifting to
+address zero — and not one of the four appears anywhere in that ordering.
+
+### Verified
+
+* 126 passed, 4 deselected, in 0.37 s — the five NAMED files, the backend file
+  named explicitly (still deselected), and `test_local_gate_fails_closed.py`
+  with its three new tests.
+* Collection counts above, measured with the same command each time.
+* `-m slow` collects 0 tests from `test_decbench_glaurung_backend.py`.
+* `uvx ruff format` + `uvx ruff check` clean on both touched Python files.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, any JVM, the `--decbench` lanes, the full
+fixture matrix, any `arch_roundtrip.py` sweep. No Rust changed, so `cargo test
+--features python-ext` was not re-run. Nothing was committed; no baseline was
+refreshed.
+
+### One thing worth knowing before the next change here
+
+The default `-m "not decbench"` lives in `addopts`, and pytest lets a
+command-line `-m` replace it wholesale. That is what makes the opt-in a single
+flag, and it is also the sharp edge: any future lane that selects by marker
+(`-m slow`, `-m "not benchmark"`, anything) silently drops the DecBench
+exclusion for the files it names. The `slow`/`decbench` mutual-exclusion test
+covers the case that exists today. A second marker would need the same thought.

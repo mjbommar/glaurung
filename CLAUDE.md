@@ -44,6 +44,7 @@ uv run glaurung kickoff <binary>        # full analysis → .glaurung KB
 # Tests
 uv run pytest python/tests/                # Python suite (~345 test files)
 uv run pytest python/tests/test_x.py -xvs  # one file, stop on first failure
+uv run pytest python/tests/ -m decbench    # OPT-IN: the tests that run the fork
 cargo test                              # Rust suite (~125 test modules)
 cargo test --features python-ext        # ...PLUS src/python_bindings/ (see below)
 
@@ -105,7 +106,10 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   and reports its own resource problems as cell failures. Default to
   `tools/dectest.py <selector>` while iterating and
   `scripts/decbench-local-gate.sh` before a push. Reach for `--decbench` only when
-  the user asks, or when preparing a submission artifact.
+  the user asks, or when preparing a submission artifact. The same boundary exists
+  in pytest: `pytest.ini` deselects `-m decbench` by default, so no ordinary test
+  run reaches the fork. `docs/design/decompiler-roadmap.md` Appendix A holds the
+  metric/evaluation plan and is explicitly not a work queue.
 - **Extend `tests/decompiler_fixtures/` when a shape has no lane.** A new numbered
   fixture plus a `manifest.py` contract is cheap and permanent; adding one requires
   refreshing `baseline.json`, `structural_baseline.json`, and `arch_baseline.json`.

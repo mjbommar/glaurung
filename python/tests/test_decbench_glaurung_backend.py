@@ -1,4 +1,28 @@
-"""Real integration coverage for Glaurung's out-of-tree DecBench adapter."""
+"""Real integration coverage for Glaurung's out-of-tree DecBench adapter.
+
+DecBench-DEPENDENT, and the only file in `python/tests/` that is. Every test
+here needs the DecBench fork checked out at `$DECBENCH_DIR` (default
+`/nas4/data/workspace-infosec/decbench`), runs the adapter under *that* venv's
+interpreter, and shells out to `gcc` and to the built `glaurung` CLI. On a
+developer box where the checkout happens to exist it therefore ran the fork on
+every plain `pytest python/tests/`, which is exactly the traffic DecBench is
+supposed to be kept out of.
+
+So it carries `@pytest.mark.decbench`, which `pytest.ini` deselects by default.
+Run it deliberately:
+
+    uv run pytest python/tests/test_decbench_glaurung_backend.py -m decbench
+
+The marker replaces the previous `slow` mark on purpose: `slow` means the
+fixture matrix / structural lane, which `scripts/decbench-local-gate.sh` and CI
+both select with `-m slow`. Leaving it on would have let a lane that is meant to
+run our own corpus reach the fork.
+
+The sibling `test_decbench_*.py` files are DecBench-NAMED but not
+DecBench-dependent — they are pure contract tests over committed data in
+`tests/decbench_corpus/` and `tests/decbench_scoreboard/` and finish in under a
+second, so they stay in the default run.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +42,7 @@ def _decbench_checkout() -> Path:
     return Path(os.environ.get("DECBENCH_DIR", "/nas4/data/workspace-infosec/decbench"))
 
 
-@pytest.mark.slow
+@pytest.mark.decbench
 def test_adapter_registers_and_decompiles_a_real_public_binary(tmp_path: Path) -> None:
     """The adapter must return source functions with exact ELF-space addresses."""
     checkout = _decbench_checkout()
@@ -55,7 +79,7 @@ def test_adapter_registers_and_decompiles_a_real_public_binary(tmp_path: Path) -
     assert not ({"_init", "_fini", "frame_dummy"} & payload["functions"].keys())
 
 
-@pytest.mark.slow
+@pytest.mark.decbench
 @pytest.mark.parametrize(
     ("selector", "expected_mode", "expected_value"),
     [
@@ -131,7 +155,7 @@ print(json.dumps(sorted(result.functions)))
     assert ({"--vas", "--all"} - {expected_mode}).isdisjoint(argv)
 
 
-@pytest.mark.slow
+@pytest.mark.decbench
 def test_address_requested_function_outside_plain_text_is_not_filtered(
     tmp_path: Path,
 ) -> None:

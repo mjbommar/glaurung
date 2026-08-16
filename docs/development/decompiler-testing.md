@@ -346,6 +346,27 @@ checkout's Python, registers the backend, and then delegates to DecBench's
 normal CLI. Set `DECBENCH_PYTHON` only when that interpreter is not at
 `$DECBENCH_DIR/.venv/bin/python`; do not patch the external checkout.
 
+### The pytest side: the `decbench` marker
+
+`pytest.ini` deselects `-m decbench` by default, so `uv run pytest python/tests/`
+cannot reach the fork. Exactly one file carries the marker —
+`test_decbench_glaurung_backend.py`, which resolves `$DECBENCH_DIR` and runs the
+adapter under that checkout's interpreter. On a box where the checkout happens to
+exist it used to spawn the fork on every plain test run.
+
+```bash
+uv run pytest python/tests/ -m decbench     # the opt-in; runs the fork
+```
+
+The marker replaces `slow` on that file rather than joining it, because CI and
+gate lane 2 select `-m slow` and an explicit `-m` replaces the default
+expression. The other five `test_decbench_*.py` files are DecBench-*named*, not
+DecBench-*dependent*: they are contract tests over committed data in
+`tests/decbench_corpus/` and `tests/decbench_scoreboard/`, 116 assertions in
+about 0.3 s, and they stay in the default run because they are the only thing
+guarding the adapter's schema. `test_local_gate_fails_closed.py` pins that
+classification by what each file actually resolves, not by its filename.
+
 Metric similarity is not a behavioral verdict. For the undergraduate
 curriculum, add `--behavior` to consume the exact combined C artifact produced
 by the selected DecBench backend, compile each required function, and execute

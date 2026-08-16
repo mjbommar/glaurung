@@ -1266,81 +1266,18 @@ optimise.
 - [ ] Add crash recovery and schema migration tests for persisted projects.
 - [ ] Make cancellation prompt and return a typed partial artifact.
 
-## DecBench and evaluation roadmap
+## DecBench and evaluation
 
-Benchmark work exists to measure product quality. It must not become a second
-product architecture or a source of target-specific patches.
+Moved. See [Appendix A](#appendix-a--decbench-and-evaluation-on-demand-only) at
+the end of this file.
 
-### Benchmark correctness and reproducibility
-
-- [x] Merge the verified additive orphan branch and preserve its real ARM fixes.
-- [x] Audit and retire stale branches/worktrees, documenting the one stack-bias
-  idea that requires a clean re-port.
-- [x] Rebuild a local DecBench tree with preprocessed sources so GED and
-  TypeMatch can be evaluated rather than asserted.
-- [x] Submit the clear empty-disassembly ByteMatch correctness fix as DecBench
-  PR #61. **Merged upstream** as `af02672db6dd`.
-- [x] Submit the reproducibility/efficiency follow-up as DecBench PR #62; no
-  further work is planned unless upstream requests it. **Merged upstream** as
-  `3db5d557a6ae`.
-- [x] Pin PR #56's deterministic Glaurung backend to the exact evaluated commit
-  and publish the fresh artifact. **Merged upstream** as `08f891581e6b`, so the
-  backend is now part of DecBench rather than a pending submission.
-- [ ] Obtain a fresh official/current-evaluator score for the exact `fb4ee6b`
-  artifact; do not infer it from the preceding package. Now that #56 is merged
-  this is a question of running the current upstream evaluator against the
-  pinned image, not of getting a backend accepted. Note the artifact pins
-  `fb4ee6ba`, and `master` has since moved past it, so decide deliberately
-  whether the next score should describe the pinned commit or a fresh package.
-- [ ] Keep raw outputs, package hashes, evaluator revision, metric schema,
-  compiler versions, target triples, and exact function joins in every ledger.
-- [ ] Keep public publication separate from local evaluation and require explicit
-  authorization for result/site changes.
-
-### Metric attack order
-
-1. TypeMatch and GED are the direct quality workstreams.
-2. Function contracts and stable source types have the best near-term TypeMatch
-   leverage.
-3. CFG completeness, value ownership, and region recovery address GED without
-   unsafe text shaping.
-4. Aggregate/object recovery can improve TypeMatch and ByteMatch together.
-5. Architecture fixes must be justified by execution/semantic evidence even when
-   they also improve metrics.
-6. Textual normalization comes last.
-
-Open benchmark investigations:
-
-- [ ] Score the exact current artifact and compute union from exact row-level
-  joins.
-- [ ] Explain the historical `linkedlist:clang:O0` ByteMatch drop from 0.47 to
-  0.10. GED was already 0.0, so “structurally closer” is not supporting evidence.
-- [x] Add and evaluate the A32 `-marm` lane. 350 ratcheted `armv7_a32` lanes in
-  `arch_baseline.json`.
-- [x] Rebuild the x86-64 control with GCC 15 to separate compiler-shape effects
-  from architecture effects. `x86_64_gcc15` is in `REQUIRED_ARCHES` with 350
-  ratcheted lanes.
-- [ ] Diagnose the 43 AArch64-only failures at the first wrong stage.
-- [ ] Preserve the ILP32-versus-ARM distinction, missing-lane caveat,
-  control-compiler caveat, and metric-soundness findings in the canonical
-  evidence register.
-- [ ] Continue TypeMatch work from owner-grouped defects; do not patch function
-  names or expected signatures.
-- [ ] Prioritize large O2-noinline GED cases after control/data-flow correctness.
-
-### Score-campaign acceptance policy
-
-Every candidate must:
-
-1. reproduce on a real binary and name the first wrong semantic stage;
-2. add a failing test before implementation;
-3. advance the intended owner rather than create a duplicate heuristic path;
-4. include near-miss controls and execution/definedness evidence where relevant;
-5. rerun affected cells plus all current perfect/canary cells;
-6. report coverage, mean, median, perfect count, union, and regressions;
-7. compare exact function identities, not adjusted aggregate arithmetic;
-8. use fresh no-cache evaluation where cache identity is in doubt; and
-9. delete superseded workaround code when the foundational owner replaces it.
+It is an appendix rather than a section because it is not a work queue. The
+project's correctness ground truth is `tests/decompiler_fixtures/`, which
+compiles the corpus, executes the recompiled decompiler output, and diffs it
+against the original. GED / TypeMatch / ByteMatch measure something else, on a
+harness that costs tens of minutes per run and reports its own resource
+contention as cell failures. Reach for the appendix when refreshing the paper or
+preparing a submission artifact — not to decide what to work on next.
 
 ## Dependency-ordered execution phases
 
@@ -2409,4 +2346,97 @@ This roadmap supersedes the ordering in the older plans but not their evidence:
 - [Master integration record](master-integration-2026-08-12.md)
 - [Branch retirement manifest](branch-retirement-2026-08-13.md)
 - [DecBench submission readiness](decbench-submission-readiness.md)
+
+## Appendix A — DecBench and evaluation (ON DEMAND ONLY)
+
+**Read this appendix only when refreshing published metrics.** It is retained in
+full because a paper refresh needs every one of its reproducibility requirements,
+and because its `[x]` entries are the audit trail for work that really did land
+upstream. It is deliberately NOT scheduled: none of its open boxes appear in the
+immediate rank-ordered plan or in the dependency-ordered phases, and a box here
+going unticked for a year is not a defect.
+
+The running gate is `scripts/decbench-local-gate.sh` lanes 1-3 (our fixture
+corpus). Lanes 4-5 are this appendix, and require `--decbench` or
+`GLAURUNG_RUN_DECBENCH=1`. In pytest, the same boundary is the `decbench` marker,
+which `pytest.ini` deselects by default; run those tests with `-m decbench`.
+
+### Benchmark correctness and reproducibility
+
+- [x] Merge the verified additive orphan branch and preserve its real ARM fixes.
+- [x] Audit and retire stale branches/worktrees, documenting the one stack-bias
+  idea that requires a clean re-port.
+- [x] Rebuild a local DecBench tree with preprocessed sources so GED and
+  TypeMatch can be evaluated rather than asserted.
+- [x] Submit the clear empty-disassembly ByteMatch correctness fix as DecBench
+  PR #61. **Merged upstream** as `af02672db6dd`.
+- [x] Submit the reproducibility/efficiency follow-up as DecBench PR #62; no
+  further work is planned unless upstream requests it. **Merged upstream** as
+  `3db5d557a6ae`.
+- [x] Pin PR #56's deterministic Glaurung backend to the exact evaluated commit
+  and publish the fresh artifact. **Merged upstream** as `08f891581e6b`, so the
+  backend is now part of DecBench rather than a pending submission.
+- [ ] Obtain a fresh official/current-evaluator score for the exact `fb4ee6b`
+  artifact; do not infer it from the preceding package. Now that #56 is merged
+  this is a question of running the current upstream evaluator against the
+  pinned image, not of getting a backend accepted. Note the artifact pins
+  `fb4ee6ba`, and `master` has since moved past it, so decide deliberately
+  whether the next score should describe the pinned commit or a fresh package.
+- [ ] Keep raw outputs, package hashes, evaluator revision, metric schema,
+  compiler versions, target triples, and exact function joins in every ledger.
+- [ ] Keep public publication separate from local evaluation and require explicit
+  authorization for result/site changes.
+
+### Metric attack order (historical — superseded as a prioritization order)
+
+This ordering was how work was chosen when GED / TypeMatch / ByteMatch were the
+scoreboard. It is kept because a paper refresh has to explain why the campaign
+attacked the metrics in this order, not because it still selects work: execution
+ground truth in `tests/decompiler_fixtures/` decides that now, and the changes
+that actually moved fixture cells over 2026-08-13..16 were missing capabilities
+(AArch64 scalar FP, i386 x87, ARM32 modified immediates, `call *(mem)`) that this
+ordering does not mention at all.
+
+1. TypeMatch and GED are the direct quality workstreams.
+2. Function contracts and stable source types have the best near-term TypeMatch
+   leverage.
+3. CFG completeness, value ownership, and region recovery address GED without
+   unsafe text shaping.
+4. Aggregate/object recovery can improve TypeMatch and ByteMatch together.
+5. Architecture fixes must be justified by execution/semantic evidence even when
+   they also improve metrics.
+6. Textual normalization comes last.
+
+Open benchmark investigations (for a metric refresh; not scheduled):
+
+- [ ] Score the exact current artifact and compute union from exact row-level
+  joins.
+- [ ] Explain the historical `linkedlist:clang:O0` ByteMatch drop from 0.47 to
+  0.10. GED was already 0.0, so “structurally closer” is not supporting evidence.
+- [x] Add and evaluate the A32 `-marm` lane. 350 ratcheted `armv7_a32` lanes in
+  `arch_baseline.json`.
+- [x] Rebuild the x86-64 control with GCC 15 to separate compiler-shape effects
+  from architecture effects. `x86_64_gcc15` is in `REQUIRED_ARCHES` with 350
+  ratcheted lanes.
+- [ ] Diagnose the 43 AArch64-only failures at the first wrong stage.
+- [ ] Preserve the ILP32-versus-ARM distinction, missing-lane caveat,
+  control-compiler caveat, and metric-soundness findings in the canonical
+  evidence register.
+- [ ] Continue TypeMatch work from owner-grouped defects; do not patch function
+  names or expected signatures.
+- [ ] Prioritize large O2-noinline GED cases after control/data-flow correctness.
+
+### Score-campaign acceptance policy
+
+Every candidate must:
+
+1. reproduce on a real binary and name the first wrong semantic stage;
+2. add a failing test before implementation;
+3. advance the intended owner rather than create a duplicate heuristic path;
+4. include near-miss controls and execution/definedness evidence where relevant;
+5. rerun affected cells plus all current perfect/canary cells;
+6. report coverage, mean, median, perfect count, union, and regressions;
+7. compare exact function identities, not adjusted aggregate arithmetic;
+8. use fresh no-cache evaluation where cache identity is in doubt; and
+9. delete superseded workaround code when the foundational owner replaces it.
 
