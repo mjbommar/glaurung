@@ -842,3 +842,57 @@ Whoever ratchets should expect those, with `gcc:O2`'s aggregate ceiling going
 (Measured before `2c928d6` landed, the same delta ran 304/175 -> 299/173, because
 the +13 the refresh absorbed is entirely `195_by_value_aggregates` and
 `196_disjoint_frame_slots`. Same nine resolved function-lanes either way.)
+
+## Entry 54 — OPEN: the SSE half of a split-bank return is read out of the integer result
+
+**Status: IN PROGRESS.** Opened before the work, updated as evidence arrives.
+Entries in this file have until now been written after the fact, which makes them
+a record rather than a working log — and a record cannot be wrong in public,
+which is most of their value.
+
+### The claim to be tested
+
+`src/ir/call_result_split.rs:71` — `result_storage` maps `xmm0` onto the SAME
+storage key as `rax` under both x86-64 conventions. The AArch64 and ARM branches
+already keep their banks apart, so this reads as an x86-64 gap rather than a
+design position. If that is right, a post-call `xmm0` read is rewritten to the
+INTEGER call result.
+
+Reported symptom, from the aggregate-return work (`c2fb19d`):
+`195_by_value_aggregates:bv195_mixed_roundtrip` renders
+
+```c
+(union { unsigned long long bits; double value; }){ .bits = var3 }.value
+```
+
+— the SSE half of a 16-byte `{int32_t; double}` return being punned out of the
+integer result rather than read from `xmm0`.
+
+### Why now
+
+`abi::ReturnClass::SplitBanks { integer_first }` landed in `c2fb19d` and is
+classified but has NO consumer. This defect and that unused variant are one
+change: the classifier says which half is where, and `result_storage` is what
+currently prevents anyone acting on it. Landing them separately would mean
+shipping either an unmeasured storage change or a second dead variant.
+
+### Predictions, recorded before measuring
+
+1. `bv195_mixed_roundtrip` fails on all four host lanes today.
+2. Separating the banks alone, without a `SplitBanks` consumer, moves NO cell —
+   it converts wrong bytes into an undefined read.
+3. The corpus contains other functions reading `xmm0` after a call where the
+   callee returns in `rax`; those are where a regression would show up.
+
+Prediction 2 is the one worth being wrong about: if separating the banks alone
+DOES move a cell, my model of the defect is incomplete.
+
+### Method
+
+    tools/dectest.py 195_by_value_aggregates --full          # confirm 1
+    tools/dectest.py @o0 @o2                                 # 736 host lanes
+    tools/dectest.py @aggregates --arch i386 --arch armv7    # 32-bit, where the
+                                                             # ABI differs
+    tools/gen_defuse_baseline.py --dry-run                   # 299 today
+
+Results and any corrections go below as they arrive.
