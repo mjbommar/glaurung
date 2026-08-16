@@ -514,7 +514,14 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
   it sees a scaled index or an escaping frame pointer, and those two events are
   the trigger for every frame extent `stack_locals` recovers by guessing.
 - [ ] Import authoritative DWARF/PDB/manual layouts into the same constraint
-  system.
+  system. Nothing is imported into the MIR constraint system yet. Worth knowing
+  before that work starts: the AST-side import was silently COORDINATE-wrong on
+  x86-64 until Entry 52. `dwarf_stack_object_hints` mapped SysV
+  `DW_OP_call_frame_cfa` to `("rbp", +16)` — a frame-pointer displacement that a
+  frame-pointer-omitted body never forms — so every proven aggregate extent in a
+  `-O2` x86-64 function landed on a key nothing addressed, and promotion fell
+  back to guessing beside it. Importing a layout is not enough; the coordinate
+  has to be the one the body actually addresses.
 - [~] Collect exact load/store, affine-offset, repeated-stride, overlap, pointer,
   and call-boundary constraints. Load/store footprints, affine offsets and
   overlap were already carried by `MemoryObject` and its partition. Scaled-index
@@ -585,8 +592,19 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
     subsequent `0x8(%rsp)` reads are promoted to `local_38`: the address escaping
     into a call is not connected to the stack object the reads name, so the
     callee writes to an undefined `rsp` and the caller reads a buffer nothing
-    wrote. That is the same promotion-meets-a-borrowed-address shape as Entry 50
-    and `111_self_referential_struct`, and it belongs to EPIC 3's stack work.
+    wrote. ~~That is the same promotion-meets-a-borrowed-address shape as Entry
+    50 and `111_self_referential_struct`~~ — **it is not (Entry 52).** Those two
+    were a DWARF coordinate bug and are fixed; this lane has no DWARF stack
+    object at all, because `b` is recorded as four register `DW_OP_piece`s. Its
+    buffer is formed heuristically by `stack_assignment_object_address` from the
+    epilogue's dead `%t147 = %rsp`, after the call argument was visited. Entry 52
+    prototyped and reverted the connect: admitting a bare `%rsp` as an escaping
+    address in argument position does hand out `&local_38[0]`, and the recovered
+    callee prototype then truncates it — `extern long *bv195_make_big(int)`
+    renders `(int)(&local_38[0])`. **The blocker is the parameter side:
+    `RecoveredOutputKind::HiddenReturn` has a producer and no consumer**, so the
+    callee never declares the MEMORY-class hidden pointer this box proved it has.
+    It belongs here, with the ABI work, not with EPIC 3's stack work.
 
   Consequently returns and parameters were **separable** here, contrary to the
   earlier note in this box. The eightbyte classifier is shared machinery — the
@@ -1784,6 +1802,18 @@ the detail kept there and only the delta recorded here.
   with an empty conflict set, and **not one of those 1120 contains a single
   indexed access**.
 
+  **Correction, Entry 52 (2026-08-16): part of that "guessing" was not a guess
+  at all.** On x86-64 the DWARF extent was already exact and simply arrived in a
+  coordinate the body never forms — `DW_OP_call_frame_cfa` was mapped to
+  `("rbp", +16)`, which is only real when the body establishes a frame pointer.
+  Repairing the coordinate replaced the heuristic partition with the declared one
+  in every frame-pointer-omitted x86-64 function that has an aggregate: 54 of the
+  748-lane corpus's `gcc:O2` bodies re-render, and the def-before-use census drops
+  18 violations. So the set of frame extents production genuinely guesses at is
+  SMALLER than this measurement recorded, and the overlap with MIR's refusals is
+  correspondingly weaker evidence than it looked. Re-measure before building on
+  it.
+
   So this box does not need plumbing; it needs the model to change. The three
   things that would actually unblock it, in increasing order of cost:
   1. **Per-cursor conflict attribution.** One object per frame root means one
@@ -2352,6 +2382,14 @@ This is the practical next-work queue as of the planning baseline.
    metric movement: `111_self_referential_struct:link_and_sum` declares `rbp` as
    a local and never assigns it, so every address computed from it is an
    uninitialised read. A self-referential struct is the linked list.
+
+   Entry 52 split that in two. The `gcc:O2` lane is FIXED (`fail -> pass`): its
+   `nodes[8]` extent was proven by DWARF and lost to the CFA coordinate bug. The
+   `gcc:O0` lane is unchanged and has a different cause — there `rbp` IS a real
+   frame register, the proven object at `rbp-144` is live and used, and the
+   uninitialised read is `*(int *)(((index << 4) + rbp) - 144)`, a scaled-index
+   address `resolved_memory_address` does not fold into the object it lands in.
+   That is a shape-recognition gap, not a coordinate one.
 
    Pass-attributed traces are now actually obtainable; the instrumentation was
    only reconnected in `0ecb8e1`.

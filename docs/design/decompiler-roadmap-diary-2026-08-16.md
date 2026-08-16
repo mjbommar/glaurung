@@ -25,6 +25,18 @@ Two conventions worth restating, both of which this project has paid to learn:
 
 ## Entry 50 — A cursor writes the range; a displacement reads inside it
 
+> **CORRECTION, added 2026-08-16 after Entry 53 measured it.** The SYMPTOM below
+> is real and the disassembly is accurate, but the MECHANISM this entry proposes
+> — "promotion meeting a frame address it did not form itself" — is wrong, and it
+> was my theory rather than a measurement. The actual cause is that
+> `dwarf_contracts.rs` mapped SysV `DW_OP_call_frame_cfa` onto `("rbp", +16)`, a
+> frame-pointer coordinate that a frame-pointer-omitted `-O2` body never forms.
+> The proven extents therefore sat on dead keys while every access resolved
+> against `entry_rsp`, so promotion was not "meeting a borrowed address" — it was
+> never shown the right address at all. The two fixes this entry proposes are
+> consequently both aimed at the wrong layer. Entry 53 has the measurement.
+
+
 `196_disjoint_frame_slots:gcc:O2:dfs196_alias_control` fails, and it failed
 identically before the copy_prop disjointness work that added the fixture — the
 control was confirmed against the unpatched build precisely because a failing
@@ -522,3 +534,177 @@ budget is acceptable, a load-dependent RESULT is not.** The right shape is for a
 truncation to be reported rather than silently rendered - `hit_timeout` already
 exists and is already aggregated, and nothing on the decompile path reads it. That
 is a separate item from this entry and has not been done.
+---
+
+## Entry 53 — Three symptoms, two defects, and the proven extent was in a coordinate the body never forms
+
+> **STATUS: the finding is committed, the FIX IS NOT.** Running the `@o2` sweep
+> the entry did not complete found `24_merge_sort:gcc:O2:merge_sort_i32` going
+> `pass -> fail` alongside its four improvements. The declarations overlap —
+> `local_8c[140]` spans `[-140, 0)` and swallows `local_88[64]` at `[-136, -72)`
+> — so an extent is being over-extended. A cell that passed and now fails is a
+> stop condition regardless of how many others improve, so the code is held out
+> of the tree until that is resolved. The diagnosis below stands on its own.
+
+
+Entry 50 read `196_disjoint_frame_slots:gcc:O2:dfs196_alias_control`,
+`111_self_referential_struct` and (through Entry 51) `195_by_value_aggregates`'s
+MEMORY lane as one defect — "promotion meeting a frame address it did not form
+itself" — and proposed failing closed when a strided cursor's range overlaps a
+promoted local. **The convergence does not survive the slot map.** Two of the
+three are one defect and it is not that one; the third is separate and blocked
+somewhere else entirely.
+
+### RED — what the three lanes actually contain
+
+    GLAURUNG_DUMP_PASSES=1 glaurung decompile <fixture>.so --func <fn> --style decbench
+    (plus a temporary dump of the final `(base, disp) -> SlotVal` map, removed before landing)
+
+| lane | slot map at `c2fb19d` |
+|---|---|
+| `196:gcc:O2:dfs196_alias_control` | `entry_rsp-44 local_2c` scalar; `entry_rsp-16 local_10`; **`rbp-48 local_30 obj=32 "int32_t[]"`** |
+| `111:gcc:O2:link_and_sum` | `entry_rsp-152 local_98` scalar; `entry_rsp-144 stack_0 obj=144` heuristic; **`rbp-144 local_90 obj=128 "struct Node[]"`** |
+| `111:gcc:O0:link_and_sum` | `rbp-144 local_90 obj=128` — live and used |
+| `195:gcc:O2:bv195_big_roundtrip` | `entry_rsp-56 local_38 obj=40 bounded` — heuristic, and formed LATE |
+
+The bold rows are DWARF-proven extents **no access in the body ever reaches**.
+`dwarf_contracts.rs:55` mapped SysV `DW_OP_call_frame_cfa` onto `("rbp", +16)`,
+which is a real coordinate only when the body establishes a frame pointer. At
+`-O2` gcc omits it as a matter of course, so the proven extent sits on a key
+nothing addresses while every access resolves against `entry_rsp`. `rsp+12` is
+inside `a`'s proven 32 bytes and became the bare scalar `local_2c` that the
+array's own filling loop never appeared to define.
+
+So this is not promotion failing on a borrowed address. **It is promotion never
+being told the object exists**, in every frame-pointer-omitted x86-64 function
+that has an aggregate. The strided cursor is a red herring: once the object is
+named, `mov %rsp,%rax` and `mov 0xc(%rsp),%edx` resolve to the same C object,
+with no store attribution, no stride proof and no non-escape proof. `111:gcc:O0`
+is the control — a real `rbp` frame, a live hint, and it does not move.
+
+### GREEN — three changes, each with the control that shaped it
+
+1. **Rebase a CFA-derived hint onto the entry coordinate when the body omits the
+   frame pointer.** `StackObjectHint::cfa_relative` records which arm of
+   `dwarf_stack_object_hints` produced the base, because a hint DWARF genuinely
+   roots at `rbp` (`DW_OP_breg6`) is already in the body's coordinate and moving
+   it would break a correct object. The omitted frame pointer would have sat one
+   machine word below the entry SP, so the rebase is `disp - stack_word_size`.
+2. **The indexed heuristic yields to a debug-proven extent.** With (1) alone,
+   `111:gcc:O2` had TWO overlapping C arrays over one piece of storage: the
+   proven `struct Node[8]` at `entry_rsp-152` and `seed_indexed_stack_objects`'
+   partition at `entry_rsp-144`, seeded from `nodes[i].next` — an interior
+   element of the first. The recompiled C allocates them apart, so the list
+   terminator landed in the wrong object. The existing "debug bounds are
+   authoritative" rule covered only a partition at the SAME start.
+3. **A debug-proven object admits an address one past its end, in an
+   assignment.** `lea 0x20(%rsp),%rdx` is `&a[8]`, the bound of the loop that
+   fills `a`. While the heuristic ran to the frame base this was swallowed by
+   accident; the exact extent refused it and left the bound as arithmetic on an
+   undefined `rsp`, taking `dfs196_indexed_control` from pass to fail. Three
+   conditions keep it from eating the neighbour that begins at that same
+   coordinate, and each was paid for:
+   * a DEREFERENCE there is still refused;
+   * the extent must be **debug-proven**. Allowing it for any bounded object cost
+     `rustc:O0` +275 and `rustc:O2` +165 undefined reads — iterator code is built
+     out of end pointers — and moved no cell;
+   * only a **value-producing assignment** asks for it. As a call argument it
+     took `10_cpp_runtime_shapes:gcc:O0:cpp_move` from pass to fail, because
+     `Movable b` sits directly above `Movable a` and its constructor is handed
+     `&a + sizeof a`. `mov %rsp,%rbp` is excluded for the same reason: it defines
+     a coordinate system rather than computing a bound, and without that
+     exclusion `-O0` prologues rendered as a dead `stack_0 = &local_c[0] + 12`.
+
+### The third symptom is NOT fixed, and the blocker is not stack promotion
+
+`195:gcc:O2:bv195_big_roundtrip` has no DWARF stack object to rebase:
+
+    readelf --debug-dump=loc 195_by_value_aggregates-gcc-O2.so
+    b: (DW_OP_reg4; DW_OP_piece: 8; DW_OP_fbreg: -56; DW_OP_piece: 8; DW_OP_reg0; ...)
+
+`b` lives in registers with pieces. Its buffer object is formed heuristically by
+`stack_assignment_object_address` from the EPILOGUE's dead `%t147 = %rsp` — after
+the call argument was visited, which is exactly why the escaping `%rsp` and the
+promoted reads disagree.
+
+The connect was prototyped and reverted. Admitting a bare architectural stack
+pointer as an escaping address in ARGUMENT position, bounded by the next known
+slot, does produce `bv195_make_big(&local_38[0])` — and then the recovered callee
+prototype truncates it, because `extern long *bv195_make_big(int)` renders
+`(int)(&local_38[0])`, a 64-bit pointer through an `int`. **What is missing is the
+parameter side: `RecoveredOutputKind::HiddenReturn` has a producer (Entry 51) and
+no consumer**, so the callee never declares the MEMORY-class hidden pointer. The
+cell still failed, and the change cost `rustc:O0` +15 / `rustc:O2` +9 undefined
+reads against a ratcheted ceiling. That is a wrong attribution being worse than
+the read it replaces, exactly as the brief anticipated.
+
+### What Entry 50's fail-closed proposal is still for
+
+It was not implemented, and the reason is measurable rather than a preference:
+
+    strip --strip-debug 196_disjoint_frame_slots-gcc-O2.so
+    glaurung decompile ... --func dfs196_alias_control
+      // glaurung-verify: local_2c is read but never defined   (unchanged)
+
+Stripped, the defect is exactly as it was. Every lane the corpus judges carries
+`-g`, so a fail-closed rule for the no-debug case has **no measurable surface
+here at all** — it could only be justified by assertion. Naming that gap is
+worth more than shipping an unmeasured guard over every frame in the corpus.
+
+### VERIFY
+
+    cargo test --features python-ext          2577 passed, 0 failed
+                                              (2571 at c2fb19d; +6 new tests,
+                                               3 of them RED without the fix,
+                                               2 controls green by construction)
+
+    tools/dectest.py 196_disjoint_frame_slots 111_self_referential_struct 195_by_value_aggregates
+      IMPROVEMENTS (2): 111_self_referential_struct:gcc:O2:link_and_sum  fail -> pass
+                        196_disjoint_frame_slots:gcc:O2:dfs196_alias_control fail -> pass
+      no regressions in scope
+
+    tools/dectest.py @o0                      368 lanes, no regressions
+    tools/dectest.py @o2                      @O2_RESULT@
+
+    touch src/lib.rs && cargo build --features python-ext
+      never-used FUNCTION count: 0
+
+**Blast radius, which is the number this change has to be judged on.** A
+`--all --style decbench` render of every function in all 748 lanes, before and
+after (14,639 bodies):
+
+      60 bodies differ:  gcc:O2 51,  clang:O0 2,  rustc:O0 5,  rustc:O2 2
+
+The tool's own noise floor, measured by running the SAME build twice, is 8
+bodies, all `rustc` — so all 7 rustc differences here are at or below noise and
+the real figure is **53 bodies, 0.36% of the corpus**, of which 47 changed which
+byte-array objects they declare. Sampling them, the change is quality-positive
+rather than merely neutral:
+
+* `06_calling_conventions:gcc:O2:guarded_spin` — `local_4` becomes `x`. The
+  rebase reaches SCALAR hints too, so DWARF source names land where they did not.
+* `10_cpp_runtime_shapes:gcc:O2:cpp_virtual_dispatch` — a frame-spanning
+  `stack_1[16]` guess becomes two proven 8-byte objects, and the canary goes back
+  to being `local_10`.
+* `134_cpp_virtual_inheritance:clang:O0:*` — `local_30[48]` and `local_38[48]`
+  overlapped by 40 bytes over one allocation. Now one object. **Both lanes passed
+  before and after**: this is a fixture passing with output that was wrong in a
+  way its vectors never exercised.
+
+**Def-before-use census** (`tests/decompiler_fixtures/defuse.py`'s report, over
+the same 748 lanes):
+
+    required violations   317 -> 299   (-18)   in 181 -> 173 function-lanes
+    INTRODUCED: 0
+    RESOLVED: 9 function-lanes — 111_self_referential_struct:gcc:O2:link_and_sum,
+      196_disjoint_frame_slots:gcc:O2:dfs196_alias_control, 16_red_black_tree:gcc:O2:rb_validate
+      (3 -> 1), 22_dijkstra, 23_topological_sort, 33_knapsack x2, 35_matrix_chain,
+      39_counting_radix_sort
+    lane ceilings: gcc:O2 126 -> 108; clang:O0/clang:O2/gcc:O0/rustc:O0/rustc:O2 unchanged
+
+**`defuse_baseline.json` was NOT refreshed, and it is already stale at
+`c2fb19d`.** It pins 304 violations across 175 function-lanes; HEAD produces 317
+across 181. The whole +13 is `195_by_value_aggregates` and
+`196_disjoint_frame_slots`, both added after the census was last written, and it
+means `test_no_lane_emits_more_undefined_reads_than_recorded` is red before this
+change as well as after. Whoever refreshes should expect 299/173.
