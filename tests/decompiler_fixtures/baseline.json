@@ -2568,7 +2568,7 @@
     "difference_of_products": "pass",
     "kahan_sum_f64": "fail",
     "naive_sum_f64": "fail",
-    "summation_disagrees": "fail"
+    "summation_disagrees": "pass"
   },
   "182_cold_and_part_splits:clang:O0": {
     "always_reaches_the_cold_chunk": "pass",
@@ -2929,7 +2929,7 @@
     "bv195_make_mixed": "structural",
     "bv195_make_pair": "structural",
     "bv195_make_quad": "structural",
-    "bv195_mixed_roundtrip": "fail",
+    "bv195_mixed_roundtrip": "pass",
     "bv195_pair_roundtrip": "pass",
     "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
@@ -2941,7 +2941,7 @@
     "bv195_make_mixed": "structural",
     "bv195_make_pair": "structural",
     "bv195_make_quad": "structural",
-    "bv195_mixed_roundtrip": "fail",
+    "bv195_mixed_roundtrip": "pass",
     "bv195_pair_roundtrip": "pass",
     "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
@@ -2953,7 +2953,7 @@
     "bv195_make_mixed": "structural",
     "bv195_make_pair": "structural",
     "bv195_make_quad": "structural",
-    "bv195_mixed_roundtrip": "fail",
+    "bv195_mixed_roundtrip": "pass",
     "bv195_pair_roundtrip": "pass",
     "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
@@ -2965,7 +2965,7 @@
     "bv195_make_mixed": "structural",
     "bv195_make_pair": "structural",
     "bv195_make_quad": "structural",
-    "bv195_mixed_roundtrip": "fail",
+    "bv195_mixed_roundtrip": "pass",
     "bv195_pair_roundtrip": "pass",
     "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"

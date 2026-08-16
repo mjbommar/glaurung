@@ -178,6 +178,50 @@ pub fn sysv_amd64_return_class(size: u64, eightbytes: &[Eightbyte]) -> Option<Re
     }
 }
 
+/// The synthesised C tag for a System V AMD64 result split across the integer
+/// and SSE result banks.
+///
+/// [`ReturnClass::IntegerPair`] had a builtin spelling: the double-word integer
+/// is INTEGER, INTEGER by construction, so `unsigned __int128` IS that ABI
+/// contract and needs no aggregate reconstruction. `rax + xmm0` has no builtin
+/// equivalent, and a declaration naming either bank alone silently discards the
+/// other eightbyte's bytes — which is exactly the defect this spelling exists to
+/// close.
+///
+/// The members are chosen for their EIGHTBYTE CLASSES, not for the source
+/// fields: `unsigned long` classifies INTEGER and `double` classifies SSE, and
+/// those two facts are the entire contract. One tag per bank ORDER therefore
+/// serves every aggregate of that shape, and no field recovery is required.
+pub fn split_bank_return_tag(integer_first: bool) -> &'static str {
+    if integer_first {
+        "struct __glaurung_split_is"
+    } else {
+        "struct __glaurung_split_si"
+    }
+}
+
+/// The self-contained definition that puts [`split_bank_return_tag`] in scope.
+///
+/// Emitted at block scope above the callee declaration that names it, for the
+/// same reason `SymbolRecord::required_structs` is: a sliced one-function
+/// fragment has to declare everything it names, and nothing above the signature
+/// line survives that slice.
+pub fn split_bank_return_definition(integer_first: bool) -> &'static str {
+    if integer_first {
+        "struct __glaurung_split_is { unsigned long __integer; double __sse; };"
+    } else {
+        "struct __glaurung_split_si { double __sse; unsigned long __integer; };"
+    }
+}
+
+/// The bank order a return-type spelling denotes, or `None` for every other
+/// type. `Some(true)` is `integer_first`, matching [`ReturnClass::SplitBanks`].
+pub fn split_bank_return_order(return_type: &str) -> Option<bool> {
+    [true, false]
+        .into_iter()
+        .find(|integer_first| split_bank_return_tag(*integer_first) == return_type)
+}
+
 /// The integer argument registers, in ABI order — canonical (widest) names only.
 ///
 /// Prefer [`argument_slots`] when matching a register NAME found in code: a 32-bit
@@ -960,10 +1004,7 @@ mod tests {
             })
         );
         // Past the cutoff the field classes stop mattering entirely.
-        assert_eq!(
-            sysv_amd64_return_class(32, &[]),
-            Some(ReturnClass::Memory)
-        );
+        assert_eq!(sysv_amd64_return_class(32, &[]), Some(ReturnClass::Memory));
         assert_eq!(sysv_amd64_return_class(17, &[]), Some(ReturnClass::Memory));
         // `xmm0:xmm1` has no second float result register in this model.
         assert_eq!(sysv_amd64_return_class(16, &[Sse, Sse]), None);
@@ -971,6 +1012,33 @@ mod tests {
         assert_eq!(sysv_amd64_return_class(16, &[Integer]), None);
         assert_eq!(sysv_amd64_return_class(8, &[]), None);
         assert_eq!(sysv_amd64_return_class(0, &[]), None);
+    }
+
+    /// The synthesised split-bank type must have the ABI contract it claims:
+    /// its members' eightbyte classes, in order, must re-derive the same class.
+    /// A definition that does not is a declaration returning the wrong bytes.
+    #[test]
+    fn the_split_bank_spelling_reclassifies_to_the_class_it_stands_for() {
+        for (integer_first, eightbytes) in [
+            (true, [Eightbyte::Integer, Eightbyte::Sse]),
+            (false, [Eightbyte::Sse, Eightbyte::Integer]),
+        ] {
+            let tag = split_bank_return_tag(integer_first);
+            let definition = split_bank_return_definition(integer_first);
+            assert_eq!(split_bank_return_order(tag), Some(integer_first));
+            assert!(definition.starts_with(&format!("{tag} {{")), "{definition}");
+            // `unsigned long` is the INTEGER member and `double` the SSE one, so
+            // their order in the definition IS the bank order.
+            let integer_at = definition.find("unsigned long").expect("integer member");
+            let sse_at = definition.find("double").expect("sse member");
+            assert_eq!(integer_at < sse_at, integer_first, "{definition}");
+            assert_eq!(
+                sysv_amd64_return_class(16, &eightbytes),
+                Some(ReturnClass::SplitBanks { integer_first })
+            );
+        }
+        assert_eq!(split_bank_return_order("long"), None);
+        assert_eq!(split_bank_return_order("unsigned __int128"), None);
     }
 
     /// The return register is the widest spelling, and the alias list leads with it.

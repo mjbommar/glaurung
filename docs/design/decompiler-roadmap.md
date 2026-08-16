@@ -549,40 +549,49 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
 - [ ] Propagate pointee and object constraints across calls.
 - [~] Model by-value aggregates, split register/stack values, hidden structure
   returns, and aggregate result storage for each ABI.
-  **The return CLASS is modelled and two of its four contracts are connected.**
+  **The return CLASS is modelled and three of its four contracts are connected.**
   `abi::ReturnClass` (`Single` / `IntegerPair` / `SplitBanks` / `Memory`) plus
   `abi::sysv_amd64_return_class` and the DWARF-driven
   `ir::return_class::declared_return_class` land the classifier; the register
   pair is wired end to end and MEMORY is now `RecoveredOutputKind::HiddenReturn`'s
   first and only producer (Entry 51, `tools/dectest.py 195_by_value_aggregates
-  --full`, 4 improvements, 0 regressions).
+  --full`, 4 improvements, 0 regressions). `SplitBanks` got its first consumer in
+  Entry 54 (`tools/dectest.py 195_by_value_aggregates --full`, 4 improvements,
+  0 regressions; `@o0` +2, `@o2` +3, both with 0 regressions).
 
   **Fixture `195_by_value_aggregates` maps the boundary exactly** (added
   2026-08-15, after an audit found the corpus had NO lane returning a struct by
-  value). Verdicts after Entry 51:
+  value). Verdicts after Entry 54:
 
       8-byte struct  -> rax             INTEGER      pass on all 4 lanes
       scalar control                                 pass on all 4 lanes
-      16-byte struct -> rax:rdx         INTEGER      pass on all 4  (was FAIL)
-      int + double   -> rax + xmm0      split banks  FAIL on all 4
+      16-byte struct -> rax:rdx         INTEGER      pass on all 4  (Entry 51)
+      int + double   -> rax + xmm0      split banks  pass on all 4  (Entry 54)
       32-byte struct -> hidden pointer  MEMORY       FAIL on all 4
 
-  The boundary that remains is two separate things, and only one of them is ABI
-  work:
+  What remains here is the MEMORY lane, and it is not ABI work:
 
-  - **Split banks needs a C type this renderer cannot yet spell.** `rax:rdx` had
-    one — the double-word integer, whose ABI contract is INTEGER,INTEGER by
-    construction, so `extern unsigned __int128 bv195_make_quad(int)` is exactly
-    right and needs no aggregate reconstruction. `rax + xmm0` has no builtin
-    equivalent: it needs a synthesised `struct { unsigned long; double; }` tag on
-    the callee declaration (`symbol_env::SymbolRecord::required_structs` is the
-    existing machinery). Until then the class is computed and deliberately not
-    applied. Separately, `call_result_split::result_storage` maps `xmm0` onto the
-    SAME storage key as `rax` under both x86-64 conventions (`call_result_split.rs:71`),
-    so a post-call `xmm0` read is rewritten to the INTEGER call result — visible
-    as `(union { unsigned long long bits; double value; }){ .bits = var3 }.value`
-    in `bv195_mixed_roundtrip`. That is a soundness defect independent of
-    aggregates and it should be fixed with the split-banks class.
+  - **Split banks is closed (Entry 54).** It needed a C type the renderer could
+    not spell, and now synthesises one: `abi::split_bank_return_tag` /
+    `split_bank_return_definition` emit `struct __glaurung_split_is { unsigned
+    long __integer; double __sse; }` (and its `_si` mirror) at block scope above
+    the callee declaration, chosen for their EIGHTBYTE CLASSES so no field
+    recovery is needed. The call's destination becomes a 16-byte frame object and
+    each bank is read back out at its ABI offset — the decomposition goes through
+    memory because `Expr` still has no value-base member node (see the "project
+    solved access paths" item, which this does not close).
+
+    The same entry fixed the soundness defect underneath it:
+    `call_result_split::result_storage` used to map `xmm0` onto the SAME storage
+    key as `rax`, so an ordinary `xor %eax,%eax` between a `double`-returning
+    call and the read of its result EVICTED that result —
+    `181_compensated_summation:gcc:O2:summation_disagrees` compared against a
+    literal zero. The x86 conventions now key on the result BANK, which also
+    moved the i386/x87 form of the same bug
+    (`181_compensated_summation:i386:O2`). **AArch64 deliberately keeps its
+    collapse**: separating `x0` from `v0`/`d0`/`s0` regressed
+    `175_float_matrix_kernel:aarch64:O0:dot_product_f32`, because AAPCS64 has no
+    modelled aggregate return class to re-attribute the other bank from.
   - **The MEMORY lane does NOT fail for an ABI reason.** The recovered call is
     positionally correct against the machine — `bv195_make_big(<buffer>, seed)`,
     the hidden pointer in `rdi` and `seed` in `rsi` — because the callee's
@@ -1860,6 +1869,14 @@ the detail kept there and only the delta recorded here.
   (`python_bindings/ir.rs`). It is deliberately behaviour-neutral: under System V
   a MEMORY callee returns the caller's buffer address in the ordinary result
   register, so the recorded contract changes no spelling.
+
+  The first REAL aggregate transfer on the return side landed in Entry 54: a
+  `SplitBanks` result is declared with a synthesised `rax + xmm0` tag and
+  decomposed into one identity per bank through a frame object
+  (`abi::split_bank_return_tag`, `call_result_split::split_bank_results`,
+  `bv195_mixed_roundtrip` pass on all four host lanes). It goes through memory
+  rather than through field access because `Expr` has no value-base member node —
+  correct, and still a workaround.
 
   **The PARAMETER side is untouched.** The refusal is still pinned by
   `locked_sysv_parameters_decline_the_whole_signature_on_an_aggregate`

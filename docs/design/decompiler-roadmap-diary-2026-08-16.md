@@ -845,7 +845,9 @@ the +13 the refresh absorbed is entirely `195_by_value_aggregates` and
 
 ## Entry 54 — OPEN: the SSE half of a split-bank return is read out of the integer result
 
-**Status: IN PROGRESS.** Opened before the work, updated as evidence arrives.
+**Status: CLOSED.** Opened before the work, updated as evidence arrived.
+Prediction 1 held, prediction 2 was FALSIFIED, prediction 3 held on an
+architecture the plan never mentioned. Six cells, zero regressions.
 Entries in this file have until now been written after the fact, which makes them
 a record rather than a working log — and a record cannot be wrong in public,
 which is most of their value.
@@ -935,3 +937,165 @@ architecture that also needs it. Win64 has the same shape (`rax`/`xmm0`).
 
 That also sharpens the fix: the ARM branch is the model, and the change is to
 stop special-casing the x86 conventions rather than to invent a rule.
+
+#### Prediction 2: FALSIFIED. Separating the banks alone moves a cell
+
+    tools/dectest.py @o0      # separation only, no SplitBanks consumer
+    SCOPED: 368 lanes of 748 (49%) — no regressions in scope
+
+    tools/dectest.py @o2      # separation only, no SplitBanks consumer
+    IMPROVEMENTS (1):
+      181_compensated_summation:gcc:O2:summation_disagrees: fail -> pass
+    SCOPED: 368 lanes of 748 (49%) — no regressions in scope, 1 improvement(s)
+
+    tools/dectest.py 181_compensated_summation --full   # same build, one fixture
+    IMPROVEMENTS (1):
+      181_compensated_summation:gcc:O2:summation_disagrees: fail -> pass
+
+The model was incomplete, and the reason is the second thing one shared key does.
+The prediction only accounted for the REWRITE: an `xmm0` read bound to the
+integer result, wrong bytes instead of an undefined read, no score either way.
+One key also shares the KILL. `result_storage` is what `kill_definition` uses, so
+under the collapse any definition of `rax`/`eax`/`ax`/`al` evicts the FLOAT call
+result too.
+
+`summation_disagrees` is exactly that, and the machine code says so plainly
+(`objdump -d 181_compensated_summation-gcc-O2.so`):
+
+    1202:  call   kahan_sum_f64      # double result -> xmm0
+    120d:  xor    %eax,%eax          # an INTEGER definition, unrelated
+    1214:  ucomisd %xmm0,%xmm1       # reads the call result
+
+The `xor` sat between the call and the read of its result. Under one key it
+evicted the reaching identity, the `ucomisd` operand fell back to the
+architectural `xmm0`, and it reached the comparison as a literal zero — the
+second call's result was never read at all:
+
+```c
+// before: var4 = kahan_sum_f64(...) assigned, then never used
+return ((((local_20 == 0) | (local_20 != local_20)) == 0) ? 1 : (local_20 != local_20));
+// after
+return ((((local_20 == var4) | ((local_20 != local_20) | (var4 != var4))) == 0) ? 1
+        : (((local_20 != local_20) | (var4 != var4)) & 255));
+```
+
+So the collapse was not merely under-informative about aggregates: an ordinary
+`xor %eax,%eax` was deleting a float call result. Separating the banks is a
+correctness fix on its own, with no aggregate anywhere near it, and
+`181_compensated_summation` is the lane that says so. It is the fixture `abi.rs`
+already cites for the i386 x87 version of the same confusion — and the i386 lane
+moves too, once the split reaches `Cdecl32` (below).
+
+#### The consumer, and the C it needed
+
+`ReturnClass::SplitBanks` now has one. The shape follows `IntegerPair` exactly:
+the class decides the CALL-BOUNDARY SPELLING, and the spelling is what makes the
+call site's storage correct.
+
+`rax:rdx` could borrow a builtin — `unsigned __int128` IS INTEGER,INTEGER.
+`rax + xmm0` has no builtin, so the tag is synthesised
+(`abi::split_bank_return_tag` / `split_bank_return_definition`) and defined at
+block scope above the declaration that names it, next to where
+`SymbolRecord::required_structs` is emitted. Its members are chosen for their
+EIGHTBYTE CLASSES, not for the source fields — `unsigned long` classifies
+INTEGER, `double` classifies SSE — so two tags (one per bank order) serve every
+aggregate of that shape and no field recovery is required.
+
+The second half is the decomposition, and this is where the renderer's real
+limit shows. There is no member-access node for a value base (`Expr` has
+`PdbFieldAddr`, which is `p->field` through a POINTER), so `tmp.__sse` is not
+sayable. The call's destination therefore becomes a 16-byte frame object and each
+bank is read back out of it at the offset the ABI put it — all of which the
+existing `StackAddr`/`Bin`/`Deref` nodes already spell, and which the
+`stack_objects` collector already declares. `bv195_mixed_roundtrip` at `gcc:O0`:
+
+```c
+struct __glaurung_split_is { unsigned long __integer; double __sse; };
+extern struct __glaurung_split_is bv195_make_mixed(int);
+unsigned char var1[16];
+...
+*(struct __glaurung_split_is *)(&var1[0]) = bv195_make_mixed(...);
+var5 = *(long *)((&var1[0] + 8));          // the SSE eightbyte, as raw bytes
+*(int *)(&local_10[0]) = *(long *)(&var1[0]);   // the INTEGER eightbyte
+*(long *)((&local_10[0] + 8)) = var5;
+```
+
+Reading the SSE eightbyte as eight raw bytes is exact rather than a shortcut: a
+float consumer reinterprets those bits back, which is precisely what the machine
+`movsd` store did. The bit-pun the old output performed was not wrong because it
+was a pun; it was wrong because it punned the WRONG EIGHT BYTES.
+
+#### Prediction 3: confirmed, on the architecture I was not looking at
+
+    tools/dectest.py 172_float_double_widths 173_float_int_conversions \
+      174_float_compare_classify 175_float_matrix_kernel 181_compensated_summation \
+      --arch i386 --arch armv7 --arch aarch64 --arch armv7_a32
+
+    REGRESSIONS (1):
+      175_float_matrix_kernel:aarch64:O0:dot_product_f32: pass -> fail
+    IMPROVEMENTS (1):
+      181_compensated_summation:i386:O2:summation_disagrees: fail -> pass
+
+"The corpus contains other functions reading the other bank after a call" was
+right, and the first attempt keyed the storage on the machine model's bank class
+for EVERY convention — which separated AArch64's `x0` from `v0`/`d0`/`s0` too.
+`dot_product_f32` is the function `abi.rs` already names for consuming a call
+result through a bank the call was not attributed to, and on AAPCS64 there is
+nothing to re-attribute it FROM: `wide_integer_return_pair` and
+`declared_return_class` are both System V only. Separation without a class to
+repair it with is a regression, not a fix.
+
+So the AArch64 arm keeps its collapse, with the measurement recorded in the code
+next to it. Fail closed: separate the banks where a class can put the other half
+back, and nowhere else. Three lanes stayed clean under this scope — no
+regressions on `@aggregates @structs` across i386, armv7 and aarch64 (72 lanes).
+
+#### Where the six cells came from
+
+Two changes, one increment, and the split of credit is worth keeping:
+
+| cells | cause |
+|---|---|
+| `181_compensated_summation:gcc:O2:summation_disagrees` | bank separation alone (x86-64) |
+| `181_compensated_summation:i386:O2:summation_disagrees` | bank separation alone (`Cdecl32`, `rax` vs `st0`) |
+| `bv195_mixed_roundtrip` x4 | the `SplitBanks` consumer, which the separation made reachable |
+
+The two halves really were one change: the consumer cannot bind an `xmm0`
+identity while `xmm0` resolves to `rax`, and the separation on its own leaves the
+aggregate lane failing (measured above — it moved 195 by exactly zero cells).
+
+#### Verification
+
+    cargo test --features python-ext          2587 passed; 0 failed
+                                              (2583 at 5230a35, plus the 4 added here)
+    tools/dectest.py 195_by_value_aggregates --full
+        4 improvements, 0 regressions (40 cells: 10 functions x 4 host lanes)
+        bv195_mixed_roundtrip pass on all four; bv195_big_roundtrip still fails
+        on all four, for the reason Entry 53 established and not this one
+    tools/dectest.py @o0                      368 lanes, 2 improvements, 0 regressions
+    tools/dectest.py @o2                      368 lanes, 3 improvements, 0 regressions
+    tools/dectest.py @aggregates @structs --arch i386 --arch armv7 --arch aarch64
+                                              72 lanes, 0 regressions
+    tools/dectest.py 172_… 173_… 174_… 175_… 181_… --arch i386 --arch armv7
+      --arch aarch64 --arch armv7_a32         40 lanes, 1 improvement, 0 regressions
+    tools/gen_defuse_baseline.py --dry-run    299 -> 299 (no delta)
+    touch src/lib.rs && cargo build --features python-ext
+                                              0 never-used functions (unchanged)
+
+Baselines are NOT refreshed here; the six moved cells are listed above so the
+regeneration is a separate, reviewable step.
+
+#### What this did not close
+
+- **The MEMORY lane.** `bv195_big_roundtrip` still fails on all four host lanes.
+  Entry 53 established it is not an ABI defect at all, and nothing here touches it.
+- **Win64.** It has the same `rax`/`xmm0` shape and now gets the same separation,
+  but `declared_return_class` refuses every non-System-V convention, so it can
+  never reach the consumer. There are no Windows fixtures to measure a change
+  against; the refusal stays.
+- **AArch64.** Its banks are disjoint and it keeps the collapse anyway, because
+  the class that would repair the separation does not exist for AAPCS64. That is
+  now a recorded cost with a named lane rather than an unexamined default.
+- **Member access.** The frame-object decomposition exists because `Expr` has no
+  value-base member node. It is exact, but it is a workaround, and it is the same
+  gap EPIC 6's "project solved access paths" item names.

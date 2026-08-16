@@ -13,12 +13,26 @@
 //! copy dead.  Uses the structured walk cannot prove (notably loop-carried and
 //! label-crossing values) retain the old register spelling and therefore keep
 //! the pre-pass semantics instead of becoming undefined.
+//!
+//! An identity is per RESULT BANK, not per call, wherever the ABI's banks can
+//! be told apart.  `rax` and `xmm0` hand back two independent values and a read
+//! of one is never a read of the other, so they get separate storage keys —
+//! exactly as AAPCS hard-float's `r0` and `s0` always have.  A callee whose
+//! System V return class is [`crate::ir::abi::ReturnClass::SplitBanks`]
+//! genuinely defines both at once, and that call's destination becomes a frame
+//! object the two identities are read back out of.  Separation is not free
+//! without such a class: see the AArch64 arm of `result_storage` for the lane
+//! that measured the cost of separating banks nothing can then re-attribute.
 
 use std::collections::HashMap;
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::{BinOp, VReg};
+
+/// A System V two-bank aggregate result is at most two eightbytes by
+/// construction: past 16 bytes the ABI returns through memory.
+const SPLIT_BANK_RESULT_BYTES: u16 = 16;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct FlowState {
@@ -68,7 +82,29 @@ impl Splitter {
         }
         let base = crate::ir::abi::ssa_base(name);
         Some(match self.cc {
-            CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => "rax".to_string(),
+            // `rax` and `xmm0` — and on i386 `rax` and the x87 stack top — are
+            // two result BANKS, not two spellings of one, so a post-call SSE or
+            // x87 read is not a read of the integer result.  Ask the machine
+            // model which bank the name belongs to and key on that, which keeps
+            // every WIDTH VIEW of one bank (`rax`/`eax`/`ax`/`al`) sharing its
+            // key while the two banks stop sharing one.  Every call still
+            // invalidates all of them before installing its attributed
+            // destination below.
+            CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => {
+                crate::ir::abi::return_register_class(self.cc, base)
+                    .and_then(|class| class.first().copied())
+                    .unwrap_or(base)
+                    .to_string()
+            }
+            // AAPCS64's banks are disjoint by the same argument, and separating
+            // them here was MEASURED on 2026-08-16:
+            // `175_float_matrix_kernel:aarch64:O0:dot_product_f32` went
+            // pass -> fail, because that caller consumes the bank the call was
+            // not attributed to and AAPCS64 has no modelled aggregate return
+            // class to attribute the other one from (`abi::wide_integer_return_pair`
+            // and `return_class::declared_return_class` are both System V only).
+            // Fail closed: keep the collapse until there is a class to replace
+            // it with.
             CallConv::Aarch64 => "x0".to_string(),
             // AAPCS hard-float has disjoint integer and FP result banks.  Keep
             // their identities distinct; every call still invalidates all of
@@ -101,6 +137,77 @@ impl Splitter {
             crate::ir::abi::machine_word_bytes(self.cc),
         )?;
         crate::ir::abi::wide_integer_return_pair(self.cc, width)
+    }
+
+    /// The bank order of a call whose callee returns in BOTH result banks.
+    ///
+    /// `None` for every other call, which is every call today except one whose
+    /// callee has a DWARF-proven System V `SplitBanks` aggregate return
+    /// (`ir::return_class`). Fail closed: an unproven return keeps the scalar
+    /// single-bank contract it has always had.
+    fn split_bank_order(
+        &self,
+        call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
+    ) -> Option<bool> {
+        if self.cc != CallConv::SysVAmd64 {
+            return None;
+        }
+        crate::ir::abi::split_bank_return_order(&call_spec?.call_prototype.return_type)
+    }
+
+    /// Decompose a two-bank call result into one identity per bank.
+    ///
+    /// The call's destination becomes a 16-byte frame object holding the whole
+    /// returned aggregate, and each bank's eightbyte is read back out of it at
+    /// the offset the ABI put it. That is the only decomposition this renderer
+    /// can spell: there is no member-access node for a value base, and a scalar
+    /// destination can name one bank at most. Reading the SSE eightbyte as
+    /// eight raw bytes is exact — a float consumer reinterprets those bits
+    /// back, which is what the machine store did too.
+    fn split_bank_results(
+        &mut self,
+        integer_first: bool,
+        buffer: &VReg,
+        state: &mut FlowState,
+    ) -> Vec<Stmt> {
+        let mut compatibility = Vec::with_capacity(4);
+        for (offset, register) in [
+            (if integer_first { 0 } else { 8 }, "rax"),
+            (if integer_first { 8 } else { 0 }, "xmm0"),
+        ] {
+            let fresh = VReg::phys(format!("{register}#call_lifetime_{}", self.next_result));
+            self.next_result += 1;
+            let object = Expr::StackAddr {
+                object: buffer.clone(),
+                size: SPLIT_BANK_RESULT_BYTES,
+            };
+            let address = if offset == 0 {
+                object
+            } else {
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(object),
+                    rhs: Box::new(Expr::Const(offset)),
+                }
+            };
+            compatibility.push(Stmt::Assign {
+                dst: fresh.clone(),
+                src: Expr::Deref {
+                    addr: Box::new(address),
+                    size: 8,
+                },
+            });
+            compatibility.push(Stmt::Assign {
+                dst: VReg::phys(register),
+                src: Expr::Reg(fresh.clone()),
+            });
+            if state.reachable {
+                if let Some(storage) = self.result_storage(&VReg::phys(register)) {
+                    state.results.insert(storage, fresh);
+                }
+            }
+        }
+        compatibility
     }
 
     fn rewrite_reg(&self, register: &mut VReg, state: &FlowState) {
@@ -267,6 +374,14 @@ impl Splitter {
                 let Some(storage) = self.result_storage(&original) else {
                     return Vec::new();
                 };
+                // A result the ABI split across both banks is not one scalar
+                // in one register, so it does not get a scalar destination.
+                if let Some(integer_first) = self.split_bank_order(call_spec.as_ref()) {
+                    let buffer = VReg::phys(format!("split_result_{}", self.next_result));
+                    self.next_result += 1;
+                    *dst = Some(buffer.clone());
+                    return self.split_bank_results(integer_first, &buffer, state);
+                }
                 let wide_pair = self.wide_result_pair(call_spec.as_ref());
                 let fresh = self.fresh_result(&original);
                 *dst = Some(fresh.clone());
@@ -651,6 +766,170 @@ mod tests {
                 "wide call did not define its high ABI part from the scalar result: {function:#?}"
             );
         }
+    }
+
+    /// `rax` and `xmm0` are two result BANKS, not two spellings of one, so a
+    /// post-call SSE read must not be rewritten to the integer call result.
+    /// Every WIDTH VIEW of one bank still shares that bank's identity.
+    #[test]
+    fn the_two_x86_64_result_banks_do_not_share_one_identity() {
+        for cc in [CallConv::SysVAmd64, CallConv::Win64] {
+            let splitter = Splitter { cc, next_result: 0 };
+            let storage = |name: &str| splitter.result_storage(&reg(name));
+            assert_eq!(storage("rax"), Some("rax".to_string()), "{cc:?}");
+            assert_eq!(storage("eax"), storage("rax"), "{cc:?}");
+            assert_eq!(storage("al"), storage("rax"), "{cc:?}");
+            assert_eq!(storage("xmm0"), Some("xmm0".to_string()), "{cc:?}");
+            assert_ne!(storage("xmm0"), storage("rax"), "{cc:?}");
+        }
+        // i386 returns floating point on the x87 stack, and that bottom slot is
+        // the same disjoint-bank case under a different spelling.
+        let splitter = Splitter {
+            cc: CallConv::Cdecl32,
+            next_result: 0,
+        };
+        assert_eq!(
+            splitter.result_storage(&reg("st0")),
+            Some("st0".to_string())
+        );
+        assert_ne!(
+            splitter.result_storage(&reg("st0")),
+            splitter.result_storage(&reg("eax"))
+        );
+    }
+
+    /// A result the System V ABI splits across both banks is decomposed into
+    /// one identity per bank, read out of the frame object the call now
+    /// returns into. Nothing else can carry both halves: a scalar destination
+    /// names one bank at most.
+    #[test]
+    fn a_split_bank_return_gets_one_identity_per_bank() {
+        for (integer_first, integer_offset, sse_offset) in [(true, 0, 8), (false, 8, 0)] {
+            let prototype = CallPrototype {
+                return_type: crate::ir::abi::split_bank_return_tag(integer_first).to_string(),
+                parameter_types: Vec::new(),
+                variadic: false,
+                authority: CallPrototypeAuthority::Recovered,
+            };
+            let mut function = Function {
+                name: "consume_both_banks".to_string(),
+                entry_va: 0,
+                body: vec![
+                    Stmt::Call {
+                        target: Expr::Named {
+                            va: 0,
+                            name: "make_mixed".to_string(),
+                        },
+                        args: Vec::new(),
+                        dst: Some(reg("rax")),
+                        call_spec: Some(CallSiteSpec {
+                            callee_prototype: Some(prototype.clone()),
+                            call_prototype: prototype,
+                        }),
+                    },
+                    Stmt::Store {
+                        addr: Expr::Reg(reg("integer_slot")),
+                        src: Expr::Reg(reg("rax")),
+                        size: 8,
+                    },
+                    Stmt::Store {
+                        addr: Expr::Reg(reg("sse_slot")),
+                        src: Expr::Reg(reg("xmm0")),
+                        size: 8,
+                    },
+                ],
+            };
+
+            split_call_result_lifetimes(&mut function, CallConv::SysVAmd64);
+
+            let Some(Stmt::Call {
+                dst: Some(buffer), ..
+            }) = function.body.first()
+            else {
+                panic!("the call lost its destination: {function:#?}");
+            };
+            let offset_of = |register: &str| {
+                function.body.iter().find_map(|statement| match statement {
+                    Stmt::Assign {
+                        dst,
+                        src: Expr::Deref { addr, size: 8 },
+                    } if matches!(dst, VReg::Phys(name) if name.starts_with(register)) => {
+                        Some(match addr.as_ref() {
+                            Expr::StackAddr { object, size: 16 } if object == buffer => 0,
+                            Expr::Bin {
+                                op: BinOp::Add,
+                                lhs,
+                                rhs,
+                            } => match (lhs.as_ref(), rhs.as_ref()) {
+                                (Expr::StackAddr { object, size: 16 }, Expr::Const(offset))
+                                    if object == buffer =>
+                                {
+                                    *offset
+                                }
+                                _ => panic!("unexpected split address: {function:#?}"),
+                            },
+                            _ => panic!("unexpected split address: {function:#?}"),
+                        })
+                    }
+                    _ => None,
+                })
+            };
+            assert_eq!(offset_of("rax"), Some(integer_offset), "{function:#?}");
+            assert_eq!(offset_of("xmm0"), Some(sse_offset), "{function:#?}");
+
+            let stored = function
+                .body
+                .iter()
+                .filter_map(|statement| match statement {
+                    Stmt::Store {
+                        src: Expr::Reg(src),
+                        ..
+                    } => Some(src.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(stored.len(), 2, "{function:#?}");
+            assert_ne!(stored[0], stored[1], "{function:#?}");
+            for (index, expected) in [(0, "rax"), (1, "xmm0")] {
+                assert!(
+                    matches!(&stored[index], VReg::Phys(name) if name.starts_with(expected)
+                        && name.contains("#call_lifetime_")),
+                    "bank {expected} was not read from its own call result: {function:#?}"
+                );
+            }
+        }
+    }
+
+    /// Fail closed: a call with no proven split-bank return keeps the scalar
+    /// destination it has always had, frame object and all.
+    #[test]
+    fn an_unproven_return_keeps_its_scalar_destination() {
+        let mut function = Function {
+            name: "ordinary".to_string(),
+            entry_va: 0,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0,
+                    name: "producer".to_string(),
+                },
+                args: Vec::new(),
+                dst: Some(reg("rax")),
+                call_spec: None,
+            }],
+        };
+
+        split_call_result_lifetimes(&mut function, CallConv::SysVAmd64);
+
+        assert!(
+            !function.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Assign {
+                    src: Expr::Deref { .. },
+                    ..
+                }
+            )),
+            "an unproven return acquired a split-bank frame object: {function:#?}"
+        );
     }
 
     #[test]

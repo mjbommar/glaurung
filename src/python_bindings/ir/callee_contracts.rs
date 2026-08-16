@@ -173,6 +173,19 @@ pub(super) fn recovered_call_prototype(
         {
             wide_integer_return_c_type(cc)
         }
+        // The same argument one bank further out. A result split across the
+        // INTEGER and SSE banks has no builtin spelling at all, so naming
+        // either bank alone discards the other eightbyte — visible as the SSE
+        // half of a `{int; double;}` return being punned out of `rax`. The
+        // synthesised tag has exactly this ABI contract by construction.
+        // System V only: Win64 returns every over-wide aggregate through a
+        // hidden pointer and AAPCS has its own HFA rules, so neither can
+        // inherit this spelling.
+        crate::ir::abi::ReturnClass::SplitBanks { integer_first }
+            if cc == crate::ir::call_args::CallConv::SysVAmd64 =>
+        {
+            crate::ir::abi::split_bank_return_tag(integer_first)
+        }
         _ => return_type,
     };
     CallPrototype {

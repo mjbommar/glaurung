@@ -8002,6 +8002,23 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         out.push_str("    extern long __unknown(long, ...);\n");
     }
 
+    // A callee whose result the ABI splits across the integer and SSE banks is
+    // declared with a synthesised tag, because no builtin C type has that
+    // storage contract. Define the tag above the declarations that name it, for
+    // the same reason `SymbolRecord::required_structs` is emitted here: a
+    // sliced one-function fragment must declare everything it names, and
+    // nothing above the signature line survives that slice.
+    for definition in named_call_declarations
+        .values()
+        .filter_map(|prototype| {
+            crate::ir::abi::split_bank_return_order(&prototype.return_type)
+                .map(crate::ir::abi::split_bank_return_definition)
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        let _ = writeln!(out, "    {definition}");
+    }
+
     // A resolved named call is still a typed call site. Keep the selected
     // authoritative-or-recovered contract inside the function so the standalone
     // fragment is valid C11/C23 without hiding the function definition behind a
@@ -11221,13 +11238,33 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             call_spec,
         } => {
             indent(out, level);
-            // A call's result must land somewhere: dropping it emitted
-            // `f(x);` and then read the ARGUMENT where the return value belonged.
-            if let Some(VReg::Phys(n)) = dst {
-                let _ = write!(out, "{} = ", sanitize_c_ident(n));
-            }
-            if let Some(dst) = dst {
-                write_call_result_conversion_dec(target, args, dst, call_spec.as_ref(), out);
+            // A result the ABI split across both banks lands in a frame object,
+            // not a scalar: the object is what the two bank identities are then
+            // read back out of. The destination is declared as a byte array
+            // (it is address-taken by those reads), so the aggregate assignment
+            // is spelled through the synthesised tag. Without the array
+            // declaration `&x[0]` would not be valid C, so fall through to the
+            // ordinary scalar form whenever the reads did not survive.
+            let split_bank_store = match (dst, call_spec.as_ref()) {
+                (Some(VReg::Phys(name)), Some(spec))
+                    if dec_is_stack_object(&sanitize_c_ident(name)) =>
+                {
+                    crate::ir::abi::split_bank_return_order(&spec.call_prototype.return_type)
+                        .map(|_| spec.call_prototype.return_type.clone())
+                }
+                _ => None,
+            };
+            if let (Some(tag), Some(VReg::Phys(name))) = (&split_bank_store, dst) {
+                let _ = write!(out, "*({tag} *)(&{}[0]) = ", sanitize_c_ident(name));
+            } else {
+                // A call's result must land somewhere: dropping it emitted
+                // `f(x);` and then read the ARGUMENT where the return value belonged.
+                if let Some(VReg::Phys(n)) = dst {
+                    let _ = write!(out, "{} = ", sanitize_c_ident(n));
+                }
+                if let Some(dst) = dst {
+                    write_call_result_conversion_dec(target, args, dst, call_spec.as_ref(), out);
+                }
             }
             write_call_dec(target, args, dst.as_ref(), call_spec.as_ref(), out);
             out.push_str(";\n");
