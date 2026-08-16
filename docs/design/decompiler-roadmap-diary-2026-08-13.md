@@ -7393,3 +7393,171 @@ repeat — "only a versioned destination is recorded" — is the same rule that
 declines this case. Loosening it to admit a loop-header phi is a soundness
 argument, not a patch, and it belongs to the consumer migration it argues for.
 Left failing, diagnosed, and attached to the box that owns it.
+
+## Entry 44 — I built the migration, measured it, and it returns nothing
+
+The brief was the keystone one: verified MIR is never built in production, so
+`memory_objects/partition.rs`, `memory_objects/shape.rs` and the
+`DefinitionOracle` are all theoretical; get ONE production consumer reading it.
+The audit's own steer was that aggregates are the cheapest of the seven
+consumers because their verified MIR model is already built and sitting unused,
+and Phase 6 named the exact first step: `StackLocalFacts::frame_coordinates` ->
+`MemoryObjectModel::resolve_frame_coordinate` -> `bounds_at` is proven end to end
+by `every_promoted_frame_coordinate_resolves_to_its_own_extent` and has no
+non-test caller.
+
+I took that step. The join works. It is also a no-op, and the reason it is a
+no-op is not a plumbing gap — it is the model.
+
+### First, the brief's own measurement, confirmed
+
+`lower_verified_with_image` has exactly two non-test callers.
+`python_bindings/ir.rs:927` is inside a `GLAURUNG_DUMP_PASSES` block that
+`eprintln!`s the objects and drops them; `:826` is `PreparedLlir::mir`, marked
+`#[allow(dead_code)]`, whose own doc comment says it exists so that "the
+roadmap's migrate-a-production-consumer box had nothing to migrate onto". Both
+halves of the framing were accurate.
+
+### What I wired, and over what
+
+`decompile_at` and `decompile_range_at`, after `run_ast_passes` and
+`merge_dwarf_register_local_facts`: build verified MIR from the numbered LLIR and
+the `ProgramImage`, then for every `(name -> (base, disp))` the promotion pass
+published, resolve the coordinate and ask the partition for the extent. Run over
+every fixture source at `-O0` and `-O2` — 1270 functions, 4703 promoted frame
+coordinates, zero decompile errors.
+
+The coordinate join itself is sound and worth recording as such. All three base
+spellings resolve to the right byte (`rbp` through `MemoryObject::base_offsets`,
+`entry_rsp` through the object root, `rsp` where the pass uses it), and
+`bounds_at(offset).at_least` began at the local's own coordinate for **3823 of
+3823** bounded locals. Stack promotion never mints a variable inside a storage
+unit MIR proves is one unit. That is a real independent check on a pass nothing
+else checks. It is not a migration.
+
+### The numbers that closed the box
+
+Forward, production coordinate -> MIR extent:
+
+| | count |
+|---|---|
+| bounded by MIR | 3823 |
+| refused by a partition conflict | 802 |
+| coordinate unresolvable (`AmbiguousBase` 48, `UnknownBase` 30) | 78 |
+
+and of the 3823 bounded: **3803 widths identical, 20 wider, 0 narrower**. Every
+one of the 20 is a slot whose production size is 1 — a byte-array aggregate,
+where MIR's `at_least` is a strictly weaker bound than the number production
+already holds. `100_struct_layout:struct_assignment_copies` is the case to
+remember: `struct Tight` is 12 bytes, production emits `unsigned char
+local_18[12]`, and verified MIR bounds the same storage only as `8 <= w <= 32`.
+The 8 is real (an 8-byte whole-object copy), the 12 is the answer, and MIR does
+not have it.
+
+Reverse, MIR-proven unit -> did production name it? 3657 of 3675 already carry a
+promoted local. The 18 that do not are interior cells of structs production
+names as one byte object, plus two spill slots in `call_into_spill` it declines
+to promote on purpose. Nothing is being lost.
+
+### Why it is structural, not a coverage problem
+
+`stack_locals` forms a frame OBJECT — as opposed to naming a scalar slot —
+in exactly three places, and all three fire because the frame's address was
+indexed or taken:
+
+* `seed_indexed_stack_objects` (`stack_locals.rs:1018`): extent = distance to the
+  next indexed start, **else all the way to the frame base**.
+* `promote_address_taken_stack_object` (`:1921`): extent = distance to the next
+  known slot, **else all the way to the frame base**.
+* `stack_assignment_object_address` (`:2608`): walk the contiguous run.
+
+Verified MIR refuses to bound a frame on precisely those two events.
+`memory_objects/mir.rs:71-94` retains the stride and then calls `refuse()` for
+any `memop.index` at all, poisoning the frame root with `UnmodeledAccess`;
+`:216` raises `EscapedRoot` for a frame pointer reaching an operand the adapter
+does not interpret, which a call argument always is. So **production's guesses
+and MIR's refusals are the same set**, and the 95% of frames MIR does bound are
+the plain scalar frames where production was already exact.
+
+I put that invariant in the corpus as `frame_partition_census`
+(`memory_objects/partition_tests.rs`, `#[ignore]`d): 173 sources, 1179
+stack-rooted objects, 1120 with an empty conflict set, and the assertion that
+**not one of those 1120 contains a single indexed access**. The counts will
+drift with the corpus; the assertion will not, and it is the sentence that
+decides this box.
+
+### The three candidates I examined and rejected, with what each needs
+
+1. **`high_variables::refine_object_cursor_values`** — already recorded as the
+   wrong target and it survives re-checking. `is_proven_promoted_object_cursor`
+   -> `has_conflict_free_extent` (`memory_objects.rs:562`) needs
+   `object.extent`, which is `stride.and_then(...)` (`:394`), and
+   `partition.rs:175` inserts `UnboundedCursor` **because** `stride.is_some()`.
+   Needs: a partition that can bound a strided object.
+2. **The frame-extent consumers** (`seed_indexed_stack_objects`,
+   `promote_address_taken_stack_object`) — refused by construction, above.
+   Needs, in order of increasing cost: per-cursor conflict attribution, so one
+   escaping local stops poisoning every other local in the frame (today the
+   whole frame is one object, so MIR's escape verdict is frame-wide where
+   production's is per-slot — strictly coarser, and unusable as evidence about
+   any individual variable); an index-aware partition that can still bound the
+   bytes below an indexed region; and an element COUNT, which
+   `ObjectShape::Array` deliberately refuses to claim (`shape.rs:56-61`), so
+   even a perfect array claim cannot answer the question
+   `seed_indexed_stack_objects` is guessing at.
+3. **The AST memory consumers** — and this one is a *different* blocker, which
+   is why it is worth writing down. `copy_prop` drops a pending single-use load
+   at any intervening store because "the store may alias" (`copy_prop.rs:1197`,
+   `:1442`), which is exactly the question MemorySSA answers with proof; the
+   same is true of `dead_stores` and `readonly_fold`. None of them can be
+   migrated, because `Stmt::Store { addr, src, size }` and `Expr::Deref`
+   (`ast.rs:390`) carry **no instruction identity** — there is no key that joins
+   an AST memory operation to a `MemoryAccessId`. Needs: a stable
+   access identity threaded from LLIR through AST lowering. That is a
+   prerequisite for four of EPIC 5's seven consumers and it is not currently on
+   the roadmap at all.
+
+### The cost of admission
+
+Building verified MIR per function measured **+10.4%** on a 294-function
+decompile (28.76 s -> 31.75 s, release build, gcc `-O0` fixtures), consistent
+with the +13% already recorded on `PreparedLlir::mir`. I did not ship the join.
+A consumer that pays 10% to restate an answer the existing pass already gives is
+worse than no consumer, and "the fallback is still there" is not a defence when
+the fallback is also the better answer.
+
+### What shipped
+
+One `#[ignore]`d corpus census and two roadmap boxes rewritten from "blocked, do
+this next" to "measured, and here is what the model needs". No production path
+was touched.
+
+### Gates
+
+`cargo test --features python-ext`: **2548 passed, 0 failed** (4 ignored, up one
+from the new census). Dead code after `touch src/lib.rs; cargo build --features
+python-ext`: **0 never-used functions**; the single never-read FIELD at
+`analysis/ioctl_taint.rs:409` is pre-existing. `rustfmt --edition 2021` on the
+one file touched.
+
+`@o0`/`@o2` were NOT run, and the reason is not budget: the only code change is
+inside `#[cfg(test)]` (`partition_tests.rs` is reached through a `#[cfg(test)]
+#[path]` attribute), so the shipped extension is byte-identical and the corpus
+verdict cannot move. The measurement above IS the corpus evidence for this
+entry, and it was taken with an instrumented build that has been reverted.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` lanes, the full fixture
+matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. **No baseline was
+refreshed and nothing was committed.**
+
+### The thing I would do next, and it is not this box
+
+The `Stmt`/`Expr` identity gap in candidate 3. It blocks `copy_prop`,
+`dead_stores`, `readonly_fold` and expression reconstruction — four of EPIC 5's
+seven consumers — and unlike the aggregate box it blocks them on a question MIR
+answers *better*, not merely differently: "did anything write this memory between
+this load and its use" is answered today by a universal refusal at any
+intervening store, and MemorySSA answers it with a version. That is a migration
+where a cell would move because MIR knew something better. This one was not.

@@ -812,3 +812,154 @@ mod synthetic {
         assert!(frame_partition_conflicts(&llir).is_empty());
     }
 }
+
+/// A corpus-wide census of WHY a frame refuses to partition, and of what is
+/// left to bound when it does not.
+///
+/// Ignored because it compiles every C fixture and lowers every function in
+/// each. Run it when the refusal rules change:
+///
+/// ```text
+/// cargo test --features python-ext frame_partition_census -- --ignored --nocapture
+/// ```
+///
+/// It exists because the shape of these refusals — not their count — is what
+/// decides whether an aggregate consumer can be migrated to MIR evidence at
+/// all, and that shape is easy to reason about wrongly. Measured 2026-08-15
+/// over 173 fixture sources at `-O0`: 1179 stack-rooted objects, 1120 of them
+/// with an EMPTY conflict set, and **not one of those 1120 carries a single
+/// indexed access**. That is not a coincidence and it is not a coverage
+/// problem: `memory_objects/mir.rs` refuses the whole frame root the moment it
+/// sees a scaled index (`UnmodeledAccess`) or a frame pointer in an operand it
+/// does not interpret (`EscapedRoot`), and those two events are precisely the
+/// triggers for every place `stack_locals` GUESSES a frame extent. The
+/// assertion below is that structural fact, not the raw counts, which move
+/// with the corpus.
+#[test]
+#[ignore]
+fn frame_partition_census() {
+    use std::collections::BTreeMap;
+
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/decompiler_fixtures/src");
+    let mut sources = std::fs::read_dir(&root)
+        .expect("the fixture source directory")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "c"))
+        .collect::<Vec<_>>();
+    sources.sort();
+
+    let mut tally = BTreeMap::<String, usize>::new();
+    let mut frames = 0usize;
+    let mut clean = 0usize;
+    let mut clean_with_index = Vec::new();
+    for source in &sources {
+        let stem = source
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("?");
+        let Some(units) = real_x86_frame_partitions(source) else {
+            return;
+        };
+        for (function, indexed, conflicts) in units {
+            frames += 1;
+            if conflicts.is_empty() {
+                clean += 1;
+                *tally.entry("clean".to_string()).or_default() += 1;
+                if indexed > 0 {
+                    clean_with_index.push(format!("{stem}:{function} indexed={indexed}"));
+                }
+                continue;
+            }
+            for conflict in &conflicts {
+                *tally.entry(format!("{conflict:?}")).or_default() += 1;
+            }
+        }
+    }
+
+    println!(
+        "{} fixture sources, {frames} stack-rooted objects",
+        sources.len()
+    );
+    for (reason, count) in &tally {
+        println!("{count:6}  {reason}");
+    }
+    assert!(frames > 0, "the census must observe some frames");
+    assert!(
+        clean > 0,
+        "an ordinary scalar frame must still partition: {tally:#?}"
+    );
+    // The load-bearing claim. An indexed access is the ONLY evidence
+    // `shape::ObjectShape::Array` is built from, and it is also the evidence
+    // that makes `partition_object` refuse. A frame therefore never carries
+    // both a proven array and a bounded extent, which is why the frame-array
+    // extent `stack_locals::seed_indexed_stack_objects` guesses cannot be
+    // answered from this model.
+    assert!(
+        clean_with_index.is_empty(),
+        "a bounded frame cannot contain an indexed access: {clean_with_index:#?}"
+    );
+}
+
+/// `(function entry, indexed access count, partition conflicts)` for every
+/// stack-rooted object of every function defined in one fixture source.
+///
+/// `None` when GCC is unavailable, matching [`real_x86_function`].
+fn real_x86_frame_partitions(
+    source: &std::path::Path,
+) -> Option<Vec<(String, usize, std::collections::BTreeSet<PartitionConflict>)>> {
+    let dir = tempfile::tempdir().expect("temporary fixture build directory");
+    let binary = dir.path().join("fixture.so");
+    let build = match Command::new("gcc")
+        .args(["-shared", "-fPIC", "-g", "-O0", "-o"])
+        .arg(&binary)
+        .arg(source)
+        .output()
+    {
+        Ok(build) => build,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => panic!("launch GCC: {error}"),
+    };
+    if !build.status.success() {
+        return Some(Vec::new());
+    }
+
+    let data = std::fs::read(&binary).expect("read GCC output");
+    let image = ProgramImage::from_path(&binary).expect("index the fixture ELF");
+    let (functions, _) = crate::analysis::cfg::analyze_functions_bytes(
+        &data,
+        &crate::analysis::cfg::Budgets::default(),
+    );
+    let mut units = Vec::new();
+    for function in &functions {
+        let Ok(mut lifted) = crate::ir::lift_function::lift_function_from_bytes(
+            &data,
+            function,
+            crate::core::binary::Arch::X86_64,
+        ) else {
+            continue;
+        };
+        crate::ir::abi::annotate_calls(&mut lifted, crate::ir::call_args::CallConv::SysVAmd64);
+        let Ok(mir) = lower_verified_with_image(&lifted, &image) else {
+            continue;
+        };
+        for object in mir.objects() {
+            if !object
+                .origins
+                .iter()
+                .any(|origin| matches!(origin, ObjectOrigin::StackValue(_)))
+            {
+                continue;
+            }
+            let Some(partition) = mir.object_partition(object.id) else {
+                continue;
+            };
+            units.push((
+                format!("{:#x}", function.entry_point.value),
+                object.indexed_accesses.len(),
+                partition.conflicts.clone(),
+            ));
+        }
+    }
+    Some(units)
+}

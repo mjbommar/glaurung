@@ -430,6 +430,12 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
 - [~] Retain the AST compatibility adapter as production authority while the MIR
   model is diagnostic; do not create a second production heuristic path.
 - [ ] Migrate the first production aggregate consumer to verified MIR evidence.
+  **Measured 2026-08-15 and the answer is not "not yet" but "there is nothing to
+  move": the two models are at parity where MIR speaks, and MIR is silent
+  exactly where the AST guesses.** See Phase 6 below for the full measurement;
+  the one-line version is that verified MIR refuses to bound a frame the moment
+  it sees a scaled index or an escaping frame pointer, and those two events are
+  the trigger for every frame extent `stack_locals` recovers by guessing.
 - [ ] Import authoritative DWARF/PDB/manual layouts into the same constraint
   system.
 - [~] Collect exact load/store, affine-offset, repeated-stride, overlap, pointer,
@@ -612,6 +618,14 @@ memory_version(region, point)
     (`memory_objects/mir.rs`, `mir/verify_objects.rs`) and sitting unused beside
     the AST version production actually calls (`high_variables.rs:36` ->
     `memory_objects/ast.rs`). It is the cheapest migration, not the dearest.
+    **Retracted 2026-08-15 — measured, and it is not a migration at all.** The
+    join was wired through the real pipeline over the whole corpus and MIR
+    agrees with the pass it would replace on 3803 of 3823 bounded frame
+    coordinates, is a weaker bound on the other 20, and is silent on every
+    extent `stack_locals` actually guesses. Cheap to plumb, yes; it returns
+    nothing. See Phase 6's "Migrate the first production aggregate consumer"
+    box for the numbers and for the three model changes that would make it
+    return something.
   * Call-argument recovery has since grown its OWN reaching-definition machinery
     (`call_args::EnclosingSlots::reaching`, `9952fc0`) rather than migrating. It
     is fail-closed and it works, but it is an eighth approximation, and its two
@@ -1613,6 +1627,69 @@ the detail kept there and only the delta recorded here.
   `MemoryObjectModel::resolve_frame_coordinate` → `bounds_at`, test-proven by
   `every_promoted_frame_coordinate_resolves_to_its_own_extent`
   (`partition_tests.rs:252`) — and today has no non-test caller.
+
+  **2026-08-15: that suggested first step was taken, wired through the real
+  pipeline, and MEASURED. It is a no-op, and the reason generalises to the whole
+  box.** The join was built in `decompile_at`/`decompile_range_at` after
+  `run_ast_passes`, asking verified MIR for the extent of every promoted frame
+  coordinate on all 173 fixture sources at `-O0` and `-O2` (1270 functions, 4703
+  promoted coordinates). It resolves — `rbp`, `rsp` and `entry_rsp` spellings all
+  land on the right byte — and then it agrees with the pass it was supposed to
+  replace:
+
+  * **Forward** (production coordinate -> MIR bounds): 3823 coordinates bounded,
+    802 refused by a partition conflict, 78 unresolvable (`AmbiguousBase` 48,
+    `UnknownBase` 30). Of the 3823 bounded, **3803 widths identical, 20 wider,
+    0 narrower** — and all 20 "wider" are `sizes[name] == 1` byte-array
+    aggregates, where MIR's `at_least` is a strictly WEAKER bound than the
+    number production already has. `100_struct_layout:struct_assignment_copies`
+    is the clean example: the source `struct Tight` is 12 bytes, production
+    emits `unsigned char local_18[12]`, and MIR bounds the same storage only as
+    `8 <= w <= 32`.
+  * **Reverse** (MIR-proven unit -> did production name it?): 3657 of 3675 units
+    already carry a promoted local. The 18 exceptions are interior cells of
+    structs production names as ONE byte object, plus two spill slots in
+    `call_into_spill` it deliberately does not promote. No frame variable is
+    being lost.
+  * `bounds_at(offset).at_least` started at the local's own coordinate for
+    **3823 of 3823** — production never mints a local inside a proven storage
+    unit. That is worth keeping as a fact; it is not a migration.
+
+  The structural reason, which is the part that generalises: **`stack_locals`
+  forms a frame OBJECT (as opposed to naming a scalar slot) in exactly three
+  places, and all three are triggered by the frame's address being indexed or
+  taken** — `seed_indexed_stack_objects` (`stack_locals.rs:1018`, extent = "to
+  the next indexed start, else to the frame base"),
+  `promote_address_taken_stack_object` (`:1921`, extent = "to the next known
+  slot, else to the frame base") and `stack_assignment_object_address`
+  (`:2608`). Verified MIR refuses to bound a frame on exactly those two events:
+  `memory_objects/mir.rs:71-94` calls `refuse()` for any `memop.index`
+  (`UnmodeledAccess`) and `:216` raises `EscapedRoot` for a frame pointer in an
+  operand it does not interpret. **Production's guesses and MIR's refusals are
+  the same set.** The corpus census `frame_partition_census`
+  (`partition_tests.rs`) pins the invariant: 1179 stack-rooted objects, 1120
+  with an empty conflict set, and **not one of those 1120 contains a single
+  indexed access**.
+
+  So this box does not need plumbing; it needs the model to change. The three
+  things that would actually unblock it, in increasing order of cost:
+  1. **Per-cursor conflict attribution.** One object per frame root means one
+     escaping local poisons every other local in the frame, so MIR's escape
+     verdict is frame-wide where production's is per-slot — strictly coarser,
+     hence unusable as evidence about any individual variable.
+  2. **An index-aware partition.** A scaled index whose stride and access width
+     agree (the `ObjectShape::Array` case, which `shape.rs` already proves) is
+     enough to bound the bytes BELOW the indexed region even though the indexed
+     region itself stays open. Today one index refuses the entire object.
+  3. **An element COUNT.** `ObjectShape::Array` deliberately reports `end: None`
+     (`shape.rs:56-61`), so even a perfect array claim cannot answer the one
+     question `seed_indexed_stack_objects` is guessing at.
+
+  Cost note for whoever wires the next consumer: building verified MIR per
+  function measured **+10.4%** on a 294-function decompile (28.76 s -> 31.75 s,
+  release, gcc `-O0` fixtures), consistent with the +13% recorded on
+  `PreparedLlir::mir`. That is the price of admission for any consumer, so the
+  first one to pay it must return more than a restatement.
 - [~] Solve arrays, structs, unions, bitfields, extents, and pointees.
   Four of the six are settled, two of them by proof of *undecidability* rather
   than by an answer; see the `[~]` "Classify struct versus array versus union
