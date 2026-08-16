@@ -24,7 +24,13 @@ decompiler defects.
 
 Status markers:
 
-- `[x]` is implemented and has specific evidence.
+- `[x]` is implemented, CONNECTED TO A PRODUCTION CALLER, and has specific
+  evidence. "Implemented" and "connected" are different claims and this document
+  has conflated them at real cost: `SymbolStore` was ticked while every caller
+  lived in `session_tests.rs`, `RecoveredOutputKind::HiddenReturn` was matched in
+  three places and constructed in none, and a whole width-propagation cluster in
+  `ast.rs` was reachable only from its own tests. A box does not tick until
+  something in the shipping pipeline asks it a question.
 - `[~]` is partially implemented or implemented only as a diagnostic sidecar.
 - `[ ]` is open.
 - `[!]` is blocked by a prerequisite or known unsafe approach.
@@ -33,6 +39,57 @@ Status markers:
 When an old score or revision appears in an evidence document, treat it as
 historical unless this file calls it current. Product correctness, local metric
 results, the PR branch, and the public leaderboard are separate states.
+
+### Two tracks, judged differently
+
+Work here divides into two kinds that were previously interleaved, competing for
+the same slots. They are not equally urgent and they cannot be measured the same
+way, so mixing them made the correctness work look like progress and the
+architecture work look stalled, when in fact the second was simply losing every
+scheduling contest to the first.
+
+**CORRECTNESS.** Success is fixture cells moving from `fail` to `pass`, or a
+census of a defect class going down. Fast feedback, days not weeks. A change here
+that moves no cells needs an argument.
+
+**ARCHITECTURE.** Success is a boundary that holds — a narrower API, one reason
+to change, a capability something else can now be built on. A change here is
+*expected* to move zero cells, and must be justified by what it unblocks rather
+than by output quality. A change here that moves cells is a pleasant surprise,
+not the reason it was done.
+
+Judge each by its own standard. An architecture item that has to promise cell
+movement to get scheduled will be over-sold, and a correctness item asked to
+justify itself architecturally will be blocked on a refactor it does not need.
+
+**The evidence for taking this seriously.** Across 2026-08-13..16 the changes
+that moved fixture cells were, almost without exception, MISSING CAPABILITIES
+rather than migrations: AArch64 had no scalar floating-point lifting at all,
+i386 had no x87 at all, ARM32 dropped an entire modified-immediate family, and
+`call *(mem)` lifted to a fabricated call to address zero. None of those four
+appeared anywhere in this document. Meanwhile two migrations that this plan
+treats as central were built and measured and returned nothing — the aggregate
+MIR consumer join reproduces what `stack_locals` already computes, and the alias
+barrier needed no MIR at all because 72% of its cases were provable from data the
+AST already carried.
+
+That is not an argument against the architecture track. It is an argument for
+stating plainly that the two are different bets, so that neither one is judged by
+the other's yardstick.
+
+### Capability census: check for whole missing categories first
+
+Before attributing a cluster of failures to a deep modelling gap, check whether
+the capability exists at all. Three whole missing categories were found in three
+days by one cheap technique: grep the lifters for an ISA's mnemonic families and
+diff that against what the corpus actually emits.
+
+    grep -c "fadd\|fmul\|fdiv\|scvtf\|fcvtz" src/ir/lift_*.rs
+    objdump -d <fixture object> | grep -oE "\bf[a-z]+\b" | sort | uniq -c
+
+`039c7d6`, `f1a6e4c` and `dcc62aa` were each found this way, and each looked like
+scattered unrelated fixture failures beforehand. This belongs in a standing test,
+not in institutional memory.
 
 
 ### The plan double-counts itself — read the Phases as views, not as work
@@ -871,6 +928,34 @@ Measured cautions:
 - [ ] Require deterministic pipeline fingerprints for every entry point/profile.
 
 ## Code quality, composition, and file-size program
+
+### The targets are moving the wrong way — decide, do not drift
+
+Measured 2026-08-16, and the direction matters more than the gap:
+
+| measure | target | 2026-08-13 | now |
+|---|---:|---:|---:|
+| product mean LOC | 450 | 515.9 | **530.2** |
+| files over 2,000 LOC | 5 | 13 | **14** |
+| product LOC in files over 1,000 | 25% | 44.5% | 44.5% |
+
+The mean rose while the ratchet stayed green, because the baseline was
+regenerated ten times in one day — each movement individually defensible, the
+trend visible to nobody. `tools/fitness_report.py --write-baseline` now records
+accepted regressions inside the baseline and prints cumulative drift, and it
+earned that on its first use by catching `copy_prop.rs` crossing 2,000 lines.
+
+This is an ARCHITECTURE-track item and should be judged as one: splits that do
+not move fixture cells are the expected outcome, not a failure. But an
+aspirational target nobody is working toward reads as failure at every
+measurement, which is corrosive. Either schedule the splits below as real work,
+or restate the numbers as a direction rather than a target. Do not leave them
+sitting as a gap that grows.
+
+The constraint that governs any split has not changed and is not negotiable: a
+split counts only if it creates a narrower API and one reason to change.
+Arbitrary fragmentation is not architecture, and a split that leaves the same
+responsibilities coupled by private mutation is a stop condition.
 
 ### Ownership map
 
@@ -2265,6 +2350,21 @@ Stop the affected change and repair the foundation when:
 - performance improves by reducing coverage or silently timing out work.
 
 ## Definition of done
+
+**This list describes an architecture, not a product, and that is a defect in
+it.** Every bullet below can be satisfied by a decompiler that lifts no x87 and
+no AArch64 scalar float — as this one did until 2026-08-15, while satisfying
+several of them. Conversely the four largest correctness wins of that week move
+none of these bullets at all.
+
+So read this as the ARCHITECTURE track's definition of done, and hold the
+correctness track to a separate one:
+
+> **Correctness is done when**, for every architecture the project claims to
+> support, no whole instruction category is unlifted, the fixture corpus records
+> no undefined reads in required functions, and no pass fabricates a fact it
+> cannot prove. Those are measurable today: the capability census, the
+> `defuse_baseline.json` ratchet, and the fail-closed stop conditions.
 
 The redesign is complete when Glaurung has:
 
