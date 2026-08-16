@@ -7788,3 +7788,226 @@ framework.
 - `tools/dectest.py @o0`: 364 lanes, no regressions. `@o2`: 364 lanes, no
   regressions. Neither shows improvements either; see above.
 - No DecBench, no Joern, no baseline regeneration.
+
+## Entry 46 — The key that was already in the AST
+
+Entry 44 ended by naming the next thing to do: `Stmt::Store` and `Expr::Deref`
+carry no instruction identity, so no key joins an AST memory operation to a
+`MemoryAccessId`, and that gap blocks `copy_prop`, `dead_stores`,
+`readonly_fold` and expression reconstruction — four of EPIC 5's seven
+consumers. It named a mechanism (thread a `MemoryAccessId` from lowering, or a
+VA plus an operand discriminator) and a payoff (MemorySSA answers *better*
+here, not merely equally).
+
+I measured the payoff before building the mechanism. The mechanism is not
+needed. Seventy-two percent of the available win is provable from evidence the
+AST already carries, and it is now shipped.
+
+### First: only one of the three sites is an alias bail
+
+The claim was that `copy_prop`, `dead_stores` and `readonly_fold` all bail the
+same way. Checked one at a time:
+
+* **`copy_prop` — real.** `invalidate_loads` (`copy_prop.rs:1536`) is called
+  from exactly two places, both in `propagate_run_counted`: at `Stmt::Store`
+  and at `Stmt::Push`. It drops *every* recorded copy whose source contains a
+  `Deref`, with the comment "the store may alias". This is the site.
+* **`dead_stores` — not an alias bail.** The pass eliminates writes to
+  *registers* (`Stmt::Assign { dst: VReg::Phys | VReg::Temp }`), and
+  `is_dead_from` contains no memory barrier of any kind — a `Stmt::Store` is
+  neither a killer nor a barrier there, only a possible syntactic *read* of the
+  register being tracked (`:532`). Its two `Stmt::Store` matches are a
+  callee-save spill idiom (`:253`) and `prune_unobserved_promoted_object_stores`
+  (`:340`), whose proof is storage-based — every remaining mention of the object
+  must be the destination of one such store — and not an aliasing question at
+  all. There is nothing here for MemorySSA to improve.
+* **`readonly_fold` — not an alias bail.** It materialises loads from
+  *read-only* image data, which by construction nothing writes. Its `Stmt::Store`
+  arm (`:256`) folds the two subexpressions and continues; it does not clear
+  anything. The `aliases` map that dominates a grep of that file is a
+  name-to-name map for guard tracking, not a memory-alias map, and the
+  conservatism the module doc describes ("mutations and unsafe control-flow
+  boundaries discard the fact") is about the *index* register, not about stores.
+
+So the prerequisite blocks one consumer, not four. That alone shrinks the box.
+
+### Second: the size of the prize
+
+Instrumented `propagate_run_counted` under `GLAURUNG_PASS_STATS` to count, at
+every barrier, the pending loads dropped and — the number that actually matters
+— how many of those had a reader waiting later in the same straight-line run
+before any statement that clears the copy set. Ran `decompile_all` over every
+prebuilt fixture binary.
+
+Over the 732 C/C++ lanes (10,051 functions):
+
+| | count |
+|---|---|
+| store/push barriers reached | 143,787 |
+| barriers that dropped at least one load | 5,338 (3.7%) |
+| loads dropped | 11,219 |
+| dropped loads with a reader in the same run | 3,688 |
+| ...reachable by proving *this one* barrier | **1,989** |
+
+Including the 30 rustc lanes the last number is 18,778, but those lanes
+decompile the whole linked-in Rust std library and 95% of the total comes from
+eight of them, so the C corpus is the honest denominator.
+
+### Third, and this is the finding: what proof each case needs
+
+Classifying those 1,989 by the evidence that would settle them:
+
+| proof needed | count | share |
+|---|---|---|
+| same frame object, constant offsets, ranges disjoint | **1,308** | 65.8% |
+| arbitrary pointer on one side | 543 | 27.3% |
+| frame storage vs. fixed image address | 116 | 5.8% |
+| two differently-named frame objects | 9 | 0.5% |
+| same frame object, ranges genuinely overlap | 8 | 0.4% |
+| two distinct image VAs | 5 | 0.3% |
+
+**1,438 of 1,989 — 72.3% — are provable from what the AST already holds.**
+`Expr::StackAddr { object }` already names the storage, the displacement is
+already a literal, and `Stmt::Store { size }` and `Expr::Deref { size }` already
+carry both widths. No `MemoryAccessId`, no lowering change, no MIR.
+
+Of those 1,438 the patch actually claims the first and third rows — 1,424, or
+71.6% — and deliberately leaves the 9 distinct-object and 5 distinct-image-VA
+cases on the table, for the reasons in "What shipped" below. The point stands
+either way: the blocking key was never missing.
+
+The 27.3% that needs a real pointer proof is the part worth being precise about,
+because it is where the brief expected MemorySSA to earn its keep — and it would
+not. `memory_ssa.rs` models five coarse regions, and
+`primary_region_for_memop` maps *any* base register that is not the stack or
+frame pointer to `HeapUnknown`; a write to `HeapUnknown` then clobbers every
+region (`:584-591`). A store through an unproven pointer is therefore a
+may-alias against the frame in MemorySSA exactly as it is in `copy_prop` today.
+Paying Entry 44's measured +10.4% to build verified MIR would buy the 121 cases
+in the two image-address rows — one fold per 83 functions — and nothing else.
+
+### What shipped
+
+`invalidate_loads_for_store` replaces the blanket drop at `Stmt::Store` only.
+`Stmt::Push` keeps the blanket drop; it has no AST address to reason about.
+Disjointness is claimed in exactly two shapes and refused everywhere else:
+
+* the same named frame object with constant displacements whose `[offset,
+  offset+width)` ranges do not intersect, and
+* frame storage against a fixed image address.
+
+Everything else keeps the original behaviour, including the two cases it would
+have been tempting to take. **Two differently-named frame objects are not
+claimed disjoint** — stack promotion can name an interior cell of a larger byte
+object, so two names are not two storages — which costs 9 corpus cases and is
+the right trade. **Any non-constant displacement refuses**, so an indexed store
+proves nothing. And the 8 genuinely overlapping pairs are rejected by the range
+test, which is the case the whole guard exists for: folding a load across a
+store that does alias produces C that compiles, runs, and returns a different
+number.
+
+Six unit tests pin each arm — the two positives, and controls for overlap,
+identical address, distinct objects, indexed store, and a store through a
+pointer. The pre-existing `single_use_load_not_folded_across_store` still passes
+unchanged, because its two addresses are bare registers and nothing proves them
+apart.
+
+### What moved, corpus-wide
+
+Decompiled all 762 prebuilt fixture binaries under both builds and diffed
+function by function. **10 lanes change, 132 functions, 63,684 → 60,856 lines**
+(-4.4%); no function anywhere got longer. Two lanes are
+`153_many_live_locals` at `-O2` and eight are rustc lanes. Of the 132 changed
+functions only **four are gated cells**:
+
+* `153_many_live_locals:gcc:O2:spill153_live_set`
+* `153_many_live_locals:gcc:O2:spill153_static_web`
+* `153_many_live_locals:clang:O2:spill153_live_set`
+* `171_rust_overflow:rustc:O0:rust_u32_sub_family`
+
+the rest being Rust std internals that no baseline names. The shape in all of
+them is the same and `153_many_live_locals:gcc:O2` shows it plainly: 466 lines
+vanish, almost all of them declarations of `long varNNNN` temporaries that
+existed only because a pending spill reload was dropped at the next spill store.
+
+```c
+-    var206 = (unsigned long)((unsigned int)(*(int *)((&local_1a0[0] + 324))));
+-    *(int *)((&local_1a0[0] + 128)) = (var206 - 0x722193c0);
++    *(int *)((&local_1a0[0] + 128)) =
++        ((unsigned long)((unsigned int)(*(int *)((&local_1a0[0] + 324)))) - 0x722193c0);
+```
+
+That is the whole 1,308: a spilled value reloaded from one frame slot while the
+store goes to another. It is not a source-level array — `local_1a0` is the
+*spill area*, which `stack_locals` promotes as one indexed byte object, which is
+precisely why both accesses share a name and the offsets are literals.
+
+### The new lane
+
+`196_disjoint_frame_slots` (`dfs196_*`). Getting the positive to reproduce took
+three tries and the failures are worth recording: an 8-element local array does
+not do it, nor does the same array with its address escaped to a call, nor 28
+live locals. The shape needs enough register pressure to force a real spill web
+— 48 live locals is where it starts, and at that size only the `gcc:O2` lane
+moves (22 lines, 12 fewer). Below that the compiler keeps everything in
+registers and there are no frame accesses to disambiguate.
+
+The three controls are the part with lasting value, because they are what fails
+if the disjointness test is ever loosened: a store through a pointer that
+genuinely points into the same array, a store to a runtime-chosen index, and a
+2-byte write inside the 4 bytes a later read covers, reached through a union so
+the overlap is real storage reuse. All three are executed and differentiated.
+None of the three changed output under this patch, which is the intended result.
+
+Fifteen of the lane's sixteen cells pass. **`gcc:O2:dfs196_alias_control`
+fails, and it fails identically on the unpatched build** — I checked by swapping
+the baseline extension back in and re-running, precisely because a control that
+starts failing is the one result that would mean this patch was unsound. It is
+not this patch; it is a pre-existing defect the control walked into on its first
+run. The recovered C reads `local_2c` at a point where nothing has assigned it:
+gcc `-O2` fills the array with a pointer-strided loop (`*(int *)var3 = var5;
+var3 = var3 + 4`), and the frame slot that loop writes is never connected to the
+named local a later statement reads. That is a stack-naming gap, not an aliasing
+one, and it deserves its own box.
+
+### One hardening, and the measurement that justified deleting code
+
+`stack_offset` and `is_image_address` initially looked through `Expr::Cast`,
+which is unsound in principle — a narrowing cast in address position truncates
+the address the offsets are being compared against. Rather than argue about
+whether that can happen, I deleted both arms and re-measured: the corpus output
+is **byte-identical** with them gone. The cast path never fired, so the safer
+version costs exactly nothing and is what shipped.
+
+### Cost
+
+None to speak of, and this is the contrast with Entry 44. The work added is a
+bounded walk of the pending copy's own expression at each store barrier — no
+MIR, no second IR, no image queries. The `+10.4%` admission fee that killed the
+aggregate migration is not charged here because MemorySSA is never consulted.
+
+### Gates
+
+`cargo test --features python-ext`: **2554 passed, 0 failed** (4 ignored) — 2548
+at HEAD plus the six new ones.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, the `--decbench` lanes, the full fixture
+matrix, any `arch_roundtrip.py` sweep, repo-wide `cargo fmt`. **No baseline was
+refreshed and nothing was committed.** `196_disjoint_frame_slots` is declared in
+`manifest.py` but has no rows yet in `baseline.json`,
+`structural_baseline.json` or `arch_baseline.json`; those three need generating
+before it can gate.
+
+### One thing I did not fix, flagged rather than silently left
+
+`dead_stores::is_dead_from` has no memory barrier at all, and it deletes
+`Stmt::Assign` writes to `VReg::Phys` names without excluding promoted locals.
+On its face `local_18 = 5; y = *p; local_18 = 9;` would delete the first store
+even where `p` points at `local_18`, because `stmt_reads` only matches the
+*name*. I believe it is unreachable rather than wrong: an address-taken frame is
+promoted by `promote_address_taken_stack_object` into a byte OBJECT whose
+accesses render as `Stmt::Store { addr: StackAddr + off }`, not as
+`Stmt::Assign { dst }`, so the two forms do not mix on the same storage. That is
+an argument, not a proof, and it deserves a fixture rather than a paragraph.

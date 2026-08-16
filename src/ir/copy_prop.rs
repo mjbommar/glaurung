@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::{is_promoted_local_reg, VReg};
+use crate::ir::types::{is_promoted_local_reg, BinOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
 /// Run copy propagation then dead-copy elimination over `f`'s body.
@@ -1188,18 +1188,21 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &HashMap<VReg, usize>) -> Co
                     }
                 }
             }
-            Stmt::Store { addr, src, .. } => {
+            Stmt::Store { addr, src, size } => {
                 subst_store_addr(addr, &copies);
                 subst(src, &copies);
                 if let Expr::Reg(r) = addr {
                     invalidate(&mut copies, r);
                 }
                 // The store may alias a pending single-use load; folding that
-                // load past this point would read the post-store value.
-                invalidate_loads(&mut copies);
+                // load past this point would read the post-store value. Only a
+                // load this store provably cannot touch survives.
+                crate::ir::pass_stats::attempt("copyprop_load_barrier");
+                invalidate_loads_for_store(&mut copies, addr, *size);
             }
             Stmt::Push { value } => {
                 subst(value, &copies);
+                // A push has no AST address to reason about.
                 invalidate_loads(&mut copies);
             }
             Stmt::Return { value } => {
@@ -1535,6 +1538,152 @@ fn contains_select(e: &Expr) -> bool {
 /// store/push could alias).
 fn invalidate_loads(copies: &mut Copies) {
     copies.retain(|_, src| !contains_deref(src));
+}
+
+/// Like [`invalidate_loads`], but keeps a pending load the store at `addr`
+/// (width `size` bytes) provably cannot touch.
+///
+/// # Why this is not just `invalidate_loads`
+///
+/// Dropping every pending load at every store is correct but costs real
+/// quality: measured over the fixture corpus at `-O0` and `-O2` (732 C/C++
+/// lanes, 10,051 functions), 1,989 dropped loads had a use waiting in the same
+/// straight-line run, and **1,308 of them were a store and a load to constant,
+/// non-overlapping offsets of the *same* named stack object** — `local_18[0]`
+/// written while `local_18[8]` sits pending. Only 8 genuinely overlapped.
+///
+/// # Fail-closed
+///
+/// Disjointness is claimed only from evidence already in the AST and only in
+/// two shapes ([`addresses_disjoint`]): identical stack object with constant
+/// displacements whose byte ranges do not intersect, and frame storage versus a
+/// fixed image address. Everything else — an arbitrary pointer on either side,
+/// two *different* named stack objects (stack promotion may nest one inside
+/// another), a non-constant index, a call — keeps the original conservative
+/// drop. A wrong claim here would reorder a load across an aliasing store and
+/// silently produce wrong C, so every unproven case stays unproven.
+fn invalidate_loads_for_store(copies: &mut Copies, addr: &Expr, size: u8) {
+    let store_size = i64::from(size);
+    copies.retain(|_, src| {
+        if !contains_deref(src) {
+            return true;
+        }
+        let kept = loads_proven_disjoint(src, addr, store_size);
+        if kept {
+            crate::ir::pass_stats::fire("copyprop_load_kept_disjoint");
+        }
+        kept
+    });
+}
+
+/// Constant byte displacement of `e` from its stack-object root.
+///
+/// `None` unless every term between the root and `e` is a literal constant, so
+/// an indexed access never produces an offset a caller could reason with.
+fn stack_offset(e: &Expr) -> Option<(&VReg, i64)> {
+    match e {
+        Expr::StackAddr { object, .. } => Some((object, 0)),
+        Expr::Bin { op, lhs, rhs } => {
+            let sign: i64 = match op {
+                BinOp::Add => 1,
+                BinOp::Sub => -1,
+                _ => return None,
+            };
+            if let (Some((object, base)), Expr::Const(k)) = (stack_offset(lhs), rhs.as_ref()) {
+                return base.checked_add(sign.checked_mul(*k)?).map(|d| (object, d));
+            }
+            // `const + &obj` only commutes for addition.
+            match (lhs.as_ref(), stack_offset(rhs)) {
+                (Expr::Const(k), Some((object, base))) if sign == 1 => {
+                    base.checked_add(*k).map(|d| (object, d))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// True when `e` addresses a fixed image location rather than frame storage.
+///
+/// Every term must be a literal. `Addr(base) + reg` is deliberately refused:
+/// the register is unbounded here, so "inside the image" is an assumption about
+/// the index, not a proof about the address.
+fn is_image_address(e: &Expr) -> bool {
+    match e {
+        Expr::Addr(_) | Expr::Named { .. } => true,
+        Expr::Bin { op, lhs, rhs } if matches!(op, BinOp::Add | BinOp::Sub) => {
+            match (lhs.as_ref(), rhs.as_ref()) {
+                (base, Expr::Const(_)) => is_image_address(base),
+                (Expr::Const(_), base) => matches!(op, BinOp::Add) && is_image_address(base),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// True only when the two accesses provably touch no common byte.
+fn addresses_disjoint(a: &Expr, a_size: i64, b: &Expr, b_size: i64) -> bool {
+    if let (Some((object_a, offset_a)), Some((object_b, offset_b))) =
+        (stack_offset(a), stack_offset(b))
+    {
+        // Two *different* named objects are deliberately not claimed disjoint:
+        // stack promotion can name an interior cell of a larger byte object.
+        return object_a == object_b
+            && (offset_a.saturating_add(a_size) <= offset_b
+                || offset_b.saturating_add(b_size) <= offset_a);
+    }
+    // Frame storage and a fixed image address are different storage.
+    (stack_offset(a).is_some() && is_image_address(b))
+        || (is_image_address(a) && stack_offset(b).is_some())
+}
+
+/// True when every memory read inside `e` is proven disjoint from the store.
+///
+/// Mirrors [`contains_deref`]'s variant coverage exactly: any construct whose
+/// memory footprint this function does not enumerate must answer `false`.
+fn loads_proven_disjoint(e: &Expr, store_addr: &Expr, store_size: i64) -> bool {
+    match e {
+        // Opaque footprint — a call may write anything.
+        Expr::Call { .. } | Expr::FunctionTableEntry { .. } => false,
+        Expr::Deref { addr, size } => {
+            addresses_disjoint(store_addr, store_size, addr, i64::from(*size))
+                // The address computation may itself load.
+                && loads_proven_disjoint(addr, store_addr, store_size)
+        }
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_)
+        | Expr::Reg(_)
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => true,
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            loads_proven_disjoint(lhs, store_addr, store_size)
+                && loads_proven_disjoint(rhs, store_addr, store_size)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            loads_proven_disjoint(cond, store_addr, store_size)
+                && loads_proven_disjoint(if_true, store_addr, store_size)
+                && loads_proven_disjoint(if_false, store_addr, store_size)
+        }
+        Expr::Un { src, .. } => loads_proven_disjoint(src, store_addr, store_size),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            loads_proven_disjoint(expr, store_addr, store_size)
+        }
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .all(|arg| loads_proven_disjoint(arg, store_addr, store_size)),
+    }
 }
 
 fn count_reg_uses(e: &Expr, target: &VReg) -> usize {
@@ -2980,6 +3129,136 @@ mod tests {
             matches!(f.body.last(), Some(Stmt::Return { value: Some(Expr::Reg(r)) }) if *r == reg("t0")),
             "return must still read the loaded temp, not the moved load: {:?}",
             f.body
+        );
+    }
+
+    /// `t0 = *(&object + load_off); *(&store_addr) = 5; return t0`
+    ///
+    /// Returns true when the load was folded into the return.
+    fn load_folds_across_store(load_addr: Expr, store_addr: Expr) -> bool {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("t0"),
+                    src: Expr::Deref {
+                        addr: Box::new(load_addr),
+                        size: 4,
+                    },
+                },
+                Stmt::Store {
+                    addr: store_addr,
+                    src: Expr::Const(5),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("t0"))),
+                },
+            ],
+        };
+        propagate_copies(&mut f);
+        matches!(
+            f.body.last(),
+            Some(Stmt::Return {
+                value: Some(Expr::Deref { .. })
+            })
+        )
+    }
+
+    fn frame_slot(object: &str, offset: i64) -> Expr {
+        let base = Expr::StackAddr {
+            object: reg(object),
+            size: 64,
+        };
+        if offset == 0 {
+            return base;
+        }
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(base),
+            rhs: Box::new(Expr::Const(offset)),
+        }
+    }
+
+    #[test]
+    fn single_use_load_folded_across_disjoint_frame_slot() {
+        // A 4-byte store at `local_10 + 0` cannot touch the 4 bytes at
+        // `local_10 + 8`, so the pending load survives the barrier. This is
+        // the dominant real shape: 1,308 of 1,989 recoverable corpus cases.
+        assert!(
+            load_folds_across_store(frame_slot("local_10", 8), frame_slot("local_10", 0)),
+            "disjoint constant offsets of one frame object must fold"
+        );
+        // ...and symmetrically with the store above the load.
+        assert!(
+            load_folds_across_store(frame_slot("local_10", 0), frame_slot("local_10", 8)),
+            "order of the two disjoint slots must not matter"
+        );
+    }
+
+    #[test]
+    fn single_use_load_not_folded_across_overlapping_frame_slot() {
+        // 4 bytes at +8 and 4 bytes at +10 share two bytes.
+        assert!(
+            !load_folds_across_store(frame_slot("local_10", 10), frame_slot("local_10", 8)),
+            "partially overlapping frame slots must keep the conservative drop"
+        );
+        // Exactly the same address is the degenerate overlap.
+        assert!(
+            !load_folds_across_store(frame_slot("local_10", 8), frame_slot("local_10", 8)),
+            "identical frame slots must keep the conservative drop"
+        );
+    }
+
+    #[test]
+    fn single_use_load_not_folded_across_distinct_frame_objects() {
+        // Deliberately unproven: stack promotion can name an interior cell of
+        // a larger byte object, so two different names are not two different
+        // storages. Measured at 9 corpus occurrences — not worth the risk.
+        assert!(
+            !load_folds_across_store(frame_slot("local_20", 0), frame_slot("local_10", 0)),
+            "two differently-named frame objects must not be claimed disjoint"
+        );
+    }
+
+    #[test]
+    fn single_use_load_not_folded_across_indexed_frame_store() {
+        // `local_10 + i` has no constant displacement, so nothing is proven.
+        let indexed = Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::StackAddr {
+                object: reg("local_10"),
+                size: 64,
+            }),
+            rhs: Box::new(Expr::Reg(reg("i"))),
+        };
+        assert!(
+            !load_folds_across_store(frame_slot("local_10", 8), indexed),
+            "an indexed frame store must keep the conservative drop"
+        );
+    }
+
+    #[test]
+    fn single_use_load_folded_across_store_to_image_address() {
+        // Frame storage and a fixed image address are different storage.
+        assert!(
+            load_folds_across_store(frame_slot("local_10", 0), Expr::Addr(0x4000)),
+            "a store to a fixed image address cannot touch the frame"
+        );
+        assert!(
+            load_folds_across_store(Expr::Addr(0x4000), frame_slot("local_10", 0)),
+            "a store to the frame cannot touch a fixed image address"
+        );
+    }
+
+    #[test]
+    fn single_use_load_not_folded_across_store_through_pointer_into_frame() {
+        // The store address is an arbitrary pointer. It may well point into
+        // `local_10`, and nothing here proves otherwise.
+        assert!(
+            !load_folds_across_store(frame_slot("local_10", 8), Expr::Reg(reg("p"))),
+            "a store through an unproven pointer must keep the conservative drop"
         );
     }
 

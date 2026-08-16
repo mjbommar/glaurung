@@ -646,6 +646,23 @@ memory_version(region, point)
     nothing. See Phase 6's "Migrate the first production aggregate consumer"
     box for the numbers and for the three model changes that would make it
     return something.
+  * The "instruction identity blocks four of the seven" claim (diary entry 44)
+    is **retracted 2026-08-16 — measured, and it was wrong twice over.** First,
+    only `copy_prop` actually bails on aliasing: `dead_stores::is_dead_from`
+    contains no memory barrier at all (it eliminates *register* writes, and its
+    two `Stmt::Store` matches are a callee-save idiom and a storage-based
+    proof), and `readonly_fold` reads read-only image data that nothing writes,
+    its `Stmt::Store` arm folding subexpressions and clearing nothing. Second,
+    `copy_prop`'s bail does not need a `MemoryAccessId`. Instrumented over the
+    corpus, 1,989 dropped loads had a waiting reader, and **1,438 of them
+    (72.3%) are provable from evidence already in the AST** — `Expr::StackAddr
+    { object }` plus a literal displacement plus the widths `Stmt::Store
+    { size }` and `Expr::Deref { size }` already carry. Shipped as
+    `copy_prop::invalidate_loads_for_store`; see diary entry 46. The 27.3%
+    remainder needs a real pointer proof, which the five-region MemorySSA also
+    cannot give: `primary_region_for_memop` maps any non-sp/fp base to
+    `HeapUnknown` and a `HeapUnknown` write clobbers every region, so verified
+    MIR would buy 121 of the 1,989 cases for Entry 44's measured +10.4%.
   * Call-argument recovery has since grown its OWN reaching-definition machinery
     (`call_args::EnclosingSlots::reaching`, `9952fc0`) rather than migrating. It
     is fail-closed and it works, but it is an eighth approximation, and its two

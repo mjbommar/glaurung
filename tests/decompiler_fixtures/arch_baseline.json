@@ -5586,7 +5586,7 @@
     "chain155_signed": "pass"
   },
   "155_long_dependency_chain:aarch64:O2": {
-    "chain155_buffered": "fail",
+    "chain155_buffered": "pass",
     "chain155_scalar": "pass",
     "chain155_signed": "pass"
   },
@@ -8339,6 +8339,78 @@
     "bv195_pair_roundtrip": "pass",
     "bv195_quad_roundtrip": "fail",
     "bv195_scalar_control": "pass"
+  },
+  "196_disjoint_frame_slots:aarch64:O0": {
+    "dfs196_alias_control": "fail",
+    "dfs196_indexed_control": "pass",
+    "dfs196_overlap_control": "pass",
+    "dfs196_spill_web": "pass"
+  },
+  "196_disjoint_frame_slots:aarch64:O2": {
+    "dfs196_alias_control": "fail",
+    "dfs196_indexed_control": "fail",
+    "dfs196_overlap_control": "pass",
+    "dfs196_spill_web": "fail"
+  },
+  "196_disjoint_frame_slots:armv7:O0": {
+    "dfs196_alias_control": "fail",
+    "dfs196_indexed_control": "pass",
+    "dfs196_overlap_control": "pass",
+    "dfs196_spill_web": "pass"
+  },
+  "196_disjoint_frame_slots:armv7:O2": {
+    "dfs196_alias_control": "fail",
+    "dfs196_indexed_control": "fail",
+    "dfs196_overlap_control": "fail",
+    "dfs196_spill_web": "pass"
+  },
+  "196_disjoint_frame_slots:armv7_a32:O0": {
+    "dfs196_alias_control": "fail",
+    "dfs196_indexed_control": "pass",
+    "dfs196_overlap_control": "pass",
+    "dfs196_spill_web": "pass"
+  },
+  "196_disjoint_frame_slots:armv7_a32:O2": {
+    "dfs196_alias_control": "fail",
+    "dfs196_indexed_control": "fail",
+    "dfs196_overlap_control": "fail",
+    "dfs196_spill_web": "fail"
+  },
+  "196_disjoint_frame_slots:i386:O0": {
+    "dfs196_alias_control": "pass",
+    "dfs196_indexed_control": "pass",
+    "dfs196_overlap_control": "fail",
+    "dfs196_spill_web": "pass"
+  },
+  "196_disjoint_frame_slots:i386:O2": {
+    "dfs196_alias_control": "pass",
+    "dfs196_indexed_control": "pass",
+    "dfs196_overlap_control": "pass",
+    "dfs196_spill_web": "pass"
+  },
+  "196_disjoint_frame_slots:x86_64:O0": {
+    "dfs196_alias_control": "pass",
+    "dfs196_indexed_control": "pass",
+    "dfs196_overlap_control": "pass",
+    "dfs196_spill_web": "pass"
+  },
+  "196_disjoint_frame_slots:x86_64:O2": {
+    "dfs196_alias_control": "fail",
+    "dfs196_indexed_control": "pass",
+    "dfs196_overlap_control": "pass",
+    "dfs196_spill_web": "pass"
+  },
+  "196_disjoint_frame_slots:x86_64_gcc15:O0": {
+    "dfs196_alias_control": "pass",
+    "dfs196_indexed_control": "pass",
+    "dfs196_overlap_control": "pass",
+    "dfs196_spill_web": "pass"
+  },
+  "196_disjoint_frame_slots:x86_64_gcc15:O2": {
+    "dfs196_alias_control": "pass",
+    "dfs196_indexed_control": "pass",
+    "dfs196_overlap_control": "pass",
+    "dfs196_spill_web": "pass"
   },
   "19_disjoint_set:aarch64:O0": {
     "dsu_find": "pass",

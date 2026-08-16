@@ -1695,6 +1695,25 @@ OVERRIDES: dict[tuple[str, str], dict] = {
         "ptr_len": 8,
         "arg_values": {1: [0, 1, 3, 7, -1, -4]},
     },
+    # The frame-slot controls. `dfs196_indexed_control` masks its seed down to
+    # an index, so the vectors have to include values that select the slot the
+    # pending load reads (k == 5) as well as ones that do not.
+    ("196_disjoint_frame_slots", "dfs196_spill_web"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4, 2147483647]},
+    },
+    ("196_disjoint_frame_slots", "dfs196_alias_control"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("196_disjoint_frame_slots", "dfs196_indexed_control"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 5, 7, 13, -1, -4]},
+    },
+    ("196_disjoint_frame_slots", "dfs196_overlap_control"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
     # Two logically distinct values from ONE machine operation. `b` is pinned
     # away from zero on most vectors (the guard returns early otherwise, which
     # tests nothing) and includes values where quotient and remainder differ in
@@ -2872,6 +2891,16 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "bv195_pair_roundtrip",
         "bv195_quad_roundtrip",
         "bv195_scalar_control",
+    ],
+    # A pending load held across a store to a DISJOINT slot of the same frame
+    # object. `dfs196_spill_web` is the positive; the three controls are stores
+    # the disjointness test must refuse to see through — an aliasing pointer, a
+    # runtime index, and a constant-offset overlap.
+    "196_disjoint_frame_slots": [
+        "dfs196_alias_control",
+        "dfs196_indexed_control",
+        "dfs196_overlap_control",
+        "dfs196_spill_web",
     ],
     # ONE machine operation, TWO logically distinct outputs. x86-64 `div` writes
     # the quotient to rax and the remainder to rdx; AArch64 spells the same
