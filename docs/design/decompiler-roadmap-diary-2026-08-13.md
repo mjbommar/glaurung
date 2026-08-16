@@ -8154,3 +8154,156 @@ flag, and it is also the sharp edge: any future lane that selects by marker
 (`-m slow`, `-m "not benchmark"`, anything) silently drops the DecBench
 exclusion for the files it names. The `slow`/`decbench` mutual-exclusion test
 covers the case that exists today. A second marker would need the same thought.
+
+## Entry 48 — The declaration plan, and the control that made "byte-identical" mean something
+
+`src/ir/ast.rs` is 19,315 lines and the roadmap has wanted it split for months
+without a single split landing, for a good reason: the constraint says a split
+counts only if it creates a narrower API and one reason to change, and "leaves
+the same responsibilities coupled by private mutation" is a stop condition. Most
+of the obvious cuts fail that test. This is the first one that does not.
+
+### The boundary, and why it is a boundary
+
+Sixteen `DEC_*` thread-locals are declared in one block at `ast.rs:9150-9257`.
+They are not one thing. Eight of them answer the same question — *what is each
+name declared as* — and they had a shape that extracts: ten write sites confined
+to `7885-8007`, twenty-one touch sites spread to `11328`.
+
+But the count of cells was never the interesting part. This was:
+
+```rust
+        let ty = ids.call_result_types.get(local) ... ;
+        DEC_DECLARED_CTYPES.with(|types| {
+            types.borrow_mut().insert(local.clone(), ty.clone());
+        });
+        let _ = writeln!(out, "    {} {};", ty, local);
+```
+
+The declaration block filled the table it was printing from. Every `write_*_dec`
+below reads `DEC_DECLARED_CTYPES` to decide a representation conversion, so what
+the body printed depended on a side effect performed by the statement above it,
+and the boundary between "deciding a declaration" and "emitting one" did not
+exist as anything a reader or a test could point at.
+
+`src/ir/ast/declaration_plan.rs` (365 lines) is that boundary.
+`DeclarationPlan::compute(DeclarationInputs { .. }) -> DeclarationPlan` is a pure
+function of eleven values: it reads no ambient state and writes none. The
+renderer computes it once, before it emits a single byte, and thereafter only
+reads it. Ten write sites inside the printer became zero.
+
+Making `compute` genuinely pure took one small change with a disproportionate
+payoff. `is_promoted_local` read `DEC_SOURCE_LOCALS` internally, which would have
+smuggled ambient state into the "pure" function. Splitting it into
+`is_promoted_local(name)` and `is_promoted_local_in(name, source_locals)` — the
+second taking the set explicitly, the first supplying it from the cell — keeps
+one predicate with two entry points instead of two predicates that drift.
+
+### What deliberately did not move
+
+The plan is still handed to the printer through one thread-local rather than a
+parameter, and I want to be exact about why, because "we replaced eight globals
+with one global" is a real criticism if the reduction stops there.
+
+The readers are 24 mutually recursive `write_*_dec` functions across 183 call
+sites. Threading a `&DeclarationPlan` through them is roughly 200 mechanical
+edits, it is the roadmap's separate `&RenderCtx` item, and doing it inside this
+change would have meant landing 200 untested edits on top of an unverified
+behaviour change. What was actually banked is the part the constraint asks for:
+the printer no longer *mutates*. It reads one value it cannot modify, computed by
+a function that can be called and asserted on without a renderer. The next step
+is now one parameter, not eight.
+
+Also left alone, each with a reason:
+
+* `DEC_SEMANTIC_WIDE_CAST` is a dynamically-scoped formatting parameter, not
+  state. It wants an argument on `write_expr_dec`. Correctly called unmovable.
+* `renderable_dwarf_structs` has a clean signature and no blocker, but it decides
+  which *aggregate definitions* to emit, not what locals are declared as. Folding
+  it in because it was nearby would have widened the responsibility to make the
+  file bigger.
+* `infer_return_ctype` genuinely runs twice — I confirmed the two call sites pass
+  *literally the same arguments* (`&prepared`, `decl`; nothing mutates between
+  them), so the second call recomputes an answer the first already had, for every
+  function where the pre-render prototype survives to the renderer as `None`. I
+  did not collapse it. The renderer's copy is its fallback when no authoritative
+  prototype survives filtering, and removing it means passing the answer in — a
+  fifth parameter on a wrapper chain that is already four deep and has one
+  production caller. That is the `&RenderCtx` cleanup, and it should be done once
+  for all of them rather than once for this one.
+
+The remaining `DEC_*` set is nine cells: source locals, pointer width, the wide
+cast, named-call prototypes, renderable structs, struct pointer types, global
+addresses, and wide locals.
+
+### The verification, and the thing it found
+
+The renderer has a self-check (`assert_eq!(prepared, before, "rendering mutated
+the AST")`) and a comment saying it must not rewrite value identities. Neither
+guards this path — both run the untyped entry with empty `DEC_*` tables — so the
+only real gate is the corpus.
+
+I decompiled every function of all 766 prebuilt objects in
+`tests/decompiler_fixtures/build` at `style="decbench"` (15,698 functions, ~40 s
+with 12 workers) before and after, and diffed the recovered C.
+
+**Sixteen functions differed. None of them were mine.**
+
+Running the *unmodified* build three times against itself produced 13 differing
+functions, and the modified build twice produced 12; the union is 16. Fifteen are
+the same two `memchr` symbols across six `rustc` fixtures, plus
+`rust_slice_get_range`. The recovered return type flips between `unsigned int`
+and `unsigned long` — in both directions, and *within a single process* as well
+as across processes, which rules out per-process hash seeding and points at a
+time-based budget.
+
+That is 0.10% of the corpus, and it is a standing defect worth its own box (added
+to the determinism item in the roadmap). For this change it was something else:
+without the three-run control I would have opened the diff, seen ten changed
+signatures, and spent the afternoon bisecting a refactor that was already
+correct. **A byte-identity check against a corpus you have not proved
+deterministic is not a check.** It is an oracle that returns a plausible failure
+at some rate, and this one returns it at roughly one run in one.
+
+Quarantining those 16 and comparing the other 15,682 across all six
+before×after run pairings: **zero differences**.
+
+### Numbers
+
+| measure | before | after |
+| --- | ---: | ---: |
+| `ast.rs` physical lines | 19,315 | 19,223 |
+| `ast.rs` product LOC | 11,628 | 11,536 |
+| `declaration_plan.rs` | — | 365 |
+| `DEC_*` cells | 16 | 9 |
+| declaration writes inside the printer | 10 | 0 |
+| corpus functions compared | — | 15,682 of 15,698 |
+| corpus differences | — | 0 |
+
+The tree gained 273 lines net. That is the correct outcome and not an
+embarrassment: the new module states a contract that previously existed only as
+eight doc comments on eight cells, and the split was never for the line count.
+It moved zero fixture cells, which under the two-track rule is what an
+architecture change is supposed to do.
+
+### Verified
+
+* `cargo test --features python-ext` — **2562 passed, 0 failed**.
+* `tools/dectest.py @o0` — 368 lanes, no regressions, no improvements.
+* `tools/dectest.py @o2` — 368 lanes, no regressions, no improvements.
+* Corpus byte-identity as above.
+* `pytest python/tests/test_large_module_review.py
+  python/tests/test_src_dependency_boundaries.py
+  python/tests/test_fitness_report.py` — 37 passed. No new review entry was
+  needed: the new file is 365 lines, and `ast.rs` stays over 1,000 so its entry
+  stays. `test_src_dependency_boundaries.py` already discovers everything under
+  `src/ir/ast/`, so the new module was covered on arrival — which is exactly what
+  that 2026-08-15 tightening was for, and this is its first real exercise.
+* `touch src/lib.rs && cargo build --features python-ext` — never-used FUNCTION
+  count **0**, unchanged.
+* `rustfmt --edition 2021` on both touched files.
+
+### Not run
+
+DecBench, Joern, `decbench_matrix.py`, any JVM, the full fixture matrix, any
+`arch_roundtrip.py` sweep. Nothing was committed; no baseline was refreshed.

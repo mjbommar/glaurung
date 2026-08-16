@@ -1865,6 +1865,26 @@ This block is a second view of "Semantic HIR and pure rendering" above; audited
   `DEC_SEMANTIC_WIDE_CAST` (`:10964`) is correctly called unmovable: it is a
   dynamically-scoped *formatting* parameter carrying destination type down an
   expression print, so it becomes a `&RenderCtx` argument, not a pass.
+
+  **The declaration plan is extracted** (2026-08-16, `src/ir/ast/declaration_plan.rs`).
+  `DEC_DECLARED_CTYPES` and the seven cells that were filled beside it —
+  `DEC_PTR_ARGS`, `DEC_PTRS`, `DEC_INT_TYPES`, `DEC_INT_WIDTHS`,
+  `DEC_STACK_OBJECTS`, `DEC_VOID_OUTPUT`, `DEC_RETURN_CTYPE` — are one immutable
+  `DeclarationPlan` computed by a pure function of values before any output is
+  produced. The coupling that mattered was not the number of cells but the write
+  at `:8160`: the declaration block filled the table it was printing from, so the
+  body's spelling depended on a side effect of the line above it. Ten write sites
+  inside the printer became zero, and the printer's residue is now the two passes
+  above it plus five unrelated cells. Byte-identical over 15,682 fixture
+  functions; see the diary entry for the control that made "byte-identical"
+  measurable.
+
+  `infer_return_ctype` was confirmed to run twice with *literally identical*
+  arguments (`&prepared`, `decl` at both sites, nothing mutating between them),
+  and was deliberately NOT collapsed: the renderer's copy is its fallback when no
+  authoritative prototype survives filtering, and removing it means handing the
+  renderer a precomputed answer — a fifth parameter on a wrapper chain that is
+  already four deep. That is the `&RenderCtx` item below, not this one.
 - [~] Make all output profiles pure and deterministic.
   Determinism is tested; purity is not achieved; and the coverage is the inverse
   of what the risk profile wants. `python/tests/test_decompile_determinism.py`
@@ -1875,8 +1895,9 @@ This block is a second view of "Semantic HIR and pure rendering" above; audited
   separate subprocesses
   (`test_decompiler_emission_invariants.py:509`), which by construction cannot
   observe thread-local leakage; and `c` (`render_c`) has no determinism test at
-  all. So the one profile that owns all 16 `DEC_*` thread-locals
-  (`src/ir/ast.rs:9150-9257`) is never rendered twice in one process by any test.
+  all. So the one profile that owns the `DEC_*` thread-locals (16 cells until
+  2026-08-16, 9 after the declaration plan was extracted;
+  `src/ir/ast.rs:9150-9257`) is never rendered twice in one process by any test.
   Two purity defects worth carrying: `DEC_POINTER_WIDTH` is set and reset only by
   the decbench renderer but read by the shared `target_int_ctype`
   (`ast.rs:5127`), so the `c`/`plain` paths read a default of 8 regardless of
@@ -1886,16 +1907,51 @@ This block is a second view of "Semantic HIR and pure rendering" above; audited
   First step: parametrize the in-process determinism test over
   `style in {"", "c", "decbench"}` — that single change makes the whole
   thread-local class falsifiable.
-- [ ] Split large owners only along migrated responsibility boundaries.
-  Zero splits. `git log --diff-filter=R -- src/ir` over the last 200 commits
-  returns nothing, and every new file under `src/ir` in the last 40 commits is
-  additive capability (`x87.rs`, `memory_objects/shape.rs`, `indirect_targets.rs`,
-  `effect_census.rs`, `mir/*`), not decomposition. `ast.rs` grew monotonically
-  across the last seven commits, 19,158 to 19,315 lines. This is correct
-  sequencing rather than neglect — the box is conditional on a migrated boundary
-  and the two boxes above have not produced one — but the conditional should not
-  be read as progress. First step, when it comes: the `prepare_for_decbench` /
-  renderer line is the one boundary already paid for.
+
+  **And the profile is measurably non-deterministic today, which no test sees.**
+  Measured 2026-08-16 while establishing a byte-identity control for the
+  declaration-plan split: rendering all 15,698 functions of the 766 objects in
+  `tests/decompiler_fixtures/build` at `style="decbench"`, three runs of ONE
+  unmodified build disagreed with each other on **16 functions** — 13 of them
+  within those three runs alone. Fifteen are the same two `memchr` symbols across
+  six `rustc` fixtures; the sixteenth is `rust_slice_get_range`. The recovered
+  return type flips between `unsigned int` and `unsigned long`, in both
+  directions, and it varies **within a single process** as well as across
+  processes, which rules out per-process hash seeding and points at a time-based
+  budget rather than at ordering. That is 0.10% of the corpus, and it is enough
+  to make any byte-identity claim about this profile a coin flip unless the
+  unstable set is quarantined first. Give the parametrized determinism test above
+  the rustc fixtures; they are where the defect lives.
+- [~] Split large owners only along migrated responsibility boundaries.
+  One split, along one boundary. Until 2026-08-16 this read "zero splits":
+  `git log --diff-filter=R -- src/ir` over the last 200 commits returned nothing,
+  every new file under `src/ir` in the last 40 commits was additive capability
+  (`x87.rs`, `memory_objects/shape.rs`, `indirect_targets.rs`, `effect_census.rs`,
+  `mir/*`) rather than decomposition, and `ast.rs` grew monotonically across
+  seven commits from 19,158 to 19,315 lines.
+
+  `src/ir/ast/declaration_plan.rs` (365 lines) is the first. It takes the
+  declaration decision — what each parameter and body local is declared as, and
+  with which C type — out of the 660-line render function and makes it a value
+  computed by a pure function before any output is produced. See the Phase 7
+  renderer box above for what moved and what deliberately did not.
+
+  Two things this split is NOT, both worth stating because the file-size targets
+  invite the opposite reading. It is **not** a line-count win: `ast.rs` fell 92
+  lines (19,315 to 19,223; product 11,628 to 11,536) while the tree gained 273,
+  because the new module documents a contract that previously existed only as
+  eight comments on eight cells. And it moved **zero fixture cells**, which under
+  the two-track rule at the top of this file is the expected outcome.
+
+  Remaining on this boundary: the plan is still transported to the printer
+  through one thread-local rather than a parameter, because the readers are 24
+  mutually recursive `write_*_dec` functions across 183 call sites. Threading
+  them is the `&RenderCtx` item, and doing it as part of this split would have
+  been ~200 mechanical edits riding on an unverified behaviour change. The
+  reduction that was actually banked is different and is the one the constraint
+  asks for: the printer went from filling eight mutable tables at ten sites — one
+  of them *while printing the declaration block* — to reading one value it cannot
+  modify. The next split does not need to re-derive that decision.
 - [x] Add dependency and file-size ratchets. Both are live, green, and collected
   by default (`pytest.ini` `testpaths = python/tests`). File size:
   `tools/fitness_report.py` + `tools/fitness_baseline.json` +

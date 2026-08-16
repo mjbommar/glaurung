@@ -22,12 +22,23 @@ use crate::ir::types::{
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
 fn is_promoted_local(name: &str) -> bool {
-    is_internal_promoted_local(name)
-        || DEC_SOURCE_LOCALS.with(|locals| locals.borrow().contains(name))
+    DEC_SOURCE_LOCALS.with(|locals| is_promoted_local_in(name, &locals.borrow()))
 }
 
+/// The promoted-local predicate against an explicit source-local set.
+///
+/// [`declaration_plan::DeclarationPlan::compute`] is a pure function of values
+/// and must not read the render's ambient source-local cell; it holds that set
+/// directly. Sharing the predicate rather than restating it keeps the two
+/// callers from drifting apart.
+fn is_promoted_local_in(name: &str, source_locals: &std::collections::HashSet<String>) -> bool {
+    is_internal_promoted_local(name) || source_locals.contains(name)
+}
+
+mod declaration_plan;
 mod width_semantics;
 
+use declaration_plan::{DeclarationInputs, DeclarationPlan, LocalDeclaration};
 use width_semantics::{containing_c_integer_bytes, exact_non_byte_value};
 
 // -- Expressions ---------------------------------------------------------------
@@ -7620,9 +7631,11 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
     dwarf_local_types: &std::collections::HashMap<String, String>,
 ) -> String {
-    DEC_SOURCE_LOCALS.with(|locals| {
-        *locals.borrow_mut() = dwarf_local_types.keys().cloned().collect();
-    });
+    let source_locals = dwarf_local_types
+        .keys()
+        .cloned()
+        .collect::<std::collections::HashSet<String>>();
+    DEC_SOURCE_LOCALS.with(|locals| *locals.borrow_mut() = source_locals.clone());
     DEC_POINTER_WIDTH.with(|width| width.set(pointer_width));
     let dwarf_type_env = crate::ir::dwarf_type_env::DwarfTypeEnv::new(dwarf_types);
     let mut ids = DecIdents::default();
@@ -7726,7 +7739,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         .flat_map(|record| record.required_structs)
         .collect::<std::collections::BTreeSet<_>>();
     DEC_RENDERABLE_STRUCTS.with(|selected| *selected.borrow_mut() = complete_structs.clone());
-    DEC_STRUCT_PTR_TYPES.with(|selected| {
+    let struct_pointer_types = {
         let mut exact = std::collections::HashMap::new();
         for (register, type_name) in dwarf_pointer_types {
             if !complete_structs.contains(type_name) {
@@ -7751,8 +7764,9 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
             exact.insert(name.clone(), c_type.clone());
             exact.insert(sanitize_c_ident(name), c_type);
         }
-        *selected.borrow_mut() = exact;
-    });
+        exact
+    };
+    DEC_STRUCT_PTR_TYPES.with(|selected| *selected.borrow_mut() = struct_pointer_types.clone());
 
     let mut out = String::new();
     // Provenance as a C comment (valid, and the harness maps by address anyway).
@@ -7879,63 +7893,25 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         );
     }
 
-    // Record every name declared as a pointer with its pointee width, so the
-    // array-index render can rewrite
-    // `*(T*)(base + i*sizeof(T))` as `base[i]` for those bases.
-    DEC_PTRS.with(|m| m.borrow_mut().clear());
-    DEC_DECLARED_CTYPES.with(|types| types.borrow_mut().clear());
-    DEC_STACK_OBJECTS
-        .with(|objects| *objects.borrow_mut() = ids.stack_objects.keys().cloned().collect());
-    DEC_INT_WIDTHS.with(|m| m.borrow_mut().clear());
-    DEC_INT_TYPES.with(|m| m.borrow_mut().clear());
-    DEC_VOID_OUTPUT.with(|is_void| {
-        is_void.set(output_kind == crate::ir::types_recover::RecoveredOutputKind::Void)
+    // EVERY declaration this render makes is decided here, once, before the
+    // signature or a single local is printed. The printer below reads the plan
+    // and cannot add to it: a declaration is a decision, and emitting one is
+    // formatting.
+    let plan = DeclarationPlan::compute(DeclarationInputs {
+        ids: &ids,
+        body: &f.body,
+        tm,
+        width_tm,
+        output_kind,
+        declared_prototype,
+        arg_count,
+        source_type_aliases: &source_type_aliases,
+        dwarf_type_env: &dwarf_type_env,
+        struct_pointer_types: &struct_pointer_types,
+        source_locals: &source_locals,
     });
-    if let Some(tm) = tm {
-        for (v, hint) in tm.iter() {
-            if let (VReg::Phys(n), TypeHint::Pointer { pointee_width }) = (v, hint) {
-                if parse_arg_index(n).is_some() || is_promoted_local(n) || is_high_variable(n) {
-                    DEC_PTRS.with(|m| m.borrow_mut().insert(n.clone(), *pointee_width));
-                }
-            }
-            if let (VReg::Phys(n), TypeHint::Int { signed, width }) = (v, hint) {
-                if parse_arg_index(n).is_some() || is_promoted_local(n) {
-                    DEC_INT_TYPES.with(|m| m.borrow_mut().insert(n.clone(), (*signed, *width)));
-                }
-            }
-        }
-    }
-    // The logical-shift cast needs each operand's *machine* width (`edi`=4),
-    // which the pre-canonicalisation `width_tm` carries; it is deliberately
-    // decoupled from the recovered *declaration* type in `tm` (canonicalised to
-    // 64-bit parents to keep def/use versions aligned). Narrowing only the
-    // shift cast — not the declaration or the surrounding arithmetic — avoids
-    // changing the width at which a widened value (`(uint64_t)a * b`) computes.
-    if let Some(wtm) = width_tm.or(tm) {
-        for (v, hint) in wtm.iter() {
-            if let (VReg::Phys(n), TypeHint::Int { width, .. }) = (v, hint) {
-                if *width > 0 && (parse_arg_index(n).is_some() || is_promoted_local(n)) {
-                    DEC_INT_WIDTHS.with(|m| m.borrow_mut().insert(n.clone(), *width));
-                }
-            }
-        }
-    }
-    // Signature: recovered return + argument types. Record which arguments are
-    // pointers so the body can cast their int↔pointer reuse (see DEC_PTR_ARGS).
-    DEC_PTR_ARGS.with(|m| m.borrow_mut().clear());
-    let return_type = declared_prototype.map_or_else(
-        || {
-            if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
-                "void".to_string()
-            } else {
-                infer_return_ctype(&f.body, tm).to_string()
-            }
-        },
-        |prototype| {
-            source_type_with_complete_struct_alias(&prototype.return_type, &source_type_aliases)
-        },
-    );
-    DEC_RETURN_CTYPE.with(|selected| *selected.borrow_mut() = return_type.clone());
+    let return_type = plan.return_ctype().to_string();
+    DEC_PLAN.with(|installed| *installed.borrow_mut() = std::rc::Rc::new(plan));
     // GCC 15 can ICE in its final RTL pass at `-O2` on exceptionally large,
     // goto-heavy generated functions even after the C front end accepts them.
     // Keep the source semantics and all producer flags, but lower only that
@@ -7987,29 +7963,14 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     out.push(' ');
     out.push_str(&name);
     out.push('(');
-    let mut parameter_types = Vec::with_capacity(arg_count);
-    if arg_count == 0 {
+    let parameter_types = dec_plan(|plan| plan.parameters().to_vec());
+    if parameter_types.is_empty() {
         out.push_str("void");
     } else {
-        for i in 0..arg_count {
+        for (i, aty) in parameter_types.iter().enumerate() {
             if i > 0 {
                 out.push_str(", ");
             }
-            let aname = format!("arg{}", i);
-            let recovered_type = || ctype_for(&aname, tm).to_string();
-            let aty = declared_prototype
-                .and_then(|prototype| prototype.parameter_types.get(i))
-                .filter(|c_type| dwarf_prototype_type_is_renderable(c_type, false, &dwarf_type_env))
-                .map_or_else(recovered_type, |c_type| {
-                    source_type_with_complete_struct_alias(c_type, &source_type_aliases)
-                });
-            if aty.ends_with('*') {
-                DEC_PTR_ARGS.with(|m| m.borrow_mut().insert(aname.clone(), aty.clone()));
-            }
-            DEC_DECLARED_CTYPES.with(|types| {
-                types.borrow_mut().insert(aname.clone(), aty.clone());
-            });
-            parameter_types.push(aty.clone());
             let _ = write!(out, "{} arg{}", aty, i);
         }
     }
@@ -8122,46 +8083,26 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         out.push_str("    };\n");
     }
 
-    // Promoted stack slots and exact SSA-derived `varN` values may take a
-    // recovered type. The high-variable pass admits `varN` only when every
-    // definition agrees and no integer/address-arithmetic use exists. Physical
-    // frame/ABI registers and unproven values stay `long` to preserve C
-    // parseability (`rsp & -16`, `rbp + ret`, etc.).
-    for local in ids.source_local_order.iter().chain(
-        ids.locals
-            .iter()
-            .filter(|local| !ids.source_local_members.contains(*local)),
-    ) {
-        if let Some(size) = ids.stack_objects.get(local) {
-            let _ = writeln!(out, "    unsigned char {}[{}];", local, size);
-            continue;
-        }
-        if ids.wide_locals.contains(local) {
-            let _ = writeln!(
-                out,
-                "    unsigned char {}[16] __attribute__((aligned(16)));",
-                local
-            );
-            continue;
-        }
-        let ty = ids
-            .call_result_types
-            .get(local)
-            .and_then(Option::as_ref)
-            .cloned()
-            .or_else(|| dec_struct_ptr_type(local))
-            .unwrap_or_else(|| {
-                if is_promoted_local(local) || is_high_variable(local) {
-                    ctype_for(local, tm).to_string()
-                } else {
-                    "long".to_string()
+    // Emit the body-local declarations the plan selected, in its order.
+    dec_plan(|plan| {
+        for (local, declaration) in plan.locals() {
+            match declaration {
+                LocalDeclaration::StackObject { bytes } => {
+                    let _ = writeln!(out, "    unsigned char {}[{}];", local, bytes);
                 }
-            });
-        DEC_DECLARED_CTYPES.with(|types| {
-            types.borrow_mut().insert(local.clone(), ty.clone());
-        });
-        let _ = writeln!(out, "    {} {};", ty, local);
-    }
+                LocalDeclaration::WideVector => {
+                    let _ = writeln!(
+                        out,
+                        "    unsigned char {}[16] __attribute__((aligned(16)));",
+                        local
+                    );
+                }
+                LocalDeclaration::Scalar { c_type } => {
+                    let _ = writeln!(out, "    {} {};", c_type, local);
+                }
+            }
+        }
+    });
 
     // Body.
     for s in &f.body {
@@ -9148,29 +9089,30 @@ fn recover_named_call_prototypes(
 }
 
 thread_local! {
-    /// Pointer-typed argument names (`arg0` → `"int *"`) for the function
-    /// currently being rendered by `render_decbench_typed`. A pointer argument
-    /// is genuinely a pointer in the signature (so type_match credits it), but
-    /// our IR uses explicit byte-offset arithmetic and reuses the ABI register
-    /// as a scratch integer, which is an int↔pointer conflict in C. We reconcile
-    /// it at render time with casts (see `write_reg_dec` / the Assign arm), so
-    /// the emitted C compiles (the gate for byte_match) without changing the
-    /// recovered signature. Scoped per render; renders are single-threaded.
-    static DEC_PTR_ARGS: std::cell::RefCell<std::collections::HashMap<String, String>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The declarations selected for the render in progress.
+    ///
+    /// This is the transport for ONE value, not a set of working registers: it
+    /// is written exactly once per typed render, by the renderer, before any
+    /// output is produced, and it is only read thereafter. Eight independent
+    /// mutable cells used to live here — argument pointer types, declared C
+    /// types, pointee widths, integer widths, integer types, stack objects, the
+    /// void-output flag and the return type — filled from ten sites, one of
+    /// which ran *while* the declaration block was printing. See
+    /// [`declaration_plan`] for what the value now decides and why.
+    ///
+    /// Deliberately NOT cleared when a render finishes, which is the lifetime
+    /// the eight cells had: they were reset at the start of the next typed
+    /// render, not at the end of the current one. Nothing here relies on that,
+    /// but changing it would change what an untyped render sees after a typed
+    /// one in the same thread, and that is a separate question from this one.
+    static DEC_PLAN: std::cell::RefCell<std::rc::Rc<DeclarationPlan>> =
+        std::cell::RefCell::new(std::rc::Rc::new(DeclarationPlan::default()));
 
     /// Source-renamed promoted locals for the current render. Semantic passes
     /// retain their offset-bearing internal names; this presentation-only set
     /// preserves scalar assignment semantics after the final DWARF rename.
     static DEC_SOURCE_LOCALS: std::cell::RefCell<std::collections::HashSet<String>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
-
-    /// Names that are *declared as pointers* in the current render (arguments and
-    /// promoted pointer locals) → their pointee width in bytes. Consulted by the
-    /// array-index render to rewrite `*(T*)(base + i*sizeof(T))` as `base[i]`.
-    /// Only declared pointers appear here, so `base[i]` is always valid C.
-    static DEC_PTRS: std::cell::RefCell<std::collections::HashMap<String, u8>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
 
     /// Target pointer width for the current render. Array-index syntax removes
     /// an explicit byte scale, so it must retain the width at which that scaled
@@ -9183,46 +9125,6 @@ thread_local! {
     /// machine-word `long`, while this scoped context renders true 64-bit
     /// arithmetic as `long long`.
     static DEC_SEMANTIC_WIDE_CAST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-
-    /// The exact C type actually printed for each scalar local and argument.
-    /// Type recovery can contain competing facts from different machine-value
-    /// lifetimes that later share one rendered name; assignment conversion must
-    /// consume the selected declaration, not rescan those candidates.
-    static DEC_DECLARED_CTYPES: std::cell::RefCell<std::collections::HashMap<String, String>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-
-    /// Names declared as complete byte arrays because their addresses escape.
-    /// These are C lvalues but not assignable scalars: a machine store whose
-    /// address is one of these names must remain a dereference rather than the
-    /// promoted-local spelling `object = value`.
-    static DEC_STACK_OBJECTS: std::cell::RefCell<std::collections::BTreeSet<String>> =
-        std::cell::RefCell::new(std::collections::BTreeSet::new());
-
-    /// Integer-typed names in the current render (arguments and promoted scalar
-    /// locals) → their declared byte width. Consulted by the logical-shift render
-    /// so `(unsigned)x >> k` on a 32-bit operand casts to `unsigned int` rather
-    /// than a blanket `unsigned long`: a blanket 64-bit cast sign-extends a
-    /// negative narrow value into the high half before the zero-filling shift,
-    /// producing a different result than the original narrow shift.
-    static DEC_INT_WIDTHS: std::cell::RefCell<std::collections::HashMap<String, u8>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-
-    /// Exact signedness and width of integer declarations in this render. This
-    /// lets the printer rely on C's built-in integer promotion and pointer-index
-    /// conversion when they are exactly the casts already represented in IR.
-    static DEC_INT_TYPES: std::cell::RefCell<std::collections::HashMap<String, (bool, u8)>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-
-    /// Whether the current function's recovered source prototype is `void`.
-    /// Unknown scalar output uses `return 0;` for a bare machine return; a
-    /// proven void function must emit the distinct C statement `return;`.
-    static DEC_VOID_OUTPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-
-    /// Exact C return type selected for the current DecBench render. Return
-    /// statements need the same representation-boundary conversion as local
-    /// assignments; keeping this beside `DEC_VOID_OUTPUT` prevents the body
-    /// printer from independently guessing the function signature.
-    static DEC_RETURN_CTYPE: std::cell::RefCell<String> = std::cell::RefCell::new("long".to_string());
 
     /// The single declaration table selected for named calls in this render.
     /// Argument conversions and result representation conversions must consume
@@ -9330,8 +9232,17 @@ fn selected_named_call_prototype(name: &str) -> Option<CallPrototype> {
     DEC_NAMED_CALL_PROTOTYPES.with(|selected| selected.borrow().get(&displayed).cloned())
 }
 
+/// Ask the installed declaration plan a question.
+///
+/// The plan is immutable for the duration of a render, so nested reads (a
+/// statement printer that consults the return type while the expression printer
+/// under it consults a declared width) share one borrow safely.
+fn dec_plan<R>(question: impl FnOnce(&DeclarationPlan) -> R) -> R {
+    DEC_PLAN.with(|plan| question(&plan.borrow()))
+}
+
 fn dec_ptr_arg_type(name: &str) -> Option<String> {
-    DEC_PTR_ARGS.with(|m| m.borrow().get(name).cloned())
+    dec_plan(|plan| plan.pointer_parameter(name).map(str::to_string))
 }
 
 fn dec_struct_ptr_type(name: &str) -> Option<String> {
@@ -9340,22 +9251,22 @@ fn dec_struct_ptr_type(name: &str) -> Option<String> {
 
 /// The pointee width of `name` if it is declared as a pointer in this render.
 fn dec_ptr_width(name: &str) -> Option<u8> {
-    DEC_PTRS.with(|m| m.borrow().get(name).copied())
+    dec_plan(|plan| plan.pointee_width(name))
 }
 
 fn dec_is_stack_object(name: &str) -> bool {
     let displayed = sanitize_c_ident(name);
-    DEC_STACK_OBJECTS.with(|objects| objects.borrow().contains(&displayed))
+    dec_plan(|plan| plan.is_stack_object(&displayed))
 }
 
 /// The declared integer byte-width of `name` if it is an integer-typed
-/// argument/local in this render (see `DEC_INT_WIDTHS`).
+/// argument/local in this render.
 fn dec_int_width(name: &str) -> Option<u8> {
-    DEC_INT_WIDTHS.with(|m| m.borrow().get(name).copied())
+    dec_plan(|plan| plan.integer_width(name))
 }
 
 fn dec_int_type(name: &str) -> Option<(bool, u8)> {
-    DEC_INT_TYPES.with(|m| m.borrow().get(name).copied())
+    dec_plan(|plan| plan.integer_type(name))
 }
 
 /// The C spelling of an `size`-byte *unsigned* integer, for logical-shift casts.
@@ -10434,9 +10345,7 @@ fn declared_reg_ctype(reg: &VReg) -> String {
         return "long".to_string();
     };
     let displayed = sanitize_c_ident(name);
-    if let Some(selected) =
-        DEC_DECLARED_CTYPES.with(|types| types.borrow().get(&displayed).cloned())
-    {
+    if let Some(selected) = dec_plan(|plan| plan.declared_ctype(&displayed).map(str::to_string)) {
         return selected;
     }
     dec_ptr_arg_type(name)
@@ -11319,13 +11228,12 @@ fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             match value {
                 Some(e) => {
                     out.push_str("return ");
-                    DEC_RETURN_CTYPE.with(|return_type| {
-                        write_representation_value_dec(return_type.borrow().as_str(), e, out)
-                    });
+                    let return_type = dec_plan(|plan| plan.return_ctype().to_string());
+                    write_representation_value_dec(&return_type, e, out);
                     out.push_str(";\n");
                 }
                 None => {
-                    if DEC_VOID_OUTPUT.with(std::cell::Cell::get) {
+                    if dec_plan(DeclarationPlan::returns_void) {
                         out.push_str("return;\n");
                     } else {
                         out.push_str("return 0;\n");
