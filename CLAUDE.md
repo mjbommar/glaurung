@@ -112,7 +112,11 @@ This is a **real, production** tool used for actual binary analysis. Hold the li
   metric/evaluation plan and is explicitly not a work queue.
 - **Extend `tests/decompiler_fixtures/` when a shape has no lane.** A new numbered
   fixture plus a `manifest.py` contract is cheap and permanent; adding one requires
-  refreshing `baseline.json`, `structural_baseline.json`, and `arch_baseline.json`.
+  refreshing **four** baselines: `baseline.json`, `structural_baseline.json`,
+  `arch_baseline.json`, and `defuse_baseline.json`. The last one is easy to miss
+  because its lane is `slow`-marked, so a scoped `dectest` run and the three
+  ordinary baseline gates all stay green while the full suite fails — that is
+  exactly how fixtures 195 and 196 reached `master` with a red census.
 - **Never `mktemp -d -t glaurung-...` in `/tmp`.** Use the session scratchpad
   directory. Ad-hoc `/tmp` scratch is never cleaned up: on 2026-08-13 there were
   663 abandoned `glaurung-<topic>.XXXXXX` directories totalling 13 GB from past

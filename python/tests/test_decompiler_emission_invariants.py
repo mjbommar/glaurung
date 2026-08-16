@@ -528,20 +528,13 @@ def test_every_local_used_is_also_declared(built, arch, opt, request) -> None:
     """
     if (arch, opt) not in built:
         pytest.skip(f"no compiler for {arch}")
-    if (arch, opt) == ("aarch64", "-O2"):
-        # OPEN DEFECT: `two_buffers_and_a_scalar` uses `stack_4` with nothing
-        # declaring it. A `stack_N` name reaching the output at all means the
-        # slot was referenced without being promoted to a declared local or
-        # folded into an enclosing frame object — so the unit does not compile.
-        # -O0 is clean on the same function, which puts this in the optimised-
-        # frame path rather than in naming. Strict, so fixing it fails here and
-        # forces this marker out rather than letting the reason rot.
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="aarch64 -O2: two_buffers_and_a_scalar uses undeclared stack_4",
-                strict=True,
-            )
-        )
+    # `aarch64 -O2` carried a strict xfail here until 2026-08-16:
+    # `two_buffers_and_a_scalar` used `stack_4` with nothing declaring it, which
+    # meant the slot was referenced without being promoted to a declared local or
+    # folded into an enclosing frame object, so the unit did not compile. The
+    # marker was written strict precisely so that fixing the defect would fail
+    # this test and force the marker out rather than let the reason rot — and
+    # that is what happened. Removed on the XPASS, not on a hunch.
     text = _decompile(built[(arch, opt)])
     problems: list[str] = []
     for name, body in _fixture_units(text).items():

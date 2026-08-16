@@ -102,6 +102,15 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
     ),
     "ir/value_number.rs": "accepted: one global value-numbering pass and its lattice.",
     "ir/copy_prop.rs": "accepted: one copy/constant propagation pass and its safety proofs.",
+    "ir/call_contracts.rs": (
+        "accepted (2026-08-16, c2fb19d): one pass with one reason to change — "
+        "an authoritative prototype overriding what ABI liveness merely "
+        "suggested. It crossed 1,000 lines when SysV return classes landed, "
+        "because a return CLASS is exactly the kind of authoritative fact this "
+        "pass exists to apply. Splitting the classifier out would separate a "
+        "fact from its only consumer, which is the coupling the ownership map "
+        "warns against rather than the one it asks to break."
+    ),
     "ir/const_fold.rs": "accepted: one constant-folding pass over the full operator set.",
     "ir/loop_form.rs": "accepted: loop normalisation, one pass with one reason to change.",
     "ir/x87.rs": (

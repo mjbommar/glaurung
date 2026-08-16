@@ -10,24 +10,24 @@
   },
   "lane_totals": {
     "clang:O0": {
-      "functions_emitted": 2519,
-      "functions_with_violations": 32,
-      "violations": 113
+      "functions_emitted": 2559,
+      "functions_with_violations": 33,
+      "violations": 114
     },
     "clang:O2": {
-      "functions_emitted": 2393,
-      "functions_with_violations": 84,
-      "violations": 232
+      "functions_emitted": 2433,
+      "functions_with_violations": 87,
+      "violations": 242
     },
     "gcc:O0": {
-      "functions_emitted": 2442,
-      "functions_with_violations": 13,
-      "violations": 92
+      "functions_emitted": 2479,
+      "functions_with_violations": 14,
+      "violations": 93
     },
     "gcc:O2": {
-      "functions_emitted": 2309,
-      "functions_with_violations": 56,
-      "violations": 121
+      "functions_emitted": 2346,
+      "functions_with_violations": 61,
+      "violations": 126
     },
     "rustc:O0": {
       "functions_emitted": 3035,
@@ -2222,6 +2222,61 @@
     "193_mapped_constant_roles:gcc:O2:mc193_offset_matches": [],
     "193_mapped_constant_roles:gcc:O2:mc193_offset_sum": [],
     "193_mapped_constant_roles:gcc:O2:mc193_scaled_constant": [],
+    "195_by_value_aggregates:clang:O0:bv195_big_roundtrip": [],
+    "195_by_value_aggregates:clang:O0:bv195_mixed_roundtrip": [],
+    "195_by_value_aggregates:clang:O0:bv195_pair_roundtrip": [],
+    "195_by_value_aggregates:clang:O0:bv195_quad_roundtrip": [],
+    "195_by_value_aggregates:clang:O0:bv195_scalar_control": [],
+    "195_by_value_aggregates:clang:O2:bv195_big_roundtrip": [
+      "local_10 is read but never defined",
+      "local_18 is read but never defined",
+      "local_20 is read but never defined",
+      "local_28 is read but never defined"
+    ],
+    "195_by_value_aggregates:clang:O2:bv195_mixed_roundtrip": [],
+    "195_by_value_aggregates:clang:O2:bv195_pair_roundtrip": [],
+    "195_by_value_aggregates:clang:O2:bv195_quad_roundtrip": [],
+    "195_by_value_aggregates:clang:O2:bv195_scalar_control": [],
+    "195_by_value_aggregates:gcc:O0:bv195_big_roundtrip": [],
+    "195_by_value_aggregates:gcc:O0:bv195_mixed_roundtrip": [],
+    "195_by_value_aggregates:gcc:O0:bv195_pair_roundtrip": [],
+    "195_by_value_aggregates:gcc:O0:bv195_quad_roundtrip": [],
+    "195_by_value_aggregates:gcc:O0:bv195_scalar_control": [],
+    "195_by_value_aggregates:gcc:O2:bv195_big_roundtrip": [],
+    "195_by_value_aggregates:gcc:O2:bv195_mixed_roundtrip": [
+      "var0 is read but never defined"
+    ],
+    "195_by_value_aggregates:gcc:O2:bv195_pair_roundtrip": [
+      "var0 is read but never defined"
+    ],
+    "195_by_value_aggregates:gcc:O2:bv195_quad_roundtrip": [
+      "var0 is read but never defined"
+    ],
+    "195_by_value_aggregates:gcc:O2:bv195_scalar_control": [],
+    "196_disjoint_frame_slots:clang:O0:dfs196_alias_control": [],
+    "196_disjoint_frame_slots:clang:O0:dfs196_indexed_control": [],
+    "196_disjoint_frame_slots:clang:O0:dfs196_overlap_control": [],
+    "196_disjoint_frame_slots:clang:O0:dfs196_spill_web": [],
+    "196_disjoint_frame_slots:clang:O2:dfs196_alias_control": [],
+    "196_disjoint_frame_slots:clang:O2:dfs196_indexed_control": [],
+    "196_disjoint_frame_slots:clang:O2:dfs196_overlap_control": [],
+    "196_disjoint_frame_slots:clang:O2:dfs196_spill_web": [
+      "var0 is read but never defined",
+      "var1 is read but never defined",
+      "var2 is read but never defined",
+      "var3 is read but never defined",
+      "var4 is read but never defined"
+    ],
+    "196_disjoint_frame_slots:gcc:O0:dfs196_alias_control": [],
+    "196_disjoint_frame_slots:gcc:O0:dfs196_indexed_control": [],
+    "196_disjoint_frame_slots:gcc:O0:dfs196_overlap_control": [],
+    "196_disjoint_frame_slots:gcc:O0:dfs196_spill_web": [],
+    "196_disjoint_frame_slots:gcc:O2:dfs196_alias_control": [
+      "local_2c is read but never defined"
+    ],
+    "196_disjoint_frame_slots:gcc:O2:dfs196_indexed_control": [],
+    "196_disjoint_frame_slots:gcc:O2:dfs196_overlap_control": [],
+    "196_disjoint_frame_slots:gcc:O2:dfs196_spill_web": [],
     "19_disjoint_set:clang:O0:dsu_find": [],
     "19_disjoint_set:clang:O0:dsu_union": [],
     "19_disjoint_set:clang:O2:dsu_find": [],
