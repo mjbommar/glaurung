@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use crate::analysis::cfg::{analyze_functions_image_with_seeds, Budgets};
 use crate::core::function::Function;
 use crate::ir::call_args::CallConv;
+use crate::program::call_graph::ProgramCallGraph;
 use crate::program::environment::{
     callback_api_identity, recover_program_environment, ProgramEnvironment,
 };
@@ -177,6 +178,7 @@ pub struct DiscoveryCacheStats {
 pub struct ProgramSession {
     image: ProgramImage,
     discovery: Arc<DiscoveryCache>,
+    call_graphs: Arc<Mutex<HashMap<DiscoveryKey, Arc<ProgramCallGraph>>>>,
     environments: Arc<Mutex<HashMap<EnvironmentKey, Arc<ProgramEnvironment>>>>,
     type_artifacts: Arc<OnceLock<ProgramTypeArtifacts>>,
     symbol_artifacts: Arc<OnceLock<Arc<SymbolStore>>>,
@@ -193,6 +195,7 @@ impl ProgramSession {
         Self {
             image,
             discovery: Arc::new(DiscoveryCache::default()),
+            call_graphs: Arc::new(Mutex::new(HashMap::new())),
             environments: Arc::new(Mutex::new(HashMap::new())),
             type_artifacts: Arc::new(OnceLock::new()),
             symbol_artifacts: Arc::new(OnceLock::new()),
@@ -260,10 +263,44 @@ impl ProgramSession {
             return functions;
         }
 
+        // The `CallGraph` returned alongside is deliberately NOT retained. It is
+        // a Python-facing report whose `nodes` are pre-rename spellings and
+        // whose edges are post-rename spellings, so it fails its own
+        // `CallGraph::validate()` on a plain hello-world and omits every root
+        // from `nodes`. `call_graph()` below builds the analysis input from the
+        // discovered functions instead. See `program::call_graph`.
         let (functions, _call_graph) =
             analyze_functions_image_with_seeds(&self.image, budgets, &key.seeds);
         let functions: Arc<[Function]> = functions.into();
         self.discovery.install(key, functions)
+    }
+
+    /// The identity-keyed call structure and SCC condensation for one discovery.
+    ///
+    /// Shares `DiscoveryKey` with [`Self::discover_functions`], so a graph is
+    /// never substituted across differing budgets or seed sets, and reuses that
+    /// cache's functions rather than analyzing the image a second time.
+    pub fn call_graph(&self, budgets: &Budgets, requested_vas: &[u64]) -> Arc<ProgramCallGraph> {
+        let key = DiscoveryKey::new(&self.image, budgets, requested_vas);
+        if let Some(graph) = self
+            .call_graphs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .cloned()
+        {
+            return graph;
+        }
+        let functions = self.discover_functions(budgets, requested_vas);
+        let graph = Arc::new(ProgramCallGraph::from_discovered(&self.image, &functions));
+        let mut graphs = self
+            .call_graphs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if graphs.len() >= MAX_DISCOVERY_CACHE_ENTRIES {
+            graphs.clear();
+        }
+        graphs.entry(key).or_insert_with(|| graph.clone()).clone()
     }
 
     /// Snapshot the session-local discovery reuse counters.
@@ -326,6 +363,10 @@ impl ProgramSession {
     /// Immutable image-derived debug/type facts remain shared for the session.
     pub fn clear_caches(&self) {
         self.discovery.clear();
+        self.call_graphs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         self.environments
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

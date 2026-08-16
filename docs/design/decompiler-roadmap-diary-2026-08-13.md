@@ -7561,3 +7561,230 @@ answers *better*, not merely differently: "did anything write this memory betwee
 this load and its use" is answered today by a universal refusal at any
 intervening store, and MemorySSA answers it with a version. That is a migration
 where a cell would move because MIR knew something better. This one was not.
+
+## Entry 45 — The value being discarded was not worth keeping
+
+`FunctionFacts`/`CallFactStore` is the most duplicated open item in the plan:
+EPIC 1, Phase 4, Phase 5, and the Performance-plan SCC box. Entry 43 wrote its
+design note (`docs/design/function-facts-and-call-facts-2026-08-15.md`) and
+identified a first step that made the whole box look small — §4:
+
+> `analyze_functions_image_with_seeds` returns `(Vec<Function>, CallGraph)`.
+> One line of `ProgramSession::discovery` reads:
+> `let (functions, _call_graph) = analyze_functions_image_with_seeds(...)`
+> **The SCC input is computed on every analysis and discarded one line after it
+> is produced.**
+
+That line is real, and it is still there. The conclusion drawn from it was
+wrong. The value being discarded is not fit for the purpose it was going to be
+kept for, and the first commit on this box had to be a different commit.
+
+### Four measurements on the thing we were about to keep
+
+A throwaway probe against `analyze_functions_image_with_seeds`, on a plain
+dynamically linked hello-world:
+
+```
+cg.validate() = Err("Edge references unknown caller function: _start")
+funcs=168 cg.nodes=270 cg.edges=274
+roots missing from cg.nodes=5   cg.nodes with no function=111
+```
+
+**It fails its own validator.** `CallGraph::validate()` — already in the tree,
+already written to reject exactly this — rejects the graph we produce. The
+cause is two name generations in one structure. `cg.add_node(f.name)`
+(`cfg.rs:5144`) runs inside the discovery loop. The symbol-table, PE-export,
+DWARF and FLIRT rename passes run *after* it (`cfg.rs:5149-5257`). The edge loop
+(`cfg.rs:5266`) then builds `name_by_va` from the final names. So a function
+discovered as `sub_1149` and renamed `main` is `sub_1149` in `nodes` and `main`
+in `edges`, and every method that iterates `self.nodes` — `root_functions`,
+`leaf_functions`, `call_depth`, `has_cycles` — has been unreliable the whole
+time.
+
+**Roots are not nodes.** In the edge loop only the *callee* gets `add_node`
+(`cfg.rs:5280`). `main`, `_start`, `__do_global_dtors_aux`,
+`_GLOBAL__sub_I_main` and `_ZL15static_functionv` are edge callers and are
+absent from `nodes`. A condensation over `cg.nodes` would have silently omitted
+every function an analyst actually asks about.
+
+**41% of the node set is synthetic.** 111 of 270 nodes are `sub_<hex>` strings
+for PLT stubs and targets outside the discovered set.
+
+**The key is a name**, which the design note's own §5 says not to do.
+
+None of this is a bug in `CallGraph`. It is a Python-facing report — `cg.edges`
+is what `llm/tools/xrefs.py` and `kb/xref_db.py` consume, as name pairs, and for
+that it is adequate. It was never an analysis input, and `session.rs:263` was
+not throwing away something valuable. It was declining something unusable.
+
+### What was there instead, already populated
+
+`Function::callees: HashSet<Address>` is filled by discovery at `cfg.rs:2113`
+and already read twice — `ir/lift_function.rs:762` classifies proven direct tail
+calls from it, `ir/name_resolve.rs:332` mints `sub_<va>` names from it. It is
+VA-level, per-function, and it rides on the `Arc<[Function]>` that
+`ProgramSession` already caches. Building an identity-keyed graph from it is one
+O(V+E) pass over an artifact the session owns, with no change to
+`analysis/cfg.rs` at all, and the node set comes out as exactly the discovered
+functions — roots included, nothing synthetic.
+
+So `src/program/call_graph.rs` builds from that, and `session.rs:263` keeps
+dropping its `CallGraph` with a comment saying why.
+
+### Three things the identity scheme got right and one it could not
+
+The design note's `FunctionId` = normalized entry VA holds up. `normalize_function_entry`
+strips the ARM Thumb bit and is already the canonicalizer behind `DiscoveryKey`,
+`EnvironmentKey`, and `ProgramEnvironment`'s prototype map — the new identity
+shares theirs rather than inventing a fourth. Keying the entry rather than a
+range is right for the same reason the note gives: `chunks: Vec<AddressRange>`
+exists because `.cold` splits make one function several intervals.
+
+`CallSiteId = (FunctionId, instruction_va)` is the right identity and has no
+producer. `Function::callees` is a set of *targets*; it records no call-site
+VAs. Those exist only in `calls_all` inside `analyze_functions_bytes_within`,
+which converts them into `CallGraphEdge::call_sites` and drops the VA-level
+form. `CallFactStore` is keyed by call site, so it is strictly larger than
+`FunctionFacts` and needs a `cfg.rs` change first. It was not shipped, rather
+than shipped as an identity nothing can construct.
+
+### The fail-open shape the note predicted, confirmed in the source
+
+§4 point 2 asked that an unresolved indirect call be an edge to unknown, not a
+missing edge. It cannot be, from what discovery keeps. `cfg.rs:1488`:
+
+```rust
+let resolved_target = immediate_target(&ins)
+    .or_else(|| indirect_memory_target(facts.image, data, &ins, bits));
+if let Some(tgt) = resolved_target {
+    call_edges.push(FunctionXref { ... });
+}
+```
+
+No resolution, no xref. The unresolved sites *are* recorded — as
+`stats.unresolved_indirect` — on `FunctionDiscoveryStats`, which
+`analyze_functions_image_with_seeds` drops alongside the graph. So a function
+whose only outgoing call is an unresolved indirect one is indistinguishable from
+a leaf.
+
+The response was to make the type say so rather than to pretend otherwise.
+`ProgramCallGraph` documents its edges as a lower bound and offers no
+`is_leaf()`. `shares_component() == true` is proof of a cycle; `false` is not
+proof of acyclicity. A consumer may use it to justify spending *more* effort and
+never as a termination guarantee.
+
+### The truncation: one boolean doing two jobs
+
+`recover_direct_callee_definition` (`callee_contracts.rs`) took
+`include_grandcallees: bool`, and its doc gave the reason:
+
+> One layer is enough to recover the common optimized wrapper shape without
+> recursively walking a whole program or looping on mutually recursive
+> functions.
+
+Two separate concerns — how deep to go, and how not to loop — collapsed into one
+flag. Census over all 762 built objects in `tests/decompiler_fixtures/build/`,
+using the VA-level graph:
+
+| | images | share |
+|---|---|---|
+| call chain reaches depth >= 3 | 222 | 29% |
+| contains a mutual-recursion SCC | 8 | 1% |
+
+34 mutual SCCs and 46 self-recursive functions in total, and the eight cyclic
+images are `112_recursion_shapes` at gcc and clang -O0 plus six `rustc`
+fixtures. The guard was written for a shape in 1% of the corpus and its cost is
+paid on the 29% whose chains run deeper than one nested layer.
+
+So the flag became `NESTED_CALLEE_DEPTH`, a counter that decrements
+unconditionally and is the *sole* termination guarantee, plus a separate SCC
+guard that declines to spend a layer inside a call cycle. That ordering is
+deliberate: the condensation is an under-approximation, so if it were the
+termination argument, a cycle closed by an unresolved indirect call would hang.
+The counter bounds the walk whether or not the graph saw the cycle.
+
+### And then the depth increase bought nothing
+
+With the mechanism in place, raising `NESTED_CALLEE_DEPTH` from 1 to 2 is a
+one-character experiment. It is also the whole reason the graph has a consumer
+rather than being another `SymbolStore` — implemented, unconnected, counted as
+done (the failure mode the design note's §5 names explicitly, and which entry 32
+found had actually happened to `SymbolStore`).
+
+It bought nothing, and the measurement is unambiguous:
+
+| check | scope | result |
+|---|---|---|
+| `dectest @o0` | 364 lanes | no verdict change |
+| `dectest @o2` | 364 lanes | no verdict change |
+| decompiled C, sha256 per function | 1457 functions over 300 objects | **0 differ** |
+
+Byte-identical output everywhere, including the deep-chain fixtures
+(`07_packet_parser`, `10_cpp_runtime_shapes`) and both `112_recursion_shapes`
+builds. So the 29% figure, which looked like the size of the prize, is not: the
+callee analysis is demand-driven on the *rendered* function's direct callees,
+and a chain being long somewhere in the image says nothing about whether a third
+layer changes that function's argument layouts. It does not.
+
+`NESTED_CALLEE_DEPTH` therefore stays at 1, with the negative result recorded at
+the constant so the next person does not spend the afternoon I spent. What
+remains is the separation itself: the depth limit and the cycle guard are two
+knobs now instead of one boolean, and the next attempt is a one-character
+change with a documented prior.
+
+The honest consequence is worth stating plainly rather than burying: **at depth
+1 the SCC guard cannot change any outcome** — `remaining_depth - 1` is 0 whether
+or not the callee is in the caller's component. `ProgramCallGraph` is built and
+consulted on every decompile, but its answer does not currently flip a decision.
+It costs 67us against 5.6ms of discovery on a 168-function binary — 1.2%, on an
+artifact the session already caches — so it is not a performance question. It is
+an honesty question, and the answer is that this box has a landed, tested,
+deterministic SCC condensation and does not yet have a consumer whose behavior
+depends on it.
+
+### What was not built, and why that is the finding
+
+`FunctionFacts` itself. Three candidates were weighed against the standard the
+box sets — one real fact with a consumer that exists today:
+
+| fact | computed | consumers | monotone |
+|---|---|---|---|
+| does it return | `call_semantics.rs:18`, a 21-name list resolved to PLT/IAT VAs, `OnceLock`-cached on `ProgramImage` | 4, incl. **CFG discovery itself** (`cfg.rs:1499`) | trivially — it is a constant |
+| does it clobber memory | **nowhere**; `memory_ssa.rs:556` makes every call an unconditional `Clobber` | none | would be, from `true` downward |
+| prototype / arity | three separate producers, three lifetimes | `prepare_llir_for_lowering` x4 | **no** — `environment.rs:872` deletes the fact and blacklists the address on conflict |
+
+Noreturn is the only one with consumers, and today it is a *name list*, not an
+inferred property; `FunctionFlags::NO_RETURN` exists at `core/function.rs:49`
+and is set by nothing. The version worth having — "never returns because every
+path ends in a noreturn call" — is exactly an SCC propagation and is monotone in
+the safe direction: start at may-return, move to never-returns only on proof,
+never retract.
+
+It still cannot be fed to its principal consumer. CFG discovery reads noreturn
+to decide where functions *end* (`cfg.rs:1499`; the module header at
+`call_semantics.rs:3-8` already flags this), and a body-derived noreturn needs
+bodies that discovery has not produced. Boundaries depend on the fact; the fact
+depends on the bodies inside the boundaries. The three downstream consumers
+could take a propagated fact without that circularity, but choosing to split
+them is a design decision, not a free one.
+
+Meanwhile the design note's §5 says not to propagate before the clobber
+contract, and the clobber contract does not exist at all: every call is
+`Clobber` over every mutable region, unconditionally. A fixed point over call
+effects that are all opaque converges instantly to "unknown everywhere" — sound,
+useless, and indistinguishable from progress.
+
+So the store was not built. The graph and the condensation are the reusable
+half, they are landed, and they are read. The half that has three homes in the
+plan stays open, with the blocking decision written down instead of the
+framework.
+
+### Gates run
+
+- `cargo test --features python-ext`: 2556 passed, 0 failed (2548 at HEAD, plus
+  8 new tests in `src/program/call_graph_tests.rs`).
+- Never-used FUNCTION count after `touch src/lib.rs; cargo build --features
+  python-ext`: 0, unchanged.
+- `tools/dectest.py @o0`: 364 lanes, no regressions. `@o2`: 364 lanes, no
+  regressions. Neither shows improvements either; see above.
+- No DecBench, no Joern, no baseline regeneration.

@@ -406,12 +406,37 @@ fn direct_callee_body_va(
     image.normalize_function_entry(body_va)
 }
 
-/// Recover one direct callee, optionally using one proven grandcallee layer.
+/// How many nested callee layers below the requested callee may be analyzed.
 ///
-/// One layer is enough to recover the common optimized wrapper shape without
-/// recursively walking a whole program or looping on mutually recursive
-/// functions. The outer cache still ensures repeated requested callees are
-/// analyzed once per batch/session.
+/// This is the ONLY termination guarantee for the nested walk, and it must stay
+/// so. The session's SCC condensation below is an under-approximation — an
+/// unresolved indirect call contributes no edge — so "not in a cycle" is not
+/// proof that recursion ends. The counter decrements unconditionally on every
+/// nested layer, which bounds the walk whether or not the graph saw the cycle.
+///
+/// This replaced an `include_grandcallees: bool` that conflated two concerns:
+/// how deep to go, and how not to loop. They are now separate — the counter
+/// bounds depth, the SCC guard declines cycles.
+///
+/// **1 because 2 was measured and changes nothing.** Raising it to 2 was tried
+/// on 2026-08-15: 1457 decompiled functions over 300 objects in
+/// `tests/decompiler_fixtures/build/` produced byte-identical C for every one,
+/// and `dectest @o0` + `@o2` (728 lanes) reported no verdict change. The 29% of
+/// the corpus whose call chains run deeper than one nested layer do not, in
+/// fact, need the extra layer to render correctly. Raise this only with a
+/// fixture that demonstrably regresses at 1.
+const NESTED_CALLEE_DEPTH: u8 = 1;
+
+/// Recover one direct callee, using up to `remaining_depth` nested layers.
+///
+/// The layers recover the common optimized wrapper shape without recursively
+/// walking a whole program. `call_graph`, when present, is used only to DECLINE
+/// spending a layer on a callee inside the analyzed function's own strongly
+/// connected component: re-entering a cycle re-derives facts from a
+/// partially-analyzed body and cannot converge in a bounded walk. It never
+/// authorizes recursion that the depth counter would not already allow.
+/// The outer cache still ensures repeated requested callees are analyzed once
+/// per batch/session.
 fn recover_direct_callee_definition(
     image: &crate::program::image::ProgramImage,
     functions: &[crate::core::function::Function],
@@ -422,7 +447,8 @@ fn recover_direct_callee_definition(
     dwarf_outputs: Option<&std::collections::HashMap<u64, DwarfPrototypeContract>>,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     address_names: &std::collections::HashMap<u64, String>,
-    include_grandcallees: bool,
+    call_graph: Option<&crate::program::call_graph::ProgramCallGraph>,
+    remaining_depth: u8,
 ) -> Option<(
     Vec<crate::ir::types::VReg>,
     crate::ir::call_contracts::CallPrototype,
@@ -448,7 +474,7 @@ fn recover_direct_callee_definition(
     annotate_calls_in(&mut lifted, cc, address_names);
 
     let mut nested = DirectCalleeFacts::default();
-    if include_grandcallees {
+    if remaining_depth > 0 {
         let catalog_facts = lifted
             .blocks
             .iter()
@@ -489,6 +515,16 @@ fn recover_direct_callee_definition(
                 nested.prototypes.insert(target, prototype.clone());
                 continue;
             }
+            // Spend a layer only outside this function's own cycle. Inside one,
+            // the nested body calls back into a function that is itself only
+            // partially analyzed, so the extra layer yields facts derived from
+            // an unconverged state rather than more information.
+            let target_id = crate::program::call_graph::FunctionId::new(image, target);
+            let body_id = crate::program::call_graph::FunctionId::new(image, body_va);
+            let nested_depth = match call_graph {
+                Some(graph) if graph.shares_component(body_id, target_id) => 0,
+                _ => remaining_depth.saturating_sub(1),
+            };
             let Some((layout, prototype, _)) = recover_direct_callee_definition(
                 image,
                 functions,
@@ -499,7 +535,8 @@ fn recover_direct_callee_definition(
                 dwarf_outputs,
                 type_env,
                 address_names,
-                false,
+                call_graph,
+                nested_depth,
             ) else {
                 continue;
             };
@@ -566,6 +603,7 @@ pub(super) fn recover_direct_callee_layouts(
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     address_names: &mut std::collections::HashMap<u64, String>,
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
+    call_graph: Option<&crate::program::call_graph::ProgramCallGraph>,
     cache: &mut std::collections::HashMap<
         u64,
         Option<(
@@ -622,7 +660,8 @@ pub(super) fn recover_direct_callee_layouts(
                 dwarf_outputs,
                 type_env,
                 address_names,
-                true,
+                call_graph,
+                NESTED_CALLEE_DEPTH,
             );
             cache.insert(callee_va, recovered);
         }
@@ -686,6 +725,7 @@ pub(super) fn recover_direct_callee_layouts(
         type_env,
         address_names,
         function_tables,
+        call_graph,
         cache,
         dump,
     );
@@ -722,6 +762,7 @@ fn recover_table_entry_layouts(
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     address_names: &mut std::collections::HashMap<u64, String>,
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
+    call_graph: Option<&crate::program::call_graph::ProgramCallGraph>,
     cache: &mut std::collections::HashMap<
         u64,
         Option<(
@@ -758,7 +799,8 @@ fn recover_table_entry_layouts(
                 dwarf_outputs,
                 type_env,
                 address_names,
-                true,
+                call_graph,
+                NESTED_CALLEE_DEPTH,
             );
             cache.insert(entry_va, recovered);
         }

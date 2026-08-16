@@ -44,7 +44,7 @@ subject. The same item is routinely open in two or three places:
 
 | item | appears as |
 |---|---|
-| `FunctionFacts`/`CallFactStore` + SCC propagation | EPIC 1, Phase 4, Phase 5 |
+| `FunctionFacts`/`CallFactStore` + SCC propagation | EPIC 1, Phase 4, Phase 5 (and the Performance-plan SCC box) — all four moved together 2026-08-15 |
 | Aggregate classification (arrays/structs/unions/bitfields) | EPIC 3, Phase 6 |
 | Semantic HIR + pure renderers | HIR block, Phase 7, Foundations |
 | ARM32 A32/Thumb/PC/VFP/ABI completeness | EPIC 4 (twice), Phase 2, Foundations |
@@ -341,9 +341,29 @@ lossy `HashMap<u64, String>` or C type strings.
 - [ ] Import PDB facts into `TypeStore` and `ObjectStore`; remove the separate
   PDB-only field-map authority.
 - [ ] Import FLIRT/library catalog facts with explicit provenance.
-- [ ] Add `FunctionFacts` and `CallFactStore` keyed by stable function/call IDs.
+- [~] Add `FunctionFacts` and `CallFactStore` keyed by stable function/call IDs.
+  **The identity and the graph landed; the fact store deliberately did not.**
+  `src/program/call_graph.rs` ships `FunctionId` (the normalized entry VA that
+  `ProgramImage::normalize_function_entry` already canonicalizes for three
+  existing keys) and `ProgramCallGraph` with a deterministic Tarjan
+  condensation, owned by `ProgramSession::call_graph()` on the same
+  `DiscoveryKey` as `discover_functions`. `CallSiteId` is NOT shipped: it has no
+  producer, because `Function::callees` is a `HashSet` of targets that records
+  no call-site VAs, so `CallFactStore` — keyed by call site — needs an
+  `analysis/cfg.rs` change first. `FunctionFacts` is not shipped either, and the
+  reason is in `docs/design/function-facts-and-call-facts-2026-08-15.md` §6:
+  of the three candidate facts, only "does it return" has consumers, it is
+  currently a 21-name list rather than an inferred property, and its main
+  consumer is CFG discovery itself (`cfg.rs:1499`) — so a body-derived version
+  is circular with the boundaries it would be derived from. Building the store
+  before that decision would repeat the `SymbolStore` shape: implemented,
+  unconnected, counted as done.
 - [ ] Solve interprocedural prototypes and type constraints monotonically over
   call-graph SCCs.
+  The SCC input now exists (box above); the monotone solver does not. Note the
+  edge set is a LOWER BOUND — an unresolved indirect call contributes no edge at
+  all (`cfg.rs:1488`) — so any fixed point over it must fail closed, and
+  `ProgramCallGraph` deliberately offers no `is_leaf()`.
 - [ ] Expose selected facts, alternatives, conflicts, and provenance through
   Python and the project database.
 - [ ] Delete legacy string-keyed and per-entry-point fact exchange after parity.
@@ -967,17 +987,35 @@ Improve performance through avoided work first, then profile-led local tuning.
   whenever any of five `GLAURUNG_*` diagnostic variables is set: correct, since
   those paths have side effects, but it means the cache vanishes under exactly
   the conditions you would measure it.
-- [ ] Analyze call-graph SCCs to fixed point instead of repeatedly relifting
+- [~] Analyze call-graph SCCs to fixed point instead of repeatedly relifting
   callees from each root.
-  Nothing in `src/` computes SCCs: `scc`/`tarjan`/`strongly` match once, in an
-  unrelated doc comment. The callee path is depth-bounded re-lifting on purpose
-  — `recover_direct_callee_definition`
-  (`src/python_bindings/ir/callee_contracts.rs:415`) truncates at one layer
-  explicitly to avoid "looping on mutually recursive functions", which is the
-  SCC case being declined rather than solved. First step: stop discarding the
-  call graph — `ProgramSession::discover_functions` computes it and drops it on
-  the floor (`let (functions, _call_graph) = ...`, `src/program/session.rs:263`),
-  so condensation has no input today.
+  The condensation now exists — `src/program/call_graph.rs`, deterministic
+  Tarjan over `FunctionId`, reached by `ProgramSession::call_graph()`. The fixed
+  point does not; the callee path is still bounded re-lifting.
+  **This box's stated first step was wrong and must not be followed.** It said
+  to stop discarding the `CallGraph` at `session.rs:263`. That value is unfit
+  for the purpose: its `nodes` are captured before the rename passes and its
+  edges after, so it fails its own `CallGraph::validate()` on a hello-world
+  (`Err("Edge references unknown caller function: _start")`); only callees are
+  ever added as nodes, so every root is missing from `nodes`; and 41% of its
+  nodes on that binary are `sub_<hex>` strings with no function behind them.
+  The graph is instead built from `Function::callees`, which discovery already
+  populates and the session already caches. `session.rs` now carries a comment
+  saying why the return value stays dropped. Full measurements in
+  `docs/design/function-facts-and-call-facts-2026-08-15.md` §6.
+  On the truncation this box cites: it conflated two separate concerns into one
+  boolean. `NESTED_CALLEE_DEPTH` is now the depth limit and the sole termination
+  guarantee, and the SCC condensation is a separate guard that declines to spend
+  a layer inside a call cycle. Census over all 762 built fixture objects: 29%
+  (222) have a call chain deeper than the truncation reaches, while the mutual
+  recursion the truncation was written to avoid occurs in 1% (8).
+  **The depth increase that census suggests was tried and is inert.** At
+  `NESTED_CALLEE_DEPTH = 2`, 1457 decompiled functions over 300 fixture objects
+  are byte-identical to depth 1, and `dectest @o0` + `@o2` (728 lanes) show no
+  verdict change. Reverted to 1, with the negative result recorded at the
+  constant. Consequence to be honest about: at depth 1 the SCC guard cannot
+  change an outcome, so this box has a landed condensation and no consumer whose
+  behavior depends on it yet.
 - [~] Use immutable environment snapshots for function-parallel work and
   deterministic phase-barrier merges.
   The snapshot half holds: `ProgramEnvironment` is handed out only as
@@ -1444,20 +1482,24 @@ behavior.
 **Outcome:** values survive calls correctly and the structurer accounts for all
 machine control flow.
 
-- [ ] Implement stable `FunctionFacts`/`CallFactStore` and SCC propagation.
-  Audited 2026-08-15: none of it exists. `FunctionFacts`, `CallFact` and
-  `CallFactStore` appear only in docs; `grep -rn "scc|tarjan|strongly_connected"
-  src/` returns zero, so there is no interprocedural fixed point of any kind.
-  This box is the single most duplicated open item in the plan (EPIC 1, here, and
-  Phase 5). The design is now written down in
-  `docs/design/function-facts-and-call-facts-2026-08-15.md`, which names the
-  stable-ID scheme (the normalized entry VA that `ProgramImage::normalize_function_entry`
-  already canonicalizes, plus a call-site instruction VA) and the owner
-  (`ProgramSession`, on the keyed-cache pattern `environment()` uses, not the
-  `OnceLock` pattern). First step is smaller than the box looks:
-  `analyze_functions_image_with_seeds` already RETURNS a `CallGraph` and
-  `session.rs:263` discards it into `_call_graph` one line later. The SCC input
-  is computed and thrown away today.
+- [~] Implement stable `FunctionFacts`/`CallFactStore` and SCC propagation.
+  Audited 2026-08-15, then partly implemented the same day. **Landed:**
+  `FunctionId` and `ProgramCallGraph` with a deterministic Tarjan condensation
+  (`src/program/call_graph.rs`), owned by `ProgramSession::call_graph()` on the
+  same `DiscoveryKey` as discovery, and read by the nested callee analysis in
+  `python_bindings/ir/callee_contracts.rs`. **Not landed, each for a stated
+  reason** (see `docs/design/function-facts-and-call-facts-2026-08-15.md` §6):
+  `CallSiteId`/`CallFactStore` have no producer — `Function::callees` records
+  targets but no call-site VAs, so this needs an `analysis/cfg.rs` change first;
+  `FunctionFacts` has no fact worth storing yet — the only candidate with
+  consumers is noreturn, which is a 21-name list today and whose principal
+  consumer is CFG discovery itself, making a body-derived version circular with
+  the function boundaries it would be inferred from.
+  Two corrections to this box's own premise. First, its "first step" —
+  retaining the `CallGraph` that `session.rs:263` drops — is wrong: that graph
+  fails its own `validate()`, omits all roots from `nodes`, and is name-keyed.
+  Second, the box is one of three homes for this item (EPIC 1, here, Phase 5);
+  all three moved together.
 - [x] Repair indirect-table call arity before DCE using reaching values.
   Done by `9952fc0`, with a correction to this box's premise: DCE was never the
   first wrong stage. `GLAURUNG_DUMP_PASSES` put the boundary at
@@ -1530,7 +1572,17 @@ identity and provenance.
   still the real symbol path. **PDB import: open** — `symbols/pdb.rs` and the
   Windows tooling exist and are real, but nothing in them touches
   `crate::program::symbols`; `SymbolSource::Debug` is declared and never emitted.
-  **Call facts: open, and not started** — see Phase 4. **Analyst persistence:
+  **Call facts: started 2026-08-15, and the identity half is done** — the
+  stable function identity (`FunctionId`) and the call structure it keys
+  (`ProgramCallGraph`, with a deterministic SCC condensation) landed in
+  `src/program/call_graph.rs`, session-owned and read by the nested callee
+  analysis. Facts *about* calls did not land: `CallSiteId` has no producer
+  (`Function::callees` records targets, not call-site VAs), and the one
+  candidate function fact with real consumers — noreturn — is circular with CFG
+  discovery, which consumes it to place function boundaries. Same box as
+  EPIC 1 and Phase 4; all three moved together. Reasoning in
+  `docs/design/function-facts-and-call-facts-2026-08-15.md` §6.
+  **Analyst persistence:
   open** — `SymbolAuthority::Analyst` is constructed only in
   `symbols_tests.rs:109`; the `.glaurung` KB schema has no symbol projection.
 - [~] Add contextual operand reference interpretations.

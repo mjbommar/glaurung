@@ -1078,6 +1078,10 @@ pub(super) fn decompile_at_session(
     // through one of these tables needs its entries' parameter storage, and
     // that is the same demand-driven callee analysis.
     let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
+    // Identity-keyed call structure for this exact discovery. Reuses the
+    // session's cached functions; the SCC condensation lets nested callee
+    // analysis decline to spend a layer inside a call cycle.
+    let callee_call_graph = py.detach(|| session.call_graph(&budgets, &[func_va]));
     let mut callee_layout_cache = std::collections::HashMap::new();
     let callee_facts = recover_direct_callee_layouts(
         &image,
@@ -1090,6 +1094,7 @@ pub(super) fn decompile_at_session(
         dwarf_type_env.as_ref(),
         &mut addr_map,
         &function_tables,
+        Some(callee_call_graph.as_ref()),
         &mut callee_layout_cache,
     );
     apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
@@ -2758,6 +2763,10 @@ fn decompile_all_py(
         crate::analysis::elf_got::elf_got_target_map(&data)
             .into_iter()
             .collect();
+    // Identity-keyed call structure for this exact discovery. Reuses the
+    // session's cached functions; the SCC condensation lets nested callee
+    // analysis decline to spend a layer inside a call cycle.
+    let callee_call_graph = py.detach(|| session.call_graph(&budgets, &[]));
     let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
     for func in funcs.iter().take(limit) {
@@ -2784,6 +2793,7 @@ fn decompile_all_py(
             dwarf_type_env.as_ref(),
             &mut addr_map,
             &function_tables,
+            Some(callee_call_graph.as_ref()),
             &mut callee_layout_cache,
         );
         apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
@@ -3011,6 +3021,10 @@ fn decompile_many_py(
         crate::analysis::elf_got::elf_got_target_map(&data)
             .into_iter()
             .collect();
+    // Identity-keyed call structure for this exact discovery. Reuses the
+    // session's cached functions; the SCC condensation lets nested callee
+    // analysis decline to spend a layer inside a call cycle.
+    let callee_call_graph = py.detach(|| session.call_graph(&budgets, &func_vas));
     let mut callee_layout_cache = std::collections::HashMap::new();
     // PDB-only public-symbol map for the `// PDB:` provenance comment; built
     // once, empty for non-PE inputs (so it never fires on ELF/Mach-O).
@@ -3065,6 +3079,7 @@ fn decompile_many_py(
             dwarf_type_env.as_ref(),
             &mut addr_map,
             &function_tables,
+            Some(callee_call_graph.as_ref()),
             &mut callee_layout_cache,
         );
         apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);

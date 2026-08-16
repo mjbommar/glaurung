@@ -157,3 +157,163 @@ expensive later:
   `6783274` on 2026-08-14 and had zero production consumers until `4af32f1` the
   next day; every caller in between lived in `session_tests.rs`.
   A `CallFactStore` with no migrated consumer is the same artifact.
+
+---
+
+## 6. Correction, measured 2026-08-15 (after §1–§5 were written)
+
+§4 above says the first step is "keeping that value" — retaining the `CallGraph`
+that `session.rs:263` discards. **That is wrong, and the box should not be
+implemented that way.** The value being discarded is not fit for the purpose it
+was going to be kept for. Four measurements, taken with a throwaway probe built
+against `analyze_functions_image_with_seeds`:
+
+**1. It fails its own validator.** On a plain dynamically linked hello-world:
+
+```
+cg.validate() = Err("Edge references unknown caller function: _start")
+```
+
+The cause is two name generations in one structure. `cg.add_node(f.name)`
+(`cfg.rs:5144`) runs inside the discovery loop, *before* the symbol-table, PE
+export, DWARF and FLIRT rename passes (`cfg.rs:5149-5257`). The edge loop
+(`cfg.rs:5266`) builds `name_by_va` from the *final* names. A function
+discovered as `sub_1149` and later renamed `main` is therefore `sub_1149` in
+`nodes` and `main` in `edges`. Every method that iterates `self.nodes` —
+`root_functions`, `leaf_functions`, `call_depth`, `has_cycles` — is unreliable
+for that reason.
+
+**2. Roots are not nodes.** Only the *callee* gets `add_node` in the edge loop
+(`cfg.rs:5280`), so a caller reached only through the `sub_{:x}` fallback never
+becomes a node. On the same binary, 5 edge callers — `main`, `_start`,
+`__do_global_dtors_aux`, `_GLOBAL__sub_I_main`, `_ZL15static_functionv` — are
+absent from `nodes`. A condensation over `cg.nodes` would omit exactly the
+functions an analyst asks about.
+
+**3. 41% of the node set has no function behind it.** 111 of 270 nodes on that
+binary are `sub_<hex>` spellings for PLT stubs and targets outside the
+discovered set. The node set is a mix of real functions and synthetic strings.
+
+**4. Names are the key, and the design note already said not to use them (§5).**
+Two static functions sharing a spelling collapse to one node; `add_node` dedups
+by string.
+
+### What to build instead
+
+`Function::callees: HashSet<Address>` is already populated by discovery
+(`cfg.rs:2113`) and already consumed twice — `ir/lift_function.rs:762` and
+`ir/name_resolve.rs:332`. It is VA-level, it is per-function, and
+`ProgramSession` already caches the `Arc<[Function]>` that carries it. Building
+the identity-keyed graph from that costs one O(V+E) pass over an artifact the
+session already owns, needs no change to `analysis/cfg.rs`, and produces a node
+set that is exactly the discovered functions — roots included.
+
+That is what `src/program/call_graph.rs` now does. The `CallGraph` return value
+stays discarded, with a comment at `session.rs` saying why.
+
+### The edge set is a LOWER BOUND, and that changes the contract
+
+`§4` point 2 asked for "an edge to unknown, not a missing edge". **That cannot
+be honoured from the data discovery keeps today.** `analysis/cfg.rs:1488` reads
+
+```rust
+let resolved_target = immediate_target(&ins)
+    .or_else(|| indirect_memory_target(facts.image, data, &ins, bits));
+if let Some(tgt) = resolved_target {
+    call_edges.push(FunctionXref { ... });
+}
+```
+
+An *unresolved* indirect call produces no xref at all. The unresolved sites are
+recorded — `stats.unresolved_indirect` — but on `FunctionDiscoveryStats`, which
+`analyze_functions_image_with_seeds` also drops. So a function whose only
+outgoing call is an unresolved indirect one is indistinguishable from a leaf.
+
+`ProgramCallGraph` therefore documents its edges as a lower bound and refuses to
+offer `is_leaf()`. `shares_component() == true` is proof of a cycle;
+`false` is not proof of acyclicity. Consumers may use it to justify spending
+*more* effort and never as a termination guarantee. Making unresolved indirect
+calls representable requires surfacing `stats.unresolved_indirect` alongside the
+functions, which is a separate change to `analysis/cfg.rs` and is not done.
+
+### `CallSiteId` is not implementable from what the session caches
+
+§2 proposes `CallSiteId = (FunctionId, instruction_va)`. The identity is right,
+but there is no producer for it on this path: `Function::callees` is a
+`HashSet<Address>` of *targets* and records no call-site VAs. The site VAs exist
+only in `calls_all` inside `analyze_functions_bytes_within`, which converts them
+to `CallGraphEdge::call_sites` and drops the VA-level form.
+
+So `CallFactStore` — which is keyed by call site — is strictly larger than
+`FunctionFacts`, and requires an `analysis/cfg.rs` change first.
+`src/program/call_graph.rs` ships `FunctionId` and deliberately does **not**
+ship `CallSiteId`, rather than shipping an identity nothing can construct.
+
+### What the truncation actually costs, and what a cycle actually costs
+
+Census over all 762 built objects in `tests/decompiler_fixtures/build/`, using
+the VA-level graph:
+
+| | images | share |
+|---|---|---|
+| call chain reaches depth >= 3 | 222 | 29% |
+| contains a mutual-recursion SCC | 8 | 1% |
+
+with 34 mutual SCCs and 46 self-recursive functions in total; the 8 cyclic
+images are `112_recursion_shapes` (gcc/clang -O0) and six `rustc` fixtures.
+
+That asymmetry is the finding. `recover_direct_callee_definition` truncates at
+one nested layer, and its doc gives mutual recursion as the reason — a shape
+present in 1% of the corpus. It pays for that guard on the 29% whose call chains
+run deeper than the truncation can follow. The guard and the depth limit were
+conflated into one boolean; they are separate concerns, and the SCC condensation
+is what lets them be separated. `include_grandcallees: bool` is now
+`NESTED_CALLEE_DEPTH` (the sole termination guarantee) plus a separate SCC
+guard.
+
+**And the depth increase the census suggests does not pay.** Raising
+`NESTED_CALLEE_DEPTH` to 2 was measured: 1457 decompiled functions over 300
+fixture objects came out byte-identical, and `dectest @o0` + `@o2` (728 lanes)
+showed no verdict change. The 29% is not the size of a prize. The callee
+analysis is demand-driven on the rendered function's direct callees, so a long
+chain somewhere in the image does not imply a third layer changes that
+function's argument layouts. Reverted to 1.
+
+Which leaves an honest gap to name: at depth 1 the SCC guard cannot alter an
+outcome, because `remaining_depth - 1` is 0 either way. `ProgramCallGraph` is
+built and consulted on every decompile — at 1.2% of discovery cost, on an
+artifact already cached — but nothing yet depends on its answer.
+
+### Which fact `FunctionFacts` should carry — and why it is not built yet
+
+Of the three candidates, only one has a consumer today:
+
+| fact | computed | consumers | monotone |
+|---|---|---|---|
+| does it return | `analysis/call_semantics.rs:18`, a 21-name list resolved to PLT/IAT VAs, cached in a `OnceLock` on `ProgramImage` | 4, incl. **CFG discovery itself** (`cfg.rs:1499`) | trivially — it is a constant |
+| does it clobber memory | **nowhere**; `memory_ssa.rs:556` makes every call an unconditional `Clobber` | none | would be, from `true` down |
+| prototype / arity | 3 separate producers | `prepare_llir_for_lowering` x4 | **no** — `environment.rs:872` deletes the fact and blacklists the address on conflict |
+
+Noreturn is the only fact with real consumers, and today it is a *name list*,
+not an inferred property. `FunctionFlags::NO_RETURN` exists (`core/function.rs:49`)
+and is never set by anything. The interesting version — "this function never
+returns because every path ends in a noreturn call" — is exactly an SCC
+propagation, and it is monotone in the safe direction: start at may-return,
+move to never-returns only on proof, never retract.
+
+**But it cannot be propagated back to its main consumer.** CFG discovery reads
+noreturn to decide where functions *end* (`cfg.rs:1499`), and a body-derived
+noreturn needs the bodies discovery has not produced yet. That is a genuine
+cycle between function boundaries and function facts, and `call_semantics.rs:3-8`
+already flags it. The three downstream consumers (`return_type.rs:130`,
+`ast.rs:8054`, `callee_contracts.rs:650`) could take a propagated fact without
+that circularity — but that is a real design decision, not a free one.
+
+Meanwhile the design note's own §5 says not to propagate before the clobber
+contract lands, and the clobber contract does not exist at all.
+
+**Conclusion: do not build `FunctionFacts` yet.** The graph and the condensation
+are the reusable part and they are now landed with a consumer. The store should
+wait for either the clobber contract (Phase 3) or an explicit decision about the
+discovery/noreturn cycle. Building it now would repeat the `SymbolStore` shape
+this note warns about in §5 — implemented, unconnected, and counted as done.
