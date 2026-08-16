@@ -86,6 +86,18 @@ fn callee_record(
         .unwrap_or_else(|| SymbolRecord::new(recovered.clone(), RecordSource::CalleeBody, noreturn))
 }
 
+/// The C spelling of an integer occupying exactly two general-purpose result
+/// registers.
+///
+/// Unsigned deliberately: the halves are storage, not a signed quantity, and a
+/// signed double-word would make the high-half extraction an arithmetic shift.
+fn wide_integer_return_c_type(cc: crate::ir::call_args::CallConv) -> &'static str {
+    match crate::ir::abi::machine_word_bytes(cc) {
+        8 => "unsigned __int128",
+        _ => "unsigned long long",
+    }
+}
+
 pub(super) fn recovered_call_prototype(
     prototype: &crate::ir::types_recover::RecoveredPrototype,
     cc: crate::ir::call_args::CallConv,
@@ -118,9 +130,8 @@ pub(super) fn recovered_call_prototype(
                 .to_string()
         })
         .collect();
-    let return_type = match prototype.output_kind() {
-        RecoveredOutputKind::Void => "void",
-        RecoveredOutputKind::Direct => prototype
+    let scalar_return_type = || {
+        prototype
             .result()
             .and_then(|result| result.hint)
             .map(|hint| {
@@ -135,8 +146,34 @@ pub(super) fn recovered_call_prototype(
                     .and_then(|result| result.values.first())
                     .map(|value| storage_fallback(&value.base))
             })
-            .unwrap_or("long"),
-        RecoveredOutputKind::Unknown | RecoveredOutputKind::HiddenReturn => "long",
+            .unwrap_or("long")
+    };
+    let return_type = match prototype.output_kind() {
+        RecoveredOutputKind::Void => "void",
+        // The MEMORY class returns the caller's buffer address in the ordinary
+        // result register, so its call-boundary spelling is the recovered
+        // scalar one. The CLASS is what a consumer needs; the spelling is
+        // already right.
+        RecoveredOutputKind::Direct | RecoveredOutputKind::HiddenReturn => scalar_return_type(),
+        RecoveredOutputKind::Unknown => "long",
+    };
+    // A proven two-register INTEGER result cannot be spelled by any scalar C
+    // type of one machine word, and spelling it as one is what left the `rdx`
+    // half of every 16-byte aggregate read but never defined. The double-word
+    // integer type has EXACTLY this ABI contract — INTEGER, INTEGER, hence
+    // `rax:rdx` — so declaring it makes the call site's storage correct without
+    // reconstructing the source aggregate's fields.
+    let return_type = match prototype.return_class() {
+        crate::ir::abi::ReturnClass::IntegerPair
+            if crate::ir::abi::wide_integer_return_pair(
+                cc,
+                crate::ir::abi::wide_integer_return_width(cc),
+            )
+            .is_some() =>
+        {
+            wide_integer_return_c_type(cc)
+        }
+        _ => return_type,
     };
     CallPrototype {
         return_type: return_type.to_string(),

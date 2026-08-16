@@ -691,6 +691,19 @@ pub(crate) fn call_return_hint(c_type: &str) -> Option<TypeHint> {
             signed: false,
             width: 8,
         }),
+        // The double-word integer a two-register INTEGER result occupies. The
+        // width matters downstream: without it the call destination keeps its
+        // result register's signed machine width, and `widen` then states a
+        // one-word reinterpretation that truncates the value before the high
+        // eightbyte can be extracted from it.
+        "__int128" => Some(TypeHint::Int {
+            signed: true,
+            width: 16,
+        }),
+        "unsigned __int128" => Some(TypeHint::Int {
+            signed: false,
+            width: 16,
+        }),
         "void" => None,
         _ => None,
     }
@@ -749,6 +762,10 @@ pub fn integer_c_type_width(c_type: &str, pointer_width: u8) -> Option<u8> {
         "int" | "unsigned int" | "int32_t" | "uint32_t" => Some(4),
         "long" | "unsigned long" | "__SIZE_TYPE__" | "__PTRDIFF_TYPE__" => Some(pointer_width),
         "long long" | "unsigned long long" | "int64_t" | "uint64_t" => Some(8),
+        // A 64-bit-target extension. Naming it on a 32-bit target would claim a
+        // width no register file there can hold, so it is only a type where the
+        // machine word is eight bytes.
+        "__int128" | "unsigned __int128" if pointer_width == 8 => Some(16),
         _ => None,
     }
 }

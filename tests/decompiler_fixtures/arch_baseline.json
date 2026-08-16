@@ -8301,7 +8301,7 @@
     "bv195_make_quad": "structural",
     "bv195_mixed_roundtrip": "fail",
     "bv195_pair_roundtrip": "pass",
-    "bv195_quad_roundtrip": "fail",
+    "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
   },
   "195_by_value_aggregates:x86_64:O2": {
@@ -8313,7 +8313,7 @@
     "bv195_make_quad": "structural",
     "bv195_mixed_roundtrip": "fail",
     "bv195_pair_roundtrip": "pass",
-    "bv195_quad_roundtrip": "fail",
+    "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
   },
   "195_by_value_aggregates:x86_64_gcc15:O0": {
@@ -8325,7 +8325,7 @@
     "bv195_make_quad": "structural",
     "bv195_mixed_roundtrip": "fail",
     "bv195_pair_roundtrip": "pass",
-    "bv195_quad_roundtrip": "fail",
+    "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
   },
   "195_by_value_aggregates:x86_64_gcc15:O2": {

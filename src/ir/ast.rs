@@ -9292,6 +9292,15 @@ fn shift_operand_ctype(lhs: &Expr, rhs: &Expr) -> &'static str {
         )
         .filter(|width| *width > pointer_width)
         {
+            // A value declared at exactly two machine words must be shifted at
+            // that width: `(unsigned long)(v) >> 64` on an LP64 target is a
+            // shift by the operand's own width, which is undefined and in
+            // practice yields nothing. The double-word spelling is the only one
+            // under which extracting the high eightbyte of a `rax:rdx` result
+            // means what it says.
+            if width == pointer_width.saturating_mul(2) {
+                return double_width_ctype(false, pointer_width);
+            }
             return target_int_ctype(false, width);
         }
     }

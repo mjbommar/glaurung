@@ -2931,7 +2931,7 @@
     "bv195_make_quad": "structural",
     "bv195_mixed_roundtrip": "fail",
     "bv195_pair_roundtrip": "pass",
-    "bv195_quad_roundtrip": "fail",
+    "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
   },
   "195_by_value_aggregates:clang:O2": {
@@ -2943,7 +2943,7 @@
     "bv195_make_quad": "structural",
     "bv195_mixed_roundtrip": "fail",
     "bv195_pair_roundtrip": "pass",
-    "bv195_quad_roundtrip": "fail",
+    "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
   },
   "195_by_value_aggregates:gcc:O0": {
@@ -2955,7 +2955,7 @@
     "bv195_make_quad": "structural",
     "bv195_mixed_roundtrip": "fail",
     "bv195_pair_roundtrip": "pass",
-    "bv195_quad_roundtrip": "fail",
+    "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
   },
   "195_by_value_aggregates:gcc:O2": {
@@ -2967,7 +2967,7 @@
     "bv195_make_quad": "structural",
     "bv195_mixed_roundtrip": "fail",
     "bv195_pair_roundtrip": "pass",
-    "bv195_quad_roundtrip": "fail",
+    "bv195_quad_roundtrip": "pass",
     "bv195_scalar_control": "pass"
   },
   "196_disjoint_frame_slots:clang:O0": {

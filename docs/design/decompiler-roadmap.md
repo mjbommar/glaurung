@@ -540,36 +540,58 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
   fixtures, 910 cell decompositions, 14 overlapping cells, and zero index
   refusals. Diagnostic only; no production consumer, per the `[~]` item above.
 - [ ] Propagate pointee and object constraints across calls.
-- [ ] Model by-value aggregates, split register/stack values, hidden structure
+- [~] Model by-value aggregates, split register/stack values, hidden structure
   returns, and aggregate result storage for each ABI.
+  **The return CLASS is modelled and two of its four contracts are connected.**
+  `abi::ReturnClass` (`Single` / `IntegerPair` / `SplitBanks` / `Memory`) plus
+  `abi::sysv_amd64_return_class` and the DWARF-driven
+  `ir::return_class::declared_return_class` land the classifier; the register
+  pair is wired end to end and MEMORY is now `RecoveredOutputKind::HiddenReturn`'s
+  first and only producer (Entry 51, `tools/dectest.py 195_by_value_aggregates
+  --full`, 4 improvements, 0 regressions).
+
   **Fixture `195_by_value_aggregates` maps the boundary exactly** (added
   2026-08-15, after an audit found the corpus had NO lane returning a struct by
-  value and `RecoveredOutputKind::HiddenReturn` was matched in three places and
-  constructed in none):
+  value). Verdicts after Entry 51:
 
       8-byte struct  -> rax             INTEGER      pass on all 4 lanes
       scalar control                                 pass on all 4 lanes
-      16-byte struct -> rax:rdx         INTEGER      FAIL on all 4
+      16-byte struct -> rax:rdx         INTEGER      pass on all 4  (was FAIL)
       int + double   -> rax + xmm0      split banks  FAIL on all 4
       32-byte struct -> hidden pointer  MEMORY       FAIL on all 4
 
-  Correct up to eight bytes, wrong at every boundary beyond, with the control
-  passing so the lane is not vacuous.
+  The boundary that remains is two separate things, and only one of them is ABI
+  work:
 
-  The cause is one modelling decision. `abi::return_registers(SysVAmd64)` is
-  `["rax","eax","ax","al","xmm0"]` — ALIASES of a single logical result plus the
-  SSE spelling. There is no representation of a SECOND result register, so a
-  16-byte INTEGER aggregate comes back as `extern long bv195_make_quad(int)` and
-  the `rdx` half is read while never defined:
+  - **Split banks needs a C type this renderer cannot yet spell.** `rax:rdx` had
+    one — the double-word integer, whose ABI contract is INTEGER,INTEGER by
+    construction, so `extern unsigned __int128 bv195_make_quad(int)` is exactly
+    right and needs no aggregate reconstruction. `rax + xmm0` has no builtin
+    equivalent: it needs a synthesised `struct { unsigned long; double; }` tag on
+    the callee declaration (`symbol_env::SymbolRecord::required_structs` is the
+    existing machinery). Until then the class is computed and deliberately not
+    applied. Separately, `call_result_split::result_storage` maps `xmm0` onto the
+    SAME storage key as `rax` under both x86-64 conventions (`call_result_split.rs:71`),
+    so a post-call `xmm0` read is rewritten to the INTEGER call result — visible
+    as `(union { unsigned long long bits; double value; }){ .bits = var3 }.value`
+    in `bv195_mixed_roundtrip`. That is a soundness defect independent of
+    aggregates and it should be fixed with the split-banks class.
+  - **The MEMORY lane does NOT fail for an ABI reason.** The recovered call is
+    positionally correct against the machine — `bv195_make_big(<buffer>, seed)`,
+    the hidden pointer in `rdi` and `seed` in `rsi` — because the callee's
+    storage layout is recovered from liveness and never claims a source arity, so
+    the "every argument shifts one register right" hazard never materialises. It
+    fails because `mov %rsp,%rdi` at `1331` hands out the frame base while the
+    subsequent `0x8(%rsp)` reads are promoted to `local_38`: the address escaping
+    into a call is not connected to the stack object the reads name, so the
+    callee writes to an undefined `rsp` and the caller reads a buffer nothing
+    wrote. That is the same promotion-meets-a-borrowed-address shape as Entry 50
+    and `111_self_referential_struct`, and it belongs to EPIC 3's stack work.
 
-      var3 = bv195_make_quad(...);       // rax only
-      *(int *)((var1 + 0x8)) = var7;     // var7 is the rdx half: undefined
-
-  The fix is NOT adding `rdx` to that list — the list means "other spellings of
-  the same value", and `rax:rdx` is two values. It needs a return CLASS (single,
-  register pair, split across banks, memory via hidden pointer), which is the
-  same eightbyte classification the SysV parameter side already needs, so the two
-  should land together.
+  Consequently returns and parameters were **separable** here, contrary to the
+  earlier note in this box. The eightbyte classifier is shared machinery — the
+  parameter side can call `sysv_amd64_return_class`'s `Eightbyte` join unchanged —
+  but the consumers are independent and nothing forced them to land together.
 - [ ] Project proven accesses as HIR `Field`, `Index`, `AddressOf`, and typed
   dereference nodes.
 - [ ] Model vtables and RTTI as global objects connected to relocations, types,
@@ -1793,23 +1815,27 @@ the detail kept there and only the delta recorded here.
   pointee's shape, which is why EPIC 3's "Propagate pointee and object
   constraints across calls" is still open. The whole layer also remains
   diagnostic: `object_shapes` has no production consumer.
-- [ ] Implement aggregate ABI transfers and real execution fixtures.
-  Neither half. No SysV eightbyte classifier exists for aggregates; the code
-  fails closed instead, and the refusal is pinned by
+- [~] Implement aggregate ABI transfers and real execution fixtures.
+  **Both halves started, the RETURN side only.** The execution lane exists:
+  `tests/decompiler_fixtures/src/195_by_value_aggregates.c` (2026-08-15) covers
+  all four System V return contracts plus a scalar control, and the older note
+  that "no fixture anywhere returns a struct by value" is superseded — the corpus
+  had dodged it on purpose in `129_struct_by_value.c`, which still keeps its
+  struct-taking functions `static`.
+
+  A SysV eightbyte classifier now exists (`abi::sysv_amd64_return_class` +
+  `ir::return_class`, Entry 51) and `RecoveredOutputKind::HiddenReturn` is
+  constructed for the first time, from a proven MEMORY-class declared return
+  (`python_bindings/ir.rs`). It is deliberately behaviour-neutral: under System V
+  a MEMORY callee returns the caller's buffer address in the ordinary result
+  register, so the recorded contract changes no spelling.
+
+  **The PARAMETER side is untouched.** The refusal is still pinned by
   `locked_sysv_parameters_decline_the_whole_signature_on_an_aggregate`
-  (`src/ir/types_recover.rs:4466`) — one aggregate poisons the whole signature.
-  `RecoveredOutputKind::HiddenReturn` is declared (`types_recover.rs:509`) and
-  **never constructed**: its only three other references are match arms that
-  treat it as a no-op or spell it `"long"`. The renderer refuses by-value
-  aggregates in as many words (`src/ir/ast.rs:7565`). On fixtures, the corpus
-  dodges the boundary on purpose:
-  `tests/decompiler_fixtures/src/129_struct_by_value.c` keeps both struct-taking
-  functions `static`, exposes only `int32_t` signatures in the manifest, and
-  says so at line 52 — "Returning the whole struct would cross the same boundary
-  in reverse." No fixture anywhere returns a struct by value, so there is no
-  sret execution lane at all. First step: add exported `struct Small f(...)`
-  (register-pair return) and `struct Large g(...)` (sret) lanes; the new code
-  would be `HiddenReturn`'s first producer.
+  (`src/ir/types_recover.rs`) — one aggregate poisons the whole signature — and
+  the renderer still refuses by-value aggregates in as many words
+  (`src/ir/ast.rs:7565`). The eightbyte join the parameter side needs is the one
+  already written; what is missing is a consumer, not a classifier.
 - [ ] Project solved access paths to semantic HIR.
   Zero, and it is gated on Phase 7 rather than on Phase 6: there is no HIR to
   project onto (no `src/ir/hir/`, no `Field`/`Index`/`Member`/`AddressOf` node in

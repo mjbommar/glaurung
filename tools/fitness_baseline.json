@@ -14,21 +14,37 @@
         "product_mean_loc: 530.1114649681529 -> 530.1968253968254 (worse)",
         "product_files_above_2000: 13 -> 14 (worse)"
       ]
+    },
+    {
+      "measures": {
+        "ir_files_above_1000": 14,
+        "ir_median_loc": 479.0,
+        "product_files_above_1000": 28,
+        "product_files_above_2000": 14,
+        "product_mean_loc": 530.1968253968254,
+        "product_median_loc": 276,
+        "product_pct_loc_above_1000": 44.464469618949536
+      },
+      "worsened": [
+        "product_files_above_1000: 28 -> 29 (worse)",
+        "product_pct_loc_above_1000: 44.464469618949536 -> 44.87695509323029 (worse)",
+        "ir_files_above_1000: 14 -> 15 (worse)"
+      ]
     }
   ],
   "ir": {
-    "file_count": 94,
-    "files_above_1000": 14,
+    "file_count": 96,
+    "files_above_1000": 15,
     "files_above_2000": 9,
-    "loc_in_files_above_1000": 44380,
-    "mean_loc": 830.2765957446809,
-    "median_loc": 479.0,
-    "pct_loc_above_1000": 56.86390077646516,
-    "total_loc": 78046
+    "loc_in_files_above_1000": 45356,
+    "mean_loc": 819.5520833333334,
+    "median_loc": 469.5,
+    "pct_loc_above_1000": 57.64835974935496,
+    "total_loc": 78677
   },
   "largest_files": [
     {
-      "loc": 11628,
+      "loc": 11545,
       "path": "ir/ast.rs"
     },
     {
@@ -40,7 +56,7 @@
       "path": "ir/lift_x86.rs"
     },
     {
-      "loc": 3932,
+      "loc": 3975,
       "path": "ir/types_recover.rs"
     },
     {
@@ -52,7 +68,7 @@
       "path": "symbolic/solver/axeyum_backend.rs"
     },
     {
-      "loc": 3291,
+      "loc": 3314,
       "path": "python_bindings/ir.rs"
     },
     {
@@ -89,23 +105,23 @@
     }
   ],
   "measures": {
-    "ir_files_above_1000": 14,
-    "ir_median_loc": 479.0,
-    "product_files_above_1000": 28,
+    "ir_files_above_1000": 15,
+    "ir_median_loc": 469.5,
+    "product_files_above_1000": 29,
     "product_files_above_2000": 14,
-    "product_mean_loc": 530.1968253968254,
+    "product_mean_loc": 529.031545741325,
     "product_median_loc": 276,
-    "product_pct_loc_above_1000": 44.464469618949536
+    "product_pct_loc_above_1000": 44.87695509323029
   },
   "product": {
-    "file_count": 315,
-    "files_above_1000": 28,
+    "file_count": 317,
+    "files_above_1000": 29,
     "files_above_2000": 14,
-    "loc_in_files_above_1000": 74261,
-    "mean_loc": 530.1968253968254,
+    "loc_in_files_above_1000": 75260,
+    "mean_loc": 529.031545741325,
     "median_loc": 276,
-    "pct_loc_above_1000": 44.464469618949536,
-    "total_loc": 167012
+    "pct_loc_above_1000": 44.87695509323029,
+    "total_loc": 167703
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -115,7 +131,7 @@
       "measure": "product_mean_loc",
       "meets_target": false,
       "target": 450.0,
-      "value": 530.1968253968254
+      "value": 529.031545741325
     },
     {
       "label": "Product-code median",
@@ -129,7 +145,7 @@
       "measure": "product_files_above_1000",
       "meets_target": true,
       "target": 35.0,
-      "value": 28
+      "value": 29
     },
     {
       "label": "Product files above 2,000 LOC",
@@ -143,21 +159,21 @@
       "measure": "product_pct_loc_above_1000",
       "meets_target": false,
       "target": 25.0,
-      "value": 44.464469618949536
+      "value": 44.87695509323029
     },
     {
       "label": "src/ir median",
       "measure": "ir_median_loc",
       "meets_target": true,
       "target": 500.0,
-      "value": 479.0
+      "value": 469.5
     },
     {
       "label": "src/ir files above 1,000 LOC",
       "measure": "ir_files_above_1000",
       "meets_target": false,
       "target": 5.0,
-      "value": 14
+      "value": 15
     }
   ]
 }

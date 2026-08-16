@@ -112,6 +112,50 @@ impl<'a> DwarfTypeEnv<'a> {
         })
     }
 
+    /// The complete recorded layout of a BARE aggregate spelling.
+    ///
+    /// This is the by-value counterpart of [`Self::aggregate_pointer`], which
+    /// deliberately answers only about pointers because a pointer needs no
+    /// layout. A by-value result does: its size and field types are what decide
+    /// which registers the ABI returns it in. Pointer spellings, arrays,
+    /// conflicting definitions, and typedef cycles all return `None`.
+    pub(crate) fn aggregate_layout(&'a self, c_type: &str) -> Option<&'a DwarfType> {
+        let spelling = strip_leading_qualifiers(strip_trailing_qualifiers(c_type.trim()));
+        if spelling.contains('*') || spelling.contains('[') {
+            return None;
+        }
+        let (kind, tag_name) = if let Some(tag) = spelling.strip_prefix("struct ").map(str::trim) {
+            (DwarfTypeKind::Struct, tag)
+        } else if let Some(tag) = spelling.strip_prefix("union ").map(str::trim) {
+            (DwarfTypeKind::Union, tag)
+        } else {
+            self.resolve_bare_aggregate(spelling, &mut HashSet::new())?
+        };
+        valid_c_identifier(tag_name).then_some(())?;
+        self.layouts.get(&(kind, tag_name)).and_then(|entry| *entry)
+    }
+
+    /// Follow typedef aliases to the spelling that carries the representation.
+    ///
+    /// Unlike [`Self::scalar_spelling`], this does not stop at width-equivalent
+    /// scalar aliases: an ABI storage class depends only on the representation,
+    /// never on the source typedef's identity, so `int32_t` resolving to `int`
+    /// is exactly the answer wanted here.
+    pub(crate) fn representation_spelling(&self, c_type: &str) -> String {
+        let mut spelling = strip_leading_qualifiers(strip_trailing_qualifiers(c_type.trim()));
+        let mut visiting = HashSet::new();
+        while !builtin_scalar_type(spelling)
+            && valid_c_identifier(spelling)
+            && visiting.insert(spelling)
+        {
+            let Some(target) = self.typedefs.get(spelling).and_then(|entry| *entry) else {
+                break;
+            };
+            spelling = strip_leading_qualifiers(strip_trailing_qualifiers(target.trim()));
+        }
+        spelling.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
     /// Standalone declaration preserving the producer's real typedef/tag
     /// relationship.
     pub(crate) fn forward_declaration(&self, pointer: AggregatePointer<'_>) -> String {

@@ -518,6 +518,13 @@ pub struct RecoveredPrototype {
     result: Option<RecoveredResult>,
     output_kind: RecoveredOutputKind,
     output_locked: bool,
+    /// Which ABI storage contract the result obeys — one register, a register
+    /// pair, a split across banks, or a caller-provided buffer.
+    ///
+    /// Orthogonal to `output_kind`, and deliberately so: `output_kind` answers
+    /// "is there a source result", this answers "where does it live". Conflating
+    /// them is what left `HiddenReturn` a variant no code could construct.
+    return_class: crate::ir::abi::ReturnClass,
     /// Float-bank slot -> the EXACT register spelling this function's machine
     /// code reads that storage under.
     ///
@@ -737,6 +744,26 @@ impl RecoveredPrototype {
 
     pub fn output_kind(&self) -> RecoveredOutputKind {
         self.output_kind
+    }
+
+    /// Which ABI storage contract this function's result obeys.
+    ///
+    /// Defaults to [`crate::ir::abi::ReturnClass::Single`], which is the one
+    /// contract the value model has always assumed. Only a proven declared
+    /// aggregate shape moves it (`crate::ir::return_class`).
+    pub fn return_class(&self) -> crate::ir::abi::ReturnClass {
+        self.return_class
+    }
+
+    /// Record a proven ABI result contract for a by-value aggregate.
+    ///
+    /// Separate from [`Self::apply_locked_output`] because the two facts are
+    /// independent: the output KIND says whether a source result exists at all,
+    /// while the CLASS says which registers carry it. A `Memory`-class result
+    /// exists and is `HiddenReturn`; an `IntegerPair` exists and is `Direct`
+    /// across two registers.
+    pub(crate) fn apply_return_class(&mut self, class: crate::ir::abi::ReturnClass) {
+        self.return_class = class;
     }
 
     /// Exact machine storage for a proven direct scalar output.
@@ -971,10 +998,25 @@ impl RecoveredPrototype {
                 self.output_kind = RecoveredOutputKind::Void;
                 self.output_locked = true;
             }
+            // A proven MEMORY-class aggregate: the caller allocated the object
+            // and the callee returns its address in the result register. The
+            // machine result stays exactly as recovered — that address IS what
+            // the register holds — so this records the contract without
+            // changing a single spelling. Marking it is what lets a consumer
+            // distinguish "a value in a register" from "an address of the
+            // caller's buffer" instead of inferring it from a size.
+            RecoveredOutputKind::HiddenReturn => {
+                if let Some(hint) = hint {
+                    if let Some(result) = self.result.as_mut() {
+                        result.hint = Some(hint);
+                    }
+                }
+                self.output_kind = RecoveredOutputKind::HiddenReturn;
+                self.output_locked = true;
+            }
             // An unresolved declaration is a fact gap, not permission to
-            // discard the machine-code result. Hidden-return declarations need
-            // aggregate shape support before they can be applied here.
-            RecoveredOutputKind::Unknown | RecoveredOutputKind::HiddenReturn => {}
+            // discard the machine-code result.
+            RecoveredOutputKind::Unknown => {}
         }
     }
 
@@ -2335,6 +2377,7 @@ pub fn recover_prototype_with_arm_vfp_args(
         result,
         output_kind,
         output_locked: false,
+        return_class: crate::ir::abi::ReturnClass::Single,
         observed_float_storage,
     }
 }
@@ -4322,6 +4365,58 @@ mod tests {
         assert_eq!(
             prototype.result().and_then(|result| result.hint),
             Some(hint)
+        );
+    }
+
+    /// `HiddenReturn` was a variant the type system knew about and no code could
+    /// produce: matched in three places, constructed in none. A MEMORY-class
+    /// result is what constructs it, and it must not discard the machine result
+    /// while doing so — under System V the callee returns the caller's buffer
+    /// address in the ordinary result register, so that register still holds a
+    /// value the caller may use.
+    #[test]
+    fn a_memory_class_result_is_a_constructible_hidden_return() {
+        let hint = TypeHint::Pointer { pointee_width: 8 };
+        let mut prototype = RecoveredPrototype {
+            result: Some(RecoveredResult {
+                values: vec![SsaValue {
+                    base: VReg::phys("rax"),
+                    version: 3,
+                }],
+                hint: None,
+            }),
+            output_kind: RecoveredOutputKind::Direct,
+            ..RecoveredPrototype::default()
+        };
+
+        prototype.apply_return_class(crate::ir::abi::ReturnClass::Memory);
+        prototype.apply_locked_output(RecoveredOutputKind::HiddenReturn, Some(hint));
+
+        assert_eq!(prototype.output_kind(), RecoveredOutputKind::HiddenReturn);
+        assert_eq!(
+            prototype.return_class(),
+            crate::ir::abi::ReturnClass::Memory
+        );
+        assert!(prototype.output_is_locked());
+        assert_eq!(
+            prototype.result().map(|result| result.values.len()),
+            Some(1),
+            "the machine result register still holds the buffer address"
+        );
+        assert_eq!(
+            prototype.result().and_then(|result| result.hint),
+            Some(hint)
+        );
+    }
+
+    /// The default is the one contract the value model has always assumed. A
+    /// prototype that never saw a declared aggregate must not acquire a
+    /// two-register or hidden-pointer result by omission.
+    #[test]
+    fn an_unclassified_prototype_keeps_the_single_register_contract() {
+        assert_eq!(
+            RecoveredPrototype::default().return_class(),
+            crate::ir::abi::ReturnClass::Single
         );
     }
 

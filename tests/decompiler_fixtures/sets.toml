@@ -107,6 +107,11 @@ selectors = [
     "161_packed_struct_layout",
     "162_unaligned_memcpy_access",
     "187_constant_bias_index",
+    # The by-value ABI transfer lane. `129_struct_by_value` keeps its
+    # struct-taking functions `static` and deliberately never returns one, so
+    # without this the set covered aggregate LAYOUT and no aggregate ABI
+    # CONTRACT at all — the four System V return classes had no named loop.
+    "195_by_value_aggregates",
 ]
 
 [bias]

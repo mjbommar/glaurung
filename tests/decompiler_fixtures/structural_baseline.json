@@ -3002,9 +3002,7 @@
     "195_by_value_aggregates:bv195_big_roundtrip": [],
     "195_by_value_aggregates:bv195_mixed_roundtrip": [],
     "195_by_value_aggregates:bv195_pair_roundtrip": [],
-    "195_by_value_aggregates:bv195_quad_roundtrip": [
-      "var3 is read but never defined"
-    ],
+    "195_by_value_aggregates:bv195_quad_roundtrip": [],
     "195_by_value_aggregates:bv195_scalar_control": [],
     "196_disjoint_frame_slots:dfs196_alias_control": [],
     "196_disjoint_frame_slots:dfs196_indexed_control": [],

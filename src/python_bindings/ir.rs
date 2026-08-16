@@ -2210,10 +2210,33 @@ fn recover_decbench_prototype(
             prototype.apply_locked_output(RecoveredOutputKind::Void, None);
         }
         Some(DwarfReturnType::Type(c_type)) => {
-            prototype.apply_locked_output(
-                RecoveredOutputKind::Direct,
-                dwarf_return_hint_with_env(c_type, cc, type_env),
-            );
+            // A declared BY-VALUE aggregate is not a scalar in the result
+            // register, and locking it as one is how a 16-byte struct became
+            // `extern long f(int)` with its `rdx` half read but never defined.
+            // Take the ABI storage contract from the declared shape first; only
+            // a `Single` class is a scalar direct output.
+            let class = crate::ir::return_class::declared_return_class(c_type, cc, type_env);
+            if let Some(class) = class {
+                prototype.apply_return_class(class);
+            }
+            let hint = dwarf_return_hint_with_env(c_type, cc, type_env);
+            match class {
+                // The result exists, but it is the caller's buffer rather than a
+                // value in a register. This is the only construction site of
+                // `HiddenReturn`, which the type system has known about since it
+                // was declared and no code could produce.
+                Some(crate::ir::abi::ReturnClass::Memory) => {
+                    prototype.apply_locked_output(RecoveredOutputKind::HiddenReturn, hint);
+                }
+                // Every other class — including an unclassifiable shape, which
+                // is every scalar — keeps the direct scalar output it has always
+                // had. Where the class is `IntegerPair`, the call-boundary
+                // spelling widens in `recovered_call_prototype`; nothing else
+                // about this function's own recovery changes.
+                _ => {
+                    prototype.apply_locked_output(RecoveredOutputKind::Direct, hint);
+                }
+            }
         }
         Some(DwarfReturnType::Unknown) | None => {}
     }

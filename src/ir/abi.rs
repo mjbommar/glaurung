@@ -50,36 +50,131 @@ pub fn machine_word_bytes(cc: CallConv) -> u8 {
     }
 }
 
-/// Low/high general-purpose registers for a scalar integer wider than one
-/// machine word.
+/// The width of the widest integer result an ABI splits over two general-purpose
+/// registers: exactly two machine words.
+///
+/// ILP32 conventions split an eight-byte `long long`; System V AMD64 splits a
+/// sixteen-byte INTEGER-class value (`__int128`, or an aggregate whose two
+/// eightbytes are both INTEGER) over `rax:rdx`. Deriving the width from the
+/// machine word keeps one rule instead of a per-convention constant.
+pub fn wide_integer_return_width(cc: CallConv) -> u8 {
+    machine_word_bytes(cc).saturating_mul(2)
+}
+
+/// Low/high general-purpose registers for an integer result of exactly two
+/// machine words.
 ///
 /// The names are the canonical SSA spellings.  Returning `None` is deliberate:
-/// 64-bit ABIs keep an eight-byte scalar in one register, and aggregate or FP
-/// returns have different storage contracts.
+/// a convention with no two-register integer result contract must not acquire
+/// one, and any other width is a single register or a different storage class
+/// entirely.
+///
+/// This is the register PAIR, not an alias set. [`return_registers`] lists other
+/// spellings of ONE logical result; `rax:rdx` is two values that together carry
+/// one, which is why it cannot be expressed by appending to that list.
 pub fn wide_integer_return_pair(
     cc: CallConv,
     value_width: u8,
 ) -> Option<(&'static str, &'static str)> {
-    if value_width != 8 || machine_word_bytes(cc) != 4 {
+    if value_width != wide_integer_return_width(cc) {
         return None;
     }
     match cc {
         CallConv::Cdecl32 => Some(("rax", "rdx")),
         CallConv::Arm | CallConv::ArmHardFloat => Some(("r0", "r1")),
-        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => None,
+        CallConv::SysVAmd64 => Some(("rax", "rdx")),
+        // Win64 returns any aggregate larger than one register through a hidden
+        // pointer, so it has no register-pair result. AAPCS64 uses `x0:x1`, but
+        // there are no fixtures returning a 16-byte aggregate on that target to
+        // measure the change against; keep it fail-closed.
+        CallConv::Win64 | CallConv::Aarch64 => None,
     }
 }
 
-/// Which half of an ILP32 wide integer result a register name denotes.
+/// Which half of a two-register integer result a register name denotes.
+///
+/// Sub-register spellings are folded onto their half: a 32-bit write to the
+/// high register still writes the same half of the same logical value.
 pub fn wide_integer_return_part(cc: CallConv, name: &str) -> Option<usize> {
     let base = ssa_base(name);
-    let (low, high) = wide_integer_return_pair(cc, 8)?;
-    if base == low || (cc == CallConv::Cdecl32 && ["eax", "ax", "al"].contains(&base)) {
+    let (low, high) = wide_integer_return_pair(cc, wide_integer_return_width(cc))?;
+    let x86 = matches!(cc, CallConv::Cdecl32 | CallConv::SysVAmd64);
+    if base == low || (x86 && ["eax", "ax", "al"].contains(&base)) {
         Some(0)
-    } else if base == high || (cc == CallConv::Cdecl32 && ["edx", "dx", "dl"].contains(&base)) {
+    } else if base == high || (x86 && ["edx", "dx", "dl"].contains(&base)) {
         Some(1)
     } else {
         None
+    }
+}
+
+/// The class of one eight-byte chunk of a System V AMD64 aggregate.
+///
+/// The full ABI has more classes (X87, COMPLEX_X87, NO_CLASS); this models the
+/// two that reach a register, and anything else is reported by refusing to
+/// classify at all rather than by guessing one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Eightbyte {
+    /// Allocated from the general-purpose result bank (`rax`, then `rdx`).
+    Integer,
+    /// Allocated from the SSE result bank (`xmm0`, then `xmm1`).
+    Sse,
+}
+
+/// How a calling convention hands a source-level result back to its caller.
+///
+/// This is the fact [`return_registers`] cannot express. That list is the set of
+/// SPELLINGS of one logical result — `rax`/`eax`/`ax`/`al` are four names for
+/// the same bits — so adding `rdx` to it would claim `rdx` is another name for
+/// `rax`. A 16-byte INTEGER aggregate instead puts DIFFERENT bytes in each, and
+/// a MEMORY-class aggregate puts none of them in a register at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReturnClass {
+    /// One logical value in one bank: the existing scalar contract.
+    #[default]
+    Single,
+    /// Two INTEGER eightbytes in the general-purpose result pair (`rax:rdx`).
+    IntegerPair,
+    /// One INTEGER and one SSE eightbyte, in the source order the two banks are
+    /// consumed. `integer_first` distinguishes `{int; double;}` (`rax` then
+    /// `xmm0`) from `{double; int;}` (`xmm0` then `rax`).
+    SplitBanks { integer_first: bool },
+    /// MEMORY: the caller allocates the object and passes its address in a
+    /// hidden first INTEGER argument register; the callee returns that address
+    /// in the result register and every declared argument shifts one slot right.
+    Memory,
+}
+
+/// Classify a System V AMD64 aggregate result from its size and eightbyte classes.
+///
+/// `eightbytes` must describe the object from offset zero in eight-byte steps.
+/// An empty slice, or one disagreeing with `size`, is not classifiable and
+/// yields `None` — a wrong class produces C that compiles and returns the wrong
+/// bytes, so an unprovable shape must keep the caller's existing behaviour.
+pub fn sysv_amd64_return_class(size: u64, eightbytes: &[Eightbyte]) -> Option<ReturnClass> {
+    if size == 0 {
+        return None;
+    }
+    // The ABI's own cutoff. Beyond it no field classification matters: the
+    // object is MEMORY however its fields are typed.
+    if size > 16 {
+        return Some(ReturnClass::Memory);
+    }
+    if eightbytes.len() != usize::try_from(size.div_ceil(8)).ok()? {
+        return None;
+    }
+    match eightbytes {
+        [Eightbyte::Integer] | [Eightbyte::Sse] => Some(ReturnClass::Single),
+        [Eightbyte::Integer, Eightbyte::Integer] => Some(ReturnClass::IntegerPair),
+        [Eightbyte::Integer, Eightbyte::Sse] => Some(ReturnClass::SplitBanks {
+            integer_first: true,
+        }),
+        [Eightbyte::Sse, Eightbyte::Integer] => Some(ReturnClass::SplitBanks {
+            integer_first: false,
+        }),
+        // Two SSE eightbytes return in `xmm0:xmm1`, which the value model has no
+        // second float result register for. Fail closed.
+        _ => None,
     }
 }
 
@@ -780,6 +875,102 @@ mod tests {
             fixed_parameter_prefix_len(CallConv::Win64, &recovered),
             recovered.len()
         );
+    }
+
+    /// The alias list means "other spellings of ONE value". `rdx` is a second
+    /// value, so putting it there would make every `rdx` in every System V
+    /// function look like the function's result — which is why the register pair
+    /// is a separate fact and this assertion guards the distinction.
+    #[test]
+    fn the_second_result_register_is_never_an_alias_of_the_first() {
+        assert!(!return_registers(CallConv::SysVAmd64).contains(&"rdx"));
+        assert!(!is_return_register(CallConv::SysVAmd64, "rdx"));
+        assert!(!is_return_register(CallConv::SysVAmd64, "edx"));
+        assert_eq!(
+            wide_integer_return_pair(CallConv::SysVAmd64, 16),
+            Some(("rax", "rdx"))
+        );
+        // Eight bytes is ONE register on an LP64 target, not a pair.
+        assert_eq!(wide_integer_return_pair(CallConv::SysVAmd64, 8), None);
+    }
+
+    /// Sub-register spellings and SSA versions must land on the same half.
+    #[test]
+    fn each_half_of_a_two_register_result_absorbs_its_own_spellings() {
+        for (name, part) in [
+            ("rax", Some(0)),
+            ("eax", Some(0)),
+            ("al", Some(0)),
+            ("rdx#7", Some(1)),
+            ("edx", Some(1)),
+            ("rsi", None),
+            ("xmm0", None),
+        ] {
+            assert_eq!(
+                wide_integer_return_part(CallConv::SysVAmd64, name),
+                part,
+                "{name}"
+            );
+        }
+        // ILP32 keeps the contract it already had, one machine word down.
+        assert_eq!(
+            wide_integer_return_pair(CallConv::Cdecl32, 8),
+            Some(("rax", "rdx"))
+        );
+        assert_eq!(wide_integer_return_pair(CallConv::Cdecl32, 16), None);
+        assert_eq!(
+            wide_integer_return_pair(CallConv::Arm, 8),
+            Some(("r0", "r1"))
+        );
+        // Neither convention has a modelled register-pair result.
+        for cc in [CallConv::Win64, CallConv::Aarch64] {
+            assert_eq!(
+                wide_integer_return_pair(cc, wide_integer_return_width(cc)),
+                None,
+                "{cc:?}"
+            );
+            assert_eq!(wide_integer_return_part(cc, "rdx"), None, "{cc:?}");
+        }
+    }
+
+    /// Each row is a different ABI contract, and treating them uniformly still
+    /// produces C that compiles.
+    #[test]
+    fn the_sysv_return_class_table_separates_every_contract() {
+        use Eightbyte::{Integer, Sse};
+
+        assert_eq!(
+            sysv_amd64_return_class(8, &[Integer]),
+            Some(ReturnClass::Single)
+        );
+        assert_eq!(
+            sysv_amd64_return_class(16, &[Integer, Integer]),
+            Some(ReturnClass::IntegerPair)
+        );
+        assert_eq!(
+            sysv_amd64_return_class(16, &[Integer, Sse]),
+            Some(ReturnClass::SplitBanks {
+                integer_first: true
+            })
+        );
+        assert_eq!(
+            sysv_amd64_return_class(16, &[Sse, Integer]),
+            Some(ReturnClass::SplitBanks {
+                integer_first: false
+            })
+        );
+        // Past the cutoff the field classes stop mattering entirely.
+        assert_eq!(
+            sysv_amd64_return_class(32, &[]),
+            Some(ReturnClass::Memory)
+        );
+        assert_eq!(sysv_amd64_return_class(17, &[]), Some(ReturnClass::Memory));
+        // `xmm0:xmm1` has no second float result register in this model.
+        assert_eq!(sysv_amd64_return_class(16, &[Sse, Sse]), None);
+        // A class list that does not describe the stated size is not evidence.
+        assert_eq!(sysv_amd64_return_class(16, &[Integer]), None);
+        assert_eq!(sysv_amd64_return_class(8, &[]), None);
+        assert_eq!(sysv_amd64_return_class(0, &[]), None);
     }
 
     /// The return register is the widest spelling, and the alias list leads with it.
