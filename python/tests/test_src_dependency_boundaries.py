@@ -234,6 +234,11 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     # whether the *render cache* may be reused; it never changes what a fresh
     # render would have produced, only whether an in-process cache is trusted.
     ("python_bindings/ir/session.rs", "name"): "diagnostic",
+    # The `===== recovered declaration types =====` dump at the end of
+    # `decbench_type_maps`. It moved here verbatim from `python_bindings/ir.rs`
+    # when the DecBench type maps were split out; the read is unchanged and
+    # still gates only `eprintln!`.
+    ("python_bindings/ir/type_maps.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     # -- decompiler-scope: instrumentation (opt-in output comments) --
     # Splices def-before-use violation comments into rendered C. The
     # verification itself (`violations`) is always computed; this only gates
