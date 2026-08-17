@@ -1103,28 +1103,32 @@ src/render/        faithful, C and DecBench formatting-only projections
 src/decompile/     pipeline, profiles, orchestration and result boundary
 ```
 
-**Current sizes, measured 2026-08-17 (`python3 tools/fitness_report.py`).** This
-table is here because the list below names targets without sizes, and that is how
-`analysis/cfg.rs` stayed invisible: it was never in the priority list, and while
-`ast.rs` was at 11,582 nobody looked past it. Three renderer cuts later it is the
-**second-largest owner in the tree**.
+**Current sizes, measured 2026-08-17 after six cuts (`python3 tools/fitness_report.py`).**
+This table is here because the list below names targets without sizes, and that
+is how `analysis/cfg.rs` stayed invisible: it was never in the priority list, and
+while `ast.rs` was at 11,582 nobody looked past it.
 
 | product LOC | file | status |
 |---:|---|---|
-| 7,920 | `ir/ast.rs` | in progress — 3 renderer cuts landed, 4th under way |
-| 6,248 | `analysis/cfg.rs` | **not in the list below**; "accepted, under review" |
-| 4,998 | `ir/lift_x86.rs` | priority split, under way |
-| 3,975 | `ir/types_recover.rs` | priority split, untouched |
-| 3,920 | `ir/call_args.rs` | priority split, untouched |
+| 6,809 | `ir/ast.rs` | 4 cuts landed; `product_max_loc` 11,582 -> 6,809, **-41%** |
+| 5,371 | `analysis/cfg.rs` | **not in the list below**; cut prepared, not yet landed |
+| 4,183 | `ir/lift_x86.rs` | packed/SSE family out (`ef8a3dc5`); flags family next |
+| 3,526 | `ir/call_args.rs` | cdecl32 out (`90e791e5`); tail calls next, 0 widenings |
 | 3,402 | `python_bindings/ir.rs` | priority split, untouched |
 | 3,241 | `ir/stack_locals.rs` | priority split, untouched |
+| 3,057 | `ir/types_recover.rs` | value-keyed collection out (`90e791e5`) |
 | 2,999 | `ir/lift_arm32.rs` | priority split, untouched |
 | 2,607 | `ir/structure.rs` | priority split, untouched |
 | 2,516 | `ir/lift_arm64.rs` | priority split, untouched |
 | 2,194 | `ir/ast/dec_render.rs` | created by the first cut; candidate for a further split |
 
-Keep this table measured, not remembered. A priority list without sizes ranks by
-when someone wrote the list rather than by where the mass is.
+Two things this table has already earned. It is **measured, not remembered** — a
+priority list without sizes ranks by when someone wrote the list rather than by
+where the mass is. And it is measured with a tool that was itself wrong until
+`afbabb4c`: `strip_test_items` matched only the literal `#[cfg(test)]`, so 1,053
+lines of test code counted as product, 877 of them in `analysis/cfg.rs`, which
+was reported at 6,248 and is really 5,371. **A number in this file is only as
+good as the last time someone checked the instrument.**
 
 Priority splits, performed only as ownership migrates:
 
@@ -1176,8 +1180,36 @@ Priority splits, performed only as ownership migrates:
 - `lift_x86.rs`, `lift_arm32.rs`, `lift_arm64.rs`: shared builder plus
   instruction-family modules.
 - `call_args.rs`: ABI classification, evidence, solver, and HIR projection.
+  **Two of those four names do not describe this file (measured 2026-08-17).**
+  "HIR projection" has NO CODE: the file's input and output are both `ir::ast` —
+  every function rewrites `Function`/`Stmt`/`Expr` in place, so there is no
+  lowering stage to cut. "ABI classification" is not a cluster but the
+  shared-helper trap: six helpers totalling ~100 LOC, most of them one-line
+  delegations to `crate::ir::abi`, every one called from `fold_one_call`. The
+  "solver" is real and enormous — `fold_body`'s exclusive subtree is 2,056 LOC
+  behind a single entry point. "evidence" is real but is four disjoint clusters.
+  The seams that exist, with the cost of each: tail-call recovery 249 LOC / 0
+  widenings, 32-bit cdecl outgoing args 394 / 1 (taken, `90e791e5`), return-value
+  attribution 246 / 3, incoming-slot evidence 503 / 4, ARM-AAPCS layout 390 / 7,
+  arg read-write marking 402 / 7.
 - `types_recover.rs`: constraints, collection, solving, prototypes, and language
   spelling.
+  **Two of those five do not exist in the file, and a third is two things
+  (measured 2026-08-17).** `grep -ci constraint` returns **1**, in prose: there is
+  no constraint type, no constraint list, no worklist. There is no **solver** —
+  every fixpoint is an inline bounded loop inside the pass that needs it,
+  `for _ in 0..8` at six sites. **"collection" is two independent passes** with
+  different keys and different outputs, `recover_types` -> `TypeMap` (669 LOC)
+  and `recover_types_valued` -> `TypeMapV` (954, taken in `90e791e5`), and naming
+  them as one hid that they are the two largest cuttable units after prototypes.
+  **"prototypes" is 1,927 LOC — half the file** — and needs its own boundary
+  pass. **"language spelling" is 43 LOC across two functions**, not a module.
+  The honest shape is: spelling 43, fact stores 365, prototypes 1,927, raw
+  collection 669, value-keyed collection 954.
+
+  This entry was written from an idea of what type recovery looks like rather
+  than from the file. Treat every other line in this list as unverified until
+  someone measures it the same way.
 - `stack_locals.rs`: frame analysis, object construction, access recovery,
   promotion, and naming.
 - `structure.rs`: graph algorithms, regions, selection, verification, and HIR.
