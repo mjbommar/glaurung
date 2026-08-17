@@ -8539,7 +8539,7 @@
     "hfa197_pair2d_roundtrip": "fail",
     "hfa197_quad4f_roundtrip": "pass",
     "hfa197_scalar_control": "pass",
-    "hfa197_tagged_control": "fail",
+    "hfa197_tagged_control": "pass",
     "hfa197_trio3f_roundtrip": "pass"
   },
   "197_homogeneous_float_aggregates:x86_64_gcc15:O0": {

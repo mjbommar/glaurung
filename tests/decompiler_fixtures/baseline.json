@@ -3004,7 +3004,7 @@
     "hfa197_pair2d_roundtrip": "pass",
     "hfa197_quad4f_roundtrip": "fail",
     "hfa197_scalar_control": "pass",
-    "hfa197_tagged_control": "fail",
+    "hfa197_tagged_control": "pass",
     "hfa197_trio3f_roundtrip": "fail"
   },
   "197_homogeneous_float_aggregates:clang:O2": {
@@ -3043,7 +3043,7 @@
     "hfa197_pair2d_roundtrip": "fail",
     "hfa197_quad4f_roundtrip": "pass",
     "hfa197_scalar_control": "pass",
-    "hfa197_tagged_control": "fail",
+    "hfa197_tagged_control": "pass",
     "hfa197_trio3f_roundtrip": "pass"
   },
   "19_disjoint_set:clang:O0": {

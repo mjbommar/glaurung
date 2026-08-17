@@ -11,8 +11,8 @@
   "lane_totals": {
     "clang:O0": {
       "functions_emitted": 2590,
-      "functions_with_violations": 36,
-      "violations": 133
+      "functions_with_violations": 35,
+      "violations": 131
     },
     "clang:O2": {
       "functions_emitted": 2464,
@@ -2285,10 +2285,7 @@
       "var32 is read but never defined"
     ],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_scalar_control": [],
-    "197_homogeneous_float_aggregates:clang:O0:hfa197_tagged_control": [
-      "var4 is read but never defined",
-      "var8 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:clang:O0:hfa197_tagged_control": [],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_trio3f_roundtrip": [
       "local_40 is read but never defined",
       "var15 is read but never defined",

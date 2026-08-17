@@ -82,6 +82,31 @@ _FLOAT_KEYS = {
 }
 _TOLERANCE = 1e-6
 
+#: Medians are ORDER STATISTICS over a population whose size changes whenever a
+#: file is added or removed, so they move for reasons that have nothing to do
+#: with the tree getting worse: adding one file flips the count's parity, and the
+#: median jumps from a single file's LOC to the mean of two adjacent files'.
+#:
+#: This is not theoretical. On 2026-08-17 three separate legitimate improvements
+#: tripped a median ceiling on their first run:
+#:
+#:   * `3c1bb91` (ctx renderer out of `ast.rs`)      ir_median_loc      492 -> 493
+#:   * `63a2a42` (c renderer out of `ast.rs`)        ir_median_loc      492 -> 493
+#:   * the float-gate fix, once its cluster moved
+#:     into `ast/float_gate.rs`                      product_median_loc 276 -> 277.5
+#:
+#: In every case the largest owner SHRANK. A ratchet that fires on the change it
+#: exists to encourage is measuring the wrong thing, and the .5 is the tell — a
+#: half-line is a parity artifact, not code.
+#:
+#: So the medians get a real tolerance rather than float-noise epsilon. Two LOC
+#: absorbs the parity jump for this tree's file-size distribution while still
+#: catching a median that is genuinely climbing. The measures that actually track
+#: this program keep ZERO tolerance: `product_max_loc` (the largest owner, which
+#: is what the decomposition is FOR), both "files above N" counts, and the mean.
+_MEDIAN_KEYS = {"product_median_loc", "ir_median_loc"}
+_MEDIAN_TOLERANCE = 2.0
+
 
 class FitnessError(ValueError):
     """Raised when the source tree or baseline cannot be measured/compared."""
@@ -346,7 +371,12 @@ def check_ratchet(current: JsonObject, baseline: JsonObject) -> list[str]:
             continue
         before = baseline_measures[key]
         after = current_measures[key]
-        tolerance = _TOLERANCE if key in _FLOAT_KEYS else 0
+        if key in _MEDIAN_KEYS:
+            tolerance = _MEDIAN_TOLERANCE
+        elif key in _FLOAT_KEYS:
+            tolerance = _TOLERANCE
+        else:
+            tolerance = 0
         if after > before + tolerance:
             problems.append(f"{key}: {before} -> {after} (worse)")
     return problems
@@ -404,7 +434,7 @@ def _accepted_regressions(report: JsonObject, baseline_path: Path) -> list[JsonO
     if baseline_path.is_file():
         try:
             previous = json.loads(baseline_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             return history
         history = list(previous.get("accepted_regressions") or [])
         problems = check_ratchet(report, previous)

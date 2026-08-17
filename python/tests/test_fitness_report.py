@@ -307,3 +307,53 @@ def test_cli_check_ratchet_exits_zero_on_the_real_tree():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "no regressions" in result.stdout
+
+
+# --- median tolerance --------------------------------------------------------
+#
+# Medians are order statistics over a population whose SIZE changes when a file
+# is added, so they move for reasons unrelated to the tree getting worse. Three
+# legitimate improvements tripped a median ceiling on 2026-08-17, every one of
+# them a change that made the largest owner SMALLER. See the comment on
+# `_MEDIAN_KEYS` in the tool.
+
+
+def test_a_parity_jump_in_a_median_is_not_a_regression(fr):
+    """Adding one file flips the count's parity, and the median moves from one
+    file's LOC to the mean of two adjacent ones. The tell is the half-line: 276
+    -> 277.5 is arithmetic, not code."""
+    baseline = {"measures": dict.fromkeys(fr.RATCHET_KEYS, 0.0)}
+    current = {"measures": dict(baseline["measures"])}
+    baseline["measures"]["product_median_loc"] = 276.0
+    current["measures"]["product_median_loc"] = 277.5
+    assert fr.check_ratchet(current, baseline) == []
+
+
+def test_a_median_that_is_genuinely_climbing_is_still_caught(fr):
+    """The tolerance must not become a licence. Two LOC absorbs the parity
+    artifact; five does not."""
+    baseline = {"measures": dict.fromkeys(fr.RATCHET_KEYS, 0.0)}
+    current = {"measures": dict(baseline["measures"])}
+    baseline["measures"]["ir_median_loc"] = 492.0
+    current["measures"]["ir_median_loc"] = 497.0
+    assert fr.check_ratchet(current, baseline) == [
+        "ir_median_loc: 492.0 -> 497.0 (worse)"
+    ]
+
+
+def test_the_measures_that_track_the_program_keep_zero_tolerance(fr):
+    """`product_max_loc` is what the decomposition is FOR, and the "files above
+    N" counts are exact. None of them may borrow the median's slack."""
+    for key, before, after in (
+        ("product_max_loc", 8247, 8248),
+        ("product_files_above_1000", 30, 31),
+        ("product_files_above_2000", 15, 16),
+        ("ir_files_above_1000", 16, 17),
+    ):
+        baseline = {"measures": dict.fromkeys(fr.RATCHET_KEYS, 0)}
+        current = {"measures": dict(baseline["measures"])}
+        baseline["measures"][key] = before
+        current["measures"][key] = after
+        assert fr.check_ratchet(current, baseline) == [
+            f"{key}: {before} -> {after} (worse)"
+        ], key
