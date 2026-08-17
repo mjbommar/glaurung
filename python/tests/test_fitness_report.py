@@ -302,11 +302,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": 493,
         "product_files_above_1000": 30,
         "product_files_above_2000": 15,
-        "product_loc_above_1000": 71224,
+        "product_loc_above_1000": 69912,
         "product_max_loc": 6809,
-        "product_mean_loc": pytest.approx(517.6738461538462),
-        "product_median_loc": 279,
-        "product_pct_loc_above_1000": pytest.approx(42.33375335821783),
+        "product_mean_loc": pytest.approx(514.6758409785933),
+        "product_median_loc": 281,
+        "product_pct_loc_above_1000": pytest.approx(41.54035377512641),
     }
 
 
@@ -336,27 +336,26 @@ def test_cli_check_ratchet_exits_zero_on_the_real_tree():
 # `_MEDIAN_KEYS` in the tool.
 
 
-def test_a_parity_jump_in_a_median_is_not_a_regression(fr):
-    """Adding one file flips the count's parity, and the median moves from one
-    file's LOC to the mean of two adjacent ones. The tell is the half-line: 276
-    -> 277.5 is arithmetic, not code."""
+def test_medians_are_reported_but_never_ratcheted(fr):
+    """A median is an order statistic over a population whose SIZE changes when a
+    file is added, so it moves by an amount set by the local gap in the size
+    distribution -- which is unbounded. A 2-LOC tolerance was tried and defeated
+    within a day: calibrated where neighbours were 1 LOC apart, then hit a 17-LOC
+    gap (`value_split.rs` 493, `regview.rs` 510) that moved `ir_median_loc` to
+    501.5 with no file changing size near the median.
+
+    They stay in TARGETS, reported against the end-state goal. They are not
+    ceilings a change can violate."""
     baseline = {"measures": dict.fromkeys(fr.RATCHET_KEYS, 0.0)}
     current = {"measures": dict(baseline["measures"])}
     baseline["measures"]["product_median_loc"] = 276.0
-    current["measures"]["product_median_loc"] = 277.5
-    assert fr.check_ratchet(current, baseline) == []
-
-
-def test_a_median_that_is_genuinely_climbing_is_still_caught(fr):
-    """The tolerance must not become a licence. Two LOC absorbs the parity
-    artifact; five does not."""
-    baseline = {"measures": dict.fromkeys(fr.RATCHET_KEYS, 0.0)}
-    current = {"measures": dict(baseline["measures"])}
+    current["measures"]["product_median_loc"] = 999.0
     baseline["measures"]["ir_median_loc"] = 492.0
-    current["measures"]["ir_median_loc"] = 497.0
-    assert fr.check_ratchet(current, baseline) == [
-        "ir_median_loc: 492.0 -> 497.0 (worse)"
-    ]
+    current["measures"]["ir_median_loc"] = 501.5
+    assert fr.check_ratchet(current, baseline) == []
+    # ...but they are still MEASURED and still carry an end-state target.
+    assert "product_median_loc" in fr.RATCHET_KEYS
+    assert {"product_median_loc", "ir_median_loc"} <= {k for k, _l, _t in fr.TARGETS}
 
 
 def test_the_measures_that_track_the_program_keep_zero_tolerance(fr):

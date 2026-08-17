@@ -127,29 +127,33 @@ _FLOAT_KEYS = {
 _TOLERANCE = 1e-6
 
 #: Medians are ORDER STATISTICS over a population whose size changes whenever a
-#: file is added or removed, so they move for reasons that have nothing to do
-#: with the tree getting worse: adding one file flips the count's parity, and the
-#: median jumps from a single file's LOC to the mean of two adjacent files'.
+#: file is added, so they move for reasons that have nothing to do with the tree
+#: getting worse -- and they are therefore NOT RATCHETED. They remain in
+#: `TARGETS` above, reported against their end-state goal, because "the median
+#: product file should be under 250 lines" is a real thing to want. They are not
+#: ceilings a change can violate.
 #:
-#: This is not theoretical. On 2026-08-17 three separate legitimate improvements
-#: tripped a median ceiling on their first run:
+#: A 2-LOC tolerance was tried first, on 2026-08-17, and it does not work. The
+#: size of the parity artifact is half the local GAP in the size distribution,
+#: which is unbounded:
 #:
-#:   * `3c1bb91` (ctx renderer out of `ast.rs`)      ir_median_loc      492 -> 493
-#:   * `63a2a42` (c renderer out of `ast.rs`)        ir_median_loc      492 -> 493
-#:   * the float-gate fix, once its cluster moved
-#:     into `ast/float_gate.rs`                      product_median_loc 276 -> 277.5
+#:   * calibrated on the `ast.rs` cuts, where the files either side of the median
+#:     were 491/492/493 -- a 1-line gap, so the median moved 0.5 to 1.5;
+#:   * defeated by the `types_recover` and `call_args` cuts, where the 52nd and
+#:     53rd `src/ir` files are `value_split.rs` at 493 and `regview.rs` at 510 --
+#:     a 17-line gap, so the parity flip moved the median to 501.5.
 #:
-#: In every case the largest owner SHRANK. A ratchet that fires on the change it
-#: exists to encourage is measuring the wrong thing, and the .5 is the tell — a
-#: half-line is a parity artifact, not code.
+#: No file's size changed near the median in either case. Two agents hit the same
+#: cliff independently and both correctly declined to relax the constant, because
+#: relaxing a measure to pass it is the drift this file exists to prevent. The
+#: constant was the wrong instrument, not the wrong value.
 #:
-#: So the medians get a real tolerance rather than float-noise epsilon. Two LOC
-#: absorbs the parity jump for this tree's file-size distribution while still
-#: catching a median that is genuinely climbing. The measures that actually track
-#: this program keep ZERO tolerance: `product_max_loc` (the largest owner, which
-#: is what the decomposition is FOR), both "files above N" counts, and the mean.
-_MEDIAN_KEYS = {"product_median_loc", "ir_median_loc"}
-_MEDIAN_TOLERANCE = 2.0
+#: What IS ratcheted are the measures a decomposition actually moves and that
+#: carry no parity artifact: `product_max_loc` (the largest owner),
+#: `product_loc_above_1000` (absolute LOC in oversized files -- the one that sees
+#: a cut to any file, not just the largest), both "files above N" counts, the
+#: mean, and the percentage.
+_MEDIAN_KEYS = frozenset({"product_median_loc", "ir_median_loc"})
 
 
 class FitnessError(ValueError):
@@ -418,8 +422,8 @@ def check_ratchet(current: JsonObject, baseline: JsonObject) -> list[str]:
         before = baseline_measures[key]
         after = current_measures[key]
         if key in _MEDIAN_KEYS:
-            tolerance = _MEDIAN_TOLERANCE
-        elif key in _FLOAT_KEYS:
+            continue
+        if key in _FLOAT_KEYS:
             tolerance = _TOLERANCE
         else:
             tolerance = 0
