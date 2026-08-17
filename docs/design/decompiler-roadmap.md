@@ -1409,6 +1409,48 @@ behavior.
   the two whole-program entry points. First step: give the whole-program entry
   points somewhere to put a `LiftError`, so a skipped function is a reported
   incompleteness rather than an absent row.
+
+  **Re-audited 2026-08-16, and the discovery half now has a reproduction rather
+  than an argument** (diary Entry 55). The 2026-08-15 audit found the *lifting*
+  signal dying at the artifact boundary. The *discovery* signal dies one line
+  earlier and more completely, at `src/analysis/cfg.rs:4351`:
+
+  ```rust
+  let (functions, cg, _stats) = analyze_functions_bytes_within(...);
+  ```
+
+  `analyze_functions_image_with_seeds` is the only discovery entry point the
+  decompiler uses — `ProgramSession::discover_functions` (`src/program/session.rs:272`)
+  calls it, and `decompile_at_session`, `decompile_many` and `list_functions` call
+  that. All five truncation flags die on that underscore, including the one that
+  fires in practice. The discarded struct documents the rule the discard breaks
+  (`src/analysis/cfg.rs:203`): *"A consumer that treats this result as a complete
+  function list is wrong, which is why it is reported rather than absorbed."*
+
+  Reproduced on the shipping API against `0x1401fd8a0` in `NETwtw10.sys`
+  (`uv run python $CLAUDE_JOB_DIR/tmp/measure_truncation_visible.py`):
+
+  | `max_blocks` | CFG blocks | `truncated` | rendered chars | output says so |
+  |---:|---:|---|---:|---|
+  | 4096 | 643 | `False` | 153,068 | — |
+  | 256 | 256 | `True` (`hit_block_limit`) | 61,942 | **no** |
+  | 64 | 64 | `True` (`hit_block_limit`) | 17,833 | **no** |
+
+  387 of 643 blocks vanish, 60% of the body disappears, and the pseudocode carries
+  no marker. That is stop condition 1 verbatim.
+
+  Two corrections to earlier text in this file. **The wall clock is not the
+  problem.** This box's neighbour in the performance section already says
+  `timeout_ms` "has never bounded an analysis"; measurement confirms it end to end
+  — 5000/500/100 ms give identical function counts *and* identical runtimes on a
+  4.9 MB driver (`measure_timeout.py`). The limit that bites is `max_blocks`.
+  **And it is rare but biased**: 0.04%–0.10% of functions exceed the shipping
+  budgets (`measure_instr.py`), about ten per large binary — but they are the
+  largest and most complex ones, and `python/glaurung/llm/finding_verifier.py:139`
+  decompiles every vulnerability candidate at `max_blocks=256,
+  max_instructions=2_000`, below both thresholds. A verifier reasoning about 40%
+  of a function while believing it holds all of it is the failure this box exists
+  to prevent.
 - [ ] Establish one explicit pipeline stage list and deterministic fingerprint.
   Audited 2026-08-15: open, though the raw material is all there. Stage names
   exist only as string literals at the ~38 `pass!`/`refine!` sites in
