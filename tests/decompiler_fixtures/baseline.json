@@ -2994,6 +2994,58 @@
     "dfs196_overlap_control": "pass",
     "dfs196_spill_web": "pass"
   },
+  "197_homogeneous_float_aggregates:clang:O0": {
+    "hfa197_consume_pair2d": "structural",
+    "hfa197_make_pair2d": "structural",
+    "hfa197_make_quad4f": "structural",
+    "hfa197_make_scalar": "fail",
+    "hfa197_make_tagged": "structural",
+    "hfa197_make_trio3f": "structural",
+    "hfa197_pair2d_roundtrip": "fail",
+    "hfa197_quad4f_roundtrip": "fail",
+    "hfa197_scalar_control": "pass",
+    "hfa197_tagged_control": "fail",
+    "hfa197_trio3f_roundtrip": "fail"
+  },
+  "197_homogeneous_float_aggregates:clang:O2": {
+    "hfa197_consume_pair2d": "structural",
+    "hfa197_make_pair2d": "structural",
+    "hfa197_make_quad4f": "structural",
+    "hfa197_make_scalar": "fail",
+    "hfa197_make_tagged": "structural",
+    "hfa197_make_trio3f": "structural",
+    "hfa197_pair2d_roundtrip": "fail",
+    "hfa197_quad4f_roundtrip": "fail",
+    "hfa197_scalar_control": "pass",
+    "hfa197_tagged_control": "pass",
+    "hfa197_trio3f_roundtrip": "fail"
+  },
+  "197_homogeneous_float_aggregates:gcc:O0": {
+    "hfa197_consume_pair2d": "structural",
+    "hfa197_make_pair2d": "structural",
+    "hfa197_make_quad4f": "structural",
+    "hfa197_make_scalar": "fail",
+    "hfa197_make_tagged": "structural",
+    "hfa197_make_trio3f": "structural",
+    "hfa197_pair2d_roundtrip": "fail",
+    "hfa197_quad4f_roundtrip": "fail",
+    "hfa197_scalar_control": "pass",
+    "hfa197_tagged_control": "pass",
+    "hfa197_trio3f_roundtrip": "fail"
+  },
+  "197_homogeneous_float_aggregates:gcc:O2": {
+    "hfa197_consume_pair2d": "structural",
+    "hfa197_make_pair2d": "structural",
+    "hfa197_make_quad4f": "structural",
+    "hfa197_make_scalar": "fail",
+    "hfa197_make_tagged": "structural",
+    "hfa197_make_trio3f": "structural",
+    "hfa197_pair2d_roundtrip": "fail",
+    "hfa197_quad4f_roundtrip": "fail",
+    "hfa197_scalar_control": "pass",
+    "hfa197_tagged_control": "fail",
+    "hfa197_trio3f_roundtrip": "fail"
+  },
   "19_disjoint_set:clang:O0": {
     "dsu_find": "pass",
     "dsu_union": "pass"
