@@ -2291,6 +2291,53 @@ items. Read the reasoning there and the delta here.
 
 This is the practical next-work queue as of the planning baseline.
 
+**Inserted 2026-08-16 — five defects found by one fixture, ahead of the queue
+below.** `197_homogeneous_float_aggregates` (`205dcfc`) was added to cover the
+one SysV return class `195` left out. It is 18 failing cells of 44, and pulling
+on them produced four *more* defects that nothing in the queue below predicts.
+They are ranked here because each is reproduced, located, and small, which the
+items below mostly are not:
+
+1. **The all-SSE return class reads its second register from nowhere.** A struct
+   of 2–4 floats returns in `xmm0:xmm1` — two registers, one value — and the
+   recovery models one, so the later members come from undefined variables. The
+   direct continuation of `c2fb19d` and `7105e26`; `abi.rs` already has the
+   eightbyte classifier and this is the case it does not spell. Use
+   `clang:O0:hfa197_quad4f_roundtrip` as the measure: it emits **ten** undefined
+   reads, not one, so a four-member aggregate loses most of the body.
+2. **Unsigned wraparound casts swallow the sign before a float conversion**
+   (`src/ir/ast/dec_render.rs:774`, diary Entry 59). `NumericConvert` consults
+   `from` only to choose float-or-not, so a `SignedInt` operand is rendered by
+   `write_expr_dec` with `(unsigned int)`/`(unsigned long)` machine-width casts —
+   correct for wraparound — and `(double)` then converts an unsigned value. Not
+   "signed-to-float is broken": `widen_int_to_float` on a bare parameter passes
+   on all four lanes and always has. Only *arithmetic* operands fail. Three
+   renderer sites have the shape.
+3. **A float-argument callee loses its arity and its result is dropped**
+   (`172:gcc:O0:double_precision_horner`). A three-argument callee is declared
+   with one, its result is computed and discarded, and the function returns its
+   own first argument. Pre-existing and previously unexplained.
+4. **A whole-function float gate shuts and the stale value flows on.**
+   `lower_scalar_float` is computed once per function (`src/ir/ast.rs:3306`) and
+   threaded unchanged, so one unmodelled float producer costs an entire function
+   its float arithmetic; `cvttss2si` becomes `/* asm: … */` and the
+   pre-instruction value silently continues. **What shuts the gate is not known**
+   — two hypotheses tested and falsified, four probes failed to reproduce, and
+   `197:gcc:O2:hfa197_tagged_control` is the only reproduction. Needs an `Op`
+   stream dump, not more reading.
+5. **A control passes execution while reading an undefined value.**
+   `gcc:O2:hfa197_scalar_control` returns the right answer on every vector and
+   still emits `var0 is read but never defined`. The clearest evidence yet that
+   the execution gate and the def-use census are asking different questions, and
+   the argument for keeping the `slow`-marked census separate rather than folding
+   it in.
+
+Two of these were found by *helper* functions written only as negative controls,
+and none was visible to the fast loop until the fixture's first baseline refresh
+(diary Entry 58, fixed in `6db5fbc`). The general lesson for this queue: the
+corpus finds more than the plan predicts, and a fixture for a shape with no lane
+is worth more than another pass over the items below.
+
 1. Finish the current session-owned DWARF/`TypeStore` slice: make the existing
    RED alignment expectation pass conservatively, run focused Rust tests, then
    full Rust/Python/lint/type gates before commit.
