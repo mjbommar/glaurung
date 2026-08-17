@@ -1414,3 +1414,83 @@ output is plausible, well-formed, type-correct C. Only running it catches it.
 - **No fix is attempted here.** The lane is being recorded failing, exactly as
   `bv195_big_roundtrip` was, so any later fix shows up as cells moving rather
   than as a baseline edit.
+
+### Appended — the mechanism, and a correction to what I wrote above
+
+Entry 56 called these "two distinct defects" and said defect 2 was "unrelated to
+aggregates." **The second half of that is probably wrong**, and the part I can
+prove is more interesting than the part I guessed.
+
+What is established, by reading the path the output proves it took:
+
+1. The decline is at **`src/ir/ast.rs:1897`**, not at the lifter. A scalar-float
+   `Convert` only lowers when `lower_scalar_float` is true:
+
+   ```rust
+   if lower_scalar_float || matches!(operation, Move | Negate) { … }
+   ```
+
+   `cvttss2si` is lifted (`src/ir/lift_x86.rs:4208`) and tabled
+   (`src/ir/ast.rs:1047`), and `scalar_convert_ops` gives it exactly one input,
+   so the `(Convert, [src])` arm would have matched. The instruction is fully
+   modelled; the *gate* is shut.
+
+2. **The gate is whole-function and all-or-nothing.**
+   `lower_scalar_float = scalar_float_semantics_are_closed(lf)` is computed once
+   per function in `lower_on_this_stack` (`src/ir/ast.rs:3306`) and threaded
+   unchanged through every `lower_region`/`lower_block`/`lower_op` call. One
+   unmodelled float producer anywhere in a function therefore costs that whole
+   function its float arithmetic. This is not a hypothesis about the design — the
+   proof's own comment says so, and names the case:
+
+   > treating one as opaque costs the whole function its float arithmetic —
+   > `dot_product_f64` reduced to `/* asm: mulsd */ /* asm: addsd */` purely
+   > because it also called a bounds check that returns an `int`.
+
+3. The emitted spelling confirms which branch ran. `Stmt::Unknown` is formatted
+   `"{name}(...)"` only when `ins` is non-empty (`src/ir/ast.rs:1936`), and the
+   output is `/* asm: cvttss2si(...) */`. So it fell through the gate rather than
+   failing the arm match.
+
+What is **not** established, and what I stopped short of asserting: *which* op in
+`hfa197_tagged_control` trips the proof. I checked the obvious candidates against
+`unmodelled_x86_float_mnemonic` by hand and none of them should trip it —
+`punpckldq` starts with `pu`, so `starts_with("unpck")` is false, and it ends in
+`dq`, which is not in `["ss","sd","ps","pd"]`; `movd`/`movq` likewise. The
+`Op::Call` arm should not fire either, because `float_registers_are_all_caller_saved`
+is satisfied the moment any `xmm` appears, and this body is full of them.
+
+So by inspection it should NOT decline, and it does. That gap is the actual
+finding, and it needs instrumentation rather than more reading. Recording it
+unresolved is the point: the lane distribution is a clue I would otherwise have
+smoothed over —
+
+```
+clang:O0 tagged FAIL   clang:O2 tagged PASS
+gcc:O0   tagged PASS   gcc:O2   tagged FAIL
+```
+
+— two compilers disagreeing in opposite directions at opposite optimisation
+levels, which is not the signature of a missing mnemonic.
+
+### Why this is one defect and not two, most likely
+
+If the trip is the unmodelled all-SSE aggregate return (defect 1), then defect 2
+is defect 1 at one remove: the packed return leaves a float producer unmodelled,
+the whole-function proof shuts, and every float conversion in that function
+becomes a comment. That would explain why the *control* — the one function here
+whose return is a plain `rax` — still failed: it calls a helper whose return the
+recovery cannot spell.
+
+I am not claiming that yet. It is the first hypothesis to test, and it is
+testable: model the all-SSE return class and see whether the `/* asm: cvttss2si */`
+comments disappear without anyone touching the lifter.
+
+### The part that stands regardless of the mechanism
+
+Whatever shuts the gate, the consequence is the same and is the thing to fix:
+`Stmt::Unknown` **drops the assignment**, so the destination silently keeps its
+previous value, and the emitted C compiles, runs, and is wrong. The comment is
+honest about the instruction and silent about the value. A declined lowering
+should leave an explicit unknown in the value, per Design Rule 8 — the same
+demand Entry 55 makes of a truncated CFG.
