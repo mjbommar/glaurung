@@ -302,11 +302,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": 493,
         "product_files_above_1000": 30,
         "product_files_above_2000": 15,
-        "product_loc_above_1000": 69912,
+        "product_loc_above_1000": 69161,
         "product_max_loc": 6809,
-        "product_mean_loc": pytest.approx(514.6758409785933),
-        "product_median_loc": 281,
-        "product_pct_loc_above_1000": pytest.approx(41.54035377512641),
+        "product_mean_loc": pytest.approx(513.2530487804878),
+        "product_median_loc": pytest.approx(282.5),
+        "product_pct_loc_above_1000": pytest.approx(41.082407170902954),
     }
 
 

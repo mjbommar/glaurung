@@ -171,7 +171,7 @@
       "path": "ir/ast.rs"
     },
     {
-      "loc": 5371,
+      "loc": 4620,
       "path": "analysis/cfg.rs"
     },
     {
@@ -232,22 +232,22 @@
     "ir_median_loc": 493,
     "product_files_above_1000": 30,
     "product_files_above_2000": 15,
-    "product_loc_above_1000": 69912,
+    "product_loc_above_1000": 69161,
     "product_max_loc": 6809,
-    "product_mean_loc": 514.6758409785933,
-    "product_median_loc": 281,
-    "product_pct_loc_above_1000": 41.54035377512641
+    "product_mean_loc": 513.2530487804878,
+    "product_median_loc": 282.5,
+    "product_pct_loc_above_1000": 41.082407170902954
   },
   "product": {
-    "file_count": 327,
+    "file_count": 328,
     "files_above_1000": 30,
     "files_above_2000": 15,
-    "loc_in_files_above_1000": 69912,
+    "loc_in_files_above_1000": 69161,
     "max_loc": 6809,
-    "mean_loc": 514.6758409785933,
-    "median_loc": 281,
-    "pct_loc_above_1000": 41.54035377512641,
-    "total_loc": 168299
+    "mean_loc": 513.2530487804878,
+    "median_loc": 282.5,
+    "pct_loc_above_1000": 41.082407170902954,
+    "total_loc": 168347
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -257,14 +257,14 @@
       "measure": "product_mean_loc",
       "meets_target": false,
       "target": 450.0,
-      "value": 514.6758409785933
+      "value": 513.2530487804878
     },
     {
       "label": "Product-code median",
       "measure": "product_median_loc",
       "meets_target": false,
       "target": 250.0,
-      "value": 281
+      "value": 282.5
     },
     {
       "label": "Product files above 1,000 LOC",
@@ -285,7 +285,7 @@
       "measure": "product_pct_loc_above_1000",
       "meets_target": false,
       "target": 25.0,
-      "value": 41.54035377512641
+      "value": 41.082407170902954
     },
     {
       "label": "src/ir median",
@@ -313,7 +313,7 @@
       "measure": "product_loc_above_1000",
       "meets_target": false,
       "target": 42000.0,
-      "value": 69912
+      "value": 69161
     }
   ]
 }
