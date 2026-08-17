@@ -280,7 +280,32 @@ impl ProgramSession {
     /// Shares `DiscoveryKey` with [`Self::discover_functions`], so a graph is
     /// never substituted across differing budgets or seed sets, and reuses that
     /// cache's functions rather than analyzing the image a second time.
+    ///
+    /// Use this when the caller does not already hold this exact discovery's
+    /// functions. If the caller already called [`Self::discover_functions`]
+    /// with the same `budgets`/`requested_vas` (the common case: a caller
+    /// needs both the function list and the call graph for one query),
+    /// prefer [`Self::call_graph_for`] instead — it builds from the functions
+    /// already in hand rather than re-querying [`Self::discover_functions`],
+    /// which would otherwise register a second `discovery_cache_stats` hit
+    /// for what is, from the caller's perspective, one logical query.
     pub fn call_graph(&self, budgets: &Budgets, requested_vas: &[u64]) -> Arc<ProgramCallGraph> {
+        let functions = self.discover_functions(budgets, requested_vas);
+        self.call_graph_for(budgets, requested_vas, &functions)
+    }
+
+    /// Same as [`Self::call_graph`], but for a caller that already holds this
+    /// exact discovery's `functions` (typically from an immediately preceding
+    /// [`Self::discover_functions`] call under the same `budgets` and
+    /// `requested_vas`). Building the graph then costs no additional
+    /// discovery-cache lookup, so `discovery_cache_stats` records exactly one
+    /// hit-or-miss per logical query instead of two.
+    pub fn call_graph_for(
+        &self,
+        budgets: &Budgets,
+        requested_vas: &[u64],
+        functions: &Arc<[Function]>,
+    ) -> Arc<ProgramCallGraph> {
         let key = DiscoveryKey::new(&self.image, budgets, requested_vas);
         if let Some(graph) = self
             .call_graphs
@@ -291,8 +316,7 @@ impl ProgramSession {
         {
             return graph;
         }
-        let functions = self.discover_functions(budgets, requested_vas);
-        let graph = Arc::new(ProgramCallGraph::from_discovered(&self.image, &functions));
+        let graph = Arc::new(ProgramCallGraph::from_discovered(&self.image, functions));
         let mut graphs = self
             .call_graphs
             .lock()
