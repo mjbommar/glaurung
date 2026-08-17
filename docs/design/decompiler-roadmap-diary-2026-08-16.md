@@ -2120,3 +2120,100 @@ production sites, and `declaration_plan.rs` already a sibling for that concern).
 It is not caller-verified yet, and unlike the three renderer cuts it would land
 over 1,000 LOC and need a review entry. Recorded as a recommendation with its
 prerequisite named, not as a plan.
+
+---
+
+## Entry 64 — A spilled float made an x86 function look like ARM
+
+Three landings close the 2026-08-16/17 arc: the SysV argument prefix
+(`ba90363`), the float gate (`7d834ed7`), and the c-renderer cut (`63a2a42`,
+Entry 63). Two of the three turned on a premise of mine being wrong, and in one
+case on my *method* being wrong.
+
+### The float gate: right shape, wrong location
+
+Entry 61 narrowed this to "if `scalar_float_intrinsic` returns `None` for that op
+instance, both symptoms follow." A guarded diagnostic at the proof site settled
+it:
+
+```
+[glaurung-float-gate] function entry_va=0x13f0 closed=false float_registers_are_all_caller_saved=false
+[glaurung-float-gate]   va=0x1403 call result=%rax#1 no vfp result and float regs are NOT all caller-saved -> gate SHUTS
+[glaurung-float-gate]   va=0x140f intrinsic cvttss2si ins=[Reg(Temp(13))] outs=[%rax#2:4] scalar_float=yes width=4
+```
+
+`scalar_float=yes`. It resolves. The gate shuts one op *earlier*, on the
+`Op::Call` arm, because `float_registers_are_all_caller_saved` asked *"does an
+`xmm` or `st0..7` name appear anywhere?"* as a proxy for *"is this x86?"* — and
+gcc had spilled the float and converted out of the spill slot:
+
+```
+objdump -d --start-address=0x13f0 --stop-address=0x1430 \
+    tests/decompiler_fixtures/build/197_homogeneous_float_aggregates-gcc-O2.so
+140b:  mov       %eax,0xc(%rsp)
+140f:  cvttss2si 0xc(%rsp),%eax
+                              grep -c xmm  ->  0
+```
+
+Zero SSE registers in the function. It looked like AAPCS. The join of the two
+symptoms into one cause was right in shape and wrong in location.
+
+### The method error, which is the part worth keeping
+
+Seven probes failed to reproduce this, and I concluded the mechanism was elusive.
+It was not. **Every probe kept the float in a register, because I built them with
+the host gcc while the fixture was built by the pinned harness compiler, which
+spilled.** My own `-O2` build of the identical source emits
+`movd %eax,%xmm0 / cvttss2si %xmm0,%eax`; the fixture's does not. I disassembled
+my object and reasoned from it about a failure in a different binary.
+
+The rule: **when investigating a failing fixture cell, disassemble
+`tests/decompiler_fixtures/build/<the object>`, never a local rebuild of the same
+source.** The whole point of a pinned toolchain is that its codegen differs from
+yours.
+
+### Per-value gating: rejected on a census, not on taste
+
+The obvious follow-up is "the gate is per-function and all-or-nothing, make it
+per-value." Measured over all 740 built objects and 2,777 functions:
+
+- **5 functions (0.18%)** have the gate shut while carrying a modelled
+  scalar-float op — the entire population per-value could rescue.
+- All 5 are shut by an **opaque mnemonic**; zero by the `Op::Call` arm, which
+  this fix makes inert on x86 corpus-wide.
+- 2,502 of 2,777 functions are x86 with no float-bank register at all. The old
+  predicate misjudged every one of them; only 3 carried a float op, which is
+  exactly why this hid for so long.
+
+And the decisive fact: every one of those opaque ops carries `ins=[] outs=[]`.
+A per-value gate needs the poisoning op's def set to know which values are
+poisoned. That set is empty and **wrong** — `unpcklps` really writes `xmm0`. So
+per-value must either believe it, reintroducing the invented-live-in failure the
+gate exists to prevent, or assume it defines everything, which is the
+whole-function gate again. **Not a smaller change; one that cannot be made
+correctly on this IR.**
+
+### A correction to Entry 62
+
+I recorded that `clang:O0:hfa197_quad4f_roundtrip` discards its `SsePair` split
+because its consumers are declined `/* asm: movlpd */`, and implied a
+consumer-typing problem. Wrong mechanism. `movlpd` lifts to `Op::opaque` with
+**no operands at all**, so `xmm0` and `xmm1` never enter that function's IR. The
+split's reads have no users because the consumers are operandless markers.
+
+That makes lifting `movlpd`/`movhpd` the highest-value next step, and it pays
+twice: real users for the `SsePair` reads, and the removal of that function's only
+opaque producer, opening 8 further declined `cvttss2si`. `movlpd` alone covers 3
+of the 5 survivors above.
+
+### The ratchet fired on the change it exists to encourage — for the third time
+
+`3c1bb91` and `63a2a42` each tripped `ir_median_loc` 492 -> 493; this change
+tripped `product_median_loc` 276 -> 277.5. In all three the largest owner shrank.
+
+The `.5` is the tell. A median is an order statistic over a population whose size
+changes when a file is added: the parity flips, and the median moves from one
+file's LOC to the mean of two adjacent ones. That is arithmetic, not code. So the
+statistic was fixed rather than the baseline — medians carry a 2-LOC tolerance
+now, with three tests pinning that `product_max_loc` and both "files above N"
+counts keep zero.
