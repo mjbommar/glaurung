@@ -266,18 +266,29 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     up by one line for the same file-count-bucket reason the four regressions
     above did: shrinking the largest file changes which file sits at the
     median position. Recorded as accepted, with drift, rather than chased.
+
+    2026-08-17 (third cut): the untyped C renderer (`render_c`, `write_reg_c`,
+    `write_expr_c`, `write_stmt_c`, `write_for_clause_c`) moved into
+    `src/ir/ast/c_render.rs`, 562 lines. `binop_sym_c` and `cmpop_sym_c` sit at
+    the same physical spot the candidate range named as its end, but the call
+    graph says otherwise: `dec_render.rs` calls both directly, so they stayed
+    in the parent as newly-recognised shared vocabulary rather than moving --
+    keeping newly-widened visibility at zero. `product_max_loc` moved again,
+    8,762 -> 8,247, and every other measure held except `ir_median_loc`
+    (492 -> 493), the same one-line file-count-bucket tick the ctx cut hit.
+    Recorded as accepted, with drift, rather than chased.
     """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 16,
-        "ir_median_loc": pytest.approx(492.0),
+        "ir_median_loc": pytest.approx(493),
         "product_files_above_1000": 30,
         "product_files_above_2000": 15,
-        "product_max_loc": 8762,
-        "product_mean_loc": pytest.approx(527.78125),
-        "product_median_loc": pytest.approx(276.0),
-        "product_pct_loc_above_1000": pytest.approx(44.42299721712357),
+        "product_max_loc": 8247,
+        "product_mean_loc": pytest.approx(526.2834890965732),
+        "product_median_loc": pytest.approx(276),
+        "product_pct_loc_above_1000": pytest.approx(44.105790916140336),
     }
 
 
