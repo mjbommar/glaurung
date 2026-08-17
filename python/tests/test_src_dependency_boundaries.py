@@ -214,6 +214,13 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     ("decompile/profile.rs", '"GLAURUNG_PIPELINE_PROFILE"'): "diagnostic",
     ("ir/exception_recover.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("ir/health.rs", '"GLAURUNG_PASS_HEALTH"'): "diagnostic",
+    # The float-gate diagnostic, added in `7d834ed7` alongside the fix for an ISA
+    # proxy that misread a spilled float as ARM. Same category and same shape as
+    # `ir/health.rs`: it gates only `eprintln!` of a JSON line and changes no
+    # decompiler output. Registered here after the fact — the commit that added
+    # it did not run this suite, and `cargo test`, `dectest`, `cargo fmt` and the
+    # fitness ratchet were all green over the gap.
+    ("ir/ast/float_gate.rs", '"GLAURUNG_PASS_HEALTH"'): "diagnostic",
     ("ir/high_variables.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("ir/pass_stats.rs", '"GLAURUNG_PASS_STATS"'): "diagnostic",
     ("ir/structure.rs", '"GLAURUNG_ACCOUNT_STRUCTURE"'): "diagnostic",
