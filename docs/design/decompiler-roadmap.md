@@ -1107,34 +1107,49 @@ Priority splits, performed only as ownership migrates:
 
 - `ast.rs`: HIR model, projection, visitors, verifier, declaration planning,
   cleanup, and renderers.
-  **In progress — the renderers are coming out first.** 19,269 -> 16,449 lines,
-  11,582 -> 8,762 PRODUCT LOC, down 24% in two cuts on 2026-08-16:
-  `ast/dec_render.rs` (2,170 lines, `a792b9a`) and `ast/ctx_render.rs` (746
-  lines, `3c1bb91`), after `ast/declaration_plan.rs` and `ast/width_semantics.rs`
-  earlier. Both verified pure — `@o0`/`@o2` at 370 lanes with **zero regressions
-  AND zero improvements**, an improvement being as suspicious as a regression for
-  a move — and dead code checked in both configurations each time (0 with
+  **In progress — the renderers came out first.** 19,269 -> 15,934 lines,
+  11,582 -> 8,247 PRODUCT LOC, **down 29%** in three cuts across 2026-08-16/17:
+  `ast/dec_render.rs` (2,170 lines, `a792b9a`), `ast/ctx_render.rs` (746 lines,
+  `3c1bb91`), `ast/c_render.rs` (562 lines, `63a2a42`), after
+  `ast/declaration_plan.rs` and `ast/width_semantics.rs` earlier. All three
+  verified pure — `@o0`/`@o2` at 370 lanes with **zero regressions AND zero
+  improvements**, an improvement being as suspicious as a regression for a move —
+  and dead code checked in both configurations each time (0 with
   `--features python-ext`, 97 without).
 
   Three things learned that apply to every remaining split here:
 
-  - **Derive the boundary from the call graph, not from line numbers.** A stated
-    range was wrong at both edges BOTH times, in both directions. The dec cut:
-    `render_with_types` was physically inside the dec block while calling
-    `write_stmt_ctx` — it is the ctx renderer's front door and is production-used
-    from `python_bindings/ir.rs` at three sites. The ctx cut: two listed items
-    stayed behind as shared vocabulary and eight unlisted ones moved.
-  - **A descendant module already sees its ancestor's private items**, so the
-    visibility cost of a good cut is near zero: one `pub(super)` for the dec cut,
-    **zero** for the ctx cut.
-  - **"Lowering" is not a mechanical move and should not be attempted as one.** I
-    called it 11 functions; one measurement put it at ~2,570 lines across four
-    tangled concerns, a second at 3,208 physical lines by section boundary. It
-    needs its own boundary-discovery pass.
+  - **Derive the boundary from the call graph, never from line numbers.** A
+    stated range was wrong at an edge **all three times**, in both directions.
+    The dec cut: `render_with_types` was physically inside the dec block while
+    calling `write_stmt_ctx` — it is the ctx renderer's front door and is
+    production-used from `python_bindings/ir.rs` at three sites. The ctx cut: two
+    listed items stayed as shared vocabulary and eight unlisted ones moved. The c
+    cut: the shared-vocabulary list named `binop_sym`/`cmpop_sym` and omitted
+    their `_c`-suffixed siblings, which sit at the END of the named range and are
+    called from `dec_render.rs` at four sites.
+  - **A descendant module already sees its ancestor's private items**, so leaving
+    a shared helper behind is FREE and moving one costs a `pub(super)` plus a
+    re-export to buy nothing. Visibility cost across the three cuts: one
+    `pub(super)`, then **zero**, then **zero**.
+  - **"Lowering" is not a mechanical move and must not be attempted as one.**
+    Measured three times independently — ~2,570 lines across four tangled
+    concerns, then 3,208 physical lines by section boundary, then 3,208 again. It
+    needs its own call-graph boundary pass. One tangled sub-concern is already
+    identified: the loop-hoisting-safety helpers have a unit test inside
+    `ast.rs`'s own `mod tests`, so a cut there forces a decision about whether
+    tests move with them.
 
-  Next cut, measured rather than estimated: the untyped `c` renderer, `render_c`
-  through `cmpop_sym_c`, **533 lines**, under 1,000 so it needs no review entry,
-  and its shared-vocabulary list is already derived by the two cuts above.
+  Next cut, recommended over lowering: the **ABI-width refinement block**
+  (`ast.rs` ~3926-5103, roughly 1,100-1,180 lines). It has a single `pub(crate)`
+  production front door, `refine_decbench_abi_widths_with_value_widths`, called
+  from exactly two sites in `python_bindings/ir.rs`, and reads as one coherent
+  concern — recovering and propagating integer widths for the declaration plan —
+  with `declaration_plan.rs` already a sibling for exactly that. **Not yet
+  caller-verified**; that verification is the prerequisite, and unlike the three
+  renderer cuts it would land over 1,000 LOC and need a `REVIEWED_LARGE_MODULES`
+  entry. `dec_render.rs` at 2,170 lines is also a candidate for a further split at
+  the expression/statement seam.
 - `lift_x86.rs`, `lift_arm32.rs`, `lift_arm64.rs`: shared builder plus
   instruction-family modules.
 - `call_args.rs`: ABI classification, evidence, solver, and HIR projection.
@@ -1162,8 +1177,9 @@ The last row was added 2026-08-16 (`a792b9a`) and is the one to judge this
 program by. Every other measure is a count or an average, and a decomposition
 that is *working* pushes several of them the wrong way: splitting a 19,269-line
 file into 17,148 + 2,170 necessarily adds a file to both "above N" buckets and
-moves both medians. `product_max_loc` went **11,582 -> 8,762** across the two
-`ast.rs` cuts, and it is the only measure that saw the work.
+moves both medians. `product_max_loc` went **11,582 -> 8,247** across the three
+`ast.rs` renderer cuts — down 29% — and it is the only measure that saw the
+work.
 
 - [x] Add a reporting and ratchet check for these measurements. `tools/fitness_report.py`
   measures them over `src/` (test files/modules and generated tables excluded) and

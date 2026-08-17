@@ -2056,3 +2056,67 @@ then discarded, because every consumer of `xmm0`/`xmm1` in that function is a
 declined `/* asm: movlpd */`, so the six reads the split emits have no users. The
 whole-function float gate is what blocks the hardest remaining cells of this
 class. It stopped being a side mystery today.
+
+---
+
+## Entry 63 — Three cuts, three wrong boundaries, three corrections from the call graph
+
+The untyped `c` renderer is out (`63a2a42`). `src/ir/ast.rs` is 19,269 -> 15,934
+lines and 11,582 -> 8,247 product LOC across the three renderer cuts — **down
+29%** — and `product_max_loc` has tracked every step of it while four of the
+other seven measures went the wrong way at least once.
+
+```
+a792b9a  dec renderer -> ast/dec_render.rs  2,170 lines   1 pub(super)
+3c1bb91  ctx renderer -> ast/ctx_render.rs    746 lines   0 widened
+63a2a42  c   renderer -> ast/c_render.rs      562 lines   0 widened
+```
+
+All three pure: `@o0`/`@o2` at 370 lanes with zero regressions **and zero
+improvements** each time.
+
+### The pattern is now unambiguous
+
+I specified a boundary three times. It was wrong at an edge three times, and the
+call graph corrected it three times — in both directions.
+
+| cut | what I got wrong |
+|---|---|
+| dec | `render_with_types` was inside the dec block while calling `write_stmt_ctx`. It is the **ctx** front door, production-used from `python_bindings/ir.rs` at three sites. |
+| ctx | Two listed items stayed as shared vocabulary; eight unlisted ones moved. |
+| c | I listed `binop_sym`/`cmpop_sym` as staying and **omitted their `_c`-suffixed siblings** — which sit at the END of the named range and are called from `dec_render.rs` at four sites (`:381`, `:741`, `:823`, `:1188`). |
+
+The c cut turned up two more list errors that cost nothing but are the same
+shape: `target_int_ctype` and `store_pointee_ctype` are real shared vocabulary
+that the moving range never calls, so they needed no decision at all; and
+`write_unit_step`, defined 4,800 lines away, IS called from both
+`write_for_clause_c` and `dec_render.rs:2188` and was missing from my list
+entirely.
+
+**A line range cannot see any of this. That is the whole finding.** Three
+independent agents, three different regions of one file, three corrections — none
+of which came from reading more carefully, all of which came from enumerating
+callers.
+
+### Why the corrections keep being free
+
+Leaving a shared helper in `ast.rs` costs nothing, because a descendant module
+already sees its ancestor's private items. Moving one costs a `pub(super)` plus a
+re-export and buys nothing. That asymmetry is why the visibility cost fell to
+zero and stayed there: when in doubt, leave it.
+
+### Lowering is now measured three times and is still not a move
+
+~2,570 lines across four tangled concerns; then 3,208 physical lines by section
+boundary; then 3,208 again, independently. Three agents, one conclusion. The
+newest one found a concrete reason it is harder than it looks: the
+loop-hoisting-safety helpers inside that span have a unit test in `ast.rs`'s own
+`mod tests`, so cutting there forces a decision about whether tests move with
+them — which "move, don't rewrite" cannot answer by itself.
+
+The recommended fourth cut is the **ABI-width refinement block** instead
+(~1,100-1,180 lines, one `pub(crate)` front door called from exactly two
+production sites, and `declaration_plan.rs` already a sibling for that concern).
+It is not caller-verified yet, and unlike the three renderer cuts it would land
+over 1,000 LOC and need a review entry. Recorded as a recommendation with its
+prerequisite named, not as a plan.
