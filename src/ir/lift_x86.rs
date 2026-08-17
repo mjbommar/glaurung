@@ -31,11 +31,17 @@ use iced_x86::{Code, Decoder, DecoderOptions, Mnemonic, OpKind, Register};
 use crate::ir::regview;
 use crate::ir::types::*;
 
+mod conditions;
 mod flags;
 mod packed;
 mod scalar_float;
 mod string_ops;
 mod wide_arith;
+mod xmm_views;
+use conditions::{
+    cmovcc_condition_for, condition_for_suffix, condition_suffix, materialize_condition,
+    setcc_condition_for,
+};
 use flags::{
     adc_ops, append_rotate_flags, append_undef_flags, bin_for, cmp_flag_ops, emit_add_with_flags,
     emit_inc_dec_with_flags, emit_machine_bin_with_flags, sbb_ops, signed_cmp_value, undef_flag,
@@ -55,6 +61,7 @@ use scalar_float::{
 };
 use string_ops::{pop_ops, push_ops, stos_ops, string_movs_ops};
 use wide_arith::{bit_scan_ops, cmpxchg_ops, double_shift_ops, wide_div_ops, wide_mul_ops};
+use xmm_views::synchronise_xmm_views;
 // `x87`'s `fcomi`/`fucomi` share the SSE four-outcome flag model verbatim; the
 // re-export keeps `crate::ir::lift_x86::float_compare_flag_ops` the single name
 // for it, exactly as it was before the split.
@@ -476,119 +483,6 @@ fn operand_width(instr: &iced_x86::Instruction, idx: u32) -> Width {
     }
 }
 
-fn condition_suffix(mnem: Mnemonic, prefix: &str) -> Option<String> {
-    let name = format!("{:?}", mnem).to_ascii_lowercase();
-    name.strip_prefix(prefix).map(str::to_string)
-}
-
-#[derive(Debug, Clone)]
-enum ConditionCode {
-    Overflow,
-    Below,
-    Equal,
-    BelowEqual,
-    Sign,
-    Parity,
-    Less,
-    LessEqual,
-}
-
-#[derive(Debug, Clone)]
-struct Condition {
-    code: ConditionCode,
-    inverted: bool,
-}
-
-fn condition_for_suffix(suffix: &str) -> Option<Condition> {
-    let (code, inverted) = match suffix {
-        "e" | "z" => (ConditionCode::Equal, false),
-        "ne" | "nz" => (ConditionCode::Equal, true),
-        "b" | "c" | "nae" => (ConditionCode::Below, false),
-        "ae" | "nb" | "nc" => (ConditionCode::Below, true),
-        "be" | "na" => (ConditionCode::BelowEqual, false),
-        "a" | "nbe" => (ConditionCode::BelowEqual, true),
-        "l" | "nge" => (ConditionCode::Less, false),
-        "ge" | "nl" => (ConditionCode::Less, true),
-        "le" | "ng" => (ConditionCode::LessEqual, false),
-        "g" | "nle" => (ConditionCode::LessEqual, true),
-        "s" => (ConditionCode::Sign, false),
-        "ns" => (ConditionCode::Sign, true),
-        "o" => (ConditionCode::Overflow, false),
-        "no" => (ConditionCode::Overflow, true),
-        "p" | "pe" => (ConditionCode::Parity, false),
-        "np" | "po" => (ConditionCode::Parity, true),
-        _ => return None,
-    };
-    Some(Condition { code, inverted })
-}
-
-/// Materialise one of x86's eight positive condition families from the six
-/// architectural status flags. Derived conditions are ordinary typed boolean
-/// temporaries, never mutable pseudo-flags.
-fn materialize_condition(condition: &Condition) -> (Vec<Op>, VReg) {
-    let atom = |flag| (Vec::new(), VReg::Flag(flag));
-    match condition.code {
-        ConditionCode::Overflow => atom(Flag::O),
-        ConditionCode::Below => atom(Flag::C),
-        ConditionCode::Equal => atom(Flag::Z),
-        ConditionCode::Sign => atom(Flag::S),
-        ConditionCode::Parity => atom(Flag::P),
-        ConditionCode::BelowEqual => {
-            let out = VReg::Temp(20);
-            (
-                vec![Op::Bin {
-                    dst: out.clone(),
-                    op: BinOp::Or,
-                    lhs: Value::Reg(VReg::Flag(Flag::C)),
-                    rhs: Value::Reg(VReg::Flag(Flag::Z)),
-                }],
-                out,
-            )
-        }
-        ConditionCode::Less => {
-            let out = VReg::Temp(20);
-            (
-                vec![Op::Bin {
-                    dst: out.clone(),
-                    op: BinOp::Xor,
-                    lhs: Value::Reg(VReg::Flag(Flag::S)),
-                    rhs: Value::Reg(VReg::Flag(Flag::O)),
-                }],
-                out,
-            )
-        }
-        ConditionCode::LessEqual => {
-            let less = VReg::Temp(20);
-            let out = VReg::Temp(21);
-            (
-                vec![
-                    Op::Bin {
-                        dst: less.clone(),
-                        op: BinOp::Xor,
-                        lhs: Value::Reg(VReg::Flag(Flag::S)),
-                        rhs: Value::Reg(VReg::Flag(Flag::O)),
-                    },
-                    Op::Bin {
-                        dst: out.clone(),
-                        op: BinOp::Or,
-                        lhs: Value::Reg(VReg::Flag(Flag::Z)),
-                        rhs: Value::Reg(less),
-                    },
-                ],
-                out,
-            )
-        }
-    }
-}
-
-fn setcc_condition_for(mnem: Mnemonic) -> Option<Condition> {
-    condition_suffix(mnem, "set").and_then(|suffix| condition_for_suffix(&suffix))
-}
-
-fn cmovcc_condition_for(mnem: Mnemonic) -> Option<Condition> {
-    condition_suffix(mnem, "cmov").and_then(|suffix| condition_for_suffix(&suffix))
-}
-
 fn accumulator_name_for_width(width: u8, bits: u32) -> &'static str {
     match width {
         1 => "al",
@@ -601,108 +495,6 @@ fn accumulator_name_for_width(width: u8, bits: u32) -> &'static str {
 }
 
 /// Lift a single iced instruction into zero or more LLIR ops.
-/// Keep an XMM register's two representations in step.
-///
-/// This LLIR gives an XMM register two names: the whole-register spelling that
-/// the scalar float operations read and write, and four `_dN` dword lanes that
-/// the packed operations do. They describe the same bits and nothing kept them
-/// in agreement, so a value written through one view was invisible through the
-/// other. GCC's `-O0` float return is exactly that crossing —
-/// `movsd -8(%rbp),%xmm0 ; movq %xmm0,%rax ; movq %rax,%xmm0` — and it returned
-/// a zero reconstructed from lanes no scalar store had ever written.
-///
-/// So: after any instruction that writes lane 0 or 1, the whole-register name
-/// is redefined from those lanes. The converse direction is handled at the
-/// producers (a scalar write defines the scalar name, which the MOVQ and MOVD
-/// GPR forms now read), and the two together make the views interchangeable.
-///
-/// Only the low two lanes participate. They are the 64 bits every scalar
-/// operation and every GPR transfer can address; a 128-bit packed value has no
-/// scalar spelling to agree with in the first place.
-fn synchronise_xmm_views(ops: &mut Vec<Op>) {
-    use std::collections::BTreeSet;
-
-    let mut already_defined: BTreeSet<String> = BTreeSet::new();
-    let mut lane_written: BTreeSet<String> = BTreeSet::new();
-    for op in ops.iter() {
-        let (definition, _) = crate::ir::use_def::def_uses(op);
-        let Some(VReg::Phys(name)) = definition else {
-            continue;
-        };
-        match name.split_once("_d") {
-            Some((register, lane)) if matches!(lane, "0" | "1") => {
-                lane_written.insert(register.to_string());
-            }
-            Some(_) => {}
-            None => {
-                already_defined.insert(name);
-            }
-        }
-    }
-    for register in lane_written {
-        if already_defined.contains(&register) {
-            continue;
-        }
-        // A register-to-register packed move copies lane N from lane N of ONE
-        // source. Rebuilding the destination's scalar view from its own lanes
-        // would be correct only if those lanes had been written — and after a
-        // `movss`/`movsd` they have not, because a scalar store writes the
-        // whole-register name instead. Carrying the SOURCE's scalar view across
-        // propagates whichever representation is actually live, which is what
-        // `movaps %xmm1,%xmm2` in a float argument setup needs.
-        if let Some(source) = single_source_of_lane_copy(ops, &register) {
-            ops.push(Op::Assign {
-                dst: VReg::phys(&register),
-                src: Value::Reg(VReg::phys(source)),
-            });
-            continue;
-        }
-        ops.push(Op::Concat {
-            dst: VReg::phys(&register),
-            hi: Value::Reg(VReg::phys(format!("{register}_d1"))),
-            lo: Value::Reg(VReg::phys(format!("{register}_d0"))),
-        });
-    }
-}
-
-/// The single XMM register every written lane of `register` was copied from,
-/// when this instruction is a plain lane-for-lane register move.
-///
-/// `None` as soon as any lane is computed, loaded, zeroed, or taken from a
-/// different register — in those cases the destination's own lanes are the only
-/// description of its value and the concat above is the right bridge.
-fn single_source_of_lane_copy(ops: &[Op], register: &str) -> Option<String> {
-    let mut source: Option<String> = None;
-    let mut lanes_seen = 0usize;
-    for op in ops {
-        let Op::Assign {
-            dst: VReg::Phys(dst),
-            src: Value::Reg(VReg::Phys(src)),
-        } = op
-        else {
-            continue;
-        };
-        let Some((dst_register, dst_lane)) = dst.split_once("_d") else {
-            continue;
-        };
-        if dst_register != register {
-            continue;
-        }
-        let (src_register, src_lane) = src.split_once("_d")?;
-        if src_lane != dst_lane {
-            return None;
-        }
-        match &source {
-            Some(known) if known != src_register => return None,
-            Some(_) => {}
-            None => source = Some(src_register.to_string()),
-        }
-        lanes_seen += 1;
-    }
-    // Every lane the instruction wrote must be accounted for by the copy.
-    (lanes_seen == 4).then_some(source?)
-}
-
 fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     let mut ops = lift_one_inner(instr, bits);
     synchronise_xmm_views(&mut ops);

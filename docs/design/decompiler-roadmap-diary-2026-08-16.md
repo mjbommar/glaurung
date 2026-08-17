@@ -2217,3 +2217,110 @@ file's LOC to the mean of two adjacent ones. That is arithmetic, not code. So th
 statistic was fixed rather than the baseline — medians carry a 2-LOC tolerance
 now, with three tests pinning that `product_max_loc` and both "files above N"
 counts keep zero.
+
+## Entry 65 — A rule I taught every agent was false, and it had been blocking real cuts
+
+Four cuts landed together. Three are pure moves; the fourth is the first
+**non-pure** cut this program has taken, and it is the one that needed the most
+evidence.
+
+```
+cfg.rs        seed collection -> analysis/cfg/seeds.rs        516 lines  NOT pure
+lift_x86.rs   xmm views       -> ir/lift_x86/xmm_views.rs     101 lines  pure
+lift_x86.rs   conditions      -> ir/lift_x86/conditions.rs    112 lines  pure
+call_args.rs  return attrib.  -> ir/call_args/return_attribution.rs  246 lines  pure
+```
+
+After them, `product_max_loc` is `symbolic/solver/axeyum_backend.rs` at 3,357 —
+**a file this program has never touched and which is not a decompiler file at
+all.** That was the terminal condition for the owners, and it is reached.
+
+### The rule that was false
+
+Nine boundary traps had accumulated across the program, taught verbatim to every
+agent. Trap 7 said: *a sibling child's `use super::X` pins `X` to the parent*, so
+a cluster a sibling imports cannot move.
+
+An agent disproved it, and did it the right way — not with an argument but with a
+compiled probe. It added `use super::materialize_condition as _probe;` to
+`packed.rs`, naming an item that had just moved into a *different* child, and
+built clean.
+
+The mechanism is obvious in hindsight: the parent's own `use child::X;` re-binds
+`X` in the parent's namespace, so `super::X` from a sibling still resolves.
+Nothing is pinned. The same mechanism keeps rustdoc `[`super::X`]` links working,
+which is why the doc-warning count held at 35 across two cuts that the rule said
+would break links.
+
+This was not a harmless over-caution. It had already been recorded as the reason
+the x86 register-view family (~215 contiguous lines) could not move. It could;
+`packed.rs` needs no edit at all. **A false rule that makes files stay large is
+worse than no rule**, because it reads as diligence.
+
+One caveat survives and is real: if the *only* consumer of the parent's
+re-export is a `#[cfg(test)]` module, the re-export is unused in the shipped lib
+build and adds a warning. That is the inversion, not the rule.
+
+### The purity standard is now a token diff
+
+"Pure move" had been an assertion in a report. It is now a check I run myself:
+extract the moved region from `git show HEAD:<parent>`, tokenise both sides with
+comments and `use` statements stripped, and `difflib` them.
+
+```
+src/ir/call_args.rs -> return_attribution.rs   1390 tok vs 1390 tok  ratio 1.000000  0 hunks
+src/ir/lift_x86.rs  -> conditions+xmm_views    1245 tok vs 1245 tok  ratio 1.000000  0 hunks
+```
+
+For the non-pure cfg.rs cut the same tool, run after applying the five declared
+substitutions, gave ratio 0.997312 over 2,796 tokens with five hunks — and
+checking each one is what the standard buys. Two were rustfmt artifacts the agent
+had named. **Three were not in its report**: a collapsed closure block, a
+re-added renamed call site, and a `);` that `git diff -U0` had hidden by aligning
+it with an identical line in the *new* call. All three are benign, and I only
+know that because I looked at each rather than accepting "two rustfmt artifacts".
+
+Zero regressions **and zero improvements** on `@o0` and `@o2` (370 lanes each)
+plus `@aggregates` cross-arch. For the non-pure cut that is the primary evidence
+rather than a formality: seed *order* decides both budget priority and body
+ownership, so a reordering would surface as a moved cell, not a compile error.
+
+### Three defects found by moving code, none fixed
+
+- **`seeds.rs:340` — the `.eh_frame` sweep is the only whole-image seed scan with
+  no deadline guard.** Twelve sibling phases route through `scan_within`; this one
+  does not. On the byte-only path (the path every `analyze_functions_bytes*` entry
+  uses) it runs a full sweep to completion *after* the total-timeout ceiling has
+  passed. Bounded overrun, not unsoundness. It was invisible until moving the
+  phases put all twelve guards on one screen.
+- **`xmm_views.rs` — a comment and its code describe different predicates.**
+  "Every lane the instruction wrote must be accounted for by the copy" sits over
+  `(lanes_seen == 4).then_some(source?)`, which demands *exactly four*. A
+  register-to-register move writing only lanes 0-1 — precisely the case
+  `synchronise_xmm_views`' own doc says the pass exists for — fails and falls
+  through to the concat bridge.
+- **`classify_pe_thunk_head` — 32-bit PE import thunks get a wild pointer.** It
+  computes a RIP-relative target for `ff 25 disp32`. Correct on x86-64; on 32-bit
+  x86 that encoding is an *absolute* indirect and is the canonical MSVC import
+  thunk, so the computed target points at nothing. The PE corpus that exercises
+  the thunk scan is x86-64, which is why nothing caught it.
+
+### Boundary corrections, round twenty-five
+
+The tail-doc swallow (trap 4) was avoided for the **sixth** time, by one line, in
+`call_args.rs`: the run ends at `attribute_call_results`' closing brace and the
+very next line opens an 18-line doc block on `struct EnclosingSlots`.
+
+Two corrections were made *against my own brief*, both by measurement:
+
+- I asked for `.pdata` bounds in the `Seeds` struct. All three readers of
+  `pdata_start_set` are inside the moved block; carrying it out would have been a
+  widening with no consumer. I had conflated it with `eh_frame_extent`, which is
+  the map that actually supplies a proven function end.
+- I said the return-attribution cluster was "roughly 455 lines". It is 246, and
+  contiguous. The agent cut what was there.
+
+And one trap fired that no rule covered: `let bits` is declared *between* the
+doc comment that opens the moved region and the loop that comment describes, and
+is read twice after the block. A line-number cut of the commented range would
+have taken it and broken both readers.
