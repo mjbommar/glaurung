@@ -175,6 +175,30 @@ Committed to `master` after `fb4ee6b` (see
 - `561e08f` fixture parallelism stays at the harness default; raising it
   recorded a fake regression in a baseline.
 
+**2026-08-16 — a day of ABI classes, renderer splits, and three gates that were
+not gating.** Diary Entries 55-62.
+
+- `7105e26` x86-64 result banks get distinct identities; `SplitBanks` gets its
+  first consumer. 12 cells. An ordinary `xor %eax,%eax` had been deleting a
+  `double` call result.
+- `205dcfc` fixture `197_homogeneous_float_aggregates` — the all-SSE return class
+  `195` left out — plus `fdbcf58` `ReturnClass::SsePair` modelling it. 11 cells
+  and −15 undefined reads.
+- `9cfa912` a conversion's operand is spelled at the type it HAD, not the type it
+  printed as. 12 cells across host and cross lanes.
+- `3b437b1` a bounded CFG walk now says so, on the function it truncated, and
+  cannot mark the clean function beside it.
+- `c7bd847` one logical query counted once — and `master` had been red on two
+  ordinary tests for nineteen hours.
+- `a792b9a`, `3c1bb91` the dec and ctx renderers out of `ast.rs`: 19,269 ->
+  16,449 lines, `product_max_loc` 11,582 -> 8,762.
+- `c3e92a9`, `3c4df2e` three gates that did not gate — a `cargo test` without
+  `--features python-ext` in the pre-push script itself, a gate that ran only
+  `-m slow` so no ordinary test could fail it, and an unconfigured `ruff` whose
+  verdict could change with no commit in this repository.
+- `ae36fc9` a false failure the arch gate recorded under load, discarded rather
+  than committed.
+
 ### Architecture already landed
 
 - [x] Reusable `ProgramImage` and `ProgramSession` seams exist.
@@ -549,15 +573,45 @@ arrays, unions, bitfields, and ABI aggregate transfers from proven accesses.
 - [ ] Propagate pointee and object constraints across calls.
 - [~] Model by-value aggregates, split register/stack values, hidden structure
   returns, and aggregate result storage for each ABI.
-  **The return CLASS is modelled and three of its four contracts are connected.**
-  `abi::ReturnClass` (`Single` / `IntegerPair` / `SplitBanks` / `Memory`) plus
-  `abi::sysv_amd64_return_class` and the DWARF-driven
+  **The return CLASS is modelled and four of its five contracts are connected.**
+  `abi::ReturnClass` (`Single` / `IntegerPair` / `SplitBanks` / `SsePair` /
+  `Memory`) plus `abi::sysv_amd64_return_class` and the DWARF-driven
   `ir::return_class::declared_return_class` land the classifier; the register
   pair is wired end to end and MEMORY is now `RecoveredOutputKind::HiddenReturn`'s
   first and only producer (Entry 51, `tools/dectest.py 195_by_value_aggregates
   --full`, 4 improvements, 0 regressions). `SplitBanks` got its first consumer in
   Entry 54 (`tools/dectest.py 195_by_value_aggregates --full`, 4 improvements,
   0 regressions; `@o0` +2, `@o2` +3, both with 0 regressions).
+
+  **`SsePair` landed 2026-08-16 (`fdbcf58`, Entry 62)** — the all-SSE class, 2-4
+  floats or doubles returned in `xmm0:xmm1`, two registers holding one value.
+  `195` had no lane for it, so `197_homogeneous_float_aggregates` was added
+  (`205dcfc`) and found it immediately. 5 gate cells and 6 arch cells
+  `fail -> pass`, 0 regressions, and the def-use census — the better measure here
+  — moved `clang:O0 136->134`, `clang:O2 250->246`, `gcc:O0 98->94`,
+  `gcc:O2 116->111`, **-15 undefined reads with no lane worse**.
+
+  Two things it established that generalise beyond this class:
+
+  - **A destination-first check asks the wrong question.** `SplitBanks` is
+    consulted AFTER `result_storage`; `SsePair` had to be consulted BEFORE it,
+    because at `gcc:O2` the attributed destination of a pair-returning call is
+    `Phys("xmm0_d0#1")` — a dword LANE, which `is_return_register` correctly
+    declines — so the scalar gate rejects the call before any class is reached.
+    The destination is an artifact of register allocation; the class is a
+    property of the ABI, and only the class knows where the value is.
+  - **The vector bank needs lane identities, not just register identities.**
+    `regview::ssa_parent` declines the vector bank, so a definition spelled
+    `xmm0` never reaches a use spelled `xmm0_d0` — and callers unpacking a
+    returned float aggregate read almost exclusively through lanes. Modelling the
+    two whole registers moved ONE cell; adding `xmm0_d0/_d1/xmm1_d0/_d1` took it
+    to seven. Expect the same asymmetry on the parameter side.
+
+  Occupancy is derived from the object SIZE rather than the class list, which is
+  what makes the 12-byte `{float x3}` case sound: `xmm1` carries four defined
+  bytes, the lane table is filtered so `xmm1_d1` is *not defined at all*, and the
+  fourth member cannot be manufactured because no identity exists to read it
+  from. Sizes 9/10/11/13/14/15 classify `None` rather than rounding up.
 
   **Fixture `195_by_value_aggregates` maps the boundary exactly** (added
   2026-08-15, after an audit found the corpus had NO lane returning a struct by
@@ -1053,6 +1107,34 @@ Priority splits, performed only as ownership migrates:
 
 - `ast.rs`: HIR model, projection, visitors, verifier, declaration planning,
   cleanup, and renderers.
+  **In progress — the renderers are coming out first.** 19,269 -> 16,449 lines,
+  11,582 -> 8,762 PRODUCT LOC, down 24% in two cuts on 2026-08-16:
+  `ast/dec_render.rs` (2,170 lines, `a792b9a`) and `ast/ctx_render.rs` (746
+  lines, `3c1bb91`), after `ast/declaration_plan.rs` and `ast/width_semantics.rs`
+  earlier. Both verified pure — `@o0`/`@o2` at 370 lanes with **zero regressions
+  AND zero improvements**, an improvement being as suspicious as a regression for
+  a move — and dead code checked in both configurations each time (0 with
+  `--features python-ext`, 97 without).
+
+  Three things learned that apply to every remaining split here:
+
+  - **Derive the boundary from the call graph, not from line numbers.** A stated
+    range was wrong at both edges BOTH times, in both directions. The dec cut:
+    `render_with_types` was physically inside the dec block while calling
+    `write_stmt_ctx` — it is the ctx renderer's front door and is production-used
+    from `python_bindings/ir.rs` at three sites. The ctx cut: two listed items
+    stayed behind as shared vocabulary and eight unlisted ones moved.
+  - **A descendant module already sees its ancestor's private items**, so the
+    visibility cost of a good cut is near zero: one `pub(super)` for the dec cut,
+    **zero** for the ctx cut.
+  - **"Lowering" is not a mechanical move and should not be attempted as one.** I
+    called it 11 functions; one measurement put it at ~2,570 lines across four
+    tangled concerns, a second at 3,208 physical lines by section boundary. It
+    needs its own boundary-discovery pass.
+
+  Next cut, measured rather than estimated: the untyped `c` renderer, `render_c`
+  through `cmpop_sym_c`, **533 lines**, under 1,000 so it needs no review entry,
+  and its shared-vocabulary list is already derived by the two cuts above.
 - `lift_x86.rs`, `lift_arm32.rs`, `lift_arm64.rs`: shared builder plus
   instruction-family modules.
 - `call_args.rs`: ABI classification, evidence, solver, and HIR projection.
@@ -1074,6 +1156,14 @@ End-state fitness targets:
 | Product LOC in files above 1,000 | below 25% |
 | `src/ir` median | below 500 LOC |
 | `src/ir` files above 1,000 LOC | at most 5 |
+| **Largest product file** | **below 1,000 LOC** |
+
+The last row was added 2026-08-16 (`a792b9a`) and is the one to judge this
+program by. Every other measure is a count or an average, and a decomposition
+that is *working* pushes several of them the wrong way: splitting a 19,269-line
+file into 17,148 + 2,170 necessarily adds a file to both "above N" buckets and
+moves both medians. `product_max_loc` went **11,582 -> 8,762** across the two
+`ast.rs` cuts, and it is the only measure that saw the work.
 
 - [x] Add a reporting and ratchet check for these measurements. `tools/fitness_report.py`
   measures them over `src/` (test files/modules and generated tables excluded) and
@@ -2297,6 +2387,27 @@ one SysV return class `195` left out. It is 18 failing cells of 44, and pulling
 on them produced four *more* defects that nothing in the queue below predicts.
 They are ranked here because each is reproduced, located, and small, which the
 items below mostly are not:
+
+**Status at end of 2026-08-16: items 1 and 2 CLOSED, 3 and 5 open, 4 promoted.**
+
+- **1 closed** by `fdbcf58` — `ReturnClass::SsePair`, 11 cells, −15 undefined
+  reads. Its successor is the **mirror class**: `hfa197_pair2d_roundtrip` now has
+  a fully correct RETURN and still fails on the ARGUMENT side, because a 16-byte
+  all-SSE aggregate passed by value has no parameter-storage model
+  (`types_recover::locked_sysv_amd64_parameter_storage`). The fixture function
+  for it, `hfa197_consume_pair2d`, was written for that case and is waiting. That
+  is now the top ABI item.
+- **2 closed** by `9cfa912` — 12 cells across host and cross lanes.
+- **4 promoted, and no longer a curiosity.** It is what blocks item 1's hardest
+  remaining cells: on `clang:O0:quad4f` the split *engages*, then is discarded
+  because every consumer of `xmm0`/`xmm1` is a declined `/* asm: movlpd */`. The
+  mechanism is narrowed to one testable fact (Entry 61) — if
+  `scalar_float_intrinsic` returns `None` for that op instance, both the shut
+  gate and the `Stmt::Unknown` follow from it. Seven probes failed to reproduce
+  it because every one had a `scalar_float_intrinsic` that resolved.
+- 3 and 5 unchanged. **3 was retitled after disassembly**: it is not callee
+  arity, it is a tail call returning `rax` when the result is in `xmm0`, so the
+  function returns its own first argument.
 
 1. **The all-SSE return class reads its second register from nowhere.** A struct
    of 2–4 floats returns in `xmm0:xmm1` — two registers, one value — and the
