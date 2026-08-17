@@ -1747,3 +1747,81 @@ floating-point results **by bit pattern** via `float_bits`, deliberately, with
 recorded reasoning about `-0.0` and NaN — so a float return is fully comparable
 and these cells fail because the output is wrong. Worth checking before
 attributing 435 failing cells to a comparator.
+
+---
+
+## Entry 59 — The casts that make the arithmetic right make the conversion wrong
+
+Located `hfa197_make_scalar`'s failure (Entry 58, defect 1) without writing any
+code. The interesting part is that my first diagnosis was wrong in a way that
+would have sent the fix to the wrong place.
+
+### What the symptom suggested, and why that was wrong
+
+```c
+source:  return (double)(seed * 6 + 1);
+ours:    return (double)((unsigned long)((unsigned int)(…)));
+```
+
+Read alone, this says "signed-to-double conversion is broken." It is not. The
+machine is unambiguous —
+
+```
+gcc -O0 -c 197_homogeneous_float_aggregates.c && objdump -d
+  cvtsi2sd %eax,%xmm0
+```
+
+— `si` means *signed integer*, and the HIR keeps it: `lower_scalar_conversion`
+(`src/ir/ast.rs:782`) builds `NumericConvert { from: SignedInt(4), to: Float(8) }`.
+The signedness survives all the way to the renderer.
+
+The measurement that corrected me is a sibling fixture that has been passing all
+along:
+
+```
+173_float_int_conversions:*:*:widen_int_to_float     PASS on all four lanes
+    float widen_int_to_float(int32_t value) { return (float)value; }
+173_float_int_conversions:*:*:widen_long_to_double   PASS on all four lanes
+197_homogeneous_float_aggregates:*:*:hfa197_make_scalar   FAIL on all four
+    return (double)(seed * 6 + 1);
+```
+
+A **bare** operand converts correctly. Only an **arithmetic** one fails. If
+signed-to-float were broken, `widen_int_to_float` would be the first casualty and
+it has never failed.
+
+### The actual cause, `src/ir/ast/dec_render.rs:774`
+
+```rust
+Expr::NumericConvert { from, to, expr } => {
+    let _ = write!(out, "({})(", to.c_name());
+    if from.is_float() {
+        write_float_expr_dec(expr, from.width(), out);
+    } else {
+        write_expr_dec(expr, out);        // <-- the signed-int path
+    }
+    out.push(')');
+}
+```
+
+`from` is consulted only to choose float-or-not. On the integer path the operand
+goes through `write_expr_dec`, which wraps integer arithmetic in
+`(unsigned int)`/`(unsigned long)` machine-width casts — **correct, and necessary
+for wraparound** — and then `(double)` converts an expression whose C type is now
+unsigned. A bare register operand gets no wraparound cast, which is exactly why
+the simple case survives.
+
+So the defect is not in the conversion and not in the wraparound casts. It is
+that the two are individually right and compose wrong, and nothing in between
+notices that the operand's C type changed under the conversion's feet.
+
+Both other renderers have the same shape and ignore `from` entirely
+(`src/ir/ast.rs:4062` ctx, `:4729` c); whether they can reach the bug depends on
+whether they emit the wraparound casts, which is a measurement not yet taken.
+
+### Why this is written down before it is fixed
+
+The fix is three lines and I am not making it yet: an agent is mid-flight
+splitting the ctx renderer out of `ast.rs` and owns one of the three sites. What
+would be lost by waiting is the diagnosis, not the code — so the diagnosis is
+here, with the measurement that produced it and the wrong turn it corrected.
