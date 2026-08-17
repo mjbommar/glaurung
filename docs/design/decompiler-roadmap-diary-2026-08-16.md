@@ -1525,3 +1525,46 @@ of those three passes `unmodelled_x86_float_mnemonic` either — `punpckldq` sta
 sequenced behind it.** I had recorded exactly that dependency an hour ago on the
 strength of a hypothesis I had not tested. The two defects are independent until
 something shows otherwise, and the O0/O2 split is the handle to pull on.
+
+### Appended — four probes that do NOT reproduce it, which is the useful part
+
+Having said the gate question needs instrumentation, I tried to shortcut it with
+minimal probes instead. All four failed to reproduce, and my reading of the
+mechanism is now falsified twice over. Recording them so the next person does not
+spend the same hour.
+
+```
+gcc -O2 -fPIC -shared probe*.c   +   g.ir.decompile_at on each
+probe_packed      cvttss2si, plain stores                    -> fully lowered
+probe_unpacked    cvttss2si, distant stores                  -> fully lowered
+probe_punned      movd + cvttss2si, 64-bit float/int pun     -> fully lowered
+probe_nofloat     no float at all                            -> fully lowered
+probe_two_conv    cvttps2dq + unpcklps + pshufd + movd/movq  -> fully lowered
+probe_mixed       cvttss2si AND cvttps2dq AND unpcklps       -> fully lowered
+probe_scalar_only cvttss2si alone                            -> fully lowered
+```
+
+`probe_mixed` is the one that matters. It puts a modelled scalar `cvttss2si` in
+the same function as `cvttps2dq` and `unpcklps` — and **both of those satisfy
+`unmodelled_x86_float_mnemonic`** (`cvt` is in `OPAQUE_PREFIXES`; `unpcklps` both
+starts with `unpck` and ends with `ps`). By my reading of
+`scalar_float_semantics_are_closed` that function should have gone entirely
+opaque. It lowers cleanly.
+
+So the trip is **not** "an opaque-named float mnemonic appears in the function."
+Either the lifter never emits those names as `Op::Intrinsic`/`Op::Unknown` — it
+may decompose them into typed ops, in which case the proof never sees the string
+— or the proof does something other than what its source reads like to me.
+
+**Two things I got wrong here, both worth keeping:**
+
+1. I predicted the aggregate return shut the gate. The `-O0` lane disproved it.
+2. I predicted an opaque-named packed op shuts the gate. `probe_mixed` disproved
+   it.
+
+The honest position is that I do not know what shuts it, and
+`197:gcc:O2:hfa197_tagged_control` is currently the only known reproduction. That
+is a good place to stop guessing: the fixture is the instrument, which is the
+argument for having built it. What is needed next is a dump of the actual
+`Op` stream for that one function — not more reading of the proof, and not more
+probes.
