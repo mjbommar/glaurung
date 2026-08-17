@@ -549,6 +549,80 @@ def toolchain_notes(arch_lanes, arch_baseline: dict) -> list[str]:
     return notes
 
 
+def unbaselined_fixture_notes(lanes: list[Lane]) -> list[str]:
+    """Warn when a selected fixture has no baseline entry, so the run judges
+    only its REQUIRED functions.
+
+    `lane_function_universe` is the union of `M.REQUIRED_FUNCTIONS` and whatever
+    `baseline.json` already observed. For a fixture with no baseline entry that
+    union is just the required list -- so a brand-new fixture's helpers are
+    invisible here, in exactly the window where someone is iterating on it and
+    most wants the feedback.
+
+    That is not hypothetical. `197_homogeneous_float_aggregates` declares five
+    required functions and contains eleven. Before its first refresh this tool
+    printed five verdicts per lane and after it printed eleven; the six it could
+    not show held two real defects, one of them on a path nothing else in the
+    corpus exercises (diary Entry 58).
+
+    The gap closes on the first `tools/fixture_harness.py --write-baseline`, so
+    the fix is a note rather than a change to the universe: widening it would
+    invent selectable functions the gate has never recorded, which is the exact
+    reasoning `arch_lane_function_universe` gives for staying narrow.
+
+    The count of unjudged functions comes from the built object when one exists,
+    because that is ground truth rather than a guess at the source.
+    """
+    if not BASELINE.is_file():
+        return []
+    baselined = {
+        cell.split(":")[0]
+        for cell in json.loads(BASELINE.read_text())
+        if not cell.startswith("__")
+    }
+    notes: list[str] = []
+    for fixture in sorted({lane.fixture for lane in lanes}):
+        if fixture in baselined:
+            continue
+        judged = sorted(
+            {fn for lane in lanes if lane.fixture == fixture for fn in lane.funcs}
+        )
+        extra = _unjudged_function_names(fixture, judged)
+        detail = (
+            f"; {len(extra)} more in the built object are NOT judged: "
+            + ", ".join(extra)
+            if extra
+            else ""
+        )
+        notes.append(
+            f"note: {fixture} has no baseline entry, so only its "
+            f"{len(judged)} REQUIRED function(s) are judged{detail}. "
+            f"Run `tools/fixture_harness.py --write-baseline` to see the rest."
+        )
+    return notes
+
+
+def _unjudged_function_names(fixture: str, judged: list[str]) -> list[str]:
+    """Functions present in a built fixture object that this run will not judge.
+
+    Returns `[]` when no object has been built yet -- a guess from the source
+    text would be worse than saying nothing, since the note's whole value is
+    that its count is trustworthy.
+    """
+    try:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import diff_decompile as DD
+    except Exception:
+        return []
+    for so in sorted(H.BUILD.glob(f"{fixture}-*.so")):
+        try:
+            present = set(DD.exported_functions(str(so)))
+        except Exception:
+            continue
+        return sorted(present - set(judged))
+    return []
+
+
 def show_function(lane: Lane, func: str) -> None:
     """Source and our C, side by side, for one function. Reading the output is
     the check the metrics cannot do — see `tools/roundtrip_review.py`, which does
@@ -679,6 +753,9 @@ def main(argv=None) -> int:
             f"{M.FIXTURE_FUZZ}; verdicts are not comparable to baseline.json",
             file=sys.stderr,
         )
+
+    for note in unbaselined_fixture_notes(lanes):
+        print(note, file=sys.stderr)
 
     arch_lanes = [l for l in lanes if l.is_arch]
     host_lanes = [l for l in lanes if not l.is_arch]

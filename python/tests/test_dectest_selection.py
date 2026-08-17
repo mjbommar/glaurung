@@ -477,3 +477,55 @@ def test_sets_only_name_fixtures_that_exist():
             if any(ch in fixture for ch in "*?["):
                 continue
             assert fixture in stems, f"set @{name} names unknown fixture {fixture!r}"
+
+
+# --- the unbaselined-fixture note -------------------------------------------
+#
+# `lane_function_universe` is the union of REQUIRED_FUNCTIONS and whatever
+# `baseline.json` already observed, so a fixture with no baseline entry
+# contributes only its required list. That is a real hole and it has already
+# cost accuracy: `197_homogeneous_float_aggregates` declares five required
+# functions and contains eleven, and the six that could not be shown held two
+# genuine defects. See diary Entry 58.
+
+
+def test_a_baselined_fixture_gets_no_note():
+    """The note must be rare enough to be worth reading."""
+    lanes = D.resolve(["195_by_value_aggregates:gcc:O0"])
+    assert D.unbaselined_fixture_notes(lanes) == []
+
+
+def test_an_unbaselined_fixture_is_named_with_its_judged_count(monkeypatch):
+    """A fixture absent from the baseline must say so, and say how little it is
+    judging, rather than silently reporting a partial verdict set as the whole
+    result."""
+    lanes = D.resolve(["195_by_value_aggregates:gcc:O0"])
+    monkeypatch.setattr(
+        D.json, "loads", lambda _text: {"other_fixture:gcc:O0": {"f": "pass"}}
+    )
+    notes = D.unbaselined_fixture_notes(lanes)
+    assert len(notes) == 1, notes
+    assert "195_by_value_aggregates has no baseline entry" in notes[0]
+    assert "REQUIRED function(s) are judged" in notes[0]
+    assert "--write-baseline" in notes[0]
+
+
+def test_the_note_names_the_functions_it_cannot_judge(monkeypatch):
+    """The count is only useful if it comes from the built object rather than a
+    guess at the source text, so the names are the evidence."""
+    monkeypatch.setattr(
+        D,
+        "_unjudged_function_names",
+        lambda _fixture, _judged: ["helper_a", "helper_b"],
+    )
+    lanes = D.resolve(["195_by_value_aggregates:gcc:O0"])
+    monkeypatch.setattr(D.json, "loads", lambda _text: {})
+    note = D.unbaselined_fixture_notes(lanes)[0]
+    assert "2 more in the built object are NOT judged: helper_a, helper_b" in note
+
+
+def test_unjudged_names_are_empty_when_nothing_is_built(tmp_path, monkeypatch):
+    """Saying nothing beats guessing: the note's value is that its count can be
+    trusted."""
+    monkeypatch.setattr(D.H, "BUILD", tmp_path)
+    assert D._unjudged_function_names("195_by_value_aggregates", []) == []
