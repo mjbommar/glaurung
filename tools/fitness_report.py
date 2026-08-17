@@ -66,6 +66,23 @@ TARGETS: tuple[tuple[str, str, float], ...] = (
     # ownership map already enforces for NEW files, applied to the worst
     # existing one.
     ("product_max_loc", "Largest product file", 1000.0),
+    # Absolute product LOC living in files over 1,000 lines. This is the measure
+    # that sees a cut to ANY oversized file, not just the largest one.
+    #
+    # `product_max_loc` was added on 2026-08-16 because the seven measures before
+    # it could not see a decomposition working. It closed half the gap and left
+    # the other half open: it watches only the single worst owner, while the
+    # program works a list top-down. Measured on the 2026-08-17 `lift_x86`
+    # packed-family cut, which moved 815 LOC out of the THIRD-largest file:
+    #
+    #     product_max_loc            7920 -> 7920   (blind)
+    #     loc_in_files_above_1000   74204 -> 73389  (-815, exactly the block)
+    #
+    # Every cut this program makes moves LOC from an above-1,000 file into a
+    # below-1,000 one, so this number falls on every one of them. The target is
+    # the 25%-of-product-LOC line the percentage measure already sets, expressed
+    # absolutely so it cannot be met by the tree merely growing.
+    ("product_loc_above_1000", "Product LOC in files above 1,000", 42_000.0),
 )
 
 # Measures the ratchet compares against the committed baseline. All of them
@@ -262,6 +279,7 @@ def build_report(
         "ir_median_loc": ir["median_loc"],
         "ir_files_above_1000": ir["files_above_1000"],
         "product_max_loc": product["max_loc"],
+        "product_loc_above_1000": product["loc_in_files_above_1000"],
     }
     targets = [
         {

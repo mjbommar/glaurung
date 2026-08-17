@@ -277,6 +277,23 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     8,762 -> 8,247, and every other measure held except `ir_median_loc`
     (492 -> 493), the same one-line file-count-bucket tick the ctx cut hit.
     Recorded as accepted, with drift, rather than chased.
+
+    2026-08-17 (first lifter cut): the x86 packed/SSE family moved out of
+    `src/ir/lift_x86.rs` into `src/ir/lift_x86/packed.rs`, 846 lines, taking
+    that file 4,998 -> 4,183 product LOC. NOT ONE OF THE EIGHT MEASURES CAN SEE
+    IT AS AN IMPROVEMENT, and one of them calls it a regression. `product_max_loc`
+    -- the measure added precisely so decomposition would be visible -- did not
+    move, because `ir/ast.rs` at 7,920 is still the largest file and this cut was
+    to the THIRD largest. Meanwhile `product_median_loc` went 276 -> 279: adding
+    any file above the median shifts the median up, so every cut this program
+    makes worsens it by construction. `product_max_loc` only sees the single
+    worst owner; the program works the list top-down and the list is long. That
+    is a gap in the measurement, recorded as accepted with drift rather than
+    chased. Part of the move was pre-existing: the tree measured 277.5 before
+    this cut, inside the 2-LOC median tolerance and so never recorded.
+    `product_max_loc` (8,247 -> 7,920), `product_mean_loc` and
+    `product_pct_loc_above_1000` also fold in improvements committed between the
+    c_render cut and this one.
     """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
@@ -285,10 +302,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": 493,
         "product_files_above_1000": 30,
         "product_files_above_2000": 15,
-        "product_max_loc": 8247,
-        "product_mean_loc": pytest.approx(526.6355140186915),
-        "product_median_loc": 276,
-        "product_pct_loc_above_1000": pytest.approx(44.08813960366756),
+        "product_loc_above_1000": 73389,
+        "product_max_loc": 7920,
+        "product_mean_loc": pytest.approx(523.9814241486068),
+        "product_median_loc": 279,
+        "product_pct_loc_above_1000": pytest.approx(43.36232466350756),
     }
 
 
@@ -357,3 +375,22 @@ def test_the_measures_that_track_the_program_keep_zero_tolerance(fr):
         assert fr.check_ratchet(current, baseline) == [
             f"{key}: {before} -> {after} (worse)"
         ], key
+
+
+def test_the_absolute_above_1000_measure_sees_a_cut_to_a_non_largest_file(fr):
+    """Why `product_loc_above_1000` exists. `product_max_loc` watches only the
+    single worst owner, so a cut to the THIRD-largest file leaves it unchanged
+    and no measure records the work. Modelled on the real 2026-08-17 `lift_x86`
+    packed-family cut: 815 LOC out of a 4,998-LOC file into an 846-LOC one."""
+    baseline = {"measures": dict.fromkeys(fr.RATCHET_KEYS, 0)}
+    current = {"measures": dict(baseline["measures"])}
+    baseline["measures"]["product_max_loc"] = 7920
+    current["measures"]["product_max_loc"] = 7920  # blind: not the largest file
+    baseline["measures"]["product_loc_above_1000"] = 74204
+    current["measures"]["product_loc_above_1000"] = 73389
+    assert fr.check_ratchet(current, baseline) == []
+    # And it is a real ceiling, not decoration: moving LOC the other way fails.
+    current["measures"]["product_loc_above_1000"] = 74205
+    assert fr.check_ratchet(current, baseline) == [
+        "product_loc_above_1000: 74204 -> 74205 (worse)"
+    ]
