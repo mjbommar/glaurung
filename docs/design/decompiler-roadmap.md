@@ -1115,7 +1115,7 @@ while `ast.rs` was at 11,582 nobody looked past it.
 | 4,183 | `ir/lift_x86.rs` | packed/SSE family out (`ef8a3dc5`); flags family next |
 | 3,526 | `ir/call_args.rs` | cdecl32 out (`90e791e5`); tail calls next, 0 widenings |
 | 3,402 | `python_bindings/ir.rs` | priority split, untouched |
-| 3,241 | `ir/stack_locals.rs` | priority split, untouched |
+| 1,695 | `ir/stack_locals.rs` | 3 layers out in one cut (3,241 -> 1,695); off the 2,000 list |
 | 3,057 | `ir/types_recover.rs` | value-keyed collection out (`90e791e5`) |
 | 2,999 | `ir/lift_arm32.rs` | priority split, untouched |
 | 2,607 | `ir/structure.rs` | priority split, untouched |
@@ -1211,7 +1211,23 @@ Priority splits, performed only as ownership migrates:
   than from the file. Treat every other line in this list as unverified until
   someone measures it the same way.
 - `stack_locals.rs`: frame analysis, object construction, access recovery,
-  promotion, and naming.
+  promotion, and naming. **Measured 2026-08-17 — four of the five are real,
+  one is not.** Of 3,241 product LOC: **promotion 1,076** (five public entry
+  points, the 162-line driver, `rewrite_body`, `rewrite_expr`,
+  `promote_address_taken_stack_object`, `reconcile_late_address_taken_objects`),
+  **frame analysis 752** (the anchor predicates and `StackContext` at 252, plus
+  500 in the two bounded monotone analyses `collect_label_stack_deltas` and
+  `collect_stack_address_defs`), **access recovery 720**, **object construction
+  362** (one function, `seed_indexed_stack_objects`), the **data model 97** —
+  and **"naming" is 141**: a 121-line `alloc_name`, a nine-line reservation
+  helper, and an eleven-line counter struct. That is a function, not a module,
+  and it is the same mistake as `types_recover`'s "language spelling". The
+  entry also inherited the size table's "untouched", which was wrong in a
+  second way: the file was already three, with `address_aliases` (697) and
+  `bounded_overlap` (62) as descendants, so its real footprint was 4,000 LOC
+  over four files. Three layers are now out — `address_recovery` (707),
+  `coordinate_flow` (526), `indexed_objects` (378) — a textually pure move
+  costing 12 `pub(super)` on moved privates and **zero** `pub(crate)`/`pub`.
 - `structure.rs`: graph algorithms, regions, selection, verification, and HIR.
 - `python_bindings/ir.rs`: thin adapters over session, engine, and typed results.
 
