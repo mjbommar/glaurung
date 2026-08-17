@@ -114,10 +114,18 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
     ),
     # -- accepted: one owner, one reason to change --
     "analysis/cfg.rs": (
-        "accepted, under review: recovery, blocks, edges, jump tables, and "
-        "budgets for one control-flow graph. Not in the roadmap's priority "
-        "split list, but it is the second-largest product file and the "
-        "jump-table and budget responsibilities are separable."
+        "accepted, under review: the entry-rooted walk that turns bytes into "
+        "blocks, edges, and functions. Two clusters have been lifted out to "
+        "descendant modules -- `cfg/scan.rs` (speculative image scans, "
+        "3c61879) and `cfg/repair.rs` (post-discovery repairs: split-chunk "
+        "merge, DWARF overrides, landing-pad attachment). What remains is one "
+        "walk with one reason to change. The earlier note here claimed the "
+        "jump-table and budget responsibilities were separable; measurement "
+        "says otherwise. The jump-table DECODERS already live in "
+        "analysis/jump_table.rs, and what is left under that name is dispatch "
+        "edge replay inside `discover_function` -- 22 call sites, all "
+        "internal, 7 widenings to buy 258 lines. `Budgets` is separable and "
+        "worth 165 lines against 19 importers across four subsystems."
     ),
     "ir/value_number.rs": "accepted: one global value-numbering pass and its lattice.",
     "ir/copy_prop.rs": "accepted: one copy/constant propagation pass and its safety proofs.",
