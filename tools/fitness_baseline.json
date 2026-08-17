@@ -167,7 +167,7 @@
   },
   "largest_files": [
     {
-      "loc": 4066,
+      "loc": 3684,
       "path": "analysis/cfg.rs"
     },
     {
@@ -232,22 +232,22 @@
     "ir_median_loc": 526,
     "product_files_above_1000": 30,
     "product_files_above_2000": 14,
-    "product_loc_above_1000": 61896,
-    "product_max_loc": 4066,
-    "product_mean_loc": 496.09411764705885,
-    "product_median_loc": 305.0,
-    "product_pct_loc_above_1000": 36.69607285145134
+    "product_loc_above_1000": 61514,
+    "product_max_loc": 3684,
+    "product_mean_loc": 494.7683284457478,
+    "product_median_loc": 307,
+    "product_pct_loc_above_1000": 36.46008677303872
   },
   "product": {
-    "file_count": 340,
+    "file_count": 341,
     "files_above_1000": 30,
     "files_above_2000": 14,
-    "loc_in_files_above_1000": 61896,
-    "max_loc": 4066,
-    "mean_loc": 496.09411764705885,
-    "median_loc": 305.0,
-    "pct_loc_above_1000": 36.69607285145134,
-    "total_loc": 168672
+    "loc_in_files_above_1000": 61514,
+    "max_loc": 3684,
+    "mean_loc": 494.7683284457478,
+    "median_loc": 307,
+    "pct_loc_above_1000": 36.46008677303872,
+    "total_loc": 168716
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -257,14 +257,14 @@
       "measure": "product_mean_loc",
       "meets_target": false,
       "target": 450.0,
-      "value": 496.09411764705885
+      "value": 494.7683284457478
     },
     {
       "label": "Product-code median",
       "measure": "product_median_loc",
       "meets_target": false,
       "target": 250.0,
-      "value": 305.0
+      "value": 307
     },
     {
       "label": "Product files above 1,000 LOC",
@@ -285,7 +285,7 @@
       "measure": "product_pct_loc_above_1000",
       "meets_target": false,
       "target": 25.0,
-      "value": 36.69607285145134
+      "value": 36.46008677303872
     },
     {
       "label": "src/ir median",
@@ -306,14 +306,14 @@
       "measure": "product_max_loc",
       "meets_target": false,
       "target": 1000.0,
-      "value": 4066
+      "value": 3684
     },
     {
       "label": "Product LOC in files above 1,000",
       "measure": "product_loc_above_1000",
       "meets_target": false,
       "target": 42000.0,
-      "value": 61896
+      "value": 61514
     }
   ]
 }

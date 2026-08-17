@@ -294,6 +294,20 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     `product_max_loc` (8,247 -> 7,920), `product_mean_loc` and
     `product_pct_loc_above_1000` also fold in improvements committed between the
     c_render cut and this one.
+
+    2026-08-17 (third cfg cut): the authoritative PE metadata tables --
+    `parse_pdata_function_starts`, `parse_pe_export_function_starts` and the
+    three unwind-record predicates the `.pdata` walk chains through -- moved
+    into `src/analysis/cfg/pe_tables.rs`, 426 product LOC. `analysis/cfg.rs`
+    went 4,066 -> 3,684 and is still the largest product file, so this is the
+    rarer case where `product_max_loc` DOES see the cut: 4,066 -> 3,684, and
+    `product_loc_above_1000` fell by exactly the 382 lines that left the file
+    (61,896 -> 61,514). The cluster is two disjoint line ranges, not one:
+    `pe_va_to_file_off` sits physically between them and has 11 call sites, 7
+    of them in the sibling `cfg/scan.rs`, so a contiguous cut would have taken
+    it along and broken the sibling. `product_median_loc` ticked 305 -> 307,
+    the same file-count-bucket effect every cut in this program produces; it is
+    exempt from the ratchet and recorded here rather than chased.
     """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
@@ -302,11 +316,11 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
         "ir_median_loc": 526,
         "product_files_above_1000": 30,
         "product_files_above_2000": 14,
-        "product_loc_above_1000": 61896,
-        "product_max_loc": 4066,
-        "product_mean_loc": pytest.approx(496.09411764705885),
-        "product_median_loc": pytest.approx(305.0),
-        "product_pct_loc_above_1000": pytest.approx(36.69607285145134),
+        "product_loc_above_1000": 61514,
+        "product_max_loc": 3684,
+        "product_mean_loc": pytest.approx(494.7683284457478),
+        "product_median_loc": pytest.approx(307),
+        "product_pct_loc_above_1000": pytest.approx(36.46008677303872),
     }
 
 

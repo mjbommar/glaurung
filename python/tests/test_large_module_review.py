@@ -126,11 +126,13 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
     # -- accepted: one owner, one reason to change --
     "analysis/cfg.rs": (
         "accepted, under review: the entry-rooted walk that turns bytes into "
-        "blocks, edges, and functions. Two clusters have been lifted out to "
+        "blocks, edges, and functions. Three clusters have been lifted out to "
         "descendant modules -- `cfg/scan.rs` (speculative image scans, "
-        "3c61879) and `cfg/repair.rs` (post-discovery repairs: split-chunk "
-        "merge, DWARF overrides, landing-pad attachment). What remains is one "
-        "walk with one reason to change. The earlier note here claimed the "
+        "3c61879), `cfg/repair.rs` (post-discovery repairs: split-chunk "
+        "merge, DWARF overrides, landing-pad attachment, 5b60729) and "
+        "`cfg/pe_tables.rs` (the authoritative PE `.pdata` and export tables "
+        "read as seeds, 426 LOC, 2 pub(super), 0 widenings). What remains is "
+        "one walk with one reason to change. The earlier note here claimed the "
         "jump-table and budget responsibilities were separable; measurement "
         "says otherwise. The jump-table DECODERS already live in "
         "analysis/jump_table.rs, and what is left under that name is dispatch "
