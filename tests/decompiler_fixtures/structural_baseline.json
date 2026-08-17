@@ -3028,18 +3028,11 @@
     "196_disjoint_frame_slots:dfs196_indexed_control": [],
     "196_disjoint_frame_slots:dfs196_overlap_control": [],
     "196_disjoint_frame_slots:dfs196_spill_web": [],
-    "197_homogeneous_float_aggregates:hfa197_pair2d_roundtrip": [
-      "var12 is read but never defined"
-    ],
-    "197_homogeneous_float_aggregates:hfa197_quad4f_roundtrip": [
-      "var5 is read but never defined",
-      "var7 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:hfa197_pair2d_roundtrip": [],
+    "197_homogeneous_float_aggregates:hfa197_quad4f_roundtrip": [],
     "197_homogeneous_float_aggregates:hfa197_scalar_control": [],
     "197_homogeneous_float_aggregates:hfa197_tagged_control": [],
-    "197_homogeneous_float_aggregates:hfa197_trio3f_roundtrip": [
-      "var12 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:hfa197_trio3f_roundtrip": [],
     "19_disjoint_set:dsu_find": [],
     "19_disjoint_set:dsu_union": [],
     "20_graph_bfs:graph_bfs": [],

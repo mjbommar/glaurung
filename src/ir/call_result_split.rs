@@ -20,7 +20,11 @@
 //! exactly as AAPCS hard-float's `r0` and `s0` always have.  A callee whose
 //! System V return class is [`crate::ir::abi::ReturnClass::SplitBanks`]
 //! genuinely defines both at once, and that call's destination becomes a frame
-//! object the two identities are read back out of.  Separation is not free
+//! object the two identities are read back out of.  The same holds one class
+//! over for [`crate::ir::abi::ReturnClass::SsePair`], where the two registers
+//! are `xmm0` and `xmm1` — a PAIR, not an alias set, which is why `xmm1` gets
+//! its storage key here and never joins `abi::return_registers`.  Separation is
+//! not free
 //! without such a class: see the AArch64 arm of `result_storage` for the lane
 //! that measured the cost of separating banks nothing can then re-attribute.
 
@@ -77,6 +81,26 @@ impl Splitter {
         if crate::ir::abi::wide_integer_return_part(self.cc, name) == Some(1) {
             return Some("wide_integer_result_high".to_string());
         }
+        // `xmm1` is the high half of the SSE result pair, and it is the one
+        // result storage `is_return_register` deliberately cannot admit: that
+        // predicate answers "is this a spelling of THE result", and `xmm1` is
+        // not a spelling of `xmm0` any more than `rdx` is one of `rax`. Give it
+        // its own key here, exactly as the wide integer pair's high half has
+        // one, so a post-call read of it is attributable and a definition of it
+        // kills the right identity. Nothing installs this key except an
+        // `SsePair` call, so on every other call it stays inert.
+        if crate::ir::abi::is_sse_pair_high_return_register(self.cc, name) {
+            return Some("sse_result_high".to_string());
+        }
+        // A dword LANE of either SSE result register is its own quarter of the
+        // returned object, not a width view of the whole: `regview::ssa_parent`
+        // declines the vector bank, so a definition spelled `xmm0` never
+        // reaches a use spelled `xmm0_d0`. Give each lane its own key — sharing
+        // the register's would hand a reader of the SECOND float the bits of
+        // the first.
+        if let Some(offset) = crate::ir::abi::sse_pair_result_lane_offset(self.cc, name) {
+            return Some(format!("sse_result_lane_{offset}"));
+        }
         if !crate::ir::abi::is_return_register(self.cc, name) {
             return None;
         }
@@ -111,6 +135,25 @@ impl Splitter {
             // them before installing its attributed destination below.
             CallConv::Arm | CallConv::ArmHardFloat => base.to_string(),
         })
+    }
+
+    /// The storage key a call DESTINATION may claim for the ordinary scalar
+    /// contract.
+    ///
+    /// Deliberately narrower than [`Self::result_storage`], which answers what
+    /// storage a READ observes. A dword lane is readable storage — that is why
+    /// it has a key at all — but it is not a spelling of "the result", so a
+    /// call landing on one is not evidence of a scalar result in it. Only a
+    /// PROVEN `SsePair` return claims a lane destination, and it does so before
+    /// this gate. Without the split the lane keeps exactly the treatment it has
+    /// always had.
+    fn destination_storage(&self, register: &VReg) -> Option<String> {
+        if let VReg::Phys(name) = register {
+            if crate::ir::abi::sse_pair_result_lane_offset(self.cc, name).is_some() {
+                return None;
+            }
+        }
+        self.result_storage(register)
     }
 
     fn fresh_result(&mut self, original: &VReg) -> VReg {
@@ -153,6 +196,92 @@ impl Splitter {
             return None;
         }
         crate::ir::abi::split_bank_return_order(&call_spec?.call_prototype.return_type)
+    }
+
+    /// The second-eightbyte occupancy of a call whose callee returns in the SSE
+    /// result PAIR (`xmm0:xmm1`).
+    ///
+    /// `None` for every other call, on the same fail-closed terms as
+    /// [`Self::split_bank_order`]: only a DWARF-proven System V `SsePair`
+    /// aggregate return reaches this, and everything else keeps the
+    /// single-register scalar contract it has always had.
+    fn sse_pair_high_bytes(
+        &self,
+        call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
+    ) -> Option<u8> {
+        if self.cc != CallConv::SysVAmd64 {
+            return None;
+        }
+        crate::ir::abi::sse_pair_return_high_bytes(&call_spec?.call_prototype.return_type)
+    }
+
+    /// Decompose an `xmm0:xmm1` call result into one identity per readable
+    /// spelling of the two registers.
+    ///
+    /// Same mechanism as [`Self::split_bank_results`] — the destination becomes
+    /// a frame object and each register's eightbyte is read back out of it —
+    /// with two differences, both of them the point of this class.
+    ///
+    /// The HIGH read is `high_bytes` wide, not eight. A twelve-byte
+    /// `{float,float,float}` leaves the top half of `xmm1` undefined, and a
+    /// full eight-byte read there would manufacture a fourth member the callee
+    /// never stored.
+    ///
+    /// And the four dword LANES that carry object bytes get identities too,
+    /// because that is how a caller actually reads a returned float aggregate:
+    /// the lifters scalarise packed operations into lanes, and a whole-register
+    /// definition does not reach a lane read (`abi::sse_pair_result_lanes`).
+    /// The lane at offset twelve is defined only when the object reaches that
+    /// far — which is the same partial-occupancy fact stated on the register.
+    fn sse_pair_results(
+        &mut self,
+        high_bytes: u8,
+        buffer: &VReg,
+        state: &mut FlowState,
+    ) -> Vec<Stmt> {
+        let object_bytes = high_bytes.saturating_add(8);
+        let lanes = crate::ir::abi::sse_pair_result_lanes(self.cc)
+            .iter()
+            .filter(|(_, offset)| offset.saturating_add(4) <= object_bytes)
+            .map(|(lane, offset)| (i64::from(*offset), 4u8, *lane));
+        let mut compatibility = Vec::with_capacity(12);
+        for (offset, size, register) in [(0i64, 8u8, "xmm0"), (8, high_bytes, "xmm1")]
+            .into_iter()
+            .chain(lanes)
+        {
+            let fresh = VReg::phys(format!("{register}#call_lifetime_{}", self.next_result));
+            self.next_result += 1;
+            let object = Expr::StackAddr {
+                object: buffer.clone(),
+                size: SPLIT_BANK_RESULT_BYTES,
+            };
+            let address = if offset == 0 {
+                object
+            } else {
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(object),
+                    rhs: Box::new(Expr::Const(offset)),
+                }
+            };
+            compatibility.push(Stmt::Assign {
+                dst: fresh.clone(),
+                src: Expr::Deref {
+                    addr: Box::new(address),
+                    size,
+                },
+            });
+            compatibility.push(Stmt::Assign {
+                dst: VReg::phys(register),
+                src: Expr::Reg(fresh.clone()),
+            });
+            if state.reachable {
+                if let Some(storage) = self.result_storage(&VReg::phys(register)) {
+                    state.results.insert(storage, fresh);
+                }
+            }
+        }
+        compatibility
     }
 
     /// Decompose a two-bank call result into one identity per bank.
@@ -371,7 +500,23 @@ impl Splitter {
                 let Some(original) = dst.clone() else {
                     return Vec::new();
                 };
-                let Some(storage) = self.result_storage(&original) else {
+                // A result the ABI put in BOTH SSE result registers is not one
+                // scalar in one register, so it does not get a scalar
+                // destination — and it is checked BEFORE the scalar storage
+                // gate below, deliberately. The attributed destination of such
+                // a call is routinely a dword LANE (`xmm0_d0`), which is not a
+                // spelling of "the result" and which `result_storage` therefore
+                // declines; the proven return CLASS says where the value is
+                // regardless of which spelling the attribution happened to
+                // pick. Only a DWARF-proven System V `SsePair` return reaches
+                // here, so nothing else is captured by the earlier position.
+                if let Some(high_bytes) = self.sse_pair_high_bytes(call_spec.as_ref()) {
+                    let buffer = VReg::phys(format!("split_result_{}", self.next_result));
+                    self.next_result += 1;
+                    *dst = Some(buffer.clone());
+                    return self.sse_pair_results(high_bytes, &buffer, state);
+                }
+                let Some(storage) = self.destination_storage(&original) else {
                     return Vec::new();
                 };
                 // A result the ABI split across both banks is not one scalar
@@ -900,6 +1045,126 @@ mod tests {
         }
     }
 
+    /// A result in the SSE result PAIR is decomposed into one identity per
+    /// readable spelling of `xmm0:xmm1` — the two whole registers AND the dword
+    /// lanes that carry object bytes, because a whole-register definition does
+    /// not reach a lane read.
+    ///
+    /// The twelve-byte case is what the occupancy is for: the high register
+    /// carries four defined bytes, so the read out of it is four wide and the
+    /// lane at offset twelve does not exist at all. A model that filled both
+    /// eightbytes would hand back a fourth member the callee never stored.
+    #[test]
+    fn an_sse_pair_return_defines_every_spelling_the_object_reaches() {
+        for (high_bytes, defined) in [
+            (
+                8u8,
+                vec![
+                    ("xmm0", 0i64, 8u8),
+                    ("xmm1", 8, 8),
+                    ("xmm0_d0", 0, 4),
+                    ("xmm0_d1", 4, 4),
+                    ("xmm1_d0", 8, 4),
+                    ("xmm1_d1", 12, 4),
+                ],
+            ),
+            (
+                4,
+                vec![
+                    ("xmm0", 0, 8),
+                    ("xmm1", 8, 4),
+                    ("xmm0_d0", 0, 4),
+                    ("xmm0_d1", 4, 4),
+                    ("xmm1_d0", 8, 4),
+                ],
+            ),
+        ] {
+            let prototype = CallPrototype {
+                return_type: crate::ir::abi::sse_pair_return_tag(high_bytes)
+                    .expect("a modelled occupancy")
+                    .to_string(),
+                parameter_types: Vec::new(),
+                variadic: false,
+                authority: CallPrototypeAuthority::Recovered,
+            };
+            let mut function = Function {
+                name: "consume_both_sse_registers".to_string(),
+                entry_va: 0,
+                body: vec![Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "make_floats".to_string(),
+                    },
+                    args: Vec::new(),
+                    // The attributed destination of such a call is routinely a
+                    // dword LANE, which `result_storage` declines. The proven
+                    // class must carry the decomposition anyway.
+                    dst: Some(reg("xmm0_d0#1")),
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(prototype.clone()),
+                        call_prototype: prototype,
+                    }),
+                }],
+            };
+
+            split_call_result_lifetimes(&mut function, CallConv::SysVAmd64);
+
+            let Some(Stmt::Call {
+                dst: Some(buffer), ..
+            }) = function.body.first()
+            else {
+                panic!("the call lost its destination: {function:#?}");
+            };
+            assert!(
+                matches!(buffer, VReg::Phys(name) if name.starts_with("split_result_")),
+                "the destination stayed a scalar: {function:#?}"
+            );
+            let reads = function
+                .body
+                .iter()
+                .filter_map(|statement| match statement {
+                    Stmt::Assign {
+                        dst: VReg::Phys(name),
+                        src: Expr::Deref { addr, size },
+                    } => {
+                        let offset = match addr.as_ref() {
+                            Expr::StackAddr { object, size: 16 } if object == buffer => 0,
+                            Expr::Bin {
+                                op: BinOp::Add,
+                                lhs,
+                                rhs,
+                            } => match (lhs.as_ref(), rhs.as_ref()) {
+                                (Expr::StackAddr { object, size: 16 }, Expr::Const(offset))
+                                    if object == buffer =>
+                                {
+                                    *offset
+                                }
+                                _ => panic!("unexpected split address: {function:#?}"),
+                            },
+                            _ => panic!("unexpected split address: {function:#?}"),
+                        };
+                        Some((crate::ir::abi::ssa_base(name).to_string(), offset, *size))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let expected = defined
+                .iter()
+                .map(|(register, offset, size)| ((*register).to_string(), *offset, *size))
+                .collect::<Vec<_>>();
+            assert_eq!(reads, expected, "high_bytes={high_bytes}: {function:#?}");
+            // Nothing reads past the object, in either shape: the upper halves
+            // of both registers (`_d2`, `_d3`) are not part of the result.
+            assert!(
+                reads
+                    .iter()
+                    .all(|(_, offset, size)| offset + i64::from(*size)
+                        <= i64::from(high_bytes) + 8),
+                "a read ran past the returned object: {function:#?}"
+            );
+        }
+    }
+
     /// Fail closed: a call with no proven split-bank return keeps the scalar
     /// destination it has always had, frame object and all.
     #[test]
@@ -930,6 +1195,51 @@ mod tests {
             )),
             "an unproven return acquired a split-bank frame object: {function:#?}"
         );
+    }
+
+    /// Fail closed on the other side of the SSE-pair gate: a call destined for
+    /// a dword LANE is not evidence of a pair. Without a proven class the lane
+    /// keeps exactly the treatment it has always had — none — rather than
+    /// acquiring a frame object because it looked like a float.
+    #[test]
+    fn a_lane_destination_without_a_proven_class_is_not_a_pair() {
+        for return_type in ["double", "long", "float"] {
+            let prototype = CallPrototype {
+                return_type: return_type.to_string(),
+                parameter_types: Vec::new(),
+                variadic: false,
+                authority: CallPrototypeAuthority::Recovered,
+            };
+            let mut function = Function {
+                name: "ordinary_float".to_string(),
+                entry_va: 0,
+                body: vec![Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "producer".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(reg("xmm0_d0#1")),
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(prototype.clone()),
+                        call_prototype: prototype,
+                    }),
+                }],
+            };
+
+            split_call_result_lifetimes(&mut function, CallConv::SysVAmd64);
+
+            assert_eq!(
+                function.body.len(),
+                1,
+                "{return_type} acquired a decomposition: {function:#?}"
+            );
+            assert!(
+                matches!(function.body.first(), Some(Stmt::Call { dst: Some(dst), .. })
+                    if *dst == reg("xmm0_d0#1")),
+                "{return_type} lost its destination: {function:#?}"
+            );
+        }
     }
 
     #[test]

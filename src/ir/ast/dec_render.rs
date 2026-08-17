@@ -1910,18 +1910,20 @@ pub(super) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usize) {
             call_spec,
         } => {
             indent(out, level);
-            // A result the ABI split across both banks lands in a frame object,
-            // not a scalar: the object is what the two bank identities are then
-            // read back out of. The destination is declared as a byte array
-            // (it is address-taken by those reads), so the aggregate assignment
-            // is spelled through the synthesised tag. Without the array
-            // declaration `&x[0]` would not be valid C, so fall through to the
-            // ordinary scalar form whenever the reads did not survive.
+            // A result the ABI split across two result registers lands in a
+            // frame object, not a scalar: the object is what the two register
+            // identities are then read back out of. The destination is declared
+            // as a byte array (it is address-taken by those reads), so the
+            // aggregate assignment is spelled through the synthesised tag —
+            // `__glaurung_split_is`/`_si` for the two BANKS, `__glaurung_sse_pair`
+            // for `xmm0:xmm1`. Without the array declaration `&x[0]` would not
+            // be valid C, so fall through to the ordinary scalar form whenever
+            // the reads did not survive.
             let split_bank_store = match (dst, call_spec.as_ref()) {
                 (Some(VReg::Phys(name)), Some(spec))
                     if dec_is_stack_object(&sanitize_c_ident(name)) =>
                 {
-                    crate::ir::abi::split_bank_return_order(&spec.call_prototype.return_type)
+                    crate::ir::abi::synthesised_return_definition(&spec.call_prototype.return_type)
                         .map(|_| spec.call_prototype.return_type.clone())
                 }
                 _ => None,

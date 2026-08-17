@@ -186,6 +186,20 @@ pub(super) fn recovered_call_prototype(
         {
             crate::ir::abi::split_bank_return_tag(integer_first)
         }
+        // And the neighbouring class: an all-floating-point aggregate comes
+        // back in `xmm0:xmm1`, TWO SSE registers holding ONE value. `double`
+        // names `xmm0` alone, so declaring it discards the second eightbyte
+        // entirely — visible as the second and third members of a
+        // `{float,float,float}` return being read from variables nothing ever
+        // defined. The tag also carries the second eightbyte's OCCUPANCY, so a
+        // twelve-byte result does not read four bytes the callee never stored.
+        // System V only, for the same reason as above.
+        crate::ir::abi::ReturnClass::SsePair { high_bytes }
+            if cc == crate::ir::call_args::CallConv::SysVAmd64
+                && crate::ir::abi::sse_pair_return_tag(high_bytes).is_some() =>
+        {
+            crate::ir::abi::sse_pair_return_tag(high_bytes).unwrap_or(return_type)
+        }
         _ => return_type,
     };
     CallPrototype {

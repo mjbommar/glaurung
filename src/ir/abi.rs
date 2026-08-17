@@ -139,6 +139,20 @@ pub enum ReturnClass {
     /// consumed. `integer_first` distinguishes `{int; double;}` (`rax` then
     /// `xmm0`) from `{double; int;}` (`xmm0` then `rax`).
     SplitBanks { integer_first: bool },
+    /// Two SSE eightbytes in the SSE result PAIR (`xmm0:xmm1`) — one value in
+    /// two floating-point registers, which is a different contract from a
+    /// scalar `double` (`xmm0` alone) and from [`Self::SplitBanks`].
+    ///
+    /// `high_bytes` is how much of the SECOND eightbyte the object actually
+    /// occupies, and it is a fact about the OBJECT rather than about the
+    /// registers: `{float,float,float}` is twelve bytes, so `xmm1` carries four
+    /// DEFINED bytes and four the callee never stored. A model that assumes
+    /// both eightbytes are full reads a fourth member that does not exist,
+    /// which is exactly what `197_homogeneous_float_aggregates`'s twelve-byte
+    /// lane exists to catch. Only 4 and 8 are constructible: with every member
+    /// a `float` or a `double`, a two-eightbyte all-SSE object is twelve or
+    /// sixteen bytes and nothing else.
+    SsePair { high_bytes: u8 },
     /// MEMORY: the caller allocates the object and passes its address in a
     /// hidden first INTEGER argument register; the callee returns that address
     /// in the result register and every declared argument shifts one slot right.
@@ -172,8 +186,17 @@ pub fn sysv_amd64_return_class(size: u64, eightbytes: &[Eightbyte]) -> Option<Re
         [Eightbyte::Sse, Eightbyte::Integer] => Some(ReturnClass::SplitBanks {
             integer_first: false,
         }),
-        // Two SSE eightbytes return in `xmm0:xmm1`, which the value model has no
-        // second float result register for. Fail closed.
+        // Two SSE eightbytes return in `xmm0:xmm1`. The occupancy of the SECOND
+        // one is not implied by its class: the object's SIZE says how many of
+        // its eight bytes the callee actually stored, and a twelve-byte
+        // `{float,float,float}` leaves the top half of `xmm1` undefined. Only
+        // the two occupancies a float/double member list can produce are
+        // accepted; any other size is a shape this model has not seen and is
+        // refused rather than rounded up to a full eightbyte.
+        [Eightbyte::Sse, Eightbyte::Sse] => {
+            let high_bytes = u8::try_from(size.checked_sub(8)?).ok()?;
+            matches!(high_bytes, 4 | 8).then_some(ReturnClass::SsePair { high_bytes })
+        }
         _ => None,
     }
 }
@@ -220,6 +243,128 @@ pub fn split_bank_return_order(return_type: &str) -> Option<bool> {
     [true, false]
         .into_iter()
         .find(|integer_first| split_bank_return_tag(*integer_first) == return_type)
+}
+
+/// The synthesised C tag for a System V AMD64 result in the SSE result PAIR.
+///
+/// Same argument as [`split_bank_return_tag`], one class over: no builtin C
+/// type returns in `xmm0:xmm1`, and a declaration naming `double` alone claims
+/// `xmm0` and silently discards everything the callee left in `xmm1`.
+///
+/// There are two tags because there are two OCCUPANCIES, not because there are
+/// two field layouts. Both tags are sixteen bytes and both return in
+/// `xmm0:xmm1` — the register contract is identical. What differs is how much
+/// of `xmm1` the callee defined, and therefore how much of it a caller may read
+/// back: `{double; double;}` moves eight bytes out of the high register and
+/// `{double; float;}` moves four. Using the full spelling for a twelve-byte
+/// result would read four bytes that were never stored.
+///
+/// `None` for any other occupancy: see [`ReturnClass::SsePair`].
+pub fn sse_pair_return_tag(high_bytes: u8) -> Option<&'static str> {
+    match high_bytes {
+        8 => Some("struct __glaurung_sse_pair"),
+        4 => Some("struct __glaurung_sse_pair_half"),
+        _ => None,
+    }
+}
+
+/// The self-contained definition that puts [`sse_pair_return_tag`] in scope,
+/// emitted at block scope for the same reason [`split_bank_return_definition`]
+/// is.
+pub fn sse_pair_return_definition(high_bytes: u8) -> Option<&'static str> {
+    match high_bytes {
+        8 => Some("struct __glaurung_sse_pair { double __sse0; double __sse1; };"),
+        4 => Some("struct __glaurung_sse_pair_half { double __sse0; float __sse1; };"),
+        _ => None,
+    }
+}
+
+/// The second-eightbyte occupancy a return-type spelling denotes, or `None` for
+/// every other type. Matches [`ReturnClass::SsePair`]'s `high_bytes`.
+pub fn sse_pair_return_high_bytes(return_type: &str) -> Option<u8> {
+    [8, 4]
+        .into_iter()
+        .find(|high_bytes| sse_pair_return_tag(*high_bytes) == Some(return_type))
+}
+
+/// Every self-contained definition a synthesised aggregate return spelling
+/// needs in scope, or `None` when the type is not one of them.
+///
+/// One entry point so a renderer emitting these declarations does not have to
+/// enumerate the classes that have them; adding a class here is what puts its
+/// tag in scope everywhere it is already declared.
+pub fn synthesised_return_definition(return_type: &str) -> Option<&'static str> {
+    if let Some(integer_first) = split_bank_return_order(return_type) {
+        return Some(split_bank_return_definition(integer_first));
+    }
+    sse_pair_return_high_bytes(return_type).and_then(sse_pair_return_definition)
+}
+
+/// The SECOND SSE result register, and every width spelling of it.
+///
+/// This is a register PAIR member, not an alias — the same distinction
+/// [`wide_integer_return_pair`] draws for `rax:rdx`, and the reason `xmm1`
+/// must never join [`return_registers`]: that list is spellings of ONE logical
+/// result, and adding `xmm1` to it would let the naming pass call a scratch
+/// `xmm1` the function's return value.
+///
+/// System V AMD64 only. Win64 returns every over-wide aggregate through a
+/// hidden pointer, so it has no `xmm0:xmm1` result contract to model.
+pub fn sse_pair_high_return_registers(cc: CallConv) -> &'static [&'static str] {
+    match cc {
+        CallConv::SysVAmd64 => &["xmm1", "ymm1", "zmm1"],
+        CallConv::Win64
+        | CallConv::Cdecl32
+        | CallConv::Aarch64
+        | CallConv::Arm
+        | CallConv::ArmHardFloat => &[],
+    }
+}
+
+/// Whether `name` denotes the high half of an `xmm0:xmm1` result, tolerating
+/// SSA versions and the wider vector spellings of the same register.
+pub fn is_sse_pair_high_return_register(cc: CallConv, name: &str) -> bool {
+    sse_pair_high_return_registers(cc).contains(&ssa_base(name))
+}
+
+/// Each dword LANE of the `xmm0:xmm1` result pair, with the offset into the
+/// returned object that its bits carry.
+///
+/// The lifters scalarise packed operations into 32-bit lanes
+/// (`crate::ir::regview::packed_views`), and `regview::ssa_parent` declines the
+/// vector bank outright, so a definition spelled `xmm0` does NOT reach a use
+/// spelled `xmm0_d0`. A caller unpacking a returned `{float,float,float,float}`
+/// reads its members through exactly these names — which is why modelling the
+/// two whole registers is not enough on its own, and why each lane needs an
+/// identity of its own rather than sharing its register's.
+///
+/// Only the lanes carrying object bytes are listed: the ABI puts one eightbyte
+/// in each register, so bits 64..127 of `xmm0` and `xmm1` (lanes `_d2`, `_d3`)
+/// are not part of the result at all and must not acquire one.
+pub fn sse_pair_result_lanes(cc: CallConv) -> &'static [(&'static str, u8)] {
+    match cc {
+        CallConv::SysVAmd64 => &[
+            ("xmm0_d0", 0),
+            ("xmm0_d1", 4),
+            ("xmm1_d0", 8),
+            ("xmm1_d1", 12),
+        ],
+        CallConv::Win64
+        | CallConv::Cdecl32
+        | CallConv::Aarch64
+        | CallConv::Arm
+        | CallConv::ArmHardFloat => &[],
+    }
+}
+
+/// The object offset a lane spelling carries, or `None` when the name is not a
+/// lane of the SSE result pair. Tolerates SSA versions.
+pub fn sse_pair_result_lane_offset(cc: CallConv, name: &str) -> Option<u8> {
+    let base = ssa_base(name);
+    sse_pair_result_lanes(cc)
+        .iter()
+        .find(|(lane, _)| *lane == base)
+        .map(|(_, offset)| *offset)
 }
 
 /// The integer argument registers, in ABI order — canonical (widest) names only.
@@ -1006,8 +1151,25 @@ mod tests {
         // Past the cutoff the field classes stop mattering entirely.
         assert_eq!(sysv_amd64_return_class(32, &[]), Some(ReturnClass::Memory));
         assert_eq!(sysv_amd64_return_class(17, &[]), Some(ReturnClass::Memory));
-        // `xmm0:xmm1` has no second float result register in this model.
-        assert_eq!(sysv_amd64_return_class(16, &[Sse, Sse]), None);
+        // Two SSE eightbytes are `xmm0:xmm1`, and the SIZE — not the class
+        // list — says how much of the second register the callee defined.
+        assert_eq!(
+            sysv_amd64_return_class(16, &[Sse, Sse]),
+            Some(ReturnClass::SsePair { high_bytes: 8 })
+        );
+        assert_eq!(
+            sysv_amd64_return_class(12, &[Sse, Sse]),
+            Some(ReturnClass::SsePair { high_bytes: 4 })
+        );
+        // An occupancy no float/double member list can produce is refused
+        // rather than rounded up to a full eightbyte.
+        for size in [9, 10, 11, 13, 14, 15] {
+            assert_eq!(
+                sysv_amd64_return_class(size, &[Sse, Sse]),
+                None,
+                "{size} bytes acquired a full-eightbyte contract"
+            );
+        }
         // A class list that does not describe the stated size is not evidence.
         assert_eq!(sysv_amd64_return_class(16, &[Integer]), None);
         assert_eq!(sysv_amd64_return_class(8, &[]), None);
@@ -1039,6 +1201,95 @@ mod tests {
         }
         assert_eq!(split_bank_return_order("long"), None);
         assert_eq!(split_bank_return_order("unsigned __int128"), None);
+    }
+
+    /// The two SSE-pair spellings must differ in exactly one way: how many
+    /// bytes of the HIGH register they move. Both are sixteen-byte objects that
+    /// classify SSE,SSE, so both return in `xmm0:xmm1` — the register contract
+    /// is shared and only the occupancy is not.
+    #[test]
+    fn the_sse_pair_spellings_differ_only_in_high_eightbyte_occupancy() {
+        for (high_bytes, high_member) in [(8u8, "double __sse1"), (4, "float __sse1")] {
+            let tag = sse_pair_return_tag(high_bytes).expect("a modelled occupancy");
+            let definition = sse_pair_return_definition(high_bytes).expect("a modelled occupancy");
+            assert_eq!(sse_pair_return_high_bytes(tag), Some(high_bytes));
+            assert_eq!(synthesised_return_definition(tag), Some(definition));
+            assert!(definition.starts_with(&format!("{tag} {{")), "{definition}");
+            // The low eightbyte is a full `double` in both: only the second
+            // member carries the occupancy.
+            assert!(definition.contains("double __sse0;"), "{definition}");
+            assert!(definition.contains(high_member), "{definition}");
+            // Both spellings are sixteen-byte SSE,SSE objects, hence
+            // `xmm0:xmm1`. This is what makes the half spelling ABI-compatible
+            // with the twelve-byte callee it stands for.
+            assert_eq!(
+                sysv_amd64_return_class(16, &[Eightbyte::Sse, Eightbyte::Sse]),
+                Some(ReturnClass::SsePair { high_bytes: 8 })
+            );
+        }
+        assert_ne!(sse_pair_return_tag(8), sse_pair_return_tag(4));
+        for unmodelled in [0u8, 1, 2, 3, 5, 6, 7, 9, 16] {
+            assert_eq!(sse_pair_return_tag(unmodelled), None, "{unmodelled}");
+            assert_eq!(sse_pair_return_definition(unmodelled), None, "{unmodelled}");
+        }
+        assert_eq!(sse_pair_return_high_bytes("double"), None);
+        assert_eq!(
+            sse_pair_return_high_bytes("struct __glaurung_split_is"),
+            None
+        );
+        assert_eq!(synthesised_return_definition("double"), None);
+        // The split-bank tags keep their own definitions through the shared
+        // entry point.
+        for integer_first in [true, false] {
+            assert_eq!(
+                synthesised_return_definition(split_bank_return_tag(integer_first)),
+                Some(split_bank_return_definition(integer_first))
+            );
+        }
+    }
+
+    /// `xmm1` is the high half of a result PAIR, not another spelling of the
+    /// result. It must be recognisable as that half and must never appear in
+    /// the alias list, where the naming pass would take a scratch `xmm1` for
+    /// the function's return value.
+    #[test]
+    fn the_high_sse_result_register_is_a_pair_member_not_an_alias() {
+        assert!(is_sse_pair_high_return_register(
+            CallConv::SysVAmd64,
+            "xmm1"
+        ));
+        assert!(is_sse_pair_high_return_register(
+            CallConv::SysVAmd64,
+            "xmm1#7"
+        ));
+        assert!(is_sse_pair_high_return_register(
+            CallConv::SysVAmd64,
+            "ymm1#7"
+        ));
+        assert!(!is_sse_pair_high_return_register(
+            CallConv::SysVAmd64,
+            "xmm0"
+        ));
+        assert!(!is_sse_pair_high_return_register(
+            CallConv::SysVAmd64,
+            "rax"
+        ));
+        assert!(!return_registers(CallConv::SysVAmd64).contains(&"xmm1"));
+        assert!(!is_return_register(CallConv::SysVAmd64, "xmm1"));
+        // No other convention has a modelled `xmm0:xmm1` result contract.
+        for cc in [
+            CallConv::Win64,
+            CallConv::Cdecl32,
+            CallConv::Aarch64,
+            CallConv::Arm,
+            CallConv::ArmHardFloat,
+        ] {
+            assert!(
+                sse_pair_high_return_registers(cc).is_empty(),
+                "{cc:?} acquired a second SSE result register"
+            );
+            assert!(!is_sse_pair_high_return_register(cc, "xmm1"), "{cc:?}");
+        }
     }
 
     /// The return register is the widest spelling, and the alias list leads with it.

@@ -16,6 +16,7 @@
 //! | `<= 8` bytes, all integer | `rax` | `Single` |
 //! | `<= 16` bytes, all integer | `rax:rdx` | `IntegerPair` |
 //! | `<= 16` bytes, integer + double | `rax` + `xmm0` | `SplitBanks` |
+//! | `<= 16` bytes, all floating point | `xmm0:xmm1` | `SsePair` |
 //! | `> 16` bytes | caller's buffer via a hidden pointer | `Memory` |
 //!
 //! This module derives that class from a DECLARED type. Machine evidence alone
@@ -214,6 +215,36 @@ mod tests {
                 16,
                 vec![field(0, "x", "double", 8), field(8, "y", "double", 8)],
             ),
+            // `197_homogeneous_float_aggregates`, exactly as it compiles.
+            structure(
+                "hfa197_quad4f",
+                16,
+                vec![
+                    field(0, "a", "float", 4),
+                    field(4, "b", "float", 4),
+                    field(8, "c", "float", 4),
+                    field(12, "d", "float", 4),
+                ],
+            ),
+            structure(
+                "hfa197_trio3f",
+                12,
+                vec![
+                    field(0, "a", "float", 4),
+                    field(4, "b", "float", 4),
+                    field(8, "c", "float", 4),
+                ],
+            ),
+            structure(
+                "hfa197_tagged",
+                8,
+                vec![field(0, "value", "float", 4), field(4, "tag", "int32_t", 4)],
+            ),
+            structure(
+                "two_floats",
+                8,
+                vec![field(0, "a", "float", 4), field(4, "b", "float", 4)],
+            ),
             DwarfType {
                 kind: DwarfTypeKind::Union,
                 name: "bits".to_string(),
@@ -249,15 +280,47 @@ mod tests {
         );
     }
 
+    /// The all-SSE class, and the occupancy of its second eightbyte.
+    ///
+    /// The three positives of `197_homogeneous_float_aggregates` differ only in
+    /// member widths and the resulting SIZE, and the size is the entire reason
+    /// `high_bytes` exists: `{float,float,float}` is twelve bytes, so the ABI
+    /// stores four bytes into `xmm1` and leaves four undefined. Both sixteen-
+    /// byte shapes must land on the full occupancy and the twelve-byte one on
+    /// the half, or the recovery reads a fourth member that was never stored.
+    #[test]
+    fn an_all_float_aggregate_is_an_sse_pair_with_a_measured_occupancy() {
+        let types = corpus();
+        let env = DwarfTypeEnv::new(&types);
+        let class = |name: &str| declared_return_class(name, CallConv::SysVAmd64, Some(&env));
+
+        assert_eq!(
+            class("struct two_doubles"),
+            Some(ReturnClass::SsePair { high_bytes: 8 })
+        );
+        assert_eq!(
+            class("struct hfa197_quad4f"),
+            Some(ReturnClass::SsePair { high_bytes: 8 })
+        );
+        assert_eq!(
+            class("struct hfa197_trio3f"),
+            Some(ReturnClass::SsePair { high_bytes: 4 })
+        );
+        // `hfa197_tagged` is the NEGATIVE: it CONTAINS a float, but the
+        // eightbyte it shares with an `int32_t` joins to INTEGER, so the whole
+        // object comes back in `rax` and must never reach the SSE bank.
+        assert_eq!(class("struct hfa197_tagged"), Some(ReturnClass::Single));
+        // One all-SSE eightbyte is `xmm0` ALONE — a pair needs two of them, and
+        // an eight-byte float aggregate must not acquire a second register.
+        assert_eq!(class("struct two_floats"), Some(ReturnClass::Single));
+    }
+
     #[test]
     fn unmodelled_shapes_refuse_to_classify_rather_than_guess() {
         let types = corpus();
         let env = DwarfTypeEnv::new(&types);
         let class = |name: &str| declared_return_class(name, CallConv::SysVAmd64, Some(&env));
 
-        // Two SSE eightbytes return in `xmm0:xmm1`; there is no second float
-        // result register in the value model.
-        assert_eq!(class("struct two_doubles"), None);
         // A union's members overlap, so a member this reader cannot place would
         // vanish from the class join instead of blocking it.
         assert_eq!(class("union bits"), None);

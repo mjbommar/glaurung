@@ -7323,17 +7323,17 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         out.push_str("    extern long __unknown(long, ...);\n");
     }
 
-    // A callee whose result the ABI splits across the integer and SSE banks is
-    // declared with a synthesised tag, because no builtin C type has that
-    // storage contract. Define the tag above the declarations that name it, for
-    // the same reason `SymbolRecord::required_structs` is emitted here: a
-    // sliced one-function fragment must declare everything it names, and
-    // nothing above the signature line survives that slice.
+    // A callee whose result the ABI splits across the integer and SSE banks —
+    // or across the two SSE registers — is declared with a synthesised tag,
+    // because no builtin C type has that storage contract. Define the tag above
+    // the declarations that name it, for the same reason
+    // `SymbolRecord::required_structs` is emitted here: a sliced one-function
+    // fragment must declare everything it names, and nothing above the
+    // signature line survives that slice.
     for definition in named_call_declarations
         .values()
         .filter_map(|prototype| {
-            crate::ir::abi::split_bank_return_order(&prototype.return_type)
-                .map(crate::ir::abi::split_bank_return_definition)
+            crate::ir::abi::synthesised_return_definition(&prototype.return_type)
         })
         .collect::<std::collections::BTreeSet<_>>()
     {

@@ -11,23 +11,23 @@
   "lane_totals": {
     "clang:O0": {
       "functions_emitted": 2590,
-      "functions_with_violations": 38,
-      "violations": 136
+      "functions_with_violations": 37,
+      "violations": 134
     },
     "clang:O2": {
       "functions_emitted": 2464,
-      "functions_with_violations": 92,
-      "violations": 250
+      "functions_with_violations": 90,
+      "violations": 246
     },
     "gcc:O0": {
       "functions_emitted": 2504,
-      "functions_with_violations": 18,
-      "violations": 98
+      "functions_with_violations": 15,
+      "violations": 94
     },
     "gcc:O2": {
       "functions_emitted": 2371,
-      "functions_with_violations": 58,
-      "violations": 116
+      "functions_with_violations": 56,
+      "violations": 111
     },
     "rustc:O0": {
       "functions_emitted": 3035,
@@ -2271,20 +2271,18 @@
     "196_disjoint_frame_slots:gcc:O2:dfs196_indexed_control": [],
     "196_disjoint_frame_slots:gcc:O2:dfs196_overlap_control": [],
     "196_disjoint_frame_slots:gcc:O2:dfs196_spill_web": [],
-    "197_homogeneous_float_aggregates:clang:O0:hfa197_pair2d_roundtrip": [
-      "var2 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:clang:O0:hfa197_pair2d_roundtrip": [],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_quad4f_roundtrip": [
       "local_30 is read but never defined",
       "local_38 is read but never defined",
-      "var11 is read but never defined",
-      "var13 is read but never defined",
-      "var14 is read but never defined",
-      "var18 is read but never defined",
-      "var22 is read but never defined",
-      "var5 is read but never defined",
-      "var7 is read but never defined",
-      "var9 is read but never defined"
+      "var15 is read but never defined",
+      "var17 is read but never defined",
+      "var19 is read but never defined",
+      "var21 is read but never defined",
+      "var23 is read but never defined",
+      "var24 is read but never defined",
+      "var28 is read but never defined",
+      "var32 is read but never defined"
     ],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_scalar_control": [],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_tagged_control": [
@@ -2293,56 +2291,35 @@
     ],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_trio3f_roundtrip": [
       "local_40 is read but never defined",
-      "var10 is read but never defined",
-      "var12 is read but never defined",
-      "var14 is read but never defined",
       "var15 is read but never defined",
+      "var17 is read but never defined",
       "var19 is read but never defined",
-      "var2 is read but never defined",
-      "var8 is read but never defined"
+      "var21 is read but never defined",
+      "var22 is read but never defined",
+      "var26 is read but never defined"
     ],
-    "197_homogeneous_float_aggregates:clang:O2:hfa197_pair2d_roundtrip": [
-      "var5 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:clang:O2:hfa197_pair2d_roundtrip": [],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_quad4f_roundtrip": [
-      "var2 is read but never defined",
-      "var3 is read but never defined",
-      "var4 is read but never defined"
+      "var13 is read but never defined",
+      "var14 is read but never defined"
     ],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_scalar_control": [],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_tagged_control": [],
-    "197_homogeneous_float_aggregates:clang:O2:hfa197_trio3f_roundtrip": [
-      "var15 is read but never defined",
-      "var5 is read but never defined"
-    ],
-    "197_homogeneous_float_aggregates:gcc:O0:hfa197_pair2d_roundtrip": [
-      "var12 is read but never defined"
-    ],
-    "197_homogeneous_float_aggregates:gcc:O0:hfa197_quad4f_roundtrip": [
-      "var5 is read but never defined",
-      "var7 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:clang:O2:hfa197_trio3f_roundtrip": [],
+    "197_homogeneous_float_aggregates:gcc:O0:hfa197_pair2d_roundtrip": [],
+    "197_homogeneous_float_aggregates:gcc:O0:hfa197_quad4f_roundtrip": [],
     "197_homogeneous_float_aggregates:gcc:O0:hfa197_scalar_control": [],
     "197_homogeneous_float_aggregates:gcc:O0:hfa197_tagged_control": [],
-    "197_homogeneous_float_aggregates:gcc:O0:hfa197_trio3f_roundtrip": [
-      "var12 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:gcc:O0:hfa197_trio3f_roundtrip": [],
     "197_homogeneous_float_aggregates:gcc:O2:hfa197_pair2d_roundtrip": [
-      "var0 is read but never defined",
-      "var7 is read but never defined"
+      "var0 is read but never defined"
     ],
-    "197_homogeneous_float_aggregates:gcc:O2:hfa197_quad4f_roundtrip": [
-      "var4 is read but never defined",
-      "var6 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:gcc:O2:hfa197_quad4f_roundtrip": [],
     "197_homogeneous_float_aggregates:gcc:O2:hfa197_scalar_control": [
       "var0 is read but never defined"
     ],
     "197_homogeneous_float_aggregates:gcc:O2:hfa197_tagged_control": [],
-    "197_homogeneous_float_aggregates:gcc:O2:hfa197_trio3f_roundtrip": [
-      "var2 is read but never defined",
-      "var6 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:gcc:O2:hfa197_trio3f_roundtrip": [],
     "19_disjoint_set:clang:O0:dsu_find": [],
     "19_disjoint_set:clang:O0:dsu_union": [],
     "19_disjoint_set:clang:O2:dsu_find": [],
