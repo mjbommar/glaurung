@@ -1494,3 +1494,34 @@ previous value, and the emitted C compiles, runs, and is wrong. The comment is
 honest about the instruction and silent about the value. A declined lowering
 should leave an explicit unknown in the value, per Design Rule 8 — the same
 demand Entry 55 makes of a truncated CFG.
+
+### Appended — the hypothesis I stated one section ago is already weakened
+
+I wrote, above, that the first hypothesis to test is "the trip is the unmodelled
+all-SSE aggregate return." A cheap measurement makes that unlikely, and it costs
+less to say so now than to let an agent spend an afternoon on it.
+
+```
+gcc -O0 -c 197_homogeneous_float_aggregates.c && objdump -d   # the lane that PASSES
+hfa197_tagged_control mnemonics: 14 mov, 3 add, 2 movss, 2 cvttss2si, sub, ret,
+                                 push, leave, lea, jne, jmp, endbr64
+```
+
+At `-O0` the function contains **the same `cvttss2si`** and **the same aggregate
+return from the same callee** — and it passes. The gate is open there. So the
+aggregate return cannot be what shuts it.
+
+The difference is entirely in the `-O2` instruction set: `punpckldq`, `movd`,
+`movq %xmm0,(%rdx)` replace the `movss`/`mov` traffic. The trip is among those,
+not in the return class.
+
+Which returns the mystery to where it was, but smaller and better bounded: none
+of those three passes `unmodelled_x86_float_mnemonic` either — `punpckldq` starts
+`pu` so `starts_with("unpck")` is false and it ends `dq`, not in
+`["ss","sd","ps","pd"]`; `movd`/`movq` likewise — and `cvttss2si` still sets
+`saw_scalar_float`, so the proof should return true. It does not.
+
+**Consequence for the plan: #46 is not blocked on #45, and should not be
+sequenced behind it.** I had recorded exactly that dependency an hour ago on the
+strength of a hypothesis I had not tested. The two defects are independent until
+something shows otherwise, and the O0/O2 split is the handle to pull on.
