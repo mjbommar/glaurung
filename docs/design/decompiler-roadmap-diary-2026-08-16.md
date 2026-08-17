@@ -1568,3 +1568,97 @@ is a good place to stop guessing: the fixture is the instrument, which is the
 argument for having built it. What is needed next is a dump of the actual
 `Op` stream for that one function — not more reading of the proof, and not more
 probes.
+
+---
+
+## Entry 57 — Three gates that did not gate
+
+A day of agent work turned up three separate cases of a check that everyone
+believed was running and was not. None was found by looking for them; each fell
+out of trying to satisfy the check honestly.
+
+**Bookkeeping note, since this file is the record:** the ruff configuration and
+the gate-script change described below were swept into commit `3b437b1`
+("cfg: a bounded walk now says so"), whose message does not mention them. That is
+a mixed commit and a process slip. Recording it here rather than rewriting three
+commits to tidy it.
+
+### 1. `cargo test` without `--features python-ext`, in the pre-push gate itself
+
+`scripts/decbench-local-gate.sh:121` ran `cargo test --lib --tests`. Its own
+header calls lane 1 "the only lane that gates the Rust logic." Without the
+feature, `src/python_bindings/` is not merely untested — it is **not compiled**.
+CLAUDE.md has warned about this since 2026-08-14, when a signature change there
+left five call sites on the old arity and a bare `cargo test` reported
+`2321 passed; 0 failed`. The warning lived in the guidance; the script that
+enforces the gate did not have it. Both live docs (`decompiler-roadmap.md`'s
+broad gate and `docs/development/setup.md`) said the same wrong thing, fixed in
+`c3e92a9`.
+
+Measured live during today's split, which is the cleanest demonstration I have
+seen of why it matters:
+
+```
+cargo build --features python-ext  | grep -c "never used"   ->  0
+cargo build                        | grep -c "never used"   -> 97
+```
+
+### 2. The gate could not fail on an ordinary test, and `master` was red
+
+Lane 2 runs `pytest -m slow`. Nothing in the gate ran the *default-selected*
+Python tests at all. So when `b423297` broke two tests in
+`test_decompiler_session.py` at 00:03 this morning — tests added six days earlier
+in `ae88988` specifically to pin the discovery cache's hit accounting — every
+gate stayed green while `master` was red for nineteen hours.
+
+A `1b` lane now runs the not-slow, not-corpus Python tests. **It costs 13m08s**
+(measured; `real 13m8.429s`), which is not nothing on a gate that is already
+~50 minutes, and a large share of it is benchmark tests that have no business in
+a correctness gate. That is a follow-up, not a reason to leave the hole open.
+
+### 3. `ruff` was never configured, so the gate was both impossible and unstable
+
+CLAUDE.md requires ruff and ty before claiming a change is done. No ruff
+configuration existed anywhere in the repo — no `[tool.ruff]`, no `ruff.toml`:
+
+```
+uvx ruff --version              -> 0.16.3        (uvx resolves LATEST, every run)
+uvx ruff check python/          -> 3507 errors, 413 rules enabled
+uvx ruff format --check python/ -> 305 files would be reformatted
+```
+
+Two problems, and the second is worse than the first. Unachievable is obvious:
+nobody was going to bury a change under a 305-file reformat, so everyone quietly
+skipped the step — two agents today independently reported doing exactly that,
+which is how it surfaced. **Non-deterministic** is the real defect: with no
+`select`, the verdict is whatever the latest ruff defaults to, so the gate could
+change with no commit in this repo. That is the same shape as defect 1 — a
+command that does not do what the document says it does.
+
+`[tool.ruff]` now pins `select = ["E4","E7","E9","F"]` with an `ignore` list that
+is explicitly **debt, not policy**: each entry carries its measured count so the
+backlog is visible in the file that enforces it. `uvx ruff check python/` now
+passes.
+
+The one finding worth acting on immediately was fixed: a redundant
+re-import of `get_config` shadowing the module-level import in
+`suggest_function_name.py`. The seven `F821`s are all string annotations naming a
+type the module never imports — `binary_diff.py` annotates
+`Optional[Dict[str, "FunctionStructure"]]` while that class lives in
+`structural_fingerprint.py` and is imported nowhere, not even under
+`TYPE_CHECKING`. No runtime error, because the annotation is never evaluated, and
+no type checker can resolve it either. An annotation that asserts something
+nothing verifies.
+
+Still open, and deliberately not done mid-flight: `ruff format` remains 315 files
+out of line, and `ty check python/` reports 2002 diagnostics on the untouched
+tree. Both need their own decision.
+
+### The pattern
+
+Each of these is the same failure at a different scale: a **stated** gate and an
+**executed** gate that had drifted apart, with nobody able to see the gap because
+the stated one is what everyone reads. The roadmap's own habit line covers it —
+"a number in a document is not a measurement, write the command next to the
+number" — but a *command* in a document is not a gate either. The gate is what
+the script runs.
