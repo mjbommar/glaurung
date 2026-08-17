@@ -1662,3 +1662,88 @@ the stated one is what everyone reads. The roadmap's own habit line covers it �
 "a number in a document is not a measurement, write the command next to the
 number" — but a *command* in a document is not a gate either. The gate is what
 the script runs.
+
+---
+
+## Entry 58 — The fast loop hid two defects, in exactly the window where it is used most
+
+Fixture 197's first baseline refresh (`f1851d5`) added four lanes and 44 cells —
+20 `structural`, 18 `fail`, 6 `pass` — and changed nothing else: every
+pre-existing shared lane kept its identical verdict, and no lane was removed.
+Verified rather than assumed, because a regeneration is exactly where an
+unrelated regression gets quietly baked in.
+
+The interesting part is that **18 fail is more than the 12 I reported yesterday**,
+and the extra six are in functions I could not see.
+
+### The blind spot, confirmed in both directions
+
+`tools/dectest.py --full` resolves its function list from
+`lane_function_universe()` (`tools/dectest.py:158`), which is the union of
+`M.REQUIRED_FUNCTIONS` **and whatever the baseline already observed**. For a
+fixture with no baseline entry yet, that union is just the required list.
+
+Fixture 197 declares five required functions and contains eleven. So:
+
+```
+before the refresh:  tools/dectest.py 197… --full   ->  5 functions per lane
+after  the refresh:  tools/dectest.py 197… --full   -> 11 functions per lane
+```
+
+Both measured. This is not a permanent gap — it closes on the first refresh —
+but it is open during precisely the window in which someone is iterating on a
+new fixture and most wants the feedback. I wrote 197's helpers deliberately, ran
+the fast loop, saw five verdicts, and reported "12 of 20 cells fail" as though
+that were the fixture's full result. It was 18 of 44.
+
+### Defect 1 — a signed integer becomes unsigned on its way to a double
+
+`hfa197_make_scalar`, failing on all four lanes:
+
+```c
+source:  return (double)(seed * 6 + 1);
+ours:    return (double)((unsigned long)((unsigned int)(…)));
+```
+
+Every intermediate is spelled unsigned before the conversion, so a negative
+result converts to a huge positive double. At `seed = -1` the source returns
+`-5.0` and the recovery returns `4294967291.0`. The fixture's vectors include
+`-1` and `-4`, which is why it is caught.
+
+Note which function this is. `hfa197_scalar_control` — the *required* one —
+passes on all four lanes, because it returns `int32_t` and never performs an
+int-to-double conversion. The helper it calls is the one that does. I added that
+helper purely as a negative control for the return-bank work, and it found an
+unrelated defect on a path nothing else in the corpus exercises.
+
+### Defect 2 — a function returns its own argument instead of the call result
+
+`172_float_double_widths:gcc:O0:double_precision_horner`, pre-existing and
+previously unexplained:
+
+```c
+source:  return fp172_horner_f64(x, a, b);
+
+ours:    extern long fp172_horner_f64(double);   /* ONE parameter, not three */
+         ret   = arg0;
+         var25 = fp172_horner_f64(arg0);         /* result DISCARDED */
+         return <ret bits as double>;            /* returns x, the INPUT */
+```
+
+Three faults compounding: a float-argument callee loses two of its three
+parameters, the call result is dropped, and the function returns its own first
+argument. The emitted C compiles, runs, and returns the input — the same shape as
+Entry 56's `Stmt::Unknown` defect, and the same reason execution-differential
+testing exists.
+
+### Two defects, not one, and I checked the harness before blaming the product
+
+The corpus-wide pattern is "functions returning a floating-point value fail," and
+filing that as a single cause would have been easy and wrong: defect 1 has no
+call in it at all, and defect 2 has no int-to-float conversion.
+
+The harness is not the explanation either. `tools/diff_decompile.py` compares
+floating-point results **by bit pattern** via `float_bits`, deliberately, with
+recorded reasoning about `-0.0` and NaN — so a float return is fully comparable
+and these cells fail because the output is wrong. Worth checking before
+attributing 435 failing cells to a comparator.
