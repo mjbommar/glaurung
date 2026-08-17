@@ -1982,3 +1982,77 @@ raw lift cannot answer it — the proof runs on the post-SSA `lf`, and value
 numbering canonicalises `eax` to `rax`, so the declared width at proof time is not
 necessarily what the lifter wrote. That needs instrumentation at the proof site,
 which is a different and much smaller job than where this started.
+
+---
+
+## Entry 62 — The class knows where the value is; the spelling does not
+
+`ReturnClass::SsePair` landed (`fdbcf58`). Fixture 197's all-SSE return class —
+2-4 floats or doubles coming back in `xmm0:xmm1`, two registers holding one
+value — is modelled, including the case where the high register is half occupied.
+
+```
+gate baseline    5 cells fail -> pass          arch baseline   6 more
+def-use census   clang:O0 136->134   clang:O2 250->246
+                 gcc:O0    98-> 94   gcc:O2   116->111     = -15, 0 lane worse
+structural       3 violation lists emptied
+cargo test --features python-ext   2481 passed, 0 failed
+```
+
+### The instruction I gave that was wrong
+
+I told the agent to follow `7105e26`'s ordering. `SplitBanks` is checked *after*
+`result_storage`; I assumed the neighbouring class would sit in the same place.
+
+It cannot. At `gcc:O2` the attributed destination of a pair-returning call is
+`Phys("xmm0_d0#1")` — a dword **lane**, not a spelling of "the result", which
+`is_return_register` therefore declines. So the scalar storage gate rejects the
+call before any class is consulted, and following my instruction verbatim left
+the cell exactly as broken as before.
+
+The principle underneath is worth more than the fix: **the proven return class
+says where the value is, regardless of which spelling the attribution happened to
+pick.** A destination-first check asks the wrong question, because the
+destination is an artifact of register allocation and the class is a property of
+the ABI.
+
+### The lanes, which nobody predicted
+
+`regview::ssa_parent` declines the vector bank. A definition spelled `xmm0`
+therefore never reaches a use spelled `xmm0_d0` — and callers unpacking a
+returned float aggregate read almost exclusively through lanes.
+
+```
+modelling xmm0 and xmm1 only                       1 cell
++ xmm0_d0, xmm0_d1, xmm1_d0, xmm1_d1               7 cells
+```
+
+Two guards keep that from becoming a leak: each lane gets its own storage key, so
+a reader of the second float never receives the first one's bits; and a new
+`destination_storage`, deliberately narrower than `result_storage`, refuses a
+lane as an *ordinary scalar* call destination — only a DWARF-proven `SsePair`
+claims one.
+
+### Occupancy comes from the object, not the class list
+
+`{float,float,float}` is 12 bytes: four bytes of `xmm1` are defined and four are
+not. `high_bytes` is derived from the object SIZE, and sizes 9/10/11/13/14/15
+classify `None` rather than rounding up. The lane table is filtered by it, so
+`xmm1_d1` is *not defined at all* for a 12-byte return — the fourth member cannot
+be manufactured, because there is no identity to read it from. That is stronger
+than emitting a read and hoping nobody uses it.
+
+### The two things this exposed about the corpus
+
+**A cell can be sound and still fail.** `pair2d_roundtrip`'s structural violation
+list is now empty — its return is fully correct — and its execution cell still
+fails, on the **argument** side: a 16-byte all-SSE aggregate passed by value has
+no parameter-storage model. The mirror class, now filed. The fixture's
+`hfa197_consume_pair2d` was written for exactly that case and has been waiting.
+
+**And #46 is now load-bearing rather than curious.** On `clang:O0:quad4f` the
+split *engages* — a probe shows `ret=Some("struct __glaurung_sse_pair")` — and is
+then discarded, because every consumer of `xmm0`/`xmm1` in that function is a
+declined `/* asm: movlpd */`, so the six reads the split emits have no users. The
+whole-function float gate is what blocks the hardest remaining cells of this
+class. It stopped being a side mystery today.
