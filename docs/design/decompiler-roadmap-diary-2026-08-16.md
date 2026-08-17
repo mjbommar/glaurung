@@ -1223,3 +1223,68 @@ half it now has a reproduction.
 
 A truncated function's rendered output says so, the untruncated function beside
 it in the same run does not, and a test on a real sample proves both.
+
+### Appended during the work — prediction 2 is already falsified
+
+Prediction 2 said "every fixture function is far under 256 blocks." It is wrong,
+and the correction made the test design better than the brief that preceded it.
+
+```
+uv run python $CLAUDE_JOB_DIR/tmp/fixture_blocks.py
+fixture objects scanned: 766
+  1457 blocks  151_wide_branch_ladder-clang-O0.so  big151_branch_ladder
+   984 blocks  151_wide_branch_ladder-gcc-O0.so    big151_branch_ladder
+   715 blocks  154_wide_switch-clang-O0.so         wide154_dense_effects
+   602 blocks  154_wide_switch-clang-O0.so         wide154_sparse_switch
+functions over 256 blocks: 15
+functions over  64 blocks: 21
+```
+
+Fixtures 151 and 154 were built wide on purpose. `big151_branch_ladder` at 1457
+blocks sits only 2.8x under `decompile_at`'s 4096 default — much less headroom
+than "far under."
+
+The consequence is a better test than the one I specified. `151_wide_branch_ladder-clang-O0.so`
+holds a 1457-block function *and* small ones, so a budget that truncates only the
+big one gives the **no-contamination** case directly: assert the small function's
+output carries no marker while the big one's does. That test is in-tree,
+deterministic, and runs in seconds. I asked for it against a 4.9 MB Windows
+driver because I had not measured the corpus I already own.
+
+### Appended during the work — the consumer that makes this a correctness bug
+
+`python/glaurung/llm/finding_verifier.py:139`:
+
+```python
+text = g.ir.decompile_at(
+    self.binary_path, va,
+    timeout_ms=5_000, max_blocks=256, max_instructions=2_000,
+    types=True, style="",
+)
+```
+
+The vulnerability-finding verifier runs at **256 blocks and 2,000 instructions** —
+below both thresholds the reproduction truncates at. A verifier reasoning about
+40% of a function while believing it holds all of it will clear a finding whose
+evidence sat in the discarded part. Budgets across shipping callers
+(`grep -rn "max_blocks" python/glaurung/ --include=*.py`): 256/2,000 in
+`finding_verifier.py`, 512 in `windows_api_contract_primitives.py`, 1,024 in
+`windows_project_zero_length_write_paths.py` and `windows_function_pretty_lift.py`,
+2,048 in `llm/context.py` and `llm/evidence.py`.
+
+### Appended during the work — the honest rate, so this is not oversold
+
+```
+uv run python $CLAUDE_JOB_DIR/tmp/measure_instr.py
+NETwtw10.sys           funcs= 12185  max_instr= 3989  >2000instr:5  >256blk:9  either: 10 (0.08%)
+xrt_coreutil.dll       funcs=  8634  max_instr= 2776  >2000instr:5  >256blk:7  either:  9 (0.10%)
+win11-webservices.dll  funcs=  4909  max_instr=15169  >2000instr:1  >256blk:2  either:  2 (0.04%)
+hello-go               funcs=  1522  max_instr= 1054  >2000instr:0  >256blk:0  either:  0 (0.00%)
+```
+
+**0.04%–0.10% of functions.** Roughly ten per large binary. The case for fixing
+it is not the rate. It is that the affected set is systematically biased toward
+the largest and most complex functions — the ones an analyst or a vuln-hunting
+agent is most likely to be looking at — and that the failure is silent wrongness
+rather than an error. Stated as a rate this looks negligible; stated as "the ten
+functions you most wanted to read are the ten we quietly halve" it does not.
