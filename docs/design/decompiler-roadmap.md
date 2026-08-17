@@ -1103,6 +1103,29 @@ src/render/        faithful, C and DecBench formatting-only projections
 src/decompile/     pipeline, profiles, orchestration and result boundary
 ```
 
+**Current sizes, measured 2026-08-17 (`python3 tools/fitness_report.py`).** This
+table is here because the list below names targets without sizes, and that is how
+`analysis/cfg.rs` stayed invisible: it was never in the priority list, and while
+`ast.rs` was at 11,582 nobody looked past it. Three renderer cuts later it is the
+**second-largest owner in the tree**.
+
+| product LOC | file | status |
+|---:|---|---|
+| 7,920 | `ir/ast.rs` | in progress — 3 renderer cuts landed, 4th under way |
+| 6,248 | `analysis/cfg.rs` | **not in the list below**; "accepted, under review" |
+| 4,998 | `ir/lift_x86.rs` | priority split, under way |
+| 3,975 | `ir/types_recover.rs` | priority split, untouched |
+| 3,920 | `ir/call_args.rs` | priority split, untouched |
+| 3,402 | `python_bindings/ir.rs` | priority split, untouched |
+| 3,241 | `ir/stack_locals.rs` | priority split, untouched |
+| 2,999 | `ir/lift_arm32.rs` | priority split, untouched |
+| 2,607 | `ir/structure.rs` | priority split, untouched |
+| 2,516 | `ir/lift_arm64.rs` | priority split, untouched |
+| 2,194 | `ir/ast/dec_render.rs` | created by the first cut; candidate for a further split |
+
+Keep this table measured, not remembered. A priority list without sizes ranks by
+when someone wrote the list rather than by where the mass is.
+
 Priority splits, performed only as ownership migrates:
 
 - `ast.rs`: HIR model, projection, visitors, verifier, declaration planning,
