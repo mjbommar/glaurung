@@ -9,8 +9,7 @@
 use std::collections::HashMap;
 
 use super::{
-    entry_stack_base, is_active_stack_base, is_stack_pointer_reg, normalized_stack_slot, SlotKey,
-    SlotVal, StackContext,
+    entry_stack_base, is_active_stack_base, is_stack_pointer_reg, SlotKey, SlotVal, StackContext,
 };
 use crate::ir::ast::Expr;
 use crate::ir::call_args::CallConv;
@@ -704,4 +703,48 @@ fn constant_stack_address(expr: &Expr, ctx: StackContext) -> Option<(String, i64
         }
         _ => None,
     }
+}
+
+/// Express an rsp-relative slot against the architectural entry rsp when the
+/// current delta is known. This makes `[rsp+16]` after one push the same slot as
+/// `[entry_rsp+8]`, and gives naming an ABI-stable displacement.
+pub(super) fn normalized_stack_slot(
+    base: &str,
+    disp: i64,
+    sp_delta: Option<i64>,
+    ctx: StackContext,
+) -> (String, i64) {
+    // `sp` is normalised unconditionally for ARM32, whose whole frame model this
+    // already describes. AArch64 was deliberately excluded: `resolve_stack_address`
+    // gives it an `entry_sp` identity through a different path, and unifying them
+    // here moves a lane that is already 82% correct.
+    //
+    // That exclusion is kept for the callee's OWN frame and lifted only at or
+    // above the entry stack pointer, which is the caller's territory and the only
+    // place an AAPCS64 stacked argument can live. A frame-pointer-omitted
+    // `ldr w9, [sp]` is exactly how `sum_arg9`/`sum_arg10` read their ninth and
+    // tenth arguments, and without the entry-relative spelling those promoted to
+    // an undefined `stack_top`.
+    //
+    // The `disp + delta >= 0` bound is not cosmetic and was not reasoned into
+    // existence: normalising AArch64's negative (own-frame) offsets too renamed
+    // `24_merge_sort:aarch64:O2:merge_sort_i32`'s locals, split its scratch buffer,
+    // and turned a passing execution differential into a failing one. See
+    // `tools/arch_roundtrip.py --check`.
+    let architectural_sp = base == "rsp" || (base == "esp" && ctx.cc == Some(CallConv::Cdecl32));
+    let aapcs_sp = base == "sp"
+        && matches!(
+            ctx.cc,
+            Some(CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64)
+        );
+    if architectural_sp || aapcs_sp {
+        if let Some(delta) = sp_delta {
+            let normalized = disp + delta;
+            let own_frame_of_aarch64 = ctx.cc == Some(CallConv::Aarch64) && normalized < 0;
+            if !own_frame_of_aarch64 {
+                return (entry_stack_base(ctx).to_string(), normalized);
+            }
+        }
+    }
+    (base.to_string(), disp)
 }

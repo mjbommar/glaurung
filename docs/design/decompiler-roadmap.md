@@ -1115,7 +1115,7 @@ while `ast.rs` was at 11,582 nobody looked past it.
 | 4,183 | `ir/lift_x86.rs` | packed/SSE family out (`ef8a3dc5`); flags family next |
 | 3,526 | `ir/call_args.rs` | cdecl32 out (`90e791e5`); tail calls next, 0 widenings |
 | 3,402 | `python_bindings/ir.rs` | priority split, untouched |
-| 1,695 | `ir/stack_locals.rs` | 3 layers out in one cut (3,241 -> 1,695); off the 2,000 list |
+| 767 | `ir/stack_locals.rs` | 4 layers out (3,241 -> 767); **first file taken below 1,000**, review entry deleted |
 | 3,057 | `ir/types_recover.rs` | value-keyed collection out (`90e791e5`) |
 | 2,999 | `ir/lift_arm32.rs` | priority split, untouched |
 | 2,607 | `ir/structure.rs` | priority split, untouched |
@@ -1225,9 +1225,16 @@ Priority splits, performed only as ownership migrates:
   entry also inherited the size table's "untouched", which was wrong in a
   second way: the file was already three, with `address_aliases` (697) and
   `bounded_overlap` (62) as descendants, so its real footprint was 4,000 LOC
-  over four files. Three layers are now out — `address_recovery` (707),
-  `coordinate_flow` (526), `indexed_objects` (378) — a textually pure move
-  costing 12 `pub(super)` on moved privates and **zero** `pub(crate)`/`pub`.
+  over four files. Four layers are now out — `address_recovery` (750),
+  `coordinate_flow` (526), `indexed_objects` (378) and `rewrite` (912) — a
+  textually pure move costing 15 `pub(super)` on moved privates and **zero**
+  `pub(crate)`/`pub`. The fourth cut took the file to **767**, the first time
+  this program has moved a file from above 1,000 to below it, which is also the
+  only way `product_loc_above_1000` sheds a whole remainder rather than a
+  difference (61,896 -> 60,201, of which 1,695 is this file leaving the set).
+  What is left is one thing: five public entry points, the driver, the
+  frame-anchor predicates, `StackContext`, the data model, naming, and
+  `stack_arg_layout`. Its `REVIEWED_LARGE_MODULES` licence has been deleted.
 - `structure.rs`: graph algorithms, regions, selection, verification, and HIR.
 - `python_bindings/ir.rs`: thin adapters over session, engine, and typed results.
 

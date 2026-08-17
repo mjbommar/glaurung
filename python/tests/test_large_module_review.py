@@ -102,21 +102,6 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "scheduled split: constraints, collection, solving, prototypes, and "
         "language spelling."
     ),
-    "ir/stack_locals.rs": (
-        "under review, measured 2026-08-17. Four of the five concerns the "
-        "earlier note listed are real; one is not. Of 3,241 product LOC: "
-        "promotion 1,076 (the driver, `rewrite_body`, `rewrite_expr`, the "
-        "address-escape recovery and the late reconcile), frame analysis 752, "
-        "access recovery 720, object construction 362, the data model 97 -- "
-        "and NAMING is 141, one 121-line `alloc_name` plus a nine-line "
-        "reservation helper. That is a function, not a module, exactly like "
-        "`types_recover`'s 43-line 'language spelling'. The note also called "
-        "the file untouched when it was already three files: `address_aliases` "
-        "(697) and `bounded_overlap` (62) predate this entry. Three layers "
-        "have now been lifted to descendant modules -- `address_recovery` "
-        "(707), `coordinate_flow` (526), `indexed_objects` (378) -- leaving "
-        "the promotion pass itself: entry points, driver, rewriter, naming."
-    ),
     "ir/structure.rs": (
         "scheduled split: graph algorithms, regions, selection, verification, and HIR."
     ),
