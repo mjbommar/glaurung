@@ -1288,3 +1288,129 @@ the largest and most complex functions — the ones an analyst or a vuln-hunting
 agent is most likely to be looking at — and that the failure is silent wrongness
 rather than an error. Stated as a rate this looks negligible; stated as "the ten
 functions you most wanted to read are the ten we quietly halve" it does not.
+
+---
+
+## Entry 56 — OPEN: a fixture for the return class `195` left out, and it found two defects on its first run
+
+**Status: OPEN.** The lane exists and fails; nothing is fixed yet. Written as the
+evidence arrived.
+
+### The gap, found by census rather than by theory
+
+`195_by_value_aggregates` covers SysV's INTEGER (`rax`), INTEGER-pair
+(`rax:rdx`), split-bank (`rax`+`xmm0`) and MEMORY classes. It has **no all-SSE
+case**, so nothing in the corpus returned a value in `xmm0:xmm1` — two SSE
+registers holding one value, which is a different contract from the split case
+and from a scalar `double`.
+
+The same structs are a different mechanism entirely on AArch64, and the corpus
+had no lane for that at all. AAPCS64 returns a *homogeneous float aggregate* in
+consecutive SIMD registers.
+
+**Verified by disassembling both targets rather than from memory** — the whole
+point of the fixture is the ABI contract, so asserting it from recollection would
+have been the same mistake this diary keeps recording:
+
+```
+gcc -O1 -c 197_homogeneous_float_aggregates.c && objdump -d
+  make_pair2d   movq %xmm0,%rax / movq %xmm1,%rdx ... -> xmm0:xmm1
+  make_quad4f   shl $0x20,%rsi / or %rsi,%rcx / movq %rcx,%xmm1  -> TWO floats packed per xmm
+  make_tagged   movd %xmm0,%eax / or %rdi,%rax  -> rax ALONE, float bit-packed in
+
+aarch64-linux-gnu-gcc -O1 -c ... && aarch64-linux-gnu-objdump -d
+  make_pair2d   scvtf d0,w1 / scvtf d1,w0        -> d0,d1
+  make_quad4f   fmov s0,w3 / s1,w2 / s2,w0 / s3,w1 -> FOUR registers, one value
+  make_tagged   bfxil x0,x2 / bfi x0,x1          -> x0 ALONE
+```
+
+Same struct, same source: SysV packs `{float x4}` into two registers, AAPCS64
+spreads it across four. A recovery that models "the float result" as a single
+register is wrong on both, differently, and nothing in the corpus could say so.
+
+### First run, x86-64
+
+```
+GLAURUNG_FIXTURE_TMPDIR=... tools/dectest.py 197_homogeneous_float_aggregates --full
+  clang:O0  pair2d fail  quad4f fail  trio3f fail  tagged fail  scalar PASS
+  clang:O2  pair2d fail  quad4f fail  trio3f fail  tagged PASS  scalar PASS
+  gcc:O0    pair2d fail  quad4f fail  trio3f fail  tagged PASS  scalar PASS
+  gcc:O2    pair2d fail  quad4f fail  trio3f fail  tagged fail  scalar PASS
+```
+
+12 of 20 cells fail, and **the discrimination is exactly what the fixture was
+built for**: `hfa197_scalar_control` — a plain `double` return — passes on all
+four lanes, so this is not "floats are broken." The three all-SSE positives fail
+on all four lanes. The corpus could not previously distinguish those two claims.
+
+### Defect 1 — the second SSE result register is read from nowhere
+
+`197:gcc:O2:hfa197_trio3f_roundtrip`, our C:
+
+```c
+extern long hfa197_make_trio3f(int);     /* declared SCALAR */
+var1 = hfa197_make_trio3f(...);
+local_14 = var1;
+local_10 = var2;                          /* var2  is NEVER DEFINED */
+...
+var5 = ... var6 ...;                      /* var6  is NEVER DEFINED */
+```
+
+The callee returns in `xmm0:xmm1`; the recovery models one result register, so
+the second and third members come from undefined variables. This is the same
+shape as the split-bank defect closed in `7105e26`, one class over: that one was
+`rax`+`xmm0`, this one is `xmm0`+`xmm1`. `declared_return_class` has no all-SSE
+case to produce.
+
+### Defect 2 — an unlifted instruction becomes a comment, and the old value flows on
+
+This one is unrelated to aggregates and is the more interesting find.
+`197:gcc:O2:hfa197_tagged_control` — the NON-homogeneous control, which returns in
+`rax` alone and should have been the easy case:
+
+```c
+var1 = hfa197_make_tagged(...);
+local_c = var1;
+/* asm: cvttss2si(...) */                 /* <- the conversion, as a COMMENT */
+var4 = ((long)(var1) >> 32);              /* tag: correct */
+*(int *)((var0 + 0x4)) = var4;            /* correct */
+*(int *)((var0)) = var1;                  /* WRONG: raw float BITS, not (int)value */
+return (unsigned int)(((var1 + (var1 * 2)) + var4));   /* bits*3 + tag */
+```
+
+The machine code (`gcc -O2 -c … && objdump -d`):
+
+```
+movd      %eax,%xmm0        ; float bits out of rax's low half
+cvttss2si %xmm0,%eax        ; float -> int
+sar       $0x20,%rcx        ; tag
+movd      %ecx,%xmm1
+movd      %eax,%xmm0
+punpckldq %xmm1,%xmm0       ; interleave both 32-bit lanes
+movq      %xmm0,(%rdx)      ; ONE 8-byte store covering both scratch slots
+```
+
+`cvttss2si` lowered to `Stmt::Unknown`, which `src/ir/ast.rs:11298` renders as
+`/* asm: … */`. The mnemonic **is** lifted (`src/ir/lift_x86.rs:4208`,
+`src/ir/ast.rs:1047`), so this is a lowering decline on this operand shape, not a
+missing capability — a capability census would have said "covered."
+
+The comment is honest about the instruction. It is silent about the
+**consequence**: the value the instruction was supposed to produce is quietly the
+value from before it, so the emitted C compiles, runs, and is wrong. That is the
+same shape as Entry 55's truncation — a step that knows it is incomplete, feeding
+a downstream that cannot tell — and it is what Design Rule 8 exists to forbid.
+
+It is also the argument for execution-differential fixtures in one screen: this
+output is plausible, well-formed, type-correct C. Only running it catches it.
+
+### What is deliberately not claimed yet
+
+- **The AArch64 lane does not exist yet.** `tools/dectest.py --arch aarch64`
+  sources its function list from `arch_baseline.json` alone, so the HFA half of
+  this fixture — the whole reason for the four-`s`-register case — is unmeasured
+  until the baselines are refreshed. The disassembly above proves the ABI; it
+  does not prove what we recover from it.
+- **No fix is attempted here.** The lane is being recorded failing, exactly as
+  `bv195_big_roundtrip` was, so any later fix shows up as cells moving rather
+  than as a baseline edit.

@@ -1695,6 +1695,39 @@ OVERRIDES: dict[tuple[str, str], dict] = {
         "ptr_len": 8,
         "arg_values": {1: [0, 1, 3, 7, -1, -4]},
     },
+    # All-float aggregates: the return class 195 left out, and the one where the
+    # two ABIs disagree most. Verified by disassembly rather than from memory
+    # (`gcc -O1 -c` + `objdump -d`, and the aarch64 cross the same way):
+    #
+    #   {double,double}  SysV xmm0:xmm1        AAPCS64 d0,d1
+    #   {float x4}       SysV xmm0:xmm1        AAPCS64 s0,s1,s2,s3
+    #                    (TWO floats packed per xmm on SysV; FOUR separate
+    #                     registers on AArch64 — same struct, same source)
+    #   {float x3}       SysV xmm0 + half xmm1 AAPCS64 s0,s1,s2
+    #   {float,int32_t}  SysV rax alone        AAPCS64 x0 alone
+    #
+    # `seed` stays small and integral so every float and double value is exactly
+    # representable in both widths and the differential compares exact values.
+    ("197_homogeneous_float_aggregates", "hfa197_pair2d_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("197_homogeneous_float_aggregates", "hfa197_quad4f_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("197_homogeneous_float_aggregates", "hfa197_trio3f_roundtrip"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("197_homogeneous_float_aggregates", "hfa197_tagged_control"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
+    ("197_homogeneous_float_aggregates", "hfa197_scalar_control"): {
+        "ptr_len": 8,
+        "arg_values": {1: [0, 1, 3, 7, -1, -4]},
+    },
     # The frame-slot controls. `dfs196_indexed_control` masks its seed down to
     # an index, so the vectors have to include values that select the slot the
     # pending load reads (k == 5) as well as ones that do not.
@@ -2891,6 +2924,30 @@ REQUIRED_FUNCTIONS: dict[str, list[str]] = {
         "bv195_pair_roundtrip",
         "bv195_quad_roundtrip",
         "bv195_scalar_control",
+    ],
+    # ALL-FLOAT AGGREGATES. 195 covers SysV's INTEGER, INTEGER-pair, split-bank
+    # and MEMORY classes but has no all-SSE case, so nothing in the corpus
+    # returned a value in xmm0:xmm1 — TWO SSE registers holding ONE value, a
+    # different contract from the split case and from a scalar double. The same
+    # structs are a different mechanism entirely on AArch64, which had no lane at
+    # all: AAPCS64 returns a homogeneous float aggregate in consecutive SIMD
+    # registers, so {float,float,float,float} comes back in s0-s3 — FOUR
+    # registers, one value — where SysV packs it into two xmms at two floats
+    # apiece. Verified by disassembling both targets, not from memory.
+    # The 12-byte trio leaves the second eightbyte HALF occupied, so a recovery
+    # assuming a full pair reads a fourth member that was never stored.
+    # hfa197_tagged_control is the negative that makes the positives mean
+    # something: it contains a float but is not homogeneous, so BOTH ABIs return
+    # it in an integer register. A decompiler routing "aggregate containing
+    # floating point" to the SSE bank passes every positive and fails only here.
+    # hfa197_scalar_control is the second negative: a plain double occupies one
+    # result register and must not acquire a second.
+    "197_homogeneous_float_aggregates": [
+        "hfa197_pair2d_roundtrip",
+        "hfa197_quad4f_roundtrip",
+        "hfa197_scalar_control",
+        "hfa197_tagged_control",
+        "hfa197_trio3f_roundtrip",
     ],
     # A pending load held across a store to a DISJOINT slot of the same frame
     # object. `dfs196_spill_web` is the positive; the three controls are stores
