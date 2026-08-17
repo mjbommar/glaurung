@@ -56,6 +56,39 @@ impl FunctionFlags {
     pub const IS_DESTRUCTOR: FunctionFlags = FunctionFlags(128);
     /// Function instructions use Thumb/Thumb-2 rather than A32 encoding.
     pub const IS_THUMB: FunctionFlags = FunctionFlags(256);
+
+    // ---- Completeness of the recovered CFG ------------------------------
+    //
+    // Discovery walks each function under `analysis::cfg::Budgets`. When a
+    // budget fires the walk STOPS and the `Function` that comes back holds
+    // whichever blocks were reached, with no record that more existed. These
+    // four bits are that record, and they are per function by construction:
+    // they are written from the single walk that produced this body, never
+    // from a whole-run aggregate, so a function that was walked to completion
+    // can never inherit a neighbour's truncation.
+    //
+    // What they assert is exactly "the budget named here fired during this
+    // function's walk". They do NOT say how many blocks or instructions were
+    // missed: the walk stops without enumerating what it would have reached,
+    // and that count is not recoverable after the fact.
+
+    /// `Budgets::max_blocks` stopped this function's block walk.
+    pub const CFG_BLOCK_LIMIT: FunctionFlags = FunctionFlags(512);
+    /// `Budgets::max_instructions` stopped this function's decode.
+    pub const CFG_INSTRUCTION_LIMIT: FunctionFlags = FunctionFlags(1024);
+    /// `Budgets::timeout_ms`, the per-function wall clock, stopped this walk.
+    pub const CFG_WALK_TIMEOUT: FunctionFlags = FunctionFlags(2048);
+    /// `Budgets::total_timeout_ms`, the whole-analysis wall clock, expired
+    /// while this function was being walked.
+    ///
+    /// The whole-run consequence -- that seed discovery stopped and other
+    /// functions were never walked at all -- has no owning function and stays
+    /// in `FunctionDiscoveryStats::hit_total_timeout`. This bit carries only
+    /// the part that IS attributable: this body is short because the clock ran
+    /// out inside it.
+    pub const CFG_ANALYSIS_DEADLINE: FunctionFlags = FunctionFlags(4096);
+    /// Any of the four completeness bits above.
+    pub const CFG_INCOMPLETE: FunctionFlags = FunctionFlags(512 | 1024 | 2048 | 4096);
 }
 
 impl std::ops::BitOr for FunctionFlags {
@@ -267,6 +300,30 @@ impl Function {
     /// Remove a flag
     pub fn remove_flag(&mut self, flag: FunctionFlags) {
         self.flags = FunctionFlags(self.flags.0 & !flag.0);
+    }
+
+    /// Whether a discovery budget stopped this function's CFG walk, leaving a
+    /// body that is a strict subset of the real function.
+    pub fn cfg_is_incomplete(&self) -> bool {
+        self.has_flag(FunctionFlags::CFG_INCOMPLETE)
+    }
+
+    /// The `Budgets` fields that fired during this function's walk, named as
+    /// the caller spells them, in declaration order.
+    ///
+    /// Empty for a function walked to completion. Never derived from anything
+    /// but this function's own walk.
+    pub fn cfg_incomplete_budgets(&self) -> Vec<&'static str> {
+        [
+            (FunctionFlags::CFG_BLOCK_LIMIT, "max_blocks"),
+            (FunctionFlags::CFG_INSTRUCTION_LIMIT, "max_instructions"),
+            (FunctionFlags::CFG_WALK_TIMEOUT, "timeout_ms"),
+            (FunctionFlags::CFG_ANALYSIS_DEADLINE, "total_timeout_ms"),
+        ]
+        .into_iter()
+        .filter(|(flag, _)| self.has_flag(*flag))
+        .map(|(_, name)| name)
+        .collect()
     }
 
     /// Calculate function size from basic blocks
@@ -635,6 +692,21 @@ impl Function {
         self.remove_flag(FunctionFlags(flag));
     }
 
+    /// Whether a discovery budget stopped this function's CFG walk.
+    #[pyo3(name = "cfg_is_incomplete")]
+    fn cfg_is_incomplete_py(&self) -> bool {
+        self.cfg_is_incomplete()
+    }
+
+    /// The `Budgets` fields that fired during this function's walk.
+    #[pyo3(name = "cfg_incomplete_budgets")]
+    fn cfg_incomplete_budgets_py(&self) -> Vec<String> {
+        self.cfg_incomplete_budgets()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+
     #[pyo3(name = "calculate_size")]
     fn calculate_size_py(&self) -> u64 {
         self.calculate_size()
@@ -804,6 +876,16 @@ impl FunctionFlagsPy {
     const IS_DESTRUCTOR: u32 = 128;
     #[classattr]
     const IS_THUMB: u32 = 256;
+    #[classattr]
+    const CFG_BLOCK_LIMIT: u32 = 512;
+    #[classattr]
+    const CFG_INSTRUCTION_LIMIT: u32 = 1024;
+    #[classattr]
+    const CFG_WALK_TIMEOUT: u32 = 2048;
+    #[classattr]
+    const CFG_ANALYSIS_DEADLINE: u32 = 4096;
+    #[classattr]
+    const CFG_INCOMPLETE: u32 = 512 | 1024 | 2048 | 4096;
 }
 
 #[cfg(test)]

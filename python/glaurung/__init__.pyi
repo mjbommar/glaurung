@@ -998,6 +998,8 @@ class Function:
         thunk_target: Optional[Address] = None,
     ) -> None: ...
     def has_flag(self, flag: int) -> bool: ...
+    def cfg_is_incomplete(self) -> bool: ...
+    def cfg_incomplete_budgets(self) -> list[str]: ...
     def to_json(self) -> str: ...
     @staticmethod
     def from_json(s: str) -> Function: ...
@@ -1014,6 +1016,12 @@ class FunctionFlags:
     IS_NAKED: int
     IS_CONSTRUCTOR: int
     IS_DESTRUCTOR: int
+    IS_THUMB: int
+    CFG_BLOCK_LIMIT: int
+    CFG_INSTRUCTION_LIMIT: int
+    CFG_WALK_TIMEOUT: int
+    CFG_ANALYSIS_DEADLINE: int
+    CFG_INCOMPLETE: int
 
 class Reference:
     """Cross-reference between addresses."""

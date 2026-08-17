@@ -10,6 +10,7 @@ pub mod arm32_mode;
 pub(crate) mod call_semantics;
 pub mod cfg;
 pub mod cil_metadata;
+pub mod completeness;
 pub mod dispatch;
 pub mod elf_got;
 pub mod elf_plt;

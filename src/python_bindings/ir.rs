@@ -1225,7 +1225,13 @@ pub(super) fn decompile_at_session(
                 .cloned()
         })
         .filter(|name| !name.is_empty() && !name.starts_with("sub_"));
-    Ok(if style == "decbench" {
+    // Design Rule 8: a proof that did not complete becomes an explicit unknown
+    // in the output, not a silent omission. `func` carries whichever discovery
+    // budget stopped ITS OWN walk, so this can only ever fire for the function
+    // being rendered. See `analysis::completeness`.
+    let incompleteness_note =
+        crate::analysis::completeness::cfg_incompleteness_note(&func, &budgets);
+    let text = if style == "decbench" {
         // DecBench wants concrete C types. Reuse the recovered TypeMap when it
         // was computed, else recover on demand, then remap raw-reg keys to the
         // AST's role names (`arg0`, `ret`, ...) before rendering.
@@ -1285,6 +1291,10 @@ pub(super) fn decompile_at_session(
         profiler.measure("render_with_types", || render_with_types(&f, &renamed))
     } else {
         profiler.measure("render", || render(&f))
+    };
+    Ok(match incompleteness_note {
+        Some(note) => format!("{note}\n{text}"),
+        None => text,
     })
 }
 
@@ -3300,6 +3310,13 @@ fn decompile_many_py(
                 }
                 None => profiler.measure("render", || render(&f)),
             }
+        };
+        // Per function, from that function's own walk: in a set where one entry
+        // hit a budget and the next did not, only the first is marked. See
+        // `analysis::completeness`.
+        let text = match crate::analysis::completeness::cfg_incompleteness_note(func, &budgets) {
+            Some(note) => format!("{note}\n{text}"),
+            None => text,
         };
         let name = resolve_outer_function_name(&func.name, func_va, &addr_map);
         list.append((name, func_va, text))?;

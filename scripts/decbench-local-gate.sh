@@ -117,8 +117,35 @@ fail=0
 step() { printf '\n=== %s ===\n' "$1"; }
 note() { printf '  %s\n' "$1"; }
 
-step "1/$lanes  cargo test"
-if cargo test --lib --tests 2>&1 | tail -3; then
+# `--features python-ext` is NOT optional. `src/python_bindings/` sits behind
+# that feature (`src/lib.rs`), so without it this lane skips ~120 tests AND never
+# compiles that tree — it reports green over code it did not build. On
+# 2026-08-14 a signature change there left five call sites on the old arity and a
+# bare `cargo test` still said `2321 passed; 0 failed`. Since
+# `python_bindings/ir.rs` is the real pipeline entry point, most passes are only
+# reachable through it, so the lane described as "the only lane that gates the
+# Rust logic" was gating a configuration we do not ship.
+step "1/$lanes  cargo test (--features python-ext)"
+if cargo test --features python-ext --lib --tests 2>&1 | tail -3; then
+  note "ok"
+else
+  note "FAILED"; fail=1
+fi
+
+# The Python unit lanes that are neither `slow` nor part of the fixture corpus.
+# Lane 2 runs only `-m slow`, so an ordinary default-selected test could not fail
+# this gate at all: on 2026-08-16 `b423297` broke two tests in
+# `test_decompiler_session.py` that had been added six days earlier to pin the
+# discovery cache's hit accounting, and every gate here stayed green while
+# `master` was red. A commit is not required to know which test file guards the
+# invariant it touched; the gate is.
+step "1b/$lanes  python unit tests (not slow, not decbench)"
+if python -m pytest -p no:cacheprovider -q -m "not slow" \
+     --ignore=python/tests/test_decompiler_fixture_matrix.py \
+     --ignore=python/tests/test_decompiler_defuse_census.py \
+     --ignore=python/tests/test_decompiler_fixture_structural.py \
+     --ignore=python/tests/test_decompiler_arch_roundtrip.py \
+     python/tests/ 2>&1 | tail -4; then
   note "ok"
 else
   note "FAILED"; fail=1

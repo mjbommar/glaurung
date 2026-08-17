@@ -215,8 +215,6 @@ class SuggestFunctionNameTool(
         """
         import asyncio
 
-        from ..config import get_config
-
         cfg = get_config()
         avail = cfg.available_models()
 

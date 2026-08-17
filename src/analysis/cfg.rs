@@ -2114,7 +2114,39 @@ fn discover_function(
         }
     }
 
+    // The truncation record travels on the body it describes. This is the ONLY
+    // place it is written, and it is written from the stats of the single walk
+    // that just produced `func` -- which is what makes it impossible for one
+    // function's budget hit to mark a different function incomplete.
+    record_cfg_incompleteness(&mut func, &stats);
+
     Some((func, call_edges, stats))
+}
+
+/// Copy this walk's budget-truncation outcome onto the function it produced.
+///
+/// `SingleFunctionDiscoveryStats` is consumed twice: here, per function, and
+/// again by `merge_single_function_stats` into the whole-run aggregate. Only
+/// the first of those can name a function, so only the first is used to mark
+/// one. `hit_total_timeout` is deliberately partial here -- see
+/// `FunctionFlags::CFG_ANALYSIS_DEADLINE`.
+fn record_cfg_incompleteness(func: &mut Function, stats: &SingleFunctionDiscoveryStats) {
+    for (fired, flag) in [
+        (stats.hit_block_limit, FunctionFlags::CFG_BLOCK_LIMIT),
+        (
+            stats.hit_instruction_limit,
+            FunctionFlags::CFG_INSTRUCTION_LIMIT,
+        ),
+        (stats.hit_timeout, FunctionFlags::CFG_WALK_TIMEOUT),
+        (
+            stats.hit_total_timeout,
+            FunctionFlags::CFG_ANALYSIS_DEADLINE,
+        ),
+    ] {
+        if fired {
+            func.add_flag(flag);
+        }
+    }
 }
 
 /// Heuristic: does `data[file_off..]` look like the start of a real
@@ -4251,7 +4283,15 @@ fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usize {
         // list in place here. Chunks without blocks are metadata, not a merged
         // function: address-scoped lifting would otherwise clip or call out to
         // the executable cold fragment instead of structuring it locally.
-        let (child_entry, child_ranges, child_blocks, child_edges, child_callers, child_callees) = {
+        let (
+            child_entry,
+            child_ranges,
+            child_blocks,
+            child_edges,
+            child_callers,
+            child_callees,
+            child_flags,
+        ) = {
             let child = &functions[*child_idx];
             let ranges = if !child.chunks.is_empty() {
                 child.chunks.clone()
@@ -4265,6 +4305,7 @@ fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usize {
                 child.edges.clone(),
                 child.callers.clone(),
                 child.callees.clone(),
+                child.flags,
             )
         };
         let parent = &mut functions[*parent_idx];
@@ -4303,6 +4344,20 @@ fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usize {
         parent.callees.remove(&child_entry);
         if !parent.has_flag(FunctionFlags::HAS_EH) {
             parent.add_flag(FunctionFlags::HAS_EH);
+        }
+        // The merged body now contains the child's blocks, so it also inherits
+        // whatever the child's walk failed to reach. Dropping this here would
+        // reintroduce exactly the silent incompleteness the flags exist for,
+        // one level up: the child object disappears from the function list.
+        for flag in [
+            FunctionFlags::CFG_BLOCK_LIMIT,
+            FunctionFlags::CFG_INSTRUCTION_LIMIT,
+            FunctionFlags::CFG_WALK_TIMEOUT,
+            FunctionFlags::CFG_ANALYSIS_DEADLINE,
+        ] {
+            if child_flags & flag {
+                parent.add_flag(flag);
+            }
         }
     }
 
@@ -6989,6 +7044,157 @@ mod degenerate_block_tests {
                 0x1234,
                 crate::analysis::dispatch::Unresolved::NoBound(0x4000)
             )]
+        );
+    }
+
+    /// The per-function record is written from the per-function stats, and the
+    /// aggregate merge cannot reach it.
+    ///
+    /// `merge_single_function_stats` ORs one walk's truncation into a WHOLE-RUN
+    /// flag, and that aggregate can never be attributed to a function: by the
+    /// time it is true, it means "some function, somewhere". So the attribution
+    /// is taken one level in, from the same `SingleFunctionDiscoveryStats`
+    /// before it is merged, where the function it belongs to is still in hand.
+    /// This test pins that the two are independent: merging a truncated local
+    /// into the aggregate marks nothing.
+    #[test]
+    fn truncation_is_attributed_from_the_local_stats_not_the_aggregate() {
+        let entry = Address::new(AddressKind::VA, 0x401000, 64, None, None).unwrap();
+        let mut walked = Function::new("walked".into(), entry.clone(), FunctionKind::Normal)
+            .expect("build function");
+        let mut stopped =
+            Function::new("stopped".into(), entry, FunctionKind::Normal).expect("build function");
+
+        let local = SingleFunctionDiscoveryStats {
+            hit_block_limit: true,
+            ..SingleFunctionDiscoveryStats::default()
+        };
+        record_cfg_incompleteness(&mut stopped, &local);
+
+        let mut aggregate = FunctionDiscoveryStats::default();
+        merge_single_function_stats(&mut aggregate, local);
+        // The whole-run flag is set...
+        assert!(aggregate.hit_block_limit);
+        // ...and the function that was NOT stopped is still clean. Marking it
+        // from the aggregate is the false-positive this design exists to make
+        // unrepresentable.
+        assert!(!walked.cfg_is_incomplete());
+        assert!(walked.cfg_incomplete_budgets().is_empty());
+
+        assert!(stopped.cfg_is_incomplete());
+        assert_eq!(stopped.cfg_incomplete_budgets(), vec!["max_blocks"]);
+
+        // Each budget maps to its own bit; nothing bleeds between them.
+        record_cfg_incompleteness(
+            &mut walked,
+            &SingleFunctionDiscoveryStats {
+                hit_instruction_limit: true,
+                hit_timeout: true,
+                ..SingleFunctionDiscoveryStats::default()
+            },
+        );
+        assert_eq!(
+            walked.cfg_incomplete_budgets(),
+            vec!["max_instructions", "timeout_ms"]
+        );
+    }
+
+    /// A walk that completed records nothing, whatever the aggregate says.
+    #[test]
+    fn a_completed_walk_records_no_truncation() {
+        let entry = Address::new(AddressKind::VA, 0x401000, 64, None, None).unwrap();
+        let mut func =
+            Function::new("f".into(), entry, FunctionKind::Normal).expect("build function");
+        record_cfg_incompleteness(&mut func, &SingleFunctionDiscoveryStats::default());
+        assert!(!func.cfg_is_incomplete());
+    }
+}
+
+/// Whether a budget stopped a function's walk must be a fact about THAT
+/// function, on a real binary, through the real discovery pipeline.
+#[cfg(test)]
+mod cfg_incompleteness_attribution_tests {
+    use super::*;
+
+    fn hello_gcc_o2() -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/export/native/gcc/O2/hello-gcc-O2");
+        std::fs::read(path).expect("read the checked-in gcc -O2 sample")
+    }
+
+    /// In one run where the block budget fires, ONLY the functions it stopped
+    /// are marked.
+    ///
+    /// The aggregate `hit_block_limit` is true for the whole run, so a design
+    /// that reported it against a function would mark every function in this
+    /// binary incomplete. The per-function flag must instead partition the list,
+    /// and the partition must be the true one: a marked function is at the
+    /// block wall, an unmarked one stopped below it on its own terminators.
+    #[test]
+    fn a_block_budget_marks_only_the_functions_it_stopped() {
+        let data = hello_gcc_o2();
+        const TIGHT_BLOCKS: usize = 2;
+
+        let (wide, _cg, wide_stats) = analyze_functions_bytes_with_stats(
+            &data,
+            &Budgets {
+                max_blocks: 4096,
+                ..Budgets::default()
+            },
+        );
+        assert!(
+            !wide_stats.hit_block_limit,
+            "4096 blocks must be enough for every function in a hello-world"
+        );
+        assert!(
+            wide.iter().all(|f| !f.cfg_is_incomplete()),
+            "no function may be marked incomplete when no budget fired"
+        );
+
+        let (tight, _cg, tight_stats) = analyze_functions_bytes_with_stats(
+            &data,
+            &Budgets {
+                max_blocks: TIGHT_BLOCKS,
+                ..Budgets::default()
+            },
+        );
+        assert!(
+            tight_stats.hit_block_limit,
+            "a 2-block budget must stop something in this binary"
+        );
+
+        let mut marked = 0usize;
+        let mut clean = 0usize;
+        for function in &tight {
+            if function.cfg_is_incomplete() {
+                marked += 1;
+                assert_eq!(
+                    function.cfg_incomplete_budgets(),
+                    vec!["max_blocks"],
+                    "0x{:x} must name the budget that actually fired",
+                    function.entry_point.value
+                );
+                assert!(
+                    function.basic_blocks.len() >= TIGHT_BLOCKS,
+                    "0x{:x} is marked but never reached the wall ({} blocks)",
+                    function.entry_point.value,
+                    function.basic_blocks.len()
+                );
+            } else {
+                clean += 1;
+                assert!(
+                    function.basic_blocks.len() < TIGHT_BLOCKS,
+                    "0x{:x} is at the block wall with {} blocks and was NOT marked",
+                    function.entry_point.value,
+                    function.basic_blocks.len()
+                );
+            }
+        }
+        assert!(marked > 0, "the tight budget must mark at least one function");
+        assert!(
+            clean > 0,
+            "at least one small function must survive the same run unmarked - \
+             that is the no-contamination property"
         );
     }
 }

@@ -355,10 +355,16 @@ def test_a_glob_in_the_compiler_slot_never_reaches_an_architecture():
 
 def test_the_committed_opt_sets_are_unchanged_by_the_arch_dimension():
     """`@o0` and `@o2` are the two broadest sets anyone runs. Their size is the
-    concrete form of the containment property above."""
+    concrete form of the containment property above.
+
+    The count is pinned, so adding a fixture lands here deliberately rather than
+    silently. 368 -> 370 on 2026-08-16: `197_homogeneous_float_aggregates` adds
+    one `gcc` and one `clang` lane to each opt. Update this WITH the fixture, and
+    say which fixture moved it.
+    """
     for name in ("o0", "o2"):
         lanes = D.resolve([f"@{name}"])
-        assert len(lanes) == 368, f"@{name} is now {len(lanes)} lanes"
+        assert len(lanes) == 370, f"@{name} is now {len(lanes)} lanes"
         assert not any(lane.is_arch for lane in lanes)
 
 
