@@ -183,6 +183,16 @@ def run(
     to drive the REPL non-interactively for transcript capture.
     """
     env = os.environ.copy()
+    # Fixture capture is a byte comparison, so the child must not colourise.
+    # Python 3.14's argparse emits ANSI escapes when FORCE_COLOR is set, and
+    # it is set by several terminals and CI runners — which made every
+    # `--help` transcript in the tutorial drift for reasons that have nothing
+    # to do with the tutorial. Neutralise it here rather than in each caller,
+    # but do it before `env_extra` so a step can still opt back in.
+    env.pop("FORCE_COLOR", None)
+    env.pop("CLICOLOR_FORCE", None)
+    env["NO_COLOR"] = "1"
+    env["PYTHON_COLORS"] = "0"
     if env_extra:
         env.update(env_extra)
     stdin_text = None
