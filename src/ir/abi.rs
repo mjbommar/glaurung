@@ -569,29 +569,90 @@ pub fn argument_slot_of(cc: CallConv, name: &str) -> Option<usize> {
         .position(|names| names.contains(&canon))
 }
 
+/// The SSE argument-bank index a register name denotes, or `None` when the name
+/// is not one of that bank's registers.
+///
+/// The counterpart of [`argument_slot_of`] for the OTHER System V bank. It
+/// tolerates SSA versions and the dword LANE spellings the lifters scalarise
+/// packed operations into (`crate::ir::regview::packed_views`): `xmm0_d0` is a
+/// quarter of `xmm0`, so it denotes the same bank slot exactly as `edi` denotes
+/// `rdi`'s. `regview::ssa_parent` declines to merge a lane with its parent, so
+/// nothing else in the pipeline would relate the two names.
+///
+/// The lane arm is CONSISTENCY, not a measured gain, and saying so is the point:
+/// deleting it moved zero cells across all 740 host lanes on 2026-08-17. It is
+/// kept because [`crate::ir::types_recover`]'s `float_argument_bank_slot` — the
+/// function that decides which live-ins become float parameters at all — accepts
+/// the same lane spellings for a measured reason, and a gate that then discarded
+/// what recovery had just admitted would be this function's own bug one spelling
+/// further in. The reason no cell needs it today is that `float_live_in_slots`
+/// already replaces a lane spelling with the whole register whenever the callee
+/// reads the whole register anywhere, which every corpus callee does.
+pub fn sse_argument_slot_of(cc: CallConv, name: &str) -> Option<usize> {
+    let index = ssa_base(name)
+        .strip_prefix("xmm")
+        .map(|index| index.split_once("_d").map_or(index, |(whole, _)| whole))?
+        .parse::<usize>()
+        .ok()?;
+    (index < sse_argument_registers(cc).len()).then_some(index)
+}
+
 /// Length of the source-level fixed-parameter prefix proven by recovered storage.
 ///
-/// SysV AMD64 allocates fixed general-purpose parameters consecutively through
-/// `rdi, rsi, rdx, rcx, r8, r9`.  Definition-site liveness can miss an unused
-/// parameter, but a later live register does not prove the missing parameter or
-/// any register after it.  Stop at the first hole instead of turning unrelated
-/// caller-saved residue into a fixed source signature.  Other conventions keep
-/// their existing layouts: AAPCS hard-float has independent allocation banks,
-/// and their recovery needs richer class-aware ordering than a single prefix.
+/// SysV AMD64 allocates fixed parameters consecutively out of TWO independent
+/// banks — `rdi, rsi, rdx, rcx, r8, r9` for INTEGER and `xmm0`-`xmm7` for SSE.
+/// Definition-site liveness can miss an unused parameter, but a later live
+/// register does not prove the missing parameter or any register after it. Stop
+/// at the first hole instead of turning unrelated caller-saved residue into a
+/// fixed source signature. Other conventions keep their existing layouts: AAPCS
+/// hard-float has independent allocation banks, and their recovery needs richer
+/// class-aware ordering than a single prefix.
+///
+/// The hole is looked for in each bank SEPARATELY, because the two counters are
+/// independent: `xmm0` is the first SSE parameter whether it is the signature's
+/// first parameter or its fourth. Asking only the integer bank — which is what
+/// this did until 2026-08-17 — silently discards every floating-point parameter
+/// of a System V callee, so a caller was told the callee takes none. That is how
+/// `197_homogeneous_float_aggregates`'s `hfa197_consume_pair2d(struct{double,
+/// double})` reached its caller as `extern long hfa197_consume_pair2d(void)`
+/// and was then CALLED with no arguments: its parameter occupies `xmm0:xmm1`
+/// and neither register is in the integer table.
+///
+/// On a layout drawn purely from the integer bank this is the rule it replaced,
+/// value for value: a parameter is retained exactly while its slot is inside
+/// its own bank's contiguous prefix, and the first one that is not ends the
+/// signature.
 pub(crate) fn fixed_parameter_prefix_len(cc: CallConv, recovered: &[VReg]) -> usize {
     if cc != CallConv::SysVAmd64 {
         return recovered.len();
     }
 
-    let recovered_slots = recovered
+    let bank_prefix = |slot_of: &dyn Fn(&str) -> Option<usize>, bank_size: usize| -> usize {
+        let recovered_slots = recovered
+            .iter()
+            .filter_map(|register| match register {
+                VReg::Phys(name) => slot_of(name),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        (0..bank_size)
+            .take_while(|slot| recovered_slots.contains(slot))
+            .count()
+    };
+    let integer_prefix = bank_prefix(&|name| argument_slot_of(cc, name), argument_slots(cc).len());
+    let sse_prefix = bank_prefix(
+        &|name| sse_argument_slot_of(cc, name),
+        sse_argument_registers(cc).len(),
+    );
+    recovered
         .iter()
-        .filter_map(|register| match register {
-            VReg::Phys(name) => argument_slot_of(cc, name),
-            _ => None,
+        .take_while(|register| {
+            let VReg::Phys(name) = register else {
+                return false;
+            };
+            argument_slot_of(cc, name).is_some_and(|slot| slot < integer_prefix)
+                || sse_argument_slot_of(cc, name).is_some_and(|slot| slot < sse_prefix)
         })
-        .collect::<std::collections::BTreeSet<_>>();
-    (0..argument_slots(cc).len())
-        .take_while(|slot| recovered_slots.contains(slot))
         .count()
 }
 
@@ -1064,6 +1125,56 @@ mod tests {
             fixed_parameter_prefix_len(CallConv::Win64, &recovered),
             recovered.len()
         );
+    }
+
+    /// The SSE bank has its own counter, so its hole is its own too.
+    ///
+    /// Until this was true, a System V callee whose parameters live in `xmm`
+    /// registers reported a prefix of ZERO — no parameters at all — because the
+    /// only table consulted was the integer one. That is what made
+    /// `hfa197_consume_pair2d(struct {double; double;})` reach its caller as
+    /// `extern long hfa197_consume_pair2d(void)`.
+    #[test]
+    fn the_sse_argument_bank_has_its_own_hole() {
+        let prefix = |registers: &[&str]| {
+            let recovered = registers
+                .iter()
+                .map(|name| VReg::phys(*name))
+                .collect::<Vec<_>>();
+            fixed_parameter_prefix_len(CallConv::SysVAmd64, &recovered)
+        };
+        // A 16-byte all-SSE aggregate by value: TWO SSE registers, ONE value,
+        // and no integer register anywhere in the signature.
+        assert_eq!(prefix(&["xmm0", "xmm1"]), 2);
+        assert_eq!(prefix(&["xmm0"]), 1);
+        // The two counters are independent, so a float parameter does not
+        // interrupt the integer bank and vice versa.
+        assert_eq!(prefix(&["rdi", "xmm0", "rsi"]), 3);
+        assert_eq!(prefix(&["xmm0", "rdi", "xmm1"]), 3);
+        // A hole in the SSE bank ends the signature exactly as an integer one
+        // does: `xmm1` without `xmm0` proves no parameter.
+        assert_eq!(prefix(&["xmm1"]), 0);
+        assert_eq!(prefix(&["rdi", "xmm1"]), 1);
+        // A dword LANE is a quarter of its register and therefore the same bank
+        // slot; `regview::ssa_parent` relates them nowhere else.
+        assert_eq!(prefix(&["xmm0_d0", "xmm1_d0"]), 2);
+        assert_eq!(
+            sse_argument_slot_of(CallConv::SysVAmd64, "xmm3_d1#4"),
+            Some(3)
+        );
+        // Past the bank there is no slot at all: `xmm8` is never a parameter.
+        assert_eq!(sse_argument_slot_of(CallConv::SysVAmd64, "xmm8"), None);
+        assert_eq!(sse_argument_slot_of(CallConv::Win64, "xmm4"), None);
+        assert_eq!(sse_argument_slot_of(CallConv::SysVAmd64, "rdi"), None);
+        assert_eq!(sse_argument_slot_of(CallConv::Aarch64, "xmm0"), None);
+        // And a purely integer layout keeps the rule this replaced, value for
+        // value: the first hole ends the signature, order does not matter, and
+        // a register from neither bank ends it too.
+        assert_eq!(prefix(&["rdi", "rsi"]), 2);
+        assert_eq!(prefix(&["rdi", "rdx"]), 1);
+        assert_eq!(prefix(&["rsi"]), 0);
+        assert_eq!(prefix(&["rdi", "rsi", "arg2"]), 2);
+        assert_eq!(prefix(&["rdi", "rax"]), 1);
     }
 
     /// The alias list means "other spellings of ONE value". `rdx` is a second

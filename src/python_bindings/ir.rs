@@ -2208,11 +2208,31 @@ fn recover_decbench_prototype(
         let parameter_hints = declared
             .parameter_types
             .iter()
-            .map(|parameter| match parameter {
-                DwarfParameterType::Type(c_type) => {
-                    dwarf_return_hint_with_env(c_type, cc, type_env)
+            .flat_map(|parameter| {
+                let DwarfParameterType::Type(c_type) = parameter else {
+                    return vec![None];
+                };
+                // A by-value all-SSE aggregate is ONE source parameter in TWO
+                // SSE argument registers, and the register contract of
+                // `f(struct {double x; double y;})` is that of `f(double,
+                // double)` exactly: each eightbyte takes the next register of
+                // the SSE bank. Spelling it as its eightbytes is what the
+                // return side could not do — a C function returns one value —
+                // and it needs no synthesised tag at all. The second hint
+                // carries the OCCUPANCY, so a twelve-byte `{float,float,float}`
+                // declares its high eightbyte `float` and moves four bytes
+                // rather than eight.
+                if let Some(high_bytes) =
+                    crate::ir::return_class::declared_sse_pair_parameter_high_bytes(
+                        c_type, cc, type_env,
+                    )
+                {
+                    return vec![
+                        Some(crate::ir::types_recover::TypeHint::Float { width: 8 }),
+                        Some(crate::ir::types_recover::TypeHint::Float { width: high_bytes }),
+                    ];
                 }
-                DwarfParameterType::Unknown => None,
+                vec![dwarf_return_hint_with_env(c_type, cc, type_env)]
             })
             .collect::<Vec<_>>();
         prototype.apply_locked_parameters(cc, &parameter_hints);

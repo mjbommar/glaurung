@@ -11,23 +11,23 @@
   "lane_totals": {
     "clang:O0": {
       "functions_emitted": 2590,
-      "functions_with_violations": 37,
-      "violations": 134
+      "functions_with_violations": 36,
+      "violations": 133
     },
     "clang:O2": {
       "functions_emitted": 2464,
-      "functions_with_violations": 90,
-      "violations": 246
+      "functions_with_violations": 89,
+      "violations": 245
     },
     "gcc:O0": {
       "functions_emitted": 2504,
-      "functions_with_violations": 15,
-      "violations": 94
+      "functions_with_violations": 14,
+      "violations": 93
     },
     "gcc:O2": {
       "functions_emitted": 2371,
-      "functions_with_violations": 56,
-      "violations": 111
+      "functions_with_violations": 55,
+      "violations": 110
     },
     "rustc:O0": {
       "functions_emitted": 3035,

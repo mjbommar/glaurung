@@ -72,6 +72,38 @@ pub(crate) fn declared_return_class(
     sysv_amd64_return_class(size, &eightbytes)
 }
 
+/// How much of the SECOND eightbyte a declared type occupies when it is passed
+/// BY VALUE in the SSE argument PAIR, or `None` for every other shape.
+///
+/// System V classifies a by-value ARGUMENT with the same eightbyte algorithm it
+/// classifies a result with; only the register assignment differs, and for the
+/// all-SSE two-eightbyte class the two assignments coincide in shape — the
+/// result takes `xmm0:xmm1` while an argument takes the next two registers of
+/// the SSE argument bank. So the classification is reused rather than
+/// duplicated, and `high_bytes` means here exactly what it means there: how many
+/// bytes of the second register the object actually occupies, which is a fact
+/// about the OBJECT and not about the register.
+///
+/// ONLY the all-SSE pair is reused, deliberately. The other classes do not
+/// transfer: `Memory` means "hidden pointer, and every declared argument shifts
+/// one slot right" for a result and "on the stack" for an argument, and the
+/// INTEGER classes already have a working positional model in
+/// `types_recover::locked_sysv_amd64_parameter_storage`. Everything not proven
+/// to be this one class answers `None` and keeps the behaviour it had.
+pub(crate) fn declared_sse_pair_parameter_high_bytes(
+    c_type: &str,
+    cc: CallConv,
+    type_env: Option<&DwarfTypeEnv<'_>>,
+) -> Option<u8> {
+    match declared_return_class(c_type, cc, type_env)? {
+        ReturnClass::SsePair { high_bytes } => Some(high_bytes),
+        ReturnClass::Single
+        | ReturnClass::IntegerPair
+        | ReturnClass::SplitBanks { .. }
+        | ReturnClass::Memory => None,
+    }
+}
+
 /// Merge every field of `c_type` into the eightbyte classes it overlaps.
 ///
 /// `base` is the aggregate's offset within the outermost object, so a nested
@@ -313,6 +345,59 @@ mod tests {
         // One all-SSE eightbyte is `xmm0` ALONE — a pair needs two of them, and
         // an eight-byte float aggregate must not acquire a second register.
         assert_eq!(class("struct two_floats"), Some(ReturnClass::Single));
+    }
+
+    /// The ARGUMENT side of the same class, and everything it must refuse.
+    ///
+    /// A by-value all-SSE aggregate is one source parameter in two SSE argument
+    /// registers, so its declared spelling is its two EIGHTBYTES and the second
+    /// one carries the occupancy. Every other class answers `None`: the integer
+    /// classes already have a positional model, and `Memory` means two
+    /// completely different things on the two sides.
+    #[test]
+    fn the_argument_side_reuses_only_the_all_sse_pair() {
+        let types = corpus();
+        let env = DwarfTypeEnv::new(&types);
+        let high = |name: &str| {
+            declared_sse_pair_parameter_high_bytes(name, CallConv::SysVAmd64, Some(&env))
+        };
+
+        assert_eq!(high("struct two_doubles"), Some(8));
+        assert_eq!(high("struct hfa197_quad4f"), Some(8));
+        // Twelve bytes: the high register holds FOUR defined bytes, so the
+        // second eightbyte is declared `float` and moves four.
+        assert_eq!(high("struct hfa197_trio3f"), Some(4));
+        // The negative that makes the rest mean something: `hfa197_tagged`
+        // contains a float, but its single eightbyte joins to INTEGER, so it
+        // arrives in an integer register and must never reach the SSE bank.
+        assert_eq!(high("struct hfa197_tagged"), None);
+        // One all-SSE eightbyte is `xmm0` ALONE and must not acquire a partner.
+        assert_eq!(high("struct two_floats"), None);
+        // The other classes do not transfer.
+        assert_eq!(high("struct bv195_quad"), None);
+        assert_eq!(high("struct bv195_mixed"), None);
+        assert_eq!(high("struct double_first"), None);
+        assert_eq!(high("struct bv195_big"), None);
+        assert_eq!(high("double"), None);
+        assert_eq!(high("int"), None);
+        // System V only, exactly as the return side is.
+        for cc in [
+            CallConv::Win64,
+            CallConv::Cdecl32,
+            CallConv::Aarch64,
+            CallConv::Arm,
+            CallConv::ArmHardFloat,
+        ] {
+            assert_eq!(
+                declared_sse_pair_parameter_high_bytes("struct two_doubles", cc, Some(&env)),
+                None,
+                "{cc:?} acquired the System V SSE argument pair"
+            );
+        }
+        assert_eq!(
+            declared_sse_pair_parameter_high_bytes("struct two_doubles", CallConv::SysVAmd64, None),
+            None
+        );
     }
 
     #[test]
