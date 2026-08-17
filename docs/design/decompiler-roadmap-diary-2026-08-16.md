@@ -1825,3 +1825,78 @@ The fix is three lines and I am not making it yet: an agent is mid-flight
 splitting the ctx renderer out of `ast.rs` and owns one of the three sites. What
 would be lost by waiting is the diagnosis, not the code — so the diagnosis is
 here, with the measurement that produced it and the wrong turn it corrected.
+
+---
+
+## Entry 60 — The gate we trust recorded a failure that was not there
+
+Fixture 197 is now baselined on all four baselines. Getting the fourth one right
+took two attempts, and the discarded attempt is the more useful half.
+
+### The near-miss
+
+The first `arch_roundtrip.py --write-baseline` recorded
+`112_recursion_shapes:armv7_a32:O2:tail_countdown` as `pass -> fail`. Three
+things said not to believe it:
+
+```
+git log over arch_baseline.json, last 14 regenerations   ->  pass, every one
+                                                             (back to 2026-08-13)
+tools/dectest.py 112_recursion_shapes:armv7_a32:O2:tail_countdown, x3
+                                                         ->  pass, pass, pass
+/proc/loadavg during that regeneration                   ->  24.42 on 24 cores
+```
+
+So it was discarded and re-run on the same tree with the machine quiet. The two
+runs differ by **exactly one cell**:
+
+```
+loaded  6162 pass, 1580 fail    armv7_a32  918 pass  73.0%
+quiet   6163 pass, 1579 fail    armv7_a32  919 pass  73.1%
+```
+
+That cell is `tail_countdown`. Nothing else in 7,742 judged cells moved.
+
+### Why this is worth an entry rather than a shrug
+
+Our own cross-architecture gate is load-sensitive and will record a failure that
+is not a property of the code. That is precisely what `CLAUDE.md` warns about for
+DecBench — "reports its own resource problems as cell failures" — occurring in
+the gate we *do* trust and *do* commit from. And a baseline regeneration is the
+worst possible place for it: once written, the next run compares against it and
+agrees.
+
+This same cell has now cost time twice by two different mechanisms. The earlier
+false alarm came from diffing `arch_baseline.json` while `--write-baseline` was
+still flushing. Same cell, different cause, both times a measurement artifact
+rather than a defect. Twice is enough to suspect the cell is genuinely marginal —
+`arch_roundtrip.py` already carries a note about ASLR ("a recovery that reads an
+uninitialised local gives a different answer under each"), and an uninitialised
+read would explain a scheduling-sensitive verdict exactly.
+
+Recorded as its own item rather than pinned to `pass`, because pinning it would
+hide the thing worth knowing.
+
+### What the cross lane showed that the host lanes could not
+
+```
+lane                    pass  fail  struct
+aarch64:O0 / O2            0     6       5
+armv7:O0 / O2              0     6       5
+armv7_a32:O0 / O2          0     6       5
+i386:O0 / O2               0     6       5
+x86_64:O0                  2     4       5
+x86_64:O2                  1     5       5
+x86_64_gcc15:O0 / O2       2     4       5
+```
+
+Every non-x86-64 architecture fails all six judged functions, **including
+`hfa197_scalar_control`**. On x86-64 that control passes on all four host lanes
+and is the fixture's discriminator: it is what proves the failures are about the
+all-SSE return class rather than about floats in general. On aarch64, armv7 and
+i386 it fails too — so there the problem is not the aggregate at all, and it is
+wider than anything the host lanes could have told us.
+
+Design Rule 11 in one table. AAPCS64 returns `{float x4}` in `s0`-`s3`, four
+registers for one value, and until this fixture nothing in the corpus had ever
+asked us to recover that.
