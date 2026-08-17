@@ -394,3 +394,55 @@ def test_the_absolute_above_1000_measure_sees_a_cut_to_a_non_largest_file(fr):
     assert fr.check_ratchet(current, baseline) == [
         "product_loc_above_1000: 74204 -> 74205 (worse)"
     ]
+
+
+# --- cfg(all(test, ...)) ------------------------------------------------------
+#
+# Matching only the bare `#[cfg(test)]` spelling counted 1,053 lines of test code
+# as PRODUCT code tree-wide -- 877 of them in one module in `src/analysis/cfg.rs`,
+# which the bug inflated by 19%. Found 2026-08-17 while splitting that file.
+
+
+def test_a_target_guarded_test_module_is_stripped(fr):
+    """`src/analysis/cfg.rs`'s `#[cfg(all(test, target_arch = "x86_64"))] mod
+    gcc_dispatch_corpus_tests` -- 877 lines, the single largest instance."""
+    text = (
+        "fn product() {}\n"
+        '#[cfg(all(test, target_arch = "x86_64"))]\n'
+        "mod gcc_dispatch_corpus_tests {\n"
+        "    fn a_case() {}\n"
+        "}\n"
+        "fn more_product() {}\n"
+    )
+    stripped = fr.strip_test_items(text)
+    assert "gcc_dispatch_corpus_tests" not in stripped
+    assert "product()" in stripped and "more_product()" in stripped
+
+
+def test_a_feature_guarded_test_module_is_stripped(fr):
+    """`src/symbolic/solver/mod.rs` has two, 176 lines between them."""
+    text = (
+        "fn product() {}\n"
+        '#[cfg(all(test, feature = "solver-z3"))]\n'
+        "mod z3_tests {\n    fn t() {}\n}\n"
+    )
+    assert "z3_tests" not in fr.strip_test_items(text)
+
+
+def test_cfg_not_test_is_product_code_and_is_kept(fr):
+    """The most product-like code there is: it exists only in the SHIPPED build.
+    A stripper that treated `not(test)` as test-only would delete it."""
+    text = "#[cfg(not(test))]\nfn only_in_release() {\n    real_work();\n}\n"
+    assert "only_in_release" in fr.strip_test_items(text)
+
+
+def test_cfg_any_test_is_not_test_only_and_is_kept(fr):
+    """`any(test, ...)` also holds when the other alternative does, so the item
+    is present in non-test builds too."""
+    text = '#[cfg(any(test, feature = "fuzzing"))]\nfn helper() {\n    x();\n}\n'
+    assert "helper" in fr.strip_test_items(text)
+
+
+def test_a_feature_literally_named_test_is_not_a_test_predicate(fr):
+    text = '#[cfg(feature = "test")]\nfn shipped() {\n    x();\n}\n'
+    assert "shipped" in fr.strip_test_items(text)

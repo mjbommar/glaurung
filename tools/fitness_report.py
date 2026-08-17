@@ -46,7 +46,34 @@ DEFAULT_IR_SUBDIR = "ir"
 SCHEMA = "glaurung-fitness-report-v1"
 
 _TEST_COMPONENT_RE = re.compile(r"^(?:.*_)?tests?$")
-_CFG_TEST_ATTR_RE = re.compile(r"^\s*#\[cfg\(test\)\]\s*$")
+#: `#[cfg(test)]` and the `all(...)`-guarded forms of it. Matching only the bare
+#: spelling counted 1,053 lines of test code as PRODUCT code tree-wide, 877 of
+#: them in `src/analysis/cfg.rs` alone (`#[cfg(all(test, target_arch =
+#: "x86_64"))] mod gcc_dispatch_corpus_tests`), plus 176 across two
+#: `#[cfg(all(test, feature = ...))]` modules in `src/symbolic/solver/mod.rs`.
+#: Found 2026-08-17 while splitting `cfg.rs`, which the bug inflated by 19%.
+#:
+#: A negated predicate is deliberately NOT matched: `#[cfg(not(test))]` marks
+#: code that exists only in the SHIPPED build, which is the most product-like
+#: code there is.
+_CFG_TEST_ATTR_RE = re.compile(r"^\s*#\[cfg\((?P<pred>.+)\)\]\s*$")
+
+
+def _is_test_predicate(predicate: str) -> bool:
+    """Whether a `#[cfg(...)]` predicate means "test builds only"."""
+    predicate = predicate.strip()
+    if "not(" in predicate:
+        return False
+    if predicate == "test":
+        return True
+    # `all(test, ...)` in any argument position: the conjunction is test-only if
+    # any conjunct is. `any(test, ...)` is NOT test-only -- it also holds when
+    # the other alternative does.
+    if predicate.startswith("all(") and predicate.endswith(")"):
+        return re.search(r"\btest\b", predicate[4:-1]) is not None
+    return False
+
+
 _GENERATED_RE = re.compile(r"@generated|DO NOT EDIT", re.IGNORECASE)
 
 # End-state fitness targets from the roadmap's "Code quality, composition,
@@ -166,7 +193,8 @@ def strip_test_items(text: str) -> str:
     index = 0
     count = len(lines)
     while index < count:
-        if not _CFG_TEST_ATTR_RE.match(lines[index]):
+        attribute = _CFG_TEST_ATTR_RE.match(lines[index])
+        if not attribute or not _is_test_predicate(attribute.group("pred")):
             kept.append(lines[index])
             index += 1
             continue
