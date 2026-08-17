@@ -776,7 +776,29 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             if from.is_float() {
                 write_float_expr_dec(expr, from.width(), out);
             } else {
+                // `from` is signed, and `write_expr_dec` spells integer
+                // arithmetic through `(unsigned int)`/`(unsigned long)`
+                // machine-width casts -- correct, and required, for wraparound.
+                // Without restoring the declared type here, C converts an
+                // UNSIGNED value: `(double)(seed * 6 + 1)` at `seed == -1`
+                // returned 4294967291.0 instead of -5.0
+                // (`197:*:*:hfa197_make_scalar`, failing on all four host lanes
+                // and all eight cross lanes; diary Entry 59).
+                //
+                // Neither half was wrong on its own -- the conversion is right
+                // and the wraparound casts are right -- and nothing between them
+                // noticed the operand's C type had changed under the
+                // conversion's feet. The comment above says the operand is
+                // spelled at the type it HAS before the conversion; on this path
+                // it was not.
+                //
+                // The cast also pins the WIDTH the machine actually reads:
+                // `cvtsi2sd %eax` consumes 32 bits, so narrowing a wider
+                // rendered operand to `from` is the instruction's own semantics,
+                // not a loss.
+                let _ = write!(out, "({})(", from.c_name());
                 write_expr_dec(expr, out);
+                out.push(')');
             }
             out.push(')');
         }
