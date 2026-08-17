@@ -122,8 +122,12 @@ Use the smallest relevant test while iterating, then run the complete gates
 before claiming a change is finished:
 
 ```bash
-# Rust
-cargo test
+# Rust. The feature is NOT optional here: `src/python_bindings/` sits behind
+# `python-ext` (`src/lib.rs`), so a bare `cargo test` skips ~120 tests and never
+# compiles that tree — a green result over code it did not build. Since
+# `python_bindings/ir.rs` is the real pipeline entry point, most passes are only
+# reachable through it.
+cargo test --features python-ext
 
 # Python
 uv run pytest python/tests/

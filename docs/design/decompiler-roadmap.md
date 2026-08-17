@@ -2498,13 +2498,26 @@ Broad gate before closing a phase:
 ```bash
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo test --features python-ext     # NOT bare `cargo test` — see below
 uv run pytest python/tests/
 uvx ruff format --check python/
 uvx ruff check python/
 uvx ty check python/
-scripts/decbench-local-gate.sh
+scripts/decbench-local-gate.sh       # OUR fixture lanes 1-3; --decbench is opt-in
 ```
+
+**Corrected 2026-08-16.** This block said `cargo test` for its whole life, and
+that command is a false green: `src/python_bindings/` sits behind the
+`python-ext` feature (`src/lib.rs`), so a bare `cargo test` skips ~120 tests
+*and never compiles that tree at all*. On 2026-08-14 a signature change there
+left five call sites on the old arity and `cargo test` still reported
+`2321 passed; 0 failed` — green over code it had not built. This is not a corner
+of the codebase: `python_bindings/ir.rs` is the real pipeline entry point, so
+most passes are only reachable through it. The same gate applies to dead-code
+counts — a bare `cargo build` reported ~98 never-used functions where the shipped
+configuration had 4, and two files totalling 1,782 lines looked unreachable while
+running on every decompile. A plan that specifies the weaker command will keep
+producing that mistake, so the plan is what had to change.
 
 Also run the 250-function external-eval replay, architecture roundtrip matrix,
 perfect/canary cells, output-health report, and performance matrix when relevant.
