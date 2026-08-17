@@ -256,18 +256,28 @@ def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     work, not the work going the wrong way, which is why `product_max_loc`
     joined the set in the same change: it is the only measure that moves in the
     direction the decomposition program moves.
+
+    2026-08-16 (same day, next cut): the ctx-renderer extraction lifted the
+    generic `render`/`render_with_types` engine (`write_expr_ctx`,
+    `write_stmt_ctx`, and seven more items the call graph pulled in that
+    weren't on the original candidate list) into `src/ir/ast/ctx_render.rs`,
+    746 lines. `product_max_loc` moved again, 9,461 -> 8,762, and every other
+    measure held or improved except `ir_median_loc` (491 -> 492), which ticked
+    up by one line for the same file-count-bucket reason the four regressions
+    above did: shrinking the largest file changes which file sits at the
+    median position. Recorded as accepted, with drift, rather than chased.
     """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
     assert baseline["measures"] == {
         "ir_files_above_1000": 16,
-        "ir_median_loc": 491,
+        "ir_median_loc": 492.0,
         "product_files_above_1000": 30,
         "product_files_above_2000": 15,
-        "product_max_loc": 9461,
-        "product_mean_loc": pytest.approx(528.2570532915361),
-        "product_median_loc": 276,
-        "product_pct_loc_above_1000": pytest.approx(44.92267704760435),
+        "product_max_loc": 8762,
+        "product_mean_loc": pytest.approx(526.753125),
+        "product_median_loc": 276.0,
+        "product_pct_loc_above_1000": pytest.approx(44.49546454992554),
     }
 
 
