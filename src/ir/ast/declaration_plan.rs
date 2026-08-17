@@ -28,10 +28,12 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use super::dwarf_render_types::{
+    dwarf_prototype_type_is_renderable, source_type_with_complete_struct_alias,
+};
 use super::{
-    ctype_for, dwarf_prototype_type_is_renderable, infer_return_ctype, is_high_variable,
-    is_promoted_local_in, parse_arg_index, source_type_with_complete_struct_alias, CallPrototype,
-    DecIdents, Stmt, TypeHint, TypeMap, VReg,
+    ctype_for, infer_return_ctype, is_high_variable, is_promoted_local_in, parse_arg_index,
+    CallPrototype, DecIdents, Stmt, TypeHint, TypeMap, VReg,
 };
 use crate::ir::dwarf_type_env::DwarfTypeEnv;
 use crate::ir::types_recover::RecoveredOutputKind;

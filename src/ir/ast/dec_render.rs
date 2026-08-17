@@ -35,15 +35,16 @@ use std::fmt::Write;
 use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 use crate::ir::types::{BinOp, CmpOp, UnOp, VReg};
 
+use super::dwarf_render_types::{pointed_struct_name, valid_c_identifier};
 use super::{
     binop_sym_c, callee_display_name, cmpop_sym_c, dec_global_name, dec_int_type, dec_plan,
     dec_ptr_arg_type, dec_ptr_width, declared_reg_ctype, expr_machine_width, flag_ident, indent,
     int_ctype, is_promoted_local, normalize_wrapped_scaled_index_constant, parse_arg_index,
-    pointed_struct_name, sanitize_c_ident, sanitize_comment, signed_shift_operand,
-    store_pointee_ctype, target_int_ctype, unop_sym, valid_c_identifier, width_ctype,
-    write_float_literal, write_unit_step, DeclarationPlan, Expr, PdbFieldHint, ScalarType, Stmt,
-    WideArithmetic, DEC_GLOBAL_ADDRS, DEC_NAMED_CALL_PROTOTYPES, DEC_POINTER_WIDTH,
-    DEC_RENDERABLE_STRUCTS, DEC_SEMANTIC_WIDE_CAST, DEC_STRUCT_PTR_TYPES, DEC_WIDE_LOCALS,
+    sanitize_c_ident, sanitize_comment, signed_shift_operand, store_pointee_ctype,
+    target_int_ctype, unop_sym, width_ctype, write_float_literal, write_unit_step, DeclarationPlan,
+    Expr, PdbFieldHint, ScalarType, Stmt, WideArithmetic, DEC_GLOBAL_ADDRS,
+    DEC_NAMED_CALL_PROTOTYPES, DEC_POINTER_WIDTH, DEC_RENDERABLE_STRUCTS, DEC_SEMANTIC_WIDE_CAST,
+    DEC_STRUCT_PTR_TYPES, DEC_WIDE_LOCALS,
 };
 
 fn dec_is_global_addr(address: u64) -> bool {

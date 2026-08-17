@@ -155,15 +155,15 @@
     }
   ],
   "ir": {
-    "file_count": 122,
+    "file_count": 124,
     "files_above_1000": 15,
-    "files_above_2000": 9,
-    "loc_in_files_above_1000": 31195,
+    "files_above_2000": 8,
+    "loc_in_files_above_1000": 30357,
     "max_loc": 3057,
-    "mean_loc": 659.2131147540983,
+    "mean_loc": 649.1209677419355,
     "median_loc": 492.5,
-    "pct_loc_above_1000": 38.788172684770714,
-    "total_loc": 80424
+    "pct_loc_above_1000": 37.71477556497,
+    "total_loc": 80491
   },
   "largest_files": [
     {
@@ -211,11 +211,7 @@
       "path": "ir/lift_arm64.rs"
     },
     {
-      "loc": 2489,
-      "path": "ir/ast.rs"
-    },
-    {
-      "loc": 2194,
+      "loc": 2195,
       "path": "ir/ast/dec_render.rs"
     },
     {
@@ -225,29 +221,33 @@
     {
       "loc": 1965,
       "path": "ir/value_number.rs"
+    },
+    {
+      "loc": 1901,
+      "path": "python_bindings/analysis.rs"
     }
   ],
   "measures": {
     "ir_files_above_1000": 15,
     "ir_median_loc": 492.5,
     "product_files_above_1000": 29,
-    "product_files_above_2000": 14,
-    "product_loc_above_1000": 57523,
+    "product_files_above_2000": 13,
+    "product_loc_above_1000": 56685,
     "product_max_loc": 3367,
-    "product_mean_loc": 484.12320916905446,
+    "product_mean_loc": 481.55555555555554,
     "product_median_loc": 311,
-    "product_pct_loc_above_1000": 34.045537674820515
+    "product_pct_loc_above_1000": 33.5362606936211
   },
   "product": {
-    "file_count": 349,
+    "file_count": 351,
     "files_above_1000": 29,
-    "files_above_2000": 14,
-    "loc_in_files_above_1000": 57523,
+    "files_above_2000": 13,
+    "loc_in_files_above_1000": 56685,
     "max_loc": 3367,
-    "mean_loc": 484.12320916905446,
+    "mean_loc": 481.55555555555554,
     "median_loc": 311,
-    "pct_loc_above_1000": 34.045537674820515,
-    "total_loc": 168959
+    "pct_loc_above_1000": 33.5362606936211,
+    "total_loc": 169026
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -257,7 +257,7 @@
       "measure": "product_mean_loc",
       "meets_target": false,
       "target": 450.0,
-      "value": 484.12320916905446
+      "value": 481.55555555555554
     },
     {
       "label": "Product-code median",
@@ -278,14 +278,14 @@
       "measure": "product_files_above_2000",
       "meets_target": false,
       "target": 5.0,
-      "value": 14
+      "value": 13
     },
     {
       "label": "Product LOC in files above 1,000",
       "measure": "product_pct_loc_above_1000",
       "meets_target": false,
       "target": 25.0,
-      "value": 34.045537674820515
+      "value": 33.5362606936211
     },
     {
       "label": "src/ir median",
@@ -313,7 +313,7 @@
       "measure": "product_loc_above_1000",
       "meets_target": false,
       "target": 42000.0,
-      "value": 57523
+      "value": 56685
     }
   ]
 }
