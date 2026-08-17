@@ -1900,3 +1900,85 @@ wider than anything the host lanes could have told us.
 Design Rule 11 in one table. AAPCS64 returns `{float x4}` in `s0`-`s3`, four
 registers for one value, and until this fixture nothing in the corpus had ever
 asked us to recover that.
+
+---
+
+## Entry 61 — Two mysteries collapse into one, and a three-line fix worth 12 cells
+
+### The fix: restoring the type the operand had before the conversion
+
+Entry 59 located `hfa197_make_scalar`'s failure at `src/ir/ast/dec_render.rs:774`
+without writing code. The fix is to do what the comment two lines above it
+already says — spell the operand at the type it HAS before the conversion:
+
+```rust
+let _ = write!(out, "({})(", from.c_name());
+write_expr_dec(expr, out);
+out.push(')');
+```
+
+**12 cells, 0 regressions**, `cargo test --features python-ext` 2476 passed:
+
+```
+GLAURUNG_FIXTURE_TMPDIR=… tools/dectest.py @o0                     2 improvements
+GLAURUNG_FIXTURE_TMPDIR=… tools/dectest.py @o2                     2 improvements
+… 197_homogeneous_float_aggregates --arch aarch64 --arch i386      4 improvements
+… 197_homogeneous_float_aggregates --arch x86_64 --arch x86_64_gcc15  4 improvements
+```
+
+`armv7` and `armv7_a32` still fail; ARM32 takes a different path and this does not
+touch it.
+
+**The fix is complete rather than partial, and I measured that rather than
+assuming it.** Entry 59 said all three renderers "have the same shape" because all
+three ignore `from`. They do not have the same *defect*: the wraparound-cast
+idiom is a dec-renderer property. `grep -c unsigned` gives **45** in
+`dec_render.rs` against **2** in `ctx_render.rs`, and both of those are
+`unsigned_abs()` for negative-constant formatting. The c renderer is the same.
+Only the dec renderer can reach the bug, so only it needed changing — which is a
+smaller and better answer than "fix all three sites."
+
+### The narrowing: one cause, two symptoms
+
+Entry 56 left two things unexplained and I said both needed an `Op` stream dump
+rather than more reading. `g.ir.lift_window_at` is that dump, and it exists
+already:
+
+```
+uv run python $CLAUDE_JOB_DIR/tmp/opdump2.py
+hfa197_tagged_control @ 0x13f0 size=64, 75 ops
+ops carrying a name/mnemonic: 1
+   {'va': 5135, 'kind': 'intrinsic', 'name': 'cvttss2si'}
+```
+
+**Exactly one named op in the whole function.** No `punpckldq`, no `movd`, no
+`movq` — those lower to typed ops, so their *names* never reach
+`unmodelled_x86_float_mnemonic` at all. That kills the entire "which packed
+mnemonic trips the proof" line, including both of my falsified hypotheses.
+Nothing trips it because nothing named ever arrives.
+
+`Stmt::Unknown` is constructed in exactly three places, all in `lower_op`
+(`src/ir/ast.rs:1934`, `:1935`, `:1940`). The observed spelling carries the
+`(...)` suffix, so it is `:1935`.
+
+And that is where the two mysteries join. **If `scalar_float_intrinsic(name, ins,
+outs)` returns `None` for this op instance, both symptoms follow from that single
+fact:**
+
+- in `scalar_float_semantics_are_closed`, arm 1 does not match, so
+  `saw_scalar_float` is never set; arm 2 does not match either, because
+  `unmodelled_x86_float_mnemonic("cvttss2si")` is *false* (the name IS known); the
+  op falls to `_ => {}` and the proof returns `false` — **the gate shuts**;
+- in `lower_op`, the same `None` fails the `if let` — **`Stmt::Unknown`**.
+
+One cause, both symptoms. It also explains why none of the seven probes
+reproduced it: every one of them had a `scalar_float_intrinsic` that *resolved*,
+so their gates stayed open. I was testing the wrong variable in all seven.
+
+What remains is narrow: why does `scalar_float_intrinsic` return `None` here? Its
+x86 branch reads `outs.first()`, converts the declared width to `u8`, and asks
+`x86_scalar_float_intrinsic`. So it is an empty `outs` or a declining width. The
+raw lift cannot answer it — the proof runs on the post-SSA `lf`, and value
+numbering canonicalises `eax` to `rax`, so the declared width at proof time is not
+necessarily what the lifter wrote. That needs instrumentation at the proof site,
+which is a different and much smaller job than where this started.
