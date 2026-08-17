@@ -1099,3 +1099,127 @@ regeneration is a separate, reviewable step.
 - **Member access.** The frame-object decomposition exists because `Expr` has no
   value-base member node. It is exact, but it is a workaround, and it is the same
   gap EPIC 6's "project solved access paths" item names.
+
+---
+
+## Entry 55 — OPEN: the CFG says "I truncated this" and the only caller that matters writes it to `_`
+
+**Status: OPEN.** Written before the work, with predictions recorded in advance
+so they can be wrong in public. Entry 54 is why: a prediction I recorded there
+was falsified, and the falsification was worth more than the fix.
+
+### The premise I was given, and the measurement that corrected it
+
+My own todo carried this as *"a wall clock silently truncates the CFG —
+`Budgets::timeout_ms` sets `hit_timeout` before truncating; nothing reads it;
+`decompile_range` runs at 500 ms."* The second and third clauses survive
+measurement. **The first does not.**
+
+```
+uv run python $CLAUDE_JOB_DIR/tmp/measure_timeout.py
+binary                  budget  wall_s   funcs  truncated / which
+NETwtw10.sys              5000    9.68   12185  False  []
+NETwtw10.sys               500    9.55   12185  False  []
+NETwtw10.sys               100    9.57   12185  False  []
+xrt_coreutil.dll          5000    7.37    8634  False  []
+xrt_coreutil.dll           500    7.37    8634  False  []
+xrt_coreutil.dll           100    7.37    8634  False  []
+```
+
+A 4.9 MB driver, 12,185 functions, 9.6 s of wall clock — and moving the
+per-function budget by 50x changes neither the function count nor the runtime by
+a measurable amount. `hit_timeout` never fires, because the clock is **per
+function** and restarts on every seed (`src/analysis/cfg.rs:1374`, and the
+roadmap's own performance box already says so: `timeout_ms` "has never bounded an
+analysis"). The wall clock is not the truncation that bites. Chasing it would
+have been a day spent on a limit that has never fired.
+
+### The limit that does bite
+
+```
+uv run python $CLAUDE_JOB_DIR/tmp/measure_limits.py
+NETwtw10.sys           funcs= 12185  max_blocks_seen=  643  >256:9  >4096:0
+xrt_coreutil.dll       funcs=  8634  max_blocks_seen=  766  >256:7  >4096:0
+hello-go               funcs=  1522  max_blocks_seen=  203  >256:0  >4096:0
+```
+
+`max_blocks`. Sixteen functions across two shipped Microsoft/AMD binaries exceed
+the 256-block default that `decompile_range_at` hardcodes
+(`src/python_bindings/ir.rs:1291`); none exceeds `decompile_at`'s 4096.
+
+### The defect, reproduced on the shipping API
+
+```
+uv run python $CLAUDE_JOB_DIR/tmp/measure_truncation_visible.py
+target 0x1401fd8a0  blocks_at_2048=643
+  max_blocks= 4096  cfg_blocks=643  truncated_flag=False ([])                decompiled_chars=153068  says_truncated=False
+  max_blocks=  256  cfg_blocks=256  truncated_flag=True  (['hit_block_limit'])  decompiled_chars= 61942  says_truncated=False
+  max_blocks=   64  cfg_blocks=64   truncated_flag=True  (['hit_block_limit'])  decompiled_chars= 17833  says_truncated=False
+```
+
+387 of 643 blocks disappear. The rendered body loses 60% of its characters. The
+CFG layer **knows** — `hit_block_limit` is set, and the `analyze_functions_*`
+Python bindings report a `truncated` field built from exactly this
+(`src/python_bindings/analysis.rs:581`). The decompiled text contains no marker
+of any kind. An analyst reading that output cannot tell they are holding 40% of a
+function.
+
+This is stop condition 1 verbatim: *incomplete input becoming apparently complete
+downstream.*
+
+### Where it is severed, to the line
+
+`src/analysis/cfg.rs:4351`:
+
+```rust
+let (functions, cg, _stats) = analyze_functions_bytes_within(...);
+```
+
+`analyze_functions_image_with_seeds` is the **only** discovery entry point the
+decompiler uses — `ProgramSession::discover_functions` (`src/program/session.rs:272`)
+calls it, and `decompile_at_session`, `decompile_many` and `list_functions` call
+that. Every truncation flag dies on that underscore.
+
+The struct being discarded documents the rule the discard breaks
+(`src/analysis/cfg.rs:203`):
+
+> A consumer that treats this result as a complete function list is wrong, which
+> is why it is reported rather than absorbed.
+
+It is reported. Then it is absorbed, by the one caller that feeds the product.
+
+### Which box this is
+
+Not a new one. `[~]` **"Carry typed diagnostics/completeness through discovery,
+lifting, recovery, HIR, and rendering."** Its 2026-08-15 audit found four
+stage-local typed signals and no carrier, and named lifting's `LiftError` as the
+first step. This is the *discovery* half of the same box, and unlike the lifting
+half it now has a reproduction.
+
+### Predictions, recorded before the work
+
+1. **Per-function attribution already exists internally and is destroyed in the
+   merge.** `SingleFunctionDiscoveryStats` is per function
+   (`src/analysis/cfg.rs:224`) and `merge_single_function_stats` ORs it into a
+   whole-run aggregate. So today the flag cannot even say *which* function was
+   truncated — reporting the aggregate against a specific function would mark
+   clean functions as incomplete. Adding the entry VA at the merge site is
+   mechanical.
+2. **No fixture cell moves.** This is an architecture-track change: the boundary
+   holds and zero cells are expected. Every fixture function is far under 256
+   blocks. To be checked, not assumed.
+3. **`hit_total_timeout` must not be attributed per function.** It stops *seed
+   discovery*, so the function list itself is short — a whole-run fact with no
+   owning function. If the design tries to hang it on a VA it will be wrong.
+4. **The one I am least sure of, and want measured rather than taken.** I expect
+   threading stats through `ProgramSession::discover_functions` to cost a widened
+   `DiscoveryCache` value type (it stores `Arc<[Function]>`), and I expect
+   recording the truncation *on the `Function`* to be smaller — but `Function` is
+   a core data model with PyO3 bindings and serialization, so its blast radius may
+   be larger than the cache's. **Measure both and report which is smaller. Do not
+   take my guess.**
+
+### Done means
+
+A truncated function's rendered output says so, the untruncated function beside
+it in the same run does not, and a test on a real sample proves both.
