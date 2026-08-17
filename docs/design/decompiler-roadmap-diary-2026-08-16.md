@@ -2324,3 +2324,111 @@ And one trap fired that no rule covered: `let bits` is declared *between* the
 doc comment that opens the moved region and the loop that comment describes, and
 is read twice after the block. A line-number cut of the commented range would
 have taken it and broken both readers.
+
+## Entry 66 — Three agents, eight cuts, and every one of my line numbers was wrong at a boundary
+
+Three parallel splits landed together: `types_recover.rs` 3,058 -> 2,358,
+`lift_arm32.rs` 2,998 -> 1,941, `structure.rs` 2,607 -> 2,044. Eight moves,
+`files_above_2000` 12 -> 11, `product_loc_above_1000` 54,271 -> 51,951.
+
+Of the six largest files in the tree, four are now outside the decompiler
+entirely — `symbolic/solver/axeyum_backend.rs`, `symbolic/explore.rs`,
+`python_bindings/ir.rs`, `analysis/java_class.rs`. The largest decompiler file
+is `analysis/cfg.rs` at 2,634.
+
+### Every seam I specified was wrong at a boundary. All eight.
+
+I gave three agents nine candidate line ranges, measured from the same HEAD they
+branched from. **Not one of the nine was right at both ends.** The corrections:
+
+```
+types_recover  B  1133-1515 -> 1133-1508   end -7:  next item's doc
+               C  1516-1847 -> 1510-1840   both:    stranded doc / next item's doc
+               A  2389-2895 -> 2389-2893   end -2:  next item's doc
+lift_arm32     A   530-982  ->  528-975    both:    stranded doc / next item's doc
+               B  2589-2898 -> 2588-2890   both:    stranded doc / next item's doc
+               C   221-529  ->  206-526    start -15: THREE stacked traps
+structure      C  2040-2235 -> 2035-2227   both:    stranded doc / next item's doc
+               A  2236-2608 -> 2229-2607   start -7:  stranded doc
+```
+
+Trap 4 — swallowing the *next* item's doc comment — is now at eleven instances.
+It fired in **six of my nine ranges**. One deserves naming: `structure` Cut C's
+stated range ended on the last line of `commit_borrowed_switch_arm`'s seven-line
+doc block. Taking that cut alone would have stranded the doc of the function the
+*next* cut moves. It was harmless only because the same agent took both.
+
+The worst single boundary was `lift_arm32` Cut C, where three traps stacked
+within 15 lines: a `#[derive]` attribute the cut would have stranded on an
+unrelated function (trap 3), the struct's own doc block above that (trap 1), and
+a `// --- Shifted register operands ---` section banner above *that*, which has
+no referent left in the parent once the section leaves.
+
+**The lesson is not "read more carefully."** It is that a line range is the wrong
+unit. Every one of these errors is invisible in a range and obvious in an item
+list; the ranges were derived by an `awk` over `^fn|^struct|^impl`, which by
+construction cannot see a doc block or an attribute, because those do not start
+at column zero with a keyword. I have been handing agents a tool's blind spot and
+calling it a specification.
+
+### An agent reversed my ranking with a table I should have built
+
+I ordered `types_recover`'s three seams A, B, C "by how self-contained they
+look." The agent measured the actual dependency edges:
+
+| cut | outbound (region -> parent) | inbound (parent needs) |
+|---|---:|---:|
+| B | **0** | 5 |
+| C | 5 | 6 |
+| A | 5 — *including `recover_types`, the parent's own public front door* | **11** |
+
+B reads nothing from its parent and was ranked last; A calls back into the
+parent's entry point and was ranked first. It took B and C and left A, which is
+the correct order. "How self-contained it looks" is not a measurement.
+
+### The purity standard held, and cost exactly three commas
+
+My own token diff over all eight moves: `types_recover` ratio 0.999866,
+`lift_arm32` 0.999919, `structure` 0.999850. Each differs from byte-identity by
+**one inserted `,`** — in all three cases a `pub(super) ` prefix pushed a
+signature past rustfmt's 100 columns, rustfmt broke the parameter list
+vertically, and its style appends a trailing comma.
+
+One agent noted it could have held 1.000000 by writing `pub` instead of
+`pub(super)` (shorter, fits in 100 columns) and refused: **widening visibility to
+buy a cosmetic ratio is the wrong trade.** That is the right instinct, and it is
+worth recording that the metric was tempting enough to be worth resisting.
+
+### Trap 7's caveat is now the common case
+
+The revised rule (a sibling's `use super::X` does not pin `X`) held under
+compilation in all three splits. Its *inversion* fired three times in one round —
+a re-export whose only consumer is a `#[cfg(test)]` module is unused in the
+shipped lib build. Each agent found it independently and gated the re-export:
+
+```rust
+#[cfg(test)]
+use shifts::SHIFT_TEMP;
+```
+
+with a comment saying why. Three independent discoveries of the same caveat in
+one round means it belongs in the rule, not beside it.
+
+### Two more stranded docs, both pre-existing, both filed not fixed
+
+The `lift_x86.rs:603` defect fixed this week was not unique; it is a *class*
+produced by earlier cuts in this same program.
+
+- **`lift_arm32.rs:608`** — `flags_for_arith` carries two stacked summary lines,
+  the first of which describes `cmp_flag_ops` (which has its own correct summary
+  40 lines below) and is *also* stale: it says "four flag writes" where the
+  function emits seven.
+- **`structure.rs:1685`** — two doc paragraphs fused into one `///` run with no
+  blank line between them. The first three sentences plainly document
+  `detect_if_shape`, the 353-line centrepiece of the file, which consequently
+  carries **no doc at all**. A previous cut moved something out from between them
+  and merged what was left.
+
+Both are one-line repairs and both stayed out of the patches, because a content
+edit inside a moved region destroys the purity claim that is the only evidence a
+move is safe. They are queued as their own change.

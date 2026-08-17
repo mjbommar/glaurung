@@ -1103,22 +1103,27 @@ uv run python tools/fitness_report.py
 | measure | target | 2026-08-13 | 2026-08-17 |
 |---|---:|---:|---:|
 | **largest product file** | 1,000 | 11,582 | **3,357** (not a decompiler file) |
-| product mean LOC | 450 | 515.9 | **471.8** |
-| product LOC in files over 1,000 | 25% | 44.5% | **32.0%** |
-| files over 2,000 LOC | 5 | 13 | **12** |
+| product mean LOC | 450 | 515.9 | **463.3** |
+| product LOC in files over 1,000 | 25% | 44.5% | **30.6%** |
+| files over 2,000 LOC | 5 | 13 | **11** |
 
-`fitness ratchet: no regressions` — the first round in this program where every
-measure moved the right way at once.
+`fitness ratchet: no regressions` — the first rounds in this program where every
+measure moved the right way at once. Of the six largest files in the tree, four
+are now `symbolic/`, `python_bindings/` and `analysis/java_class.rs`; the
+largest decompiler file is `analysis/cfg.rs` at 2,634.
 
 Per owner, product LOC, `#[cfg(test)]` excluded:
 
 | owner | start | now | cuts |
 |---|---:|---:|---:|
 | `ir/ast.rs` | 11,582 | 1,650 | 8 |
-| `analysis/cfg.rs` | 6,248 | 2,628 | 6 |
+| `analysis/cfg.rs` | 6,248 | 2,634 | 6 |
 | `ir/lift_x86.rs` | 4,998 | 2,161 | 8 |
 | `ir/call_args.rs` | 3,920 | 2,175 | 5 |
 | `ir/stack_locals.rs` | 3,241 | 767 | 4 |
+| `ir/types_recover.rs` | 3,058 | 2,358 | 2 |
+| `ir/lift_arm32.rs` | 2,998 | 1,941 | 3 |
+| `ir/structure.rs` | 2,607 | 2,044 | 2 |
 
 Two findings that change how the remaining cuts get planned:
 
