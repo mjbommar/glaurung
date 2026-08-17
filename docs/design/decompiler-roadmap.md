@@ -1120,7 +1120,7 @@ while `ast.rs` was at 11,582 nobody looked past it.
 | 2,999 | `ir/lift_arm32.rs` | priority split, untouched |
 | 2,607 | `ir/structure.rs` | priority split, untouched |
 | 2,516 | `ir/lift_arm64.rs` | priority split, untouched |
-| 2,194 | `ir/ast/dec_render.rs` | created by the first cut; candidate for a further split |
+| 1,727 | `ir/ast/dec_render.rs` | created by the first cut; statement printer out to the `dec_render::stmt` child (2,195 -> 1,727), 0 widenings — **took `product_files_above_2000` 13 -> 12** |
 
 Two things this table has already earned. It is **measured, not remembered** — a
 priority list without sizes ranks by when someone wrote the list rather than by
@@ -1175,8 +1175,13 @@ Priority splits, performed only as ownership migrates:
   with `declaration_plan.rs` already a sibling for exactly that. **Not yet
   caller-verified**; that verification is the prerequisite, and unlike the three
   renderer cuts it would land over 1,000 LOC and need a `REVIEWED_LARGE_MODULES`
-  entry. `dec_render.rs` at 2,170 lines is also a candidate for a further split at
-  the expression/statement seam.
+  entry. `dec_render.rs`'s expression/statement seam is **done** (2026-08-17):
+  the seam is real and the call graph made it exact — `write_stmt_dec` plus
+  seven helpers, no caller outside that set, against an expression side that is
+  a *closed* sub-graph never calling a statement printer. It left as the
+  `dec_render::stmt` **child** module (526 lines), which is why it cost zero
+  widenings: a descendant already sees its parent's privates. 2,195 -> 1,727,
+  and `product_files_above_2000` 13 -> 12.
 - `lift_x86.rs`, `lift_arm32.rs`, `lift_arm64.rs`: shared builder plus
   instruction-family modules.
 - `call_args.rs`: ABI classification, evidence, solver, and HIR projection.
@@ -2511,7 +2516,7 @@ items below mostly are not:
    `clang:O0:hfa197_quad4f_roundtrip` as the measure: it emits **ten** undefined
    reads, not one, so a four-member aggregate loses most of the body.
 2. **Unsigned wraparound casts swallow the sign before a float conversion**
-   (`src/ir/ast/dec_render.rs:774`, diary Entry 59). `NumericConvert` consults
+   (`src/ir/ast/dec_render.rs:786`, diary Entry 59). `NumericConvert` consults
    `from` only to choose float-or-not, so a `SignedInt` operand is rendered by
    `write_expr_dec` with `(unsigned int)`/`(unsigned long)` machine-width casts —
    correct for wraparound — and `(double)` then converts an unsigned value. Not

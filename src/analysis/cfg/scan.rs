@@ -13,20 +13,25 @@
 //! before promoting a hit; `prologue_gate_tests` and `elf_prologue_scan_tests`
 //! (below) are their tests and moved here with them.
 //!
-//! Several predicates that look like they belong here stay in the parent
-//! instead, because the call graph says they are shared vocabulary rather than
-//! scan-private helpers:
-//! - [`head_looks_like_fn_start`](super::head_looks_like_fn_start) and
-//!   [`has_function_boundary_marker`](super::has_function_boundary_marker) are
-//!   also the parent's tail-call and xref-seed gates.
-//! - [`pe_head_looks_like_simd_continuation`](super::pe_head_looks_like_simd_continuation)
+//! Several predicates that look like they belong here live in the sibling
+//! [`entry_shape`](super::entry_shape) module instead, because the call graph
+//! says they are shared vocabulary rather than scan-private helpers. That
+//! module owns the single question "does this byte window look like a function
+//! start?"; this one owns "which offsets should we ask about?":
+//! - [`head_looks_like_fn_start`](super::entry_shape::head_looks_like_fn_start)
+//!   and
+//!   [`has_function_boundary_marker`](super::entry_shape::has_function_boundary_marker)
+//!   are also the parent's tail-call and xref-seed gates.
+//! - [`pe_head_looks_like_simd_continuation`](super::entry_shape::pe_head_looks_like_simd_continuation)
 //!   is also called by `pe_xref_seed_looks_like_function_start`.
-//! - [`classify_pe_thunk_head`](super::classify_pe_thunk_head) and its
-//!   `PeThunkKind`/`PeThunkMatch` vocabulary are also called by
-//!   `pe_tail_target_looks_like_function_start` and `classify_function_shapes`.
-//! - `PeTinyStubScanResult` and `PeRawCallFunctionStart` are the two scan
-//!   results whose fields the parent reads directly, so they stay declared
-//!   there and cost no widening.
+//! - [`classify_pe_thunk_head`](super::entry_shape::classify_pe_thunk_head) and
+//!   its `PeThunkKind`/`PeThunkMatch` vocabulary are also called by
+//!   `pe_tail_target_looks_like_function_start` and the parent's
+//!   `classify_function_shapes`.
+//!
+//! `PeTinyStubScanResult` and `PeRawCallFunctionStart` are the two scan results
+//! whose fields the parent reads directly, so they stay declared there and cost
+//! no widening.
 
 use super::*;
 
@@ -800,12 +805,16 @@ pub(super) fn scan_pe_thunk_function_starts(
 #[cfg(test)]
 mod prologue_gate_tests {
     use super::{
-        classify_pe_thunk_head, is_code_padding_terminator, looks_like_fn_start, memory_operand_va,
+        classify_pe_thunk_head, is_code_padding_terminator, memory_operand_va,
         pe_adjustor_jump_stub_len, pe_head_looks_like_simd_continuation,
         pe_low_confidence_call_target_head, pe_prologue_scan_candidate, pe_tiny_return_helper_len,
         pe_tiny_stub_scan_candidate, pe_tiny_stub_scan_promotes_candidate, BArch, ExecRegion,
         PeThunkKind,
     };
+    // Named through its own module rather than the parent's re-export: nothing
+    // outside `entry_shape` calls this in the shipped build, so a `use` of it in
+    // `cfg` would be an unused import there.
+    use crate::analysis::cfg::entry_shape::looks_like_fn_start;
     use crate::core::instruction::{Access, Instruction, Operand};
     use std::collections::HashSet;
 
