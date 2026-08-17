@@ -1001,6 +1001,35 @@ measurement, which is corrosive. Either schedule the splits below as real work,
 or restate the numbers as a direction rather than a target. Do not leave them
 sitting as a gap that grows.
 
+**Decided 2026-08-16, and the table above was measuring the wrong thing.** The
+first real cut — lifting the typed C renderer out of `ir/ast.rs` into
+`ir/ast/dec_render.rs` (`a792b9a`) — took the largest owner from 11,582 to 9,461
+product LOC, an 18% reduction, and made **four of the seven measures worse**.
+Not through any fault of the split: dividing a 19,269-line file into 17,148 +
+2,170 necessarily adds a file to both "above N" buckets and moves both medians.
+Every measure in the set was a count or an average, so the program's own ratchet
+argued against the program.
+
+`product_max_loc` — the single largest product file, target 1,000, the same line
+the ownership map already enforces for *new* modules — joined the set in that
+commit. It is the only measure that moves in the direction this work moves:
+
+| measure | target | 2026-08-13 | before the cut | after |
+|---|---:|---:|---:|---:|
+| **largest product file** | 1,000 | — | 11,582 | **9,461** |
+| product mean LOC | 450 | 515.9 | 530.6 | 528.3 |
+| files over 2,000 LOC | 5 | 13 | 14 | 15 |
+| product LOC in files over 1,000 | 25% | 44.5% | 44.9% | 44.9% |
+
+The four regressions are recorded as accepted, with drift, rather than
+regenerated away — and the drift record is now saying something uncomfortable
+that the per-change view hid: since it was first written,
+`product_files_above_1000` has gone 28 -> 30 and `files_above_2000` 13 -> 15. We
+keep buying mean improvements with file-count regressions. **`product_max_loc` is
+how that trade gets judged from here, and it has to come down.** Judge the
+program by it; treat the count measures as secondary, because a decomposition
+that is working will always push them the wrong way for a while.
+
 The constraint that governs any split has not changed and is not negotiable: a
 split counts only if it creates a narrower API and one reason to change.
 Arbitrary fragmentation is not architecture, and a split that leaves the same
@@ -1451,6 +1480,34 @@ behavior.
   max_instructions=2_000`, below both thresholds. A verifier reasoning about 40%
   of a function while believing it holds all of it is the failure this box exists
   to prevent.
+
+  **The discovery half is CLOSED as of `3b437b1`, and the box stays `[~]` because
+  three of the five stages it names are still open.** Four bits in the existing
+  `FunctionFlags` word record which budget cut a walk short, written in
+  `discover_function` from that single walk's stats *before* the merge into the
+  whole-run aggregate — that ordering is the correctness property, and it is what
+  makes it impossible for one function's budget hit to mark a different function
+  incomplete. `decompile_at` and `decompile_many` render an analyst-visible note
+  naming the budget and its value, and refusing to state how much is missing,
+  because a bounded walk stops without enumerating what it did not reach. Proven
+  on a second binary: one discovery at `max_blocks=2` over 38 functions marks 9
+  and leaves 29 clean, with zero disagreements against their true block counts; a
+  design reading the whole-run aggregate would have marked all 38.
+
+  Four design predictions were recorded in diary Entry 55 *before* the work and
+  **three were wrong**, including one whose reasoning was exactly inverted:
+  putting the fact on `Function` was assumed to have the largest blast radius
+  because it is a core data model with PyO3 bindings and serialization, and it
+  measured smallest of four designs — 0 forced compile breaks against 36 for
+  threading stats through `discover_functions`.
+
+  Still open on the discovery stage, and smaller than what closed: nothing *acts*
+  on the marker (`finding_verifier.py` is handed a body that says it is partial
+  and neither retries wider nor downgrades confidence — that is the obvious next
+  box); `hit_function_limit` and the unattributable half of `hit_total_timeout`
+  remain whole-run facts still written to `_` at `src/analysis/cfg.rs:4351`; and
+  `decompile_range_at` synthesises its own `Function` without discovery, so it is
+  partial by construction and can never be marked.
 - [ ] Establish one explicit pipeline stage list and deterministic fingerprint.
   Audited 2026-08-15: open, though the raw material is all there. Stage names
   exist only as string literals at the ~38 `pass!`/`refine!` sites in
