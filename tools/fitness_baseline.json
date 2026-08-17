@@ -60,25 +60,43 @@
         "product_mean_loc: 529.9242902208202 -> 530.5835962145111 (worse)",
         "ir_median_loc: 469.5 -> 481.5 (worse)"
       ]
+    },
+    {
+      "measures": {
+        "ir_files_above_1000": 15,
+        "ir_median_loc": 481.5,
+        "product_files_above_1000": 29,
+        "product_files_above_2000": 14,
+        "product_mean_loc": 530.5835962145111,
+        "product_median_loc": 276,
+        "product_pct_loc_above_1000": 44.93058652159696
+      },
+      "worsened": [
+        "product_files_above_1000: 29 -> 30 (worse)",
+        "product_files_above_2000: 14 -> 15 (worse)",
+        "ir_median_loc: 481.5 -> 491 (worse)",
+        "ir_files_above_1000: 15 -> 16 (worse)"
+      ]
     }
   ],
   "ir": {
-    "file_count": 96,
-    "files_above_1000": 15,
-    "files_above_2000": 9,
-    "loc_in_files_above_1000": 45622,
-    "mean_loc": 823.9791666666666,
-    "median_loc": 481.5,
-    "pct_loc_above_1000": 57.67490076104271,
-    "total_loc": 79102
+    "file_count": 97,
+    "files_above_1000": 16,
+    "files_above_2000": 10,
+    "loc_in_files_above_1000": 45671,
+    "max_loc": 9461,
+    "mean_loc": 815.9896907216495,
+    "median_loc": 491,
+    "pct_loc_above_1000": 57.70110295511112,
+    "total_loc": 79151
   },
   "largest_files": [
     {
-      "loc": 11582,
+      "loc": 9461,
       "path": "ir/ast.rs"
     },
     {
-      "loc": 6190,
+      "loc": 6248,
       "path": "analysis/cfg.rs"
     },
     {
@@ -94,7 +112,7 @@
       "path": "ir/call_args.rs"
     },
     {
-      "loc": 3359,
+      "loc": 3382,
       "path": "python_bindings/ir.rs"
     },
     {
@@ -126,32 +144,34 @@
       "path": "ir/lift_arm64.rs"
     },
     {
-      "loc": 2068,
-      "path": "ir/copy_prop.rs"
+      "loc": 2170,
+      "path": "ir/ast/dec_render.rs"
     },
     {
-      "loc": 1965,
-      "path": "ir/value_number.rs"
+      "loc": 2068,
+      "path": "ir/copy_prop.rs"
     }
   ],
   "measures": {
-    "ir_files_above_1000": 15,
-    "ir_median_loc": 481.5,
-    "product_files_above_1000": 29,
-    "product_files_above_2000": 14,
-    "product_mean_loc": 530.5835962145111,
+    "ir_files_above_1000": 16,
+    "ir_median_loc": 491,
+    "product_files_above_1000": 30,
+    "product_files_above_2000": 15,
+    "product_max_loc": 9461,
+    "product_mean_loc": 528.2570532915361,
     "product_median_loc": 276,
-    "product_pct_loc_above_1000": 44.93058652159696
+    "product_pct_loc_above_1000": 44.92267704760435
   },
   "product": {
-    "file_count": 317,
-    "files_above_1000": 29,
-    "files_above_2000": 14,
-    "loc_in_files_above_1000": 75571,
-    "mean_loc": 530.5835962145111,
+    "file_count": 319,
+    "files_above_1000": 30,
+    "files_above_2000": 15,
+    "loc_in_files_above_1000": 75701,
+    "max_loc": 9461,
+    "mean_loc": 528.2570532915361,
     "median_loc": 276,
-    "pct_loc_above_1000": 44.93058652159696,
-    "total_loc": 168195
+    "pct_loc_above_1000": 44.92267704760435,
+    "total_loc": 168514
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -161,7 +181,7 @@
       "measure": "product_mean_loc",
       "meets_target": false,
       "target": 450.0,
-      "value": 530.5835962145111
+      "value": 528.2570532915361
     },
     {
       "label": "Product-code median",
@@ -175,35 +195,42 @@
       "measure": "product_files_above_1000",
       "meets_target": true,
       "target": 35.0,
-      "value": 29
+      "value": 30
     },
     {
       "label": "Product files above 2,000 LOC",
       "measure": "product_files_above_2000",
       "meets_target": false,
       "target": 5.0,
-      "value": 14
+      "value": 15
     },
     {
       "label": "Product LOC in files above 1,000",
       "measure": "product_pct_loc_above_1000",
       "meets_target": false,
       "target": 25.0,
-      "value": 44.93058652159696
+      "value": 44.92267704760435
     },
     {
       "label": "src/ir median",
       "measure": "ir_median_loc",
       "meets_target": true,
       "target": 500.0,
-      "value": 481.5
+      "value": 491
     },
     {
       "label": "src/ir files above 1,000 LOC",
       "measure": "ir_files_above_1000",
       "meets_target": false,
       "target": 5.0,
-      "value": 15
+      "value": 16
+    },
+    {
+      "label": "Largest product file",
+      "measure": "product_max_loc",
+      "meets_target": false,
+      "target": 1000.0,
+      "value": 9461
     }
   ]
 }

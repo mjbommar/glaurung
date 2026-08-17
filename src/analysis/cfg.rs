@@ -7190,7 +7190,10 @@ mod cfg_incompleteness_attribution_tests {
                 );
             }
         }
-        assert!(marked > 0, "the tight budget must mark at least one function");
+        assert!(
+            marked > 0,
+            "the tight budget must mark at least one function"
+        );
         assert!(
             clean > 0,
             "at least one small function must survive the same run unmarked - \

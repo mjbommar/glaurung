@@ -60,6 +60,12 @@ TARGETS: tuple[tuple[str, str, float], ...] = (
     ("product_pct_loc_above_1000", "Product LOC in files above 1,000", 25.0),
     ("ir_median_loc", "src/ir median", 500.0),
     ("ir_files_above_1000", "src/ir files above 1,000 LOC", 5.0),
+    # The single largest product file. The decomposition program IS this
+    # number coming down; every other measure above can worsen while it
+    # improves. Target is the "reject new modules over 1,000 LOC" line the
+    # ownership map already enforces for NEW files, applied to the worst
+    # existing one.
+    ("product_max_loc", "Largest product file", 1000.0),
 )
 
 # Measures the ratchet compares against the committed baseline. All of them
@@ -186,6 +192,14 @@ def _stats(sizes: Sequence[int]) -> JsonObject:
         "files_above_2000": above_2000,
         "loc_in_files_above_1000": loc_above_1000,
         "pct_loc_above_1000": (100.0 * loc_above_1000 / total) if total else 0.0,
+        # The largest single owner. Every other measure here is a count or an
+        # average, and none of them can see the thing this program is actually
+        # about: splitting a 19,269-line file into 17,148 + 2,170 makes four of
+        # them WORSE (one more file above 1,000, one more above 2,000, and both
+        # medians move) while strictly improving the tree. Only this one moves
+        # in the direction the work does. Added 2026-08-16, when that exact
+        # split forced the question.
+        "max_loc": max(sizes),
     }
 
 
@@ -222,6 +236,7 @@ def build_report(
         "product_pct_loc_above_1000": product["pct_loc_above_1000"],
         "ir_median_loc": ir["median_loc"],
         "ir_files_above_1000": ir["files_above_1000"],
+        "product_max_loc": product["max_loc"],
     }
     targets = [
         {
@@ -319,6 +334,16 @@ def check_ratchet(current: JsonObject, baseline: JsonObject) -> list[str]:
     current_measures = current["measures"]
     baseline_measures = baseline["measures"]
     for key in RATCHET_KEYS:
+        # A measure added since the baseline was written has no prior value, so
+        # it cannot have regressed. Skipping is not laxity: `load_baseline`
+        # already rejects a baseline missing a key it *should* have, and
+        # `--write-baseline` records the new measure on the next run. Before
+        # this, adding a measure raised `KeyError` from inside
+        # `_accepted_regressions`, so the tool could not write the very baseline
+        # that would have fixed it -- found on 2026-08-16 while adding
+        # `product_max_loc`.
+        if key not in baseline_measures:
+            continue
         before = baseline_measures[key]
         after = current_measures[key]
         tolerance = _TOLERANCE if key in _FLOAT_KEYS else 0

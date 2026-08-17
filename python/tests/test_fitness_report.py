@@ -246,17 +246,28 @@ def test_the_real_src_tree_has_not_regressed_against_the_committed_baseline(fr):
 def test_the_committed_baseline_reproduces_todays_measured_values(fr):
     """Pin the exact current numbers so a silent drift in the measurement
     methodology itself (not the source tree) is caught too. Update this
-    alongside the baseline file when it is deliberately regenerated."""
+    alongside the baseline file when it is deliberately regenerated.
+
+    2026-08-16: the dec-renderer extraction moved these deliberately. It took
+    `src/ir/ast.rs` from 11,582 product LOC to 9,461 by lifting a 2,170-line,
+    one-owner renderer into `src/ir/ast/dec_render.rs` -- and made FOUR of the
+    seven then-existing measures worse, because a split necessarily adds a file
+    to both "files above N" buckets. That is the measurement failing to see the
+    work, not the work going the wrong way, which is why `product_max_loc`
+    joined the set in the same change: it is the only measure that moves in the
+    direction the decomposition program moves.
+    """
     with BASELINE.open(encoding="utf-8") as handle:
         baseline = json.load(handle)
     assert baseline["measures"] == {
-        "ir_files_above_1000": 15,
-        "ir_median_loc": pytest.approx(481.5),
-        "product_files_above_1000": 29,
-        "product_files_above_2000": 14,
-        "product_mean_loc": pytest.approx(530.5835962145111),
+        "ir_files_above_1000": 16,
+        "ir_median_loc": 491,
+        "product_files_above_1000": 30,
+        "product_files_above_2000": 15,
+        "product_max_loc": 9461,
+        "product_mean_loc": pytest.approx(528.2570532915361),
         "product_median_loc": 276,
-        "product_pct_loc_above_1000": pytest.approx(44.93058652159696),
+        "product_pct_loc_above_1000": pytest.approx(44.92267704760435),
     }
 
 

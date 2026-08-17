@@ -73,6 +73,25 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "declaration planning, cleanup, and renderers. The roadmap's single "
         "largest owner and the target of Phase 7."
     ),
+    "ir/ast/dec_render.rs": (
+        "extracted 2026-08-16 from ir/ast.rs's Phase 7 split (see that "
+        'entry above): the typed C ("dec") expression and statement '
+        "printer -- write_stmt_dec, write_expr_dec, write_call_dec, and the "
+        "~50 other *_dec functions and private helpers that exist only to "
+        "serve them, moved as one call-graph-validated unit. One entry "
+        "point (write_stmt_dec, the module's only pub(super) item, called "
+        "once from the DecBench render front door in the parent module); "
+        "everything else is either called solely from inside this module or "
+        "recurses within it. It has no state of its own -- it reads the "
+        "parent's installed DeclarationPlan and render-scoped thread-locals "
+        "through the parent's private accessors, which is why the module is "
+        "a child of ir/ast rather than a standalone sibling. It crossed "
+        "1,000 LOC on the move itself (2,170 LOC, almost none of it test "
+        "code, unlike the file it came from); the recommended next cut is a "
+        "further split along the expression-printer / statement-printer "
+        "seam inside this module once that is worth the added pub(super) "
+        "surface between the two halves."
+    ),
     "ir/lift_x86.rs": "scheduled split: shared lift builder plus x86 instruction families.",
     "ir/lift_arm32.rs": "scheduled split: shared lift builder plus ARM32 instruction families.",
     "ir/lift_arm64.rs": "scheduled split: shared lift builder plus ARM64 instruction families.",
