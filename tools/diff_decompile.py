@@ -601,7 +601,7 @@ def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str 
             if pointee_kind == "int":
                 try:
                     initializer = ", ".join(str(int(item)) for item in value)
-                except TypeError, ValueError:
+                except (TypeError, ValueError):
                     return None
             else:
                 aggregates: list[str] = []
@@ -617,7 +617,7 @@ def _native_worker_source(sig: dict, vectors: list[list], ptr_elem: str) -> str 
                                 initializer_fields, item
                             )
                         )
-                    except TypeError, ValueError:
+                    except (TypeError, ValueError):
                         return None
                     aggregates.append("{" + fields + "}")
                 initializer = ", ".join(aggregates)
@@ -849,7 +849,7 @@ def decompiled_many_c(binary: str, vas: list[int]) -> dict[int, str]:
             style="decbench",
             max_functions=max(1, len(requested)),
         )
-    except OSError, RuntimeError, ValueError:
+    except (OSError, RuntimeError, ValueError):
         return {}
     recovered: dict[int, str] = {}
     for _name, va, code in rows:
@@ -2373,7 +2373,7 @@ def run_function(
     try:
         last_input = json.loads(progress_path.read_text())
         input_detail = f" on {last_input}"
-    except OSError, json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         input_detail = ""
     if r.returncode == -signal.SIGALRM:
         # Alarmed twice, on a loaded machine and again on retry: the original
@@ -2394,7 +2394,7 @@ def run_function(
         }
     try:
         verdict = json.loads(r.stdout.strip().splitlines()[-1])
-    except json.JSONDecodeError, IndexError:
+    except (json.JSONDecodeError, IndexError):
         return {
             "status": "fail",
             "detail": "worker produced no verdict",

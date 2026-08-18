@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "glaurung"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 description = "A modern rewrite of Ghidra in Rust/Python with first-class agentic AI"
 authors = [
     {name = "Michael Bommarito", email = "michael.bommarito@gmail.com"}
@@ -92,7 +92,13 @@ dev = [
 # honest today and the backlog is visible in the file that enforces it. Burn one
 # down and delete its line.
 [tool.ruff]
-target-version = "py314"
+# MUST track `requires-python` above. They disagreed until 2026-08-18 --
+# `py314` against a declared floor of 3.11 -- and ruff's formatter dutifully
+# rewrote five `except (A, B):` into PEP 758's unparenthesized form, which is
+# a SyntaxError on every interpreter the project claimed to support. A
+# formatter told to target a version you do not require will happily emit code
+# you cannot run.
+target-version = "py312"
 line-length = 88
 
 [tool.ruff.lint]
