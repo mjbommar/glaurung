@@ -106,6 +106,7 @@ pub(super) fn attach_exception_landing_pads(
     budgets: &Budgets,
     facts: &DiscoveryFacts<'_>,
     functions: &mut [Function],
+    eh_frame_extent: &std::collections::HashMap<u64, u64>,
     deadline: Deadline<'_>,
 ) -> Vec<(u64, FunctionXref)> {
     let sites = facts.image.map_or_else(
@@ -135,10 +136,43 @@ pub(super) fn attach_exception_landing_pads(
     let mut call_edges = Vec::new();
     let mut touched = std::collections::BTreeSet::new();
 
+    // Every interval any function already owns, sorted by start, so claiming a
+    // proven tail can never take bytes from a neighbour. Maintained as tails
+    // are added rather than rebuilt per site.
+    let mut occupied: Vec<(u64, u64)> = functions
+        .iter()
+        .flat_map(|function| {
+            function.all_ranges().into_iter().map(|range| {
+                (
+                    range.start.value,
+                    range.start.value.saturating_add(range.size),
+                )
+            })
+        })
+        .collect();
+    occupied.sort_unstable();
+
     for site in sites.iter() {
         let Some(&parent_index) = parent_by_fde_start.get(&site.function_start) else {
             continue;
         };
+        // The walk that produced `all_ranges` stops where NORMAL flow stops,
+        // and this pass exists precisely because a landing pad has no normal
+        // predecessor. GCC and Clang park the landing-pad trampoline after the
+        // epilogue and inside the same FDE, so testing ownership against the
+        // walked extent rejects exactly the bytes being recovered. The FDE is
+        // the authoritative bound; take the tail the walk never reached.
+        if let Some(&proven_end) = eh_frame_extent.get(&site.function_start) {
+            if !functions[parent_index].contains_va(site.landing_pad) {
+                claim_proven_tail(
+                    functions,
+                    parent_index,
+                    site.function_start,
+                    proven_end,
+                    &mut occupied,
+                );
+            }
+        }
         let ranges = functions[parent_index].all_ranges();
         let owns = |start: u64, end: u64| {
             ranges.iter().any(|range| {
@@ -260,6 +294,83 @@ pub(super) fn attach_exception_landing_pads(
         rebuild_block_relationships(&mut functions[index]);
     }
     call_edges
+}
+
+/// Grow the fragment starting at `fragment_start` to the end its `.eh_frame`
+/// FDE proves, when the entry-rooted walk stopped short of it.
+///
+/// Returns whether the fragment grew. The existing chunk is *widened* rather
+/// than a second chunk appended: [`Function::total_size`] sums chunks, and two
+/// abutting chunks also make an otherwise contiguous fragment look
+/// non-contiguous to every consumer that reasons about locality. A `-g` build
+/// of the same source already gets the single wide range from DWARF, so
+/// widening is what makes the two builds agree.
+///
+/// Never claims bytes another function already owns: an FDE describes one
+/// function, so an overlap means one of the two extents is wrong and silently
+/// double-owning the bytes is the worse of the two failures.
+fn claim_proven_tail(
+    functions: &mut [Function],
+    parent_index: usize,
+    fragment_start: u64,
+    proven_end: u64,
+    occupied: &mut Vec<(u64, u64)>,
+) -> bool {
+    let Some(walked_end) = functions[parent_index]
+        .all_ranges()
+        .iter()
+        .find(|range| range.start.value == fragment_start)
+        .map(|range| range.start.value.saturating_add(range.size))
+    else {
+        return false;
+    };
+    if walked_end >= proven_end {
+        return false;
+    }
+    // `occupied` is sorted by start, so nothing at or beyond `proven_end` can
+    // overlap; the prefix below it still has to be checked in full because the
+    // intervals are not sorted by end.
+    let first_after = occupied.partition_point(|(start, _)| *start < proven_end);
+    if occupied[..first_after]
+        .iter()
+        .any(|(start, end)| *start < proven_end && *end > walked_end)
+    {
+        return false;
+    }
+    let parent = &mut functions[parent_index];
+    let Some(anchor) = parent
+        .all_ranges()
+        .into_iter()
+        .find(|range| range.start.value == fragment_start)
+    else {
+        return false;
+    };
+    let Ok(widened) = AddressRange::new(
+        anchor.start.clone(),
+        proven_end - fragment_start,
+        anchor.alignment,
+    ) else {
+        return false;
+    };
+    if parent.chunks.is_empty() {
+        parent.chunks.push(anchor.clone());
+    }
+    for chunk in &mut parent.chunks {
+        if chunk.start.value == fragment_start {
+            *chunk = widened.clone();
+        }
+    }
+    if parent
+        .range
+        .as_ref()
+        .is_some_and(|range| range.start.value == fragment_start)
+    {
+        parent.range = Some(widened.clone());
+        parent.size = Some(widened.size);
+    }
+    let insert_at = occupied.partition_point(|(start, _)| *start < walked_end);
+    occupied.insert(insert_at, (walked_end, proven_end));
+    true
 }
 
 /// Split an existing normal-flow block when an EH subgraph branches into its
@@ -460,6 +571,49 @@ fn split_parent_name(raw_name: &str) -> Option<&str> {
     None
 }
 
+/// The surviving function a split child must fold into.
+///
+/// A split can nest, and the shape is not hypothetical: on Ubuntu 25.10,
+/// `/usr/lib/x86_64-linux-gnu/libwebsockets.a` carries all three of
+/// `lws_context_destroy`, `lws_context_destroy.part.0` and
+/// `lws_context_destroy.part.0.cold` at once (`libmbedtls.a` and
+/// `libboost_url.a` have their own). Folding a child into its *immediate* parent is
+/// only correct when that parent survives the pass. When the parent is itself a
+/// child it is removed from the list at the end, and everything merged into it
+/// goes with it — so the leaf fragment's blocks and range are lost. Which of
+/// the two merges runs first is decided by the order the two symbols sit in the
+/// function list, which is discovery order, which for symbol-seeded functions
+/// is symbol-table order and so link order. That made the loss intermittent
+/// rather than absent, which is the worst of the two.
+///
+/// Walks only through links that exist: a `foo.part.0.cold` whose `foo.part.0`
+/// was never discovered stays an orphan exactly as it did before, because the
+/// evidence tying it to `foo` is the middle symbol.
+fn split_root_index(
+    by_name: &std::collections::HashMap<String, usize>,
+    child_index: usize,
+    child_name: &str,
+) -> Option<usize> {
+    let mut current = child_name;
+    let mut root = None;
+    // Every step strips a non-empty suffix, so `current` strictly shortens and
+    // the walk terminates on its own; the bound only guards a symbol table that
+    // spells two different functions the same way.
+    for _ in 0..child_name.len() {
+        let Some(parent_name) = split_parent_name(current) else {
+            break;
+        };
+        match by_name.get(parent_name) {
+            Some(&index) if index != child_index && Some(index) != root => {
+                root = Some(index);
+                current = parent_name;
+            }
+            _ => break,
+        }
+    }
+    root
+}
+
 /// Merge compiler-emitted split children (`main.cold`, `foo.part.0`, ...)
 /// into their parent function's `chunks` list and drop them from the
 /// flat function list. Returns the number of children folded in.
@@ -476,16 +630,11 @@ pub(super) fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usiz
         .collect();
 
     let mut to_remove: Vec<usize> = Vec::new();
-    let mut merges: Vec<(usize, usize)> = Vec::new(); // (parent_idx, child_idx)
+    let mut merges: Vec<(usize, usize)> = Vec::new(); // (root_idx, child_idx)
 
     for (child_idx, child) in functions.iter().enumerate() {
-        let parent_name = match split_parent_name(&child.name) {
-            Some(n) => n,
-            None => continue,
-        };
-        let parent_idx = match by_name.get(parent_name) {
-            Some(&i) if i != child_idx => i,
-            _ => continue,
+        let Some(parent_idx) = split_root_index(&by_name, child_idx, &child.name) else {
+            continue;
         };
         merges.push((parent_idx, child_idx));
         to_remove.push(child_idx);
@@ -497,15 +646,7 @@ pub(super) fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usiz
         // list in place here. Chunks without blocks are metadata, not a merged
         // function: address-scoped lifting would otherwise clip or call out to
         // the executable cold fragment instead of structuring it locally.
-        let (
-            child_entry,
-            child_ranges,
-            child_blocks,
-            child_edges,
-            child_callers,
-            child_callees,
-            child_flags,
-        ) = {
+        let (child_ranges, child_blocks, child_edges, child_callers, child_callees, child_flags) = {
             let child = &functions[*child_idx];
             let ranges = if !child.chunks.is_empty() {
                 child.chunks.clone()
@@ -513,7 +654,6 @@ pub(super) fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usiz
                 child.range.clone().map(|r| vec![r]).unwrap_or_default()
             };
             (
-                child.entry_point.clone(),
                 ranges,
                 child.basic_blocks.clone(),
                 child.edges.clone(),
@@ -553,9 +693,11 @@ pub(super) fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usiz
                 .filter(|caller| caller != &parent_entry),
         );
         parent.callees.extend(child_callees);
-        // The compiler split's entry was an interprocedural target only until
-        // the child became part of its logical parent.
-        parent.callees.remove(&child_entry);
+        // The merged entry stops being an interprocedural target here, but the
+        // removal is deferred to a pass over the finished merge set below: in a
+        // nested split the middle fragment's own callee list names the leaf, so
+        // removing at this point would only hold when the leaf happened to be
+        // merged second.
         if !parent.has_flag(FunctionFlags::HAS_EH) {
             parent.add_flag(FunctionFlags::HAS_EH);
         }
@@ -573,6 +715,17 @@ pub(super) fn merge_compiler_split_chunks(functions: &mut Vec<Function>) -> usiz
                 parent.add_flag(flag);
             }
         }
+    }
+
+    // Every merged entry is now local control flow inside its root, whichever
+    // merge contributed the reference. Done once over the finished set so the
+    // result does not depend on the order the children were visited.
+    let merged_entries: Vec<(usize, Address)> = merges
+        .iter()
+        .map(|(root_idx, child_idx)| (*root_idx, functions[*child_idx].entry_point.clone()))
+        .collect();
+    for (root_idx, child_entry) in merged_entries {
+        functions[root_idx].callees.remove(&child_entry);
     }
 
     // Remove children in descending index order so earlier indices stay valid.
@@ -672,6 +825,141 @@ mod chunk_tests {
             "the merged child entry is local control flow, not a callee"
         );
         assert!(main.callees.iter().any(|callee| callee.value == 0x5000));
+    }
+
+    /// The numbers are measured, not invented: `g++ -O2` (no `-g`) on
+    /// `tests/decompiler_fixtures/src/136_cpp_exception_unwinding.cpp` puts
+    /// `cpp_catch_by_type` at 0x14c0, ends normal flow at the `ret` on 0x14d4,
+    /// and parks the landing-pad trampoline (`endbr64; mov %rax,%rdi;
+    /// jmp <cold>`) at 0x14d5. `readelf --debug-dump=frames` gives that
+    /// function's FDE as `pc=0x14c0..0x14e1`, so the pad is inside the extent
+    /// the FDE proves and outside the extent the entry-rooted walk found.
+    ///
+    /// Testing ownership against the walked extent therefore rejected the one
+    /// thing landing-pad recovery exists to recover — and only on builds
+    /// without `-g`, because DWARF hands the same function the wide range.
+    /// Every fixture in `tests/decompiler_fixtures/` is compiled `-g`
+    /// (`tools/fixture_harness.py`), which is why no lane could see this.
+    #[test]
+    fn a_landing_pad_past_the_walked_end_is_owned_by_its_fde() {
+        let mut funcs = vec![_func("cpp_catch_by_type", 0x14c0, 0x15)];
+        let mut occupied = vec![(0x14c0, 0x14d5)];
+        assert!(
+            !funcs[0].contains_va(0x14d5),
+            "precondition: the walked extent stops at the epilogue"
+        );
+        assert!(claim_proven_tail(
+            &mut funcs,
+            0,
+            0x14c0,
+            0x14e1,
+            &mut occupied
+        ));
+        assert!(funcs[0].contains_va(0x14d5));
+        assert!(funcs[0].contains_va(0x14e0));
+        assert!(!funcs[0].contains_va(0x14e1), "the FDE end is exclusive");
+        assert_eq!(
+            funcs[0].all_ranges().len(),
+            1,
+            "abutting proven bytes widen the fragment; a second chunk would \
+             make a contiguous function look split"
+        );
+        assert_eq!(funcs[0].total_size(), 0x21);
+    }
+
+    #[test]
+    fn a_proven_tail_never_takes_bytes_from_a_neighbour() {
+        let mut funcs = vec![_func("hot", 0x1000, 0x10), _func("neighbour", 0x1010, 0x10)];
+        let mut occupied = vec![(0x1000, 0x1010), (0x1010, 0x1020)];
+        assert!(!claim_proven_tail(
+            &mut funcs,
+            0,
+            0x1000,
+            0x1020,
+            &mut occupied
+        ));
+        assert_eq!(funcs[0].total_size(), 0x10);
+    }
+
+    #[test]
+    fn a_walk_that_reached_the_proven_end_is_left_alone() {
+        let mut funcs = vec![_func("hot", 0x1000, 0x20)];
+        let mut occupied = vec![(0x1000, 0x1020)];
+        assert!(!claim_proven_tail(
+            &mut funcs,
+            0,
+            0x1000,
+            0x1020,
+            &mut occupied
+        ));
+        assert_eq!(
+            funcs[0].total_size(),
+            0x20,
+            "nothing claimed, nothing grown"
+        );
+        assert_eq!(occupied.len(), 1, "and no interval recorded");
+    }
+
+    fn _block(name: &str, start: u64, end: u64) -> BasicBlock {
+        BasicBlock::new(
+            name.to_string(),
+            Address::new(AddressKind::VA, start, 64, None, None).unwrap(),
+            Address::new(AddressKind::VA, end, 64, None, None).unwrap(),
+            2,
+            Some(Vec::new()),
+            Some(Vec::new()),
+        )
+    }
+
+    /// `foo` <- `foo.part.0` <- `foo.part.0.cold` is a chain, not a star, and
+    /// GCC really emits it: `/usr/bin/perf` on Ubuntu 25.10 ships
+    /// `comm_str__put.part.0.cold` alongside `comm_str__put.part.0`.
+    ///
+    /// The chain is the whole point of the test. Folding the middle link into
+    /// the root first leaves the leaf merging into a `Function` that is about
+    /// to be removed from the list, so its blocks and its range go with it —
+    /// and which of the two merges runs first is decided by the order the two
+    /// symbols happen to sit in, which is symbol-table order, which is link
+    /// order. Both orders must produce the same function.
+    fn nested_split_chain(cold_first: bool) -> Vec<Function> {
+        let mut root = _func("foo", 0x1000, 0x40);
+        root.add_basic_block(_block("root", 0x1000, 0x1040));
+        let mut part = _func("foo.part.0", 0x2000, 0x40);
+        part.add_basic_block(_block("part", 0x2000, 0x2040));
+        let mut cold = _func("foo.part.0.cold", 0x3000, 0x20);
+        cold.add_basic_block(_block("cold", 0x3000, 0x3020));
+        if cold_first {
+            vec![root, cold, part]
+        } else {
+            vec![root, part, cold]
+        }
+    }
+
+    #[test]
+    fn nested_split_keeps_the_cold_fragment_in_either_symbol_order() {
+        for cold_first in [true, false] {
+            let mut funcs = nested_split_chain(cold_first);
+            let merged = merge_compiler_split_chunks(&mut funcs);
+            assert_eq!(merged, 2, "cold_first={cold_first}");
+            assert_eq!(funcs.len(), 1, "cold_first={cold_first}");
+            let foo = &funcs[0];
+            assert_eq!(foo.name, "foo");
+            assert!(
+                foo.contains_va(0x3010),
+                "cold_first={cold_first}: the nested cold fragment's RANGE was lost"
+            );
+            assert!(
+                foo.basic_blocks
+                    .iter()
+                    .any(|block| block.start_address.value == 0x3000),
+                "cold_first={cold_first}: the nested cold fragment's BLOCKS were lost"
+            );
+            assert_eq!(
+                foo.total_size(),
+                0x40 + 0x40 + 0x20,
+                "cold_first={cold_first}"
+            );
+        }
     }
 
     #[test]

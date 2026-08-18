@@ -2388,6 +2388,7 @@ fn analyze_functions_bytes_within(
         budgets,
         &discovery_facts,
         &mut functions,
+        &eh_frame_extent,
         deadline,
     ));
 
