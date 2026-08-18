@@ -55,7 +55,8 @@ use packed::{
     packed_dword_immediate_logical_shift_right_ops, packed_dword_immediate_shift_left_ops,
     packed_dword_move_ops, packed_dword_shuffle_ops, packed_dword_unpack_low_ops,
     packed_float_shuffle_ops, packed_float_sign_mask_ops, packed_qword_binary_ops,
-    packed_qword_move_ops, packed_qword_unpack_low_ops, packed_word_extract_ops, xorps_ops,
+    packed_qword_half_move_ops, packed_qword_move_ops, packed_qword_unpack_low_ops,
+    packed_word_extract_ops, xorps_ops, XmmHalf,
 };
 use scalar_float::{
     scalar_convert_ops, scalar_convert_source_bytes, scalar_float_binary_ops,
@@ -1319,6 +1320,19 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         // only architectural difference is the element type the *processor*
         // assumes, which does not change what moves.
         Mnemonic::Movapd | Mnemonic::Movupd => packed_dword_move_ops(instr),
+        // HALF-register memory traffic. Every one of these had no arm anywhere
+        // in `src/ir/`, so each fell through to `Op::Unknown` — which carries a
+        // mnemonic and nothing else: no operands, no reads, no writes. An
+        // unmodelled instruction is therefore not conservatively modelled, it
+        // is INVISIBLE to register dataflow, and the value its destination was
+        // supposed to receive simply never arrives. Clang `-O0` spills a
+        // System V `xmm0:xmm1` aggregate return with a pair of MOVLPDs, so on
+        // `197_homogeneous_float_aggregates` the whole returned struct was lost
+        // this way. The `pd`/`ps` suffix also made every one of them an
+        // unmodelled float producer to `ast::float_gate`, shutting the
+        // whole-function float gate on top.
+        Mnemonic::Movlpd | Mnemonic::Movlps => packed_qword_half_move_ops(instr, XmmHalf::Low),
+        Mnemonic::Movhpd | Mnemonic::Movhps => packed_qword_half_move_ops(instr, XmmHalf::High),
         // As XORPS: the packed-double spelling of the same bitwise lanes, which
         // is how Clang zeroes an `xmm` before a binary64 accumulation and how
         // both compilers flip a sign bit.
@@ -5659,6 +5673,457 @@ mod tests {
                 } if dst == "xmm0" && hi == "xmm0_d1" && lo == "xmm0_d0"
             )),
             "the whole-register view must be defined from the summed lanes"
+        );
+    }
+
+    /// Every register a lifted op reads and writes, as `use_def` sees it.
+    ///
+    /// The whole point of the MOVLPD/MOVHPD family below is that `Op::Unknown`
+    /// answers "nothing" to both questions, so the assertions are about this
+    /// view of the ops rather than about their shape.
+    fn def_and_use_names(ops: &[LlirInstr]) -> (Vec<String>, Vec<String>) {
+        let mut defs = Vec::new();
+        let mut uses = Vec::new();
+        for instruction in ops {
+            let (definition, used) = crate::ir::use_def::def_uses(&instruction.op);
+            if let Some(VReg::Phys(name)) = definition {
+                defs.push(name);
+            }
+            uses.extend(used.into_iter().filter_map(|register| match register {
+                VReg::Phys(name) => Some(name),
+                _ => None,
+            }));
+        }
+        (defs, uses)
+    }
+
+    /// `movlpd %xmm0,-0x38(%rbp)` — the exact instruction clang `-O0` uses to
+    /// spill a System V `xmm0:xmm1` aggregate return.
+    ///
+    /// It had no arm anywhere in `src/ir/`, so it lifted to `Op::Unknown`, whose
+    /// single `mnemonic` field declares no reads at all. The consequence is not
+    /// "conservative": the returned struct's only consumer disappeared, the
+    /// `SsePair` result split lost every user and was eliminated as dead, and
+    /// `ast::float_gate` — which reads the trailing `pd` as an unmodelled float
+    /// producer — shut the whole-function gate on top of that.
+    ///
+    /// The source is read through the WHOLE-REGISTER spelling. That is the one
+    /// the views are synchronised INTO: a lane write is mirrored to the scalar
+    /// name, a scalar write is not mirrored to the lanes, so reading the lanes
+    /// here would find nothing after any `movsd`/`cvtsi2sd` producer.
+    #[test]
+    fn movlpd_stores_the_low_quadword_as_one_eight_byte_access() {
+        let ops = lift64(&[0x66, 0x0F, 0x13, 0x45, 0xC8]); // movlpd %xmm0,-0x38(%rbp)
+        let stores: Vec<(i64, u8, String)> = ops
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Store {
+                    addr,
+                    src: Value::Reg(VReg::Phys(src)),
+                } => Some((addr.disp, addr.size, src.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            stores,
+            vec![(-0x38, 8, "xmm0".to_string())],
+            "one 64-bit store, from the spelling both producers reach: {ops:#?}"
+        );
+        assert!(
+            !ops.iter()
+                .any(|instruction| matches!(&instruction.op, Op::Unknown { .. })),
+            "no residual opaque marker may survive: {ops:#?}"
+        );
+        let (defs, uses) = def_and_use_names(&ops);
+        assert!(defs.is_empty(), "a store defines no register: {defs:?}");
+        assert!(
+            uses.iter().any(|name| name == "xmm0"),
+            "the source register must be VISIBLE to register dataflow: {uses:?}"
+        );
+    }
+
+    /// `movlpd -0x38(%rbp),%xmm0` writes the low half and — unlike MOVQ — leaves
+    /// the high half exactly as it was.
+    ///
+    /// Reusing [`packed_qword_move_ops`] here would invent the zero MOVQ writes
+    /// into bits 64..127, which this instruction does not. All three names the
+    /// transferred bits have get defined, so both XMM spellings agree.
+    #[test]
+    fn movlpd_loads_the_low_quadword_without_touching_the_high_one() {
+        let ops = lift64(&[0x66, 0x0F, 0x12, 0x45, 0xC8]); // movlpd -0x38(%rbp),%xmm0
+        let loads: Vec<(i64, u8)> = ops
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Load { addr, .. } => Some((addr.disp, addr.size)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            loads,
+            vec![(-0x38, 8)],
+            "the machine performs ONE 64-bit read: {ops:#?}"
+        );
+        let (defs, _) = def_and_use_names(&ops);
+        assert_eq!(
+            defs,
+            vec![
+                "xmm0_d0".to_string(),
+                "xmm0_d1".to_string(),
+                "xmm0".to_string()
+            ],
+            "both lanes and the scalar view are defined, and nothing else: {ops:#?}"
+        );
+        assert!(
+            !defs
+                .iter()
+                .any(|name| name == "xmm0_d2" || name == "xmm0_d3"),
+            "MOVLPD preserves bits 64..127; MOVQ's zeroing must not leak in: {defs:?}"
+        );
+    }
+
+    /// `movhpd -0x38(%rbp),%xmm1` writes lanes 2 and 3 from the address the
+    /// operand names — the displacement counts from the m64, not from the half
+    /// of the register it lands in.
+    ///
+    /// And it must NOT redefine the whole-register spelling: that name is the
+    /// low quadword, which MOVHPD does not touch. Rebuilding it here would
+    /// overwrite a live scalar value with lanes nobody wrote.
+    #[test]
+    fn movhpd_loads_the_high_quadword_and_leaves_the_scalar_view_alone() {
+        let ops = lift64(&[0x66, 0x0F, 0x16, 0x4D, 0xC8]); // movhpd -0x38(%rbp),%xmm1
+        let loads: Vec<(i64, u8)> = ops
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Load { addr, .. } => Some((addr.disp, addr.size)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            loads,
+            vec![(-0x38, 8)],
+            "the high half is read from the operand address itself: {ops:#?}"
+        );
+        let (defs, _) = def_and_use_names(&ops);
+        assert_eq!(
+            defs,
+            vec!["xmm1_d2".to_string(), "xmm1_d3".to_string()],
+            "the scalar view is the LOW quadword and MOVHPD does not write it: {ops:#?}"
+        );
+    }
+
+    /// `movhpd %xmm1,-0x30(%rbp)` reads lanes 2 and 3. Bits 64..127 have no
+    /// scalar spelling, so unlike the LOW store this one has to assemble the
+    /// transferred quadword from the lanes.
+    #[test]
+    fn movhpd_stores_the_high_quadword() {
+        let ops = lift64(&[0x66, 0x0F, 0x17, 0x4D, 0xD0]); // movhpd %xmm1,-0x30(%rbp)
+        let stores: Vec<(i64, u8)> = ops
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Store { addr, .. } => Some((addr.disp, addr.size)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stores, vec![(-0x30, 8)], "one 64-bit store: {ops:#?}");
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Concat {
+                    hi: Value::Reg(VReg::Phys(hi)),
+                    lo: Value::Reg(VReg::Phys(lo)),
+                    ..
+                } if hi == "xmm1_d3" && lo == "xmm1_d2"
+            )),
+            "the stored value is lane 3 over lane 2: {ops:#?}"
+        );
+        let (_, uses) = def_and_use_names(&ops);
+        assert!(
+            uses.iter().any(|name| name == "xmm1_d2") && uses.iter().any(|name| name == "xmm1_d3"),
+            "both high lanes must be VISIBLE to register dataflow: {uses:?}"
+        );
+    }
+
+    /// MOVLPS/MOVHPS move the same 64 bits as MOVLPD/MOVHPD — two packed floats
+    /// instead of one double — so the identical lowering serves them. The
+    /// encodings differ only by the absent `66` prefix.
+    #[test]
+    fn movlps_and_movhps_get_the_same_half_register_lowering() {
+        for (packed_double, packed_single) in [
+            (
+                [0x66, 0x0F, 0x12, 0x45, 0xC8].as_slice(),
+                [0x0F, 0x12, 0x45, 0xC8].as_slice(),
+            ),
+            (&[0x66, 0x0F, 0x13, 0x45, 0xC8], &[0x0F, 0x13, 0x45, 0xC8]),
+            (&[0x66, 0x0F, 0x16, 0x45, 0xC8], &[0x0F, 0x16, 0x45, 0xC8]),
+            (&[0x66, 0x0F, 0x17, 0x45, 0xC8], &[0x0F, 0x17, 0x45, 0xC8]),
+        ] {
+            let double: Vec<Op> = lift64(packed_double)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            let single: Vec<Op> = lift64(packed_single)
+                .into_iter()
+                .map(|instruction| instruction.op)
+                .collect();
+            assert!(
+                !double.iter().any(|op| matches!(op, Op::Unknown { .. })),
+                "{packed_double:02x?} still opaque: {double:#?}"
+            );
+            assert_eq!(
+                double, single,
+                "the `pd` and `ps` spellings move the same bits: {packed_double:02x?}"
+            );
+        }
+    }
+
+    /// PIN — `iced_x86` has no register/register encoding for ANY of the four.
+    ///
+    /// `MOVLHPS`/`MOVHLPS` are the reg-reg operations and carry their own
+    /// mnemonics, so the eight `Code` variants below are the complete set the
+    /// dispatch must serve. If a future `iced_x86` widens one of these
+    /// mnemonics, this test fails and the lowering gets looked at before the
+    /// new form silently takes the memory arm's semantics.
+    #[test]
+    fn the_half_register_moves_have_only_memory_forms() {
+        use iced_x86::{Code, Mnemonic};
+
+        let mut found = Vec::new();
+        for raw in 0..u16::MAX {
+            let Ok(code) = Code::try_from(raw as usize) else {
+                continue;
+            };
+            if matches!(
+                code.mnemonic(),
+                Mnemonic::Movlpd | Mnemonic::Movhpd | Mnemonic::Movlps | Mnemonic::Movhps
+            ) {
+                found.push(format!("{code:?}"));
+            }
+        }
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                "Movhpd_m64_xmm",
+                "Movhpd_xmm_m64",
+                "Movhps_m64_xmm",
+                "Movhps_xmm_m64",
+                "Movlpd_m64_xmm",
+                "Movlpd_xmm_m64",
+                "Movlps_m64_xmm",
+                "Movlps_xmm_m64",
+            ],
+            "every form is a memory form; there is no register/register encoding"
+        );
+    }
+
+    /// CENSUS — every x86-64 mnemonic this lifter leaves unmodelled while the
+    /// ISA says it WRITES a register.
+    ///
+    /// `Op::Unknown` has one field, a mnemonic, so [`crate::ir::use_def`]
+    /// answers "nothing" to both "what does this define" and "what does this
+    /// read". The conservative form the function boundary migrates it to,
+    /// [`Op::opaque`], is conservative about MEMORY only —
+    /// `reads_mem: true, writes_mem: true` over `ins: []`, `outs: []`. An
+    /// unmodelled instruction with a register destination is therefore not
+    /// over-approximated but INVISIBLE: the def-use census believes the
+    /// destination was never written, and whatever the register held before
+    /// flows on to every later reader as if the instruction were not there.
+    ///
+    /// That is the mechanism, not a hypothesis. `movlpd` had no arm anywhere in
+    /// `src/ir/`, and on `197_homogeneous_float_aggregates:clang:O0` it silently
+    /// deleted an entire `xmm0:xmm1` aggregate return: the `SsePair` result
+    /// split was computed correctly, found no users because its only consumers
+    /// were operandless markers, and was eliminated as dead.
+    ///
+    /// This test changes nothing about the fallback — that is a larger change
+    /// with its own risks. It makes the POPULATION visible and pins its size
+    /// over the committed corpus, so the next instruction to join it arrives as
+    /// a failing diff naming the mnemonic instead of as a wrong answer nobody
+    /// can see. Raising `SILENT_REGISTER_WRITERS` is allowed; doing it without
+    /// reading which mnemonic appeared is the thing this exists to stop.
+    #[test]
+    fn unmodelled_instructions_that_silently_claim_no_register_write() {
+        use iced_x86::{Decoder, DecoderOptions, InstructionInfoFactory, OpAccess};
+        use object::{Object, ObjectSection, ObjectSymbol};
+
+        /// Mnemonics observed to leave an `Op::Unknown` in their lift while
+        /// `iced_x86` reports at least one written register, over the committed
+        /// x86-64 sample corpus. Each one is a register definition the LLIR does
+        /// not have and does not admit to not having.
+        ///
+        /// The shape of the list is itself the argument. It is not exotica: the
+        /// SSE string primitives glibc's `strlen`/`memcmp` are built from
+        /// (`pcmpeqb`, `pmovmskb`, `punpcklbw`, `pshuflw`), the bit-scan and
+        /// population-count family (`bsr`, `bts`, `tzcnt`, `popcnt`), `syscall`,
+        /// and the byte/quadword string moves.
+        ///
+        /// The guard is DEMONSTRATED, not asserted: deleting this commit's two
+        /// dispatch arms and re-running puts `"movhps": 26` back on the list,
+        /// which is every `movhps` in the corpus. It would not have caught
+        /// `movlpd` on its own, because these samples contain no MOVLPD at all
+        /// and its store form writes no register — that one needed the fixture
+        /// corpus, which is compiled rather than committed and so cannot be
+        /// swept from a unit test. This is the committed-corpus slice of the
+        /// question, not the whole of it.
+        const SILENT_REGISTER_WRITERS: &[&str] = &[
+            "aesenc",
+            "bsr",
+            "btc",
+            "btr",
+            "bts",
+            "cpuid",
+            "fadd",
+            "faddp",
+            "fchs",
+            "fisub",
+            "fmul",
+            "fstp",
+            "fsub",
+            "fsubp",
+            "fxch",
+            "movlhps",
+            "movsb",
+            "movsq",
+            "packssdw",
+            "pcmpeqb",
+            "pcmpgtb",
+            "pcmpgtd",
+            "pinsrd",
+            "pinsrq",
+            "pinsrw",
+            "pmovmskb",
+            "pmuludq",
+            "popcnt",
+            "popfq",
+            "pshufb",
+            "pshufhw",
+            "pshuflw",
+            "psrlq",
+            "punpckhqdq",
+            "punpcklbw",
+            "punpcklwd",
+            "pushfq",
+            "rcr",
+            "rdtsc",
+            "rdtscp",
+            "shrd",
+            "shufpd",
+            "syscall",
+            "tzcnt",
+            "vmovdqu",
+            "vpand",
+            "vpbroadcastb",
+            "vpcmpeqb",
+            "vpmovmskb",
+            "vpxor",
+            "vzeroupper",
+            "xgetbv",
+        ];
+
+        let root = std::path::Path::new("samples/binaries/platforms/linux/amd64");
+        if !root.exists() {
+            eprintln!("sample corpus missing: {}", root.display());
+            return;
+        }
+        let mut binaries: Vec<std::path::PathBuf> = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(directory) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_none() {
+                    binaries.push(path);
+                }
+            }
+        }
+        binaries.sort();
+        assert!(
+            binaries.len() > 50,
+            "the census needs the committed corpus; found {}",
+            binaries.len()
+        );
+
+        let mut factory = InstructionInfoFactory::new();
+        let mut silent: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for path in &binaries {
+            let Ok(data) = std::fs::read(path) else {
+                continue;
+            };
+            let Ok(object) = crate::decompile::profile::parse_object(data.as_slice()) else {
+                continue;
+            };
+            if object.architecture() != object::Architecture::X86_64 {
+                continue;
+            }
+            // Decode only inside DECLARED FUNCTION BOUNDS. A linear sweep of the
+            // whole `.text` also decodes alignment padding, jump tables and
+            // constant pools as if they were code, and the junk it invents
+            // (`aesenc`, `xlatb`, `iretd`, `in`) would dominate the census and
+            // hide the real entries. A sized `STT_FUNC` symbol is code the
+            // producer said is code.
+            let mut ranges: Vec<(usize, usize)> = Vec::new();
+            for symbol in object.symbols() {
+                if symbol.kind() != object::SymbolKind::Text || symbol.size() == 0 {
+                    continue;
+                }
+                let Some(section) = symbol
+                    .section_index()
+                    .and_then(|index| object.section_by_index(index).ok())
+                else {
+                    continue;
+                };
+                let Some((section_offset, _)) = section.file_range() else {
+                    continue;
+                };
+                let start = (section_offset + (symbol.address() - section.address())) as usize;
+                let end = start + symbol.size() as usize;
+                if end <= data.len() && start < end {
+                    ranges.push((start, end));
+                }
+            }
+            drop(object);
+            for (start, end) in ranges {
+                let bytes = &data[start..end];
+                let mut decoder = Decoder::with_ip(64, bytes, 0x1000, DecoderOptions::NONE);
+                for instruction in decoder.iter() {
+                    if instruction.is_invalid() {
+                        continue;
+                    }
+                    let ops = lift_one(&instruction, 64);
+                    if !ops.iter().any(|op| matches!(op, Op::Unknown { .. })) {
+                        continue;
+                    }
+                    let writes_a_register =
+                        factory
+                            .info(&instruction)
+                            .used_registers()
+                            .iter()
+                            .any(|used| {
+                                matches!(
+                                    used.access(),
+                                    OpAccess::Write | OpAccess::ReadWrite | OpAccess::CondWrite
+                                )
+                            });
+                    if writes_a_register {
+                        *silent
+                            .entry(format!("{:?}", instruction.mnemonic()).to_ascii_lowercase())
+                            .or_default() += 1;
+                    }
+                }
+            }
+        }
+
+        let observed: Vec<&str> = silent.keys().map(String::as_str).collect();
+        assert_eq!(
+            observed, SILENT_REGISTER_WRITERS,
+            "an unmodelled instruction with a register destination declares no \
+             write at all, so its destination silently keeps its previous value. \
+             Occurrences: {silent:?}"
         );
     }
 

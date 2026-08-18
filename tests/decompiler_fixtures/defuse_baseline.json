@@ -11,8 +11,8 @@
   "lane_totals": {
     "clang:O0": {
       "functions_emitted": 2659,
-      "functions_with_violations": 36,
-      "violations": 132
+      "functions_with_violations": 34,
+      "violations": 115
     },
     "clang:O2": {
       "functions_emitted": 2533,
@@ -2300,29 +2300,10 @@
     "196_disjoint_frame_slots:gcc:O2:dfs196_overlap_control": [],
     "196_disjoint_frame_slots:gcc:O2:dfs196_spill_web": [],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_pair2d_roundtrip": [],
-    "197_homogeneous_float_aggregates:clang:O0:hfa197_quad4f_roundtrip": [
-      "local_30 is read but never defined",
-      "local_38 is read but never defined",
-      "var15 is read but never defined",
-      "var17 is read but never defined",
-      "var19 is read but never defined",
-      "var21 is read but never defined",
-      "var22 is read but never defined",
-      "var24 is read but never defined",
-      "var27 is read but never defined",
-      "var31 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:clang:O0:hfa197_quad4f_roundtrip": [],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_scalar_control": [],
     "197_homogeneous_float_aggregates:clang:O0:hfa197_tagged_control": [],
-    "197_homogeneous_float_aggregates:clang:O0:hfa197_trio3f_roundtrip": [
-      "local_40 is read but never defined",
-      "var15 is read but never defined",
-      "var17 is read but never defined",
-      "var19 is read but never defined",
-      "var20 is read but never defined",
-      "var22 is read but never defined",
-      "var25 is read but never defined"
-    ],
+    "197_homogeneous_float_aggregates:clang:O0:hfa197_trio3f_roundtrip": [],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_pair2d_roundtrip": [],
     "197_homogeneous_float_aggregates:clang:O2:hfa197_quad4f_roundtrip": [
       "var13 is read but never defined",
