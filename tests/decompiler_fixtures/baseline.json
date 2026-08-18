@@ -2391,35 +2391,35 @@
     "rust_wrapping_sub": "pass"
   },
   "172_float_double_widths:clang:O0": {
-    "accumulate_narrow": "fail",
-    "accumulate_wide": "fail",
+    "accumulate_narrow": "pass",
+    "accumulate_wide": "pass",
     "double_precision_horner": "pass",
     "narrow_after_double_math": "fail",
     "single_precision_horner": "fail",
     "width_disagreement": "fail"
   },
   "172_float_double_widths:clang:O2": {
-    "accumulate_narrow": "fail",
-    "accumulate_wide": "fail",
+    "accumulate_narrow": "pass",
+    "accumulate_wide": "pass",
     "double_precision_horner": "pass",
     "narrow_after_double_math": "fail",
     "single_precision_horner": "pass",
     "width_disagreement": "fail"
   },
   "172_float_double_widths:gcc:O0": {
-    "accumulate_narrow": "fail",
-    "accumulate_wide": "fail",
+    "accumulate_narrow": "pass",
+    "accumulate_wide": "pass",
     "double_precision_horner": "fail",
     "narrow_after_double_math": "fail",
-    "single_precision_horner": "fail",
+    "single_precision_horner": "pass",
     "width_disagreement": "pass"
   },
   "172_float_double_widths:gcc:O2": {
     "accumulate_narrow": "fail",
     "accumulate_wide": "fail",
-    "double_precision_horner": "fail",
+    "double_precision_horner": "pass",
     "narrow_after_double_math": "fail",
-    "single_precision_horner": "fail",
+    "single_precision_horner": "pass",
     "width_disagreement": "fail"
   },
   "173_float_int_conversions:clang:O0": {
@@ -2550,15 +2550,15 @@
     "summation_disagrees": "pass"
   },
   "181_compensated_summation:clang:O2": {
-    "compensation_of_step": "fail",
+    "compensation_of_step": "pass",
     "difference_of_products": "pass",
     "kahan_sum_f64": "fail",
     "naive_sum_f64": "fail",
     "summation_disagrees": "fail"
   },
   "181_compensated_summation:gcc:O0": {
-    "compensation_of_step": "fail",
-    "difference_of_products": "fail",
+    "compensation_of_step": "pass",
+    "difference_of_products": "pass",
     "kahan_sum_f64": "pass",
     "naive_sum_f64": "pass",
     "summation_disagrees": "pass"

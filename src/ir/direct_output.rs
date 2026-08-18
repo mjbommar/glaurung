@@ -96,7 +96,9 @@ fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
 }
 
 fn materialize_direct_output_with_live_in(function: &mut Function, live_in_result: Option<&VReg>) {
-    if let Some(return_register) = find_written_return_reg(&function.body) {
+    let written = find_written_return_reg(&function.body)
+        .or_else(|| find_written_float_result_reg(&function.body));
+    if let Some(return_register) = written {
         apply_default_return(&mut function.body, &return_register);
     } else if let Some(return_register) = live_in_result.filter(|value| is_return_reg(value)) {
         apply_default_return(&mut function.body, return_register);
@@ -219,6 +221,68 @@ const RETURN_REGS: &[&str] = &[
     "ret", // canonical role name after apply_role_names
 ];
 
+/// x86-64 result storage for the SSE class, which is NOT in [`RETURN_REGS`].
+///
+/// Both x86-64 conventions return a `float`/`double` in `xmm0` and nowhere
+/// else, and [`crate::ir::abi::return_registers`] has said so since the naming
+/// pass needed it. This module kept a second, disagreeing list: ARM32's
+/// hard-float `s0`/`d0` are in `RETURN_REGS` above, x86-64's `xmm0` was in
+/// neither list, and the consequence was that a float-returning function's
+/// recovered result had nothing to attach a bare machine `ret` to. GCC's `-O0`
+/// `float negate(float v) { return -v; }` computed the right value into `xmm0`
+/// and then rendered `return 0;`, because the value was written to a register
+/// this pass did not believe was result storage.
+///
+/// It is a SEPARATE list, consulted only when the body writes no integer result
+/// register at all, rather than four more entries in `RETURN_REGS`. On x86-64
+/// `xmm0` is also the first float ARGUMENT register and the ordinary float
+/// scratch, so a function that writes both `rax` and `xmm0` returns through
+/// `rax` and used `xmm0` for arithmetic on the way — the same precedence
+/// `abi::return_registers` documents for its own alias order, and the reason
+/// this cannot be a flat merge into the list above.
+const FLOAT_RESULT_REGS: &[&str] = &["xmm0"];
+
+/// The SSE result register, if the body writes it.
+///
+/// Only consulted after [`find_written_return_reg`] has found no integer result
+/// storage anywhere in the body — see [`FLOAT_RESULT_REGS`].
+fn find_written_float_result_reg(body: &[Stmt]) -> Option<VReg> {
+    // UNVERSIONED only, exactly as `is_return_reg` is. A versioned write is
+    // some interior value of the register, and on this shape there is always
+    // one: GCC's `-O0` float body reloads its spilled argument into `xmm0#1`
+    // before computing the result into the register's exit definition. Matching
+    // the SSA base would take the first of those and return the function's own
+    // input instead of what it computed.
+    fn is_float_result_reg(value: &VReg) -> bool {
+        matches!(value, VReg::Phys(name) if FLOAT_RESULT_REGS.contains(&name.as_str()))
+    }
+    for statement in body {
+        let found = match statement {
+            Stmt::Assign { dst, .. } if is_float_result_reg(dst) => Some(dst.clone()),
+            Stmt::Call { dst: Some(dst), .. } if is_float_result_reg(dst) => Some(dst.clone()),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => find_written_float_result_reg(then_body)
+                .or_else(|| else_body.as_deref().and_then(find_written_float_result_reg)),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                find_written_float_result_reg(body)
+            }
+            Stmt::For { body, .. } => find_written_float_result_reg(body),
+            Stmt::Switch { cases, default, .. } => cases
+                .iter()
+                .find_map(|(_, body)| find_written_float_result_reg(body))
+                .or_else(|| default.as_deref().and_then(find_written_float_result_reg)),
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
 pub(crate) fn is_return_reg(value: &VReg) -> bool {
     matches!(value, VReg::Phys(name) if RETURN_REGS.iter().any(|register| name == *register))
 }
@@ -280,6 +344,63 @@ mod tests {
                 value: Some(Expr::Reg(VReg::phys("x0"))),
             }]
         );
+    }
+
+    /// x86-64 returns a `float` in `xmm0` and nowhere else, so a body that
+    /// writes it and no integer result register returns THAT value. GCC's `-O0`
+    /// `return -value;` is exactly this shape, and it rendered `return 0;`.
+    #[test]
+    fn a_written_sse_result_register_is_the_output_when_no_integer_one_is() {
+        let mut function = Function {
+            name: "negate_binary32".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("xmm0"),
+                    src: Expr::Const(1),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        materialize_direct_output(&mut function);
+        assert_eq!(
+            function.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("xmm0"))),
+            })
+        );
+    }
+
+    /// ...and it is a FALLBACK, not a peer. `xmm0` is also the first float
+    /// argument register and the ordinary float scratch, so a body that writes
+    /// both returns through the integer register no matter which comes first.
+    #[test]
+    fn an_integer_result_register_outranks_the_sse_one_in_either_order() {
+        for (first, second) in [("xmm0", "rax"), ("rax", "xmm0")] {
+            let mut function = Function {
+                name: "scratch_float".into(),
+                entry_va: 0,
+                body: vec![
+                    Stmt::Assign {
+                        dst: VReg::phys(first),
+                        src: Expr::Const(1),
+                    },
+                    Stmt::Assign {
+                        dst: VReg::phys(second),
+                        src: Expr::Const(2),
+                    },
+                    Stmt::Return { value: None },
+                ],
+            };
+            materialize_direct_output(&mut function);
+            assert_eq!(
+                function.body.last(),
+                Some(&Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("rax"))),
+                }),
+                "written in the order {first} then {second}"
+            );
+        }
     }
 
     #[test]

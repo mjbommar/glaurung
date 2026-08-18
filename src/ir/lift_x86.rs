@@ -72,7 +72,7 @@ use scalar_float::{
 };
 use string_ops::{pop_ops, push_ops, stos_ops, string_movs_ops};
 use wide_arith::{bit_scan_ops, cmpxchg_ops, double_shift_ops, wide_div_ops, wide_mul_ops};
-use xmm_views::synchronise_xmm_views;
+use xmm_views::{split_xmm_scalar_view, synchronise_xmm_views};
 // `x87`'s `fcomi`/`fucomi` share the SSE four-outcome flag model verbatim; the
 // re-export keeps `crate::ir::lift_x86::float_compare_flag_ops` the single name
 // for it, exactly as it was before the split.
@@ -508,6 +508,9 @@ fn accumulator_name_for_width(width: u8, bits: u32) -> &'static str {
 /// Lift a single iced instruction into zero or more LLIR ops.
 fn lift_one(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
     let mut ops = lift_one_inner(instr, bits);
+    // Scalar -> lanes first, lanes -> scalar second. The order is load-bearing;
+    // see the `xmm_views` module documentation.
+    split_xmm_scalar_view(instr, &mut ops);
     synchronise_xmm_views(&mut ops);
     ops
 }
@@ -5050,10 +5053,14 @@ mod tests {
         }
     }
 
+    /// The register form of MOVSD moves the low quadword and PRESERVES bits
+    /// 64..127, so it defines three names: the scalar spelling and the two
+    /// lanes that spell the same 64 bits. Lanes 2 and 3 stay undefined, which
+    /// is how this LLIR says "unchanged".
     #[test]
     fn movsd_scalar_reg_reg_lifts_to_assign() {
         let ops = lift64(&[0xf2, 0x0f, 0x10, 0xc1]);
-        assert_eq!(ops.len(), 1, "got: {ops:#?}");
+        assert_eq!(ops.len(), 3, "got: {ops:#?}");
         assert!(matches!(
             &ops[0].op,
             Op::Assign {
@@ -5061,6 +5068,225 @@ mod tests {
                 src: Value::Reg(src),
             } if *dst == VReg::phys("xmm0") && *src == VReg::phys("xmm1")
         ));
+        assert!(matches!(
+            &ops[1].op,
+            Op::Trunc { dst, src: Value::Reg(src), to: Width::W32, .. }
+                if *dst == VReg::phys("xmm0_d0") && *src == VReg::phys("xmm0")
+        ));
+        assert!(matches!(
+            &ops[2].op,
+            Op::Extract { dst, src: Value::Reg(src), hi: 64, lo: 32 }
+                if *dst == VReg::phys("xmm0_d1") && *src == VReg::phys("xmm0")
+        ));
+    }
+
+    /// Every lane of `register` that a definition in `ops` covers.
+    fn lanes_defined(ops: &[LlirInstr], register: &str) -> Vec<usize> {
+        let mut lanes: Vec<usize> = ops
+            .iter()
+            .filter_map(
+                |instruction| match crate::ir::use_def::def_uses(&instruction.op).0 {
+                    Some(VReg::Phys(name)) => {
+                        let (defined, lane) = name.split_once("_d")?;
+                        (defined == register).then(|| lane.parse::<usize>().ok())?
+                    }
+                    _ => None,
+                },
+            )
+            .collect();
+        lanes.sort_unstable();
+        lanes
+    }
+
+    /// `movss xmm, m32` ZEROES bits 32..127 (Intel SDM Vol. 2B, MOVSS
+    /// "Operation"), so all four lanes are defined: lane 0 from the value, the
+    /// other three as constant zero.
+    #[test]
+    fn a_scalar_load_from_memory_defines_every_lane_it_zeroes() {
+        let ops = lift64(&[0xF3, 0x0F, 0x10, 0x00]); // movss (%rax),%xmm0
+        assert_eq!(lanes_defined(&ops, "xmm0"), vec![0, 1, 2, 3], "{ops:#?}");
+        assert!(
+            matches!(
+                &ops[1].op,
+                Op::Trunc { dst, src: Value::Reg(src), to: Width::W32, .. }
+                    if *dst == VReg::phys("xmm0_d0") && *src == VReg::phys("xmm0")
+            ),
+            "lane 0 comes from the SCALAR NAME, not from a second narrow load of \
+             the same address: {ops:#?}"
+        );
+        for lane in 1..4 {
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Assign { dst: VReg::Phys(dst), src: Value::Const(0) }
+                        if dst == &format!("xmm0_d{lane}")
+                )),
+                "lane {lane} is zeroed by the instruction: {ops:#?}"
+            );
+        }
+        // Exactly one memory access, at the architectural width. Splitting the
+        // transfer into narrow lane loads is bit-identical and changes what the
+        // stack-object recovery infers about the frame — see
+        // `packed::packed_qword_half_move_ops`.
+        let loads: Vec<u8> = ops
+            .iter()
+            .filter_map(|instruction| match &instruction.op {
+                Op::Load { addr, .. } => Some(addr.size),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads, vec![4], "{ops:#?}");
+    }
+
+    /// `movss xmm, xmm` PRESERVES bits 32..127, and "unchanged" in this LLIR is
+    /// spelled by NOT defining the lane — the previous definition still reaches.
+    #[test]
+    fn a_scalar_register_move_leaves_the_lanes_it_preserves_undefined() {
+        let ops = lift64(&[0xF3, 0x0F, 0x10, 0xC1]); // movss %xmm1,%xmm0
+        assert_eq!(lanes_defined(&ops, "xmm0"), vec![0], "{ops:#?}");
+    }
+
+    /// The 64-bit sibling of both rules at once: `movsd xmm, m64` defines lanes
+    /// 0 and 1 from the value and zeroes 2 and 3.
+    #[test]
+    fn a_binary64_scalar_load_defines_two_lanes_and_zeroes_two() {
+        let ops = lift64(&[0xF2, 0x0F, 0x10, 0x00]); // movsd (%rax),%xmm0
+        assert_eq!(lanes_defined(&ops, "xmm0"), vec![0, 1, 2, 3], "{ops:#?}");
+        assert!(
+            ops.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Extract { dst, src: Value::Reg(src), hi: 64, lo: 32 }
+                    if *dst == VReg::phys("xmm0_d1") && *src == VReg::phys("xmm0")
+            )),
+            "lane 1 is the high half of the scalar value: {ops:#?}"
+        );
+        for lane in 2..4 {
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Assign { dst: VReg::Phys(dst), src: Value::Const(0) }
+                        if dst == &format!("xmm0_d{lane}")
+                )),
+                "lane {lane} is zeroed: {ops:#?}"
+            );
+        }
+    }
+
+    /// A scalar ARITHMETIC result preserves the bits above it whatever its
+    /// source operand is — the rule that differs from MOVSS/MOVSD, and the
+    /// reason this is a per-mnemonic table rather than one rule.
+    #[test]
+    fn scalar_arithmetic_preserves_the_lanes_above_its_result() {
+        // `addss %xmm1,%xmm0` — 4-byte result, lanes 1..3 untouched.
+        let addss = lift64(&[0xF3, 0x0F, 0x58, 0xC1]);
+        assert_eq!(lanes_defined(&addss, "xmm0"), vec![0], "{addss:#?}");
+        // `addsd %xmm1,%xmm0` — 8-byte result, lanes 2..3 untouched.
+        let addsd = lift64(&[0xF2, 0x0F, 0x58, 0xC1]);
+        assert_eq!(lanes_defined(&addsd, "xmm0"), vec![0, 1], "{addsd:#?}");
+        // `cvtsi2sd %eax,%xmm0` — a conversion is the same shape.
+        let cvtsi2sd = lift64(&[0xF2, 0x0F, 0x2A, 0xC0]);
+        assert_eq!(
+            lanes_defined(&cvtsi2sd, "xmm0"),
+            vec![0, 1],
+            "{cvtsi2sd:#?}"
+        );
+    }
+
+    /// A lowering that defines both spellings for itself is not double-defined.
+    /// `movlpd xmm, m64` writes lanes 0 and 1 AND the scalar name; the mirror
+    /// must add nothing.
+    #[test]
+    fn a_lowering_that_already_writes_both_spellings_gains_no_second_definition() {
+        let ops = lift64(&[0x66, 0x0F, 0x12, 0x00]); // movlpd (%rax),%xmm0
+        assert_eq!(lanes_defined(&ops, "xmm0"), vec![0, 1], "{ops:#?}");
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(
+                    crate::ir::use_def::def_uses(&instruction.op).0,
+                    Some(VReg::Phys(name)) if name == "xmm0"
+                ))
+                .count(),
+            1,
+            "one definition of the scalar name, not two: {ops:#?}"
+        );
+    }
+
+    /// The two directions never both fire, so the lane-to-scalar bridge's
+    /// `single_source_of_lane_copy` — whose `lanes_seen == 4` predicate a
+    /// two-lane mirror would fail — is not consulted for a scalar producer at
+    /// all. Its routing of the packed cases is unaffected, which is what the
+    /// negative control below asserts.
+    #[test]
+    fn a_scalar_producer_is_never_re_bridged_back_from_its_own_lanes() {
+        for (name, bytes) in [
+            ("movss (%rax),%xmm0", &[0xF3u8, 0x0F, 0x10, 0x00][..]),
+            ("movsd %xmm1,%xmm0", &[0xF2, 0x0F, 0x10, 0xC1][..]),
+            ("addsd %xmm1,%xmm0", &[0xF2, 0x0F, 0x58, 0xC1][..]),
+        ] {
+            let ops = lift64(bytes);
+            assert_eq!(
+                ops.iter()
+                    .filter(|instruction| matches!(
+                        crate::ir::use_def::def_uses(&instruction.op).0,
+                        Some(VReg::Phys(register)) if register == "xmm0"
+                    ))
+                    .count(),
+                1,
+                "{name} defines the scalar name once, with no appended bridge: {ops:#?}"
+            );
+        }
+        // Negative control: a PACKED producer still gets the bridge it always
+        // did, by whichever of the two forms applies.
+        let movaps = lift64(&[0x0F, 0x28, 0xC1]); // movaps %xmm1,%xmm0
+        assert!(
+            movaps.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Assign { dst, src: Value::Reg(src) }
+                    if *dst == VReg::phys("xmm0") && *src == VReg::phys("xmm1")
+            )),
+            "a four-lane register copy still carries the source's scalar view: {movaps:#?}"
+        );
+        let movdqa = lift64(&[0x66, 0x0F, 0x6F, 0x00]); // movdqa (%rax),%xmm0
+        assert!(
+            movdqa.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Concat { dst, .. } if *dst == VReg::phys("xmm0")
+            )),
+            "a four-lane load still rebuilds the scalar view by concat: {movdqa:#?}"
+        );
+    }
+
+    /// The defect, end to end: GCC's whole `-O0` body for `-value` is a scalar
+    /// load followed by a packed sign-bit mask, and the mask read four lanes the
+    /// load had never defined.
+    #[test]
+    fn a_scalar_load_reaches_a_packed_mask_of_the_same_register() {
+        // movss (%rax),%xmm0 ; xorps %xmm1,%xmm0
+        let ops = lift64(&[0xF3, 0x0F, 0x10, 0x00, 0x0F, 0x57, 0xC1]);
+        let mask_va = ops
+            .iter()
+            .find(|instruction| instruction.va != 0x1000)
+            .map(|instruction| instruction.va)
+            .expect("the mask is a second instruction");
+        let defined_before_mask: std::collections::BTreeSet<VReg> = ops
+            .iter()
+            .filter(|instruction| instruction.va < mask_va)
+            .filter_map(|instruction| crate::ir::use_def::def_uses(&instruction.op).0)
+            .collect();
+        let read_by_mask: Vec<VReg> = ops
+            .iter()
+            .filter(|instruction| instruction.va == mask_va)
+            .flat_map(|instruction| crate::ir::use_def::def_uses(&instruction.op).1)
+            .filter(|register| matches!(register, VReg::Phys(name) if name.starts_with("xmm0")))
+            .collect();
+        assert!(!read_by_mask.is_empty(), "the mask reads xmm0: {ops:#?}");
+        for register in read_by_mask {
+            assert!(
+                defined_before_mask.contains(&register),
+                "{register} is read by the sign-bit mask with no reaching \
+                 definition — the whole function body folds to zero: {ops:#?}"
+            );
+        }
     }
 
     #[test]
@@ -6859,13 +7085,16 @@ mod tests {
         use crate::ir::regview::{self, Arch, ParentDefinition};
 
         // `movss (%rax),%xmm0` — a 32-BIT load that names the 128-bit register.
+        // The lanes that follow it are `split_xmm_scalar_view`'s mirror, which
+        // bridges the gap this test pins but does not close it: the two
+        // spellings are still two names.
         let movss = lift64(&[0xF3, 0x0F, 0x10, 0x00]);
         let [LlirInstr {
             op: Op::Load { dst, addr },
             ..
-        }] = &movss[..]
+        }, ..] = &movss[..]
         else {
-            panic!("movss did not lift to one load: {movss:#?}");
+            panic!("movss did not lift to a load first: {movss:#?}");
         };
         assert_eq!(dst, &VReg::phys("xmm0"));
         assert_eq!(addr.size, 4, "the transfer really is 32 bits wide");

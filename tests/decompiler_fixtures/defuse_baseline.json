@@ -11,13 +11,13 @@
   "lane_totals": {
     "clang:O0": {
       "functions_emitted": 2659,
-      "functions_with_violations": 34,
-      "violations": 115
+      "functions_with_violations": 32,
+      "violations": 113
     },
     "clang:O2": {
       "functions_emitted": 2533,
-      "functions_with_violations": 87,
-      "violations": 243
+      "functions_with_violations": 86,
+      "violations": 242
     },
     "gcc:O0": {
       "functions_emitted": 2567,
@@ -26,8 +26,8 @@
     },
     "gcc:O2": {
       "functions_emitted": 2434,
-      "functions_with_violations": 60,
-      "violations": 115
+      "functions_with_violations": 59,
+      "violations": 114
     },
     "rustc:O0": {
       "functions_emitted": 3035,
@@ -1813,9 +1813,7 @@
     "173_float_int_conversions:gcc:O2:widen_long_to_double": [],
     "174_float_compare_classify:clang:O0:absolute_binary32": [],
     "174_float_compare_classify:clang:O0:classify_binary32": [],
-    "174_float_compare_classify:clang:O0:negate_binary32": [
-      "var2 is read but never defined"
-    ],
+    "174_float_compare_classify:clang:O0:negate_binary32": [],
     "174_float_compare_classify:clang:O0:ordered_compare_binary32": [],
     "174_float_compare_classify:clang:O0:sign_bit_of_binary32": [],
     "174_float_compare_classify:clang:O0:unordered_compare_flags": [],
@@ -1856,14 +1854,10 @@
     "174_float_compare_classify:gcc:O2:unordered_compare_flags": [
       "var1 is read but never defined"
     ],
-    "174_float_compare_classify:gcc:O2:zero_sign_from_product": [
-      "var7 is read but never defined"
-    ],
+    "174_float_compare_classify:gcc:O2:zero_sign_from_product": [],
     "175_float_matrix_kernel:clang:O0:dot_product_f32": [],
     "175_float_matrix_kernel:clang:O0:dot_product_f64": [],
-    "175_float_matrix_kernel:clang:O0:matrix2_determinant": [
-      "var9 is read but never defined"
-    ],
+    "175_float_matrix_kernel:clang:O0:matrix2_determinant": [],
     "175_float_matrix_kernel:clang:O0:matrix2_multiply": [],
     "175_float_matrix_kernel:clang:O0:scale_series_f32": [],
     "175_float_matrix_kernel:clang:O0:sum_of_squares_f32": [],

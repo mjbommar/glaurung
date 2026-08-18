@@ -6665,27 +6665,27 @@
     "width_disagreement": "fail"
   },
   "172_float_double_widths:x86_64:O0": {
-    "accumulate_narrow": "fail",
-    "accumulate_wide": "fail",
+    "accumulate_narrow": "pass",
+    "accumulate_wide": "pass",
     "double_precision_horner": "fail",
     "narrow_after_double_math": "fail",
-    "single_precision_horner": "fail",
+    "single_precision_horner": "pass",
     "width_disagreement": "pass"
   },
   "172_float_double_widths:x86_64:O2": {
     "accumulate_narrow": "fail",
     "accumulate_wide": "fail",
-    "double_precision_horner": "fail",
+    "double_precision_horner": "pass",
     "narrow_after_double_math": "fail",
-    "single_precision_horner": "fail",
+    "single_precision_horner": "pass",
     "width_disagreement": "fail"
   },
   "172_float_double_widths:x86_64_gcc15:O0": {
-    "accumulate_narrow": "fail",
-    "accumulate_wide": "fail",
+    "accumulate_narrow": "pass",
+    "accumulate_wide": "pass",
     "double_precision_horner": "pass",
     "narrow_after_double_math": "fail",
-    "single_precision_horner": "fail",
+    "single_precision_horner": "pass",
     "width_disagreement": "pass"
   },
   "172_float_double_widths:x86_64_gcc15:O2": {
@@ -7113,8 +7113,8 @@
     "summation_disagrees": "pass"
   },
   "181_compensated_summation:x86_64:O0": {
-    "compensation_of_step": "fail",
-    "difference_of_products": "fail",
+    "compensation_of_step": "pass",
+    "difference_of_products": "pass",
     "kahan_sum_f64": "pass",
     "naive_sum_f64": "pass",
     "summation_disagrees": "pass"
