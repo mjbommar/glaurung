@@ -142,7 +142,7 @@ class ViewFunctionTool(MemoryTool[ViewFunctionArgs, ViewFunctionResult]):
         # Build symbol maps
         addr_to_name: dict[int, str] = {}
         try:
-            for a, n in g.symbols.symbol_address_map(
+            for a, n in g.symbol_address_map(
                 ctx.file_path, ctx.budgets.max_read_bytes, ctx.budgets.max_file_size
             ):
                 addr_to_name[int(a)] = str(n)

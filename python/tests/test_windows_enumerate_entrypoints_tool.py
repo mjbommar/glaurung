@@ -68,10 +68,9 @@ def test_windows_enumerate_entrypoints_joins_binary_symbol_evidence(
         lambda *args: _SymbolSummary(),
     )
     monkeypatch.setattr(
-        entrypoints_tool.g.symbols,
+        entrypoints_tool.g,
         "symbol_address_map",
         lambda *args: [(0x14001000, "NtQuerySystemInformation")],
-        raising=False,
     )
 
     result = tool.run(
@@ -116,10 +115,9 @@ def test_windows_enumerate_entrypoints_can_return_present_only(
         lambda *args: _SymbolSummary(),
     )
     monkeypatch.setattr(
-        entrypoints_tool.g.symbols,
+        entrypoints_tool.g,
         "symbol_address_map",
         lambda *args: [(0x14001000, "NtQuerySystemInformation")],
-        raising=False,
     )
 
     result = tool.run(

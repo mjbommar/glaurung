@@ -361,6 +361,17 @@ __all__ = [
     "ir",
 ]
 
+# Top-level symbol-address helper.  `src/lib.rs` registers this on the root
+# `_native` module ("Top-level helper: symbol address map for a file"), not on
+# the `symbols` submodule -- so `glaurung.symbols.symbol_address_map` never
+# existed.  Re-export it here so the documented `glaurung.symbol_address_map`
+# spelling actually resolves.
+symbol_address_map = _native.symbol_address_map
+
+__all__ += [
+    "symbol_address_map",
+]
+
 # Expose logging config from native and Python wrapper
 LogLevel = _native.LogLevel
 init_logging = _native.init_logging

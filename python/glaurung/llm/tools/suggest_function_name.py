@@ -86,7 +86,7 @@ class SuggestFunctionNameTool(
             sym_map = {}
             plt_map = {}
             try:
-                sym_list = g.symbols.symbol_address_map(ctx.file_path)
+                sym_list = g.symbol_address_map(ctx.file_path)
                 sym_map = {int(a): s for (a, s) in sym_list}
             except Exception:
                 pass

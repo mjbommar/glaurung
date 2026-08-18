@@ -218,8 +218,7 @@ def _collect_binary_symbols(
 
 def _collect_symbol_addresses(ctx: MemoryContext) -> dict[str, int]:
     try:
-        symbol_address_map = getattr(g.symbols, "symbol_address_map")
-        pairs = symbol_address_map(
+        pairs = g.symbol_address_map(
             ctx.file_path,
             ctx.budgets.max_read_bytes,
             ctx.budgets.max_file_size,

@@ -528,7 +528,8 @@ class RecursiveUnpackTool(MemoryTool[RecursiveUnpackArgs, RecursiveUnpackResult]
         work: List[tuple[Path, int, str]] = [(Path(args.path), 0, "_root")]
         total = 0
         truncated = False
-        seen: set[bytes] = set()
+        # (file size, hash of the first 4 KiB) -- see `digest` below.
+        seen: set[tuple[int, int]] = set()
 
         while work:
             cur_path, depth, sub = work.pop(0)

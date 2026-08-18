@@ -3030,6 +3030,10 @@ def import_data_symbols_from_binary(
     # symbol_address_map returns (va, name) tuples — but we don't know
     # which are functions vs data. Filter out names that already have a
     # function_names row at the same VA so we don't shadow them.
+    # `_ensure_schema` is what every other entry point in this module does
+    # first; this one skipped it and only got away with it because the lookup
+    # above always raised AttributeError and returned 0 before reaching SQL.
+    _ensure_schema(kb._conn)
     cur = kb._conn.cursor()
     cur.execute(
         "SELECT entry_va FROM function_names WHERE binary_id = ?",

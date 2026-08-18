@@ -407,148 +407,19 @@ __all__ = [
     "triage",
 ]
 
-
-try:
-    # PE-specific types
-    PeTriageInfo = _native.triage.PeTriageInfo
-    PeSubsystem = _native.triage.PeSubsystem
-    PeMachine = _native.triage.PeMachine
-    PeCharacteristics = _native.triage.PeCharacteristics
-    PeDllCharacteristics = _native.triage.PeDllCharacteristics
-    PeDebugInfo = _native.triage.PeDebugInfo
-    PePdbInfo = _native.triage.PePdbInfo
-    PeImport = _native.triage.PeImport
-    PeExport = _native.triage.PeExport
-    PeResource = _native.triage.PeResource
-    PeResourceType = _native.triage.PeResourceType
-    PeVersionInfo = _native.triage.PeVersionInfo
-    PeTlsInfo = _native.triage.PeTlsInfo
-    PeLoadConfig = _native.triage.PeLoadConfig
-    PeRelocation = _native.triage.PeRelocation
-    PeSection = _native.triage.PeSection
-    PeRichHeader = _native.triage.RichHeader
-    PeRichHeaderEntry = _native.triage.RichHeaderEntry
-
-    __all__ += [
-        "PeTriageInfo",
-        "PeSubsystem",
-        "PeMachine",
-        "PeCharacteristics",
-        "PeDllCharacteristics",
-        "PeDebugInfo",
-        "PePdbInfo",
-        "PeImport",
-        "PeExport",
-        "PeResource",
-        "PeResourceType",
-        "PeVersionInfo",
-        "PeTlsInfo",
-        "PeLoadConfig",
-        "PeRelocation",
-        "PeSection",
-        "PeRichHeader",
-        "PeRichHeaderEntry",
-    ]
-except AttributeError:
-    # PE types not available in this build
-    pass
-
-try:
-    # ELF-specific types
-    ElfTriageInfo = _native.triage.ElfTriageInfo
-    ElfType = _native.triage.ElfType
-    ElfMachine = _native.triage.ElfMachine
-    ElfOsAbi = _native.triage.ElfOsAbi
-    ElfHeaderFlags = _native.triage.ElfHeaderFlags
-    ElfSegment = _native.triage.ElfSegment
-    ElfSegmentType = _native.triage.ElfSegmentType
-    ElfSegmentFlags = _native.triage.ElfSegmentFlags
-    ElfSection = _native.triage.ElfSection
-    ElfSectionType = _native.triage.ElfSectionType
-    ElfSectionFlags = _native.triage.ElfSectionFlags
-    ElfSymbol = _native.triage.ElfSymbol
-    ElfSymbolType = _native.triage.ElfSymbolType
-    ElfSymbolBind = _native.triage.ElfSymbolBind
-    ElfSymbolVisibility = _native.triage.ElfSymbolVisibility
-    ElfRelocation = _native.triage.ElfRelocation
-    ElfDynamicEntry = _native.triage.ElfDynamicEntry
-    ElfDynamicTag = _native.triage.ElfDynamicTag
-    ElfNote = _native.triage.ElfNote
-    ElfGnuInfo = _native.triage.ElfGnuInfo
-
-    __all__ += [
-        "ElfTriageInfo",
-        "ElfType",
-        "ElfMachine",
-        "ElfOsAbi",
-        "ElfHeaderFlags",
-        "ElfSegment",
-        "ElfSegmentType",
-        "ElfSegmentFlags",
-        "ElfSection",
-        "ElfSectionType",
-        "ElfSectionFlags",
-        "ElfSymbol",
-        "ElfSymbolType",
-        "ElfSymbolBind",
-        "ElfSymbolVisibility",
-        "ElfRelocation",
-        "ElfDynamicEntry",
-        "ElfDynamicTag",
-        "ElfNote",
-        "ElfGnuInfo",
-    ]
-except AttributeError:
-    # ELF types not available in this build
-    pass
-
-try:
-    # Mach-O specific types
-    MachOTriageInfo = _native.triage.MachOTriageInfo
-    MachOHeader = _native.triage.MachOHeader
-    MachOFileType = _native.triage.MachOFileType
-    MachOHeaderFlags = _native.triage.MachOHeaderFlags
-    MachOLoadCommand = _native.triage.MachOLoadCommand
-    MachOSegment = _native.triage.MachOSegment
-    MachOSection = _native.triage.MachOSection
-    MachOSymbol = _native.triage.MachOSymbol
-    MachODynamicLib = _native.triage.MachODynamicLib
-    MachOChainedFixup = _native.triage.MachOChainedFixup
-    MachOCodeSignature = _native.triage.MachOCodeSignature
-    MachOEncryptionInfo = _native.triage.MachOEncryptionInfo
-    MachOFunctionStarts = _native.triage.MachOFunctionStarts
-    MachODataInCode = _native.triage.MachODataInCode
-    MachOLinkerOption = _native.triage.MachOLinkerOption
-    MachOSourceVersion = _native.triage.MachOSourceVersion
-    MachOVersionMin = _native.triage.MachOVersionMin
-    MachOEntryPoint = _native.triage.MachOEntryPoint
-    MachOUuid = _native.triage.MachOUuid
-    MachOBuildVersion = _native.triage.MachOBuildVersion
-    MachOBuildToolVersion = _native.triage.MachOBuildToolVersion
-
-    __all__ += [
-        "MachOTriageInfo",
-        "MachOHeader",
-        "MachOFileType",
-        "MachOHeaderFlags",
-        "MachOLoadCommand",
-        "MachOSegment",
-        "MachOSection",
-        "MachOSymbol",
-        "MachODynamicLib",
-        "MachOChainedFixup",
-        "MachOCodeSignature",
-        "MachOEncryptionInfo",
-        "MachOFunctionStarts",
-        "MachODataInCode",
-        "MachOLinkerOption",
-        "MachOSourceVersion",
-        "MachOVersionMin",
-        "MachOEntryPoint",
-        "MachOUuid",
-        "MachOBuildVersion",
-        "MachOBuildToolVersion",
-    ]
-except AttributeError:
-    # Mach-O types not available in this build
-    pass
+# Every name in `__all__` is bound unconditionally above, so a native module
+# that stops exporting one fails at import rather than silently shrinking the
+# public surface.  This replaces three `try: ... except AttributeError: pass`
+# blocks that named 59 PE/ELF/Mach-O types: 52 of them were never Rust types at
+# all, and the remaining 7 (PeTriageInfo, ElfTriageInfo, MachOTriageInfo,
+# ElfType, ElfMachine, RichHeader, RichHeaderEntry) exist in Rust but are not
+# registered on `_native.triage`.  Each block therefore died on its own first
+# line and `__all__` never gained a single one of the 59 names -- 59 failures
+# hidden behind three silent `pass` statements.
+_missing = sorted(name for name in __all__ if name not in globals())
+if _missing:  # pragma: no cover - only reachable against a mismatched build
+    raise ImportError(
+        "glaurung.triage exports names the native module does not provide: "
+        + ", ".join(_missing)
+    )
+del _missing

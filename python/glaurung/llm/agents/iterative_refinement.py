@@ -15,6 +15,7 @@ from .base import (
     TerminationReason,
     AgentMetrics,
 )
+from ..kb.models import Node, NodeKind
 
 
 class IterativeConfig(BaseModel):
@@ -541,15 +542,20 @@ class IterativeRefinementAgent:
                 f"Close to target. Need {(self.config.min_confidence - confidence):.0%} more confidence."
             )
 
-        # Add as KB node for context
-        try:
-            context.kb.add_node(
+        # Add as KB node for context.  `KnowledgeBase.add_node` takes a `Node`;
+        # the old `id=/type=/properties=` spelling raised `TypeError` on every
+        # call and the `except Exception: pass` below it swallowed the failure,
+        # so no iteration feedback ever reached the KB.
+        context.kb.add_node(
+            Node(
                 id=f"iteration_feedback_{iteration}",
-                type="iteration_feedback",
-                properties=feedback,
+                kind=NodeKind.note,
+                label=f"iteration_feedback_{iteration}",
+                text=str(feedback.get("guidance", "")),
+                props=feedback,
+                tags=["iteration_feedback"],
             )
-        except Exception:
-            pass  # Soft fail on feedback injection
+        )
 
     def _create_result(
         self,

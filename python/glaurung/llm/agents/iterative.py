@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
 from ..context import MemoryContext
+from ..kb.models import Node, NodeKind
 
 
 class ConfidenceLevel(Enum):
@@ -271,17 +272,26 @@ class IterativeAgent:
         elif confidence < self.strategy.min_confidence:
             feedback += "Close to target. Focus on filling gaps in analysis."
 
-        # Add as note in KB for context
+        # Add as note in KB for context.  `KnowledgeBase.add_node` takes a
+        # `Node`, not loose keyword arguments -- the old `id=/type=/properties=`
+        # call raised `TypeError` on every low-confidence iteration and the
+        # caller's bare `except Exception` recorded the crash as a failed
+        # attempt, so the feedback node was never stored.
         context.kb.add_node(
-            id=f"feedback_{state.iteration}",
-            type="refinement_feedback",
-            properties={
-                "iteration": state.iteration,
-                "confidence": confidence,
-                "message": feedback,
-                "tools_used": state.tools_used.copy(),
-                "evidence_count": len(state.evidence_gathered),
-            },
+            Node(
+                id=f"feedback_{state.iteration}",
+                kind=NodeKind.note,
+                label=f"refinement_feedback_{state.iteration}",
+                text=feedback,
+                props={
+                    "iteration": state.iteration,
+                    "confidence": confidence,
+                    "message": feedback,
+                    "tools_used": state.tools_used.copy(),
+                    "evidence_count": len(state.evidence_gathered),
+                },
+                tags=["refinement_feedback"],
+            )
         )
 
 

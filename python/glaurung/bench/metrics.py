@@ -271,11 +271,6 @@ def stack_frame_metrics(
     Skipped (returns zeros) if anything raises — auto-discovery must
     not be load-bearing for the bench."""
     try:
-        from .._sandbox_xref_db import _open_volatile_kb_for_metrics
-    except Exception:
-        # Use the public xref_db directly via a tmp-path KB.
-        pass
-    try:
         import tempfile
         from pathlib import Path as _Path
 

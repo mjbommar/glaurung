@@ -43,7 +43,7 @@ class MapSymbolAddressesTool(
     ) -> MapSymbolAddressesResult:
         pairs: list[tuple[int, str]] = []
         try:
-            pairs = g.symbols.symbol_address_map(
+            pairs = g.symbol_address_map(
                 ctx.file_path, ctx.budgets.max_read_bytes, ctx.budgets.max_file_size
             )
         except Exception:
