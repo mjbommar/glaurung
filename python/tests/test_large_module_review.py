@@ -104,7 +104,18 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
     "ir/lift_arm32.rs": "scheduled split: shared lift builder plus ARM32 instruction families.",
     "ir/lift_arm64.rs": "scheduled split: shared lift builder plus ARM64 instruction families.",
     "ir/call_args.rs": (
-        "scheduled split: ABI classification, evidence, solver, and HIR projection."
+        "accepted (2026-08-17): the argument-folding driver, 3,920 -> 1,327 LOC "
+        "across seven cuts. The previous note here promised a split into 'ABI "
+        "classification, evidence, solver, and HIR projection'; none of those "
+        "four destinations ever existed, and the entry had been describing an "
+        "imaginary file since the first real cut. What actually happened: "
+        "cdecl32, aapcs and tail_calls (per-convention folding), slot_marking "
+        "and captured_defs (argument-slot evidence), return_attribution (246 "
+        "lines, where a callee's result goes), enclosing_slots (187 lines, the "
+        "loop-carried argument context) and fold_one_call (663 lines, 31% of "
+        "the file at the time, ONE pub(super) marker because it was fully "
+        "private and 22 parent items were free to it as a descendant). What "
+        "remains is one driver with one reason to change."
     ),
     "ir/types_recover.rs": (
         "scheduled split: constraints, collection, solving, prototypes, and "
@@ -134,7 +145,24 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "worth 165 lines against 19 importers across four subsystems."
     ),
     "ir/value_number.rs": "accepted: one global value-numbering pass and its lattice.",
-    "ir/copy_prop.rs": "accepted: one copy/constant propagation pass and its safety proofs.",
+    "ir/copy_prop.rs": (
+        "under review (2026-08-17): NOT one pass. The previous note said "
+        "'accepted: one copy/constant propagation pass and its safety proofs' "
+        "and the first half is false -- the file exports EIGHT pub entry "
+        "points, scheduled independently at seven call sites in "
+        "ir/ast/prepare.rs plus two in python_bindings/ir.rs. A module whose "
+        "callers interleave seven of its passes at different pipeline "
+        "positions has seven reasons to change, which is the exact question "
+        "this list asks. The 'safety proofs' half is accurate and the "
+        "2026-08-17 cuts are the evidence: copy_prop/alias.rs took the "
+        "memory-disjointness proof out at 284 lines with only 7 names crossing "
+        "the boundary, and four of its items turned out to have no reference "
+        "anywhere outside it. copy_prop/reads.rs took the read-counting "
+        "analysis at 207. Both at token ratio 1.000000. Remaining work is to "
+        "decide whether the eight entry points are one owner -- and note that "
+        "prune_unobservable_scratch_dataflow is pub with ZERO callers outside "
+        "this module, which pub visibility hides from both dead-code counts."
+    ),
     "ir/call_contracts.rs": (
         "accepted (2026-08-16, c2fb19d): one pass with one reason to change — "
         "an authoritative prototype overriding what ABI liveness merely "
