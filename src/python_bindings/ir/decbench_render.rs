@@ -427,6 +427,39 @@ fn decbench_text_with_installed_environment(
         None
     };
     let render_prototype = declared_prototype.or(recovered_render_prototype.as_ref());
+    // A function whose OWN result is a proven two-register INTEGER aggregate
+    // cannot be declared at one machine word: `struct bv195_quad` is not a
+    // renderable source spelling, so the signature fell back to `unsigned long`
+    // and the second eightbyte — members `c` and `d`, computed correctly into
+    // `rdx` — was returned by nothing. The double-word integer type has exactly
+    // that storage contract, and it is the SAME spelling `recovered_call_prototype`
+    // already gives every CALLER of this function, so both sides of the boundary
+    // agree by construction.
+    //
+    // Gated on the PREPARED body, not on the class alone: the rewrite is all or
+    // nothing and may decline (a `return` with no proven reaching high half),
+    // and a later transform could yet have rewritten a composed return. The
+    // declaration and the value are one decision, so both read the same AST.
+    let pair_render_prototype = recovered_prototype
+        .filter(|prototype| {
+            prototype.return_class() == crate::ir::abi::ReturnClass::IntegerPair
+                && output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct
+                && crate::ir::callee_return_pair::returns_are_pair_composed(&prepared.body, cc)
+        })
+        .and_then(|_| crate::ir::callee_return_pair::pair_return_c_type(cc))
+        .map(|return_type| {
+            let mut prototype = render_prototype.cloned().unwrap_or_else(|| {
+                crate::ir::call_contracts::CallPrototype {
+                    return_type: String::new(),
+                    parameter_types: Vec::new(),
+                    variadic: false,
+                    authority: crate::ir::call_contracts::CallPrototypeAuthority::Recovered,
+                }
+            });
+            prototype.return_type = return_type.to_string();
+            prototype
+        });
+    let render_prototype = pair_render_prototype.as_ref().or(render_prototype);
     let body = profiler.measure("render_decbench", || {
         crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types(
             &prepared,

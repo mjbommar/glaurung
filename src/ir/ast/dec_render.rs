@@ -770,7 +770,16 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             if let Some(reg) = redundant_declared_integer_cast(e) {
                 write_reg_dec(reg, out);
             } else {
-                let c_type = if *width == 8 && DEC_SEMANTIC_WIDE_CAST.with(std::cell::Cell::get) {
+                // A DOUBLE-WORD cast is the one width `int_ctype` cannot spell:
+                // it answers `long` for sixteen bytes, which silently halves
+                // the value. That is the spelling a two-register INTEGER result
+                // needs on both sides of the call boundary, and the extension
+                // exists only on a 64-bit target — so it is derived from the
+                // target's pointer width rather than named unconditionally.
+                let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
+                let c_type = if *width == 16 && pointer_width == 8 {
+                    double_width_ctype(*signed, pointer_width)
+                } else if *width == 8 && DEC_SEMANTIC_WIDE_CAST.with(std::cell::Cell::get) {
                     target_int_ctype(*signed, *width)
                 } else {
                     int_ctype(*signed, *width)

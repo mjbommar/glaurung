@@ -404,6 +404,18 @@ pub(crate) fn builtin_scalar_type(spelling: &str) -> bool {
             | "uint64_t"
             | "float"
             | "double"
+            // The double-word integer types. Present because they are exactly
+            // the ABI storage of a two-register INTEGER result: the CALL
+            // boundary has declared `unsigned __int128` since `c2fb19d`, and a
+            // callee whose own result is such an aggregate now declares the
+            // same spelling. Omitting them made that declaration unrenderable
+            // and the signature silently fell back to one machine word.
+            // `scalar_eightbyte_class` still refuses them (its `size <= 8`
+            // guard), so a struct MEMBER of this type classifies no differently
+            // than before.
+            | "__int128"
+            | "signed __int128"
+            | "unsigned __int128"
     )
 }
 

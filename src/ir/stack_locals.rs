@@ -36,6 +36,7 @@ mod bounded_overlap;
 mod coordinate_flow;
 mod indexed_objects;
 mod rewrite;
+mod slot_views;
 
 // Re-imported under their own names so the pass body, the sibling modules and
 // the test module keep addressing them exactly as they did while they lived
@@ -4462,5 +4463,199 @@ mod tests {
         let orig = f.clone();
         promote_stack_locals(&mut f);
         assert_eq!(f, orig);
+    }
+
+    /// A load WIDER than the slot it starts in reads the NEIGHBOURING slots
+    /// too, and rewriting it to the first slot's name drops the rest.
+    ///
+    /// GCC -O2 returns a twelve-byte aggregate by writing two dwords into the
+    /// red zone and reloading eight bytes across both
+    /// (`198_aggregate_return_edges:gcc:O2:agr198_make_trio`). Promoted as one
+    /// name, the second member was computed into a C local that nothing read.
+    #[test]
+    fn a_load_spanning_two_promoted_slots_concatenates_them() {
+        use crate::ir::types::BinOp;
+        let mut f = Function {
+            name: "make_trio".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rsp", -0x14),
+                    src: Expr::Reg(reg("eax")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("rsp", -0x10),
+                    src: Expr::Reg(reg("ecx")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: deref_of("rsp", -0x14, 8),
+                },
+            ],
+        };
+        promote_stack_locals_with_facts(&mut f, Some(CallConv::SysVAmd64), None, &[]);
+
+        let promoted = |statement: &Stmt| match statement {
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                ..
+            }
+            | Stmt::Store {
+                addr: Expr::Reg(VReg::Phys(name)),
+                ..
+            } => name.clone(),
+            other => panic!("expected a promoted store, got {other:?}"),
+        };
+        let low = promoted(&f.body[0]);
+        let high = promoted(&f.body[1]);
+        assert_ne!(low, high, "distinct slots must get distinct names");
+
+        let Stmt::Assign { src, .. } = &f.body[2] else {
+            panic!("expected the wide load, got {:?}", f.body[2]);
+        };
+        let widened = |name: &str| Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg(name))),
+            }),
+        };
+        assert_eq!(
+            src,
+            &Expr::Bin {
+                op: BinOp::Or,
+                lhs: Box::new(widened(&low)),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Shl,
+                    lhs: Box::new(widened(&high)),
+                    rhs: Box::new(Expr::Const(32)),
+                }),
+            },
+            "the wide load must read BOTH slots: {:#?}",
+            f.body[2]
+        );
+    }
+
+    /// The second negative control. An INCOMING PARAMETER's width is the
+    /// recovered prototype's, not the observed accesses': `[rbp+0x10]` is the
+    /// seventh System V argument and the signature already declares its whole
+    /// object, so masking it to the four bytes this body happened to write
+    /// would drop the rest.
+    #[test]
+    fn a_wide_load_over_an_incoming_parameter_slot_is_not_concatenated() {
+        let mut f = Function {
+            name: "seventh_argument".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", 0x10),
+                    src: Expr::Reg(reg("eax")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("rbp", 0x14),
+                    src: Expr::Reg(reg("ecx")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: deref_of("rbp", 0x10, 8),
+                },
+            ],
+        };
+        promote_stack_locals_with_facts(&mut f, Some(CallConv::SysVAmd64), Some(7), &[]);
+        assert!(
+            matches!(&f.body[0], Stmt::Assign { dst: VReg::Phys(name), .. }
+                | Stmt::Store { addr: Expr::Reg(VReg::Phys(name)), .. } if name == "arg6"),
+            "the stacked argument slot must promote to arg6: {:?}",
+            f.body[0]
+        );
+        let Stmt::Assign { src, .. } = &f.body[2] else {
+            panic!("expected the wide load, got {:?}", f.body[2]);
+        };
+        assert!(
+            matches!(src, Expr::Reg(_)),
+            "a parameter's declaration owns its whole object: {src:#?}"
+        );
+    }
+
+    /// The third negative control, and the one a measurement found. On i386 an
+    /// `fild QWORD` reads eight bytes across two four-byte slots, and the high
+    /// one is a copy of the second half of a stacked `int64_t` parameter that
+    /// promotion names as a local and nothing defines. Composing made that
+    /// undefined read live and turned
+    /// `173_float_int_conversions:i386:O0:widen_long_to_double` from pass to
+    /// fail; an access wider than the machine word is not one machine value.
+    #[test]
+    fn a_load_wider_than_the_machine_word_is_not_concatenated() {
+        let mut f = Function {
+            name: "widen_long_to_double".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("ebp", -8),
+                    src: Expr::Reg(reg("eax")),
+                    size: 4,
+                },
+                Stmt::Store {
+                    addr: lea("ebp", -4),
+                    src: Expr::Reg(reg("edx")),
+                    size: 4,
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: deref_of("ebp", -8, 8),
+                },
+            ],
+        };
+        promote_stack_locals_with_facts(&mut f, Some(CallConv::Cdecl32), Some(1), &[]);
+        let Stmt::Assign { src, .. } = &f.body[2] else {
+            panic!("expected the wide load, got {:?}", f.body[2]);
+        };
+        assert!(
+            matches!(src, Expr::Reg(_)),
+            "an access wider than the machine word keeps its single-slot form: {src:#?}"
+        );
+    }
+
+    /// The negative control. A gap inside the access is a byte no observed
+    /// store reached, and no C variable names it — so the concatenation is
+    /// refused and the existing single-slot behaviour stands rather than a
+    /// value being invented for the hole.
+    #[test]
+    fn a_wide_load_over_a_gap_keeps_its_single_slot_form() {
+        let mut f = Function {
+            name: "gap".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rsp", -0x14),
+                    src: Expr::Reg(reg("eax")),
+                    size: 4,
+                },
+                // Two bytes short of tiling the eight-byte load below.
+                Stmt::Store {
+                    addr: lea("rsp", -0x10),
+                    src: Expr::Reg(reg("cx")),
+                    size: 2,
+                },
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: deref_of("rsp", -0x14, 8),
+                },
+            ],
+        };
+        promote_stack_locals_with_facts(&mut f, Some(CallConv::SysVAmd64), None, &[]);
+        let Stmt::Assign { src, .. } = &f.body[2] else {
+            panic!("expected the wide load, got {:?}", f.body[2]);
+        };
+        assert!(
+            matches!(src, Expr::Reg(_)),
+            "an incompletely tiled access must keep its single-slot form: {src:#?}"
+        );
     }
 }

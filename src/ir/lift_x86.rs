@@ -1296,10 +1296,33 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
                         rhs: Value::Const(disp),
                     });
                 }
-                ops.push(Op::Assign {
-                    dst,
-                    src: Value::Reg(tmp),
-                });
+                // LEA's arithmetic is computed at the ADDRESS size, but the
+                // result is written through the DESTINATION register's view —
+                // and every other x86 ALU form already models that write
+                // (`emit_machine_bin_with_flags` appends the same `ZExt`).
+                // Omitting it here made `lea eax,[rdi+1]` a 64-bit addition:
+                // at `seed == -1` the sum is 0x1_0000_0000 rather than 0, and
+                // a following `shl rdx,32; or rax,rdx` then carried the stray
+                // bit straight into the second member of a returned aggregate
+                // (`195:gcc:O2:bv195_make_pair`, and the low half of every
+                // `bv195_make_quad`/`agr198_make_trio` lane that composes two
+                // eightbytes this way).
+                let dst_name = reg_name(instr.op_register(0));
+                if let Some(view) = partial_gp_view(&dst_name) {
+                    ops.extend(partial_write_ops(view, Value::Reg(tmp)));
+                } else if zero_extending_gp_view(&dst_name, bits).is_some() {
+                    ops.push(Op::ZExt {
+                        dst,
+                        src: Value::Reg(tmp),
+                        from: Width::W32,
+                        to: Width::W64,
+                    });
+                } else {
+                    ops.push(Op::Assign {
+                        dst,
+                        src: Value::Reg(tmp),
+                    });
+                }
                 return ops;
             }
             vec![Op::Unknown {

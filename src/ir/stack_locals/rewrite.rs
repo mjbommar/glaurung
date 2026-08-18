@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use super::slot_views::{compose_little_endian_slots, extract_little_endian_subvalue};
 use super::{
     alloc_name, body_falls_through, bounded_overlap, bounded_scalar_slot, escaped_stack_address,
     is_active_stack_base, is_arm_frame_pointer, is_stack_pointer_reg, merge_stack_deltas,
@@ -341,6 +342,31 @@ fn rewrite_expr(
                         *e = extract_little_endian_subvalue(alias, 0, size_val);
                         return;
                     }
+                    // A load WIDER than the slot it starts in reads the slots
+                    // next to it too. Rewriting it to that one slot's name
+                    // silently drops the rest, which is how GCC's
+                    // `mov [rsp-0x14],eax; mov [rsp-0x10],eax; mov rax,[rsp-0x14]`
+                    // returned only the first member of `agr198_make_trio`, and
+                    // how the byte at `[rsp-0x2]` vanished from
+                    // `agr198_make_bytes3`'s `movzx eax,WORD PTR [rsp-0x3]`.
+                    // Where the neighbours tile the access exactly, the load's
+                    // value IS their little-endian concatenation.
+                    let spans_neighbours = size_val > entry.span_size;
+                    if spans_neighbours {
+                        if let Some(composed) = compose_little_endian_slots(
+                            map,
+                            &key_base,
+                            key_disp,
+                            size_val,
+                            stack_word_size(ctx).try_into().unwrap_or(8),
+                        ) {
+                            *e = composed;
+                            return;
+                        }
+                    }
+                    let Some(entry) = map.get_mut(&key) else {
+                        return;
+                    };
                     // A load reports the true access width — let it win for
                     // the declaration while preserving the widest owned span.
                     entry.declared_size = entry.declared_size.min(size_val);
@@ -821,24 +847,6 @@ fn promote_address_taken_stack_object(
     entry.object_size = Some(entry.object_size.unwrap_or(0).max(size));
     entry.bounded_object |= next_slot_extent.is_some() || key_disp >= 0;
     *expr = Expr::StackAddr { object, size };
-}
-
-fn extract_little_endian_subvalue(parent: String, byte_offset: u8, size: u8) -> Expr {
-    let wide_parent = Expr::Cast {
-        signed: false,
-        width: 8,
-        expr: Box::new(Expr::Reg(VReg::phys(parent))),
-    };
-    let shifted = Expr::Bin {
-        op: crate::ir::types::BinOp::Shr,
-        lhs: Box::new(wide_parent),
-        rhs: Box::new(Expr::Const(i64::from(byte_offset) * 8)),
-    };
-    Expr::Cast {
-        signed: false,
-        width: size,
-        expr: Box::new(shifted),
-    }
 }
 
 /// Store-address Lea: turn the full `&[base+disp]` into a `Reg(local)`.

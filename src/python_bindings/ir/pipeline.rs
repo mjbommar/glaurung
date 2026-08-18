@@ -250,6 +250,12 @@ pub(super) fn run_ast_passes(
     pass!("materialize_direct_output", {
         if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
             crate::ir::direct_output::materialize_prototype_output(f, cc, prototype);
+            // The result register now carries the LOW eightbyte of a proven
+            // two-register aggregate result. State the whole contract here,
+            // while the high half's definition is still present: dead-store
+            // elimination runs a few passes below and has nothing to keep it
+            // alive until a `return` reads it.
+            crate::ir::callee_return_pair::compose_pair_returns(f, cc, prototype);
         }
     });
     // Reconstructed expressions now carry their explicit machine width. Make

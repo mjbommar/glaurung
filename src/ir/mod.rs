@@ -31,6 +31,7 @@ pub mod ast;
 pub mod call_args;
 pub mod call_contracts;
 pub mod call_result_split;
+pub mod callee_return_pair;
 pub(crate) mod caller_arity;
 pub mod canary;
 pub mod cfg_edges;

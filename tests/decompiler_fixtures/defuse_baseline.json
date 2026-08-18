@@ -32,12 +32,12 @@
     "rustc:O0": {
       "functions_emitted": 3035,
       "functions_with_violations": 1998,
-      "violations": 7525
+      "violations": 7535
     },
     "rustc:O2": {
       "functions_emitted": 1787,
       "functions_with_violations": 1156,
-      "violations": 4451
+      "violations": 4457
     }
   },
   "problems": [],
