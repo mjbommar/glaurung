@@ -496,6 +496,24 @@ fn to_bv<'c>(
                 BinOp::Shl => a.bvshl(&b),
                 BinOp::Shr => a.bvlshr(&b),
                 BinOp::Sar => a.bvashr(&b),
+                // Source-level `&&` / `||` booleanize both operands and yield
+                // 1 or 0 at the node width -- see the note in
+                // `axeyum_backend::translate`. Kept term-for-term identical to
+                // `ExprPool::render_smtlib`'s truthiness renderer so the native
+                // backend and the SMT-LIB text bridge cannot disagree on a
+                // verdict. The `!= 0` test runs on the already-coerced
+                // operands, because truncation can zero a non-zero value.
+                BinOp::LogicalAnd | BinOp::LogicalOr => {
+                    let zero = bv_from_u128(ctx, 0, tb);
+                    let a_true = a._eq(&zero).not();
+                    let b_true = b._eq(&zero).not();
+                    let joined = if matches!(op, BinOp::LogicalAnd) {
+                        Bool::and(ctx, &[&a_true, &b_true])
+                    } else {
+                        Bool::or(ctx, &[&a_true, &b_true])
+                    };
+                    joined.ite(&bv_from_u128(ctx, 1, tb), &zero)
+                }
             }
         }
         Expr::Un { op, a, .. } => {
@@ -714,6 +732,147 @@ mod tests {
         assert_eq!(left_prefix.common_depth(&right_prefix), 1);
         assert!(lineage.close_path(7));
         assert!(!lineage.close_path(7));
+    }
+
+    /// The z3 twin of
+    /// `axeyum_backend::tests::native_source_logical_ops_match_the_text_bridge_truthiness`.
+    /// Source-level `&&` / `||` are not bitvector ALU ops: they booleanize both
+    /// operands and yield 1 or 0 at the node width, exactly as
+    /// `ExprPool::render_smtlib` denotes. The rows are chosen so a naive
+    /// `bvand` / `bvor` lowering disagrees on every one of them.
+    #[test]
+    fn z3_source_logical_ops_match_the_text_bridge_truthiness() {
+        let w = Width::W32;
+        // (lhs, rhs, expected `&&`, expected `||`, wrong `bvand`, wrong `bvor`)
+        let table: &[(u128, u128, u128, u128, u128, u128)] = &[
+            (1, 2, 1, 1, 0, 3),
+            (0, 5, 0, 1, 0, 5),
+            (0, 0, 0, 0, 0, 0),
+            (6, 6, 1, 1, 6, 6),
+            (0xFFFF_FFFF, 1, 1, 1, 1, 0xFFFF_FFFF),
+        ];
+
+        for &(lhs, rhs, want_and, want_or, bitwise_and, bitwise_or) in table {
+            for (op, want, bitwise) in [
+                (BinOp::LogicalAnd, want_and, bitwise_and),
+                (BinOp::LogicalOr, want_or, bitwise_or),
+            ] {
+                let mut p = ExprPool::new();
+                let a = p.constant(w, lhs);
+                let b = p.constant(w, rhs);
+                let node = p.intern(Expr::Bin { op, a, b, width: w });
+                let k = p.constant(w, want);
+                let holds = p.intern(Expr::Cmp {
+                    op: CmpOp::Eq,
+                    a: node,
+                    b: k,
+                    width: w,
+                });
+                assert!(
+                    matches!(
+                        Z3Solver::new().check(&p, &[(holds, true)]),
+                        SolveResult::Sat(_)
+                    ),
+                    "{op:?} on ({lhs}, {rhs}) should equal {want}",
+                );
+
+                if bitwise != want {
+                    let wrong = p.constant(w, bitwise);
+                    let bitwise_holds = p.intern(Expr::Cmp {
+                        op: CmpOp::Eq,
+                        a: node,
+                        b: wrong,
+                        width: w,
+                    });
+                    assert!(
+                        matches!(
+                            Z3Solver::new().check(&p, &[(bitwise_holds, true)]),
+                            SolveResult::Unsat
+                        ),
+                        "{op:?} on ({lhs}, {rhs}) was lowered bitwise",
+                    );
+                }
+            }
+        }
+
+        // The native lowering and the text bridge must denote the same term.
+        let mut p = ExprPool::new();
+        let a = p.constant(w, 1);
+        let b = p.constant(w, 2);
+        let conjunction = p.intern(Expr::Bin {
+            op: BinOp::LogicalAnd,
+            a,
+            b,
+            width: w,
+        });
+        assert_eq!(
+            p.render_smtlib(conjunction),
+            concat!(
+                "(ite (and (distinct (_ bv1 32) (_ bv0 32)) ",
+                "(distinct (_ bv2 32) (_ bv0 32))) (_ bv1 32) (_ bv0 32))"
+            ),
+        );
+    }
+
+    /// Both operands must survive the lowering, and truncation to the node
+    /// width happens BEFORE the `!= 0` test (0x100 is non-zero at 32 bits and
+    /// zero at 8) -- the order the text bridge uses.
+    #[test]
+    fn z3_source_logical_and_constrains_both_operands_after_coercion() {
+        let w = Width::W32;
+        let mut p = ExprPool::new();
+        let x = p.fresh_symbol(w);
+        let y = p.fresh_symbol(w);
+        let conjunction = p.intern(Expr::Bin {
+            op: BinOp::LogicalAnd,
+            a: x,
+            b: y,
+            width: w,
+        });
+        let zero = p.constant(w, 0);
+        let x_is_zero = p.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: x,
+            b: zero,
+            width: w,
+        });
+        match Z3Solver::new().check(&p, &[(conjunction, true)]) {
+            SolveResult::Sat(model) => {
+                for symbol in [0_u32, 1] {
+                    assert_ne!(
+                        model.values.get(&symbol).copied().unwrap_or(0),
+                        0,
+                        "`x && y` held with symbol {symbol} equal to zero",
+                    );
+                }
+            }
+            other => panic!("`x && y` should be satisfiable, got {other:?}"),
+        }
+        assert!(matches!(
+            Z3Solver::new().check(&p, &[(conjunction, true), (x_is_zero, true)]),
+            SolveResult::Unsat
+        ));
+
+        let mut p = ExprPool::new();
+        let wide = p.constant(Width::W32, 0x100);
+        let one = p.constant(Width::W8, 1);
+        let node = p.intern(Expr::Bin {
+            op: BinOp::LogicalAnd,
+            a: wide,
+            b: one,
+            width: Width::W8,
+        });
+        let zero = p.constant(Width::W8, 0);
+        let is_zero = p.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: node,
+            b: zero,
+            width: Width::W8,
+        });
+        assert!(matches!(
+            Z3Solver::new().check(&p, &[(is_zero, true)]),
+            SolveResult::Sat(_)
+        ));
     }
 
     #[test]

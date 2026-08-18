@@ -1563,6 +1563,122 @@ mod tests {
         expect_pred(&p, pred2, true); // 0x0F & 0x09 == 0x09
     }
 
+    /// `BinOp::LogicalAnd` / `LogicalOr` are source-level short-circuit
+    /// operators, not bitvector ALU ops. They reach a solver backend through
+    /// `native_trace::parse_bin_op` (which accepts `"logical_and"` /
+    /// `"logical_or"`) when `ordered_replay` imports a native assertion pack,
+    /// and nothing between the pool and the backend desugars them.
+    ///
+    /// This pins the lowering against the SMT-LIB text bridge in
+    /// `ExprPool::render_smtlib`, which is the definition `ordered_replay`
+    /// enforces: it re-renders every imported pack through the text bridge and
+    /// rejects the pack unless the rendering hashes to the recorded constraint.
+    /// The concrete pairs are chosen so a naive `bvand` / `bvor` lowering --
+    /// the obvious wrong answer -- gives a different verdict on every row.
+    #[test]
+    fn native_source_logical_ops_match_the_text_bridge_truthiness() {
+        let w = Width::W32;
+        // (lhs, rhs, expected `&&`, expected `||`, wrong `bvand`, wrong `bvor`)
+        let table: &[(u128, u128, u128, u128, u128, u128)] = &[
+            (1, 2, 1, 1, 0, 3),
+            (0, 5, 0, 1, 0, 5),
+            (0, 0, 0, 0, 0, 0),
+            (6, 6, 1, 1, 6, 6),
+            (0xFFFF_FFFF, 1, 1, 1, 1, 0xFFFF_FFFF),
+        ];
+
+        for &(lhs, rhs, want_and, want_or, bitwise_and, bitwise_or) in table {
+            for (op, want, bitwise) in [
+                (BinOp::LogicalAnd, want_and, bitwise_and),
+                (BinOp::LogicalOr, want_or, bitwise_or),
+            ] {
+                let mut p = ExprPool::new();
+                let a = c(&mut p, lhs, w);
+                let b = c(&mut p, rhs, w);
+                let node = bin(&mut p, op, a, b, w);
+
+                let k = c(&mut p, want, w);
+                let holds = cmp(&mut p, CmpOp::Eq, node, k, w);
+                expect_pred(&p, holds, true);
+
+                // The discriminator: where the truthiness result differs from
+                // the bitwise one, the backend must NOT answer bitwise.
+                if bitwise != want {
+                    let wrong = c(&mut p, bitwise, w);
+                    let bitwise_holds = cmp(&mut p, CmpOp::Eq, node, wrong, w);
+                    expect_pred(&p, bitwise_holds, false);
+                }
+            }
+        }
+
+        // The native lowering and the text bridge must denote the same term.
+        // If either side is edited alone, this literal fails.
+        let mut p = ExprPool::new();
+        let a = c(&mut p, 1, w);
+        let b = c(&mut p, 2, w);
+        let conjunction = bin(&mut p, BinOp::LogicalAnd, a, b, w);
+        assert_eq!(
+            p.render_smtlib(conjunction),
+            concat!(
+                "(ite (and (distinct (_ bv1 32) (_ bv0 32)) ",
+                "(distinct (_ bv2 32) (_ bv0 32))) (_ bv1 32) (_ bv0 32))"
+            ),
+        );
+    }
+
+    /// Both operands must survive the lowering. A backend that dropped one --
+    /// or replaced the pair with a single truthiness test -- would still pass
+    /// the constant table above on some rows, but cannot satisfy this.
+    #[test]
+    fn native_source_logical_and_constrains_both_operands() {
+        let w = Width::W32;
+        let mut p = ExprPool::new();
+        let x = p.fresh_symbol(w);
+        let y = p.fresh_symbol(w);
+        let conjunction = bin(&mut p, BinOp::LogicalAnd, x, y, w);
+        let zero = c(&mut p, 0, w);
+        let x_is_zero = cmp(&mut p, CmpOp::Eq, x, zero, w);
+
+        // `x && y` true is satisfiable on its own ...
+        match solve_native(&p, &[(conjunction, true)]) {
+            SolveResult::Sat(model) => {
+                for symbol in [0_u32, 1] {
+                    assert_ne!(
+                        model.values.get(&symbol).copied().unwrap_or(0),
+                        0,
+                        "`x && y` held with symbol {symbol} equal to zero",
+                    );
+                }
+            }
+            other => panic!("`x && y` should be satisfiable, got {other:?}"),
+        }
+
+        // ... but not together with `x == 0`.
+        assert!(
+            matches!(
+                solve_native(&p, &[(conjunction, true), (x_is_zero, true)]),
+                SolveResult::Unsat
+            ),
+            "`x && y` must be false whenever x is zero",
+        );
+    }
+
+    /// Truncation can turn a non-zero operand into zero, so the `!= 0` test
+    /// has to run on the operand AFTER it is coerced to the node width -- the
+    /// order `ExprPool::render_smtlib` uses. A backend that tested truthiness
+    /// before coercing would answer `1` here instead of `0`.
+    #[test]
+    fn native_source_logical_and_tests_truthiness_after_width_coercion() {
+        let mut p = ExprPool::new();
+        // 0x100 is non-zero at 32 bits but truncates to zero at 8.
+        let wide = c(&mut p, 0x100, Width::W32);
+        let one = c(&mut p, 1, Width::W8);
+        let node = bin(&mut p, BinOp::LogicalAnd, wide, one, Width::W8);
+        let zero = c(&mut p, 0, Width::W8);
+        let is_zero = cmp(&mut p, CmpOp::Eq, node, zero, Width::W8);
+        expect_pred(&p, is_zero, true);
+    }
+
     #[test]
     fn native_udiv() {
         // 0xFF / 0x10 == 0x0F (unsigned)

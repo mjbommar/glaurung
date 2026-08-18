@@ -62,6 +62,13 @@ fn eval(pool: &ExprPool, id: ExprId, x0: u128) -> u128 {
                         (a & m) / (b & m)
                     }
                 }
+                // Source-level `&&` / `||` booleanize both operands at the
+                // node width and yield 1 or 0 -- the same semantics as
+                // `exec::concrete::Concrete::binop` and the truthiness
+                // renderer in `ExprPool::render_smtlib`, NOT the bitwise ops
+                // immediately below.
+                BinOp::LogicalAnd => u128::from(a & m != 0 && b & m != 0),
+                BinOp::LogicalOr => u128::from(a & m != 0 || b & m != 0),
                 BinOp::And => a & b,
                 BinOp::Or => a | b,
                 BinOp::Xor => a ^ b,

@@ -1,0 +1,47 @@
+# Does every Cargo feature still compile?
+#
+# Before this file, no GitHub workflow in this repository ran cargo at all --
+# CI.yml builds wheels through maturin (which is `--features python-ext` and
+# nothing else) and decompiler-fixtures.yml runs `maturin develop`. The only
+# Rust gate anywhere was `scripts/decbench-local-gate.sh` lane 1, a manual
+# pre-push script that also builds only `python-ext`.
+#
+# The cost of that: three SMT solver backends stopped compiling on 2026-07-31
+# when `BinOp::LogicalAnd` / `LogicalOr` were added without updating them, and
+# nothing noticed for seventeen days. `--features triage-parsers-extra` had not
+# compiled since 2025-09-01.
+#
+# This is `cargo check`, not `cargo test`. Type checking is what catches a
+# non-exhaustive match, and it needs no solver binaries -- only libz3 headers
+# for the z3 crate. Running the feature-gated TESTS needs more than a hosted
+# runner has (see the Bitwuzla note in scripts/feature-build-gate.sh); building
+# every configuration is the part that is both cheap and was entirely missing.
+name: feature build gate
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  feature-matrix:
+    name: cargo check, every feature configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # libz3-dev is what the `z3` crate links against. Without it the
+      # solver-z3 lanes SKIP, and a skipped lane fails the gate on purpose.
+      - name: Install libz3
+        run: sudo apt-get update && sudo apt-get install -y libz3-dev
+      # Bitwuzla 0.9.1 is not packaged for the runner. The gate script sets
+      # GLAURUNG_BITWUZLA_TYPECHECK_ONLY=1 so build.rs skips the link setup;
+      # `cargo check` never links, so solver-bitwuzla is still genuinely type
+      # checked here. Its RUNTIME behaviour is not covered by any gate -- see
+      # the same note in scripts/feature-build-gate.sh.
+      - name: Feature matrix
+        run: scripts/feature-build-gate.sh
+      - name: Formatting
+        run: cargo fmt --all -- --check

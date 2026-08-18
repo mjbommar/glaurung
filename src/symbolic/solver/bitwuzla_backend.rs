@@ -370,19 +370,33 @@ impl<'a> Translator<'a> {
                 let left = self.coerce(left, pool.width_of(a).bits(), bits)?;
                 let right = self.expression(pool, b)?;
                 let right = self.coerce(right, pool.width_of(b).bits(), bits)?;
-                let kind = match op {
-                    BinOp::Add => KIND_BV_ADD,
-                    BinOp::Sub => KIND_BV_SUB,
-                    BinOp::Mul => KIND_BV_MUL,
-                    BinOp::Div => KIND_BV_UDIV,
-                    BinOp::And => KIND_BV_AND,
-                    BinOp::Or => KIND_BV_OR,
-                    BinOp::Xor => KIND_BV_XOR,
-                    BinOp::Shl => KIND_BV_SHL,
-                    BinOp::Shr => KIND_BV_SHR,
-                    BinOp::Sar => KIND_BV_ASHR,
-                };
-                self.term2(kind, left, right)?
+                match op {
+                    // Source-level `&&` / `||` booleanize both operands to 1
+                    // or 0 at the node width -- what `ExprPool::render_smtlib`
+                    // denotes, NOT the bitwise kinds below. See
+                    // `bitwuzla_translates_the_complete_glaurung_qfbv_surface`.
+                    BinOp::LogicalAnd | BinOp::LogicalOr => {
+                        let zero = self.value(bits, 0)?;
+                        let one = self.value(bits, 1)?;
+                        let a = self.term2(KIND_DISTINCT, left, zero)?;
+                        let a = self.term3(KIND_ITE, a, one, zero)?;
+                        let b = self.term2(KIND_DISTINCT, right, zero)?;
+                        let b = self.term3(KIND_ITE, b, one, zero)?;
+                        let conjunction = matches!(op, BinOp::LogicalAnd);
+                        let kind = if conjunction { KIND_BV_AND } else { KIND_BV_OR };
+                        self.term2(kind, a, b)?
+                    }
+                    BinOp::Add => self.term2(KIND_BV_ADD, left, right)?,
+                    BinOp::Sub => self.term2(KIND_BV_SUB, left, right)?,
+                    BinOp::Mul => self.term2(KIND_BV_MUL, left, right)?,
+                    BinOp::Div => self.term2(KIND_BV_UDIV, left, right)?,
+                    BinOp::And => self.term2(KIND_BV_AND, left, right)?,
+                    BinOp::Or => self.term2(KIND_BV_OR, left, right)?,
+                    BinOp::Xor => self.term2(KIND_BV_XOR, left, right)?,
+                    BinOp::Shl => self.term2(KIND_BV_SHL, left, right)?,
+                    BinOp::Shr => self.term2(KIND_BV_SHR, left, right)?,
+                    BinOp::Sar => self.term2(KIND_BV_ASHR, left, right)?,
+                }
             }
             Expr::Un { op, a, .. } => {
                 let argument = self.expression(pool, a)?;
@@ -1081,25 +1095,86 @@ mod tests {
         let mut pool = ExprPool::new();
         let a8 = pool.constant(Width::W8, 0b1001_0110);
         let b8 = pool.constant(Width::W8, 3);
-        for (op, expected) in [
-            (BinOp::Add, 0x99),
-            (BinOp::Sub, 0x93),
-            (BinOp::Mul, 0xc2),
-            (BinOp::Div, 0x32),
-            (BinOp::And, 0x02),
-            (BinOp::Or, 0x97),
-            (BinOp::Xor, 0x95),
-            (BinOp::Shl, 0xb0),
-            (BinOp::Shr, 0x12),
-            (BinOp::Sar, 0xf2),
-        ] {
+        // This list claimed to be "the complete surface" while silently
+        // missing `LogicalAnd` / `LogicalOr` for seventeen days -- a plain
+        // array gets no exhaustiveness checking from the compiler. The two
+        // constructs below restore it: `expected` is an exhaustive `match`, so
+        // a new `BinOp` variant is a compile error there, and `SURFACE` is a
+        // fixed-length array, so it is a compile error here too.
+        fn expected(op: BinOp) -> u128 {
+            // 0b1001_0110 (0x96) `op` 3, at 8 bits.
+            match op {
+                BinOp::Add => 0x99,
+                BinOp::Sub => 0x93,
+                BinOp::Mul => 0xc2,
+                BinOp::Div => 0x32,
+                BinOp::And => 0x02,
+                BinOp::Or => 0x97,
+                BinOp::Xor => 0x95,
+                BinOp::Shl => 0xb0,
+                BinOp::Shr => 0x12,
+                BinOp::Sar => 0xf2,
+                // Source-level `&&` / `||` booleanize both operands: both
+                // are non-zero, so both yield 1 at the node width. Note this
+                // is nothing like the bitwise answers (0x02 / 0x97) above --
+                // the rows discriminate a truthiness lowering from a bitwise
+                // one.
+                //
+                // The adapter spells that lowering as `bvand` / `bvor` over
+                // the two booleanized 0/1 operands rather than Bitwuzla's
+                // Boolean `AND` / `OR` kinds. On 0/1 inputs the two are the
+                // same function, and this way the arm needs no kind constant
+                // beyond those already verified against the pinned 0.9.1 C
+                // enum (KIND_DISTINCT, KIND_ITE, KIND_BV_AND, KIND_BV_OR).
+                // That matters more than it looks: a wrong enum value would
+                // not fail to build, it would silently construct a different
+                // operator, and this test is what would catch it.
+                BinOp::LogicalAnd | BinOp::LogicalOr => 1,
+            }
+        }
+        const SURFACE: [BinOp; 12] = [
+            BinOp::Add,
+            BinOp::Sub,
+            BinOp::Mul,
+            BinOp::Div,
+            BinOp::And,
+            BinOp::Or,
+            BinOp::Xor,
+            BinOp::Shl,
+            BinOp::Shr,
+            BinOp::Sar,
+            BinOp::LogicalAnd,
+            BinOp::LogicalOr,
+        ];
+        for op in SURFACE {
             let expression = pool.intern(Expr::Bin {
                 op,
                 a: a8,
                 b: b8,
                 width: Width::W8,
             });
+            assert_constant_expression(&mut pool, expression, expected(op));
+        }
+
+        // A zero operand must make `&&` false and leave `||` true -- the rows
+        // above cannot tell a correct lowering from one that ignores an
+        // operand entirely.
+        let zero8 = pool.constant(Width::W8, 0);
+        for (op, expected) in [(BinOp::LogicalAnd, 0), (BinOp::LogicalOr, 1)] {
+            let expression = pool.intern(Expr::Bin {
+                op,
+                a: zero8,
+                b: b8,
+                width: Width::W8,
+            });
             assert_constant_expression(&mut pool, expression, expected);
+            let flipped = pool.intern(Expr::Bin {
+                op,
+                a: b8,
+                b: zero8,
+                width: Width::W8,
+            });
+            assert_constant_expression(&mut pool, flipped, expected);
         }
 
         for (op, expected) in [(UnOp::Not, 0x69), (UnOp::Neg, 0x6a)] {

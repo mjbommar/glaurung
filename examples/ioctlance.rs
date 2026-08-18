@@ -361,8 +361,8 @@ fn main() {
         }
         analyzed += 1;
         let lf = match lift_function_from_bytes(&data, f, Arch::X86_64) {
-            Some(lf) => lf,
-            None => continue,
+            Ok(lf) => lf,
+            Err(_) => continue,
         };
         if lf.blocks.len() > MAX_BLOCKS {
             continue;

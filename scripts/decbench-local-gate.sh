@@ -8,6 +8,8 @@
 # DEFAULT — our own fixture corpus, and nothing else:
 #
 #   1. cargo test           — fast, and the only lane that gates the Rust logic
+#   1a. feature matrix      — does every Cargo feature still type-check? (~3 min)
+#   1b. python unit tests   — the not-slow, not-decbench Python lanes
 #   2. fixture matrix       — execution-differential, x86-64, 4 lanes, ~3 min
 #   3. arch round trip      — the SAME differential for aarch64 / armv7 / i386
 #
@@ -127,6 +129,22 @@ note() { printf '  %s\n' "$1"; }
 # Rust logic" was gating a configuration we do not ship.
 step "1/$lanes  cargo test (--features python-ext)"
 if cargo test --features python-ext --lib --tests 2>&1 | tail -3; then
+  note "ok"
+else
+  note "FAILED"; fail=1
+fi
+
+# Lane 1 builds exactly ONE feature configuration, and until 2026-08-17 so did
+# every other gate in the repository -- no GitHub workflow runs cargo at all.
+# Three SMT solver backends had therefore not compiled for seventeen days
+# (b03d5057 added `BinOp::LogicalAnd`/`LogicalOr` and updated no backend), and
+# `--features triage-parsers-extra` had not compiled since 2025-09-01, with
+# every lane here green throughout. This lane type-checks all eleven feature
+# configurations. It is `cargo check`, so it costs ~3 minutes against a warm
+# target directory -- cheap next to lanes 2-5, and it is the only thing that
+# looks at the feature-gated tree at all.
+step "1a/$lanes  feature matrix type check (scripts/feature-build-gate.sh)"
+if scripts/feature-build-gate.sh 2>&1 | tail -6; then
   note "ok"
 else
   note "FAILED"; fail=1

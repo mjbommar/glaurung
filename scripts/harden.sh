@@ -7,6 +7,13 @@ echo "[harden] Formatting + linting Rust and Python, then type checking"
 if command -v cargo >/dev/null 2>&1; then
   echo "[harden] Rust: cargo fmt"
   cargo fmt --all
+  # `--all-features` turns on `solver-bitwuzla`, whose build script used to panic
+  # whenever Bitwuzla was absent -- so this command died in the build script, on
+  # every machine without Bitwuzla installed, before clippy saw a single line.
+  # That is why it never caught the three solver backends that stopped compiling
+  # on 2026-07-31. `GLAURUNG_BITWUZLA_TYPECHECK_ONLY=1` makes build.rs skip the
+  # link setup; clippy, like `cargo check`, never links.
+  export GLAURUNG_BITWUZLA_TYPECHECK_ONLY=1
   echo "[harden] Rust: cargo clippy (-D warnings)"
   cargo clippy --all-targets --all-features -- -D warnings
 else

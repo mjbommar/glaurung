@@ -1360,6 +1360,19 @@ mod tests {
     }
 
     #[test]
+    // `neutral_measurement_backend` returns `Value::Null` unless
+    // `solver-bitwuzla` is on, and both of these assert the manifest names
+    // "bitwuzla". They are not broken -- they are testing a configuration, and
+    // saying so is better than failing in every other one. Before this, both
+    // failed on every machine without Bitwuzla installed, which is every
+    // machine: `build.rs` panicked when the library was absent, so
+    // `solver-bitwuzla` could not even be built. Found 2026-08-17 while adding
+    // scripts/feature-build-gate.sh, which now type-checks that configuration
+    // through GLAURUNG_BITWUZLA_TYPECHECK_ONLY.
+    #[cfg_attr(
+        not(feature = "solver-bitwuzla"),
+        ignore = "asserts the bitwuzla neutral-measurement identity; needs --features solver-bitwuzla"
+    )]
     fn neutral_shadow_timing_names_all_six_cells() {
         let timing = SolveTiming {
             total_nanos: 200,
@@ -1426,6 +1439,19 @@ mod tests {
     }
 
     #[test]
+    // `neutral_measurement_backend` returns `Value::Null` unless
+    // `solver-bitwuzla` is on, and both of these assert the manifest names
+    // "bitwuzla". They are not broken -- they are testing a configuration, and
+    // saying so is better than failing in every other one. Before this, both
+    // failed on every machine without Bitwuzla installed, which is every
+    // machine: `build.rs` panicked when the library was absent, so
+    // `solver-bitwuzla` could not even be built. Found 2026-08-17 while adding
+    // scripts/feature-build-gate.sh, which now type-checks that configuration
+    // through GLAURUNG_BITWUZLA_TYPECHECK_ONLY.
+    #[cfg_attr(
+        not(feature = "solver-bitwuzla"),
+        ignore = "asserts the bitwuzla neutral-measurement identity; needs --features solver-bitwuzla"
+    )]
     fn reference_validator_accepts_v4_named_work_bounds() {
         let timing = SolveTiming {
             total_nanos: 200,

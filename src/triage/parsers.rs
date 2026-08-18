@@ -39,18 +39,18 @@ pub fn parse(data: &[u8]) -> Vec<ParserResult> {
     // pelite (optional, only meaningful for PE)
     #[cfg(feature = "triage-parsers-extra")]
     {
-        // Try both 32 and 64 variants; treat any success as ok
-        let mut ok = false;
-        // Avoid panic on invalid input; pelite may panic for non-PE sometimes, so wrap in catch_unwind
+        // Try both 32 and 64 variants; treat any success as ok.
+        // Avoid panic on invalid input; pelite may panic for non-PE sometimes,
+        // so wrap in catch_unwind. The result is RETURNED from the closure
+        // rather than written through a captured `&mut bool`: `&mut T` is not
+        // `UnwindSafe`, so the captured form never compiled (E0277) and this
+        // feature has not built since the block was written on 2025-09-01.
         let res = std::panic::catch_unwind(|| {
-            if let Ok(_pe) = pelite::pe64::PeFile::from_bytes(data) {
-                ok = true;
-            } else if let Ok(_pe32) = pelite::pe32::PeFile::from_bytes(data) {
-                ok = true;
-            }
+            pelite::pe64::PeFile::from_bytes(data).is_ok()
+                || pelite::pe32::PeFile::from_bytes(data).is_ok()
         });
         let pr = match res {
-            Ok(_) => {
+            Ok(ok) => {
                 if ok {
                     ParserResult::new(ParserKind::PELite, true, None)
                 } else {

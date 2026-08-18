@@ -85,7 +85,11 @@ fn main() {
     let t_lift = std::time::Instant::now();
     let lifted: Vec<(&_, LlirFunction)> = funcs
         .par_iter()
-        .filter_map(|f| lift_function_from_bytes(&data, f, Arch::X86_64).map(|lf| (f, lf)))
+        .filter_map(|f| {
+            lift_function_from_bytes(&data, f, Arch::X86_64)
+                .ok()
+                .map(|lf| (f, lf))
+        })
         .collect();
     eprintln!(
         "[lift] {} functions in {:?}",

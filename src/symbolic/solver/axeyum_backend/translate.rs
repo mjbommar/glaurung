@@ -136,6 +136,39 @@ impl<'a> Translator<'a> {
                     BinOp::Shl => self.arena.bv_shl(ta, tb)?,
                     BinOp::Shr => self.arena.bv_lshr(ta, tb)?, // logical
                     BinOp::Sar => self.arena.bv_ashr(ta, tb)?, // arithmetic
+                    // Source-level `&&` / `||` are NOT bitvector ALU ops. They
+                    // booleanize both operands and yield 1 or 0 at the node
+                    // width. This mirrors `ExprPool::render_smtlib` term for
+                    // term -- `(ite (and (distinct a 0) (distinct b 0))
+                    // (_ bv1 W) (_ bv0 W))` -- and that identity is load
+                    // bearing: `ordered_replay` re-renders every imported
+                    // native assertion pack through the text bridge and
+                    // rejects the pack unless the two hash to the same
+                    // constraint, so a divergent lowering here would not be a
+                    // silent disagreement, it would break replay outright.
+                    //
+                    // Note the coercion order matters. `ta`/`tb` are already
+                    // narrowed/widened to `tw`, and truncation can turn a
+                    // non-zero value into zero, so the `!= 0` test must come
+                    // after the coercion exactly as the text renderer does it.
+                    BinOp::LogicalAnd | BinOp::LogicalOr => {
+                        let zero = self.arena.bv_const(tw, 0)?;
+                        let a_true = {
+                            let a_zero = self.arena.eq(ta, zero)?;
+                            self.arena.not(a_zero)?
+                        };
+                        let b_true = {
+                            let b_zero = self.arena.eq(tb, zero)?;
+                            self.arena.not(b_zero)?
+                        };
+                        let joined = if matches!(op, BinOp::LogicalAnd) {
+                            self.arena.and(a_true, b_true)?
+                        } else {
+                            self.arena.or(a_true, b_true)?
+                        };
+                        let one = self.arena.bv_const(tw, 1)?;
+                        self.arena.ite(joined, one, zero)?
+                    }
                 }
             }
             Expr::Un { op, a, .. } => {
