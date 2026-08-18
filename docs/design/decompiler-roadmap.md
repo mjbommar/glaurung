@@ -2625,6 +2625,33 @@ items below mostly are not:
 
 **Status at end of 2026-08-16: items 1 and 2 CLOSED, 3 and 5 open, 4 promoted.**
 
+**Status at end of 2026-08-19: item 4 CLOSED, and it was two defects wearing one
+symptom.** The whole-function float gate really did shut, and the reason it shut
+was `abi::result_register_candidates` answering `None` for `CallConv::Aarch64`
+so that EVERY AArch64 call was annotated `result = x0` whatever it returned.
+Separately, `movlpd`/`movhpd`/`movlps`/`movhps` had no arm anywhere in
+`src/ir/`, and the `pd` suffix made an unmodelled float producer that shut the
+gate a second way. Both fixed; item 4's `hfa197_quad4f_roundtrip` reproduction
+now passes and the eight declined `cvttss2si` opened exactly as predicted.
+
+**Item 3 CLOSED, and my retitle was still wrong.** I had retitled it "a tail
+call returning `rax` when the result is in `xmm0`". The actual owner is
+`direct_output::RETURN_REGS` — a SECOND return-register list, separate from
+`abi::return_registers`, carrying ARM32's hard-float `s0`/`d0` but **not**
+x86-64's `xmm0`. A float result reaching a bare machine `ret` had nothing to
+attach to and the assignment was dead-store eliminated, so the body vanished.
+Five such lists were then found; `st0` (i386 x87) has the identical gap and is
+filed.
+
+**Item 5 remains open and is now better bounded.** Of the 70 float-cluster
+failures I attributed to one mechanism, a census of all 104 cells found only
+**22 contain the crossing at all** — a packed read of a register whose live
+definition was a scalar write. Nine are fixed, 13 remain, and **48 are a
+different mechanism entirely.** The single largest remaining float blocker is
+instead the float->bits direction of reinterpretation: the bits->float direction
+has a union spelling and the reverse did not, so `(unsigned int)(arg0)` on a
+`float` was a C VALUE conversion. That fix moved 26 cells.
+
 **Inserted 2026-08-17, ahead of all of the above: the overflow flags after a
 multiply were poison, and the readers of those flags are overflow checks.**
 CLOSED. `Mnemonic::Imul` marked CF/OF undefined under a comment that stated the
