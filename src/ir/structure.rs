@@ -1306,11 +1306,6 @@ fn build_arm(
     build(entry, cfg, visited, stop_at)
 }
 
-/// Recognise an if-then / if-then-else diamond rooted at `cond`.
-///
-/// Returns `Some((region, after))` when we can structurally absorb the whole
-/// conditional and continue at `after` (the join block, or None if one of
-/// the arms exits outright).
 /// Whether the lowered condition at block `cond` must be negated when
 /// `then_entry` is used as the `then` arm. The raw condition is true when the
 /// branch is *taken* (jumps to `cond_taken`); if `then_entry` is instead the
@@ -1321,6 +1316,11 @@ fn invert_for(cfg: &Cfg, cond: usize, then_entry: usize) -> bool {
     cfg.cond_taken[cond] != Some(then_entry)
 }
 
+/// Recognise an if-then / if-then-else diamond rooted at `cond`.
+///
+/// Returns `Some((region, after))` when we can structurally absorb the whole
+/// conditional and continue at `after` (the join block, or None if one of
+/// the arms exits outright).
 fn detect_if_shape(
     cond: usize,
     cfg: &Cfg,
