@@ -12549,7 +12549,7 @@
   },
   "91_union_type_punning:x86_64_gcc15:O2": {
     "pun_byte_of_word": "pass",
-    "pun_halves_swapped": "fail",
+    "pun_halves_swapped": "pass",
     "pun_is_little_endian": "pass"
   },
   "92_anonymous_members:aarch64:O0": {

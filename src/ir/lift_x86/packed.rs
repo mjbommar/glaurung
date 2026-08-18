@@ -21,11 +21,11 @@ pub(super) fn xorps_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
 /// Packed integer operations are not scalar 128-bit arithmetic. Representing
 /// the four dword lanes independently lets the existing scalar LLIR, SSA, and C
 /// backend preserve exact lane dataflow without adding a second vector AST.
-fn packed_dword_lane(register: Register, lane: usize) -> VReg {
+pub(super) fn packed_dword_lane(register: Register, lane: usize) -> VReg {
     crate::ir::types::packed_dword_lane(&reg_name(register), lane)
 }
 
-fn is_xmm_register(register: Register) -> bool {
+pub(super) fn is_xmm_register(register: Register) -> bool {
     reg_name(register)
         .strip_prefix("xmm")
         .is_some_and(|index| index.parse::<u8>().is_ok())
@@ -749,7 +749,7 @@ pub(super) fn packed_qword_binary_ops(
 /// Register operands already have independent lane names; memory operands need
 /// explicit scalar loads so the ordinary readonly-data pass can materialise
 /// their bytes into portable constants later in the AST pipeline.
-fn packed_dword_sources(
+pub(super) fn packed_dword_sources(
     instr: &iced_x86::Instruction,
     first_temp: u32,
 ) -> Option<(Vec<Op>, Vec<Value>)> {
@@ -811,41 +811,6 @@ pub(super) fn packed_dword_and_not_ops(instr: &iced_x86::Instruction) -> Vec<Op>
             op: BinOp::And,
             lhs: Value::Reg(complemented),
             rhs: Value::Reg(packed_dword_lane(instr.op_register(1), lane)),
-        });
-    }
-    ops
-}
-
-pub(super) fn packed_dword_compare_greater_ops(instr: &iced_x86::Instruction) -> Vec<Op> {
-    if instr.op_count() != 2
-        || instr.op_kind(0) != OpKind::Register
-        || instr.op_kind(1) != OpKind::Register
-        || !is_xmm_register(instr.op_register(0))
-        || !is_xmm_register(instr.op_register(1))
-    {
-        return vec![Op::Unknown {
-            mnemonic: "pcmpgtd".into(),
-        }];
-    }
-    let mut ops = Vec::with_capacity(8);
-    for lane in 0..4 {
-        let dst = packed_dword_lane(instr.op_register(0), lane);
-        let src = packed_dword_lane(instr.op_register(1), lane);
-        let condition = VReg::Temp(80 + lane as u32);
-        // dst > src is the signed comparison src < dst. PCMPGTD writes an
-        // all-ones mask for true, not the boolean value one.
-        ops.push(Op::Cmp {
-            dst: condition.clone(),
-            op: CmpOp::Slt,
-            lhs: Value::Reg(src),
-            rhs: Value::Reg(dst.clone()),
-        });
-        ops.push(Op::Ite {
-            dst,
-            cond: condition,
-            t: Value::Const(-1),
-            e: Value::Const(0),
-            width: Width::W32,
         });
     }
     ops

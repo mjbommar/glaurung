@@ -35,6 +35,7 @@ mod conditions;
 mod flags;
 mod mul_flags;
 mod packed;
+mod packed_string;
 mod scalar_float;
 mod string_ops;
 mod wide_arith;
@@ -51,12 +52,19 @@ use flags::{
 use mul_flags::{append_imul_overflow_flags, imul_wide_product};
 use packed::{
     movd_ops, packed_dword_and_not_ops, packed_dword_binary_ops, packed_dword_compare_equal_ops,
-    packed_dword_compare_greater_ops, packed_dword_immediate_arithmetic_shift_right_ops,
+    packed_dword_immediate_arithmetic_shift_right_ops,
     packed_dword_immediate_logical_shift_right_ops, packed_dword_immediate_shift_left_ops,
     packed_dword_move_ops, packed_dword_shuffle_ops, packed_dword_unpack_low_ops,
     packed_float_shuffle_ops, packed_float_sign_mask_ops, packed_qword_binary_ops,
     packed_qword_half_move_ops, packed_qword_move_ops, packed_qword_unpack_low_ops,
     packed_word_extract_ops, xorps_ops, XmmHalf,
+};
+use packed_string::{
+    packed_byte_compare_ops, packed_byte_shuffle_ops, packed_byte_sign_mask_ops,
+    packed_byte_unpack_low_ops, packed_double_shuffle_ops, packed_dword_compare_greater_ops,
+    packed_dword_saturating_pack_ops, packed_insert_ops,
+    packed_qword_immediate_logical_shift_right_ops, packed_qword_unpack_high_ops,
+    packed_unsigned_dword_multiply_ops, packed_word_shuffle_ops, packed_word_unpack_low_ops,
 };
 use scalar_float::{
     scalar_convert_ops, scalar_convert_source_bytes, scalar_float_binary_ops,
@@ -1725,6 +1733,24 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
         Mnemonic::Pcmpeqd => packed_dword_compare_equal_ops(instr),
         Mnemonic::Pcmpgtd => packed_dword_compare_greater_ops(instr),
         Mnemonic::Pshufd => packed_dword_shuffle_ops(instr),
+        // The SSE string-primitive family; see `packed_string` for which of
+        // these are lifted exactly and which declare their register effect
+        // only, and why the line falls where it does.
+        Mnemonic::Pcmpeqb | Mnemonic::Pcmpgtb => packed_byte_compare_ops(instr),
+        Mnemonic::Punpcklbw => packed_byte_unpack_low_ops(instr),
+        Mnemonic::Pmovmskb => packed_byte_sign_mask_ops(instr, bits),
+        Mnemonic::Packssdw => packed_dword_saturating_pack_ops(instr),
+        Mnemonic::Pshufb => packed_byte_shuffle_ops(instr),
+        Mnemonic::Punpckhqdq => packed_qword_unpack_high_ops(instr),
+        Mnemonic::Shufpd => packed_double_shuffle_ops(instr),
+        Mnemonic::Pmuludq => packed_unsigned_dword_multiply_ops(instr),
+        Mnemonic::Psrlq => packed_qword_immediate_logical_shift_right_ops(instr),
+        Mnemonic::Pshuflw => packed_word_shuffle_ops(instr, false),
+        Mnemonic::Pshufhw => packed_word_shuffle_ops(instr, true),
+        Mnemonic::Punpcklwd => packed_word_unpack_low_ops(instr),
+        Mnemonic::Pinsrw => packed_insert_ops(instr, 2),
+        Mnemonic::Pinsrd => packed_insert_ops(instr, 4),
+        Mnemonic::Pinsrq => packed_insert_ops(instr, 8),
         Mnemonic::Movd => movd_ops(instr, bits),
         Mnemonic::Movq => packed_qword_move_ops(instr),
         Mnemonic::Pextrw => packed_word_extract_ops(instr),
@@ -5952,10 +5978,31 @@ mod tests {
         /// not have and does not admit to not having.
         ///
         /// The shape of the list is itself the argument. It is not exotica: the
-        /// SSE string primitives glibc's `strlen`/`memcmp` are built from
-        /// (`pcmpeqb`, `pmovmskb`, `punpcklbw`, `pshuflw`), the bit-scan and
-        /// population-count family (`bsr`, `bts`, `tzcnt`, `popcnt`), `syscall`,
-        /// and the byte/quadword string moves.
+        /// bit-scan and population-count family (`bsr`, `bts`, `tzcnt`,
+        /// `popcnt`), `syscall`, the x87 arithmetic this build has no depth
+        /// solution for, the VEX encodings of instructions whose SSE spellings
+        /// ARE lifted, and the byte/quadword string moves.
+        ///
+        /// The SSE string primitives glibc's `strlen`/`strcmp`/`memcmp` are
+        /// built from used to be the largest cluster on this list -- `pcmpeqb`
+        /// 204, `pcmpgtb` 220, `punpcklbw` 260, `pmovmskb` 222, `pshuflw` 232,
+        /// `psrlq` 120, `pmuludq` 48, and nine more, 1,388 occurrences in
+        /// total. `packed_string` took all seventeen off it, by two different
+        /// routes: the word/dword/qword-granular members are lifted exactly,
+        /// and the byte-parallel core emits a single-output `Op::Intrinsic` per
+        /// destination lane that declares what it writes and what it reads
+        /// without claiming to compute the value. Both routes satisfy this
+        /// guard, and only the first claims to know the answer.
+        ///
+        /// NOTE what this guard does NOT catch, which is the shape the second
+        /// route could have taken and deliberately did not: `Op::opaque` builds
+        /// an `Op::Intrinsic` with EMPTY `ins`/`outs`, and the sweep below only
+        /// looks for `Op::Unknown`. Rewriting an unmodelled instruction as
+        /// `Op::opaque` therefore leaves this list while telling register
+        /// dataflow exactly the same lie. `lower_unknowns` does precisely that
+        /// to whatever survives lifting, so the pipeline this census is a proxy
+        /// for has that hole in it by construction; the census measures the
+        /// lifter, not the pipeline.
         ///
         /// The guard is DEMONSTRATED, not asserted: deleting this commit's two
         /// dispatch arms and re-running puts `"movhps": 26` back on the list,
@@ -5984,30 +6031,13 @@ mod tests {
             "movlhps",
             "movsb",
             "movsq",
-            "packssdw",
-            "pcmpeqb",
-            "pcmpgtb",
-            "pcmpgtd",
-            "pinsrd",
-            "pinsrq",
-            "pinsrw",
-            "pmovmskb",
-            "pmuludq",
             "popcnt",
             "popfq",
-            "pshufb",
-            "pshufhw",
-            "pshuflw",
-            "psrlq",
-            "punpckhqdq",
-            "punpcklbw",
-            "punpcklwd",
             "pushfq",
             "rcr",
             "rdtsc",
             "rdtscp",
             "shrd",
-            "shufpd",
             "syscall",
             "tzcnt",
             "vmovdqu",
@@ -6125,6 +6155,672 @@ mod tests {
              write at all, so its destination silently keeps its previous value. \
              Occurrences: {silent:?}"
         );
+    }
+
+    // --- the SSE string-primitive family (`lift_x86::packed_string`) --------
+
+    /// Byte encodings of the family, each verified by decoding it back rather
+    /// than trusted from the modrm tables. Registers are `xmm0` (destination),
+    /// `xmm1` (source) and `eax`/`rax` throughout.
+    mod sse_string_encodings {
+        pub const PUNPCKHQDQ: &[u8] = &[0x66, 0x0f, 0x6d, 0xc1];
+        pub const PUNPCKHQDQ_IN_PLACE: &[u8] = &[0x66, 0x0f, 0x6d, 0xc0];
+        pub const SHUFPD_1: &[u8] = &[0x66, 0x0f, 0xc6, 0xc1, 0x01];
+        pub const PMULUDQ: &[u8] = &[0x66, 0x0f, 0xf4, 0xc1];
+        pub const PSRLQ_6: &[u8] = &[0x66, 0x0f, 0x73, 0xd0, 0x06];
+        pub const PSRLQ_65: &[u8] = &[0x66, 0x0f, 0x73, 0xd0, 0x41];
+        pub const PSRLQ_BY_REGISTER: &[u8] = &[0x66, 0x0f, 0xd3, 0xc1];
+        pub const PSHUFLW_D4: &[u8] = &[0xf2, 0x0f, 0x70, 0xc1, 0xd4];
+        pub const PSHUFHW_0: &[u8] = &[0xf3, 0x0f, 0x70, 0xc1, 0x00];
+        pub const PUNPCKLWD: &[u8] = &[0x66, 0x0f, 0x61, 0xc1];
+        pub const PUNPCKLWD_IN_PLACE: &[u8] = &[0x66, 0x0f, 0x61, 0xc0];
+        pub const PINSRW_WORD4: &[u8] = &[0x66, 0x0f, 0xc4, 0xc0, 0x04];
+        pub const PINSRW_WORD5: &[u8] = &[0x66, 0x0f, 0xc4, 0xc0, 0x05];
+        pub const PINSRD_LANE2: &[u8] = &[0x66, 0x0f, 0x3a, 0x22, 0xc0, 0x02];
+        pub const PINSRQ_HIGH: &[u8] = &[0x66, 0x48, 0x0f, 0x3a, 0x22, 0xc0, 0x01];
+        pub const PCMPEQB: &[u8] = &[0x66, 0x0f, 0x74, 0xc1];
+        pub const PCMPGTB: &[u8] = &[0x66, 0x0f, 0x64, 0xc1];
+        pub const PUNPCKLBW: &[u8] = &[0x66, 0x0f, 0x60, 0xc1];
+        pub const PMOVMSKB: &[u8] = &[0x66, 0x0f, 0xd7, 0xc0];
+        pub const PACKSSDW: &[u8] = &[0x66, 0x0f, 0x6b, 0xc1];
+        pub const PSHUFB: &[u8] = &[0x66, 0x0f, 0x38, 0x00, 0xc1];
+        pub const SHUFPD_1_IN_PLACE: &[u8] = &[0x66, 0x0f, 0xc6, 0xc0, 0x01];
+        pub const PMULUDQ_IN_PLACE: &[u8] = &[0x66, 0x0f, 0xf4, 0xc0];
+        pub const PSHUFLW_D4_IN_PLACE: &[u8] = &[0xf2, 0x0f, 0x70, 0xc0, 0xd4];
+        pub const PUNPCKLBW_IN_PLACE: &[u8] = &[0x66, 0x0f, 0x60, 0xc0];
+        pub const PACKSSDW_IN_PLACE: &[u8] = &[0x66, 0x0f, 0x6b, 0xc0];
+        pub const PSHUFB_IN_PLACE: &[u8] = &[0x66, 0x0f, 0x38, 0x00, 0xc0];
+        pub const PCMPGTD_RIP: &[u8] = &[0x66, 0x0f, 0x66, 0x05, 0x00, 0x00, 0x00, 0x00];
+
+        /// Every encoding above, for the sweeps that assert a property of the
+        /// whole family rather than of one member.
+        pub const ALL: &[&[u8]] = &[
+            PUNPCKHQDQ,
+            PUNPCKHQDQ_IN_PLACE,
+            SHUFPD_1,
+            PMULUDQ,
+            PSRLQ_6,
+            PSRLQ_65,
+            PSRLQ_BY_REGISTER,
+            PSHUFLW_D4,
+            PSHUFHW_0,
+            PUNPCKLWD,
+            PUNPCKLWD_IN_PLACE,
+            PINSRW_WORD4,
+            PINSRW_WORD5,
+            PINSRD_LANE2,
+            PINSRQ_HIGH,
+            PCMPEQB,
+            PCMPGTB,
+            PUNPCKLBW,
+            PMOVMSKB,
+            PACKSSDW,
+            PSHUFB,
+            PCMPGTD_RIP,
+            SHUFPD_1_IN_PLACE,
+            PMULUDQ_IN_PLACE,
+            PSHUFLW_D4_IN_PLACE,
+            PUNPCKLBW_IN_PLACE,
+            PACKSSDW_IN_PLACE,
+            PSHUFB_IN_PLACE,
+        ];
+    }
+
+    /// The lane values every value-level test below starts from. Chosen so no
+    /// two bytes, words, dwords or quadwords of the two registers collide —
+    /// a permutation that dropped a lane, swapped two, or read the wrong half
+    /// of one cannot produce a coincidentally correct answer.
+    const XMM0_LANES: [u64; 4] = [0x1122_3344, 0x5566_7788, 0x99aa_bbcc, 0xddee_ff00];
+    const XMM1_LANES: [u64; 4] = [0xa1a2_a3a4, 0xb1b2_b3b4, 0xc1c2_c3c4, 0xd1d2_d3d4];
+
+    /// A concrete evaluator for the op subset the packed lowerings emit.
+    ///
+    /// Asserting the op LIST of an exact lowering restates the implementation
+    /// in a second notation and passes whether or not the lowering is right;
+    /// asserting the VALUE it computes does not. `pshuflw`, `punpcklwd` and the
+    /// `pinsr*` family are bit-field surgery inside a 32-bit lane, which is
+    /// where an off-by-16 hides — so the tests below state the architectural
+    /// result and let this run the lift to reach it.
+    ///
+    /// Deliberately not [`crate::exec::interp`]: that lives behind the `exec`
+    /// feature, which `--features python-ext` does not build, so a test written
+    /// against it would not run in the configuration this lifter ships in.
+    ///
+    /// `Op::Intrinsic` is NOT evaluated — an effect-only intrinsic has no value
+    /// to evaluate, which is the entire point of it — so this is used only on
+    /// the exactly-lifted members. `evaluated_every_op` returns whether the
+    /// whole op list was understood, and the exact-lift tests assert it.
+    fn evaluate_lanes(
+        bytes: &[u8],
+        seed: &[(&str, u64)],
+    ) -> (std::collections::BTreeMap<String, u64>, bool) {
+        use std::collections::BTreeMap;
+
+        /// A `_dN` lane is 32 bits wide; every other name here is a temporary
+        /// or a 64-bit general register.
+        fn width_mask(name: &str) -> u64 {
+            match name.split_once("_d") {
+                Some((_, lane)) if matches!(lane, "0" | "1" | "2" | "3") => u64::from(u32::MAX),
+                _ => u64::MAX,
+            }
+        }
+
+        let mut physical: BTreeMap<String, u64> = seed
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), *value))
+            .collect();
+        let mut temporaries: BTreeMap<u32, u64> = BTreeMap::new();
+        let mut understood = true;
+
+        let mut read = |register: &VReg,
+                        physical: &BTreeMap<String, u64>,
+                        temporaries: &BTreeMap<u32, u64>| match register {
+            VReg::Phys(name) => *physical.get(name).unwrap_or(&0),
+            VReg::Temp(id) => *temporaries.get(id).unwrap_or(&0),
+            _ => 0,
+        };
+
+        for instruction in lift64(bytes) {
+            let value_of = |value: &Value,
+                            physical: &BTreeMap<String, u64>,
+                            temporaries: &BTreeMap<u32, u64>| match value
+            {
+                Value::Const(constant) => *constant as u64,
+                Value::Reg(register) => read(register, physical, temporaries),
+                Value::Addr(address) => *address,
+            };
+            let computed = match &instruction.op {
+                Op::Assign { dst, src } => {
+                    Some((dst.clone(), value_of(src, &physical, &temporaries)))
+                }
+                Op::ZExt { dst, src, from, to } => {
+                    let raw = value_of(src, &physical, &temporaries);
+                    let narrowed = raw & bit_mask(u32::from(from.bits()));
+                    Some((dst.clone(), narrowed & bit_mask(u32::from(to.bits()))))
+                }
+                Op::Trunc { dst, src, to, .. } => Some((
+                    dst.clone(),
+                    value_of(src, &physical, &temporaries) & bit_mask(u32::from(to.bits())),
+                )),
+                Op::Extract { dst, src, hi, lo } => Some((
+                    dst.clone(),
+                    (value_of(src, &physical, &temporaries) >> lo) & bit_mask(u32::from(hi - lo)),
+                )),
+                Op::Concat { dst, hi, lo } => {
+                    // Every `Concat` in this family joins two 32-bit lanes.
+                    let high = value_of(hi, &physical, &temporaries) & bit_mask(32);
+                    let low = value_of(lo, &physical, &temporaries) & bit_mask(32);
+                    Some((dst.clone(), (high << 32) | low))
+                }
+                Op::Bin { dst, op, lhs, rhs } => {
+                    let left = value_of(lhs, &physical, &temporaries);
+                    let right = value_of(rhs, &physical, &temporaries);
+                    let result = match op {
+                        BinOp::Add => left.wrapping_add(right),
+                        BinOp::Sub => left.wrapping_sub(right),
+                        BinOp::Mul => left.wrapping_mul(right),
+                        BinOp::And => left & right,
+                        BinOp::Or => left | right,
+                        BinOp::Xor => left ^ right,
+                        BinOp::Shl => left.wrapping_shl(right as u32),
+                        BinOp::Shr => left.wrapping_shr(right as u32),
+                        _ => {
+                            understood = false;
+                            0
+                        }
+                    };
+                    Some((dst.clone(), result))
+                }
+                Op::Nop => None,
+                _ => {
+                    understood = false;
+                    None
+                }
+            };
+            match computed {
+                Some((VReg::Phys(name), value)) => {
+                    let masked = value & width_mask(&name);
+                    physical.insert(name, masked);
+                }
+                Some((VReg::Temp(id), value)) => {
+                    temporaries.insert(id, value);
+                }
+                Some(_) | None => {}
+            }
+        }
+        (physical, understood)
+    }
+
+    /// Low `bits` bits set; `bits == 64` is the whole word.
+    fn bit_mask(bits: u32) -> u64 {
+        if bits >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << bits) - 1
+        }
+    }
+
+    /// The four lanes of `register` after lifting `bytes` over the standard
+    /// seed, plus the assertion that every op was evaluable.
+    fn lanes_after(bytes: &[u8]) -> [u64; 4] {
+        let seed: Vec<(String, u64)> = (0..4)
+            .flat_map(|lane| {
+                [
+                    (format!("xmm0_d{lane}"), XMM0_LANES[lane]),
+                    (format!("xmm1_d{lane}"), XMM1_LANES[lane]),
+                ]
+            })
+            .collect();
+        let borrowed: Vec<(&str, u64)> = seed
+            .iter()
+            .map(|(name, value)| (name.as_str(), *value))
+            .collect();
+        let (state, understood) = evaluate_lanes(bytes, &borrowed);
+        assert!(
+            understood,
+            "an exactly-lifted member emitted an op the value test cannot evaluate: {:#?}",
+            lift64(bytes)
+        );
+        std::array::from_fn(|lane| *state.get(&format!("xmm0_d{lane}")).unwrap_or(&0))
+    }
+
+    #[test]
+    fn punpckhqdq_takes_the_high_quadword_of_each_operand() {
+        assert_eq!(
+            lanes_after(sse_string_encodings::PUNPCKHQDQ),
+            [XMM0_LANES[2], XMM0_LANES[3], XMM1_LANES[2], XMM1_LANES[3]]
+        );
+        // The in-place form is the one a lowering that wrote before it read
+        // would get wrong: `punpckhqdq %xmm0,%xmm0` broadcasts the high half.
+        assert_eq!(
+            lanes_after(sse_string_encodings::PUNPCKHQDQ_IN_PLACE),
+            [XMM0_LANES[2], XMM0_LANES[3], XMM0_LANES[2], XMM0_LANES[3]]
+        );
+    }
+
+    #[test]
+    fn shufpd_selects_one_quadword_from_each_operand_by_immediate() {
+        // imm 1: bit 0 picks the destination's HIGH quadword for the result's
+        // low half; bit 1 is clear, so the source's LOW quadword becomes the
+        // result's high half.
+        assert_eq!(
+            lanes_after(sse_string_encodings::SHUFPD_1),
+            [XMM0_LANES[2], XMM0_LANES[3], XMM1_LANES[0], XMM1_LANES[1]]
+        );
+    }
+
+    #[test]
+    fn pmuludq_multiplies_the_even_dwords_into_full_quadwords() {
+        let low = XMM0_LANES[0] * XMM1_LANES[0];
+        let high = XMM0_LANES[2] * XMM1_LANES[2];
+        assert_eq!(
+            lanes_after(sse_string_encodings::PMULUDQ),
+            [low & 0xffff_ffff, low >> 32, high & 0xffff_ffff, high >> 32]
+        );
+    }
+
+    #[test]
+    fn psrlq_shifts_each_quadword_and_zeroes_past_sixty_three() {
+        let low = ((XMM0_LANES[1] << 32) | XMM0_LANES[0]) >> 6;
+        let high = ((XMM0_LANES[3] << 32) | XMM0_LANES[2]) >> 6;
+        assert_eq!(
+            lanes_after(sse_string_encodings::PSRLQ_6),
+            [low & 0xffff_ffff, low >> 32, high & 0xffff_ffff, high >> 32]
+        );
+        // Intel specifies a ZERO result for a count above 63, not a masked
+        // count — 0x41 is 65, which a `& 63` would turn into a shift by one.
+        assert_eq!(lanes_after(sse_string_encodings::PSRLQ_65), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn pshuflw_permutes_the_low_four_words_and_copies_the_high_quadword() {
+        // Control 0xd4 selects source words 0, 1, 1, 3.
+        let word = |index: usize| (XMM1_LANES[index / 2] >> ((index % 2) * 16)) & 0xffff;
+        assert_eq!(
+            lanes_after(sse_string_encodings::PSHUFLW_D4),
+            [
+                word(0) | (word(1) << 16),
+                word(1) | (word(3) << 16),
+                XMM1_LANES[2],
+                XMM1_LANES[3],
+            ]
+        );
+    }
+
+    #[test]
+    fn pshufhw_permutes_the_high_four_words_and_copies_the_low_quadword() {
+        // Control 0 broadcasts source word 4 across the high quadword.
+        let word4 = XMM1_LANES[2] & 0xffff;
+        assert_eq!(
+            lanes_after(sse_string_encodings::PSHUFHW_0),
+            [
+                XMM1_LANES[0],
+                XMM1_LANES[1],
+                word4 | (word4 << 16),
+                word4 | (word4 << 16),
+            ]
+        );
+    }
+
+    #[test]
+    fn punpcklwd_interleaves_the_low_four_words_of_each_operand() {
+        let destination = |index: usize| (XMM0_LANES[index / 2] >> ((index % 2) * 16)) & 0xffff;
+        let source = |index: usize| (XMM1_LANES[index / 2] >> ((index % 2) * 16)) & 0xffff;
+        assert_eq!(
+            lanes_after(sse_string_encodings::PUNPCKLWD),
+            std::array::from_fn(|lane| destination(lane) | (source(lane) << 16))
+        );
+        // In place, every result word is doubled.
+        assert_eq!(
+            lanes_after(sse_string_encodings::PUNPCKLWD_IN_PLACE),
+            std::array::from_fn(|lane| destination(lane) | (destination(lane) << 16))
+        );
+    }
+
+    #[test]
+    fn pinsr_writes_one_field_and_leaves_every_other_lane_intact() {
+        let inserted = 0x1234_abcdu64;
+        let with_eax = |bytes: &[u8]| {
+            let seed: Vec<(String, u64)> = (0..4)
+                .map(|lane| (format!("xmm0_d{lane}"), XMM0_LANES[lane]))
+                .chain([("eax".to_string(), inserted), ("rax".to_string(), inserted)])
+                .collect();
+            let borrowed: Vec<(&str, u64)> = seed
+                .iter()
+                .map(|(name, value)| (name.as_str(), *value))
+                .collect();
+            let (state, understood) = evaluate_lanes(bytes, &borrowed);
+            assert!(understood, "pinsr lowering emitted an unevaluable op");
+            std::array::from_fn::<u64, 4, _>(|lane| {
+                *state.get(&format!("xmm0_d{lane}")).unwrap_or(&0)
+            })
+        };
+        // Word 4 is the LOW half of lane 2; word 5 is its high half. The three
+        // other lanes must be untouched in both cases — an unlifted `pinsrw`
+        // did not merely lose the inserted field, it lost the statement that
+        // the rest of the register survives.
+        assert_eq!(
+            with_eax(sse_string_encodings::PINSRW_WORD4),
+            [
+                XMM0_LANES[0],
+                XMM0_LANES[1],
+                (XMM0_LANES[2] & 0xffff_0000) | (inserted & 0xffff),
+                XMM0_LANES[3],
+            ]
+        );
+        assert_eq!(
+            with_eax(sse_string_encodings::PINSRW_WORD5),
+            [
+                XMM0_LANES[0],
+                XMM0_LANES[1],
+                (XMM0_LANES[2] & 0xffff) | ((inserted & 0xffff) << 16),
+                XMM0_LANES[3],
+            ]
+        );
+        assert_eq!(
+            with_eax(sse_string_encodings::PINSRD_LANE2),
+            [XMM0_LANES[0], XMM0_LANES[1], inserted, XMM0_LANES[3]]
+        );
+        // PINSRQ writes a whole quadword, which is two lanes.
+        assert_eq!(
+            with_eax(sse_string_encodings::PINSRQ_HIGH),
+            [
+                XMM0_LANES[0],
+                XMM0_LANES[1],
+                inserted & 0xffff_ffff,
+                inserted >> 32,
+            ]
+        );
+    }
+
+    /// Every `(name, ins, outs)` triple of the intrinsics one lift emitted.
+    fn intrinsics_of(bytes: &[u8]) -> Vec<(String, Vec<String>, Vec<String>)> {
+        lift64(bytes)
+            .into_iter()
+            .filter_map(|instruction| match instruction.op {
+                Op::Intrinsic {
+                    name, ins, outs, ..
+                } => Some((
+                    name,
+                    ins.iter()
+                        .map(|value| format!("{value}").trim_start_matches('%').to_string())
+                        .collect(),
+                    outs.iter()
+                        .map(|(register, _)| {
+                            format!("{register}").trim_start_matches('%').to_string()
+                        })
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn byte_parallel_compares_declare_one_lane_local_effect_per_lane() {
+        // PCMPEQB and PCMPGTB compare sixteen bytes independently, so result
+        // lane N depends on lane N of both operands and on nothing else. Four
+        // single-output intrinsics state exactly that. They are NOT given a
+        // value: a scalar transliteration of sixteen byte compares is ~80 ops
+        // whose only consumer in real code is `pmovmskb`.
+        for (bytes, expected) in [
+            (sse_string_encodings::PCMPEQB, "x86.pcmpeqb"),
+            (sse_string_encodings::PCMPGTB, "x86.pcmpgtb"),
+        ] {
+            let intrinsics = intrinsics_of(bytes);
+            assert_eq!(intrinsics.len(), 4, "{expected}: {intrinsics:?}");
+            for (lane, (name, ins, outs)) in intrinsics.iter().enumerate() {
+                assert_eq!(name, expected);
+                assert_eq!(ins, &[format!("xmm0_d{lane}"), format!("xmm1_d{lane}")]);
+                assert_eq!(outs, &[format!("xmm0_d{lane}")]);
+            }
+        }
+    }
+
+    #[test]
+    fn punpcklbw_names_its_two_halves_apart() {
+        // Result lanes 0 and 1 are two DIFFERENT functions of the same input
+        // pair. One shared name would let value numbering collapse them, so the
+        // low and high halves are named apart.
+        let intrinsics = intrinsics_of(sse_string_encodings::PUNPCKLBW);
+        let expected: Vec<(String, Vec<String>, Vec<String>)> = (0..4)
+            .map(|lane| {
+                let input = lane / 2;
+                (
+                    format!("x86.punpcklbw.{}", if lane % 2 == 0 { "lo" } else { "hi" }),
+                    vec![format!("t{}", 138 + input), format!("xmm1_d{input}")],
+                    vec![format!("xmm0_d{lane}")],
+                )
+            })
+            .collect();
+        assert_eq!(intrinsics, expected);
+    }
+
+    #[test]
+    fn pmovmskb_declares_a_general_register_write_from_four_lanes() {
+        // The escape point out of the vector domain: in a real `strlen` this
+        // mask is what the following `bsf` branches on, and while it was
+        // unlifted that `bsf` read a register nothing in the function defined.
+        let intrinsics = intrinsics_of(sse_string_encodings::PMOVMSKB);
+        assert_eq!(intrinsics.len(), 1);
+        assert_eq!(intrinsics[0].0, "x86.pmovmskb");
+        assert_eq!(
+            intrinsics[0].1,
+            (0..4)
+                .map(|lane| format!("xmm0_d{lane}"))
+                .collect::<Vec<_>>()
+        );
+        // A 32-bit destination on x86-64 zero-extends into its parent, which is
+        // what `movd`'s GPR form already records; the mask must not be written
+        // as a bare 32-bit assignment that leaves `rax`'s high half undefined.
+        assert!(
+            lift64(sse_string_encodings::PMOVMSKB)
+                .iter()
+                .any(|instruction| matches!(
+                    &instruction.op,
+                    Op::ZExt { dst: VReg::Phys(name), to: Width::W64, .. } if name == "eax"
+                )),
+            "{:#?}",
+            lift64(sse_string_encodings::PMOVMSKB)
+        );
+    }
+
+    #[test]
+    fn packssdw_pairs_the_lanes_each_result_lane_saturates_from() {
+        let intrinsics = intrinsics_of(sse_string_encodings::PACKSSDW);
+        assert_eq!(intrinsics.len(), 4);
+        assert!(intrinsics.iter().all(|(name, ..)| name == "x86.packssdw"));
+        assert_eq!(
+            intrinsics
+                .iter()
+                .map(|(_, ins, outs)| (ins.clone(), outs.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (vec!["t138".into(), "t139".into()], vec!["xmm0_d0".into()]),
+                (vec!["t140".into(), "t141".into()], vec!["xmm0_d1".into()]),
+                (
+                    vec!["xmm1_d0".into(), "xmm1_d1".into()],
+                    vec!["xmm0_d2".into()]
+                ),
+                (
+                    vec!["xmm1_d2".into(), "xmm1_d3".into()],
+                    vec!["xmm0_d3".into()]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn pshufb_declares_every_output_lane_dependent_on_every_input_lane() {
+        // The one member with no static expression at all: its byte indices are
+        // a runtime register value, so each output byte is a sixteen-way select
+        // on something no analysis can read off the encoding.
+        let intrinsics = intrinsics_of(sse_string_encodings::PSHUFB);
+        assert_eq!(intrinsics.len(), 4);
+        for (lane, (name, ins, outs)) in intrinsics.iter().enumerate() {
+            assert_eq!(name, &format!("x86.pshufb.lane{lane}"));
+            assert_eq!(ins.len(), 8, "table lanes and index lanes");
+            assert_eq!(outs, &[format!("xmm0_d{lane}")]);
+        }
+    }
+
+    #[test]
+    fn a_shape_an_exact_lowering_declines_still_declares_its_effect() {
+        // `psrlq %xmm1,%xmm0` takes its count from the low quadword of an XMM
+        // register. That is not lifted — inventing a second quadword read is
+        // not better than declining — but declining must not mean vanishing.
+        let intrinsics = intrinsics_of(sse_string_encodings::PSRLQ_BY_REGISTER);
+        assert_eq!(intrinsics.len(), 4);
+        for (lane, (name, _, outs)) in intrinsics.iter().enumerate() {
+            assert_eq!(name, &format!("x86.psrlq.lane{lane}"));
+            assert_eq!(outs, &[format!("xmm0_d{lane}")]);
+        }
+    }
+
+    #[test]
+    fn pcmpgtd_compares_against_a_memory_operand_too() {
+        // The register form was already lifted; the memory form fell through to
+        // `Op::Unknown` and was every one of `pcmpgtd`'s twelve appearances in
+        // the sample corpus.
+        let ops = lift64(sse_string_encodings::PCMPGTD_RIP);
+        assert!(
+            !ops.iter()
+                .any(|instruction| matches!(instruction.op, Op::Unknown { .. })),
+            "{ops:#?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Load { .. }))
+                .count(),
+            4,
+            "one load per compared lane: {ops:#?}"
+        );
+        assert_eq!(
+            ops.iter()
+                .filter(|instruction| matches!(instruction.op, Op::Ite { .. }))
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn an_operand_named_twice_is_read_before_the_destination_is_overwritten() {
+        // `packed_dword_sources` hands back LIVE lane names for a register
+        // operand, which is right when the two registers differ and silently
+        // wrong when they do not: every lowering here writes destination lane 0
+        // before reading source lane 1 or 2, so `shufpd $1,%xmm0,%xmm0` would
+        // have read a lane this same instruction had already overwritten. The
+        // destination was snapshotted from the start; the source needed the
+        // same treatment, and only when it aliases.
+        //
+        // Checked by VALUE for the exactly-lifted members, because that is the
+        // only form of this bug that produces a wrong number rather than a
+        // wrong-looking op list.
+        assert_eq!(
+            lanes_after(sse_string_encodings::SHUFPD_1_IN_PLACE),
+            [XMM0_LANES[2], XMM0_LANES[3], XMM0_LANES[0], XMM0_LANES[1]]
+        );
+        let product = XMM0_LANES[2] * XMM0_LANES[2];
+        assert_eq!(
+            lanes_after(sse_string_encodings::PMULUDQ_IN_PLACE)[2..],
+            [product & 0xffff_ffff, product >> 32]
+        );
+        let word = |index: usize| (XMM0_LANES[index / 2] >> ((index % 2) * 16)) & 0xffff;
+        assert_eq!(
+            lanes_after(sse_string_encodings::PSHUFLW_D4_IN_PLACE),
+            [
+                word(0) | (word(1) << 16),
+                word(1) | (word(3) << 16),
+                XMM0_LANES[2],
+                XMM0_LANES[3],
+            ]
+        );
+        // For the effect-only members the same bug shows as an intrinsic whose
+        // declared input is a destination lane a previous intrinsic in the same
+        // instruction already redefined. No input may name `xmm0_dN` at all
+        // once the source aliases the destination — every one has to be a
+        // snapshot temporary.
+        for bytes in [
+            sse_string_encodings::PUNPCKLBW_IN_PLACE,
+            sse_string_encodings::PACKSSDW_IN_PLACE,
+            sse_string_encodings::PSHUFB_IN_PLACE,
+        ] {
+            for (name, ins, _) in intrinsics_of(bytes) {
+                assert!(
+                    ins.iter().all(|input| input.starts_with('t')),
+                    "{name} reads {ins:?}, which this instruction overwrites"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_member_of_the_sse_string_family_hides_its_register_write() {
+        // The family-wide contract, and the one the census in this module
+        // measures across the sample corpus: neither `Op::Unknown` (which
+        // declares nothing at all) nor an `Op::Intrinsic` with empty `outs`
+        // (which `Op::opaque` builds, and which declares nothing about
+        // registers while looking modelled) may survive lifting.
+        for bytes in sse_string_encodings::ALL {
+            let ops = lift64(bytes);
+            let mut wrote_a_register = false;
+            for instruction in &ops {
+                match &instruction.op {
+                    Op::Unknown { mnemonic } => {
+                        panic!("{mnemonic} still lifts to Op::Unknown: {ops:#?}")
+                    }
+                    Op::Intrinsic { name, outs, .. } => {
+                        assert!(
+                            !outs.is_empty(),
+                            "{name} declares no output, which is the defect: {ops:#?}"
+                        );
+                        wrote_a_register = true;
+                    }
+                    _ => {}
+                }
+                if crate::ir::use_def::defs_uses(&instruction.op)
+                    .0
+                    .iter()
+                    .any(|register| matches!(register, VReg::Phys(_)))
+                {
+                    wrote_a_register = true;
+                }
+            }
+            assert!(wrote_a_register, "{bytes:02x?} defines nothing: {ops:#?}");
+        }
+    }
+
+    #[test]
+    fn every_sse_string_lowering_leaves_both_xmm_spellings_consistent() {
+        // Each of these writes `_dN` lane names; the whole-register spelling a
+        // scalar float operation or a GPR transfer would read has to be
+        // redefined at the same instruction or it keeps a stale value. That is
+        // `synchronise_xmm_views`' job, and it reads definitions through
+        // `def_uses` — which reports a single-output intrinsic's `outs[0]`, so
+        // the effect-only members participate exactly as the lifted ones do.
+        for bytes in sse_string_encodings::ALL {
+            let ops = lift64(bytes);
+            let writes_low_lane = ops.iter().any(|instruction| {
+                crate::ir::use_def::defs_uses(&instruction.op)
+                    .0
+                    .iter()
+                    .any(|register| {
+                        matches!(register, VReg::Phys(name)
+                            if name == "xmm0_d0" || name == "xmm0_d1")
+                    })
+            });
+            if !writes_low_lane {
+                continue;
+            }
+            assert!(
+                ops.iter().any(|instruction| matches!(
+                    &instruction.op,
+                    Op::Assign { dst: VReg::Phys(dst), .. }
+                        | Op::Concat { dst: VReg::Phys(dst), .. } if dst == "xmm0"
+                )),
+                "{bytes:02x?} wrote a low lane without redefining the whole-register view: {ops:#?}"
+            );
+        }
     }
 
     #[test]

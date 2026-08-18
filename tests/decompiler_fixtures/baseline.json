@@ -1874,7 +1874,7 @@
   },
   "153_many_live_locals:clang:O2": {
     "spill153_live_set": "pass",
-    "spill153_static_web": "fail"
+    "spill153_static_web": "pass"
   },
   "153_many_live_locals:gcc:O0": {
     "spill153_live_set": "pass",
@@ -2312,7 +2312,7 @@
     "rust_slice_reverse": "pass",
     "rust_slice_split_zip": "pass",
     "rust_slice_windows": "pass",
-    "rust_slice_write": "fail"
+    "rust_slice_write": "pass"
   },
   "16_red_black_tree:clang:O0": {
     "rb_validate": "pass"

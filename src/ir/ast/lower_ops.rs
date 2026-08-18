@@ -875,10 +875,36 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                     }
                 }
             }
+            // An intrinsic that DECLARES a destination must assign to it, even
+            // when the value is not modelled. Dropping `outs` here was a
+            // dataflow lie with a measurable cost: the LLIR said "this defines
+            // `xmm0_d0`", the rendered C said nothing, and every later reader
+            // of that lane became an undefined read. It only became visible
+            // when the readers were exactly lifted -- the def-use census moved
+            // +529 across the three lanes that contain the SSE string family
+            // while both gcc lanes, which contain none of it, stayed put.
+            //
+            // `Expr::Unknown` renders as `__unknown(...)`, which the harness
+            // defines as returning 0. That is a WRONG VALUE where the previous
+            // behaviour was a stale register -- both are wrong, but only this
+            // one is honest about the dataflow, and an execution-differential
+            // lane can see the difference either way.
             match semantic_comment_for_unknown(name) {
                 Some(comment) => vec![Stmt::Comment(comment.to_string())],
-                None if ins.is_empty() => vec![Stmt::Unknown(name.clone())],
-                None => vec![Stmt::Unknown(format!("{}(...)", name))],
+                None => {
+                    let call = if ins.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}(...)", name)
+                    };
+                    match outs.first() {
+                        Some((dst, _)) => vec![Stmt::Assign {
+                            dst: dst.clone(),
+                            src: Expr::Unknown(call),
+                        }],
+                        None => vec![Stmt::Unknown(call)],
+                    }
+                }
             }
         }
         Op::Unknown { mnemonic } => match semantic_comment_for_unknown(mnemonic) {

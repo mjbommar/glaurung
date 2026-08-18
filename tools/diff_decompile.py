@@ -98,7 +98,13 @@ typedef _Bool bool;
 #define true 1
 #define false 0
 #endif
-long __unknown(long x){ (void)x; return 0; }
+/* Variadic to match the declaration the renderer emits
+ * (`extern long __unknown(long, ...);`, decbench_render.rs:509). A fixed
+ * arity here is a `conflicting types` compile error the moment a function
+ * contains BOTH an unmodelled intrinsic with arguments and one without --
+ * which is why it only surfaced when intrinsics started assigning their
+ * declared destination. */
+long __unknown(long x, ...){ (void)x; return 0; }
 /* Scrub the stack the measured call is about to use, to a fixed pattern.
 
    A recovered function that reads an UNINITIALISED local returns whatever the

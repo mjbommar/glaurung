@@ -16,8 +16,8 @@
     },
     "clang:O2": {
       "functions_emitted": 2533,
-      "functions_with_violations": 89,
-      "violations": 245
+      "functions_with_violations": 87,
+      "violations": 243
     },
     "gcc:O0": {
       "functions_emitted": 2567,
@@ -32,12 +32,12 @@
     "rustc:O0": {
       "functions_emitted": 3035,
       "functions_with_violations": 1998,
-      "violations": 7530
+      "violations": 7525
     },
     "rustc:O2": {
       "functions_emitted": 1787,
       "functions_with_violations": 1156,
-      "violations": 4454
+      "violations": 4451
     }
   },
   "problems": [],
@@ -1768,9 +1768,7 @@
     "172_float_double_widths:clang:O2:double_precision_horner": [],
     "172_float_double_widths:clang:O2:narrow_after_double_math": [],
     "172_float_double_widths:clang:O2:single_precision_horner": [],
-    "172_float_double_widths:clang:O2:width_disagreement": [
-      "var3 is read but never defined"
-    ],
+    "172_float_double_widths:clang:O2:width_disagreement": [],
     "172_float_double_widths:gcc:O0:accumulate_narrow": [],
     "172_float_double_widths:gcc:O0:accumulate_wide": [],
     "172_float_double_widths:gcc:O0:double_precision_horner": [],
@@ -1873,9 +1871,7 @@
     "175_float_matrix_kernel:clang:O2:dot_product_f64": [],
     "175_float_matrix_kernel:clang:O2:matrix2_determinant": [],
     "175_float_matrix_kernel:clang:O2:matrix2_multiply": [],
-    "175_float_matrix_kernel:clang:O2:scale_series_f32": [
-      "var35 is read but never defined"
-    ],
+    "175_float_matrix_kernel:clang:O2:scale_series_f32": [],
     "175_float_matrix_kernel:clang:O2:sum_of_squares_f32": [],
     "175_float_matrix_kernel:gcc:O0:dot_product_f32": [],
     "175_float_matrix_kernel:gcc:O0:dot_product_f64": [],
