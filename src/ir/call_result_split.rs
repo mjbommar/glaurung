@@ -92,6 +92,18 @@ impl Splitter {
         if crate::ir::abi::is_sse_pair_high_return_register(self.cc, name) {
             return Some("sse_result_high".to_string());
         }
+        // The same argument for AAPCS64's HFA members past the first. `s1` is
+        // not another spelling of `s0`; it carries a DIFFERENT member of one
+        // value, so it needs a key of its own to be attributable at all. Keyed
+        // on the exact register SPELLING rather than on the member index,
+        // because `s1` and `d1` are two views of `v1` that SSA tracks
+        // separately — a `{float x3}` result must not be read back through
+        // `d1`. Member ZERO is deliberately absent: `s0`/`d0` is already a
+        // spelling of "the result", and claiming it here would take it out of
+        // the AArch64 result-bank collapse below.
+        if let Some(member) = crate::ir::abi::hfa_return_member(self.cc, name) {
+            return Some(format!("hfa_result_{member}"));
+        }
         // A dword LANE of either SSE result register is its own quarter of the
         // returned object, not a width view of the whole: `regview::ssa_parent`
         // declines the vector bank, so a definition spelled `xmm0` never
@@ -219,6 +231,99 @@ impl Splitter {
             return None;
         }
         crate::ir::abi::sse_pair_return_high_bytes(&call_spec?.call_prototype.return_type)
+    }
+
+    /// The member width and count of a call whose callee returns an AAPCS64
+    /// HOMOGENEOUS FLOAT AGGREGATE in `v0`..`v3`.
+    ///
+    /// `None` for every other call, on the same fail-closed terms as
+    /// [`Self::sse_pair_high_bytes`]: only a DWARF-proven AAPCS64 HFA return
+    /// reaches this.
+    fn hfa_result_members(
+        &self,
+        call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
+    ) -> Option<(u8, u8)> {
+        if self.cc != CallConv::Aarch64 {
+            return None;
+        }
+        crate::ir::abi::hfa_return_members(&call_spec?.call_prototype.return_type)
+    }
+
+    /// Whether this call's callee writes its result into the CALLER's buffer
+    /// through AAPCS64's `x8` rather than into any result register.
+    fn returns_through_indirect_buffer(
+        &self,
+        call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
+    ) -> bool {
+        if self.cc != CallConv::Aarch64 {
+            return false;
+        }
+        call_spec
+            .and_then(|spec| {
+                crate::ir::abi::indirect_return_bytes(&spec.call_prototype.return_type)
+            })
+            .is_some()
+    }
+
+    /// Decompose an AAPCS64 HFA call result into one identity per member
+    /// register.
+    ///
+    /// Same mechanism as [`Self::sse_pair_results`] — the destination becomes a
+    /// frame object and each register's share is read back out of it — with the
+    /// difference that IS the class: a member is one whole register, so there
+    /// are up to FOUR of them and none is partly occupied. System V packs the
+    /// same `{float,float,float}` into two registers at two floats apiece and
+    /// needs an occupancy for the second; AAPCS64 gives `s0`,`s1`,`s2` one
+    /// member each and leaves `s3` untouched.
+    ///
+    /// Verified against `aarch64-linux-gnu-gcc` on 2026-08-18:
+    /// `hfa197_trio3f_roundtrip` reads `s0`, `s1` and `s2` after the call at
+    /// both `-O0` and `-O2`, and `hfa197_pair2d_roundtrip` reads `d0` and `d1`.
+    fn hfa_results(
+        &mut self,
+        member_bytes: u8,
+        members: u8,
+        buffer: &VReg,
+        state: &mut FlowState,
+    ) -> Vec<Stmt> {
+        let object_bytes = u16::from(member_bytes).saturating_mul(u16::from(members));
+        let registers = crate::ir::abi::hfa_return_registers(self.cc, member_bytes);
+        let mut compatibility = Vec::with_capacity(usize::from(members) * 2);
+        for (index, register) in registers.iter().take(usize::from(members)).enumerate() {
+            let fresh = VReg::phys(format!("{register}#call_lifetime_{}", self.next_result));
+            self.next_result += 1;
+            let object = Expr::StackAddr {
+                object: buffer.clone(),
+                size: object_bytes,
+            };
+            let offset = i64::try_from(index).unwrap_or(0) * i64::from(member_bytes);
+            let address = if offset == 0 {
+                object
+            } else {
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(object),
+                    rhs: Box::new(Expr::Const(offset)),
+                }
+            };
+            compatibility.push(Stmt::Assign {
+                dst: fresh.clone(),
+                src: Expr::Deref {
+                    addr: Box::new(address),
+                    size: member_bytes,
+                },
+            });
+            compatibility.push(Stmt::Assign {
+                dst: VReg::phys(*register),
+                src: Expr::Reg(fresh.clone()),
+            });
+            if state.reachable {
+                if let Some(storage) = self.result_storage(&VReg::phys(*register)) {
+                    state.results.insert(storage, fresh);
+                }
+            }
+        }
+        compatibility
     }
 
     /// Decompose an `xmm0:xmm1` call result into one identity per readable
@@ -503,6 +608,18 @@ impl Splitter {
                 // Every call clobbers every ABI result bank, regardless of
                 // whether source-level consumption attributed a destination.
                 state.results.clear();
+                // AAPCS64's indirect result is in NO result register: the
+                // callee wrote it into the caller's own buffer through `x8`,
+                // and `x0` holds nothing on return. Whatever the attribution
+                // picked, it is not this call's value — so drop the destination
+                // rather than assign a register the callee never defined. The
+                // buffer itself is bound later, once stack promotion has given
+                // it an identity (`aapcs64_indirect_result`), because the
+                // address is still `sp + k` arithmetic at this point.
+                if self.returns_through_indirect_buffer(call_spec.as_ref()) {
+                    *dst = None;
+                    return Vec::new();
+                }
                 let Some(original) = dst.clone() else {
                     return Vec::new();
                 };
@@ -521,6 +638,16 @@ impl Splitter {
                     self.next_result += 1;
                     *dst = Some(buffer.clone());
                     return self.sse_pair_results(high_bytes, &buffer, state);
+                }
+                // AAPCS64's HFA, checked here for the same reason and with the
+                // same effect: one value in up to four SIMD registers is not a
+                // scalar in one, so the attributed spelling does not decide
+                // where it is — the proven return CLASS does.
+                if let Some((member_bytes, members)) = self.hfa_result_members(call_spec.as_ref()) {
+                    let buffer = VReg::phys(format!("split_result_{}", self.next_result));
+                    self.next_result += 1;
+                    *dst = Some(buffer.clone());
+                    return self.hfa_results(member_bytes, members, &buffer, state);
                 }
                 let Some(storage) = self.destination_storage(&original) else {
                     return Vec::new();

@@ -28,6 +28,16 @@ use crate::ir::regview;
 use crate::ir::types::{CallEffects, LlirFunction, Op, VReg};
 use crate::ir::use_def::def_uses;
 
+mod return_spelling;
+// Re-exported at their original `crate::ir::abi::` paths: the split is a
+// file boundary, not an API change, so no caller moves.
+pub use return_spelling::{
+    hfa_return_definition, hfa_return_members, hfa_return_tag, indirect_return_bytes,
+    indirect_return_definition, indirect_return_tag, split_bank_return_definition,
+    split_bank_return_order, split_bank_return_tag, sse_pair_return_definition,
+    sse_pair_return_high_bytes, sse_pair_return_tag, synthesised_return_definition,
+};
+
 /// The register a callee leaves its return value in.
 pub fn return_register(cc: CallConv) -> &'static str {
     match cc {
@@ -180,6 +190,100 @@ pub enum ReturnClass {
     /// hidden first INTEGER argument register; the callee returns that address
     /// in the result register and every declared argument shifts one slot right.
     Memory,
+    /// AAPCS64's HOMOGENEOUS FLOATING-POINT AGGREGATE: 2-4 members, all of the
+    /// SAME floating-point type, one member per consecutive SIMD register
+    /// (`v0`..`v3`, spelled `s0`..`s3` or `d0`..`d3` at the member's width).
+    ///
+    /// Not [`Self::SsePair`] in another bank, and `197_homogeneous_float_aggregates`
+    /// is what proves it. System V packs `{float,float,float}` into TWO
+    /// registers at two floats apiece, so its high register is a partly
+    /// occupied EIGHTBYTE and the class needs an occupancy. AAPCS64 gives each
+    /// MEMBER a register of its own, so the same struct occupies `s0`,`s1`,`s2`
+    /// with `s3` untouched: three registers, four bytes each, no partial
+    /// occupancy anywhere. A model that reuses the pair reads member two out of
+    /// the top half of member one's register.
+    ///
+    /// `members` is 2..=4 by construction. One member is a scalar `float` or
+    /// `double` result, which already has a working single-register contract;
+    /// five cannot be an HFA at all.
+    HomogeneousFloat { member_bytes: u8, members: u8 },
+    /// AAPCS64's INDIRECT result: the caller allocates `bytes` of storage and
+    /// passes its address in the dedicated `x8`, which is NOT an argument
+    /// register.
+    ///
+    /// Deliberately not [`Self::Memory`]. That variant carries System V's
+    /// contract — hidden pointer in the FIRST ARGUMENT register, every declared
+    /// argument shifted one slot right, and the buffer's address handed back in
+    /// the result register. AAPCS64 shifts nothing, returns nothing, and uses a
+    /// register the argument model never touches, so reusing `Memory` would
+    /// relabel every argument of the call.
+    ///
+    /// The size is carried because AAPCS64 copies the result "as if" it were
+    /// stored to memory and reloaded: a 20-byte object writes 20 bytes and
+    /// leaves the tail of the last eightbyte unspecified, which is exactly the
+    /// case `198_aggregate_return_edges`'s `agr198_five` exists to pin.
+    IndirectBuffer { bytes: u16 },
+}
+
+/// The dedicated register a caller passes an indirect result's address in.
+///
+/// `None` for every convention whose over-wide result travels in an ordinary
+/// ARGUMENT register instead — System V AMD64's hidden pointer is argument
+/// zero, and modelling it here would claim the two contracts are one.
+pub fn indirect_result_register(cc: CallConv) -> Option<&'static str> {
+    match cc {
+        // AAPCS64 (IHI 0055, "Result return"): "the caller shall reserve a
+        // block of memory ... and shall pass its address in x8".  `x8` is the
+        // Indirect Result Location Register (`XR`), outside `x0`-`x7`.
+        CallConv::Aarch64 => Some("x8"),
+        CallConv::SysVAmd64
+        | CallConv::Win64
+        | CallConv::Cdecl32
+        | CallConv::Arm
+        | CallConv::ArmHardFloat => None,
+    }
+}
+
+/// The consecutive SIMD result registers an AAPCS64 HFA occupies, at the
+/// member's own width.
+///
+/// A member is one whole register, so the spelling states the member's width:
+/// four bytes is `s0`..`s3` and eight is `d0`..`d3`. These are NOT alias sets
+/// and NOT a pair — they are four registers carrying four different members of
+/// one value, which is why they can never join [`return_registers`].
+pub fn hfa_return_registers(cc: CallConv, member_bytes: u8) -> &'static [&'static str] {
+    match (cc, member_bytes) {
+        (CallConv::Aarch64, 4) => &["s0", "s1", "s2", "s3"],
+        (CallConv::Aarch64, 8) => &["d0", "d1", "d2", "d3"],
+        _ => &[],
+    }
+}
+
+/// Which HFA member register `name` is, for members past the FIRST.
+///
+/// Member zero is deliberately excluded. `s0`/`d0` is already a spelling of
+/// "the result" under [`return_registers`], and claiming it here would take it
+/// out of the AArch64 result-bank collapse that
+/// `call_result_split::Splitter::result_storage` deliberately keeps (see the
+/// `175_float_matrix_kernel` measurement recorded there). Members one to three
+/// have no storage identity at all today, so giving them one is additive and
+/// inert on every call that is not a proven HFA return.
+///
+/// The exact SPELLING is part of the answer, not just the index: `s1` and `d1`
+/// are two views of `v1` that SSA tracks as unrelated identities, so a call
+/// returning `{float x3}` must not have its member read back through `d1`.
+pub fn hfa_return_member(cc: CallConv, name: &str) -> Option<&'static str> {
+    let base = ssa_base(name);
+    for member_bytes in [4u8, 8] {
+        if let Some(register) = hfa_return_registers(cc, member_bytes)
+            .iter()
+            .skip(1)
+            .find(|register| **register == base)
+        {
+            return Some(register);
+        }
+    }
+    None
 }
 
 /// Classify a System V AMD64 aggregate result from its size and eightbyte classes.
@@ -222,105 +326,6 @@ pub fn sysv_amd64_return_class(size: u64, eightbytes: &[Eightbyte]) -> Option<Re
         }
         _ => None,
     }
-}
-
-/// The synthesised C tag for a System V AMD64 result split across the integer
-/// and SSE result banks.
-///
-/// [`ReturnClass::IntegerPair`] had a builtin spelling: the double-word integer
-/// is INTEGER, INTEGER by construction, so `unsigned __int128` IS that ABI
-/// contract and needs no aggregate reconstruction. `rax + xmm0` has no builtin
-/// equivalent, and a declaration naming either bank alone silently discards the
-/// other eightbyte's bytes — which is exactly the defect this spelling exists to
-/// close.
-///
-/// The members are chosen for their EIGHTBYTE CLASSES, not for the source
-/// fields: `unsigned long` classifies INTEGER and `double` classifies SSE, and
-/// those two facts are the entire contract. One tag per bank ORDER therefore
-/// serves every aggregate of that shape, and no field recovery is required.
-pub fn split_bank_return_tag(integer_first: bool) -> &'static str {
-    if integer_first {
-        "struct __glaurung_split_is"
-    } else {
-        "struct __glaurung_split_si"
-    }
-}
-
-/// The self-contained definition that puts [`split_bank_return_tag`] in scope.
-///
-/// Emitted at block scope above the callee declaration that names it, for the
-/// same reason `SymbolRecord::required_structs` is: a sliced one-function
-/// fragment has to declare everything it names, and nothing above the signature
-/// line survives that slice.
-pub fn split_bank_return_definition(integer_first: bool) -> &'static str {
-    if integer_first {
-        "struct __glaurung_split_is { unsigned long __integer; double __sse; };"
-    } else {
-        "struct __glaurung_split_si { double __sse; unsigned long __integer; };"
-    }
-}
-
-/// The bank order a return-type spelling denotes, or `None` for every other
-/// type. `Some(true)` is `integer_first`, matching [`ReturnClass::SplitBanks`].
-pub fn split_bank_return_order(return_type: &str) -> Option<bool> {
-    [true, false]
-        .into_iter()
-        .find(|integer_first| split_bank_return_tag(*integer_first) == return_type)
-}
-
-/// The synthesised C tag for a System V AMD64 result in the SSE result PAIR.
-///
-/// Same argument as [`split_bank_return_tag`], one class over: no builtin C
-/// type returns in `xmm0:xmm1`, and a declaration naming `double` alone claims
-/// `xmm0` and silently discards everything the callee left in `xmm1`.
-///
-/// There are two tags because there are two OCCUPANCIES, not because there are
-/// two field layouts. Both tags are sixteen bytes and both return in
-/// `xmm0:xmm1` — the register contract is identical. What differs is how much
-/// of `xmm1` the callee defined, and therefore how much of it a caller may read
-/// back: `{double; double;}` moves eight bytes out of the high register and
-/// `{double; float;}` moves four. Using the full spelling for a twelve-byte
-/// result would read four bytes that were never stored.
-///
-/// `None` for any other occupancy: see [`ReturnClass::SsePair`].
-pub fn sse_pair_return_tag(high_bytes: u8) -> Option<&'static str> {
-    match high_bytes {
-        8 => Some("struct __glaurung_sse_pair"),
-        4 => Some("struct __glaurung_sse_pair_half"),
-        _ => None,
-    }
-}
-
-/// The self-contained definition that puts [`sse_pair_return_tag`] in scope,
-/// emitted at block scope for the same reason [`split_bank_return_definition`]
-/// is.
-pub fn sse_pair_return_definition(high_bytes: u8) -> Option<&'static str> {
-    match high_bytes {
-        8 => Some("struct __glaurung_sse_pair { double __sse0; double __sse1; };"),
-        4 => Some("struct __glaurung_sse_pair_half { double __sse0; float __sse1; };"),
-        _ => None,
-    }
-}
-
-/// The second-eightbyte occupancy a return-type spelling denotes, or `None` for
-/// every other type. Matches [`ReturnClass::SsePair`]'s `high_bytes`.
-pub fn sse_pair_return_high_bytes(return_type: &str) -> Option<u8> {
-    [8, 4]
-        .into_iter()
-        .find(|high_bytes| sse_pair_return_tag(*high_bytes) == Some(return_type))
-}
-
-/// Every self-contained definition a synthesised aggregate return spelling
-/// needs in scope, or `None` when the type is not one of them.
-///
-/// One entry point so a renderer emitting these declarations does not have to
-/// enumerate the classes that have them; adding a class here is what puts its
-/// tag in scope everywhere it is already declared.
-pub fn synthesised_return_definition(return_type: &str) -> Option<&'static str> {
-    if let Some(integer_first) = split_bank_return_order(return_type) {
-        return Some(split_bank_return_definition(integer_first));
-    }
-    sse_pair_return_high_bytes(return_type).and_then(sse_pair_return_definition)
 }
 
 /// The SECOND SSE result register, and every width spelling of it.
@@ -866,7 +871,28 @@ fn result_register_candidates(cc: CallConv) -> Option<(&'static [&'static str], 
         // invariant `x87::plan_function` refuses to lift without), so the returned
         // value is always the bottom slot `st0`.
         CallConv::Cdecl32 => Some((&["st0", "rax"], "rax")),
-        CallConv::Aarch64 | CallConv::Arm => None,
+        // AAPCS64 has the same two-bank split, and its absence here cost the
+        // same thing one architecture over. Every AArch64 call was annotated as
+        // returning `x0`, so a `double`-returning callee defined a register the
+        // caller never read — and because AArch64's `v8`-`v15` are callee-SAVED,
+        // `ast::float_gate::scalar_float_semantics_proof` then treats such a
+        // call as an unmodelled float producer and shuts the WHOLE FUNCTION's
+        // scalar-float lowering. That is why
+        // `197_homogeneous_float_aggregates:aarch64:*:hfa197_scalar_control`
+        // failed: a plain `double` return, no aggregate anywhere, every
+        // `fcvtzs` rendered `/* asm: vcvt... */` with its destination
+        // undefined, purely because the call before it was labelled `x0`.
+        //
+        // `v0` leads because the scalar views are what a caller actually reads
+        // (`fmov d30, d0`), and the whole-register spelling is what a vector
+        // consumer reads; the integer register is last for the same reason it
+        // is last on System V — `x0` is the one that is also used for other
+        // purposes, so it must not win a tie, and it remains the fallback when
+        // nothing after the call decides.
+        CallConv::Aarch64 => Some((&["v0", "d0", "s0", "x0"], "x0")),
+        // Soft-float AAPCS returns every floating-point value in the CORE
+        // registers, so there is no second bank to choose between.
+        CallConv::Arm => None,
     }
 }
 
@@ -946,6 +972,98 @@ mod tests {
                 }
                 other => panic!("expected a call, got {other:?}"),
             }
+        }
+    }
+
+    /// AAPCS64's call result is chosen from the SAME first-read-wins evidence
+    /// System V's is, and its absence is what made every AArch64 call look like
+    /// an integer one.
+    ///
+    /// The instruction stream does not say which bank a callee returned in —
+    /// that is a property of its return TYPE. What the caller says is which
+    /// register it goes on to consume, and consuming a caller-saved register the
+    /// call did not write would be reading garbage. So the float names lead and
+    /// `x0` is both the last candidate and the fallback: when a function writes
+    /// both, `x0` is the result and the vector register was scratch.
+    ///
+    /// Measured on `197_homogeneous_float_aggregates:aarch64:O0` (2026-08-18):
+    /// `bl hfa197_make_scalar` followed by `fmov d31, d0`. Annotated `x0`, the
+    /// `d0` read had no definition and `float_gate` shut the whole function's
+    /// scalar-float lowering.
+    #[test]
+    fn aarch64_call_result_follows_the_bank_the_caller_reads() {
+        let float_result = |consume: Op, expected: &str| {
+            let mut lf = func(vec![
+                call_at(0x1000),
+                LlirInstr {
+                    va: 0x1004,
+                    op: consume,
+                },
+            ]);
+            annotate_calls(&mut lf, CallConv::Aarch64);
+            let Op::Call {
+                effects: Some(effects),
+                ..
+            } = &lf.blocks[0].instrs[0].op
+            else {
+                panic!("AArch64 call was not annotated: {lf:#?}");
+            };
+            assert_eq!(effects.result, Some(VReg::phys(expected)));
+        };
+
+        // A `double`-returning callee: the caller reads `d0`.
+        float_result(
+            Op::Intrinsic {
+                name: "vmov.f64".into(),
+                ins: vec![crate::ir::types::Value::Reg(VReg::phys("d0"))],
+                outs: vec![(VReg::phys("d31"), crate::ir::types::Width::W64)],
+                reads_mem: false,
+                writes_mem: false,
+            },
+            "d0",
+        );
+        // A `float`-returning callee reads the 32-bit view of the same
+        // register, and the EXACT spelling is what the result must land on:
+        // SSA tracks `s0` and `d0` as unrelated identities, so annotating the
+        // other one leaves the read undefined.
+        float_result(
+            Op::Intrinsic {
+                name: "vmov.f32".into(),
+                ins: vec![crate::ir::types::Value::Reg(VReg::phys("s0"))],
+                outs: vec![(VReg::phys("s29"), crate::ir::types::Width::W32)],
+                reads_mem: false,
+                writes_mem: false,
+            },
+            "s0",
+        );
+        // An integer-returning callee keeps `x0`, which is also the fallback
+        // when nothing after the call decides.
+        float_result(
+            Op::Assign {
+                dst: VReg::phys("x19"),
+                src: crate::ir::types::Value::Reg(VReg::phys("x0")),
+            },
+            "x0",
+        );
+
+        // THE CANDIDATE LIST AND ITS ORDER. `v0` leads so a vector consumer is
+        // matched, the scalar views follow, and `x0` is last so it never wins a
+        // tie against a float read in the same instruction.
+        assert_eq!(
+            result_register_candidates(CallConv::Aarch64),
+            Some((&["v0", "d0", "s0", "x0"][..], "x0"))
+        );
+        // Soft-float AAPCS returns floating-point values in the CORE registers,
+        // so it has no second bank and must not acquire this choice.
+        assert_eq!(result_register_candidates(CallConv::Arm), None);
+        // Every listed candidate is a spelling this convention already agrees
+        // is result storage; the choice is WHICH, never a new register.
+        for candidate in ["v0", "d0", "s0", "x0"] {
+            assert!(
+                is_return_register(CallConv::Aarch64, candidate)
+                    || float_return_registers(CallConv::Aarch64).contains(&candidate),
+                "{candidate} is not AArch64 result storage"
+            );
         }
     }
 
@@ -1397,13 +1515,170 @@ mod tests {
     /// bytes of the HIGH register they move. Both are sixteen-byte objects that
     /// classify SSE,SSE, so both return in `xmm0:xmm1` — the register contract
     /// is shared and only the occupancy is not.
+    /// The AAPCS64 HFA spellings: one member per register, and the count is
+    /// what distinguishes them.
+    ///
+    /// The `trio3f` row is the one that proves this cannot be the SSE pair.
+    /// `sse_pair_return_tag(4)` describes TWO sixteen-byte registers of which
+    /// the second is half occupied; `hfa_return_tag(4, 3)` describes THREE
+    /// four-byte members, each in a register of its own, with a fourth register
+    /// untouched. Those are different objects and different storage.
+    #[test]
+    fn an_hfa_spelling_names_one_member_per_register() {
+        for (member_bytes, members, member_type) in [
+            (4u8, 2u8, "float"),
+            (4, 3, "float"),
+            (4, 4, "float"),
+            (8, 2, "double"),
+            (8, 3, "double"),
+            (8, 4, "double"),
+        ] {
+            let tag = hfa_return_tag(member_bytes, members).expect("a modelled HFA shape");
+            let definition =
+                hfa_return_definition(member_bytes, members).expect("a modelled HFA shape");
+            assert_eq!(hfa_return_members(tag), Some((member_bytes, members)));
+            assert_eq!(
+                synthesised_return_definition(tag).as_deref(),
+                Some(definition)
+            );
+            assert!(definition.starts_with(&format!("{tag} {{")), "{definition}");
+            // Exactly `members` members, all of the same type: that IS the
+            // homogeneity the class asserts.
+            assert_eq!(
+                definition.matches(&format!("{member_type} __m")).count(),
+                usize::from(members),
+                "{definition}"
+            );
+        }
+        // ONE member is a scalar result and FIVE has no register; neither is an
+        // HFA, and neither gets a spelling.
+        for members in [0u8, 1, 5, 8] {
+            assert_eq!(hfa_return_tag(4, members), None, "{members}");
+            assert_eq!(hfa_return_definition(8, members), None, "{members}");
+        }
+        // Only the two floating-point widths AArch64 has scalar views for.
+        for member_bytes in [1u8, 2, 3, 5, 6, 7, 16] {
+            assert_eq!(hfa_return_tag(member_bytes, 2), None, "{member_bytes}");
+        }
+        assert_eq!(hfa_return_members("double"), None);
+        assert_eq!(hfa_return_members("struct __glaurung_split_is"), None);
+        // A trio and a quad of the same member type are DIFFERENT spellings:
+        // collapsing them would read a fourth member out of `s3`.
+        assert_ne!(hfa_return_tag(4, 3), hfa_return_tag(4, 4));
+        // ...as are the two widths at the same count.
+        assert_ne!(hfa_return_tag(4, 2), hfa_return_tag(8, 2));
+    }
+
+    /// The HFA member registers, and the member-zero exclusion.
+    #[test]
+    fn hfa_member_registers_are_the_scalar_views_of_v0_to_v3() {
+        assert_eq!(
+            hfa_return_registers(CallConv::Aarch64, 4),
+            &["s0", "s1", "s2", "s3"]
+        );
+        assert_eq!(
+            hfa_return_registers(CallConv::Aarch64, 8),
+            &["d0", "d1", "d2", "d3"]
+        );
+        // No other convention has this bank, and no other member width.
+        assert!(hfa_return_registers(CallConv::Aarch64, 2).is_empty());
+        for cc in [
+            CallConv::SysVAmd64,
+            CallConv::Win64,
+            CallConv::Cdecl32,
+            CallConv::Arm,
+            CallConv::ArmHardFloat,
+        ] {
+            assert!(hfa_return_registers(cc, 4).is_empty(), "{cc:?}");
+            assert!(hfa_return_registers(cc, 8).is_empty(), "{cc:?}");
+        }
+
+        // Members ONE onward have no storage identity anywhere else, which is
+        // why they can acquire one here.
+        for name in ["s1", "s2", "s3", "d1", "d2", "d3"] {
+            assert_eq!(hfa_return_member(CallConv::Aarch64, name), Some(name));
+            assert!(!is_return_register(CallConv::Aarch64, name), "{name}");
+        }
+        // SSA versions fold onto the same member.
+        assert_eq!(hfa_return_member(CallConv::Aarch64, "s2#7"), Some("s2"));
+        // MEMBER ZERO IS EXCLUDED. `s0`/`d0` is already a spelling of "the
+        // result", and claiming it here would take it out of the AArch64
+        // result-bank collapse in `call_result_split`.
+        for name in ["s0", "d0", "v0", "x0"] {
+            assert_eq!(hfa_return_member(CallConv::Aarch64, name), None, "{name}");
+        }
+        // Nothing outside the bank, and nothing on another convention.
+        assert_eq!(hfa_return_member(CallConv::Aarch64, "x1"), None);
+        assert_eq!(hfa_return_member(CallConv::ArmHardFloat, "s1"), None);
+        assert_eq!(hfa_return_member(CallConv::SysVAmd64, "xmm1"), None);
+    }
+
+    /// The AAPCS64 indirect result spelling: a size, and the register it is NOT
+    /// passed in.
+    #[test]
+    fn the_indirect_result_spelling_carries_the_buffer_size() {
+        assert_eq!(indirect_result_register(CallConv::Aarch64), Some("x8"));
+        // System V's hidden pointer is argument ZERO, not a dedicated register.
+        // Claiming one here would say the two contracts are the same.
+        for cc in [
+            CallConv::SysVAmd64,
+            CallConv::Win64,
+            CallConv::Cdecl32,
+            CallConv::Arm,
+            CallConv::ArmHardFloat,
+        ] {
+            assert_eq!(indirect_result_register(cc), None, "{cc:?}");
+        }
+        // `x8` is not an argument register and not a result register, which is
+        // the whole reason this class needs its own machinery.
+        assert!(!argument_registers(CallConv::Aarch64).contains(&"x8"));
+        assert!(!is_return_register(CallConv::Aarch64, "x8"));
+
+        for bytes in [17u16, 20, 24, 32, 64, 4096] {
+            let tag = indirect_return_tag(bytes).expect("a size past the register cutoff");
+            let definition = indirect_return_definition(bytes).expect("the same");
+            assert_eq!(indirect_return_bytes(&tag), Some(bytes));
+            assert_eq!(
+                synthesised_return_definition(&tag),
+                Some(definition.clone())
+            );
+            assert!(definition.starts_with(&format!("{tag} {{")), "{definition}");
+            // The size is the WHOLE contract: AAPCS64 copies the object as if
+            // stored to memory, so no field recovery is required and none is
+            // spelled. Twenty bytes is deliberately not a multiple of eight.
+            assert!(
+                definition.contains(&format!("__bytes[{bytes}]")),
+                "{definition}"
+            );
+        }
+        // At or below sixteen bytes the result is in REGISTERS and this
+        // spelling would be actively wrong.
+        for bytes in [0u16, 1, 8, 12, 16] {
+            assert_eq!(indirect_return_tag(bytes), None, "{bytes}");
+            assert_eq!(indirect_return_definition(bytes), None, "{bytes}");
+            assert_eq!(
+                indirect_return_bytes(&format!("struct __glaurung_indirect_{bytes}")),
+                None,
+                "{bytes}"
+            );
+        }
+        assert_eq!(indirect_return_bytes("long"), None);
+        assert_eq!(indirect_return_bytes("struct __glaurung_hfa_3f"), None);
+        // Two sizes are two spellings: sharing one would copy the wrong number
+        // of bytes back out of the buffer.
+        assert_ne!(indirect_return_tag(20), indirect_return_tag(32));
+    }
+
     #[test]
     fn the_sse_pair_spellings_differ_only_in_high_eightbyte_occupancy() {
         for (high_bytes, high_member) in [(8u8, "double __sse1"), (4, "float __sse1")] {
             let tag = sse_pair_return_tag(high_bytes).expect("a modelled occupancy");
             let definition = sse_pair_return_definition(high_bytes).expect("a modelled occupancy");
             assert_eq!(sse_pair_return_high_bytes(tag), Some(high_bytes));
-            assert_eq!(synthesised_return_definition(tag), Some(definition));
+            assert_eq!(
+                synthesised_return_definition(tag).as_deref(),
+                Some(definition)
+            );
             assert!(definition.starts_with(&format!("{tag} {{")), "{definition}");
             // The low eightbyte is a full `double` in both: only the second
             // member carries the occupancy.
@@ -1432,7 +1707,7 @@ mod tests {
         // entry point.
         for integer_first in [true, false] {
             assert_eq!(
-                synthesised_return_definition(split_bank_return_tag(integer_first)),
+                synthesised_return_definition(split_bank_return_tag(integer_first)).as_deref(),
                 Some(split_bank_return_definition(integer_first))
             );
         }

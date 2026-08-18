@@ -204,14 +204,37 @@ pub(super) fn run_ast_passes(
     // Stack-slot promotion runs before register renaming so the aliases (`stack_0`,
     // `local_0`, ...) it allocates cannot collide with the role names (`arg0`, `ret`,
     // `varN`) the naming pass introduces.
+    // AAPCS64's `x8` result buffer is not described by DWARF at `-O2` -- it is a
+    // compiler temporary with no source name -- so the ABI has to declare it.
+    // Without this the twenty-byte buffer of `agr198_five_roundtrip` promotes as
+    // five unrelated four-byte slots and the call has no single destination.
+    // Empty on every other convention and on every AArch64 function with no
+    // indirect-return call, so the hint list is unchanged where it does not
+    // apply.
+    let indirect_result_hints =
+        crate::ir::aapcs64_indirect_result::indirect_result_buffer_hints(f, cc);
+    let stack_object_hints = if indirect_result_hints.is_empty() {
+        stack_object_hints.to_vec()
+    } else {
+        let mut combined = stack_object_hints.to_vec();
+        combined.extend(indirect_result_hints);
+        combined
+    };
     let stack_facts = pass!(
         "promote_stack_locals",
         crate::ir::stack_locals::promote_stack_locals_with_facts(
             f,
             Some(cc),
             locked_parameter_count,
-            stack_object_hints,
+            &stack_object_hints,
         )
+    );
+    // Now that the buffer is a named object, make it the destination of the
+    // call that fills it. Before promotion its address is still `sp + k`
+    // arithmetic, which no renderer can take the address of.
+    pass!(
+        "bind_indirect_result_buffers",
+        crate::ir::aapcs64_indirect_result::bind_indirect_result_buffers(f, cc)
     );
     // Frame-relative storage is source-level state; the push/mov/sub sequence
     // that establishes its machine frame is not.  Recognise the machine prologue

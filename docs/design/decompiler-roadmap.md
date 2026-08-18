@@ -1170,24 +1170,30 @@ src/render/        faithful, C and DecBench formatting-only projections
 src/decompile/     pipeline, profiles, orchestration and result boundary
 ```
 
-**Current sizes, measured 2026-08-17 after six cuts (`python3 tools/fitness_report.py`).**
+**Current sizes, measured 2026-08-18 (`uv run python tools/fitness_report.py`).**
 This table is here because the list below names targets without sizes, and that
 is how `analysis/cfg.rs` stayed invisible: it was never in the priority list, and
 while `ast.rs` was at 11,582 nobody looked past it.
 
 | product LOC | file | status |
 |---:|---|---|
-| 6,809 | `ir/ast.rs` | 4 cuts landed; `product_max_loc` 11,582 -> 6,809, **-41%** |
-| 5,371 | `analysis/cfg.rs` | **not in the list below**; cut prepared, not yet landed |
-| 4,183 | `ir/lift_x86.rs` | packed/SSE family out (`ef8a3dc5`); flags family next |
-| 3,526 | `ir/call_args.rs` | cdecl32 out (`90e791e5`); tail calls next, 0 widenings |
-| 1,422 | `python_bindings/ir.rs` | 3 cuts landed 2026-08-18; 2,738 -> 1,422, **-48%**, and it stopped being `product_max_loc` (2,738 -> 2,644, now `analysis/java_class.rs`) |
-| 767 | `ir/stack_locals.rs` | 4 layers out (3,241 -> 767); **first file taken below 1,000**, review entry deleted |
-| 3,057 | `ir/types_recover.rs` | value-keyed collection out (`90e791e5`) |
-| 2,999 | `ir/lift_arm32.rs` | priority split, untouched |
-| 2,607 | `ir/structure.rs` | priority split, untouched |
-| 2,516 | `ir/lift_arm64.rs` | priority split, untouched |
-| 1,727 | `ir/ast/dec_render.rs` | created by the first cut; statement printer out to the `dec_render::stmt` child (2,195 -> 1,727), 0 widenings — **took `product_files_above_2000` 13 -> 12** |
+| 2,466 | `analysis/cfg.rs` | 8 cuts; 6,248 -> 2,466. **Largest decompiler file.** `discover_function` is still ~596 lines of it |
+| 2,163 | `ir/lift_x86.rs` | 9 cuts; 4,998 -> 2,163. `lift_one_inner` is ~74% of what remains and is a by-mnemonic match, not a lift-and-shift |
+| 2,038 | `ir/lift_arm64.rs` | 2 cuts; 2,516 -> 2,038. `arith` family measured as the next cut |
+| 1,941 | `ir/lift_arm32.rs` | 3 cuts; 2,998 -> 1,941. `lift_one_decoded` is 76% and needs a `return`->`Some` rewrite, so not pure |
+| 1,888 | `ir/types_recover.rs` | 3 cuts; 3,058 -> 1,888 |
+| 1,789 | `ir/ast/dec_render.rs` | **GREW.** Created at 2,195, cut to 1,727, now 1,789 — the only row here moving the wrong way, and the previous table presented 1,727 as a finished success |
+| 1,668 | `ir/structure.rs` | 3 cuts; 2,607 -> 1,668. `detect_if_shape` (353 lines) measured as the next cut |
+| 1,650 | `ir/ast.rs` | 8 cuts; 11,582 -> 1,650, **-86%**. The file this program started on |
+| 1,422 | `python_bindings/ir.rs` | 3 cuts; 2,738 -> 1,422. Seven of its eight PyO3 items would be mis-cut by a keyword scan — the attributes sit between doc and item |
+| 1,327 | `ir/call_args.rs` | 7 cuts; 3,920 -> 1,327 |
+| 767 | `ir/stack_locals.rs` | 4 layers out; 3,241 -> 767. **First file taken below 1,000**, review entry deleted |
+
+Not decompiler files, but they are what `product_max_loc` now points at:
+`analysis/java_class.rs` 2,644 (untouched), `symbolic/solver/mod.rs` 1,710,
+`python_bindings/analysis.rs` 1,901, `ir/value_number.rs` 1,965.
+`symbolic/explore.rs` (2,742 -> 901) and `symbolic/solver/axeyum_backend.rs`
+(3,357 -> 925) were cut on 2026-08-18 and are off the list.
 
 Two things this table has already earned. It is **measured, not remembered** — a
 priority list without sizes ranks by when someone wrote the list rather than by
@@ -1196,6 +1202,13 @@ where the mass is. And it is measured with a tool that was itself wrong until
 lines of test code counted as product, 877 of them in `analysis/cfg.rs`, which
 was reported at 6,248 and is really 5,371. **A number in this file is only as
 good as the last time someone checked the instrument.**
+
+That sentence earned itself again on 2026-08-18: **nine of the ten rows in the
+previous version of this table were stale**, by as much as 5,159 LOC, and one of
+them — `ir/ast/dec_render.rs` — was presented as a shrink while the file had
+actually grown. A table that exists to stop people ranking by memory had itself
+gone back to being remembered. It is now regenerated from
+`tools/fitness_report.py:product_loc` rather than edited row by row.
 
 Priority splits, performed only as ownership migrates:
 

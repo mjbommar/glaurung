@@ -202,8 +202,31 @@ pub(super) fn recovered_call_prototype(
         }
         _ => return_type,
     };
+    // The two AAPCS64 classes, which need a SPELLING and not just a width.
+    //
+    // An HFA is one value in up to four SIMD registers; naming its member type
+    // declares `s0` alone and discards the rest, which is the same defect the
+    // SSE pair had one bank over. The indirect class is not in registers at
+    // all: only a declaration of an object LARGER than sixteen bytes makes a C
+    // compiler emit the `x8` setup, because `x8` is not an argument slot and no
+    // argument list can reach it.
+    let return_type = match prototype.return_class() {
+        crate::ir::abi::ReturnClass::HomogeneousFloat {
+            member_bytes,
+            members,
+        } if cc == crate::ir::call_args::CallConv::Aarch64 => {
+            crate::ir::abi::hfa_return_tag(member_bytes, members)
+                .map_or_else(|| return_type.to_string(), str::to_string)
+        }
+        crate::ir::abi::ReturnClass::IndirectBuffer { bytes }
+            if cc == crate::ir::call_args::CallConv::Aarch64 =>
+        {
+            crate::ir::abi::indirect_return_tag(bytes).unwrap_or_else(|| return_type.to_string())
+        }
+        _ => return_type.to_string(),
+    };
     CallPrototype {
-        return_type: return_type.to_string(),
+        return_type,
         parameter_types,
         variadic: false,
         authority: CallPrototypeAuthority::Recovered,

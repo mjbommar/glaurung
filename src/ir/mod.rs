@@ -22,6 +22,7 @@
 //!
 //! This file defines the IR; [`lift_x86`] contains the lifter.
 
+pub mod aapcs64_indirect_result;
 pub mod abi;
 pub mod arm32_prologue;
 pub mod arm64_prologue;
