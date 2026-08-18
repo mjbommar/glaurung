@@ -261,9 +261,33 @@ fn is_padding_restore_load(statement: &Stmt, save: &SavedSlot) -> bool {
     })
 }
 
+/// Whether evaluating `expression` reads memory.
+///
+/// `is_dead_machine_temporary` deletes a statement when this says no, so a
+/// false negative deletes a load. The arms are therefore ENUMERATED with no
+/// `_ => false` catch-all: a new `Expr` variant that can carry a load must
+/// break this build rather than silently read as safe.
+///
+/// It had a catch-all until 2026-08-17, and it cost two answers:
+/// `NumericConvert` was not listed, so `(int64_t)*(int32_t *)p` -- the shape of
+/// every widening load -- reported "no dereference"; and
+/// `FunctionTableEntry` recursed into its index instead of being a load in its
+/// own right. Both errors point the same way, toward deleting a live load. The
+/// sibling copy of this predicate in `ir/copy_prop/alias.rs` had neither bug,
+/// which is how the divergence was found; keep the two in step.
 fn contains_deref(expression: &Expr) -> bool {
     match expression {
-        Expr::Deref { .. } | Expr::Call { .. } => true,
+        Expr::Deref { .. } | Expr::Call { .. } | Expr::FunctionTableEntry { .. } => true,
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_)
+        | Expr::Reg(_)
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. } => false,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             contains_deref(lhs) || contains_deref(rhs)
         }
@@ -273,10 +297,9 @@ fn contains_deref(expression: &Expr) -> bool {
             if_false,
             ..
         } => contains_deref(cond) || contains_deref(if_true) || contains_deref(if_false),
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => contains_deref(src),
-        Expr::FunctionTableEntry { index, .. } => contains_deref(index),
+        Expr::Un { src, .. } => contains_deref(src),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => contains_deref(expr),
         Expr::WideArithmetic { args, .. } => args.iter().any(contains_deref),
-        _ => false,
     }
 }
 
@@ -866,6 +889,47 @@ fn is_rsp_add(s: &Stmt) -> bool {
 mod tests {
     use super::*;
     use crate::ir::ast::{Function, Stmt};
+
+    /// A load hidden behind a widening conversion is still a load.
+    ///
+    /// `is_dead_machine_temporary` deletes a `Temp`/`Flag` assignment whose
+    /// source has no dereference. `contains_deref` used to answer that with a
+    /// `_ => false` catch-all, so `NumericConvert { expr: Deref { .. } }` --
+    /// the shape of every widening load, `(int64_t)*(int32_t *)p` -- reported
+    /// "no dereference" and the statement was deleted with its load inside it.
+    ///
+    /// The sibling copy of this predicate in `ir/copy_prop/alias.rs` recursed
+    /// into `NumericConvert` and had no catch-all at all, so the two answered
+    /// this question differently. That divergence is the reason the arms are
+    /// enumerated here rather than defaulted: a new `Expr` variant that can
+    /// carry a load must break this build, not silently read as safe.
+    #[test]
+    fn a_load_behind_a_numeric_conversion_is_not_a_dead_temporary() {
+        let load = Expr::Deref {
+            addr: Box::new(Expr::Reg(reg("rax"))),
+            size: 4,
+        };
+        assert!(contains_deref(&load), "a bare load must be seen");
+
+        let widened = Expr::NumericConvert {
+            from: crate::ir::ast::ScalarType::SignedInt(4),
+            to: crate::ir::ast::ScalarType::SignedInt(8),
+            expr: Box::new(load),
+        };
+        assert!(
+            contains_deref(&widened),
+            "a load behind a widening conversion must be seen too"
+        );
+
+        let statement = Stmt::Assign {
+            dst: VReg::Temp(7),
+            src: widened,
+        };
+        assert!(
+            !is_dead_machine_temporary(&statement),
+            "deleting this drops the load"
+        );
+    }
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
